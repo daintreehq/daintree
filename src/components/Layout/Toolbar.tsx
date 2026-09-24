@@ -119,6 +119,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import {
   agentStateDotColor,
+  STATE_LABELS,
   type AttentionAgentState,
 } from "@/components/Worktree/terminalStateConfig";
 import { notify } from "@/lib/notify";
@@ -496,15 +497,13 @@ function OverflowMenu({
             return [
               ...inlinedAgents.map((agentId) => {
                 const agentMeta = OVERFLOW_MENU_META[agentId]!;
-                const attentionState = agentAttentionStates.get(agentId) ?? null;
-                const dotColor = attentionState ? agentStateDotColor(attentionState) : null;
                 return (
                   <AgentOverflowItem
                     key={`launcher-${agentId}`}
                     id={agentId}
                     label={agentMeta.label}
                     Icon={agentMeta.icon}
-                    dotColor={dotColor}
+                    attentionState={agentAttentionStates.get(agentId) ?? null}
                     onSelect={() => overflowActions[agentId]?.()}
                   />
                 );
@@ -531,15 +530,13 @@ function OverflowMenu({
           const meta = OVERFLOW_MENU_META[id] ?? dynamicOverflowMeta[id];
           if (!meta) return [];
           if (isBuiltInAgentId(id)) {
-            const attentionState = agentAttentionStates.get(id) ?? null;
-            const dotColor = attentionState ? agentStateDotColor(attentionState) : null;
             return [
               <AgentOverflowItem
                 key={id}
                 id={id}
                 label={meta.label}
                 Icon={meta.icon}
-                dotColor={dotColor}
+                attentionState={agentAttentionStates.get(id) ?? null}
                 onSelect={() => overflowActions[id]?.()}
               />,
             ];
@@ -577,16 +574,17 @@ function AgentOverflowItem({
   id,
   label,
   Icon,
-  dotColor,
+  attentionState,
   onSelect,
 }: {
   id: string;
   label: string;
   Icon: React.ComponentType<{ className?: string }>;
-  dotColor: string | null;
+  attentionState: AttentionAgentState | null;
   onSelect: () => void;
 }) {
   const shortcut = useKeybindingDisplay(`agent.${id}`);
+  const dotColor = attentionState ? agentStateDotColor(attentionState) : null;
   return (
     <DropdownMenuItem onClick={onSelect}>
       <span className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center">
@@ -595,13 +593,20 @@ function AgentOverflowItem({
           <span
             aria-hidden="true"
             className={cn(
-              "status-mark absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-surface-canvas",
+              "toolbar-menu-pip status-mark absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-surface-canvas",
               dotColor
             )}
           />
         )}
       </span>
-      <span className="flex-1">{label}</span>
+      <span className="flex-1">
+        {label}
+        {/* The pip is aria-hidden; the row's name carries what it draws, in
+            the agent button's own "— waiting" form. */}
+        {attentionState && dotColor && (
+          <span className="sr-only">{` — ${STATE_LABELS[attentionState]}`}</span>
+        )}
+      </span>
       {shortcut && <DropdownMenuShortcut>{shortcut}</DropdownMenuShortcut>}
     </DropdownMenuItem>
   );

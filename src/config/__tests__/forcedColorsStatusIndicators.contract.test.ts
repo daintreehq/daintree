@@ -8,6 +8,7 @@ const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
 const INDEX_CSS = path.join(REPO_ROOT, "src/index.css");
 const TOOLBAR_CSS = path.join(REPO_ROOT, "src/styles/components/toolbar.css");
 const SIDEBAR_CSS = path.join(REPO_ROOT, "src/styles/components/sidebar.css");
+const TOOLBAR_TSX = path.join(REPO_ROOT, "src/components/Layout/Toolbar.tsx");
 
 // Issue #8936: status indicators (toolbar pips, ActivityLight) and the
 // SettingsSwitch toggle lose all state in forced-colors / Windows High Contrast
@@ -127,6 +128,19 @@ describe("forced-colors status-indicator contract (#8936)", () => {
     expect(block).toMatch(
       /\.toolbar-badge\b[\s\S]*\.toolbar-badge-chip\b[\s\S]*\.toolbar-overflow-badge\b[\s\S]*\.toolbar-problems-badge\b\s*\{[^}]*background-color:\s*CanvasText/
     );
+  });
+
+  // Forced colors strips the ring (box-shadow) that keeps a corner pip off the
+  // glyph beneath it; without the outline the CanvasText dot fuses with the
+  // icon stroke. The overflow menu's agent pip needs the same moat.
+  it("toolbar.css gives every corner pip, the overflow menu's included, a Canvas outline", () => {
+    const block = readForcedColorsBlocks(TOOLBAR_CSS);
+    const rule = block.match(/([^{}]*)\{\s*outline:\s*2px solid Canvas;?\s*\}/);
+    expect(rule).not.toBeNull();
+    for (const selector of [".toolbar-badge", ".toolbar-problems-badge", ".toolbar-menu-pip"]) {
+      expect(rule![1]).toContain(selector);
+    }
+    expect(fs.readFileSync(TOOLBAR_TSX, "utf8")).toContain("toolbar-menu-pip");
   });
 });
 

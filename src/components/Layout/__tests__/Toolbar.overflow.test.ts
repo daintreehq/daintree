@@ -66,6 +66,8 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
       expect(source).toContain("function AgentOverflowItem");
       expect(source).toContain("useKeybindingDisplay(`agent.${id}`)");
       expect(source).toContain("agentStateDotColor(attentionState)");
+      // The pip is aria-hidden, so the row's accessible name carries its state.
+      expect(source).toMatch(/sr-only[^\n]*STATE_LABELS\[attentionState\]/);
     });
   });
 

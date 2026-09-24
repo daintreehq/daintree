@@ -731,7 +731,8 @@
 
   .toolbar-badge,
   .toolbar-overflow-badge,
-  .toolbar-problems-badge {
+  .toolbar-problems-badge,
+  .toolbar-menu-pip {
     outline: 2px solid Canvas;
   }
 
