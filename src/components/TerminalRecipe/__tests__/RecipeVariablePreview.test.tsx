@@ -37,9 +37,18 @@ describe("RecipeVariablePreview", () => {
     mockSnapshot = undefined;
   });
 
+  const segments = (container: HTMLElement, kind: string) =>
+    Array.from(container.querySelectorAll(`[data-segment="${kind}"]`)).map((el) => el.textContent);
+
   it("returns null when initialPrompt is empty", () => {
     mockSnapshot = { path: "/tmp/test" };
     const { container } = renderPreview("");
+    expect(container.textContent).toBe("");
+  });
+
+  it("renders nothing when the prompt has no variable syntax, since it would repeat the field", () => {
+    mockSnapshot = FULL_SNAPSHOT;
+    const { container } = renderPreview("Review the latest changes", "wt-1");
     expect(container.textContent).toBe("");
   });
 
@@ -51,57 +60,81 @@ describe("RecipeVariablePreview", () => {
       "wt-1"
     );
 
-    expect(container.textContent).toContain("Resolved prompt");
     expect(container.textContent).toContain(
       "Fix #42 on feature/my-branch at /home/project (PR #99)"
     );
+    expect(segments(container, "value")).toEqual([
+      "#42",
+      "feature/my-branch",
+      "/home/project",
+      "#99",
+    ]);
+    expect(screen.getByText("Values from feature/my-branch")).toBeTruthy();
   });
 
-  it("shows unresolved badge with icon when issueNumber is missing", () => {
+  it("marks a missing value in place instead of letting it vanish", () => {
     mockSnapshot = { path: "/tmp/test", branch: "main" };
 
-    renderPreview("Fix {{issue_number}}", "wt-1");
+    const { container } = renderPreview("Fix {{issue_number}} on {{branch_name}}", "wt-1");
 
-    expect(screen.getByText(/unresolved/)).toBeTruthy();
-    expect(screen.getByText(/{{issue_number}}/)).toBeTruthy();
+    const preview = container.querySelector('[data-segment="missing"]')!;
+    expect(preview.textContent).toBe("{{issue_number}} (empty)");
+    // The marker sits between the literal text around it, where the gap will be.
+    const line = preview.parentElement!.textContent;
+    expect(line).toBe("Fix {{issue_number}} (empty) on main");
+    expect(screen.getByText(/has no value in this worktree and launches empty/)).toBeTruthy();
   });
 
-  it("shows fallback amber token spans when worktreeId is undefined", () => {
+  it("names every missing variable once in the note", () => {
+    mockSnapshot = { path: "/tmp/test" };
+
+    renderPreview("{{issue_number}} {{pr_number}} {{issue_number}}", "wt-1");
+
+    expect(
+      screen.getByText(
+        "{{issue_number}} and {{pr_number}} have no value in this worktree and launch empty"
+      )
+    ).toBeTruthy();
+  });
+
+  it("shows run-time tokens without claiming they are missing when there is no worktree", () => {
     const { container } = renderPreview("Fix {{issue_number}} on {{branch_name}}", undefined);
 
-    expect(container.querySelector(".bg-category-amber-subtle")).toBeTruthy();
-    expect(screen.getByText("Resolving at run time")).toBeTruthy();
+    expect(segments(container, "variable")).toEqual(["{{issue_number}}", "{{branch_name}}"]);
+    expect(segments(container, "missing")).toEqual([]);
+    expect(screen.getByText("Values fill in from the worktree at launch")).toBeTruthy();
+    expect(screen.queryByText(/no value/)).toBeNull();
   });
 
-  it("shows fallback amber tokens when worktree snapshot is not in store", () => {
+  it("falls back to run-time mode when the worktree snapshot is not in the store", () => {
     const { container } = renderPreview("Deploy {{branch_name}}", "wt-missing");
 
-    expect(container.querySelector(".bg-category-amber-subtle")).toBeTruthy();
-    expect(screen.getByText("Resolving at run time")).toBeTruthy();
+    expect(segments(container, "variable")).toEqual(["{{branch_name}}"]);
+    expect(screen.getByText("Values fill in from the worktree at launch")).toBeTruthy();
   });
 
-  it("does not show unresolved badges in fallback mode without worktree context", () => {
-    renderPreview("Fix {{issue_number}} on {{branch_name}}", undefined);
-
-    expect(screen.queryByText(/unresolved/)).toBeNull();
-  });
-
-  it("does not flag {{number}} as unresolved during authoring without worktree", () => {
+  it("does not flag {{number}} as missing during authoring without worktree", () => {
     const { container } = renderPreview("See {{number}}", undefined);
 
-    expect(screen.queryByText(/unresolved/)).toBeNull();
-    expect(container.querySelector(".bg-category-rose-subtle")).toBeNull();
-    expect(container.querySelector(".bg-category-amber-subtle")).toBeTruthy();
-    expect(screen.getByText("Resolving at run time")).toBeTruthy();
+    expect(segments(container, "variable")).toEqual(["{{number}}"]);
+    expect(segments(container, "missing")).toEqual([]);
   });
 
-  it("treats unknown {{var}} as literal text, not as unresolved", () => {
+  it("flags an unknown {{var}} as sent as typed, never as missing", () => {
     mockSnapshot = { path: "/tmp/test", branch: "main" };
 
-    const { container } = renderPreview("Use {{foo}} here", "wt-1");
+    const { container } = renderPreview("Use {{foo}} on {{Branch_Name}}", "wt-1");
 
-    expect(container.textContent).toContain("{{foo}}");
-    expect(screen.queryByText(/unresolved/)).toBeNull();
+    expect(segments(container, "unknown")).toEqual(["{{foo}}"]);
+    expect(segments(container, "value")).toEqual(["main"]);
+    expect(segments(container, "missing")).toEqual([]);
+    expect(screen.getByText("{{foo}} isn't a recipe variable and is sent as typed")).toBeTruthy();
+  });
+
+  it("previews an unknown-only prompt so a typo is not hidden", () => {
+    const { container } = renderPreview("Use {{isue_number}}", undefined);
+
+    expect(segments(container, "unknown")).toEqual(["{{isue_number}}"]);
   });
 
   it("resolves {{number}} to issueNumber when set", () => {
@@ -109,8 +142,7 @@ describe("RecipeVariablePreview", () => {
 
     const { container } = renderPreview("See {{number}}", "wt-1");
 
-    expect(container.textContent).toContain("#7");
-    expect(screen.queryByText(/unresolved/)).toBeNull();
+    expect(segments(container, "value")).toEqual(["#7"]);
   });
 
   it("resolves {{number}} to prNumber when issueNumber is absent", () => {
@@ -128,14 +160,24 @@ describe("RecipeVariablePreview", () => {
 
     const { container } = renderPreview("See {{number}}", "wt-1");
 
-    expect(container.textContent).toContain("#55");
+    expect(segments(container, "value")).toEqual(["#55"]);
   });
 
-  it("shows rose badge for {{number}} when neither issue nor PR is set", () => {
+  it("marks {{number}} missing when neither issue nor PR is set", () => {
     mockSnapshot = { path: "/tmp/test" };
 
-    renderPreview("See {{number}}", "wt-1");
+    const { container } = renderPreview("See {{number}}", "wt-1");
 
-    expect(screen.getByText(/unresolved/)).toBeTruthy();
+    expect(segments(container, "missing")).toEqual(["{{number}} (empty)"]);
+  });
+
+  it("previews the prompt trimmed, the way launch sends it", () => {
+    mockSnapshot = { path: "/tmp/test", branch: "main" };
+
+    const { container } = renderPreview("  \n on {{branch_name}}  \n", "wt-1");
+
+    expect(container.querySelector('[data-segment="value"]')!.parentElement!.textContent).toBe(
+      "on main"
+    );
   });
 });

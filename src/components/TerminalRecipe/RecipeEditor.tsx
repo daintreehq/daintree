@@ -541,7 +541,7 @@ export function RecipeEditor({
                             placeholder="e.g., Review the latest changes and suggest improvements"
                             rows={2}
                             aria-describedby={`terminal-initial-prompt-help-${index}`}
-                            className="w-full px-2 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary resize-y min-h-[60px]"
+                            className="w-full px-2 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary resize-y min-h-[60px] field-sizing-content max-h-60"
                           />
                           <RecipeVariablePreview
                             initialPrompt={terminal.initialPrompt || ""}
@@ -549,7 +549,7 @@ export function RecipeEditor({
                           />
                           <p
                             id={`terminal-initial-prompt-help-${index}`}
-                            className="text-xs text-text-muted mt-1 select-text"
+                            className="text-xs text-text-secondary mt-1.5 select-text"
                           >
                             Variables:{" "}
                             <code className="text-text-secondary">{"{{issue_number}}"}</code>,{" "}
