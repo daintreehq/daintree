@@ -77,6 +77,14 @@ export const BLOCKED_NAV_FIXTURES = {
     errorCause: "failed",
     errorMessage: "Navigation failed: net::ERR_CONNECTION_REFUSED",
   },
+  // One unbroken DNS label: nothing to wrap at but the dots, then the domain
+  // that identifies the site.
+  "narrow-long-host": {
+    width: 480,
+    url: "https://preview-a7f3c91be04d5e62f18a9c3b7d0e4f5a6b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2.vercel.app/login",
+    canOpenExternal: true,
+    phase: "blocked",
+  },
   "narrow-blocked": { width: 480, url: DOCS_URL, canOpenExternal: true, phase: "blocked" },
   "narrow-oauth-offer": { width: 480, url: OAUTH_URL, canOpenExternal: true, phase: "blocked" },
   "narrow-oauth-error": {

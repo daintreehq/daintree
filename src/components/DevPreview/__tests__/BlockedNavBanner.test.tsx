@@ -159,18 +159,61 @@ describe("blockedNavReducer phase coalescing", () => {
     }
   });
 
+  const ATTEMPT_URL = "https://accounts.example.com/authorize";
+
   it("lets a dropped-event fallback end an attempt but never rewrite how it ended", () => {
-    const failed: BlockedNavAction = { type: "OAUTH_RESULT_FAILED", timedOut: false };
+    const failed: BlockedNavAction = {
+      type: "OAUTH_RESULT_FAILED",
+      url: ATTEMPT_URL,
+      timedOut: false,
+    };
     expect(blockedNavReducer(reachPhase("oauth-started"), failed)?.phase).toBe("oauth-error");
     expect(
       blockedNavReducer(reachPhase("oauth-intercepting"), {
         type: "OAUTH_RESULT_FAILED",
+        url: ATTEMPT_URL,
         timedOut: true,
       })?.phase
     ).toBe("oauth-timed-out");
     for (const phase of ["oauth-completed", "oauth-timed-out", "oauth-error"] as const) {
       expect(blockedNavReducer(reachPhase(phase), failed)?.phase).toBe(phase);
     }
+  });
+});
+
+describe("blockedNavReducer stale results", () => {
+  const blocked = (url: string): BlockedNavAction => ({
+    type: "BLOCKED",
+    url,
+    canOpenExternal: true,
+    sessionStorageSnapshot: [],
+  });
+
+  // An action awaited on one link must not settle the notice for the next.
+  it("ignores a result that belongs to a URL the banner has moved on from", () => {
+    const first = "https://docs.example.com/a";
+    const newer = blockedNavReducer(
+      blockedNavReducer(null, blocked(first)),
+      blocked("https://b.example.com/")
+    );
+    expect(blockedNavReducer(newer, { type: "DISMISS_IF_URL", url: first })).toBe(newer);
+
+    let attempt = blockedNavReducer(null, blocked("https://accounts.example.com/authorize"));
+    attempt = blockedNavReducer(attempt, { type: "OAUTH_STARTED" });
+    expect(
+      blockedNavReducer(attempt, {
+        type: "OAUTH_RESULT_FAILED",
+        url: "https://other.example.com/authorize",
+        timedOut: false,
+      })
+    ).toBe(attempt);
+  });
+
+  it("settles the notice the result belongs to", () => {
+    const url = "https://docs.example.com/a";
+    expect(
+      blockedNavReducer(blockedNavReducer(null, blocked(url)), { type: "DISMISS_IF_URL", url })
+    ).toBeNull();
   });
 });
 

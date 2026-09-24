@@ -47,10 +47,17 @@ type BlockedNavAction =
   /**
    * The invoke result of a failed sign-in. Main normally reports the failure
    * first as a status event; this only lands when that event was dropped, so it
-   * applies to an attempt still in flight and never overwrites a terminal phase.
+   * applies to the same attempt still in flight and never overwrites a terminal
+   * phase or a newer notice.
    */
-  | { type: "OAUTH_RESULT_FAILED"; timedOut: boolean }
-  | { type: "DISMISS" };
+  | { type: "OAUTH_RESULT_FAILED"; url: string; timedOut: boolean; message?: string | null }
+  | { type: "DISMISS" }
+  /**
+   * Dismiss once an action on `url` has settled — but only if the banner is
+   * still about `url`. A block that arrived while the action was awaited is a
+   * new notice, and a late result must not close it.
+   */
+  | { type: "DISMISS_IF_URL"; url: string };
 
 // How long the "Copied" confirmation label lingers before reverting to "Copy URL".
 const COPY_FEEDBACK_MS = 2000;
@@ -129,12 +136,19 @@ function blockedNavReducer(
           }
         : state;
     case "OAUTH_RESULT_FAILED":
-      if (!state || !isInFlight(state.phase)) return state;
+      if (!state || !isInFlight(state.phase) || state.url !== action.url) return state;
       return action.timedOut
         ? { ...state, phase: "oauth-timed-out" }
-        : { ...state, phase: "oauth-error", errorCause: "failed", errorMessage: null };
+        : {
+            ...state,
+            phase: "oauth-error",
+            errorCause: "failed",
+            errorMessage: action.message ?? null,
+          };
     case "DISMISS":
       return null;
+    case "DISMISS_IF_URL":
+      return state && state.url === action.url ? null : state;
   }
 }
 
@@ -147,6 +161,11 @@ export interface BlockedNavBannerProps {
 
 type CopyState = "idle" | "copied" | "failed";
 
+/** Mirrors `canOpenExternal`'s allow-list: anything not web is handed to the OS. */
+function schemeLabel(scheme: string, url: string): string {
+  return url.startsWith(`${scheme}//`) ? `${scheme}//` : scheme;
+}
+
 export function BlockedNavBanner({
   state,
   panelId,
@@ -154,6 +173,7 @@ export function BlockedNavBanner({
   onDispatch,
 }: BlockedNavBannerProps) {
   const [copyState, setCopyState] = useState<CopyState>("idle");
+  const [openFailed, setOpenFailed] = useState(false);
   const url = state?.url;
 
   const handleCopyUrl = useCallback(async () => {
@@ -175,9 +195,10 @@ export function BlockedNavBanner({
     return () => clearTimeout(timer);
   }, [copyState]);
 
-  // A confirmation belongs to the URL it copied, not to the next one.
+  // Feedback belongs to the URL it was about, not to the next one.
   useEffect(() => {
     setCopyState("idle");
+    setOpenFailed(false);
   }, [url]);
 
   // Listen for OAuth loopback status events from main process
@@ -229,19 +250,26 @@ export function BlockedNavBanner({
       return;
     }
 
+    const attemptUrl = state.url;
     try {
       const result = await window.electron.webview.startOAuthLoopback(
-        state.url,
+        attemptUrl,
         panelId,
         wcId,
         state.sessionStorageSnapshot
       );
       if (!result.success && result.cause !== "cancelled") {
-        onDispatch({ type: "OAUTH_RESULT_FAILED", timedOut: result.cause === "timed-out" });
+        onDispatch({
+          type: "OAUTH_RESULT_FAILED",
+          url: attemptUrl,
+          timedOut: result.cause === "timed-out",
+        });
       }
     } catch (err) {
       onDispatch({
-        type: "OAUTH_ERROR",
+        type: "OAUTH_RESULT_FAILED",
+        url: attemptUrl,
+        timedOut: false,
         // Empty fallback: with nothing observed, the detail line stays empty.
         message: formatErrorMessage(err, "") || null,
       });
@@ -249,11 +277,14 @@ export function BlockedNavBanner({
   };
 
   const handleOpenExternal = async () => {
+    const target = state.url;
+    setOpenFailed(false);
     try {
-      await window.electron.system.openExternal(state.url);
-      onDispatch({ type: "DISMISS" });
+      await window.electron.system.openExternal(target);
+      onDispatch({ type: "DISMISS_IF_URL", url: target });
     } catch {
-      // The banner stays: the link is still here to copy.
+      // The banner stays and says so: the link is still here to copy.
+      setOpenFailed(true);
     }
   };
 
@@ -276,11 +307,13 @@ export function BlockedNavBanner({
     onClick: handleStartOAuth,
     variant: "primary",
   };
+  // The one control an in-flight sign-in offers, so it carries the button
+  // treatment rather than reading as loose text.
   const cancelAction: BannerAction = {
     id: "oauth-cancel",
     label: "Cancel sign-in",
     onClick: handleCancelOAuth,
-    variant: "dismiss",
+    variant: "primary",
   };
 
   switch (phase) {
@@ -301,10 +334,10 @@ export function BlockedNavBanner({
       } else {
         title =
           destination?.kind === "web"
-            ? `Can't open ${destination.host} in the preview`
+            ? `Can't open ${destination.host} here`
             : destination?.kind === "scheme"
-              ? `Can't open ${destination.scheme} links in the preview`
-              : "Can't open this link in the preview";
+              ? `Can't open ${schemeLabel(destination.scheme, state.url)} links here`
+              : "Can't open this link here";
         if (state.canOpenExternal) {
           actions.push({
             id: "open-external",
@@ -325,9 +358,11 @@ export function BlockedNavBanner({
           layout="pane"
           title={title}
           description={
-            state.isOAuth
-              ? "Sign in through your browser and the session comes back to the preview."
-              : undefined
+            openFailed
+              ? "Your system couldn't open this link. Copy it instead."
+              : state.isOAuth
+                ? "Sign in through your browser and the session comes back to the preview."
+                : undefined
           }
           // The OAuth request's query string is noise once the title names the
           // host; an ordinary link's path is what tells the user which page.
@@ -344,7 +379,7 @@ export function BlockedNavBanner({
           icon={ExternalLink}
           severity="info"
           layout="pane"
-          title="Finish signing in in your browser"
+          title="Finish signing in from your browser"
           description={
             hostLabel
               ? `Waiting for ${hostLabel} to send you back. Stops after ${SIGN_IN_TIMEOUT_MINUTES} minutes.`
@@ -388,7 +423,8 @@ export function BlockedNavBanner({
           description={description}
           contextLine={detail}
           action={retryAction}
-          trailingSlot={<BannerOverflowMenu actions={[copyAction]} />}
+          // `end`: in the pane layout the trigger sits at the band's right edge.
+          trailingSlot={<BannerOverflowMenu actions={[copyAction]} align="end" />}
           onClose={handleDismiss}
           role="alert"
         />
