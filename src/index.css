@@ -230,6 +230,15 @@ code.hljs {
     --theme-scrollbar-thumb-hover,
     color-mix(in oklab, var(--scrollbar-thumb) 85%, var(--color-text-primary))
   );
+  /* The grabbed step, one further along the same ramp as hover — xterm's slider
+     has the same three (rest / hover / active), and a drag that looks like a
+     hover gives no confirmation the handle was caught. Derived, not a theme
+     token: every theme's ramp already points toward its own text colour. */
+  --scrollbar-thumb-active: color-mix(
+    in oklab,
+    var(--scrollbar-thumb-hover) 70%,
+    var(--color-text-primary)
+  );
   --scrollbar-track: var(--theme-scrollbar-track, transparent);
   --scroll-shadow-color: var(--color-surface-panel);
   --panel-state-edge-width: var(--theme-panel-state-edge-width, 2px);
@@ -2547,6 +2556,20 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     outline: 1px solid CanvasText;
     outline-offset: -1px;
     color: CanvasText;
+  }
+
+  /* The grid scrollbar's thumb survives on its 2px border, which forced colors
+     paints CanvasText; its fill does not. Hover and drag lose their fill steps
+     the same way, so they move to the border and then the fill in Highlight —
+     the same rest / hover / grabbed ladder, in system colours. */
+  [data-grid-scrollbar-thumb][data-phase="hover"] {
+    border-color: Highlight;
+  }
+
+  [data-grid-scrollbar-thumb][data-phase="drag"] {
+    forced-color-adjust: none;
+    background-color: Highlight;
+    border-color: Highlight;
   }
 
   /* The trash TTL meter is a coloured background against a coloured track, and

@@ -19,6 +19,7 @@ import {
   isRescuableKeystroke,
   resolveRescueTarget,
 } from "@/lib/typeAnywhere";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 
 /** Best-effort focus retry budget — the draft is already safe by the time we try. */
 const FOCUS_ATTEMPT_FRAMES = 30;
@@ -46,7 +47,11 @@ function findElementByAttr(attr: string, value: string): HTMLElement | null {
 
 function scrollPanelIntoView(terminalId: string): void {
   const host = findElementByAttr("data-panel-id", terminalId);
-  host?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  host?.scrollIntoView({
+    block: "nearest",
+    inline: "nearest",
+    behavior: prefersReducedMotion() ? "auto" : "smooth",
+  });
 }
 
 /** Did DOM focus actually land inside this panel's hybrid input? */

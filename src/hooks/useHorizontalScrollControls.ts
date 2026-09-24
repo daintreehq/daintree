@@ -4,6 +4,7 @@ import {
   calculateScrollAmount,
   type HorizontalScrollState,
 } from "@/lib/horizontalScroll";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 
 export interface UseHorizontalScrollControlsReturn extends HorizontalScrollState {
   scrollLeft: () => void;
@@ -80,14 +81,14 @@ export function useHorizontalScrollControls(
     const el = scrollRef.current;
     if (!el) return;
     const amount = calculateScrollAmount(el.clientWidth);
-    el.scrollBy({ left: -amount, behavior: "smooth" });
+    el.scrollBy({ left: -amount, behavior: prefersReducedMotion() ? "auto" : "smooth" });
   }, [scrollRef]);
 
   const scrollRight = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
     const amount = calculateScrollAmount(el.clientWidth);
-    el.scrollBy({ left: amount, behavior: "smooth" });
+    el.scrollBy({ left: amount, behavior: prefersReducedMotion() ? "auto" : "smooth" });
   }, [scrollRef]);
 
   return {

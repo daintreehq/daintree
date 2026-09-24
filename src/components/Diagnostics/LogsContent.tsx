@@ -19,6 +19,7 @@ import type { LogEntry as LogEntryType, LogLevel } from "@/types";
 
 import { logsClient, appClient } from "@/clients";
 import { logError } from "@/utils/logger";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 
 export interface LogsContentProps {
   className?: string;
@@ -275,7 +276,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
     pauseBoundaryTsRef.current = undefined;
     virtuosoRef.current?.scrollToIndex({
       index: "LAST",
-      behavior: "smooth",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
     });
   }, [setAutoScroll]);
 
@@ -389,7 +390,12 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
             // Someone opening the log is looking for what just happened, so it
             // opens at the newest line rather than the oldest.
             initialTopMostItemIndex={{ index: "LAST", align: "end" }}
-            followOutput={autoScroll ? "smooth" : false}
+            followOutput={
+              autoScroll
+                ? (isAtBottom) =>
+                    isAtBottom ? (prefersReducedMotion() ? "auto" : "smooth") : false
+                : false
+            }
             atBottomStateChange={handleAtBottomChange}
             computeItemKey={(_index, display) => display.entry.id}
             itemContent={(_index, display) => (

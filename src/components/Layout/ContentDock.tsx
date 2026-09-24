@@ -5,6 +5,7 @@ import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortabl
 import { useDndContext, useDroppable } from "@dnd-kit/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
 import {
@@ -85,6 +86,7 @@ interface ContentDockProps {
 }
 
 export function ContentDock({ density = "normal" }: ContentDockProps) {
+  const skipMotion = useShouldSkipMotion();
   // Subscribe to panel-kind metadata changes (#11375). The dock-membership
   // selectors below call `isDockPanel` (→ `panelKindIsDockable`), which reads
   // the registry, not the panel store — so a `dockable`-only flip or a plugin
@@ -483,7 +485,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
               onKeyDown={handleDockKeyDown}
               onFocusCapture={handleDockFocusCapture}
               className={cn(
-                "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-smooth scroll-px-4 px-1 transition-[color,background-color,box-shadow]",
+                "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-px-4 px-1 transition-[color,background-color,box-shadow]",
+                !skipMotion && "scroll-smooth",
                 isDockDropRejected && "cursor-no-drop",
                 isOver &&
                   !isDockDropRejected &&

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { EVENT_CATEGORY_STYLES } from "@/config/categoryColors";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 
 interface EventTimelineProps {
   events: EventRecord[];
@@ -160,7 +161,7 @@ export function EventTimeline({
     pauseBoundaryTsRef.current = undefined;
     virtuosoRef.current?.scrollToIndex({
       index: "LAST",
-      behavior: "smooth",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
     });
   }, [onAutoScrollChange]);
 
@@ -195,7 +196,11 @@ export function EventTimeline({
         data={events}
         computeItemKey={(_index, event) => event.id}
         initialTopMostItemIndex={{ index: "LAST", align: "end" }}
-        followOutput={autoScroll ? "smooth" : false}
+        followOutput={
+          autoScroll
+            ? (isAtBottom) => (isAtBottom ? (prefersReducedMotion() ? "auto" : "smooth") : false)
+            : false
+        }
         atBottomStateChange={handleAtBottomChange}
         itemContent={(_index, event) => (
           <EventRow event={event} isSelected={event.id === selectedId} onSelect={onSelectEvent} />

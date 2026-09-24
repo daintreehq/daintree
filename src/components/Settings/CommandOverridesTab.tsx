@@ -16,6 +16,7 @@ import type { CommandManifestEntry, CommandOverride } from "@shared/types/comman
 import { cn } from "@/lib/utils";
 import { validatePromptTemplate } from "@shared/utils/promptTemplate";
 import { logError } from "@/utils/logger";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 
 interface CommandOverridesTabProps {
   projectId: string;
@@ -454,9 +455,10 @@ function PromptRow({ commandId, args, value, onChange }: PromptRowProps) {
       // The error renders under a tall field and can land below the fold; bring
       // it into view without moving the caret.
       requestAnimationFrame(() =>
-        textareaRef.current
-          ?.closest("[data-settings-row]")
-          ?.scrollIntoView?.({ block: "nearest", behavior: "smooth" })
+        textareaRef.current?.closest("[data-settings-row]")?.scrollIntoView?.({
+          block: "nearest",
+          behavior: prefersReducedMotion() ? "auto" : "smooth",
+        })
       );
     }
     if (!nowInvalid && invalid) setAnnouncement("Custom prompt saved");
