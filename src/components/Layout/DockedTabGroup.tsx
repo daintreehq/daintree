@@ -85,6 +85,7 @@ import {
   hasPanelCloseGuard,
   isPanelClosePending,
 } from "@/services/panelCloseGuard";
+import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 
 interface DockedTabGroupProps {
   group: TabGroup;
@@ -656,8 +657,11 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               onDoubleClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                const moved = moveTerminalToGrid(activePanel.id);
-                if (moved && openDockPanelId) closeDockTerminal(openDockPanelId);
+                animatePanelMove(activePanel.id, "restore", () => {
+                  const moved = moveTerminalToGrid(activePanel.id);
+                  if (moved && openDockPanelId) closeDockTerminal(openDockPanelId);
+                  return moved;
+                });
               }}
               aria-label={`${activePanel.title}${displayAgentState ? (observedStateLabel ? ` — agent ${observedStateLabel}` : "") : groupPlainWorking ? " — command running" : ""} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
             >

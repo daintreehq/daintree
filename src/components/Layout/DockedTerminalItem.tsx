@@ -42,6 +42,7 @@ import { usePreferencesStore } from "@/store";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDismissableTooltip } from "@/hooks/useDismissableTooltip";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
+import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 
 interface DockedTerminalItemProps {
   terminal: PtyPanelData;
@@ -187,8 +188,11 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   // double-click backstop: only close the dock popover if the move succeeded
   // (the store wrapper clears activeDockTerminalId — see #4997).
   const handleMoveToGrid = useCallback(() => {
-    const moved = moveTerminalToGrid(terminal.id);
-    if (moved) closeDockTerminal(terminal.id);
+    animatePanelMove(terminal.id, "restore", () => {
+      const moved = moveTerminalToGrid(terminal.id);
+      if (moved) closeDockTerminal(terminal.id);
+      return moved;
+    });
   }, [terminal.id, moveTerminalToGrid, closeDockTerminal]);
 
   const presetCustomPresets = useAgentSettingsStore((s) =>
