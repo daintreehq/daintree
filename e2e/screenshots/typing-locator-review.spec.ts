@@ -101,10 +101,13 @@ function pill(page: Page, fixture: string) {
 type Hold = "none" | "all" | "unmount";
 
 async function show(page: Page, fixture: string, hold: Hold) {
+  // Clear and show in separate tasks: in one tick React batches them, the pill
+  // never unmounts, and a fresh show never gets its `@starting-style` entry.
+  await page.evaluate(() => (window as unknown as HarnessWindow).__typingLocator.clear());
+  await expect(page.locator("[data-typing-locator]")).toHaveCount(0);
   await page.evaluate(
     ([id, h]) => {
       const api = (window as unknown as HarnessWindow).__typingLocator;
-      api.clear();
       api.hold(h as Hold);
       api.show(id as string);
     },
