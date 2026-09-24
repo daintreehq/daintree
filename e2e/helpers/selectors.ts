@@ -482,7 +482,8 @@ export const SEL = {
     saveDialog: '[data-testid="fleet-save-dialog"]',
     saveFormName: '[data-testid="fleet-save-form-name"]',
     savedRow: '[data-testid="fleet-saved-row"]',
-    savedRowDelete: '[data-testid="fleet-saved-row-delete"]',
+    savedManageOpen: '[data-testid="fleet-saved-manage-open"]',
+    savedManageDialog: '[data-testid="fleet-saved-manage-dialog"]',
     failureBanner: '[role="alert"]:has-text("Broadcast failed")',
   },
   events: {

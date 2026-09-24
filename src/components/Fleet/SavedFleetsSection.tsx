@@ -12,11 +12,14 @@ interface SavedFleetsSectionProps {
   onRequestDelete: (id: string) => void;
   /** Open the save dialog. Hoisted to the ribbon so it outlives the menu. */
   onRequestSave: () => void;
+  /** Open the saved-fleets dialog, where each fleet's Arm and Delete are buttons. */
+  onRequestManage: () => void;
 }
 
 export function SavedFleetsSection({
   onRequestDelete,
   onRequestSave,
+  onRequestManage,
 }: SavedFleetsSectionProps): ReactElement {
   const { snapshotUsable, snapshotStale, rules, countById } = useSavedFleets();
 
@@ -69,6 +72,11 @@ export function SavedFleetsSection({
       <DropdownMenuItem onSelect={onRequestSave} data-testid="fleet-save-open">
         Save as fleet…
       </DropdownMenuItem>
+      {(hasSnapshots || rules.length > 0) && (
+        <DropdownMenuItem onSelect={onRequestManage} data-testid="fleet-saved-manage-open">
+          Manage saved fleets…
+        </DropdownMenuItem>
+      )}
     </>
   );
 }

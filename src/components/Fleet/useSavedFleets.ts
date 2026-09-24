@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetActions";
 import type { FleetSavedScope } from "@shared/types";
 import { rankSavedFleets, rankPredicateFleets } from "./fleetRanking";
@@ -30,6 +31,9 @@ export function useSavedFleets(): SavedFleetList {
   const savedScopes = useProjectSettingsStore(
     useShallow((s) => s.settings?.fleetSavedScopes ?? [])
   );
+  // "This worktree" rules count against the active worktree, which lives in
+  // its own store — subscribe so switching worktrees re-derives the counts.
+  useWorktreeSelectionStore((s) => s.activeWorktreeId);
   // Primitive-valued selection (FleetCountChip pattern): re-derive counts when
   // panes open/close, but return a flat Record so unrelated panel ticks —
   // agent-state churn while a menu is open — reuse the previous reference and

@@ -1226,16 +1226,16 @@ describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
     });
   });
 
-  it("trash button opens a confirm dialog instead of deleting immediately", async () => {
+  it("requesting delete opens a confirm dialog instead of deleting immediately", async () => {
     const actionServiceModule = await import("@/services/ActionService");
     const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
 
     useFleetArmingStore.getState().armIds(["a", "b"]);
     render(<FleetArmingRibbon />);
 
-    const trash = screen.getByTestId("fleet-saved-row-delete");
+    // The fixture fleet is stale (no terminals), so selecting it asks to delete.
     await act(async () => {
-      fireEvent.click(trash);
+      fireEvent.click(screen.getByText("My fleet"));
     });
 
     // No immediate dispatch — the confirm must gate the deletion.
@@ -1253,7 +1253,7 @@ describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
     render(<FleetArmingRibbon />);
 
     await act(async () => {
-      fireEvent.click(screen.getByTestId("fleet-saved-row-delete"));
+      fireEvent.click(screen.getByText("My fleet"));
     });
 
     const confirmBtn = screen.getByRole("button", { name: "Delete fleet" });
@@ -1278,7 +1278,7 @@ describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
     render(<FleetArmingRibbon />);
 
     await act(async () => {
-      fireEvent.click(screen.getByTestId("fleet-saved-row-delete"));
+      fireEvent.click(screen.getByText("My fleet"));
     });
     expect(screen.getByText("Delete 'My fleet'?")).toBeTruthy();
 
@@ -1297,7 +1297,7 @@ describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
     render(<FleetArmingRibbon />);
 
     await act(async () => {
-      fireEvent.click(screen.getByTestId("fleet-saved-row-delete"));
+      fireEvent.click(screen.getByText("My fleet"));
     });
     expect(screen.getByText("Delete 'My fleet'?")).toBeTruthy();
 
@@ -1331,7 +1331,7 @@ describe("FleetArmingRibbon — fleet dialogs absorb bare Escape", () => {
   // Esc closes the dialog; a second quick Esc from the control that regained
   // focus must not read as the double-tap that interrupts every armed agent.
   for (const [label, open] of [
-    ["delete confirm", () => fireEvent.click(screen.getByTestId("fleet-saved-row-delete"))],
+    ["delete confirm", () => fireEvent.click(screen.getByText("My fleet"))],
     ["save dialog", () => fireEvent.click(screen.getByText("Save as fleet…"))],
   ] as const) {
     it(`a double bare Escape while the ${label} is open does not interrupt`, async () => {

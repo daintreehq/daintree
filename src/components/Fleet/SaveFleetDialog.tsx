@@ -6,6 +6,8 @@ import { FIELD_INPUT, FormGrid, FormRow } from "@/components/Worktree/views";
 import { actionService } from "@/services/ActionService";
 import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetActions";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { PredicateFleetSavedScope } from "@shared/types";
 
 type SaveFleetKind = "snapshot" | "predicate";
@@ -65,7 +67,11 @@ export function SaveFleetDialog({
 
   // What the rule would select right now, so the user sees the result of the
   // filter before naming it — the same count the saved row will show.
-  const ruleMatchCount =
+  // A primitive-valued selection over the panel registry, plus the active
+  // worktree the "this worktree" scope reads — the preview has to move on its
+  // own, since the ribbon that hosts this dialog may no longer be rendering.
+  useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  const ruleMatchCount = usePanelStore(() =>
     kind === "predicate"
       ? computeSavedScopePaneCount({
           kind: "predicate",
@@ -75,7 +81,8 @@ export function SaveFleetDialog({
           stateFilter: ruleState,
           createdAt: 0,
         })
-      : 0;
+      : 0
+  );
 
   const submit = async () => {
     if (!canSave) return;

@@ -488,36 +488,56 @@ describe("Fleet drafting preview invariants", () => {
 });
 
 describe("Saved fleet row invariants", () => {
-  it("a stale snapshot steps down its recall content but never its delete control", () => {
-    const scope = {
-      kind: "snapshot" as const,
-      id: "s",
-      name: "old",
-      terminalIds: ["gone"],
-      createdAt: 0,
-    };
+  const scope = {
+    kind: "snapshot" as const,
+    id: "s",
+    name: "old",
+    terminalIds: ["gone"],
+    createdAt: 0,
+  };
+
+  it("a stale snapshot steps its name down through the text hierarchy, never opacity", () => {
     const { unmount } = render(
       <SavedFleetRow scope={scope} onRequestDelete={() => {}} count={0} isStale />
     );
     const staleRow = screen.getByTestId("fleet-saved-row");
-    const staleDelete = screen.getByTestId("fleet-saved-row-delete");
     // Stale means "cannot recall", never "menu item disabled" — Radix would dim
-    // and block every descendant, Delete included.
+    // and block the row, and with it the one action a dead snapshot still has.
     expect(staleRow.getAttribute("data-disabled")).toBeNull();
     expect(staleRow.className).not.toMatch(/opacity-/);
-    expect(staleDelete.className).not.toMatch(/opacity-/);
-    // Stepped down through the text hierarchy rather than opacity, which
-    // would halve an already-secondary colour below any contrast floor.
     const staleName = screen.getByText("old").className;
     expect(staleName).not.toMatch(/opacity-/);
     unmount();
 
     render(<SavedFleetRow scope={scope} onRequestDelete={() => {}} count={2} isStale={false} />);
     expect(screen.getByText("old").className).not.toBe(staleName);
-    expect(screen.getByTestId("fleet-saved-row-delete").className).toBe(staleDelete.className);
-    const delegate = vi.fn();
-    render(<SavedFleetRow scope={scope} onRequestDelete={delegate} count={0} isStale />);
-    fireEvent.click(screen.getAllByTestId("fleet-saved-row-delete")[1]!);
-    expect(delegate).toHaveBeenCalledWith("s");
+  });
+
+  it("a saved fleet row holds one action and no nested controls, like every other menu row", () => {
+    for (const isStale of [true, false]) {
+      const { unmount } = render(
+        <SavedFleetRow
+          scope={scope}
+          onRequestDelete={() => {}}
+          count={isStale ? 0 : 1}
+          isStale={isStale}
+        />
+      );
+      const row = screen.getByTestId("fleet-saved-row");
+      expect(row.querySelectorAll("button, input, select, textarea, a[href]")).toHaveLength(0);
+      unmount();
+    }
+  });
+
+  it("Delete on any row reaches the delete request", () => {
+    for (const isStale of [true, false]) {
+      const delegate = vi.fn();
+      const { unmount } = render(
+        <SavedFleetRow scope={scope} onRequestDelete={delegate} count={1} isStale={isStale} />
+      );
+      fireEvent.keyDown(screen.getByTestId("fleet-saved-row"), { key: "Delete" });
+      expect(delegate).toHaveBeenCalledWith("s");
+      unmount();
+    }
   });
 });

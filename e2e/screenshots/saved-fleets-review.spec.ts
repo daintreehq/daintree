@@ -243,12 +243,27 @@ const SHOTS: Shot[] = [
     fixture: "saved-rich",
     fullFrame: true,
     drive: async (page) => {
+      // Delete on a focused row is the menu's accelerator to the confirm.
       const row = page.getByTestId("fleet-saved-row").first();
-      await row.hover();
-      await row.getByTestId("fleet-saved-row-delete").click();
+      await row.focus();
+      await page.keyboard.press("Delete");
       const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog")).first();
       await expect(dialog).toBeVisible();
       await page.waitForTimeout(350);
+      return dialog;
+    },
+  },
+  {
+    name: "manage-dialog",
+    fixture: "saved-rich",
+    sweep: true,
+    fullFrame: true,
+    drive: async (page) => {
+      await page.getByTestId("fleet-saved-manage-open").click();
+      const dialog = page.getByTestId("fleet-saved-manage-dialog");
+      await expect(dialog).toBeVisible();
+      await expect(page.getByTestId("fleet-saved-manage-row")).toHaveCount(6);
+      await page.waitForTimeout(300);
       return dialog;
     },
   },

@@ -137,21 +137,11 @@ async function openSavedFleetRow(page: Page, fleetName: string) {
 }
 
 async function requestSavedFleetDelete(page: Page, fleetName: string): Promise<void> {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    await openSavedFleetRow(page, fleetName);
-    const clicked = await page.evaluate((name) => {
-      const buttons = Array.from(
-        document.querySelectorAll<HTMLButtonElement>('[data-testid="fleet-saved-row-delete"]')
-      );
-      const button = buttons.find(
-        (candidate) => candidate.getAttribute("aria-label") === `Delete fleet "${name}"`
-      );
-      button?.click();
-      return Boolean(button);
-    }, fleetName);
-    if (clicked) return;
-  }
-  throw new Error(`Could not request delete for saved fleet "${fleetName}"`);
+  // Delete on a focused row is the menu's accelerator to the same confirm the
+  // saved-fleets dialog offers as a button.
+  const savedRow = await openSavedFleetRow(page, fleetName);
+  await savedRow.focus();
+  await page.keyboard.press("Delete");
 }
 
 // These confirmation keys belong to window-level listeners. Dispatch from

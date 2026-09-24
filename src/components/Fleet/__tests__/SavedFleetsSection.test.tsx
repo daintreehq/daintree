@@ -168,7 +168,13 @@ beforeEach(() => {
 describe("SavedFleetsSection", () => {
   it("renders snapshots under Snapshots label", () => {
     setSavedScopes([SNAPSHOT_A, SNAPSHOT_B]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     expect(screen.getByText("Snapshots")).toBeDefined();
     expect(screen.queryByText("Pinned")).toBeNull();
     expect(screen.getByText("My terminals")).toBeDefined();
@@ -177,7 +183,13 @@ describe("SavedFleetsSection", () => {
 
   it("renders live rules under the Live rules label", () => {
     setSavedScopes([PREDICATE_FINISHED_CURRENT, PREDICATE_ALL_ALL]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     expect(screen.getByText("Live rules")).toBeDefined();
     expect(screen.getByText("Finished here")).toBeDefined();
     expect(screen.getByText("All everything")).toBeDefined();
@@ -194,7 +206,13 @@ describe("SavedFleetsSection", () => {
       PREDICATE_ALL_ALL,
     ];
     setSavedScopes(rules);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     for (const rule of rules) {
       expect(screen.getAllByText(rule.name)).toHaveLength(1);
     }
@@ -202,7 +220,13 @@ describe("SavedFleetsSection", () => {
 
   it("shows both sections when both kinds exist", () => {
     setSavedScopes([SNAPSHOT_A, PREDICATE_FINISHED_CURRENT]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     expect(screen.getByText("Snapshots")).toBeDefined();
     expect(screen.getByText("Live rules")).toBeDefined();
     expect(screen.getByText("My terminals")).toBeDefined();
@@ -211,28 +235,52 @@ describe("SavedFleetsSection", () => {
 
   it("shows only Snapshots when no live rules exist", () => {
     setSavedScopes([SNAPSHOT_A]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     expect(screen.getByText("Snapshots")).toBeDefined();
     expect(screen.queryByText("Live rules")).toBeNull();
   });
 
   it("shows only Smart-Sets when no snapshots exist", () => {
     setSavedScopes([PREDICATE_FINISHED_CURRENT]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     expect(screen.queryByText("Snapshots")).toBeNull();
     expect(screen.getByText("Live rules")).toBeDefined();
   });
 
   it("shows neither section label when no saved scopes exist", () => {
     setSavedScopes([]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     expect(screen.queryByText("Snapshots")).toBeNull();
     expect(screen.queryByText("Live rules")).toBeNull();
   });
 
   it("marks a stale snapshot as stale, not disabled, and names what selecting it does", () => {
     setSavedScopes([SNAPSHOT_B]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     const staleRow = screen.getByTestId("fleet-saved-row");
     // Disabled semantics can't describe a row whose delete still works.
     expect(staleRow.getAttribute("aria-disabled")).toBeNull();
@@ -240,27 +288,15 @@ describe("SavedFleetsSection", () => {
     expect(staleRow.getAttribute("aria-label")).toMatch(/delete/i);
   });
 
-  it("fires onRequestDelete when delete button clicked", () => {
-    const onDelete = vi.fn();
-    setSavedScopes([SNAPSHOT_A]);
-    render(<SavedFleetsSection onRequestDelete={onDelete} onRequestSave={vi.fn()} />);
-    const deleteBtn = screen.getByLabelText('Delete fleet "My terminals"');
-    fireEvent.click(deleteBtn);
-    expect(onDelete).toHaveBeenCalledWith("snap-a");
-  });
-
-  it("fires onRequestDelete when stale snapshot delete button clicked", () => {
-    const onDelete = vi.fn();
-    setSavedScopes([SNAPSHOT_B]);
-    render(<SavedFleetsSection onRequestDelete={onDelete} onRequestSave={vi.fn()} />);
-    const deleteBtn = screen.getByLabelText('Delete fleet "Stale snapshot"');
-    fireEvent.click(deleteBtn);
-    expect(onDelete).toHaveBeenCalledWith("snap-b");
-  });
-
   it("dispatches recall when live snapshot row is selected", () => {
     setSavedScopes([SNAPSHOT_A]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     const rows = screen.getAllByRole("menuitem");
     const liveRow = rows.find((r) => r.textContent?.includes("My terminals"));
     fireEvent.click(liveRow!);
@@ -273,7 +309,13 @@ describe("SavedFleetsSection", () => {
 
   it("does not dispatch recall when stale snapshot row is selected", () => {
     setSavedScopes([SNAPSHOT_B]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     const rows = screen.getAllByRole("menuitem");
     const staleRow = rows.find((r) => r.textContent?.includes("Stale snapshot"));
     fireEvent.click(staleRow!);
@@ -283,7 +325,13 @@ describe("SavedFleetsSection", () => {
   it("selecting a stale snapshot opens its delete confirm instead of recalling", () => {
     const onDelete = vi.fn();
     setSavedScopes([SNAPSHOT_B]);
-    render(<SavedFleetsSection onRequestDelete={onDelete} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={onDelete}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     fireEvent.click(screen.getByTestId("fleet-saved-row"));
     expect(onDelete).toHaveBeenCalledWith("snap-b");
     expect(actionService.dispatch).not.toHaveBeenCalled();
@@ -291,7 +339,13 @@ describe("SavedFleetsSection", () => {
 
   it("does not keep a usable row's menu open on select", () => {
     setSavedScopes([SNAPSHOT_A]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     const row = screen
       .getAllByRole("menuitem")
       .find((r) => r.textContent?.includes("My terminals"));
@@ -303,7 +357,13 @@ describe("SavedFleetsSection", () => {
   it("requests delete from the keyboard on a focused row, stale or not", () => {
     const onDelete = vi.fn();
     setSavedScopes([SNAPSHOT_A, SNAPSHOT_B]);
-    render(<SavedFleetsSection onRequestDelete={onDelete} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={onDelete}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     for (const row of screen.getAllByTestId("fleet-saved-row")) {
       fireEvent.keyDown(row, { key: "Delete" });
     }
@@ -316,7 +376,11 @@ describe("SavedFleetsSection", () => {
       const onSave = vi.fn();
       setSavedScopes(scopes);
       const { unmount } = render(
-        <SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={onSave} />
+        <SavedFleetsSection
+          onRequestDelete={vi.fn()}
+          onRequestSave={onSave}
+          onRequestManage={vi.fn()}
+        />
       );
       fireEvent.click(screen.getByTestId("fleet-save-open"));
       expect(onSave).toHaveBeenCalledTimes(1);
@@ -324,9 +388,40 @@ describe("SavedFleetsSection", () => {
     }
   });
 
+  it("offers Manage saved fleets only when there is something to manage", () => {
+    for (const [scopes, expected] of [
+      [[], 0],
+      [[SNAPSHOT_B], 1],
+      [[PREDICATE_FINISHED_CURRENT], 1],
+    ] as const) {
+      const onManage = vi.fn();
+      setSavedScopes([...scopes]);
+      const { unmount } = render(
+        <SavedFleetsSection
+          onRequestDelete={vi.fn()}
+          onRequestSave={vi.fn()}
+          onRequestManage={onManage}
+        />
+      );
+      const items = screen.queryAllByTestId("fleet-saved-manage-open");
+      expect(items).toHaveLength(expected);
+      if (items[0]) {
+        fireEvent.click(items[0]);
+        expect(onManage).toHaveBeenCalledTimes(1);
+      }
+      unmount();
+    }
+  });
+
   it("renders Snapshots group before Smart-Sets group in DOM order", () => {
     setSavedScopes([SNAPSHOT_A, PREDICATE_FINISHED_CURRENT]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     const groups = screen.getAllByTestId("dropdown-group");
     expect(groups).toHaveLength(2);
     const [first, second] = groups as [HTMLElement, HTMLElement];
@@ -359,7 +454,13 @@ describe("SavedFleetsSection ranking", () => {
     };
     // Insert in array order (low first, high second) to confirm sorting re-orders
     setSavedScopes([lowFrecency, highFrecency]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     const [snapGroup] = screen.getAllByTestId("dropdown-group") as [HTMLElement];
     expect(rowNames(snapGroup)).toEqual(["high", "low"]);
   });
@@ -386,7 +487,11 @@ describe("SavedFleetsSection ranking", () => {
     // Insert stale first to prove usable wins regardless of array order
     setSavedScopes([stale, usable]);
     const { container } = render(
-      <SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
     );
     const [snapGroup] = screen.getAllByTestId("dropdown-group") as [HTMLElement];
     expect(rowNames(snapGroup)).toEqual(["usable", "stale"]);
@@ -414,7 +519,13 @@ describe("SavedFleetsSection ranking", () => {
       createdAt: NOW, // brand-new, never recalled
     };
     setSavedScopes([fresh, recalled]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     const [snapGroup] = screen.getAllByTestId("dropdown-group") as [HTMLElement];
     expect(rowNames(snapGroup)).toEqual(["recalled", "fresh"]);
   });
@@ -441,7 +552,13 @@ describe("SavedFleetsSection ranking", () => {
       usageHistory: [NOW, NOW - DAY],
     };
     setSavedScopes([low, high]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     // The last group is the live rules group
     const groups = screen.getAllByTestId("dropdown-group");
     const rulesGroup = groups[groups.length - 1] as HTMLElement;
@@ -451,7 +568,11 @@ describe("SavedFleetsSection ranking", () => {
   it("does not render a stale sub-group separator when no usable snapshots exist", () => {
     setSavedScopes([SNAPSHOT_B]); // empty terminalIds → stale
     const { container } = render(
-      <SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
     );
     const [snapGroup] = screen.getAllByTestId("dropdown-group") as [HTMLElement];
     expect(rowNames(snapGroup)).toEqual(["Stale snapshot"]);
@@ -498,7 +619,13 @@ describe("SavedFleetsSection integration (live pane counts)", () => {
       },
     ]);
     // Empty panel store — all terminalIds are missing.
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     const [snapGroup] = screen.getAllByTestId("dropdown-group") as [HTMLElement];
     expect(rowNames(snapGroup)).toEqual(["Gone"]);
     const staleRow = within(snapGroup).getByRole("menuitem");
@@ -521,7 +648,13 @@ describe("SavedFleetsSection integration (live pane counts)", () => {
       },
       panelIds: ["t-real"],
     });
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
+    render(
+      <SavedFleetsSection
+        onRequestDelete={vi.fn()}
+        onRequestSave={vi.fn()}
+        onRequestManage={vi.fn()}
+      />
+    );
     const [snapGroup] = screen.getAllByTestId("dropdown-group") as [HTMLElement];
     expect(rowNames(snapGroup)).toEqual(["fresh"]);
     const liveRow = within(snapGroup).getByRole("menuitem");

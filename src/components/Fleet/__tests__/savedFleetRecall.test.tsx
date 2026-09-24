@@ -109,23 +109,34 @@ describe("SavedFleetQuickRecall", () => {
         createdAt: 1,
       },
     ]);
-    render(<SavedFleetQuickRecall mode="replace" onRecalled={vi.fn()} />);
+    render(<SavedFleetQuickRecall mode="replace" onManage={vi.fn()} onRecalled={vi.fn()} />);
     const names = screen
       .getAllByTestId("fleet-picker-saved-fleet")
       .map((b) => b.getAttribute("title"));
     expect(names.sort()).toEqual(["live", "rule"]);
   });
 
-  it("renders nothing when nothing can be recalled", () => {
-    setSaved([snapshot("dead", ["gone-1"])]);
-    const { container } = render(<SavedFleetQuickRecall mode="replace" onRecalled={vi.fn()} />);
+  it("renders nothing when nothing is saved", () => {
+    setSaved([]);
+    const { container } = render(
+      <SavedFleetQuickRecall mode="replace" onManage={vi.fn()} onRecalled={vi.fn()} />
+    );
     expect(container.innerHTML).toBe("");
+  });
+
+  it("still reaches Manage when every saved fleet is stale", () => {
+    const onManage = vi.fn();
+    setSaved([snapshot("dead", ["gone-1"])]);
+    render(<SavedFleetQuickRecall mode="replace" onManage={onManage} onRecalled={vi.fn()} />);
+    expect(screen.queryAllByTestId("fleet-picker-saved-fleet")).toHaveLength(0);
+    fireEvent.click(screen.getByTestId("fleet-picker-saved-manage"));
+    expect(onManage).toHaveBeenCalledTimes(1);
   });
 
   it("recalls the clicked fleet and hands control back to the host", () => {
     const onRecalled = vi.fn();
     setSaved([snapshot("live", ["a"])]);
-    render(<SavedFleetQuickRecall mode="replace" onRecalled={onRecalled} />);
+    render(<SavedFleetQuickRecall mode="replace" onManage={vi.fn()} onRecalled={onRecalled} />);
     fireEvent.click(screen.getByTestId("fleet-picker-saved-fleet"));
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "fleet.recallNamedFleet",
@@ -145,7 +156,7 @@ describe("SavedFleetQuickRecall in Append mode", () => {
     try {
       const onRecalled = vi.fn();
       setSaved([snapshot("live", ["a", "gone-1", "b"])]);
-      render(<SavedFleetQuickRecall mode="append" onRecalled={onRecalled} />);
+      render(<SavedFleetQuickRecall mode="append" onManage={vi.fn()} onRecalled={onRecalled} />);
       fireEvent.click(screen.getByTestId("fleet-picker-saved-fleet"));
       expect(addToFleet).toHaveBeenCalledWith(["a", "b"]);
       expect(actionService.dispatch).not.toHaveBeenCalled();
@@ -153,6 +164,50 @@ describe("SavedFleetQuickRecall in Append mode", () => {
     } finally {
       useFleetArmingStore.setState({ addToFleet: original });
     }
+  });
+});
+
+describe("SavedFleetQuickRecall in Append mode counts only what it would add", () => {
+  it("hides a fleet that is already fully armed and counts the rest by new panes", async () => {
+    const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
+    useFleetArmingStore.setState({ armedIds: new Set(["a", "b"]) });
+    try {
+      setSaved([snapshot("covered", ["a", "b"]), snapshot("partly", ["a", "c", "d"])]);
+      render(<SavedFleetQuickRecall mode="append" onManage={vi.fn()} onRecalled={vi.fn()} />);
+      const chips = screen.getAllByTestId("fleet-picker-saved-fleet");
+      expect(chips.map((c) => c.getAttribute("title"))).toEqual(["partly"]);
+      expect(chips[0]!.getAttribute("aria-label")).toMatch(/\b2 panes\b/);
+    } finally {
+      useFleetArmingStore.setState({ armedIds: new Set() });
+    }
+  });
+});
+
+describe("SavedFleetsDialog", () => {
+  it("lists every saved fleet, arms only the ones that would arm something, and gates delete on a confirm", async () => {
+    const { SavedFleetsDialog } = await import("../SavedFleetsDialog");
+    setSaved([snapshot("live", ["a"]), snapshot("dead", ["gone-1"])]);
+    const onClose = vi.fn();
+    render(<SavedFleetsDialog isOpen onClose={onClose} />);
+    expect(screen.getAllByTestId("fleet-saved-manage-row")).toHaveLength(2);
+    const arms = screen.getAllByTestId("fleet-saved-manage-arm");
+    const disabled = arms.filter(
+      (b) => b.hasAttribute("disabled") || b.getAttribute("aria-disabled") === "true"
+    );
+    expect(disabled).toHaveLength(1);
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Delete fleet "dead"'));
+    });
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Delete fleet" }));
+    });
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "fleet.deleteNamedFleet",
+      { id: "dead" },
+      { source: "user" }
+    );
   });
 });
 

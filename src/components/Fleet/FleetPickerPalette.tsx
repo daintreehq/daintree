@@ -9,6 +9,7 @@ import { useUiMotionTransition } from "@/hooks/useShouldSkipMotion";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { handleSegmentedRadioKeyDown } from "./segmentedRadioKeys";
 import { SavedFleetQuickRecall } from "./SavedFleetQuickRecall";
+import { SavedFleetsDialog } from "./SavedFleetsDialog";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 
 type CommitMode = "replace" | "append";
@@ -45,6 +46,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const addToFleet = useFleetArmingStore((s) => s.addToFleet);
   const armedIds = useFleetArmingStore((s) => s.armedIds);
   const [commitMode, setCommitMode] = useState<CommitMode>("replace");
+  const [manageOpen, setManageOpen] = useState(false);
   const thumbLayoutId = `${useId()}-segmented-thumb`;
   const uiMotionTransition = useUiMotionTransition();
   // Closing resets the mode to Replace while the palette is still fading out, which
@@ -168,7 +170,15 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
 
   const selectionHelpers = (
     <>
-      <SavedFleetQuickRecall mode={commitMode} onRecalled={onClose} />
+      <SavedFleetQuickRecall
+        mode={commitMode}
+        onRecalled={onClose}
+        onManage={() => {
+          // The palette is modal; hand over to the dialog rather than stack them.
+          onClose();
+          setManageOpen(true);
+        }}
+      />
       <div className="flex items-center justify-between gap-2 pt-2">
         <div role="group" aria-label="Selection helpers" className="flex items-center gap-1.5">
           <button
@@ -225,162 +235,167 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const hasVisibleRows = picker.visibleTerminals.length > 0;
 
   return (
-    <AppPaletteDialog
-      isOpen={isOpen}
-      onClose={onClose}
-      ariaLabel="Select terminals to arm"
-      tier="command"
-    >
-      <div className="flex flex-col">
-        <div
-          className={cn(
-            "flex items-center gap-2 px-4 py-3 border-b border-border-default",
-            "text-text-primary"
-          )}
-        >
-          <Zap className="h-4 w-4 text-text-secondary" aria-hidden="true" />
-          <h2 className="text-sm leading-[inherit] font-semibold">Select terminals to arm</h2>
-        </div>
-
-        {picker.acquired ? (
-          <>
-            <div className="max-h-[60vh] flex flex-col">
-              <FleetPickerContent
-                picker={picker}
-                testIdPrefix="fleet-picker-cold-start"
-                autoFocusSearch
-                headerSlot={selectionHelpers}
-              />
-            </div>
-
-            <div className="flex min-h-7 flex-wrap items-center gap-1.5 border-t border-border-default px-3 py-1.5 text-2xs text-text-secondary">
-              <FleetPickerFooterHint
-                confirmedCount={picker.confirmedIds.length}
-                driftCount={picker.driftCount}
-                hasVisibleRows={hasVisibleRows}
-              />
-            </div>
-
-            <div className="flex flex-nowrap items-center justify-between gap-2 border-t border-border-default px-3 py-2">
-              <div
-                // A visible track. Without one the inactive half is bare dim
-                // text beside a filled chip, so the pair reads as "a button and
-                // some grey words" rather than a two-position switch.
-                className="relative isolate flex rounded-sm border border-border-default bg-tint/[0.04] p-0.5 text-2xs"
-                role="radiogroup"
-                aria-label="Commit mode"
-                data-testid="fleet-picker-cold-start-commit-mode"
-                // Arrow keys move within the group; stopping them here keeps the
-                // palette's row navigation from also acting on the same press.
-                onKeyDown={(e) =>
-                  handleSegmentedRadioKeyDown(e, COMMIT_MODE_VALUES, commitMode, setCommitMode)
-                }
-              >
-                {COMMIT_MODES.map(({ mode, label }) => {
-                  const isActive = commitMode === mode;
-
-                  return (
-                    <button
-                      key={mode}
-                      type="button"
-                      role="radio"
-                      aria-checked={isActive}
-                      tabIndex={isActive ? 0 : -1}
-                      data-value={mode}
-                      onClick={() => setCommitMode(mode)}
-                      data-testid={`fleet-picker-cold-start-commit-mode-${mode}`}
-                      className={cn(
-                        "relative rounded-xs px-2 py-1 transition-colors duration-150",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-                        isActive ? "text-text-primary" : "text-text-secondary hover:bg-tint/[0.04]"
-                      )}
-                    >
-                      {isActive && (
-                        <m.div
-                          data-slot="segmented-thumb"
-                          layout
-                          layoutId={thumbLayoutId}
-                          layoutCrossfade={false}
-                          transition={thumbTransition}
-                          className="absolute inset-0 z-0 rounded-xs bg-tint/[0.10] pointer-events-none"
-                          aria-hidden="true"
-                        />
-                      )}
-                      <span className="relative z-10">{label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className={cn(
-                    "rounded-sm px-2.5 py-1 text-xs leading-[inherit] text-text-secondary",
-                    "hover:bg-tint/[0.08] hover:text-text-primary transition-colors duration-150",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                  )}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={picker.handleConfirm}
-                  // In Append mode the live count is what would actually be
-                  // added; without this the button stayed enabled on a selection
-                  // that was already entirely armed, and closed having done
-                  // nothing.
-                  disabled={
-                    commitMode === "append" ? appendCount === 0 : picker.confirmedIds.length === 0
-                  }
-                  data-testid="fleet-picker-cold-start-confirm"
-                  className={cn(
-                    // Neutral high-contrast, the house primary treatment
-                    // (`AppDialog.Footer` hard-codes `variant="contrast"`). The
-                    // amber category fill this used to carry was the only
-                    // category-coloured confirm in ~111 dialogs. Fleet keeps its
-                    // amber identity where it belongs — the arming ribbon, the
-                    // drafting pill, the pane header — and this surface is left
-                    // with exactly one gold, the Waiting badge.
-                    "rounded-sm bg-text-primary px-2.5 py-1 text-xs leading-[inherit] text-text-inverse ring-1 ring-tint/15",
-                    "transition-[background-color,opacity] duration-150 hover:bg-[color-mix(in_oklab,var(--color-text-primary)_90%,var(--color-text-inverse))]",
-                    // The label changes width with the count, and it sits at the
-                    // end of the row, so every change dragged Cancel sideways
-                    // with it. A floor wide enough for the longest common label
-                    // pins the pair in place.
-                    "min-w-[7.5rem] text-center tabular-nums",
-                    "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                  )}
-                >
-                  {commitMode === "append"
-                    ? appendCount === 0
-                      ? "Add selected"
-                      : `Add ${appendCount}`
-                    : picker.confirmedIds.length === 0
-                      ? "Arm selected"
-                      : `Arm ${picker.confirmedIds.length} selected`}
-                </button>
-              </div>
-            </div>
-          </>
-        ) : (
-          // Another picker (likely the ribbon `+ Add panes…`) holds the
-          // single-active session. Surface a soft empty state and let the
-          // user dismiss via Cancel/Esc.
+    <>
+      <SavedFleetsDialog isOpen={manageOpen} onClose={() => setManageOpen(false)} />
+      <AppPaletteDialog
+        isOpen={isOpen}
+        onClose={onClose}
+        ariaLabel="Select terminals to arm"
+        tier="command"
+      >
+        <div className="flex flex-col">
           <div
-            className="flex flex-col items-center justify-center gap-1 px-6 py-12 text-center"
-            data-testid="fleet-picker-cold-start-blocked"
+            className={cn(
+              "flex items-center gap-2 px-4 py-3 border-b border-border-default",
+              "text-text-primary"
+            )}
           >
-            <div className="text-sm leading-[inherit] font-medium text-text-primary">
-              Another fleet picker is open
-            </div>
-            <div className="text-xs leading-[inherit] text-text-secondary">
-              Close it and try again.
-            </div>
+            <Zap className="h-4 w-4 text-text-secondary" aria-hidden="true" />
+            <h2 className="text-sm leading-[inherit] font-semibold">Select terminals to arm</h2>
           </div>
-        )}
-      </div>
-    </AppPaletteDialog>
+
+          {picker.acquired ? (
+            <>
+              <div className="max-h-[60vh] flex flex-col">
+                <FleetPickerContent
+                  picker={picker}
+                  testIdPrefix="fleet-picker-cold-start"
+                  autoFocusSearch
+                  headerSlot={selectionHelpers}
+                />
+              </div>
+
+              <div className="flex min-h-7 flex-wrap items-center gap-1.5 border-t border-border-default px-3 py-1.5 text-2xs text-text-secondary">
+                <FleetPickerFooterHint
+                  confirmedCount={picker.confirmedIds.length}
+                  driftCount={picker.driftCount}
+                  hasVisibleRows={hasVisibleRows}
+                />
+              </div>
+
+              <div className="flex flex-nowrap items-center justify-between gap-2 border-t border-border-default px-3 py-2">
+                <div
+                  // A visible track. Without one the inactive half is bare dim
+                  // text beside a filled chip, so the pair reads as "a button and
+                  // some grey words" rather than a two-position switch.
+                  className="relative isolate flex rounded-sm border border-border-default bg-tint/[0.04] p-0.5 text-2xs"
+                  role="radiogroup"
+                  aria-label="Commit mode"
+                  data-testid="fleet-picker-cold-start-commit-mode"
+                  // Arrow keys move within the group; stopping them here keeps the
+                  // palette's row navigation from also acting on the same press.
+                  onKeyDown={(e) =>
+                    handleSegmentedRadioKeyDown(e, COMMIT_MODE_VALUES, commitMode, setCommitMode)
+                  }
+                >
+                  {COMMIT_MODES.map(({ mode, label }) => {
+                    const isActive = commitMode === mode;
+
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="radio"
+                        aria-checked={isActive}
+                        tabIndex={isActive ? 0 : -1}
+                        data-value={mode}
+                        onClick={() => setCommitMode(mode)}
+                        data-testid={`fleet-picker-cold-start-commit-mode-${mode}`}
+                        className={cn(
+                          "relative rounded-xs px-2 py-1 transition-colors duration-150",
+                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
+                          isActive
+                            ? "text-text-primary"
+                            : "text-text-secondary hover:bg-tint/[0.04]"
+                        )}
+                      >
+                        {isActive && (
+                          <m.div
+                            data-slot="segmented-thumb"
+                            layout
+                            layoutId={thumbLayoutId}
+                            layoutCrossfade={false}
+                            transition={thumbTransition}
+                            className="absolute inset-0 z-0 rounded-xs bg-tint/[0.10] pointer-events-none"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <span className="relative z-10">{label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className={cn(
+                      "rounded-sm px-2.5 py-1 text-xs leading-[inherit] text-text-secondary",
+                      "hover:bg-tint/[0.08] hover:text-text-primary transition-colors duration-150",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                    )}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={picker.handleConfirm}
+                    // In Append mode the live count is what would actually be
+                    // added; without this the button stayed enabled on a selection
+                    // that was already entirely armed, and closed having done
+                    // nothing.
+                    disabled={
+                      commitMode === "append" ? appendCount === 0 : picker.confirmedIds.length === 0
+                    }
+                    data-testid="fleet-picker-cold-start-confirm"
+                    className={cn(
+                      // Neutral high-contrast, the house primary treatment
+                      // (`AppDialog.Footer` hard-codes `variant="contrast"`). The
+                      // amber category fill this used to carry was the only
+                      // category-coloured confirm in ~111 dialogs. Fleet keeps its
+                      // amber identity where it belongs — the arming ribbon, the
+                      // drafting pill, the pane header — and this surface is left
+                      // with exactly one gold, the Waiting badge.
+                      "rounded-sm bg-text-primary px-2.5 py-1 text-xs leading-[inherit] text-text-inverse ring-1 ring-tint/15",
+                      "transition-[background-color,opacity] duration-150 hover:bg-[color-mix(in_oklab,var(--color-text-primary)_90%,var(--color-text-inverse))]",
+                      // The label changes width with the count, and it sits at the
+                      // end of the row, so every change dragged Cancel sideways
+                      // with it. A floor wide enough for the longest common label
+                      // pins the pair in place.
+                      "min-w-[7.5rem] text-center tabular-nums",
+                      "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                    )}
+                  >
+                    {commitMode === "append"
+                      ? appendCount === 0
+                        ? "Add selected"
+                        : `Add ${appendCount}`
+                      : picker.confirmedIds.length === 0
+                        ? "Arm selected"
+                        : `Arm ${picker.confirmedIds.length} selected`}
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            // Another picker (likely the ribbon `+ Add panes…`) holds the
+            // single-active session. Surface a soft empty state and let the
+            // user dismiss via Cancel/Esc.
+            <div
+              className="flex flex-col items-center justify-center gap-1 px-6 py-12 text-center"
+              data-testid="fleet-picker-cold-start-blocked"
+            >
+              <div className="text-sm leading-[inherit] font-medium text-text-primary">
+                Another fleet picker is open
+              </div>
+              <div className="text-xs leading-[inherit] text-text-secondary">
+                Close it and try again.
+              </div>
+            </div>
+          )}
+        </div>
+      </AppPaletteDialog>
+    </>
   );
 }

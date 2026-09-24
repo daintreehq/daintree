@@ -14,6 +14,7 @@ import { FleetCountChip } from "./FleetCountChip";
 import { FleetFailureBanner } from "./FleetFailureBanner";
 import { SavedFleetsSection } from "./SavedFleetsSection";
 import { SaveFleetDialog } from "./SaveFleetDialog";
+import { SavedFleetsDialog } from "./SavedFleetsDialog";
 import { FLEET_LARGE_PASTE_BATCH_SIZE } from "./fleetBroadcast";
 import { cancelActiveBroadcast } from "./fleetEnterBroadcast";
 import {
@@ -172,6 +173,7 @@ export function FleetArmingRibbon(): ReactElement | null {
   const [selectionMenuOpen, setSelectionMenuOpen] = useState(false);
   const [pendingDeleteFleetId, setPendingDeleteFleetId] = useState<string | null>(null);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [manageDialogOpen, setManageDialogOpen] = useState(false);
   // Set when the menu closes to hand off to one of the fleet dialogs. The
   // menu's focus restore to its trigger runs after the exit animation — after
   // the dialog has already focused its first field — and would pull focus back
@@ -303,7 +305,7 @@ export function FleetArmingRibbon(): ReactElement | null {
     armedCount,
     exitFleet,
     pending,
-    popoverOpen || pendingDeleteFleetId !== null || saveDialogOpen
+    popoverOpen || pendingDeleteFleetId !== null || saveDialogOpen || manageDialogOpen
   );
 
   useFleetRibbonFlashes(ribbonRef);
@@ -338,6 +340,12 @@ export function FleetArmingRibbon(): ReactElement | null {
     dialogHandoffRef.current = true;
     setSelectionMenuOpen(false);
     setSaveDialogOpen(true);
+  }, []);
+
+  const handleRequestManageFleets = useCallback(() => {
+    dialogHandoffRef.current = true;
+    setSelectionMenuOpen(false);
+    setManageDialogOpen(true);
   }, []);
 
   const pendingDeleteScope =
@@ -399,14 +407,20 @@ export function FleetArmingRibbon(): ReactElement | null {
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       if (e.key !== "Escape") return;
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-      if (popoverOpen || pending !== null || pendingDeleteFleetId !== null || saveDialogOpen) {
+      if (
+        popoverOpen ||
+        pending !== null ||
+        pendingDeleteFleetId !== null ||
+        saveDialogOpen ||
+        manageDialogOpen
+      ) {
         return;
       }
       e.preventDefault();
       e.stopPropagation();
       exitFleet();
     },
-    [exitFleet, popoverOpen, pending, pendingDeleteFleetId, saveDialogOpen]
+    [exitFleet, popoverOpen, pending, pendingDeleteFleetId, saveDialogOpen, manageDialogOpen]
   );
 
   // Render confirmation before the armedCount<2 null guard so single-agent
@@ -421,12 +435,19 @@ export function FleetArmingRibbon(): ReactElement | null {
   // the dialog and the typed name with it. The dialog explains when a
   // snapshot can no longer be saved.
   const saveDialog = (
-    <SaveFleetDialog
-      isOpen={saveDialogOpen}
-      onClose={() => setSaveDialogOpen(false)}
-      armedCount={armedCount}
-      restoreFocusTo={selectionTriggerRef}
-    />
+    <>
+      <SaveFleetDialog
+        isOpen={saveDialogOpen}
+        onClose={() => setSaveDialogOpen(false)}
+        armedCount={armedCount}
+        restoreFocusTo={selectionTriggerRef}
+      />
+      <SavedFleetsDialog
+        isOpen={manageDialogOpen}
+        onClose={() => setManageDialogOpen(false)}
+        restoreFocusTo={selectionTriggerRef}
+      />
+    </>
   );
 
   if (armedCount > 0 && pending !== null) {
@@ -566,6 +587,7 @@ export function FleetArmingRibbon(): ReactElement | null {
       <SavedFleetsSection
         onRequestDelete={handleRequestDeleteFleet}
         onRequestSave={handleRequestSaveFleet}
+        onRequestManage={handleRequestManageFleets}
       />
     </>
   );
