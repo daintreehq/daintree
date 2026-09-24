@@ -20,6 +20,8 @@
  *   DESIGN_CAPTURE_DIR           required — output directory (never the repo)
  *   DAINTREE_SHOT_THEMES         comma-separated theme ids (default: all built-ins)
  *   DAINTREE_SCREENSHOT_SCALE    device scale factor (default 2)
+ *   DAINTREE_SHOT_SEARCH_EXTRA   also capture the settings-page consumers (the
+ *                                terminal colour-scheme filter, the shortcuts search)
  *
  * Output: <dir>/<state>--<theme>.png. Each frame is checked against the state
  * it claims to show (focus owner, typed value, surface visible) after the
@@ -63,7 +65,14 @@ const ALL_THEMES = [
 const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "").split(",").filter(Boolean);
 const RUN_THEMES = THEMES.length > 0 ? THEMES : ALL_THEMES;
 
-const STATES = [
+const EXTRA = !!process.env.DAINTREE_SHOT_SEARCH_EXTRA;
+const EXTRA_STATES = [
+  "canvas-launcher-rest",
+  "scheme-search-focus",
+  "shortcuts-search-focus",
+] as const;
+
+const CORE_STATES = [
   "sidebar-rest",
   "sidebar-focus",
   "sidebar-query",
@@ -72,6 +81,7 @@ const STATES = [
   "switcher-focus",
   "launcher-focus",
 ] as const;
+const STATES: readonly string[] = EXTRA ? [...CORE_STATES, ...EXTRA_STATES] : CORE_STATES;
 
 // Transitions off so a frame never lands mid-fade; the caret stays hidden so
 // its blink phase cannot make two captures of the same state differ.
@@ -208,6 +218,17 @@ async function captureTheme(page: Page, theme: string): Promise<void> {
   await sidebarInput.fill("");
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
+  if (EXTRA) {
+    // The canvas home's palette entry is a button drawn as a search field.
+    const entry = page.getByRole("button", { name: /Search agents & panels/ }).first();
+    await entry.waitFor({ state: "visible", timeout: T_LONG });
+    await entry.evaluate((el) => el.setAttribute("data-shot-anchor", "canvas"));
+    await snap(page, "canvas-launcher-rest", theme, '[data-shot-anchor="canvas"]', {
+      padX: 24,
+      padTop: 24,
+    });
+  }
+
   // Settings nav search.
   await page.evaluate(() =>
     window.dispatchEvent(
@@ -267,6 +288,57 @@ async function captureTheme(page: Page, theme: string): Promise<void> {
   await expectFocused(page, LAUNCHER_INPUT, true);
   await snap(page, "launcher-focus", theme, LAUNCHER, { padX: 16, padTop: 16, height: 200 });
   await escapeAll(page);
+
+  if (EXTRA) await captureSettingsConsumers(page, theme);
+}
+
+/** A settings-page search, focused with a query, cropped to the row it sits in. */
+async function captureSettingsSearch(
+  page: Page,
+  theme: string,
+  state: string,
+  target: { tab: string; subtab?: string },
+  inputSelector: string,
+  query: string
+): Promise<void> {
+  await page.evaluate(
+    (detail) => window.dispatchEvent(new CustomEvent("daintree:open-settings-tab", { detail })),
+    target
+  );
+  await page.locator(SETTINGS_DIALOG).waitFor({ state: "visible", timeout: 20_000 });
+  const input = page.locator(inputSelector).first();
+  await input.waitFor({ state: "visible", timeout: 15_000 });
+  await input.scrollIntoViewIfNeeded();
+  await input.focus();
+  await input.pressSequentially(query, { delay: 15 });
+  await expect(input).toHaveValue(query);
+  await expectFocused(page, inputSelector, true);
+  const row = input.locator("xpath=ancestor::div[contains(@class,'flex')][1]/..");
+  await row.evaluate((el) => el.setAttribute("data-shot-anchor", "1"));
+  await snap(page, state, theme, '[data-shot-anchor="1"]', { padX: 12, padTop: 12 });
+  await row.evaluate((el) => el.removeAttribute("data-shot-anchor"));
+  await input.fill("");
+}
+
+async function captureSettingsConsumers(page: Page, theme: string): Promise<void> {
+  await captureSettingsSearch(
+    page,
+    theme,
+    "scheme-search-focus",
+    { tab: "terminalAppearance", subtab: "terminal" },
+    '[aria-label="Filter color schemes"]',
+    "dark"
+  );
+  await captureSettingsSearch(
+    page,
+    theme,
+    "shortcuts-search-focus",
+    { tab: "keyboard" },
+    '[aria-label="Search shortcuts"]',
+    "term"
+  );
+  await page.locator(SEL.settings.closeButton).click();
+  await page.locator(SETTINGS_DIALOG).waitFor({ state: "hidden", timeout: 8000 });
 }
 
 test("search field family — every theme", async () => {
