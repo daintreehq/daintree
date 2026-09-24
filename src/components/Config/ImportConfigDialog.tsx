@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Check } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Button } from "@/components/ui/button";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { notify } from "@/lib/notify";
+import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   CONFIG_BUNDLE_SECTION_LABELS,
   type ConfigBundlePreview,
+  type ConfigBundlePreviewChange,
   type ConfigBundlePreviewSection,
   type ConfigImportReport,
 } from "@shared/types/configBundle";
@@ -14,6 +19,9 @@ import { IMPORT_CONFIG_EVENT } from "./importConfigEvent";
 
 /** Groups this dialog's notifications so a repeat import replaces the last report. */
 const IMPORT_CONFIG_ACTION_ID = "app.importConfig";
+
+/** Added names shown before the rest fold behind "and N more". */
+const MAX_NAMED = 3;
 
 /**
  * Re-enter the flow from a toast action by firing the same event the menu item
@@ -28,42 +36,157 @@ function changeCount(section: ConfigBundlePreviewSection): number {
   return section.add + section.update;
 }
 
-/** "3 added, 1 replaced" — the actual operations, not a bare total. */
+/** "1 replaced, 3 added" — the actual operations, in the order the row lists them. */
 function describeSection(section: ConfigBundlePreviewSection): string {
   const parts: string[] = [];
-  if (section.add > 0) parts.push(`${section.add} added`);
   if (section.update > 0) parts.push(`${section.update} replaced`);
+  if (section.add > 0) parts.push(`${section.add} added`);
   return parts.join(", ");
 }
 
-function summarizeReport(report: ConfigImportReport): string {
-  const totals = report.sections.reduce(
-    (acc, section) => ({
-      applied: acc.applied + section.applied,
-      unchanged: acc.unchanged + section.unchanged,
-      skipped: acc.skipped + section.skipped,
-    }),
-    { applied: 0, unchanged: 0, skipped: 0 }
-  );
-
-  const parts = [`${totals.applied} applied`];
-  if (totals.unchanged > 0) parts.push(`${totals.unchanged} already matched`);
-  if (totals.skipped > 0) parts.push(`${totals.skipped} skipped`);
-  return parts.join(", ");
+/** "a", "a and b", "a, b and c". */
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
-/** The first few reasons, so a skip is explained rather than just counted. */
-function skippedReasons(report: ConfigImportReport): string[] {
+/**
+ * A scalar shows the value it moves between, a renamed entry the name it takes,
+ * and everything else just its name.
+ */
+function nameChange(change: ConfigBundlePreviewChange): string {
+  if (change.kind === "update" && change.from !== undefined && change.to !== undefined) {
+    return `${change.label} (${change.from} → ${change.to})`;
+  }
+  if (change.kind === "add" && change.to !== undefined) return `${change.label} (${change.to})`;
+  if (change.renamedTo) return `${change.label} (becomes ${change.renamedTo})`;
+  return change.label;
+}
+
+function countLabel(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** Appended to an outcome toast, so sections the import dropped aren't lost from its record. */
+function unsupportedNote(unknownSections: string[]): string {
+  if (unknownSections.length === 0) return "";
+  return `. ${countLabel(unknownSections.length, "unsupported section was", "unsupported sections were")} left out`;
+}
+
+/**
+ * The skipped leaves, named the way the confirmation named them — a leaf's key
+ * is a store identifier, and the preview already resolved it to a label.
+ */
+function skippedReasons(report: ConfigImportReport, preview: ConfigBundlePreview): string[] {
   const reasons: string[] = [];
   for (const section of report.sections) {
+    const labels = new Map(
+      preview.sections
+        .find((s) => s.section === section.section)
+        ?.changes.map((c) => [c.key, c.label] as const) ?? []
+    );
     for (const leaf of section.leaves) {
       if (leaf.status !== "skipped" || !leaf.reason) continue;
-      reasons.push(
-        `${CONFIG_BUNDLE_SECTION_LABELS[section.section]} — ${leaf.key}: ${leaf.reason}`
-      );
+      const name = labels.get(leaf.key) ?? leaf.key;
+      const where = CONFIG_BUNDLE_SECTION_LABELS[section.section].toLowerCase();
+      reasons.push(`${name} (${where}): ${leaf.reason}`);
     }
   }
   return reasons;
+}
+
+/** The outcome's opening sentence, shared by the toast and its inbox record so they can't disagree. */
+function outcomeLead(report: ConfigImportReport, skippedCount: number): string {
+  const applied = report.sections.reduce((sum, section) => sum + section.applied, 0);
+  const skipped = countLabel(skippedCount, "setting", "settings");
+  // Nothing landed: "imported" would claim an outcome that didn't happen.
+  return applied === 0
+    ? `No settings imported — ${skipped} skipped.`
+    : `Configuration imported with ${skipped} skipped.`;
+}
+
+function outcomeMessage(report: ConfigImportReport, preview: ConfigBundlePreview): string {
+  const applied = report.sections.reduce((sum, section) => sum + section.applied, 0);
+  const reasons = skippedReasons(report, preview);
+  const tail = unsupportedNote(preview.unknownSections);
+  if (reasons.length === 0) {
+    return `Configuration imported — ${countLabel(applied, "setting", "settings")} changed${tail}`;
+  }
+  const more = reasons.length > 1 ? `, plus ${reasons.length - 1} more in the inbox` : "";
+  const lead = outcomeLead(report, reasons.length);
+  return `${lead} ${reasons[0]}${more}${tail}`;
+}
+
+interface ApplyFailure {
+  description: string;
+  /**
+   * What was written is unknown — the apply threw, or its rollback failed.
+   * A backup taken now would capture the damage, not the pre-import values.
+   */
+  uncertain: boolean;
+  /** The raw error, when the description had to translate it. */
+  detail?: string;
+}
+
+/** Section rows whose only setting is the section itself, named by its value alone. */
+const VALUE_ONLY_SECTIONS = new Set<ConfigBundlePreviewSection["section"]>(["worktreeConfig"]);
+
+const ROW = "py-2 first:pt-0 last:pb-0";
+const DETAIL = "mt-0.5 text-xs text-text-secondary";
+
+function SectionRow({ section }: { section: ConfigBundlePreviewSection }) {
+  const [showAllAdded, setShowAllAdded] = useState(false);
+  const replaced = section.changes.filter((c) => c.kind === "update");
+  const added = section.changes.filter((c) => c.kind === "add").map(nameChange);
+  const hiddenAdded = showAllAdded ? 0 : Math.max(0, added.length - MAX_NAMED);
+  const shownAdded = hiddenAdded > 0 ? added.slice(0, MAX_NAMED) : added;
+  const valueOnly = VALUE_ONLY_SECTIONS.has(section.section);
+
+  return (
+    <li className={ROW}>
+      <div className="flex items-baseline justify-between gap-4">
+        <span className="text-sm text-text-primary">
+          {CONFIG_BUNDLE_SECTION_LABELS[section.section]}
+        </span>
+        <span className="shrink-0 text-xs text-text-secondary tabular-nums">
+          {describeSection(section)}
+        </span>
+      </div>
+      {/* Replacements are what the import takes away, so they are never
+          collapsed — only additions fold behind "and N more". */}
+      {replaced.length > 0 &&
+        (valueOnly ? (
+          replaced.map((change) => (
+            <p key={change.key} className={DETAIL}>
+              Replaces <code className="font-mono break-all">{change.from ?? change.label}</code>{" "}
+              with <code className="font-mono break-all">{change.to ?? "the bundle's value"}</code>
+            </p>
+          ))
+        ) : (
+          <p className={DETAIL}>Replaces {joinNames(replaced.map(nameChange))}</p>
+        ))}
+      {added.length > 0 && (
+        <p className={DETAIL}>
+          Adds {hiddenAdded > 0 ? `${shownAdded.join(", ")} and ` : joinNames(shownAdded)}
+          {/* One stable disclosure that relabels rather than unmounting, so a
+              keyboard user keeps their place after expanding. */}
+          {added.length > MAX_NAMED && (
+            <>
+              {hiddenAdded === 0 && " "}
+              <button
+                type="button"
+                aria-expanded={showAllAdded}
+                className="rounded-[var(--radius-sm)] text-text-primary underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                onClick={() => setShowAllAdded((open) => !open)}
+              >
+                {showAllAdded ? "show fewer" : `${hiddenAdded} more`}
+              </button>
+            </>
+          )}
+        </p>
+      )}
+    </li>
+  );
 }
 
 /**
@@ -80,7 +203,23 @@ function skippedReasons(report: ConfigImportReport): string[] {
 export function ImportConfigDialog() {
   const [preview, setPreview] = useState<ConfigBundlePreview | null>(null);
   const [isApplying, setIsApplying] = useState(false);
-  const [applyError, setApplyError] = useState<string | null>(null);
+  const [applyFailure, setApplyFailure] = useState<ApplyFailure | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportNote, setExportNote] = useState<{ text: string; failed: boolean } | null>(null);
+  /** Bumped per failure so the body scrolls back to the banner that explains it. */
+  const [failureCount, setFailureCount] = useState(0);
+  const backupRef = useRef<HTMLDivElement>(null);
+  /**
+   * Sticky for the life of this preview: once one attempt left the outcome
+   * unknown, a later clean rollback only restores the state *that* attempt
+   * started from, which may already carry the earlier attempt's writes.
+   */
+  const [outcomeUnknown, setOutcomeUnknown] = useState(false);
+  const outcomeUnknownRef = useRef(false);
+  const markOutcomeUnknown = useCallback((unknown: boolean) => {
+    outcomeUnknownRef.current = unknown;
+    setOutcomeUnknown(unknown);
+  }, []);
   /**
    * Synchronous single-flight gate. `isApplying` is state and settles a render
    * later, so two activations in the same tick would both pass a state check —
@@ -90,8 +229,10 @@ export function ImportConfigDialog() {
 
   const close = useCallback(() => {
     setPreview(null);
-    setApplyError(null);
-  }, []);
+    setApplyFailure(null);
+    setExportNote(null);
+    markOutcomeUnknown(false);
+  }, [markOutcomeUnknown]);
 
   const beginImport = useCallback(async () => {
     if (inFlight.current) return;
@@ -137,19 +278,21 @@ export function ImportConfigDialog() {
           type: "info",
           priority: "high",
           transient: true,
-          message: "Configuration already matches that bundle — nothing to import",
+          message: `Configuration already matches that bundle — nothing to import${unsupportedNote(result.unknownSections)}`,
           supersedeKey: IMPORT_CONFIG_ACTION_ID,
           context: { eventKind: "settings" },
         });
         return;
       }
 
-      setApplyError(null);
+      setApplyFailure(null);
+      setExportNote(null);
+      markOutcomeUnknown(false);
       setPreview(result);
     } finally {
       inFlight.current = false;
     }
-  }, []);
+  }, [markOutcomeUnknown]);
 
   useEffect(() => {
     const handler = () => {
@@ -168,55 +311,136 @@ export function ImportConfigDialog() {
     });
   }, []);
 
+  /**
+   * The one recovery the confirmation can offer for an import with no undo:
+   * write the current values out first. It never gates the import.
+   */
+  const handleExport = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setIsExporting(true);
+    try {
+      const result = await window.electron.configBundle.export();
+      if (result.outcome === "canceled" || !result.filePath) return;
+      const name = result.filePath.split(/[\\/]/).pop() ?? result.filePath;
+      // The Export button unmounts on success; hand its focus to Cancel rather
+      // than let it fall to the document once the native save dialog returns.
+      const cancel = backupRef.current
+        ?.closest<HTMLElement>('[role="dialog"], [role="alertdialog"]')
+        ?.querySelector<HTMLElement>('[data-confirm-role="cancel"]');
+      const omitted = result.omittedSecretPaths.length;
+      setExportNote({
+        failed: false,
+        text:
+          omitted > 0
+            ? `Current values saved to '${name}', without ${countLabel(omitted, "value that looked like a secret", "values that looked like secrets")}`
+            : `Current values saved to '${name}'`,
+      });
+      requestAnimationFrame(() => cancel?.focus());
+    } catch (error) {
+      logError("[importConfig] Failed to export current configuration", error);
+      setExportNote({
+        failed: true,
+        text: `Couldn't save the current values — ${formatErrorMessage(error, "the file wasn't written")}`,
+      });
+    } finally {
+      inFlight.current = false;
+      setIsExporting(false);
+    }
+  }, []);
+
   const handleConfirm = useCallback(async () => {
     if (!preview?.bundleJson || inFlight.current) return;
     inFlight.current = true;
     setIsApplying(true);
-    setApplyError(null);
-    let succeeded = false;
+    setApplyFailure(null);
+    let report: ConfigImportReport;
     try {
-      const report = await window.electron.configBundle.applyImport({
+      report = await window.electron.configBundle.applyImport({
         bundleJson: preview.bundleJson,
-      });
-
-      if (report.outcome === "rolled-back") {
-        // Kept open rather than dismissed: the dialog is the only surface that
-        // still holds what the user was importing, so closing it would take the
-        // retry away along with the explanation.
-        setApplyError(report.errors[0] ?? "The bundle couldn't be applied");
-        return;
-      }
-
-      // Main has written; this view's own mirrors still hold the old values.
-      // Other views are covered by the main-process broadcast.
-      await refreshImportedConfig();
-      succeeded = true;
-
-      const reasons = skippedReasons(report);
-      notify({
-        type: reasons.length > 0 ? "warning" : "success",
-        priority: "high",
-        transient: true,
-        context: { eventKind: "settings" },
-        message:
-          reasons.length > 0
-            ? `Configuration imported — ${summarizeReport(report)}. ${reasons[0]}`
-            : `Configuration imported — ${summarizeReport(report)}`,
-        supersedeKey: IMPORT_CONFIG_ACTION_ID,
       });
     } catch (error) {
       logError("[importConfig] Failed to apply configuration bundle", error);
-      setApplyError(formatErrorMessage(error, "The bundle couldn't be applied"));
-    } finally {
+      // A throw means the apply never reported back, so what was written is
+      // unknown — say that rather than guess in either direction.
+      markOutcomeUnknown(true);
+      setApplyFailure({
+        uncertain: true,
+        description:
+          "Daintree couldn't confirm what was written, so some of these may already have changed. Check them in Settings before trying again.",
+        detail: formatErrorMessage(error, ""),
+      });
+      setFailureCount((n) => n + 1);
       inFlight.current = false;
       setIsApplying(false);
-      if (succeeded) close();
+      return;
     }
-  }, [preview, close]);
+
+    inFlight.current = false;
+    setIsApplying(false);
+
+    if (report.outcome === "rolled-back") {
+      // Kept open rather than dismissed: the dialog is the only surface that
+      // still holds what the user was importing, so closing it would take the
+      // retry away along with the explanation.
+      const earlierUnknown = outcomeUnknownRef.current;
+      const uncertain = earlierUnknown || report.restoreFailed === true;
+      if (uncertain) markOutcomeUnknown(true);
+      const reason = report.errors[0] ?? "The bundle couldn't be applied. Nothing was changed.";
+      setApplyFailure({
+        uncertain,
+        description:
+          earlierUnknown && !report.restoreFailed
+            ? `${reason} An earlier attempt may already have changed some of these, so check them in Settings.`
+            : reason,
+      });
+      setFailureCount((n) => n + 1);
+      return;
+    }
+
+    close();
+
+    // Main has written; this view's own mirrors still hold the old values.
+    // Other views are covered by the main-process broadcast. A failure here is
+    // a stale window, not a failed import — retrying the apply would be wrong.
+    try {
+      await refreshImportedConfig();
+    } catch (error) {
+      logError("[importConfig] Imported, but refreshing this window failed", error);
+      notify({
+        type: "warning",
+        priority: "high",
+        context: { eventKind: "settings" },
+        message: "Configuration imported, but this window is still showing the previous settings",
+        supersedeKey: IMPORT_CONFIG_ACTION_ID,
+        action: { label: "Refresh settings", onClick: () => void refreshImportedConfig() },
+      });
+      return;
+    }
+
+    const reasons = skippedReasons(report, preview);
+    notify({
+      type: reasons.length > 0 ? "warning" : "success",
+      priority: "high",
+      // A clean import needs no record. Skips do: the toast names one, and the
+      // inbox keeps every one of them.
+      transient: reasons.length === 0,
+      context: { eventKind: "settings" },
+      message: outcomeMessage(report, preview),
+      ...(reasons.length > 1
+        ? {
+            inboxMessage: `${outcomeLead(report, reasons.length)} ${reasons.join(". ")}`,
+          }
+        : {}),
+      supersedeKey: IMPORT_CONFIG_ACTION_ID,
+    });
+  }, [preview, close, markOutcomeUnknown]);
 
   if (!preview) return null;
 
   const changed = preview.sections.filter((section) => changeCount(section) > 0);
+  const replacesAny = changed.some((section) => section.update > 0);
+  const unknown = preview.unknownSections;
 
   return (
     <ConfirmDialog
@@ -227,35 +451,86 @@ export function ImportConfigDialog() {
           ? `Import configuration from '${preview.fileName}'?`
           : "Import configuration?"
       }
-      description="These settings will be replaced with the values in the bundle. Anything not listed stays as it is. Daintree keeps no copy of the current values, so restoring them means importing a bundle that has them."
-      confirmLabel={applyError ? "Try again" : "Import configuration"}
+      description={
+        replacesAny
+          ? "Adds or replaces each setting below with the value in this file. Everything else stays as it is, and Daintree keeps no copy of what's replaced."
+          : "Adds each setting below from this file. Everything else stays as it is."
+      }
+      confirmLabel={applyFailure ? "Try again" : "Import configuration"}
       variant="destructive"
       isConfirmLoading={isApplying}
       onConfirm={handleConfirm}
+      bodyResetKey={failureCount}
       hasPreview
     >
-      <ul className="flex flex-col gap-1 text-sm">
+      {applyFailure && (
+        <InlineStatusBanner
+          severity="error"
+          title="Import stopped"
+          description={applyFailure.description}
+          {...(applyFailure.detail
+            ? { contextLine: applyFailure.detail, contextLineTruncate: "middle" as const }
+            : {})}
+          className="rounded-[var(--radius-md)]"
+        />
+      )}
+      {/* Ahead of the list, not after it: the way back has to be seen before
+          the confirm, and a busy preview scrolls past anything below it. */}
+      {/* Once what was written is unknown, exporting would capture the damage
+          rather than a way back — keep a backup already taken, offer no new one. */}
+      {replacesAny && (!outcomeUnknown || (exportNote && !exportNote.failed)) && (
+        <div
+          ref={backupRef}
+          className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2"
+        >
+          <p
+            className={cn(
+              "flex items-center gap-1.5 text-xs",
+              exportNote?.failed ? "text-status-error" : "text-text-secondary"
+            )}
+            role="status"
+          >
+            {/* Neutral, not success-green: a finished side step, not the outcome. */}
+            {exportNote && !exportNote.failed && (
+              <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            )}
+            {exportNote?.text ?? "Save the current values before importing"}
+          </p>
+          {(!exportNote || exportNote.failed) && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="shrink-0"
+              loading={isExporting}
+              disabled={isApplying}
+              onClick={() => void handleExport()}
+            >
+              Export a backup…
+            </Button>
+          )}
+        </div>
+      )}
+      <ul className="divide-y divide-border-subtle">
         {changed.map((section) => (
-          <li key={section.section} className="flex items-baseline justify-between gap-4">
-            <span className="text-text-primary">
-              {CONFIG_BUNDLE_SECTION_LABELS[section.section]}
-            </span>
-            <span className="text-text-secondary tabular-nums">{describeSection(section)}</span>
-          </li>
+          <SectionRow key={section.section} section={section} />
         ))}
+        {unknown.length > 0 && (
+          <li className={ROW}>
+            <div className="flex items-baseline justify-between gap-4">
+              <span className="text-sm text-text-primary">Not supported by this version</span>
+              <span className="shrink-0 text-xs text-text-secondary">left out</span>
+            </div>
+            <p className={DETAIL}>
+              {unknown.map((key, i) => (
+                <span key={key}>
+                  {i > 0 && (i === unknown.length - 1 ? " and " : ", ")}
+                  <code className="font-mono">{key}</code>
+                </span>
+              ))}
+            </p>
+          </li>
+        )}
       </ul>
-      {preview.unknownSections.length > 0 && (
-        <p className="mt-2 text-xs text-text-secondary">
-          {preview.unknownSections.length === 1
-            ? "1 section in this bundle isn't supported by this version and will be ignored"
-            : `${preview.unknownSections.length} sections in this bundle aren't supported by this version and will be ignored`}
-        </p>
-      )}
-      {applyError && (
-        <p className="mt-3 text-sm text-status-error" role="alert">
-          {applyError}
-        </p>
-      )}
     </ConfirmDialog>
   );
 }

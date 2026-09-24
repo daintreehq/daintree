@@ -1295,6 +1295,37 @@ describe("ConfirmDialog activation guards while the confirm is running", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("locks every dismissal route that Cancel is locked out of", () => {
+    const onClose = vi.fn();
+    const props = {
+      isOpen: true,
+      onClose,
+      title: "Delete repo?",
+      confirmLabel: "Delete it",
+      onConfirm: () => {},
+      variant: "destructive" as const,
+    };
+    const { rerender } = render(<ConfirmDialog {...props} isConfirmLoading={true} />);
+
+    // Cancel is disabled mid-confirm; the close button and Escape must agree,
+    // or dismissing unmounts the only surface that can report how it ended.
+    const closeButton = screen.getByRole("button", { name: "Close dialog" });
+    expect(closeButton.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(closeButton);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+
+    // The same routes work once the confirm has settled, so the lock above is
+    // the loading state and not a dialog that never dismisses.
+    rerender(<ConfirmDialog {...props} isConfirmLoading={false} />);
+    const settledClose = screen.getByRole("button", { name: "Close dialog" });
+    expect(settledClose.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(settledClose);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
   it("does not re-confirm when the typed name is submitted mid-confirm", () => {
     const onConfirm = vi.fn();
     render(

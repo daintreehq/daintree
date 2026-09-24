@@ -80,6 +80,8 @@ interface AppDialogContextValue {
   titleId: string;
   descriptionId: string;
   variant: DialogVariant;
+  /** Mirrors the dialog's `dismissible`, so the close button can say it's unavailable. */
+  dismissible: boolean;
 }
 
 const AppDialogContext = createContext<AppDialogContextValue | null>(null);
@@ -301,14 +303,26 @@ export function AppDialog({
   // Backstop registration must NOT churn on every handleClose-identity change
   // (re-registering pushes the entry to the top of the stack and breaks LIFO
   // when this dialog is rendered underneath another). Hold the latest closer
-  // in a ref and only register once per `isOpen && dismissible` cycle.
+  // in a ref and only register once per `isOpen` cycle.
+  //
+  // Registered while open even when the dialog can't be dismissed: a locked
+  // dialog still has to be the topmost backstop, or Escape falls through to
+  // the dismissible dialog underneath it (a running confirm over Settings
+  // closed Settings and unmounted itself mid-run). While locked it swallows
+  // the keypress instead of closing.
   const handleCloseRef = useRef(handleClose);
+  const dismissibleRef = useRef(dismissible);
   useEffect(() => {
     handleCloseRef.current = handleClose;
-  }, [handleClose]);
+    dismissibleRef.current = dismissible;
+  }, [handleClose, dismissible]);
 
-  useEffect(() => {
-    if (!isOpen || !dismissible) return;
+  // Layout effect, matching AppPaletteDialog: backstops stack in commit order,
+  // so a dialog and a palette opened in the same commit layer in render order.
+  // A passive effect here registered after the palette's layout effect and put
+  // a locked dialog on top of the palette it sits beneath.
+  useLayoutEffect(() => {
+    if (!isOpen) return;
     const closeThis = () => {
       void handleCloseRef.current();
     };
@@ -327,6 +341,10 @@ export function AppDialog({
       // in a dialog above it — a dock popover deliberately stays open behind the
       // dialog it spawned, so it is always "the open layer" (#11505).
       if (radixLayerWasOpenWhenEscapePressed() && !escapeWasYieldedToDialog(e)) return;
+      if (!dismissibleRef.current) {
+        markBackstopConsumedEscape();
+        return;
+      }
       // We deliberately do NOT bail on `e.defaultPrevented`: Radix Select /
       // Combobox triggers call `preventDefault` on Escape even when their
       // popup is closed, which would leave the dialog stuck open if we
@@ -345,7 +363,7 @@ export function AppDialog({
       document.removeEventListener("keydown", handler);
       unregister();
     };
-  }, [isOpen, dismissible]);
+  }, [isOpen]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === "Tab" && dialogRef.current) {
@@ -408,7 +426,9 @@ export function AppDialog({
   if (!shouldRender) return null;
 
   return createPortal(
-    <AppDialogContext.Provider value={{ onClose: handleClose, titleId, descriptionId, variant }}>
+    <AppDialogContext.Provider
+      value={{ onClose: handleClose, titleId, descriptionId, variant, dismissible }}
+    >
       <div
         className={cn(
           "fixed inset-0 flex items-center justify-center bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur)] backdrop-saturate-[var(--theme-material-saturation)]",
@@ -433,9 +453,11 @@ export function AppDialog({
         aria-describedby={descriptionId}
         // Marks the surface as one a Radix layer underneath can hand Escape to
         // — see `ESCAPE_BACKSTOP_DIALOG_ATTR`. Tracks the backstop registration
-        // (`isOpen && dismissible`), not merely being mounted: a dialog mid-exit
-        // has already unregistered and could not take the keypress.
-        {...(isOpen && dismissible ? { [ESCAPE_BACKSTOP_DIALOG_ATTR]: "" } : {})}
+        // (`isOpen`), not merely being mounted: a dialog mid-exit has already
+        // unregistered and could not take the keypress. A locked dialog keeps
+        // it — its backstop swallows the keypress, and without the marker the
+        // dock popover underneath would take Escape and dismiss itself.
+        {...(isOpen ? { [ESCAPE_BACKSTOP_DIALOG_ATTR]: "" } : {})}
         // Unconditional, unlike the Escape backstop above: `handleDockInteractOutside`
         // needs to recognise this surface whether or not the dialog is dismissible.
         {...{ [APP_DIALOG_SURFACE_ATTR]: "" }}
@@ -548,6 +570,9 @@ AppDialog.CloseButton = function AppDialogCloseButton({
   return (
     <SurfaceHeaderCloseButton
       onClick={context?.onClose}
+      // A locked dialog swallows the click anyway; say so instead of offering
+      // an X that looks live beside a disabled Cancel.
+      disabled={context ? !context.dismissible : false}
       className={className}
       aria-label={ariaLabel}
     />
