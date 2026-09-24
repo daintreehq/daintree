@@ -137,7 +137,7 @@ function Pips() {
         const state = getAttentionAgentState(sessions);
         const color = state ? agentStateDotColor(state) : null;
         return (
-          <div key={label} className="flex w-24 flex-col items-center gap-1.5">
+          <div key={label} className="flex w-32 flex-col items-center gap-1.5">
             <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] text-text-secondary">
               <div className="relative">
                 <Bot className="h-4 w-4" aria-hidden="true" />
@@ -148,7 +148,7 @@ function Pips() {
                 />
               </div>
             </div>
-            <span className="text-center text-2xs text-text-secondary">{label}</span>
+            <span className="whitespace-nowrap text-2xs text-text-secondary">{label}</span>
           </div>
         );
       })}
