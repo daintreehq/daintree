@@ -4,6 +4,7 @@ import {
   getPanelTransitionDuration,
   PANEL_MINIMIZE_EASING,
   PANEL_RESTORE_EASING,
+  UI_ANIMATION_DURATION,
 } from "@/lib/animationUtils";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 
@@ -17,16 +18,21 @@ export interface TransitionRect {
 }
 
 /**
- * Where the ghost lands. A function is resolved once the move has committed, so
- * the ghost can aim at the element the pane actually became (its dock chip, its
- * grid slot) rather than a guess made before that element existed. Returning
- * `null` means "not there yet"; a target that never appears cancels the flight.
+ * Where the ghost lands. A function is resolved once the move has committed and
+ * again on every frame of the flight, so the ghost aims at the element the pane
+ * actually became (its dock chip, its grid slot) and follows it if it moves —
+ * a chip inserted before it, a grid that scrolls the restored pane into view.
+ * Returning `null` means "not there": before launch that waits a few frames,
+ * during the flight it calls the flight off. Returning an element (rather than a
+ * bare box) also lets a minimize mark the chip that received the pane.
  */
-export type TransitionTarget = TransitionRect | (() => TransitionRect | null);
+export type TransitionTarget = TransitionRect | (() => Element | TransitionRect | null);
 
 interface TransitionState {
   key: number;
   id: string;
+  /** What a newer flight supersedes — the pane, or the tab group it moves with. */
+  identity: string;
   title: string;
   direction: TransitionDirection;
   sourceRect: TransitionRect;
@@ -37,29 +43,51 @@ interface PanelTransitionOverlayProps {
   onTransitionComplete?: (id: string) => void;
 }
 
-/** Frames to wait for a lazily-resolved target before giving up on the flight. */
-const TARGET_RESOLVE_FRAMES = 4;
+/**
+ * Frames to wait for a lazily-resolved target before giving up on the flight. A
+ * move run inside a view transition commits a frame or two late.
+ */
+const TARGET_RESOLVE_FRAMES = 8;
+
+/** Id every animation this overlay starts carries, so a harness can find them all. */
+export const PANEL_TRANSITION_ANIMATION_ID = "panel-transition";
+
+type Stops = Array<[offset: number, opacity: number]>;
 
 /**
- * Minimize is an exit: the ghost stays solid through most of the flight so the
- * eye can follow it, then dissolves into the chip as it arrives. Restore is the
- * inverse — it condenses out of the chip, holds, and hands over to the pane that
- * is already rendered underneath. Offsets sit in eased progress, so "0.6" means
- * 60% of the way there, not 60% of the clock.
+ * Opacity runs on the clock, not on the geometry's easing: the geometry curves are
+ * steep at one end, and fades keyed to them would spend the ghost's visibility in
+ * a few milliseconds.
+ *
+ * Minimize is an exit: the ghost stays solid while it travels and dissolves into
+ * the chip in the last stretch. Restore grows out of the chip already solid (the
+ * chip has just gone), sheds its title first so it never doubles the real pane's
+ * header, and hands over to the pane underneath before the clock runs out.
  */
-const OPACITY_STOPS: Record<TransitionDirection, Array<[offset: number, opacity: number]>> = {
+const CONTAINER_OPACITY: Record<TransitionDirection, Stops> = {
   minimize: [
     [0, 1],
-    [0.6, 1],
+    [0.8, 1],
     [1, 0],
   ],
   restore: [
-    [0, 0],
-    [0.2, 1],
-    [0.7, 1],
+    [0, 1],
+    [0.3, 1],
+    [0.75, 0],
     [1, 0],
   ],
 };
+
+const TITLE_OPACITY: Partial<Record<TransitionDirection, Stops>> = {
+  restore: [
+    [0, 1],
+    [0.3, 0],
+    [1, 0],
+  ],
+};
+
+const RECEIVING_CUE_SHADOW = "0 0 0 1px var(--color-border-strong)";
+const NO_CUE_SHADOW = "0 0 0 1px transparent";
 
 type TransitionListener = (transition: TransitionState) => void;
 const listeners = new Set<TransitionListener>();
@@ -69,12 +97,17 @@ function hasArea(rect: TransitionRect): boolean {
   return rect.width > 0 && rect.height > 0;
 }
 
+function toStops(stops: Stops): Keyframe[] {
+  return stops.map(([offset, opacity]) => ({ offset, opacity }));
+}
+
 export function triggerPanelTransition(
   id: string,
   direction: TransitionDirection,
   sourceRect: TransitionRect,
   target: TransitionTarget,
-  title = ""
+  title = "",
+  identity = id
 ): void {
   if (prefersReducedMotion()) return;
   // A zero-size box has nothing to show, and would put NaN into the keyframes.
@@ -84,6 +117,7 @@ export function triggerPanelTransition(
   const transition: TransitionState = {
     key: ++nextKey,
     id,
+    identity,
     title,
     direction,
     sourceRect,
@@ -102,9 +136,12 @@ export function PanelTransitionOverlay({ onTransitionComplete }: PanelTransition
 
   useEffect(() => {
     const handleTransition = (transition: TransitionState) => {
-      // A newer flight for the same pane supersedes the old one; unrelated
-      // flights keep going.
-      setTransitions((prev) => [...prev.filter((t) => t.id !== transition.id), transition]);
+      // A newer flight for the same pane or group supersedes the old one;
+      // unrelated flights keep going.
+      setTransitions((prev) => [
+        ...prev.filter((t) => t.identity !== transition.identity),
+        transition,
+      ]);
     };
     listeners.add(handleTransition);
     return () => {
@@ -147,9 +184,35 @@ function toBox(rect: TransitionRect) {
   };
 }
 
+interface Resolved {
+  rect: TransitionRect;
+  element: Element | null;
+}
+
+function resolveTarget(target: TransitionTarget): Resolved | null {
+  const value = typeof target === "function" ? target() : target;
+  if (!value) return null;
+  if (value instanceof Element) {
+    const { x, y, width, height } = value.getBoundingClientRect();
+    const rect = { x, y, width, height };
+    return hasArea(rect) ? { rect, element: value } : null;
+  }
+  return hasArea(value) ? { rect: value, element: null } : null;
+}
+
+function sameRect(a: TransitionRect, b: TransitionRect): boolean {
+  return (
+    Math.abs(a.x - b.x) < 0.5 &&
+    Math.abs(a.y - b.y) < 0.5 &&
+    Math.abs(a.width - b.width) < 0.5 &&
+    Math.abs(a.height - b.height) < 0.5
+  );
+}
+
 function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
   const { key, id, direction, sourceRect, target, title } = transition;
   const elementRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLDivElement>(null);
 
   // Layout effect, not a passive one: the flight is armed before the first
   // paint, so the ghost is never seen at a size it was not meant to have.
@@ -159,23 +222,61 @@ function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
 
     const duration = getPanelTransitionDuration(direction);
     const easing = direction === "minimize" ? PANEL_MINIMIZE_EASING : PANEL_RESTORE_EASING;
+    const from = toBox(sourceRect);
     let frame = 0;
     let fallback: ReturnType<typeof setTimeout> | undefined;
-    let animation: Animation | null = null;
+    let flight: Animation[] = [];
+    let geometry: Animation | null = null;
+    let cue: Animation | null = null;
     let settled = false;
+
     const settle = (landed: boolean) => {
       if (settled) return;
       settled = true;
+      cancelAnimationFrame(frame);
+      if (!landed) cue?.cancel();
       onDone(key, id, landed);
     };
 
-    // The destination is measured after the move commits — for most callers
-    // that is before the next frame, but a move run inside a view transition
-    // commits later, so give it a few frames before calling the flight off.
+    const markReceiver = (receiver: Element) => {
+      // The chip snaps in before the ghost gets there; a neutral hairline around
+      // it through the arrival names the exact destination before the ghost is
+      // gone. Added to whatever shadow the chip already has, never replacing it.
+      const total = duration + UI_ANIMATION_DURATION;
+      cue = receiver.animate(
+        [
+          { offset: 0, boxShadow: NO_CUE_SHADOW },
+          { offset: (duration * 0.5) / total, boxShadow: RECEIVING_CUE_SHADOW },
+          { offset: duration / total, boxShadow: RECEIVING_CUE_SHADOW },
+          { offset: 1, boxShadow: NO_CUE_SHADOW },
+        ],
+        { duration: total, easing: "linear", composite: "add" }
+      );
+      cue.id = PANEL_TRANSITION_ANIMATION_ID;
+    };
+
+    const track = (last: TransitionRect) => {
+      frame = requestAnimationFrame(() => {
+        if (settled || !geometry) return;
+        const next = resolveTarget(target);
+        if (!next) {
+          flight.forEach((animation) => animation.cancel());
+          return;
+        }
+        const effect = geometry.effect;
+        if (!sameRect(next.rect, last) && effect instanceof KeyframeEffect) {
+          // Re-aim without restarting the clock; the ghost bends toward the new
+          // spot instead of snapping back to the start.
+          effect.setKeyframes([from, toBox(next.rect)]);
+        }
+        track(next.rect);
+      });
+    };
+
     let attempts = 0;
     const launch = () => {
-      const resolved = typeof target === "function" ? target() : target;
-      if (!resolved || !hasArea(resolved)) {
+      const resolved = resolveTarget(target);
+      if (!resolved) {
         if (++attempts < TARGET_RESOLVE_FRAMES) {
           frame = requestAnimationFrame(launch);
         } else {
@@ -183,34 +284,39 @@ function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
         }
         return;
       }
-      const from = toBox(sourceRect);
-      const to = toBox(resolved);
-      const stops = OPACITY_STOPS[direction];
-      animation = element.animate(
-        stops.map(([offset, opacity], index) => ({
-          offset,
-          opacity,
-          ...(index === 0 ? from : index === stops.length - 1 ? to : {}),
-        })),
-        { duration, easing, fill: "both" }
-      );
-      animation.finished.then(
+      const timing = { duration, fill: "both" as const };
+      geometry = element.animate([from, toBox(resolved.rect)], { ...timing, easing });
+      flight = [
+        geometry,
+        element.animate(toStops(CONTAINER_OPACITY[direction]), { ...timing, easing: "linear" }),
+      ];
+      const titleStops = TITLE_OPACITY[direction];
+      if (titleStops && titleRef.current) {
+        flight.push(titleRef.current.animate(toStops(titleStops), { ...timing, easing: "linear" }));
+      }
+      for (const animation of flight) animation.id = PANEL_TRANSITION_ANIMATION_ID;
+      if (direction === "minimize" && resolved.element) markReceiver(resolved.element);
+
+      geometry.finished.then(
         () => settle(true),
         () => settle(false)
       );
       // Belt and braces: a finished promise that never settles (a detached
       // element, a throttled background window) must not strand the ghost.
       fallback = setTimeout(() => settle(true), duration * 2);
+      track(resolved.rect);
     };
     launch();
 
     return () => {
       // Torn down, not finished: whoever re-runs or unmounts this effect owns
-      // what happens next, so the cancellation below must not report back.
+      // what happens next, so the cancellations below must not report back.
+      const interrupted = !settled;
       settled = true;
       cancelAnimationFrame(frame);
       if (fallback) clearTimeout(fallback);
-      animation?.cancel();
+      flight.forEach((animation) => animation.cancel());
+      if (interrupted) cue?.cancel();
     };
   }, [key, id, direction, sourceRect, target, onDone]);
 
@@ -223,7 +329,10 @@ function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
       // flight that never finds its target is never seen at all.
       style={{ ...toBox(sourceRect), opacity: 0 }}
     >
-      <div className="flex h-full max-h-8 shrink-0 items-center border-b border-divider px-3">
+      <div
+        ref={titleRef}
+        className="flex h-full max-h-8 shrink-0 items-center border-b border-divider px-3"
+      >
         <span className="truncate text-xs text-text-secondary">{title}</span>
       </div>
     </div>

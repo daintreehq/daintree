@@ -15,6 +15,9 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../PanelTransitionOverlay", () => ({ triggerPanelTransition: trigger }));
+const observable = vi.hoisted(() => ({ value: true }));
+vi.mock("@/lib/viewCacheState", () => ({ isProjectViewObservable: () => observable.value }));
+
 vi.mock("@/store/storeAccessors", () => ({
   getPanelStoreSnapshot: () => ({
     panelsById: state.current.panelsById,
@@ -39,7 +42,12 @@ function mount(selectorAttrs: Record<string, string>, rect: TransitionRect): HTM
 
 function resolve(target: TransitionTarget | undefined): TransitionRect | null {
   if (target === undefined) return null;
-  return typeof target === "function" ? target() : target;
+  const value = typeof target === "function" ? target() : target;
+  if (value instanceof Element) {
+    const { x, y, width, height } = value.getBoundingClientRect();
+    return { x, y, width, height };
+  }
+  return value;
 }
 
 const paneBox = { x: 10, y: 10, width: 500, height: 300 };
@@ -48,6 +56,7 @@ const chipBox = { x: 200, y: 640, width: 120, height: 26 };
 describe("animatePanelMove", () => {
   beforeEach(() => {
     trigger.mockReset();
+    observable.value = true;
     state.current = { panelsById: {}, groups: {} };
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
     document.body.removeAttribute("data-reduce-animations");
@@ -119,6 +128,18 @@ describe("animatePanelMove", () => {
     expect(trigger).not.toHaveBeenCalled();
   });
 
+  it("still moves, without motion, in a project view nobody can see", () => {
+    observable.value = false;
+    place("p1", "grid");
+    mount({ "data-panel-id": "p1", "data-panel-location": "grid" }, paneBox);
+    const move = vi.fn(() => place("p1", "dock"));
+
+    animatePanelMove("p1", "minimize", move);
+
+    expect(move).toHaveBeenCalledTimes(1);
+    expect(trigger).not.toHaveBeenCalled();
+  });
+
   it("does not fly a pane that was not where the direction starts", () => {
     place("p1", "dock");
     mount({ "data-panel-id": "p1", "data-panel-location": "grid" }, paneBox);
@@ -144,8 +165,15 @@ describe("animatePanelMove", () => {
     });
     mount({ "data-dock-item-id": "b" }, chipBox);
 
-    const [, , source, target] = trigger.mock.calls[0]!;
+    const [, , source, target, , identity] = trigger.mock.calls[0]!;
     expect(source).toEqual(paneBox);
     expect(resolve(target)).toEqual(chipBox);
+
+    // A reversal through the other member shares the flight's identity, so it
+    // supersedes the first ghost instead of racing it.
+    animatePanelMove("b", "restore", () => {});
+    expect(trigger).toHaveBeenCalledTimes(2);
+    expect(trigger.mock.calls[1]![5]).toBe(identity);
+    expect(identity).not.toBe("a");
   });
 });

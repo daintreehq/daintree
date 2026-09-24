@@ -1,10 +1,7 @@
 import { getPanelStoreSnapshot } from "@/store/storeAccessors";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
-import {
-  triggerPanelTransition,
-  type TransitionDirection,
-  type TransitionRect,
-} from "./PanelTransitionOverlay";
+import { isProjectViewObservable } from "@/lib/viewCacheState";
+import { triggerPanelTransition, type TransitionDirection } from "./PanelTransitionOverlay";
 
 type Placement = "grid" | "dock";
 
@@ -18,11 +15,11 @@ function cssEscape(value: string): string {
 }
 
 /**
- * The on-screen box standing for any of `ids` in `placement`. A tab group shows
- * up as one element keyed by a single member — the active tab's pane in the
- * grid, the first member's chip in the dock — so every member is tried.
+ * The on-screen element standing for any of `ids` in `placement`. A tab group
+ * shows up as one element keyed by a single member — the active tab's pane in
+ * the grid, the first member's chip in the dock — so every member is tried.
  */
-function findBox(ids: readonly string[], placement: Placement): TransitionRect | null {
+function findElement(ids: readonly string[], placement: Placement): Element | null {
   for (const id of ids) {
     const selector =
       placement === "grid"
@@ -30,8 +27,8 @@ function findBox(ids: readonly string[], placement: Placement): TransitionRect |
         : `[data-dock-item-id="${cssEscape(id)}"]`;
     const element = document.querySelector(selector);
     if (!element) continue;
-    const { x, y, width, height } = element.getBoundingClientRect();
-    if (width > 0 && height > 0) return { x, y, width, height };
+    const { width, height } = element.getBoundingClientRect();
+    if (width > 0 && height > 0) return element;
   }
   return null;
 }
@@ -52,7 +49,9 @@ export function animatePanelMove(
   direction: TransitionDirection,
   move: () => unknown
 ): void {
-  if (prefersReducedMotion()) {
+  // Automation can move panes in a project view nobody is looking at (cached, or
+  // a hidden window); decorating those is work with no audience.
+  if (prefersReducedMotion() || !isProjectViewObservable()) {
     move();
     return;
   }
@@ -67,21 +66,28 @@ export function animatePanelMove(
   }
 
   let ids = [panelId];
-  for (const group of before.tabGroups.values()) {
+  let identity = panelId;
+  for (const [groupId, group] of before.tabGroups) {
     if (group.panelIds.includes(panelId)) {
       ids = [panelId, ...group.panelIds.filter((id) => id !== panelId)];
+      // The group moves as one, whichever member asked, so a flight started
+      // through one member is superseded by a reversal through another.
+      identity = `group:${groupId}`;
       break;
     }
   }
-  const source = findBox(ids, from);
+  const sourceElement = findElement(ids, from);
+  const source = sourceElement?.getBoundingClientRect();
 
   if (move() === false || !source) return;
 
   triggerPanelTransition(
     panelId,
     direction,
-    source,
-    () => (getPanelStoreSnapshot()?.panelsById[panelId]?.location === to ? findBox(ids, to) : null),
-    panel.title
+    { x: source.x, y: source.y, width: source.width, height: source.height },
+    () =>
+      getPanelStoreSnapshot()?.panelsById[panelId]?.location === to ? findElement(ids, to) : null,
+    panel.title,
+    identity
   );
 }

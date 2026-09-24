@@ -18,7 +18,7 @@ import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import { ContentDock } from "@/components/Layout/ContentDock";
 import { DockPanelOffscreenContainer } from "@/components/Layout/DockPanelOffscreenContainer";
-import { PanelTransitionOverlay } from "../PanelTransitionOverlay";
+import { PanelTransitionOverlay, PANEL_TRANSITION_ANIMATION_ID } from "../PanelTransitionOverlay";
 import { animatePanelMove } from "../animatePanelMove";
 import "@/index.css";
 
@@ -147,31 +147,23 @@ function restore(panelId: string): void {
 }
 
 /**
- * Pause every animation inside the overlay portal at
- * `progress` of the longest one's end time, so each is shown at the same instant of the
- * flight. Forces a style flush first so a CSS transition that was armed this frame
- * exists as an Animation before it is looked for. Returns how many it froze.
+ * Pause every animation the transition started — the ghost's and the receiving
+ * chip's cue — at `progress` of the flight's clock, so each is shown at the same
+ * instant. Returns how many it froze.
  */
 function freeze(progress: number): number {
-  const overlay = document.querySelector("[data-panel-transition-overlay]");
-  if (!overlay) return 0;
-  for (const node of [overlay, ...overlay.querySelectorAll("*")])
-    void getComputedStyle(node).opacity;
-  const animations = document.getAnimations().filter((a) => {
-    const effect = a.effect;
-    return (
-      effect instanceof KeyframeEffect &&
-      effect.target instanceof Element &&
-      overlay.contains(effect.target)
-    );
-  });
-  const end = Math.max(
+  const animations = document
+    .getAnimations()
+    .filter((a) => a.id === PANEL_TRANSITION_ANIMATION_ID && a.effect);
+  const flight = Math.max(
     0,
-    ...animations.map((a) => Number(a.effect?.getComputedTiming().endTime ?? 0))
+    ...animations
+      .filter((a) => a.effect?.getComputedTiming().fill === "both")
+      .map((a) => Number(a.effect?.getComputedTiming().endTime ?? 0))
   );
   for (const a of animations) {
     a.pause();
-    a.currentTime = progress * end;
+    a.currentTime = progress * flight;
   }
   return animations.length;
 }
