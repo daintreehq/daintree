@@ -316,7 +316,11 @@ export function AppDialog({
     dismissibleRef.current = dismissible;
   }, [handleClose, dismissible]);
 
-  useEffect(() => {
+  // Layout effect, matching AppPaletteDialog: backstops stack in commit order,
+  // so a dialog and a palette opened in the same commit layer in render order.
+  // A passive effect here registered after the palette's layout effect and put
+  // a locked dialog on top of the palette it sits beneath.
+  useLayoutEffect(() => {
     if (!isOpen) return;
     const closeThis = () => {
       void handleCloseRef.current();

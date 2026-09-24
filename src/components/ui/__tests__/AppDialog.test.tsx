@@ -2,6 +2,7 @@
 import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { AppDialog } from "../AppDialog";
+import { AppPaletteDialog } from "../AppPaletteDialog";
 import { buttonVariants } from "../button";
 import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { _resetForTests } from "@/lib/escapeStack";
@@ -302,6 +303,41 @@ describe("AppDialog focus trapping", () => {
     escapeFromFocus();
     expect(onCloseAbove).toHaveBeenCalledOnce();
     expect(onCloseBelow).not.toHaveBeenCalled();
+  });
+
+  // A locked dialog and a palette that open in the same commit stack in render
+  // order: the palette, rendered after, is on top and owns Escape. Registering
+  // the locked dialog's backstop later than the palette's would put it on top
+  // and swallow the palette's Escape.
+  it("lets a palette opened alongside a locked dialog keep Escape", async () => {
+    const onCloseDialog = vi.fn();
+    const onClosePalette = vi.fn();
+    const tree = (open: boolean) => (
+      <>
+        <Dispatcher />
+        <AppDialog isOpen={open} onClose={onCloseDialog} dismissible={false}>
+          <AppDialog.Body>
+            <button type="button">Locked</button>
+          </AppDialog.Body>
+        </AppDialog>
+        <AppPaletteDialog isOpen={open} onClose={onClosePalette} ariaLabel="Palette" tier="command">
+          <input aria-label="Search" />
+        </AppPaletteDialog>
+      </>
+    );
+    const { rerender } = render(tree(false));
+    rerender(tree(true));
+    await act(() => vi.runAllTimersAsync());
+    screen.getByLabelText("Search").focus();
+
+    act(() => {
+      (document.activeElement ?? document.body).dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
+      );
+    });
+
+    expect(onClosePalette).toHaveBeenCalledOnce();
+    expect(onCloseDialog).not.toHaveBeenCalled();
   });
 
   it("restores focus to previously focused element on close", async () => {
