@@ -325,6 +325,19 @@ describe("CompactErrorList", () => {
     });
   });
 
+  // Focus opens a tooltip, so landing on a clamped message would drop its
+  // tooltip over the list the moment the disclosure opens.
+  it("opens the disclosure onto a control, never onto a message", () => {
+    const errors = makeErrors(3).map((e, i) =>
+      i === 2 ? { ...e, message: `${"x".repeat(400)} end` } : e
+    );
+    render(<CompactErrorList variant="flush" errors={errors} maxInline={2} onDismiss={vi.fn()} />);
+    openOverflow();
+    const active = document.activeElement;
+    expect(active?.tagName).toBe("BUTTON");
+    expect(screen.getByRole("dialog", { name: "More errors" }).contains(active)).toBe(true);
+  });
+
   describe("arrival announcements", () => {
     beforeEach(() => {
       useAnnouncerStore.setState({ polite: null, assertive: null });

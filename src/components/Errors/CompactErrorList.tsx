@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { ChevronDown } from "lucide-react";
-import { Popover, PopoverAnchor, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ErrorBanner } from "./ErrorBanner";
@@ -166,13 +166,16 @@ function ErrorOverflow({
   contentRef: RefObject<HTMLDivElement | null>;
 }) {
   const [open, setOpen] = useState(false);
-  // Radix measures an anchor through `getBoundingClientRect`; this reads the
-  // list's box at measure time, so a list that grows or shrinks stays anchored.
-  const [anchor] = useState(() => ({
-    current: {
-      getBoundingClientRect: () => anchorRef.current?.getBoundingClientRect() ?? new DOMRect(),
-    },
-  }));
+  // The hidden rows open at the list's width, starting at its left edge, so
+  // every column sits where the inline rows put it. Measured as the popover
+  // opens: the trigger is inset from that edge by the row's own padding.
+  const [frame, setFrame] = useState<{ width: number; offset: number } | null>(null);
+  const handleOpenChange = (next: boolean, trigger?: HTMLElement | null) => {
+    const list = anchorRef.current?.getBoundingClientRect();
+    const own = trigger?.getBoundingClientRect();
+    if (next && list && own) setFrame({ width: list.width, offset: list.left - own.left });
+    setOpen(next);
+  };
   const label = `Show ${errors.length} more ${errors.length === 1 ? "error" : "errors"}`;
 
   return (
@@ -185,10 +188,15 @@ function ErrorOverflow({
         borderBottom: "1px solid color-mix(in oklab, var(--color-status-error) 20%, transparent)",
       }}
     >
-      <Popover open={open} onOpenChange={setOpen}>
-        {/* Anchored to the whole list, not the trigger, so the hidden rows open
-            at the list's width with every column where the inline rows put it. */}
-        <PopoverAnchor virtualRef={anchor} />
+      <Popover
+        open={open}
+        onOpenChange={(next) =>
+          handleOpenChange(
+            next,
+            anchorRef.current?.querySelector<HTMLElement>("[data-testid='compact-error-overflow']")
+          )
+        }
+      >
         <PopoverTrigger asChild>
           <Button
             variant="ghost"
@@ -213,9 +221,17 @@ function ErrorOverflow({
         <PopoverContent
           ref={contentRef}
           align="start"
+          alignOffset={frame?.offset}
           sideOffset={2}
           collisionPadding={8}
           aria-label="More errors"
+          // Radix focuses the first tabbable on open, which for a clamped
+          // message is the message itself — and focus opens its tooltip over
+          // the list. Land on the first row's first control instead.
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            contentRef.current?.querySelector<HTMLElement>("button")?.focus();
+          }}
           // A portal moves the DOM but not the React tree, so a row's Retry would
           // still bubble into the card behind it.
           onClick={(e) => e.stopPropagation()}
@@ -223,7 +239,8 @@ function ErrorOverflow({
           // pixel cap, so a long tail scrolls inside the popover instead of
           // running past the viewport edge. The last row's divider would double
           // the popover's own border.
-          className="flex w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-16px)] flex-col max-h-[var(--radix-popover-content-available-height)] overflow-y-auto [&>:last-child]:border-b-0!"
+          style={frame ? { width: frame.width } : undefined}
+          className="flex w-96 max-w-[calc(100vw-16px)] flex-col max-h-[var(--radix-popover-content-available-height)] overflow-y-auto [&>:last-child]:border-b-0!"
         >
           {errors.map((error) => (
             <ErrorBanner key={error.id} error={error} animated={false} {...handlers} />
