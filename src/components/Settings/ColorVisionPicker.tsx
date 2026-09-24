@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle } from "lucide-react";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
@@ -127,7 +126,6 @@ export function ColorVisionPicker() {
           <InlineStatusBanner
             className="rounded-[var(--radius-md)]"
             severity="error"
-            icon={AlertCircle}
             title="Couldn't save color vision mode"
             description="The mode was restored to the last saved one, so it won't be lost on restart."
             action={{ id: "retry", label: "Retry", onClick: () => void handleChange(failedMode) }}

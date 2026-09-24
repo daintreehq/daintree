@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   keybindingService,
@@ -86,7 +85,6 @@ function ShortcutRowError({
     <InlineStatusBanner
       className="rounded-[var(--radius-md)]"
       severity="error"
-      icon={AlertCircle}
       title={isSave ? "Couldn't save shortcut" : "Couldn't reset shortcut"}
       description={
         isSave
@@ -662,7 +660,6 @@ export function KeyboardShortcutsTab() {
           <InlineStatusBanner
             className="rounded-[var(--radius-md)]"
             severity="error"
-            icon={AlertCircle}
             title="Couldn't reset shortcuts"
             description="Your customized shortcuts are still in place. Reset shortcuts to try again."
           />

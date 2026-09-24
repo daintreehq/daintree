@@ -7,7 +7,7 @@ import {
   type FormEvent,
   type MouseEvent,
 } from "react";
-import { AlertCircle, Shuffle } from "lucide-react";
+import { Shuffle } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -746,7 +746,6 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
           <InlineStatusBanner
             className="rounded-[var(--radius-md)]"
             severity="error"
-            icon={AlertCircle}
             title={fileResult.title}
             description={fileResult.description}
             action={{ id: "retry", label: "Retry", onClick: fileResult.retry }}
@@ -796,7 +795,6 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
           <InlineStatusBanner
             className="rounded-[var(--radius-md)]"
             severity="error"
-            icon={AlertCircle}
             title={saveError.title}
             description={saveError.description}
             action={{ id: "retry", label: "Retry", onClick: saveError.retry }}

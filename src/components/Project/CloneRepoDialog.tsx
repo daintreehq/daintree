@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Check, AlertCircle, CircleSlash, FolderOpen, LogIn } from "lucide-react";
+import { Check, CircleSlash, FolderOpen, LogIn } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { FolderGit2 } from "@/components/icons";
@@ -571,7 +571,6 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
 
   const cleanupBanner = cleanupError ? (
     <InlineStatusBanner
-      icon={AlertCircle}
       severity="error"
       title="Partial clone not removed"
       description="Close any Git processes using it, then delete the folder manually."
@@ -734,7 +733,6 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                 scrolls it out of sight entirely. */}
             {error && (
               <InlineStatusBanner
-                icon={AlertCircle}
                 severity="error"
                 title="Clone failed"
                 description={error.message}

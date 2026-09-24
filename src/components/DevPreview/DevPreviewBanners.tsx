@@ -94,7 +94,6 @@ export function DevPreviewStuckBanner({
 
   return (
     <InlineStatusBanner
-      icon={AlertTriangle}
       severity="error"
       title={title}
       description={description}

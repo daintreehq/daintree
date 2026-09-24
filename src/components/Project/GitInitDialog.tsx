@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Check, AlertCircle, AlertTriangle } from "lucide-react";
+import { Check, AlertTriangle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { FolderGit2 } from "@/components/icons";
@@ -587,7 +587,6 @@ export function GitInitDialog({
               <div data-testid="git-init-error">
                 {isIdentityFailure ? (
                   <InlineStatusBanner
-                    icon={AlertCircle}
                     severity="error"
                     title="Initial commit skipped"
                     description="The repository was created, but Git needs a name and email before it can commit. Set them, then retry."
@@ -604,7 +603,6 @@ export function GitInitDialog({
                   />
                 ) : (
                   <InlineStatusBanner
-                    icon={AlertCircle}
                     severity="error"
                     title="Initialization failed"
                     description={error}
