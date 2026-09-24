@@ -23,6 +23,7 @@
  *   scene-<scene>--<theme>.png         each split scene at rest
  *   close-<state>--<theme>.png         a crop around the divider: rest, hover, focus, drag
  *   scene-split-agent-browser--<theme>--drag.png   the whole scene mid-drag
+ *   scene-split-agent-browser--<theme>--menu.png   the divider's context menu open
  * and once:
  *   close-focus--<theme>--forced-colors.png  keyboard focus under forced colours
  *
@@ -219,6 +220,18 @@ test("two-pane split divider — states and themes", async ({ page }) => {
       const grid = await openScene(page, scene, theme);
       written.push(await snapScene(grid, `scene-${scene}--${theme}.png`));
     }
+    {
+      // The click-only path: the divider's own context menu.
+      const grid = await openScene(page, "split-agent-browser", theme);
+      const { x, y } = await separatorCentre(page);
+      await page.mouse.click(x, y, { button: "right" });
+      const menu = page.getByRole("menu");
+      await expect(menu).toBeVisible({ timeout: 10_000 });
+      await expect(menu.getByRole("menuitem")).toHaveCount(4);
+      await page.waitForTimeout(200);
+      written.push(await snapScene(grid, `scene-split-agent-browser--${theme}--menu.png`));
+      await page.keyboard.press("Escape");
+    }
     for (const state of CLOSE_STATES) {
       const grid = await openScene(page, "split-agent-browser", theme);
       await enter(page, state);
@@ -241,6 +254,6 @@ test("two-pane split divider — states and themes", async ({ page }) => {
 
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBe(THEMES.length * (SCENES.length + CLOSE_STATES.length + 1) + 1);
+  expect(onDisk.length).toBe(THEMES.length * (SCENES.length + CLOSE_STATES.length + 2) + 1);
   console.log(`[split-divider-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });

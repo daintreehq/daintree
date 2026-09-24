@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, cleanup, fireEvent } from "@testing-library/react";
+import { render, cleanup, fireEvent, screen } from "@testing-library/react";
 import { TwoPaneSplitDivider } from "../TwoPaneSplitDivider";
 
 const MIN = 0.3;
@@ -25,7 +25,8 @@ function renderDivider(ratio = 0.5) {
     />
   );
   const separator = utils.getByRole("separator");
-  const grip = separator.firstElementChild as HTMLElement;
+  const grip = separator.firstElementChild;
+  if (!grip) throw new Error("divider rendered no grip");
   return { separator, grip, onRatioChange, onRatioCommit, onDoubleClick };
 }
 
@@ -88,6 +89,42 @@ describe("TwoPaneSplitDivider keyboard contract", () => {
     expect(shares).toHaveLength(2);
     expect(shares[0]).toBe(Number(separator.getAttribute("aria-valuenow")));
     expect(shares[0]! + shares[1]!).toBe(100);
+  });
+});
+
+describe("TwoPaneSplitDivider click-only resizing", () => {
+  afterEach(cleanup);
+
+  async function openMenu(ratio: number) {
+    const utils = renderDivider(ratio);
+    fireEvent.contextMenu(utils.separator, { clientX: 500, clientY: 300 });
+    await screen.findByRole("menu");
+    const item = (name: RegExp) => screen.getByRole("menuitem", { name });
+    return { ...utils, item };
+  }
+
+  it("moves the split each way without a drag, committing the value it lands on", async () => {
+    const { item, onRatioCommit } = await openMenu(0.5);
+    fireEvent.click(item(/left/i));
+    const widenedLeft = onRatioCommit.mock.calls.at(-1)?.[0];
+    expect(widenedLeft).toBeGreaterThan(0.5);
+    cleanup();
+
+    const again = await openMenu(0.5);
+    fireEvent.click(again.item(/right/i));
+    expect(again.onRatioCommit.mock.calls.at(-1)?.[0]).toBeLessThan(0.5);
+  });
+
+  it("offers no move past a limit", async () => {
+    const atMax = await openMenu(MAX);
+    expect(atMax.item(/left/i).getAttribute("aria-disabled")).toBe("true");
+    expect(atMax.item(/right/i).getAttribute("aria-disabled")).not.toBe("true");
+  });
+
+  it("resets through the same path as double-click", async () => {
+    const { item, onDoubleClick } = await openMenu(0.4);
+    fireEvent.click(item(/reset/i));
+    expect(onDoubleClick).toHaveBeenCalledTimes(1);
   });
 });
 
