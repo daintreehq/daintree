@@ -103,18 +103,19 @@ describe("ProjectPulseStrip", () => {
   it("peeks cached stats — active days (not a raw commit count), streak, and a mini ribbon", () => {
     state.getPulse = () => makePulse();
     render(<ProjectPulseStrip worktreeId="wt1" />);
-    expect(screen.getByText(/5 active days/i)).toBeTruthy();
+    // Scoped to the window it counts, matching the card summary's "5/60".
+    expect(screen.getByText("5/60 active days")).toBeTruthy();
+    expect(screen.getByText("2 day streak")).toBeTruthy();
     // The busyness-flavored commit count is no longer the headline (#11194).
     expect(screen.queryByText(/13 commits/i)).toBeNull();
     expect(screen.getByTestId("streak-flame")).toBeTruthy();
     expect(screen.getByTestId("pulse-mini-ribbon")).toBeTruthy();
   });
 
-  it("renders a singular 'active day' for a one-day-active pulse", () => {
-    state.getPulse = () => makePulse({ activeDays: 1, currentStreakDays: 1 });
+  it("scopes the active-day count to the snapshot's own window, not a fixed one", () => {
+    state.getPulse = () => makePulse({ activeDays: 3, projectAgeDays: 4, currentStreakDays: 1 });
     render(<ProjectPulseStrip worktreeId="wt1" />);
-    expect(screen.getByText(/1 active day\b/i)).toBeTruthy();
-    expect(screen.queryByText(/active days/i)).toBeNull();
+    expect(screen.getByText("3/4 active days")).toBeTruthy();
   });
 
   it("folds the peeked stats into the button's accessible name for screen readers", () => {
@@ -122,17 +123,17 @@ describe("ProjectPulseStrip", () => {
     render(<ProjectPulseStrip worktreeId="wt1" />);
     expect(
       screen.getByRole("button", {
-        name: /^project pulse — 5 active days, 2 day streak, show activity$/i,
+        name: /^project pulse — 5 of 60 days active, 2 day streak, show activity$/i,
       })
     ).toBeTruthy();
   });
 
-  it("uses a singular 'active day' in the accessible name and omits a 1-day streak", () => {
+  it("scopes the accessible name the same way and omits a 1-day streak", () => {
     state.getPulse = () => makePulse({ activeDays: 1, currentStreakDays: 1 });
     render(<ProjectPulseStrip worktreeId="wt1" />);
-    // Anchored so "1 active days" (plural bug) or a spurious streak suffix fails.
+    // Anchored so a spurious streak suffix fails.
     expect(
-      screen.getByRole("button", { name: /^project pulse — 1 active day, show activity$/i })
+      screen.getByRole("button", { name: /^project pulse — 1 of 60 days active, show activity$/i })
     ).toBeTruthy();
   });
 

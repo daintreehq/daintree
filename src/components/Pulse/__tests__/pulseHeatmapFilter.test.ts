@@ -1,13 +1,23 @@
 import { describe, it, expect } from "vitest";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
+import { buildPulseCalendar } from "../pulseCalendar";
 
 const HEATMAP_PATH = resolve(__dirname, "../PulseHeatmap.tsx");
 
 describe("PulseHeatmap — isBeforeProject filtering (issue #4078)", () => {
-  it("filters out isBeforeProject cells before rendering", async () => {
-    const content = await readFile(HEATMAP_PATH, "utf-8");
-    expect(content).toContain(".filter((cell) => !cell.isBeforeProject)");
+  it("never places a pre-project day in the calendar", () => {
+    const calendar = buildPulseCalendar([
+      { date: "2026-03-02", count: 0, level: 0, isBeforeProject: true },
+      { date: "2026-03-03", count: 0, level: 0, isBeforeProject: true },
+      { date: "2026-03-04", count: 2, level: 2 },
+      { date: "2026-03-05", count: 0, level: 0 },
+    ]);
+    expect(calendar.positions.has("2026-03-02")).toBe(false);
+    expect(calendar.positions.has("2026-03-03")).toBe(false);
+    expect(calendar.days.map((c) => c.date)).toEqual(["2026-03-04", "2026-03-05"]);
+    // The pre-project slots of the first week are empty space, not quiet days.
+    expect(calendar.weeks[0]!.slice(0, 2)).toEqual([null, null]);
   });
 
   it("does not render isBeforeProject cells with a distinct style", async () => {
@@ -18,16 +28,6 @@ describe("PulseHeatmap — isBeforeProject filtering (issue #4078)", () => {
   it("does not produce 'Before project started' tooltip text", async () => {
     const content = await readFile(HEATMAP_PATH, "utf-8");
     expect(content).not.toContain("Before project started");
-  });
-
-  it("right-aligns the first row when it is shorter than a full row", async () => {
-    const content = await readFile(HEATMAP_PATH, "utf-8");
-    expect(content).toContain("justify-end");
-  });
-
-  it("uses filtered cell count for compact-mode column width", async () => {
-    const content = await readFile(HEATMAP_PATH, "utf-8");
-    expect(content).toContain("rows.reduce((sum, r) => sum + r.length, 0)");
   });
 });
 

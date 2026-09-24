@@ -1,5 +1,6 @@
 import { type SVGProps } from "react";
 import { Flame } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 type StreakTier = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
@@ -46,7 +47,7 @@ export function StreakFlame({ streakDays, size = 14, className, ...svgProps }: S
   const color = getStreakColor(streakDays);
   return (
     <Flame
-      className={className}
+      className={cn("pulse-streak-flame", className)}
       style={{ color, width: size, height: size }}
       aria-hidden
       {...(svgProps as Record<string, unknown>)}

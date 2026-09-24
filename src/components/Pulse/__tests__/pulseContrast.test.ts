@@ -298,9 +298,12 @@ describe("PulseHeatmap — legend (issue #9819)", () => {
     expect(legendBlock![0]).not.toContain("ring-accent-primary");
   });
 
-  it("legend shares the heatmap row width via getPulseHeatmapRowWidth", async () => {
+  it("legend sits outside the heatmap's horizontal scroller, so it can never be scrolled away", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("getPulseHeatmapRowWidth");
+    // The scroller closes after the grid and before the legend begins.
+    expect(content).toMatch(
+      /overflow-x-auto[^>]*>\s*<PulseHeatmap[\s\S]*?\/>\s*<\/div>\s*<PulseHeatmapLegend/
+    );
   });
 
   it("legend swatches reuse the pulse-heat-cell shape cue so they stay distinguishable in forced-colors", async () => {
