@@ -54,8 +54,8 @@ export function resolveWorktreeDisplayName(worktreeId: string | undefined): stri
 
 /**
  * The preview a bulk destructive confirm shows: the terminals it will touch,
- * grouped by worktree in the order they first appear, with the ones whose agent
- * is working listed first in each group. Groups whose worktree can't be named
+ * grouped by worktree, with the groups and terminals holding a working agent
+ * listed first and everything else in the order it first appears. Groups whose worktree can't be named
  * are titled by `fallbackWorktreeTitle` rather than dropped — the list has to
  * account for every target the count claims.
  */
@@ -84,8 +84,11 @@ export function buildDestructivePreview(
       hasRunningAgent: terminalHasRunningAgentSession(terminal),
     });
   }
+  const hasWork = (group: DestructivePreviewGroup) =>
+    group.terminals.some((t) => t.hasRunningAgent);
   for (const group of groups.values()) {
     group.terminals.sort((a, b) => Number(b.hasRunningAgent) - Number(a.hasRunningAgent));
   }
-  return [...groups.values()];
+  // Live work leads the list: groups holding a working agent come first.
+  return [...groups.values()].sort((a, b) => Number(hasWork(b)) - Number(hasWork(a)));
 }

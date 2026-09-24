@@ -68,4 +68,25 @@ describe("buildDestructivePreview", () => {
       "idle-2",
     ]);
   });
+
+  it("puts groups holding a working agent ahead of groups that hold none", () => {
+    const groups = buildDestructivePreview(
+      [
+        panel({ id: "idle-a", worktreeId: "a" }),
+        panel({ id: "idle-b", worktreeId: "b" }),
+        panel({ id: "busy-c", worktreeId: "c", detectedAgentId: "claude", agentState: "working" }),
+        panel({ id: "idle-d", worktreeId: "d" }),
+      ],
+      titles
+    );
+    const hasWork = groups.map((g) => g.terminals.some((t) => t.hasRunningAgent));
+    const firstIdleGroup = hasWork.indexOf(false);
+    expect(hasWork.slice(firstIdleGroup).every((w) => !w)).toBe(true);
+    // Idle groups keep their first-seen order behind it.
+    expect(groups.filter((_, i) => !hasWork[i]).map((g) => g.worktreeTitle)).toEqual([
+      "wt:a",
+      "wt:b",
+      "wt:d",
+    ]);
+  });
 });

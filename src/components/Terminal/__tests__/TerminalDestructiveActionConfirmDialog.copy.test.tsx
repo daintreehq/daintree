@@ -238,6 +238,15 @@ describe("TerminalDestructiveActionConfirmDialog — copy and preview invariants
 
   it.each(CASES)("$name states the real trash window only when it is recoverable", (c) => {
     const { described } = open(c.snapshot);
-    expect(described.includes(`${TRASH_TTL_SECONDS} seconds`)).toBe(c.recoverable);
+    expect(new RegExp(`${TRASH_TTL_SECONDS}\\s+seconds`).test(described)).toBe(c.recoverable);
+  });
+
+  it.each(CASES)("$name keeps advice out of the accessible description", (c) => {
+    const { dialog, described } = open(c.snapshot);
+    const describedBy = dialog.getAttribute("aria-describedby");
+    const notes = [...dialog.querySelectorAll("p")].filter((p) => p.id !== describedBy);
+    for (const note of notes) {
+      expect(described).not.toContain(note.textContent ?? "");
+    }
   });
 });

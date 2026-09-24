@@ -463,6 +463,49 @@ test("terminal destructive confirm review — every copy variant", async () => {
         }
       );
     });
+
+    // Where keyboard focus lands after a confirmed kill. The only step that confirms
+    // rather than cancels, so it runs last. Focus the agent the way a user would, raise
+    // the confirm from there, Tab to the destructive button and press Enter.
+    await step(page, "kill-focus", async () => {
+      await running();
+      // A click, not a `.focus()`: the kill keybinding targets the store's focused panel,
+      // so the pane has to be focused the way the user focuses it.
+      await page.locator(`[data-panel-id="${agentB}"] .xterm-screen`).first().click();
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            document.activeElement?.closest("[data-panel-id]")?.getAttribute("data-panel-id")
+          )
+        )
+        .toBe(agentB);
+      await dispatch(page, "terminal.kill");
+      await page.locator(DIALOG).last().waitFor({ state: "visible", timeout: 8000 });
+      await settle(page, 300);
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Enter");
+      await page.locator(DIALOG).first().waitFor({ state: "hidden", timeout: 8000 });
+      await settle(page, 1200);
+      const landed = await page.evaluate(() => {
+        const el = document.activeElement as HTMLElement | null;
+        return {
+          tag: el?.tagName ?? null,
+          panelId: el?.closest("[data-panel-id]")?.getAttribute("data-panel-id") ?? null,
+          label: el?.getAttribute("aria-label") ?? el?.textContent?.trim().slice(0, 60) ?? null,
+          isBody: el === document.body,
+        };
+      });
+      writeFileSync(
+        path.join(OUTPUT_DIR, `12-kill-focus-${THEME}.json`),
+        JSON.stringify({ killed: agentB, ...landed }, null, 2)
+      );
+      await page.screenshot({
+        path: path.join(OUTPUT_DIR, `12-kill-focus-window-${THEME}.png`),
+        type: "png",
+        animations: "disabled",
+        caret: "hide",
+      });
+    });
   } finally {
     if (ctx?.app) await closeApp(ctx.app).catch(() => {});
     try {

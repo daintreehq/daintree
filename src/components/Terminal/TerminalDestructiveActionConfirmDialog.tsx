@@ -24,6 +24,11 @@ export interface DestructiveConfirmCopy {
    */
   lead?: string;
   description: string;
+  /**
+   * An alternative to the action, shown after the preview and kept out of the
+   * accessible description: it is advice, not a consequence.
+   */
+  note?: string;
   confirmLabel: string;
 }
 
@@ -68,12 +73,14 @@ export function buildRestartRunningAgentCopy(terminalTitle?: string): Destructiv
 /**
  * Trashing does not end a process: the PTY keeps running in Recently closed
  * for the trash TTL and is only killed if nobody restores it. The copy has to
- * say so, or a recoverable close reads exactly as final as a kill.
+ * say so, or a recoverable close reads exactly as final as a kill. The
+ * non-breaking space keeps the window from splitting across a line.
  */
 function recentlyClosedSentence(count: number): string {
+  const ttl = `${TRASH_TTL_SECONDS}\u00a0seconds`;
   return count === 1
-    ? `It moves to Recently closed and keeps running for ${TRASH_TTL_SECONDS} seconds, so it can be restored until then.`
-    : `They move to Recently closed and keep running for ${TRASH_TTL_SECONDS} seconds, so they can be restored until then.`;
+    ? `It moves to Recently closed, where it keeps running and can be restored for ${ttl}.`
+    : `They move to Recently closed, where they keep running and can be restored for ${ttl}.`;
 }
 
 function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DestructiveConfirmCopy {
@@ -156,10 +163,11 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
       return {
         title: `Close ${count} ${noun} from ${worktree}?`,
         lead: workingLead(pending.runningAgentCount, "will stop unless restored"),
-        description:
+        description: recentlyClosedSentence(count),
+        note:
           count === 1
-            ? `This terminal outlived its deleted worktree. ${recentlyClosedSentence(1)} To keep it, drag it to another worktree instead.`
-            : `These terminals outlived their deleted worktree. ${recentlyClosedSentence(count)} To keep one, drag it to another worktree instead.`,
+            ? "To keep it open, cancel and drag it to another worktree."
+            : "To keep one open, cancel and drag it to another worktree.",
         confirmLabel: `Close ${count} ${noun}`,
       };
     }
@@ -172,11 +180,11 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
       return {
         title: `Close ${count} ${noun} from ${worktreeCount} ${worktreeNoun}?`,
         lead: workingLead(pending.runningAgentCount, "will stop unless restored"),
-        description: `${
+        description: recentlyClosedSentence(count),
+        note:
           count === 1
-            ? "This terminal outlived its deleted worktree."
-            : "These terminals outlived their deleted worktrees."
-        } ${recentlyClosedSentence(count)} To keep one, drag it to another worktree instead.`,
+            ? "To keep it open, cancel and drag it to another worktree."
+            : "To keep one open, cancel and drag it to another worktree.",
         confirmLabel: `Close ${count} ${noun}`,
       };
     }
@@ -239,7 +247,10 @@ function TargetPreview({
   const GroupIcon = deletedWorktrees ? FolderX : GitBranch;
   return (
     <div
-      className="max-h-56 overflow-y-auto divide-y divide-divider rounded-[var(--radius-md)] border border-divider bg-surface-canvas/40"
+      // No scroller of its own: a long list grows the dialog body, which already
+      // scrolls with edge shadows, so an overflowing target is never clipped
+      // out of sight inside a nested box.
+      className="divide-y divide-divider rounded-[var(--radius-md)] border border-divider bg-surface-canvas/40"
       data-testid="destructive-confirm-preview"
     >
       {groups.map((group) => (
@@ -449,6 +460,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           deletedWorktrees={isDeleted}
         />
       )}
+      {copy.note && <p className="text-sm text-text-secondary">{copy.note}</p>}
     </ConfirmDialog>
   );
 }

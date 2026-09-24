@@ -64,7 +64,7 @@ describe("TerminalDestructiveActionConfirmDialog — deleted-worktree dismiss", 
     stage(2);
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    expect(screen.getByText(/drag it to another worktree instead/)).toBeTruthy();
+    expect(screen.getByText(/drag it to another worktree/)).toBeTruthy();
   });
 
   it("warns when a terminal still has a running agent", () => {
@@ -187,6 +187,6 @@ describe("TerminalDestructiveActionConfirmDialog — grouped deleted-worktree cl
     stageGroup();
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    expect(screen.getByText(/drag it to another worktree instead/)).toBeTruthy();
+    expect(screen.getByText(/drag it to another worktree/)).toBeTruthy();
   });
 });
