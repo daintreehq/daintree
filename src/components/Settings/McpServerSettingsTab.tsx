@@ -1121,6 +1121,8 @@ export function McpServerSettingsTab() {
           </SettingsGroup>
 
           <McpAuditLogViewer
+            // The assistant panel's recent-calls popover links here.
+            id="mcp-audit-log"
             records={auditRecords}
             turnRecords={turnRecords}
             loading={auditLoading}

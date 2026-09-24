@@ -287,6 +287,8 @@ interface McpAuditLogViewerProps {
    * "nothing has ever happened".
    */
   emptyLabel?: string;
+  /** DOM id for the log's group, so a settings deep link can land on it. */
+  id?: string;
 }
 
 function DispatchRow({
@@ -446,6 +448,7 @@ export function McpAuditLogViewer({
   emptyLabel = "Tool calls show up here once an agent uses the MCP server",
   loadError,
   actionError,
+  id,
 }: McpAuditLogViewerProps) {
   const [toolFilter, setToolFilter] = useState("");
   const [resultFilter, setResultFilter] = useState<AuditResultFilter>("all");
@@ -581,7 +584,7 @@ export function McpAuditLogViewer({
   const hasQuickViews = (unauthorizedCount > 0 && resultFilter !== "unauthorized") || canGroup;
 
   return (
-    <SettingsGroup>
+    <SettingsGroup id={id}>
       <div>
         <AuditFilterBar label="Filter MCP audit log">
           <AuditFilterInput
