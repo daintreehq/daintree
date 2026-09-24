@@ -1,4 +1,12 @@
-import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useMemo,
+  useState,
+} from "react";
 import { Trash2 } from "lucide-react";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
@@ -53,6 +61,41 @@ const EMPTY_META: DerivedWorktreeMeta = {
   hasMergeConflict: false,
   chipState: null,
 };
+
+/**
+ * The bulk bar's focus guard. The bar unmounts whenever the selection empties
+ * — Clear, Escape, a filter pruning the last selected row, a bulk remove
+ * finishing — and a focused control that unmounts strands the keyboard on the
+ * document. A layout-effect cleanup runs before the bar's DOM is detached, so
+ * it can still see whether focus was inside and hand it on once it is gone.
+ */
+function SelectionBarFocusGuard({
+  onFocusLeaving,
+  children,
+}: {
+  onFocusLeaving: () => void;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const onFocusLeavingRef = useRef(onFocusLeaving);
+  useLayoutEffect(() => {
+    onFocusLeavingRef.current = onFocusLeaving;
+  });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    return () => {
+      if (el?.contains(document.activeElement)) {
+        const handOff = onFocusLeavingRef.current;
+        queueMicrotask(handOff);
+      }
+    };
+  }, []);
+  return (
+    <div ref={ref} className="contents">
+      {children}
+    </div>
+  );
+}
 
 export interface WorktreeOverviewModalProps {
   isOpen: boolean;
@@ -539,43 +582,40 @@ export function WorktreeOverviewModal({
   // routes Escape and a scrim click through the same `onClose`, and only the
   // key is two-stage — a scrim click leaves in one — so record whether the
   // dismissal being resolved came from Escape. Capture phase, because the
-  // escape stack dispatches on bubble; cleared on a microtask so a later
-  // pointer dismissal cannot inherit the flag.
+  // escape stack dispatches on bubble. Cleared on the next task, not a
+  // microtask: the browser drains microtasks between listeners of one native
+  // event, so a microtask cleared the flag before the bubble-phase backstop
+  // read it, and Escape from a bulk-bar button closed the whole overview
+  // instead of clearing the selection. A pointer dismissal is its own task,
+  // so it still cannot inherit the flag.
   const escapeDismissRef = useRef(false);
   useEffect(() => {
     if (!isOpen) return;
     const markEscapeDismissal = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       escapeDismissRef.current = true;
-      queueMicrotask(() => {
+      setTimeout(() => {
         escapeDismissRef.current = false;
-      });
+      }, 0);
     };
     document.addEventListener("keydown", markEscapeDismissal, true);
     return () => document.removeEventListener("keydown", markEscapeDismissal, true);
   }, [isOpen]);
 
-  const selectionBarRef = useRef<HTMLDivElement | null>(null);
-
-  /**
-   * Leaving selection mode unmounts the bulk bar. If focus is on one of its
-   * controls, hand it to the list first — the cursor row it was acting on is
-   * still there — or the keyboard is stranded on the document.
-   */
-  const exitSelection = useCallback(() => {
-    if (selectionBarRef.current?.contains(document.activeElement)) {
-      gridRef.current?.focus({ preventScroll: true });
-    }
-    clearSelection();
-  }, [clearSelection]);
+  /** Where focus goes when the bulk bar leaves: the list, or the field if the list went too. */
+  const handOffFocusFromSelectionBar = useCallback(() => {
+    const grid = gridRef.current;
+    if (grid?.isConnected) grid.focus({ preventScroll: true });
+    else searchInputRef.current?.focus();
+  }, []);
 
   const handleDismiss = useCallback(() => {
     if (escapeDismissRef.current && hasSelection) {
-      exitSelection();
+      clearSelection();
       return;
     }
     onClose();
-  }, [hasSelection, exitSelection, onClose]);
+  }, [hasSelection, clearSelection, onClose]);
 
   /**
    * The row menu for the keyboard. The list keeps DOM focus while the cursor is
@@ -798,14 +838,14 @@ export function WorktreeOverviewModal({
               apply to. */}
           {hasSelection ? (
             <AppPaletteDialog.Footer className="shrink-0 justify-between">
-              <div ref={selectionBarRef} className="contents">
+              <SelectionBarFocusGuard onFocusLeaving={handOffFocusFromSelectionBar}>
                 <div className="flex items-center gap-3 min-w-0">
                   <span className="text-text-primary font-medium tabular-nums">
                     {selectedIds.size} selected
                   </span>
                   <button
                     type="button"
-                    onClick={exitSelection}
+                    onClick={clearSelection}
                     className={cn(
                       "rounded-[var(--radius-sm)] px-1.5 py-0.5 text-xs text-text-secondary",
                       "hover:bg-overlay-soft hover:text-text-primary transition-colors",
@@ -835,7 +875,7 @@ export function WorktreeOverviewModal({
                     Remove worktrees
                   </Button>
                 </div>
-              </div>
+              </SelectionBarFocusGuard>
             </AppPaletteDialog.Footer>
           ) : filteredWorktrees.length > 0 ? (
             <AppPaletteDialog.Footer className="shrink-0">

@@ -166,6 +166,13 @@ test("Worktree overview — fleets, states and themes", async ({ page }) => {
     await page.keyboard.press("Enter");
     await expect(modal.locator('[aria-selected="true"]')).toHaveCount(0);
     await expect(modal.getByRole("grid")).toBeFocused();
+
+    // And from Escape while a bulk action holds focus.
+    await page.keyboard.press("Space");
+    await modal.getByRole("button", { name: "Close sessions" }).focus();
+    await page.keyboard.press("Escape");
+    await expect(modal.locator('[aria-selected="true"]')).toHaveCount(0);
+    await expect(modal.getByRole("grid")).toBeFocused();
   }
 
   // The row menu from the keyboard: Shift+F10 on the cursor row, which lists
