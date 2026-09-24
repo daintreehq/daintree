@@ -202,6 +202,19 @@ describe("Daintree app CSP", () => {
       }
     });
 
+    it("streams tour narration from the asset CDN by media tag only", () => {
+      // The Daintree Tour's audio is never bundled. It loads by <audio> tag,
+      // so only media-src may name the CDN — connect-src staying closed means
+      // no renderer fetch() can reach it.
+      for (const csp of [getDaintreeAppProdCSP(), getDaintreeAppDevCSP()]) {
+        const directives = csp.split(";").map((d) => d.trim());
+        const carrying = directives.filter((d) =>
+          d.split(" ").includes("https://cdn.daintree.org")
+        );
+        expect(carrying.map((d) => d.split(" ")[0])).toEqual(["media-src"]);
+      }
+    });
+
     it("allows daintree-file: in media-src in production", () => {
       const mediaSrc = getDaintreeAppProdCSP().match(/media-src ([^;]*);/)?.[1];
       expect(mediaSrc).toContain("daintree-file:");

@@ -63,6 +63,11 @@ const GRAVATAR = "https://www.gravatar.com";
 // `*.daintree.org` subdomain form must be listed explicitly.
 const DAINTREE_DOCS = "https://daintree.org https://*.daintree.org";
 
+// Daintree Tour narration. Audio is never bundled — it streams from the
+// first-party asset CDN by `<audio>` tag, which `media-src` alone governs; no
+// fetch, so `connect-src` stays closed to it.
+const DAINTREE_CDN = "https://cdn.daintree.org";
+
 // Named Trusted Types policy backing all DOM HTML-sink writes in the renderer.
 // 'allow-duplicates' is required so Vite HMR can re-evaluate the policy module
 // on hot reload without throwing 'Policy with name "<x>" already exists'.
@@ -131,7 +136,7 @@ export function getDaintreeAppProdCSP(options?: DaintreeCspOptions): string {
     // FILE_SCHEMES stays here for media loaded by tag from that scheme; the
     // viewer's size probe and WebAudio read it via fetch(), which connect-src
     // governs. blob: stays for renderer-minted object URLs.
-    `media-src 'self' ${MEDIA_SCHEME} ${FILE_SCHEMES} blob:`,
+    `media-src 'self' ${MEDIA_SCHEME} ${FILE_SCHEMES} ${DAINTREE_CDN} blob:`,
     "worker-src 'self' blob:",
     `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${PDF_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
     "object-src 'none'",
@@ -166,7 +171,7 @@ export function getDaintreeAppDevCSP(): string {
     `img-src 'self' ${origins} ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
     `font-src 'self' ${origins} data:`,
     // Mirrors the production policy — see getDaintreeAppProdCSP.
-    `media-src 'self' ${MEDIA_SCHEME} ${FILE_SCHEMES} blob:`,
+    `media-src 'self' ${MEDIA_SCHEME} ${FILE_SCHEMES} ${DAINTREE_CDN} blob:`,
     "worker-src 'self' blob:",
     `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${PDF_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
     "object-src 'none'",

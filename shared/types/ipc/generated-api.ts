@@ -467,6 +467,9 @@ export interface GeneratedElectronAPI {
     dismissSetupBanner(
       ...args: IpcInvokeMap["onboarding:dismiss-setup-banner"]["args"]
     ): Promise<IpcInvokeMap["onboarding:dismiss-setup-banner"]["result"]>;
+    dismissTourInvite(
+      ...args: IpcInvokeMap["onboarding:tour-dismiss-invite"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:tour-dismiss-invite"]["result"]>;
     dismissWelcomeCard(
       ...args: IpcInvokeMap["onboarding:dismiss-welcome-card"]["args"]
     ): Promise<IpcInvokeMap["onboarding:dismiss-welcome-card"]["result"]>;
@@ -500,6 +503,12 @@ export interface GeneratedElectronAPI {
     setStep(
       ...args: IpcInvokeMap["onboarding:set-step"]["args"]
     ): Promise<IpcInvokeMap["onboarding:set-step"]["result"]>;
+    setTourMuted(
+      ...args: IpcInvokeMap["onboarding:tour-set-muted"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:tour-set-muted"]["result"]>;
+    setTourProgress(
+      ...args: IpcInvokeMap["onboarding:tour-set-progress"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:tour-set-progress"]["result"]>;
   };
   osDnd: {
     getState(

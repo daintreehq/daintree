@@ -564,6 +564,39 @@ body,
   overflow: hidden;
 }
 
+/* Daintree Tour click marker — one ring blooming from the mockup pointer's tip.
+ * Keyed remounts replay it; the scale is the signal, so reduced motion drops it. */
+@keyframes tour-click-ring {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.3);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+
+.tour-click-ring {
+  animation: tour-click-ring 450ms ease-out 1 both;
+}
+
+/* Daintree Tour end card — the ring around Next drains over the auto-advance
+ * countdown. Its length is the countdown, so the duration comes from the
+ * component (--tour-countdown) rather than a shared tier. */
+@keyframes tour-countdown {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: var(--tour-ring-length);
+  }
+}
+
+.tour-countdown-ring {
+  animation: tour-countdown var(--tour-countdown) linear 1 both;
+}
+
 /* Activity light pulse animation for very recent activity */
 @keyframes activity-pulse {
   0%,
@@ -1320,6 +1353,15 @@ body,
    * then shows it in one step — no motion at all. */
   .animate-pulse-delayed {
     animation: skeleton-reveal 0s var(--anti-flicker-delay) backwards;
+  }
+
+  .tour-click-ring {
+    display: none;
+  }
+
+  /* The countdown still runs; the draining ring is motion, so it holds full. */
+  .tour-countdown-ring {
+    animation: none;
   }
 
   /* The all-clear flash has no static form: snapping it to opacity 1 like the

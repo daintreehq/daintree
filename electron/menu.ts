@@ -680,6 +680,11 @@ export function createApplicationMenu(
             sendAction("help.gettingStarted.show", getTargetBrowserWindow(browserWindow)),
         },
         {
+          label: "Daintree Tour",
+          click: (_item, browserWindow) =>
+            sendAction("help.tour.show", getTargetBrowserWindow(browserWindow)),
+        },
+        {
           // The searchable shortcut reference was previously reachable only
           // via combos you'd already have to know (Cmd+/ or Cmd+K Cmd+S) or
           // the command palette — the Help menu is where new users look.

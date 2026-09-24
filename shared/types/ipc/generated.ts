@@ -1101,6 +1101,18 @@ export interface GeneratedIpcInvokeMap {
     args: [arg: string | { step: string | null; agentSetupIds?: string[] | undefined } | null];
     result: void;
   };
+  "onboarding:tour-dismiss-invite": {
+    args: [];
+    result: import("./maps.js").TourOnboardingState;
+  };
+  "onboarding:tour-set-muted": {
+    args: [muted: boolean];
+    result: import("./maps.js").TourOnboardingState;
+  };
+  "onboarding:tour-set-progress": {
+    args: [update: import("./maps.js").TourProgressUpdate];
+    result: import("./maps.js").TourOnboardingState;
+  };
   "os-dnd:get-state": {
     args: [];
     result: boolean | undefined;

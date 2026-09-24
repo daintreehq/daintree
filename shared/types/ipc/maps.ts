@@ -173,6 +173,20 @@ export interface ChecklistState {
   items: ChecklistItems;
 }
 
+export interface TourOnboardingState {
+  completed: boolean;
+  /** The user turned down the tour's invitation; it is never offered again unasked. */
+  dismissed: boolean;
+  muted: boolean;
+  /** Chapter the user last reached, so a reopened tour resumes there. */
+  lastChapter: number;
+}
+
+export interface TourProgressUpdate {
+  completed?: boolean;
+  lastChapter?: number;
+}
+
 export interface OnboardingState {
   schemaVersion: number;
   completed: boolean;
@@ -186,6 +200,7 @@ export interface OnboardingState {
   welcomeCardDismissed: boolean;
   setupBannerDismissed: boolean;
   checklist: ChecklistState;
+  tour: TourOnboardingState;
 }
 
 /**

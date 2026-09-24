@@ -251,4 +251,60 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
     complete(null);
     expect(setOnboardingCompleteTagMock).toHaveBeenCalledWith(true);
   });
+
+  describe("tour", () => {
+    it("defaults tour state for stores written before the tour existed", () => {
+      registerOnboardingHandlers();
+      seedOnboarding();
+      const state = getHandler("onboarding:get")(null) as { tour: Record<string, unknown> };
+      expect(state.tour).toEqual({
+        completed: false,
+        dismissed: false,
+        muted: false,
+        lastChapter: 0,
+      });
+    });
+
+    it("drops malformed persisted tour fields", () => {
+      registerOnboardingHandlers();
+      seedOnboarding({
+        tour: { completed: "yes", dismissed: "no", muted: 1, lastChapter: 2.7 },
+      });
+      const state = getHandler("onboarding:get")(null) as { tour: Record<string, unknown> };
+      expect(state.tour).toEqual({
+        completed: false,
+        dismissed: false,
+        muted: false,
+        lastChapter: 2,
+      });
+    });
+
+    it("remembers a dismissed invitation", () => {
+      registerOnboardingHandlers();
+      seedOnboarding();
+      getHandler("onboarding:tour-dismiss-invite")(null);
+      const state = getHandler("onboarding:get")(null) as { tour: { dismissed: boolean } };
+      expect(state.tour.dismissed).toBe(true);
+    });
+
+    it("keeps completion sticky while recording the last chapter", () => {
+      registerOnboardingHandlers();
+      seedOnboarding();
+      const progress = getHandler("onboarding:tour-set-progress");
+      progress(null, { completed: true, lastChapter: 5 });
+      const after = progress(null, { completed: false, lastChapter: 1 }) as {
+        completed: boolean;
+        lastChapter: number;
+      };
+      expect(after).toMatchObject({ completed: true, lastChapter: 1 });
+    });
+
+    it("persists the mute preference", () => {
+      registerOnboardingHandlers();
+      seedOnboarding();
+      getHandler("onboarding:tour-set-muted")(null, true);
+      const state = getHandler("onboarding:get")(null) as { tour: { muted: boolean } };
+      expect(state.tour.muted).toBe(true);
+    });
+  });
 });

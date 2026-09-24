@@ -20,6 +20,7 @@ import {
 import { logError } from "@/utils/logger";
 import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
+import { openDaintreeTour } from "@/components/Tour/tourEvents";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { getAssistantSupportedAgentIds } from "@shared/config/agentRegistry";
 
@@ -356,6 +357,21 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     keywords: ["onboarding", "checklist", "welcome", "tutorial"],
     run: async () => {
       window.dispatchEvent(new CustomEvent("daintree:show-getting-started"));
+    },
+  }));
+
+  actions.set("help.tour.show", () => ({
+    id: "help.tour.show",
+    title: "Daintree Tour",
+    description: "Play the narrated tour of Daintree's essentials",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    nonRepeatable: true,
+    scope: "renderer",
+    keywords: ["tour", "tutorial", "walkthrough", "onboarding", "intro", "video"],
+    run: async () => {
+      openDaintreeTour();
     },
   }));
 

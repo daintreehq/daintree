@@ -963,6 +963,7 @@ describe("preferences action hardening", () => {
       "help.displayImage",
       "help.openCommandsFolder",
       "help.gettingStarted.show",
+      "help.tour.show",
       "help.launchAgent",
       "help.togglePanel",
       "modal.close",

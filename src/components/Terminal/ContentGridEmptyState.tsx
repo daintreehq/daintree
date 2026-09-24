@@ -18,6 +18,7 @@ import { RotatingTip } from "./contentGridTips";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
 import { ResumeSessionLine } from "./ResumeSessionLine";
 import { LauncherQuickActions } from "./LauncherQuickActions";
+import { TourInviteCard } from "@/components/Tour/TourInviteCard";
 
 const PATH_TRUNCATE_LENGTH = 52;
 
@@ -78,6 +79,8 @@ const SECTION_ENTRY_DELAY_4 =
   "motion-safe:[--tw-animation-delay:120ms] motion-safe:fill-mode-backwards";
 const SECTION_ENTRY_DELAY_5 =
   "motion-safe:[--tw-animation-delay:150ms] motion-safe:fill-mode-backwards";
+const SECTION_ENTRY_DELAY_6 =
+  "motion-safe:[--tw-animation-delay:180ms] motion-safe:fill-mode-backwards";
 
 // Both of the entry's suppressors are CSS-only — `motion-safe:` reads the OS
 // preference and the `launcher-section-enter` rule reads the in-app toggle — so
@@ -506,6 +509,20 @@ export function ContentGridEmptyState({
               >
                 <RotatingTip />
               </div>
+            )}
+
+            {/* Last in the column: the tour's invitation is teaching content, and
+                nothing below the launch anchor may move it. It renders its own
+                section only while the tour is on offer, so there's no gap. */}
+            {hasLaunchTarget && (
+              <TourInviteCard
+                className={cn(
+                  "mt-6 flex w-full justify-center",
+                  LAUNCHER_MEASURE,
+                  SECTION_ENTRY,
+                  SECTION_ENTRY_DELAY_6
+                )}
+              />
             )}
           </section>
           {/* All remaining slack goes below the column, so the anchor keeps its
