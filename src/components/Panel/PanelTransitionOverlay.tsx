@@ -114,7 +114,11 @@ export function PanelTransitionOverlay({ onTransitionComplete }: PanelTransition
   if (transitions.length === 0) return null;
 
   return createPortal(
-    <div className="fixed inset-0 pointer-events-none z-[100]" aria-hidden="true">
+    <div
+      data-panel-transition-overlay
+      className="fixed inset-0 pointer-events-none z-[100]"
+      aria-hidden="true"
+    >
       {transitions.map((transition) => (
         <TransitionGhost
           key={transition.uniqueKey}
