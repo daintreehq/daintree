@@ -109,6 +109,7 @@ export function FilesScene() {
       worktrees={
         <>
           <MockWorktreeCard name="shop-app" branch="main" />
+          <MockWorktreeCard name="fix-login-redirect" branch="fix-login-redirect" />
           <MockWorktreeCard name="add-search" branch="add-search" selected states={["waiting"]} />
         </>
       }
@@ -139,7 +140,10 @@ export function FilesScene() {
         </MockGrid>
       }
     >
-      <MockSpotlight targets={["file-browser"]} visible={browseCue && !opened} />
+      <MockSpotlight
+        targets={dropped ? ["claude-input"] : ["file-browser"]}
+        visible={(browseCue && !opened) || dropped}
+      />
       <MockCursor {...cursor} />
     </MockApp>
   );

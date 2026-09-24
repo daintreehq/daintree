@@ -31,9 +31,9 @@ const CURSOR: readonly CursorStep[] = [
 /** One thing the Assistant did, as a line of its terminal transcript. */
 function Step({ children, visible }: { children: string; visible: boolean }) {
   return (
-    <div className={cn("flex items-center gap-1.5 text-3xs", reveal(visible))}>
+    <div className={cn("flex items-baseline gap-1.5 text-3xs", reveal(visible))}>
       <span className="shrink-0 text-text-secondary">▸</span>
-      <span className="truncate text-text-primary">{children}</span>
+      <span className="text-text-primary">{children}</span>
     </div>
   );
 }
@@ -79,15 +79,16 @@ function AssistantPanel({
       {started ? (
         <>
           <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2 font-mono">
-            <div className={cn("truncate text-3xs text-text-primary", reveal(act, "none"))}>
-              › {REQUEST}
-            </div>
+            <div className={cn("text-3xs text-text-primary", reveal(act, "none"))}>› {REQUEST}</div>
             <div className="flex flex-col gap-1">
               <Step visible={created}>Created worktree issue-52</Step>
               <Step visible={launched}>Started Codex in it</Step>
               <Step visible={prompted}>Sent it issue #52</Step>
             </div>
-            <span className={cn("text-3xs text-text-primary", reveal(tell))}>
+            <span
+              data-tour-anchor="assistant-tell"
+              className={cn("text-3xs text-text-primary", reveal(tell))}
+            >
               Codex needs you in issue-52: round each line, or the total?
             </span>
           </div>
@@ -133,10 +134,11 @@ export function AssistantScene() {
   return (
     <MockApp
       branch={created ? ISSUE_BRANCH : "main"}
-      focus={open ? ["right", "sidebar", "grid"] : openCue ? ["toolbar"] : ["grid"]}
+      focus={open ? ["right", "sidebar", "grid", "dock"] : openCue ? ["toolbar"] : ["grid"]}
       worktrees={
         <>
           <MockWorktreeCard name="shop-app" branch="main" selected={!created} />
+          <MockWorktreeCard name="fix-login-redirect" branch="fix-login-redirect" />
           <MockWorktreeCard name="add-search" branch="add-search" states={["completed"]} />
           <MockWorktreeCard
             name="issue-52"
@@ -174,8 +176,8 @@ export function AssistantScene() {
       dock={<MockWaitingPill count={1} className={reveal(waiting, "none")} />}
     >
       <MockSpotlight
-        targets={runs ? ["assistant-runs-on"] : ["assistant-start"]}
-        visible={runs || (open && !started)}
+        targets={runs ? ["assistant-runs-on"] : tell ? ["assistant-tell"] : ["assistant-start"]}
+        visible={runs || tell || (open && !started)}
       />
       <MockCursor {...cursor} visible={cursor.visible && !started} />
     </MockApp>

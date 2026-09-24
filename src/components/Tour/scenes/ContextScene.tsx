@@ -15,7 +15,7 @@ import { MockMenu, MockSpotlight, MockTooltip } from "./sceneParts";
 const COPY = ANCHOR["copy-context"];
 const PORTAL = ANCHOR.portal;
 // Copy context is a menu; its first item copies the whole worktree.
-const MENU = { width: 150, x: COPY.x - 140, y: COPY.y + 14 };
+const MENU = { width: 176, x: COPY.x - 166, y: COPY.y + 14 };
 const COPY_FULL = { x: MENU.x + 60, y: MENU.y + 13 };
 
 const CURSOR: readonly CursorStep[] = [
@@ -88,6 +88,7 @@ export function ContextScene() {
       worktrees={
         <>
           <MockWorktreeCard name="shop-app" branch="main" />
+          <MockWorktreeCard name="fix-login-redirect" branch="fix-login-redirect" />
           <MockWorktreeCard name="add-search" branch="add-search" selected states={["working"]} />
         </>
       }
@@ -121,7 +122,15 @@ export function ContextScene() {
         detail="Copied 42 files (186 KB) to clipboard"
       />
       <MockSpotlight
-        targets={pasted ? ["portal-composer"] : portalCue ? ["portal"] : ["copy-context"]}
+        targets={
+          pasted
+            ? ["portal-composer"]
+            : portalCue
+              ? ["portal"]
+              : menuOpen
+                ? ["menu-0"]
+                : ["copy-context"]
+        }
         visible={(copyCue && !copied) || (portalCue && !portalOpen) || pasted}
       />
       <MockCursor {...cursor} visible={cursor.visible && !portalOpen} />

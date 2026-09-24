@@ -43,7 +43,7 @@ const DIFF_ROW: Record<DiffKind, string> = {
 
 // The card's review icon, and the commit button inside the review. The card is
 // the third in the sidebar; measured from the render.
-const REVIEW_BUTTON = { x: 141, y: 224 };
+const REVIEW_BUTTON = { x: 134, y: 243 };
 const PANE_INPUT = { x: GRID_RECT.x + 80, y: GRID_RECT.y + GRID_RECT.height - 11 };
 const COMMIT_BUTTON = {
   x: GRID_RECT.x + GRID_RECT.width - 44,
@@ -183,7 +183,7 @@ export function ReviewScene() {
   return (
     <MockApp
       branch={"add-search"}
-      focus={opened ? ["grid"] : ["sidebar"]}
+      focus={changes && !opened ? ["sidebar"] : ["grid"]}
       worktrees={
         <>
           <MockWorktreeCard name="shop-app" branch="main" />

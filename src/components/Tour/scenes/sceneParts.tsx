@@ -165,12 +165,12 @@ export function MockLegend({
           <span
             key={item.label}
             className={cn(
-              "flex items-center gap-1.5 rounded-md px-2 py-1 transition-[background-color,opacity] duration-150 ease-out",
-              item.active ? "bg-overlay-selected opacity-100" : "opacity-50"
+              "flex items-center gap-1.5 rounded-md px-2 py-1 transition-[background-color,color] duration-150 ease-out",
+              item.active ? "bg-overlay-selected text-text-primary" : "text-text-secondary"
             )}
           >
             {item.glyph}
-            <span className="text-2xs font-medium text-text-primary">{item.label}</span>
+            <span className="text-2xs font-medium">{item.label}</span>
           </span>
         ))}
       </div>

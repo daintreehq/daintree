@@ -60,7 +60,7 @@ function ParkEditor() {
         <span className="shrink-0 text-3xs text-text-secondary">api-server</span>
       </div>
       <div className="flex flex-col gap-1">
-        <span className="text-3xs font-medium uppercase text-text-secondary">Note</span>
+        <span className="text-3xs font-medium text-text-secondary">Note</span>
         <span className="flex h-5 items-center rounded-md border border-border-input bg-surface-input px-2 text-3xs text-text-secondary">
           Why is this parked? (optional)
         </span>
@@ -89,22 +89,19 @@ export function PilotScene() {
       focus={open ? [] : undefined}
       worktrees={
         <>
-          <MockWorktreeCard name="shop-app" branch="main" selected />
-          <MockWorktreeCard name="add-search" branch="add-search" states={["working"]} />
+          <MockWorktreeCard name="shop-app" branch="main" />
           <MockWorktreeCard
             name="fix-login-redirect"
             branch="fix-login-redirect"
             states={["waiting"]}
           />
+          <MockWorktreeCard name="add-search" branch="add-search" selected states={["working"]} />
         </>
       }
       grid={
-        <MockGrid columns={2}>
+        <MockGrid columns={1}>
           <MockPane agent="claude" state="working">
-            <MockLines widths={[80, 56, 90, 64]} />
-          </MockPane>
-          <MockPane agent="codex" state="waiting">
-            <MockLines widths={[70, 84, 52]} />
+            <MockLines widths={[80, 56, 90, 64, 72, 48]} />
           </MockPane>
         </MockGrid>
       }

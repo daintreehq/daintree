@@ -12,10 +12,10 @@ import {
   type CursorStep,
 } from "../mockup/TourMock";
 import { useCue } from "../useTourPlayer";
-import { MockMenu, MockSearchField, MockSpotlight } from "./sceneParts";
+import { MockEmptyGrid, MockMenu, MockSearchField, MockSpotlight } from "./sceneParts";
 
 const ISSUES = ANCHOR["forge-issues"];
-const LIST = { x: 300, y: ISSUES.y + 14, width: 200 };
+const LIST = { x: 290, y: ISSUES.y + 14, width: 216 };
 // #51, the second row, is the one picked; measured from the render.
 const ISSUE_ROW = { x: LIST.x + 90, y: 92 };
 
@@ -80,6 +80,7 @@ export function GitHubScene() {
       worktrees={
         <>
           <MockWorktreeCard name="shop-app" branch="main" selected={!created} />
+          <MockWorktreeCard name="fix-login-redirect" branch="fix-login-redirect" />
           <MockWorktreeCard name="add-search" branch="add-search" states={["completed"]} />
           <MockWorktreeCard
             name="issue-51"
@@ -104,11 +105,15 @@ export function GitHubScene() {
         </>
       }
       grid={
-        <MockGrid columns={1}>
-          <MockPane agent="claude" state={null}>
-            <MockLines widths={[70, 54, 82]} />
-          </MockPane>
-        </MockGrid>
+        created ? (
+          <MockEmptyGrid label="Dark mode for settings" />
+        ) : (
+          <MockGrid columns={1}>
+            <MockPane agent="claude" state={null}>
+              <MockLines widths={[70, 54, 82]} />
+            </MockPane>
+          </MockGrid>
+        )
       }
     >
       <MockSpotlight

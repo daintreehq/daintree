@@ -308,7 +308,7 @@ export function MockCursor({
       aria-hidden="true"
       className={cn(
         "pointer-events-none absolute left-0 top-0 z-40",
-        "transition-[translate,opacity] duration-[600ms] ease-[cubic-bezier(0.45,0,0.2,1)] reduce-motion:transition-[opacity]",
+        "transition-[translate,opacity] duration-[450ms] ease-[cubic-bezier(0.45,0,0.2,1)] reduce-motion:transition-[opacity]",
         visible ? "opacity-100" : "opacity-0"
       )}
       style={{ translate: `${at.x}px ${at.y}px` }}

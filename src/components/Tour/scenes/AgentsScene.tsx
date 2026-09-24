@@ -20,7 +20,7 @@ import { useCue } from "../useTourPlayer";
 import { MockEmptyGrid, MockMenu, MockSearchField, MockSpotlight } from "./sceneParts";
 
 const LAUNCHER = ANCHOR.launcher;
-const MENU = { x: LAUNCHER.x - 8, y: LAUNCHER.y + 14, width: 150 };
+const MENU = { x: LAUNCHER.x - 8, y: LAUNCHER.y + 14, width: 164 };
 // The launcher's first agent row, under its search field.
 const CLAUDE_ROW = { x: MENU.x + 50, y: MENU.y + 36 };
 const INPUT_BAR = { x: GRID_RECT.x + 120, y: GRID_RECT.y + GRID_RECT.height - 12 };
@@ -63,9 +63,13 @@ export function AgentsScene() {
       ? typing && !sent
         ? ["claude-input"]
         : []
-      : launcher
-        ? ["launcher"]
-        : ["toolbar-agents"];
+      : menuOpen
+        ? clicked
+          ? []
+          : ["menu-0"]
+        : launcher
+          ? ["launcher"]
+          : ["toolbar-agents"];
 
   return (
     <MockApp
@@ -74,6 +78,7 @@ export function AgentsScene() {
       worktrees={
         <>
           <MockWorktreeCard name="shop-app" branch="main" />
+          <MockWorktreeCard name="fix-login-redirect" branch="fix-login-redirect" />
           <MockWorktreeCard
             name="add-search"
             branch="add-search"

@@ -19,7 +19,7 @@ import { useCue } from "../useTourPlayer";
 import { MockSpotlight } from "./sceneParts";
 
 const PANES: readonly MockAgentId[] = ["claude", "codex", "antigravity"];
-const PROMPT = "Run the tests and fix failures";
+const PROMPT = "Run the tests";
 const SEND = { cue: "send" } as const;
 const SHIFT = "⇧ Shift";
 
@@ -87,12 +87,16 @@ export function FleetScene() {
     <MockApp
       focus={bolt && !typeCue ? ["grid", "sidebar"] : ["grid"]}
       worktrees={
-        <MockWorktreeCard
-          name="shop-app"
-          branch="main"
-          selected
-          states={[sent ? "working" : "waiting"]}
-        />
+        <>
+          <MockWorktreeCard
+            name="shop-app"
+            branch="main"
+            selected
+            states={[sent ? "working" : "waiting"]}
+          />
+          <MockWorktreeCard name="fix-login-redirect" branch="fix-login-redirect" />
+          <MockWorktreeCard name="add-search" branch="add-search" />
+        </>
       }
       grid={
         // No reserved space: the ribbon appears only once two panels are armed,
@@ -125,14 +129,8 @@ export function FleetScene() {
                     ) : null
                   }
                 >
-                  <MockStreamingLines
-                    cue="send"
-                    delay={0.3 + i * 0.15}
-                    widths={[86, 64, 92, 58, 76, 70]}
-                    perSecond={3}
-                  />
                   {i === 0 && typing && !sent && (
-                    <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-category-amber-subtle px-1.5 py-0.5 text-3xs text-text-primary">
+                    <span className="mb-2 inline-flex items-center gap-1 rounded-full bg-category-amber-subtle px-1.5 py-0.5 text-3xs text-text-primary">
                       <RadioTower
                         className="size-2.5 text-category-amber-text"
                         aria-hidden="true"
@@ -140,6 +138,12 @@ export function FleetScene() {
                       Mirroring to 2 peers
                     </span>
                   )}
+                  <MockStreamingLines
+                    cue="send"
+                    delay={0.3 + i * 0.15}
+                    widths={[86, 64, 92, 58, 76, 70]}
+                    perSecond={3}
+                  />
                 </MockPane>
               );
             })}

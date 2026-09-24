@@ -5,7 +5,6 @@ import {
   FolderTree,
   Folders,
   GitBranch,
-  GitCommitHorizontal,
   GitPullRequest,
   MessageSquareMore,
   PanelLeft,
@@ -64,8 +63,8 @@ export const ANCHOR = {
   "agent-antigravity": { x: 128, y: 14 },
   terminal: { x: 161, y: 14 },
   "file-browser": { x: 183, y: 14 },
-  forge: { x: 440, y: 14 },
-  "forge-issues": { x: 412, y: 14 },
+  forge: { x: 455, y: 14 },
+  "forge-issues": { x: 443, y: 14 },
   "copy-context": { x: 523, y: 14 },
   palette: { x: 545, y: 14 },
   assistant: { x: 600, y: 14 },
@@ -178,16 +177,19 @@ export function MockWorktreeCard({
           {branch}
         </span>
         <span className="flex-1" />
-        {changes && (
-          <span className="shrink-0 text-3xs tabular-nums text-text-secondary">{changes}</span>
-        )}
         {shown && (
           <span className="flex shrink-0 items-center [&>span]:size-2.5 [&_svg]:size-2.5 [&_.spinner-circle]:size-2.5">
             <MockStateGlyph state={shown} />
           </span>
         )}
-        {action}
       </div>
+      {changes && (
+        <div className="flex min-w-0 items-center gap-1.5 pl-[18px]">
+          <span className="truncate text-3xs tabular-nums text-text-secondary">{changes}</span>
+          <span className="flex-1" />
+          {action}
+        </div>
+      )}
       {children}
     </div>
   );
@@ -290,10 +292,6 @@ export function MockApp({
           </span>
           <span data-tour-anchor="forge-prs" className="flex items-center gap-0.5">
             <GitPullRequest aria-hidden="true" />3
-          </span>
-          <span className="flex items-center gap-0.5">
-            <GitCommitHorizontal aria-hidden="true" />
-            24
           </span>
         </span>
         <ToolbarButton anchor="notifications">

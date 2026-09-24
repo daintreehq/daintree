@@ -41,7 +41,7 @@ export function OutroScene() {
         ))}
       </div>
       <span className={cn("text-2xs text-text-secondary", reveal(next, "none"))}>
-        Replay any time from Help › Daintree Tour
+        Next: the Getting Started checklist
       </span>
     </div>
   );

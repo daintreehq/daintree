@@ -1,15 +1,27 @@
 import type { AgentState } from "@/types";
 import { cn } from "@/lib/utils";
 import { MockApp, MockGrid, MockWaitingPill, MockWorktreeCard } from "../mockup/MockApp";
-import { MockLines, MockPane, reveal, type MockAgentId } from "../mockup/TourMock";
+import {
+  MockLines,
+  MockPane,
+  MockStreamingLines,
+  reveal,
+  type MockAgentId,
+} from "../mockup/TourMock";
 import { useCue } from "../useTourPlayer";
 import { MockEmptyGrid } from "./sceneParts";
 
-const PANES: ReadonlyArray<{ agent: MockAgentId; state: AgentState; lines: number[] }> = [
-  { agent: "claude", state: "working", lines: [82, 64, 90, 48] },
-  { agent: "codex", state: "working", lines: [70, 88, 56] },
-  { agent: "antigravity", state: "waiting", lines: [92, 60, 74, 40] },
-  { agent: "claude", state: "completed", lines: [66, 84, 52] },
+const PANES: ReadonlyArray<{
+  agent: MockAgentId;
+  state: AgentState;
+  lines: number[];
+  /** The cue this pane arrives on; a working pane streams output from it. */
+  cue: string;
+}> = [
+  { agent: "claude", state: "working", lines: [82, 64, 90, 48, 76, 58, 86, 44], cue: "first" },
+  { agent: "codex", state: "working", lines: [70, 88, 56, 80, 62, 92, 50], cue: "second" },
+  { agent: "antigravity", state: "waiting", lines: [92, 60, 74, 40], cue: "grid" },
+  { agent: "claude", state: "completed", lines: [66, 84, 52, 72, 46], cue: "grid" },
 ];
 
 export function WelcomeScene() {
@@ -45,7 +57,11 @@ export function WelcomeScene() {
                 style={{ transitionDelay: grid && i > 0 ? `${(i - 1) * 140}ms` : undefined }}
               >
                 <MockPane agent={pane.agent} state={pane.state} className="w-full">
-                  <MockLines widths={pane.lines} />
+                  {pane.state === "working" ? (
+                    <MockStreamingLines cue={pane.cue} widths={pane.lines} perSecond={1.2} />
+                  ) : (
+                    <MockLines widths={pane.lines} />
+                  )}
                 </MockPane>
               </div>
             ))}

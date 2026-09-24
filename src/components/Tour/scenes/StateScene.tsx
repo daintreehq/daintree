@@ -43,7 +43,7 @@ const CURSOR: readonly CursorStep[] = [
   { cue: "jump", at: DOCK_WAITING_POINT },
   { cue: "jump", offset: 0.6, at: DOCK_WAITING_POINT, click: true },
   { cue: "pick", at: WAITING_ROW },
-  { cue: "pick", offset: 0.4, at: WAITING_ROW, click: true },
+  { cue: "pick", offset: 0.5, at: WAITING_ROW, click: true },
   { cue: "answer", at: CODEX_INPUT },
   { cue: "answer", offset: 0.5, at: CODEX_INPUT, click: true },
 ];
@@ -54,7 +54,7 @@ export function StateScene() {
   const done = useCue("done");
   const pill = useCue("pill");
   const listOpen = useCue("jump", 0.7);
-  const jumped = useCue("pick", 0.5);
+  const jumped = useCue("pick", 0.6);
   const answer = useCue("answer");
   const answering = useCue("answer", 0.6);
   // Long enough to read the reply before the spinner comes back.
@@ -73,8 +73,9 @@ export function StateScene() {
       focus={pill ? ["grid", "dock"] : ["grid"]}
       worktrees={
         <>
-          <MockWorktreeCard name="shop-app" branch="main" selected states={live} />
-          <MockWorktreeCard name="add-search" branch="add-search" />
+          <MockWorktreeCard name="shop-app" branch="main" />
+          <MockWorktreeCard name="fix-login-redirect" branch="fix-login-redirect" />
+          <MockWorktreeCard name="add-search" branch="add-search" selected states={live} />
         </>
       }
       grid={

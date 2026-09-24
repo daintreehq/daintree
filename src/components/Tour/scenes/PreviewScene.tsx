@@ -24,7 +24,7 @@ import { useCue } from "../useTourPlayer";
 import { MockMenu, MockPanel, MockSearchField, MockSpotlight } from "./sceneParts";
 
 const LAUNCHER = ANCHOR.launcher;
-const MENU = { x: LAUNCHER.x - 8, y: LAUNCHER.y + 14, width: 150 };
+const MENU = { x: LAUNCHER.x - 8, y: LAUNCHER.y + 14, width: 164 };
 // The menu's fourth row, Dev preview; measured from the render.
 const DEV_PREVIEW_ITEM = { x: 118, y: 138 };
 
@@ -41,9 +41,9 @@ const CURSOR: readonly CursorStep[] = [
   { cue: "pickpreview", offset: -0.4, at: DEV_PREVIEW_ITEM },
   { cue: "pickpreview", offset: 0.1, at: DEV_PREVIEW_ITEM, click: true },
   { cue: "start", at: RUN_BUTTON },
-  { cue: "start", offset: 0.4, at: RUN_BUTTON, click: true },
+  { cue: "start", offset: 0.5, at: RUN_BUTTON, click: true },
   { cue: "console", at: CONSOLE_TOGGLE },
-  { cue: "console", offset: 0.4, at: CONSOLE_TOGGLE, click: true },
+  { cue: "console", offset: 0.5, at: CONSOLE_TOGGLE, click: true },
 ];
 
 /** The shop's storefront as the dev server renders it — a page, not UI chrome. */
@@ -55,6 +55,7 @@ function MockPage({ withSearch }: { withSearch: boolean }) {
         <span className="h-1.5 w-10 rounded-full bg-overlay-strong" />
         <span className="flex-1" />
         <span
+          data-tour-anchor="dev-search"
           className={cn(
             "flex h-4 w-24 items-center gap-1 rounded-full border border-border-strong px-1.5",
             "transition-[opacity,scale] duration-300 ease-out reduce-motion:scale-100",
@@ -113,20 +114,26 @@ export function PreviewScene() {
   const launchCue = useCue("launch");
   const menu = useCue("launch", 0.6);
   const opened = useCue("pickpreview", 0.3);
-  const starting = useCue("start", 0.4);
-  const running = useCue("start", 0.8);
+  const starting = useCue("start", 0.55);
+  const running = useCue("start", 0.9);
   const live = useCue("live", 0.6);
   const consoleCue = useCue("console");
-  const drawer = useCue("console", 0.5);
+  const drawer = useCue("console", 0.6);
   const cursor = useMockCursor({ x: 420, y: 200 }, CURSOR);
 
-  const spot = consoleCue
-    ? ["dev-console"]
-    : opened
-      ? ["dev-run"]
-      : menu
-        ? ["menu-3"]
-        : ["launcher"];
+  // The trigger, then what it produced: the launcher row, Run, the new search
+  // box on the live page, the console button, then the logs it opened.
+  const spot = drawer
+    ? ["dev-logs"]
+    : consoleCue
+      ? ["dev-console"]
+      : live
+        ? ["dev-search"]
+        : opened
+          ? ["dev-run"]
+          : menu
+            ? ["menu-3"]
+            : ["launcher"];
 
   return (
     <MockApp
@@ -135,6 +142,7 @@ export function PreviewScene() {
       worktrees={
         <>
           <MockWorktreeCard name="shop-app" branch="main" />
+          <MockWorktreeCard name="fix-login-redirect" branch="fix-login-redirect" />
           <MockWorktreeCard name="add-search" branch="add-search" selected states={["working"]} />
         </>
       }
@@ -165,8 +173,9 @@ export function PreviewScene() {
             >
               {running ? <MockPage withSearch={live} /> : <StartPrompt starting={starting} />}
               <div
+                data-tour-anchor="dev-logs"
                 className={cn(
-                  "absolute inset-x-0 bottom-0 flex h-[64px] flex-col border-t border-border-default bg-surface-panel",
+                  "absolute inset-x-0 bottom-0 flex h-[72px] flex-col border-t border-border-default bg-surface-panel",
                   reveal(drawer)
                 )}
               >
@@ -208,7 +217,7 @@ export function PreviewScene() {
           { icon: <MonitorPlay />, label: "Dev preview" },
         ]}
       />
-      <MockSpotlight targets={spot} visible={launchCue && !(starting && !consoleCue) && !drawer} />
+      <MockSpotlight targets={spot} visible={launchCue && !(starting && !live)} />
       <MockCursor {...cursor} />
     </MockApp>
   );

@@ -28,6 +28,7 @@ export function PaletteScene() {
       worktrees={
         <>
           <MockWorktreeCard name="shop-app" branch="main" selected />
+          <MockWorktreeCard name="fix-login-redirect" branch="fix-login-redirect" />
           <MockWorktreeCard name="add-search" branch="add-search" states={["completed"]} />
         </>
       }
@@ -62,6 +63,9 @@ export function PaletteScene() {
         x={HELP_MENU.x}
         y={HELP_MENU.y}
         width={HELP_MENU.width}
+        header={
+          <div className="px-2 pb-1 pt-0.5 text-3xs font-semibold text-text-primary">Help</div>
+        }
         items={[
           { icon: <ListChecks />, label: "Getting Started" },
           { icon: <CirclePlay />, label: "Daintree Tour" },
