@@ -494,4 +494,18 @@ describe("describeChord", () => {
   it("returns an empty string for an empty shortcut", () => {
     expect(describeChord("", true)).toBe("");
   });
+
+  it("speaks exactly the steps and keys the chips show, literal plus included", () => {
+    const edgeCases = ["Cmd++ Cmd+P", "Cmd+K +", "Ctrl++", " Cmd + Shift + P ", "Cmd+K  Cmd+S"];
+    for (const combo of [...edgeCases, ...combos]) {
+      for (const mac of [true, false]) {
+        const shown = parseChord(combo, mac);
+        const spoken = describeChord(combo, mac).split(", then ");
+        expect(spoken.length, combo).toBe(shown.length);
+        spoken.forEach((step, i) => {
+          if (shown[i]!.includes("+")) expect(step, combo).toMatch(/\bPlus\b/);
+        });
+      }
+    }
+  });
 });
