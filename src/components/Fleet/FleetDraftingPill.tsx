@@ -12,6 +12,7 @@ import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewSt
 import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { detectUnresolvedVariables, splitByRecipeVariables } from "@/utils/recipeVariables";
+import { RECIPE_VARIABLE_TOKEN } from "@/components/TerminalRecipe/recipeVariableTokens";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import type { FleetTargetPreview } from "./fleetExecution";
 
@@ -268,16 +269,13 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
       </div>
       <div
         className={cn(
-          "mt-0.5 text-2xs leading-relaxed text-text-secondary break-all",
+          "mt-0.5 text-2xs leading-relaxed text-text-secondary wrap-anywhere",
           isSkipped && "opacity-50"
         )}
       >
         {parts.map((part, i) =>
           part.isVar ? (
-            <span
-              key={i}
-              className="inline rounded-sm bg-category-amber-subtle px-0.5 text-category-amber-text"
-            >
+            <span key={i} className={RECIPE_VARIABLE_TOKEN}>
               {part.text}
             </span>
           ) : (
@@ -311,7 +309,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
             // Grows with its content up to a cap so the payload is readable
             // in full rather than clipped at one row.
             className={cn(
-              "field-sizing-content max-h-24 text-2xs leading-relaxed break-all",
+              "field-sizing-content max-h-24 text-2xs leading-relaxed wrap-anywhere",
               isSkipped && "line-through",
               resolvedPayload === "" && !isOverridden && "text-text-placeholder"
             )}

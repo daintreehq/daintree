@@ -2,18 +2,15 @@ import { useMemo } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { segmentRecipePrompt, type RecipeContext } from "@/utils/recipeVariables";
-import { cn } from "@/lib/utils";
+import {
+  RECIPE_VARIABLE_EMPTY_TOKEN,
+  RECIPE_VARIABLE_TOKEN,
+} from "@/components/TerminalRecipe/recipeVariableTokens";
 
 interface RecipeVariablePreviewProps {
   initialPrompt: string;
   worktreeId?: string;
 }
-
-// Outlines survive forced-colors, where the fill disappears, and dashed vs
-// solid keeps "filled" and "empty" apart without relying on hue.
-const TOKEN = "rounded-sm px-0.5 box-decoration-clone outline -outline-offset-1";
-const FILLED = cn(TOKEN, "bg-category-amber-subtle text-category-amber-text outline-current");
-const EMPTY = cn(TOKEN, "outline-dashed text-category-rose-text outline-current");
 
 function formatList(items: string[]): string {
   if (items.length === 1) return items[0]!;
@@ -68,13 +65,13 @@ export function RecipeVariablePreview({ initialPrompt, worktreeId }: RecipeVaria
             case "variable":
             case "value":
               return (
-                <span key={i} className={FILLED} data-segment={segment.kind}>
+                <span key={i} className={RECIPE_VARIABLE_TOKEN} data-segment={segment.kind}>
                   {segment.text}
                 </span>
               );
             case "missing":
               return (
-                <span key={i} className={EMPTY} data-segment="missing">
+                <span key={i} className={RECIPE_VARIABLE_EMPTY_TOKEN} data-segment="missing">
                   {segment.text}
                   <span className="sr-only"> (empty)</span>
                 </span>

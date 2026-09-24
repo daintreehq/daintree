@@ -228,13 +228,16 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       await expect(promptField).toBeVisible({ timeout: T_SHORT });
       await promptField.fill("Work on {{branch_name}} now");
 
-      // No worktree context in the create flow → tokens stay highlighted and the
-      // preview tells the user they resolve at run time.
-      await expect(editor.getByText("Resolved prompt")).toBeVisible({ timeout: T_SHORT });
-      await expect(editor.getByText("Resolving at run time")).toBeVisible({ timeout: T_SHORT });
-      await expect(editor.locator(".bg-category-amber-subtle").first()).toBeVisible({
+      // No worktree context in the create flow → tokens stay marked and the
+      // preview says their values fill in at launch.
+      await expect(editor.getByText("Prompt preview")).toBeVisible({ timeout: T_SHORT });
+      await expect(editor.getByText("Values fill in from the worktree at launch")).toBeVisible({
         timeout: T_SHORT,
       });
+      await expect(editor.locator('[data-segment="variable"]').first()).toHaveText(
+        "{{branch_name}}",
+        { timeout: T_SHORT }
+      );
 
       // Cancel without saving (dirty → discard-changes confirm dialog).
       await editor.locator(SEL.recipeEditor.cancelButton).click();

@@ -270,7 +270,7 @@ export function RecipeEditor({
 
         <AppDialog.Body>
           <FormGrid>
-            <FormRow label="Recipe Name" htmlFor="recipe-name">
+            <FormRow label="Recipe name" htmlFor="recipe-name">
               <input
                 id="recipe-name"
                 type="text"
@@ -329,7 +329,7 @@ export function RecipeEditor({
             </FormRow>
 
             <FormRow
-              label="Auto-assign Issue"
+              label="Auto-assign issue"
               htmlFor="auto-assign"
               hint={
                 <p id="auto-assign-help" className="text-xs text-text-muted select-text">
@@ -359,7 +359,7 @@ export function RecipeEditor({
                   onClick={handleAddTerminal}
                   disabled={terminals.length >= MAX_TERMINALS_PER_RECIPE}
                 >
-                  + Add Terminal
+                  + Add terminal
                 </Button>
               }
             >
@@ -486,9 +486,9 @@ export function RecipeEditor({
                             aria-describedby={`terminal-exit-behavior-help-${index}`}
                             className="w-full px-2 pr-8 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary"
                           >
-                            <option value="trash">Send to Trash (default)</option>
-                            <option value="keep">Keep for Review</option>
-                            <option value="remove">Remove Completely</option>
+                            <option value="trash">Send to trash (default)</option>
+                            <option value="keep">Keep for review</option>
+                            <option value="remove">Remove completely</option>
                           </select>
                           <p
                             id={`terminal-exit-behavior-help-${index}`}
@@ -579,9 +579,9 @@ export function RecipeEditor({
                             aria-describedby={`terminal-agent-exit-behavior-help-${index}`}
                             className="w-full px-2 pr-8 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary"
                           >
-                            <option value="keep">Keep for Review (default)</option>
-                            <option value="trash">Send to Trash</option>
-                            <option value="remove">Remove Completely</option>
+                            <option value="keep">Keep for review (default)</option>
+                            <option value="trash">Send to trash</option>
+                            <option value="remove">Remove completely</option>
                           </select>
                           <p
                             id={`terminal-agent-exit-behavior-help-${index}`}
@@ -640,9 +640,9 @@ export function RecipeEditor({
                             aria-describedby={`terminal-dev-exit-behavior-help-${index}`}
                             className="w-full px-2 pr-8 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary"
                           >
-                            <option value="trash">Send to Trash (default)</option>
-                            <option value="keep">Keep for Review</option>
-                            <option value="remove">Remove Completely</option>
+                            <option value="trash">Send to trash (default)</option>
+                            <option value="keep">Keep for review</option>
+                            <option value="remove">Remove completely</option>
                           </select>
                           <p
                             id={`terminal-dev-exit-behavior-help-${index}`}
