@@ -152,6 +152,96 @@ const SAVED_SCOPES: ProjectSettings["fleetSavedScopes"] = [
   },
 ];
 
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+
+/**
+ * The saved-fleets section at a realistic working density: frecency-ranked
+ * snapshots (one with a partly-gone selection), a stale snapshot, and live
+ * rules across both scopes — including a name long enough to truncate.
+ */
+const SAVED_SCOPES_RICH: ProjectSettings["fleetSavedScopes"] = [
+  {
+    kind: "snapshot",
+    id: "s-1",
+    name: "Bugfix pair",
+    terminalIds: ["t-1", "t-2"],
+    createdAt: Date.now() - 3 * DAY,
+    lastUsedAt: Date.now() - HOUR,
+    usageHistory: [Date.now() - HOUR, Date.now() - 5 * HOUR, Date.now() - DAY],
+  },
+  {
+    kind: "snapshot",
+    id: "s-3",
+    name: "Release train — changelog, notes and the flaky pty-host follow-up",
+    terminalIds: ["t-4", "t-5", "t-8", "t-gone-3"],
+    createdAt: Date.now() - 2 * DAY,
+    lastUsedAt: Date.now() - 6 * HOUR,
+    usageHistory: [Date.now() - 6 * HOUR],
+  },
+  {
+    kind: "snapshot",
+    id: "s-4",
+    name: "Codex reviewers",
+    terminalIds: ["t-2", "t-7"],
+    createdAt: Date.now() - HOUR / 2,
+  },
+  {
+    kind: "snapshot",
+    id: "s-2",
+    name: "Yesterday's review sweep",
+    terminalIds: ["t-gone-1", "t-gone-2"],
+    createdAt: Date.now() - 2 * DAY,
+    lastUsedAt: Date.now() - DAY,
+  },
+  {
+    kind: "predicate",
+    id: "p-1",
+    name: "Everything waiting",
+    scope: "all",
+    stateFilter: "waiting",
+    createdAt: Date.now() - DAY,
+    usageHistory: [Date.now() - 2 * HOUR],
+  },
+  {
+    kind: "predicate",
+    id: "p-2",
+    name: "Finished here",
+    scope: "current",
+    stateFilter: "finished",
+    createdAt: Date.now() - DAY,
+  },
+];
+
+const DENSE_NAMES = [
+  "Bugfix pair",
+  "Release train — changelog, notes and the flaky pty-host follow-up",
+  "Codex reviewers",
+  "Theme ramp pass",
+  "Import budget sweep",
+  "Menu focus ring (#12383)",
+  "Worktree card PR number (#12381)",
+  "All the Claudes",
+  "Gemini scratch",
+  "Docs pass",
+];
+
+const SAVED_SCOPES_DENSE: ProjectSettings["fleetSavedScopes"] = [
+  ...DENSE_NAMES.map((name, i) => ({
+    kind: "snapshot" as const,
+    id: `sd-${i}`,
+    name,
+    terminalIds: i % 4 === 3 ? ["t-gone-9"] : [PANES[i % PANES.length]!.id, "t-2", "t-4"],
+    createdAt: Date.now() - (i + 1) * DAY,
+    usageHistory: [Date.now() - (i + 1) * HOUR],
+  })),
+  ...SAVED_SCOPES_RICH.filter((s) => s.kind === "predicate"),
+];
+
+function seedSaved(scopes: ProjectSettings["fleetSavedScopes"]): void {
+  useProjectSettingsStore.setState({ settings: { runCommands: [], fleetSavedScopes: scopes } });
+}
+
 function seedBase(): void {
   const panelsById: Record<string, PtyPanelData> = {};
   const panelIds: string[] = [];
@@ -319,6 +409,27 @@ const FIXTURES = {
       overrides.setSkipped("t-3", true);
     },
   },
+  "saved-rich": {
+    what: "selection menu's saved fleets at working density — usable, partial, stale, live rules",
+    seed: () => {
+      useFleetArmingStore.getState().armIds(["t-1", "t-2", "t-7"]);
+      seedSaved(SAVED_SCOPES_RICH);
+    },
+  },
+  "saved-empty": {
+    what: "nothing saved yet — the section is only the save form",
+    seed: () => {
+      useFleetArmingStore.getState().armIds(["t-1", "t-2", "t-7"]);
+      seedSaved([]);
+    },
+  },
+  "saved-dense": {
+    what: "a dozen saved fleets — does the menu still fit and scroll",
+    seed: () => {
+      useFleetArmingStore.getState().armIds(["t-1", "t-2", "t-7"]);
+      seedSaved(SAVED_SCOPES_DENSE);
+    },
+  },
   "picker-palette": {
     what: "cold-start picker palette over the grid",
     palette: true,
@@ -339,6 +450,7 @@ const themeId = params.get("theme") ?? "daintree";
 const fixtureParam = params.get("fixture") ?? "armed-3";
 const fixtureName: FixtureName = isFixtureName(fixtureParam) ? fixtureParam : "armed-3";
 const width = Number(params.get("width")) || 1100;
+const height = Number(params.get("height")) || 640;
 
 const worktreeStore = createWorktreeStore();
 worktreeStore.setState({ worktrees: new Map(WORKTREES.map((w) => [w.id, w])) });
@@ -357,7 +469,7 @@ function Frame() {
       data-preview-frame
       data-fixture={fixtureName}
       className="flex flex-col bg-surface-canvas"
-      style={{ width: `${width}px`, height: "640px" }}
+      style={{ width: `${width}px`, height: `${height}px` }}
     >
       {/* Stand-in for the toolbar the ribbon slides out from under. */}
       <div
