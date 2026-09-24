@@ -4,7 +4,8 @@
  * Saved fleets are listed and recalled from the bottom of the fleet ribbon's selection
  * menu, which only exists once two or more panes are armed. Every state worth judging —
  * frecency-ranked snapshots, a partly-gone snapshot, a stale one kept for cleanup, live
- * rules, the inline save form in each mode, the delete confirm — needs a populated
+ * rules, the save dialog in each mode, the delete confirm, and the cold-start picker's
+ * quick recall — needs a populated
  * `fleetSavedScopes` and an open menu, so this drives the Fleet preview entry
  * (`fleet-preview.html`) rather than booting Electron: the real `FleetArmingRibbon` and
  * `SavedFleetsSection`, seeded through the real Zustand stores, against the real theme
@@ -182,6 +183,8 @@ interface Shot {
   drive: (page: Page, menu: Locator) => Promise<Locator>;
   /** Photograph the whole frame instead of the menu region (dialogs). */
   fullFrame?: boolean;
+  /** The state lives outside the selection menu; don't open it. */
+  noMenu?: boolean;
 }
 
 const SHOTS: Shot[] = [
@@ -194,34 +197,12 @@ const SHOTS: Shot[] = [
   {
     name: "menu-empty",
     fixture: "saved-empty",
-    drive: async (page) => page.getByTestId("fleet-save-form"),
+    drive: async (page) => page.getByTestId("fleet-save-open"),
   },
   {
     name: "menu-dense",
     fixture: "saved-dense",
     drive: async (page) => page.getByTestId("fleet-saved-row").nth(9),
-  },
-  {
-    name: "form-live-rule",
-    fixture: "saved-rich",
-    sweep: true,
-    drive: async (page) => {
-      await page.locator('[data-testid="fleet-save-form"] [data-value="predicate"]').click();
-      await page.waitForTimeout(200);
-      return page.locator('[data-testid="fleet-save-form"] select').first();
-    },
-  },
-  {
-    name: "form-typed",
-    fixture: "saved-rich",
-    drive: async (page) => {
-      await page.getByTestId("fleet-save-form-name").click();
-      await page.keyboard.type("Morning triage");
-      await page.waitForTimeout(200);
-      const submit = page.getByTestId("fleet-save-form-submit");
-      await expect(submit).toBeEnabled();
-      return submit;
-    },
   },
   {
     name: "row-hover",
@@ -252,13 +233,9 @@ const SHOTS: Shot[] = [
           );
         });
       }
-      if (!reached) {
-        const trail = await page.evaluate(() => {
-          const el = document.activeElement;
-          return `${el?.tagName} ${el?.getAttribute("role")} ${el?.getAttribute("data-testid")}`;
-        });
-        throw new Error(`keyboard never reached the stale row (ended on ${trail}) — refusing to write`);
-      }
+      if (!reached) throw new Error("keyboard never reached the stale row — refusing to write");
+      // Activating an unavailable row must leave the menu open.
+      await page.keyboard.press("Enter");
       await page.waitForTimeout(250);
       return page.locator('[data-testid="fleet-saved-row"][aria-disabled="true"]').first();
     },
@@ -277,6 +254,42 @@ const SHOTS: Shot[] = [
       return dialog;
     },
   },
+  {
+    name: "save-dialog",
+    fixture: "saved-rich",
+    fullFrame: true,
+    drive: async (page) => {
+      await page.getByTestId("fleet-save-open").click();
+      const dialog = page.getByTestId("fleet-save-dialog");
+      await expect(dialog).toBeVisible();
+      await page.waitForTimeout(300);
+      await page.keyboard.type("Morning triage");
+      await expect(page.getByTestId("fleet-save-form-name")).toHaveValue("Morning triage");
+      return dialog;
+    },
+  },
+  {
+    name: "save-dialog-rule",
+    fixture: "saved-rich",
+    sweep: true,
+    fullFrame: true,
+    drive: async (page) => {
+      await page.getByTestId("fleet-save-open").click();
+      const dialog = page.getByTestId("fleet-save-dialog");
+      await expect(dialog).toBeVisible();
+      await dialog.getByRole("radio", { name: "Live rule" }).click();
+      await page.waitForTimeout(300);
+      return dialog.getByTestId("fleet-save-rule-state");
+    },
+  },
+  {
+    name: "palette-recall",
+    fixture: "saved-palette",
+    sweep: true,
+    fullFrame: true,
+    noMenu: true,
+    drive: async (page) => page.getByTestId("fleet-picker-saved-fleets"),
+  },
 ];
 
 test("saved fleets — states and themes", async ({ page }) => {
@@ -293,7 +306,7 @@ test("saved fleets — states and themes", async ({ page }) => {
     const shots = index === 0 ? SHOTS : SHOTS.filter((s) => s.sweep);
     for (const shot of shots) {
       const frame = await open(page, shot.fixture, theme);
-      const menu = await openMenu(page);
+      const menu = shot.noMenu ? page.locator(MENU).first() : await openMenu(page);
       const marker = await shot.drive(page, menu);
       let clip: Clip;
       if (shot.fullFrame) {

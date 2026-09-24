@@ -5,6 +5,7 @@ import { actionService } from "@/services/ActionService";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { FLEET_RIBBON_ICON_BUTTON_CLASS } from "./fleetRibbonStyles";
+import { describeRule, formatSavedFleetCount, savedFleetAccessibleName } from "./savedFleetMeta";
 
 interface SavedFleetRowProps {
   scope: FleetSavedScope;
@@ -21,25 +22,54 @@ export function SavedFleetRow({
   count,
   isStale,
 }: SavedFleetRowProps): ReactElement {
-  const flavorLabel = scope.kind === "snapshot" ? "Snapshot" : "Live";
   return (
     <DropdownMenuItem
       aria-disabled={isStale || undefined}
-      onSelect={() => {
-        if (isStale) return;
+      aria-label={savedFleetAccessibleName(scope, count)}
+      // The trash button is pointer-only inside a menuitem, so the row itself
+      // takes Delete/Backspace — the keyboard route to the same confirm.
+      aria-keyshortcuts="Delete"
+      title={scope.name}
+      onSelect={(e) => {
+        if (isStale) {
+          // An unavailable row stays focusable (APG) but activating it must
+          // neither recall nor close the menu, or it reads as a command that ran.
+          e.preventDefault();
+          return;
+        }
         void actionService.dispatch("fleet.recallNamedFleet", { id: scope.id }, { source: "user" });
       }}
+      onKeyDown={(e) => {
+        if (e.key === "Delete" || e.key === "Backspace") {
+          e.preventDefault();
+          onRequestDelete(scope.id);
+        }
+      }}
       data-testid="fleet-saved-row"
-      className="flex items-center gap-2"
+      data-stale={isStale || undefined}
+      className="gap-2"
     >
-      {/* Only the recall half fades when a snapshot is stale — Delete is
+      {/* Only the recall half steps down when a snapshot is stale — Delete is
           exactly the action a dead snapshot still wants. */}
-      <span className={cn("flex-1 truncate", isStale && "opacity-50")}>{scope.name}</span>
-      <span className={cn("text-3xs text-text-secondary tabular-nums", isStale && "opacity-50")}>
-        {count} · {flavorLabel}
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate",
+          isStale ? "text-text-secondary" : "text-text-primary"
+        )}
+      >
+        {scope.name}
+      </span>
+      <span aria-hidden="true" className="flex shrink-0 items-center gap-2">
+        {scope.kind === "predicate" && (
+          <span className="text-2xs text-text-secondary">{describeRule(scope)}</span>
+        )}
+        <span className="text-2xs tabular-nums text-text-secondary">
+          {formatSavedFleetCount(scope, count)}
+        </span>
       </span>
       <button
         type="button"
+        tabIndex={-1}
         aria-label={`Delete fleet "${scope.name}"`}
         data-testid="fleet-saved-row-delete"
         onClick={(e) => {
@@ -52,13 +82,20 @@ export function SavedFleetRow({
           onRequestDelete(scope.id);
         }}
         onPointerDown={(e) => {
-          // Radix DropdownMenuItem also commits on pointerdown — guard the
-          // delete from triggering recall by stopping propagation early.
           e.stopPropagation();
         }}
-        className={FLEET_RIBBON_ICON_BUTTON_CLASS}
+        onPointerUp={(e) => {
+          // Radix's item treats a pointerup it never saw go down as a
+          // pointer-select and synthesises a click on itself. Stopping only
+          // pointerdown hid the press from the item, so releasing over the
+          // trash recalled the fleet and closed the menu instead of deleting.
+          e.stopPropagation();
+        }}
+        // A 24px target in a 28px row: the negative margin keeps the target
+        // size without making saved rows taller than every other menu row.
+        className={cn(FLEET_RIBBON_ICON_BUTTON_CLASS, "-my-1 -mr-1.5")}
       >
-        <Trash2 className="h-3 w-3" />
+        <Trash2 className="h-3 w-3" aria-hidden="true" />
       </button>
     </DropdownMenuItem>
   );

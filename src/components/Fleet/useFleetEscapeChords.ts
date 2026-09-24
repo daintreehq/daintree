@@ -8,7 +8,8 @@ export function useFleetEscapeChords(
   armedCount: number,
   exitFleet: () => void,
   pending: FleetPendingActionSnapshot | null,
-  popoverOpen: boolean
+  /** Any ribbon-owned popover or dialog that absorbs bare Escape itself. */
+  overlayOpen: boolean
 ): void {
   const lastEscapeMsRef = useRef<number>(0);
   const lastBareEscapeMsRef = useRef<number>(0);
@@ -21,12 +22,12 @@ export function useFleetEscapeChords(
   // Mirror modal state into a ref so the capture-phase handler (whose
   // effect only re-binds on armedCount change) can skip bare-Escape
   // double-tap detection when an Escape-stack handler should win instead
-  // — pending confirm and popover both absorb bare Escape via
-  // useEscapeStack and must not also start a double-tap timer.
+  // — pending confirm, popovers and dialogs all absorb bare Escape and must
+  // not also start a double-tap timer.
   const bareEscapeBlockedRef = useRef(false);
   useEffect(() => {
-    bareEscapeBlockedRef.current = pending !== null || popoverOpen;
-  }, [pending, popoverOpen]);
+    bareEscapeBlockedRef.current = pending !== null || overlayOpen;
+  }, [pending, overlayOpen]);
 
   useEffect(() => {
     const clearPendingExit = () => {

@@ -13,6 +13,7 @@ import { buildConfirmMessage, type FleetConfirmActionId } from "./buildConfirmMe
 import { FleetCountChip } from "./FleetCountChip";
 import { FleetFailureBanner } from "./FleetFailureBanner";
 import { SavedFleetsSection } from "./SavedFleetsSection";
+import { SaveFleetDialog } from "./SaveFleetDialog";
 import { FLEET_LARGE_PASTE_BATCH_SIZE } from "./fleetBroadcast";
 import { cancelActiveBroadcast } from "./fleetEnterBroadcast";
 import {
@@ -170,6 +171,15 @@ export function FleetArmingRibbon(): ReactElement | null {
   // colliding with the dialog's focus trap (#8023, lesson #2828).
   const [selectionMenuOpen, setSelectionMenuOpen] = useState(false);
   const [pendingDeleteFleetId, setPendingDeleteFleetId] = useState<string | null>(null);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  // Set when the menu closes to hand off to one of the fleet dialogs. The
+  // menu's focus restore to its trigger runs after the exit animation — after
+  // the dialog has already focused its first field — and would pull focus back
+  // out of the dialog, so that one restoration is skipped.
+  const dialogHandoffRef = useRef(false);
+  // Where the fleet dialogs hand focus back: the menu item that opened them is
+  // gone by the time they close.
+  const selectionTriggerRef = useRef<HTMLButtonElement>(null);
   const savedScopes = useProjectSettingsStore(
     useShallow((s) => s.settings?.fleetSavedScopes ?? [])
   );
@@ -181,6 +191,11 @@ export function FleetArmingRibbon(): ReactElement | null {
       setPopoverOpen(false);
     }
   }, [armedCount, popoverOpen]);
+
+  // The save dialog lives in the same branch; drop it with the ribbon.
+  useEffect(() => {
+    if (armedCount < 2 && saveDialogOpen) setSaveDialogOpen(false);
+  }, [armedCount, saveDialogOpen]);
 
   // The fleet-delete confirm renders only in the armedCount>=2 branch. If the
   // armed set drains below 2 while it's pending, the dialog unmounts without
@@ -287,7 +302,14 @@ export function FleetArmingRibbon(): ReactElement | null {
     return () => window.removeEventListener("keydown", handler, true);
   }, [pending]);
 
-  useFleetEscapeChords(armedCount, exitFleet, pending, popoverOpen);
+  // The fleet dialogs count as overlays too: Esc closes the dialog, and a
+  // second quick Esc must not land as a double-tap that interrupts every agent.
+  useFleetEscapeChords(
+    armedCount,
+    exitFleet,
+    pending,
+    popoverOpen || pendingDeleteFleetId !== null || saveDialogOpen
+  );
 
   useFleetRibbonFlashes(ribbonRef);
 
@@ -311,8 +333,16 @@ export function FleetArmingRibbon(): ReactElement | null {
   const handleRequestDeleteFleet = useCallback((id: string) => {
     // Close the selection menu first so its modal layer tears down before
     // the confirm dialog mounts; React 19 batches both state updates.
+    dialogHandoffRef.current = true;
     setSelectionMenuOpen(false);
     setPendingDeleteFleetId(id);
+  }, []);
+
+  const handleRequestSaveFleet = useCallback(() => {
+    // Same hand-off as delete: the menu's modal layer goes before the dialog mounts.
+    dialogHandoffRef.current = true;
+    setSelectionMenuOpen(false);
+    setSaveDialogOpen(true);
   }, []);
 
   const pendingDeleteScope =
@@ -374,12 +404,14 @@ export function FleetArmingRibbon(): ReactElement | null {
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       if (e.key !== "Escape") return;
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-      if (popoverOpen || pending !== null || pendingDeleteFleetId !== null) return;
+      if (popoverOpen || pending !== null || pendingDeleteFleetId !== null || saveDialogOpen) {
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       exitFleet();
     },
-    [exitFleet, popoverOpen, pending, pendingDeleteFleetId]
+    [exitFleet, popoverOpen, pending, pendingDeleteFleetId, saveDialogOpen]
   );
 
   // Render confirmation before the armedCount<2 null guard so single-agent
@@ -519,7 +551,10 @@ export function FleetArmingRibbon(): ReactElement | null {
           </DropdownMenuItem>
         </>
       ) : null}
-      <SavedFleetsSection onRequestDelete={handleRequestDeleteFleet} />
+      <SavedFleetsSection
+        onRequestDelete={handleRequestDeleteFleet}
+        onRequestSave={handleRequestSaveFleet}
+      />
     </>
   );
 
@@ -567,6 +602,13 @@ export function FleetArmingRibbon(): ReactElement | null {
           setPendingDeleteFleetId(null);
         }}
         onClose={() => setPendingDeleteFleetId(null)}
+        restoreFocusTo={selectionTriggerRef}
+      />
+      <SaveFleetDialog
+        isOpen={saveDialogOpen}
+        onClose={() => setSaveDialogOpen(false)}
+        armedCount={armedCount}
+        restoreFocusTo={selectionTriggerRef}
       />
       <FleetFailureBanner />
       <AnimatePresence initial={false}>
@@ -657,6 +699,7 @@ export function FleetArmingRibbon(): ReactElement | null {
             >
               <DropdownMenuTrigger asChild>
                 <button
+                  ref={selectionTriggerRef}
                   type="button"
                   aria-label="Open selection menu"
                   className={FLEET_RIBBON_ICON_BUTTON_CLASS}
@@ -665,7 +708,18 @@ export function FleetArmingRibbon(): ReactElement | null {
                   <MoreHorizontal className="h-3.5 w-3.5" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" sideOffset={4}>
+              {/* A fixed width: sized to its content, one long saved-fleet name
+                  stretched every preset row with it. Names truncate instead. */}
+              <DropdownMenuContent
+                align="end"
+                sideOffset={4}
+                className="w-[22rem] max-w-[calc(100vw-1rem)]"
+                onCloseAutoFocus={(e) => {
+                  if (!dialogHandoffRef.current) return;
+                  dialogHandoffRef.current = false;
+                  e.preventDefault();
+                }}
+              >
                 {selectionMenuItems}
               </DropdownMenuContent>
             </DropdownMenu>

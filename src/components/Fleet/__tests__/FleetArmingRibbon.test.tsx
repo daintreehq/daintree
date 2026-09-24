@@ -1315,6 +1315,41 @@ describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
   });
 });
 
+describe("FleetArmingRibbon — fleet dialogs absorb bare Escape", () => {
+  beforeEach(() => {
+    resetStores();
+    useProjectSettingsStore.setState({
+      settings: {
+        runCommands: [],
+        fleetSavedScopes: [
+          { kind: "snapshot", id: "fs-1", name: "My fleet", terminalIds: [], createdAt: 1 },
+        ],
+      } as ProjectSettings,
+    });
+  });
+
+  // Esc closes the dialog; a second quick Esc from the control that regained
+  // focus must not read as the double-tap that interrupts every armed agent.
+  for (const [label, open] of [
+    ["delete confirm", () => fireEvent.click(screen.getByTestId("fleet-saved-row-delete"))],
+    ["save dialog", () => fireEvent.click(screen.getByText("Save as fleet…"))],
+  ] as const) {
+    it(`a double bare Escape while the ${label} is open does not interrupt`, async () => {
+      const actionServiceModule = await import("@/services/ActionService");
+      const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+      useFleetArmingStore.getState().armIds(["a", "b"]);
+      render(<FleetArmingRibbon />);
+      await act(async () => {
+        open();
+      });
+      fireEvent.keyDown(window, { key: "Escape" });
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+      dispatchSpy.mockRestore();
+    });
+  }
+});
+
 describe("supervised run status line (#10930)", () => {
   function makeRunTarget(
     terminalId: string,

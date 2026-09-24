@@ -8,6 +8,7 @@ import { useFleetPicker } from "@/hooks/useFleetPicker";
 import { useUiMotionTransition } from "@/hooks/useShouldSkipMotion";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { handleSegmentedRadioKeyDown } from "./segmentedRadioKeys";
+import { SavedFleetQuickRecall } from "./SavedFleetQuickRecall";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 
 type CommitMode = "replace" | "append";
@@ -166,50 +167,53 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const hiddenSelected = picker.hiddenSelectedCount;
 
   const selectionHelpers = (
-    <div className="flex items-center justify-between gap-2 pt-2">
-      <div role="group" aria-label="Selection helpers" className="flex items-center gap-1.5">
-        <button
-          type="button"
-          onClick={handleSelectAllVisible}
-          disabled={!canSelect}
-          data-testid="fleet-picker-cold-start-select-all"
-          className={helperClass}
-        >
-          {selectLabel}
-        </button>
-        <button
-          type="button"
-          onClick={handleSelectAgents}
-          disabled={agentVisibleIds.length === 0}
-          data-testid="fleet-picker-cold-start-select-agents"
-          className={helperClass}
-        >
-          Select agents
-        </button>
-        <button
-          type="button"
-          onClick={handleClearSelection}
-          disabled={!canClear}
-          data-testid="fleet-picker-cold-start-clear-selection"
-          className={helperClass}
-        >
-          Clear
-        </button>
-      </div>
-      {/*
+    <>
+      <SavedFleetQuickRecall onRecalled={onClose} />
+      <div className="flex items-center justify-between gap-2 pt-2">
+        <div role="group" aria-label="Selection helpers" className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={handleSelectAllVisible}
+            disabled={!canSelect}
+            data-testid="fleet-picker-cold-start-select-all"
+            className={helperClass}
+          >
+            {selectLabel}
+          </button>
+          <button
+            type="button"
+            onClick={handleSelectAgents}
+            disabled={agentVisibleIds.length === 0}
+            data-testid="fleet-picker-cold-start-select-agents"
+            className={helperClass}
+          >
+            Select agents
+          </button>
+          <button
+            type="button"
+            onClick={handleClearSelection}
+            disabled={!canClear}
+            data-testid="fleet-picker-cold-start-clear-selection"
+            className={helperClass}
+          >
+            Clear
+          </button>
+        </div>
+        {/*
         The running total, where the convention puts it. Until now the ONLY
         statement of how many terminals were selected was the commit button —
         and when a filter hid a pick, the button promised to arm a terminal the
         user could neither see nor name. Say how many are hidden.
       */}
-      <span
-        className="shrink-0 text-2xs tabular-nums text-text-secondary"
-        data-testid="fleet-picker-cold-start-selection-summary"
-      >
-        {selectedCount} of {picker.eligibleCount} selected
-        {hiddenSelected > 0 ? ` · ${hiddenSelected} hidden by search` : ""}
-      </span>
-    </div>
+        <span
+          className="shrink-0 text-2xs tabular-nums text-text-secondary"
+          data-testid="fleet-picker-cold-start-selection-summary"
+        >
+          {selectedCount} of {picker.eligibleCount} selected
+          {hiddenSelected > 0 ? ` · ${hiddenSelected} hidden by search` : ""}
+        </span>
+      </div>
+    </>
   );
 
   // `FleetPickerFooterHint` collapses to nothing when the list is empty and

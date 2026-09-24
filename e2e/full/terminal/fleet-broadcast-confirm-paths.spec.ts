@@ -288,11 +288,12 @@ test.describe.serial("Fleet broadcast: confirm and lifecycle paths", () => {
     await test.step("Save the current selection as a named snapshot", async () => {
       await dismissBlockingPalette(window);
       await window.locator(SEL.fleet.selectionMenuTrigger).click();
-      await expect(window.locator(SEL.fleet.saveForm)).toBeVisible({ timeout: T_MEDIUM });
+      await window.locator(SEL.fleet.saveOpen).click();
+      await expect(window.locator(SEL.fleet.saveDialog)).toBeVisible({ timeout: T_MEDIUM });
       await window.locator(SEL.fleet.saveFormName).fill(fleetName);
-      await window.locator(SEL.fleet.saveFormSubmit).click();
-      // The form lives inside the dropdown and keeps it open; dismiss it.
-      await window.keyboard.press("Escape");
+      await window.keyboard.press("Enter");
+      // The dialog closes itself once the fleet is stored.
+      await expect(window.locator(SEL.fleet.saveDialog)).toBeHidden({ timeout: T_MEDIUM });
     });
 
     await test.step("Reopening the menu shows the saved row", async () => {

@@ -488,7 +488,7 @@ describe("Fleet drafting preview invariants", () => {
 });
 
 describe("Saved fleet row invariants", () => {
-  it("a stale snapshot fades its recall content but never its delete control", () => {
+  it("a stale snapshot steps down its recall content but never its delete control", () => {
     const scope = {
       kind: "snapshot" as const,
       id: "s",
@@ -506,13 +506,14 @@ describe("Saved fleet row invariants", () => {
     expect(staleRow.getAttribute("data-disabled")).toBeNull();
     expect(staleRow.className).not.toMatch(/opacity-/);
     expect(staleDelete.className).not.toMatch(/opacity-/);
-    const fadedText = Array.from(staleRow.querySelectorAll("span")).filter((s) =>
-      /opacity-/.test(s.className)
-    );
-    expect(fadedText.length).toBeGreaterThan(0);
+    // Stepped down through the text hierarchy rather than opacity, which
+    // would halve an already-secondary colour below any contrast floor.
+    const staleName = screen.getByText("old").className;
+    expect(staleName).not.toMatch(/opacity-/);
     unmount();
 
     render(<SavedFleetRow scope={scope} onRequestDelete={() => {}} count={2} isStale={false} />);
+    expect(screen.getByText("old").className).not.toBe(staleName);
     expect(screen.getByTestId("fleet-saved-row-delete").className).toBe(staleDelete.className);
     const delegate = vi.fn();
     render(<SavedFleetRow scope={scope} onRequestDelete={delegate} count={0} isStale />);

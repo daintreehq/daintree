@@ -430,6 +430,11 @@ const FIXTURES = {
       seedSaved(SAVED_SCOPES_DENSE);
     },
   },
+  "saved-palette": {
+    what: "cold-start picker with saved fleets to recall — nothing armed yet",
+    palette: true,
+    seed: () => seedSaved(SAVED_SCOPES_RICH),
+  },
   "picker-palette": {
     what: "cold-start picker palette over the grid",
     palette: true,

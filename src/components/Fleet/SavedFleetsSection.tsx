@@ -1,84 +1,24 @@
-import { useMemo, type ReactElement } from "react";
-import { useShallow } from "zustand/react/shallow";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
-import { useProjectSettingsStore } from "@/store/projectSettingsStore";
-import { usePanelStore } from "@/store/panelStore";
+import type { ReactElement } from "react";
 import {
   DropdownMenuGroup,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { SavedFleetRow } from "./SavedFleetRow";
-import { SaveFleetForm } from "./SaveFleetForm";
-import { rankSavedFleets, rankPredicateFleets } from "./fleetRanking";
-import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetActions";
-import type { FleetSavedScope } from "@shared/types";
+import { useSavedFleets } from "./useSavedFleets";
 
 interface SavedFleetsSectionProps {
   onRequestDelete: (id: string) => void;
+  /** Open the save dialog. Hoisted to the ribbon so it outlives the menu. */
+  onRequestSave: () => void;
 }
 
-const PRESET_PREDICATE_KEYS = new Set([
-  "waiting:current",
-  "waiting:all",
-  "working:current",
-  "working:all",
-  "all:current",
-]);
-
-function isPresetPredicate(scope: { kind: string; stateFilter?: string; scope?: string }): boolean {
-  if (scope.kind !== "predicate") return false;
-  return PRESET_PREDICATE_KEYS.has(`${scope.stateFilter}:${scope.scope}`);
-}
-
-export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps): ReactElement {
-  const armedCount = useFleetArmingStore((s) => s.armedIds.size);
-  const savedScopes = useProjectSettingsStore(
-    useShallow((s) => s.settings?.fleetSavedScopes ?? [])
-  );
-  // Primitive-valued selection (FleetCountChip pattern): re-derive counts when
-  // panes open/close, but return a flat Record so unrelated panel ticks —
-  // agent-state churn while the dropdown is open — reuse the previous
-  // reference and skip the re-render entirely. A snapshot scope is stale
-  // exactly when none of its stored ids is still arm-eligible (count 0).
-  const countById = usePanelStore(
-    useShallow(() => {
-      const counts: Record<string, number> = {};
-      for (const scope of savedScopes) {
-        if (scope.kind === "snapshot" || !isPresetPredicate(scope)) {
-          counts[scope.id] = computeSavedScopePaneCount(scope);
-        }
-      }
-      return counts;
-    })
-  );
-
-  const { snapshotUsable, snapshotStale, predicateRanked, isStaleById } = useMemo(() => {
-    const snapshots: FleetSavedScope[] = [];
-    const predicates: FleetSavedScope[] = [];
-    for (const scope of savedScopes) {
-      if (scope.kind === "snapshot") {
-        snapshots.push(scope);
-      } else if (!isPresetPredicate(scope)) {
-        predicates.push(scope);
-      }
-    }
-    const now = Date.now();
-    const isStaleByIdLocal = new Map<string, boolean>();
-    for (const scope of snapshots) {
-      isStaleByIdLocal.set(scope.id, (countById[scope.id] ?? 0) === 0);
-    }
-    for (const scope of predicates) {
-      isStaleByIdLocal.set(scope.id, false);
-    }
-    const { usable, stale } = rankSavedFleets(snapshots, now, isStaleByIdLocal);
-    return {
-      snapshotUsable: usable,
-      snapshotStale: stale,
-      predicateRanked: rankPredicateFleets(predicates, now),
-      isStaleById: isStaleByIdLocal,
-    };
-  }, [savedScopes, countById]);
+export function SavedFleetsSection({
+  onRequestDelete,
+  onRequestSave,
+}: SavedFleetsSectionProps): ReactElement {
+  const { snapshotUsable, snapshotStale, rules, countById } = useSavedFleets();
 
   const hasSnapshots = snapshotUsable.length + snapshotStale.length > 0;
   const showStaleSeparator = snapshotUsable.length > 0 && snapshotStale.length > 0;
@@ -95,7 +35,7 @@ export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps)
               scope={scope}
               onRequestDelete={onRequestDelete}
               count={countById[scope.id] ?? 0}
-              isStale={isStaleById.get(scope.id) ?? false}
+              isStale={false}
             />
           ))}
           {showStaleSeparator && <DropdownMenuSeparator />}
@@ -105,15 +45,16 @@ export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps)
               scope={scope}
               onRequestDelete={onRequestDelete}
               count={countById[scope.id] ?? 0}
-              isStale={isStaleById.get(scope.id) ?? false}
+              isStale
             />
           ))}
         </DropdownMenuGroup>
       )}
-      {predicateRanked.length > 0 && (
+      {hasSnapshots && rules.length > 0 && <DropdownMenuSeparator />}
+      {rules.length > 0 && (
         <DropdownMenuGroup>
-          <DropdownMenuLabel>Smart-Sets</DropdownMenuLabel>
-          {predicateRanked.map((scope) => (
+          <DropdownMenuLabel>Live rules</DropdownMenuLabel>
+          {rules.map((scope) => (
             <SavedFleetRow
               key={scope.id}
               scope={scope}
@@ -124,7 +65,10 @@ export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps)
           ))}
         </DropdownMenuGroup>
       )}
-      <SaveFleetForm armedCount={armedCount} />
+      {(hasSnapshots || rules.length > 0) && <DropdownMenuSeparator />}
+      <DropdownMenuItem onSelect={onRequestSave} data-testid="fleet-save-open">
+        Save as fleet…
+      </DropdownMenuItem>
     </>
   );
 }
