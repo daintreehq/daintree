@@ -183,6 +183,7 @@ describe("ChordIndicator (Cmd+K command HUD)", () => {
     const keyText = Array.from(first.querySelectorAll("kbd"))
       .map((k) => k.textContent)
       .join("");
+    expect(keyText.length).toBeGreaterThan(0);
 
     fireEvent.change(input()!, { target: { value: keyText } });
 
