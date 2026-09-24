@@ -62,6 +62,7 @@ const ALL_THEMES = [
   "serengeti",
   "svalbard",
   "table-mountain",
+  "movile",
 ];
 
 function themeList(value: string | undefined, fallback: string[]): string[] {
@@ -103,8 +104,10 @@ function stampFor(daysAgo: number): number {
 }
 
 // Deterministic, uneven per-day volumes so the p90 scaling spreads cells over
-// all four heat levels instead of flattening them.
-const VOLUMES = [2, 1, 3, 6, 1, 2, 9, 1, 4, 2, 1, 5, 3, 1, 12, 2, 1, 3, 7, 1];
+// all four heat levels instead of flattening them. The length is prime so the
+// pattern never lines up with a week (or any other grid period) and paints
+// stripes that look like a layout artefact.
+const VOLUMES = [2, 1, 3, 6, 1, 2, 9, 1, 4, 2, 1, 5, 3, 1, 12, 2, 1, 3, 7];
 
 type History = { branch: string; days: Array<{ daysAgo: number; count: number }> };
 
@@ -257,6 +260,25 @@ async function cellCount(page: Page): Promise<number> {
   return page.locator(`${GRID} [role="gridcell"]`).count();
 }
 
+/**
+ * The card opens below the strip inside the canvas scroller; a viewport clip
+ * taken before scrolling photographs half a card. Only scroll when the element
+ * is not already whole on screen — any scroll closes an open tooltip, so the
+ * focus and hover states reveal first and interact second.
+ */
+async function revealWhole(page: Page, selector: string): Promise<void> {
+  await page
+    .locator(selector)
+    .first()
+    .evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      if (r.top < 0 || r.bottom > window.innerHeight) {
+        el.scrollIntoView({ block: "center", inline: "nearest" });
+      }
+    });
+  await settle(page, 200);
+}
+
 const written: string[] = [];
 
 async function snap(
@@ -266,12 +288,7 @@ async function snap(
   theme: string,
   pad = { top: 16, right: 16, bottom: 16, left: 16 }
 ): Promise<void> {
-  // The card opens below the strip inside the canvas scroller; a viewport
-  // clip taken before scrolling photographs half a card.
-  await page
-    .locator(selector)
-    .first()
-    .evaluate((el) => el.scrollIntoView({ block: "center", inline: "nearest" }));
+  await revealWhole(page, selector);
   await settle(page);
   const box = await page.locator(selector).first().boundingBox();
   if (!box) throw new Error(`no bounding box for ${selector}`);
@@ -396,6 +413,7 @@ test("pulse heatmap review — heatmap and streak flame across states and themes
       // Keyboard entry into the grid: tabbed, never `.focus()`, so Chromium
       // sets :focus-visible and the focus tooltip opens as a user sees it.
       await step(`cell-focus ${theme}`, async () => {
+        await revealWhole(page, CARD);
         await page.locator(`${CARD} .pulse-card-header span.text-sm`).click();
         let reached = false;
         for (let press = 0; press < 12 && !reached; press += 1) {
@@ -407,15 +425,20 @@ test("pulse heatmap review — heatmap and streak flame across states and themes
         if (!reached) throw new Error("Tab never reached a heatmap cell");
         await page.keyboard.press("ArrowLeft");
         await page.keyboard.press("ArrowLeft");
-        await page
-          .locator('[role="tooltip"]')
-          .first()
-          .waitFor({ state: "attached", timeout: 3000 });
+        // The focused trigger must report its tooltip open at capture time —
+        // an attached-but-closed tooltip node proves nothing.
+        await expect
+          .poll(
+            () => page.evaluate(() => document.activeElement?.getAttribute("data-state") ?? ""),
+            { timeout: 3000 }
+          )
+          .toMatch(/open$/);
         await snap(page, CARD, "cell-focus", theme, TOOLTIP_PAD);
         await page.keyboard.press("Escape");
       });
 
       await step(`cell-hover ${theme}`, async () => {
+        await revealWhole(page, CARD);
         const target = page.locator(`${GRID} [role="gridcell"][data-heat-level="4"]`).nth(1);
         await target.hover();
         await page
