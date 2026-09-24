@@ -15,6 +15,11 @@ export {
 } from "./TitleEditingContext";
 export type { TitleEditingContextValue, TitleEditingProviderProps } from "./TitleEditingContext";
 export { PanelTransitionOverlay, triggerPanelTransition } from "./PanelTransitionOverlay";
-export type { TransitionDirection, TransitionRect } from "./PanelTransitionOverlay";
+export type {
+  TransitionDirection,
+  TransitionRect,
+  TransitionTarget,
+} from "./PanelTransitionOverlay";
+export { animatePanelMove } from "./animatePanelMove";
 export { PluginMissingPanel } from "./PluginMissingPanel";
 export type { PluginMissingPanelProps } from "./PluginMissingPanel";

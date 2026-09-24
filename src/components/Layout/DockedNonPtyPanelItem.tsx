@@ -18,6 +18,7 @@ import {
   handleDockFocusOutside,
 } from "./dockPopoverGuard";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
+import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 
 interface DockedNonPtyPanelItemProps {
   /**
@@ -108,8 +109,11 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
   );
 
   const handleMoveToGrid = useCallback(() => {
-    const moved = moveTerminalToGrid(panel.id);
-    if (moved) closeDockTerminal(panel.id);
+    animatePanelMove(panel.id, "restore", () => {
+      const moved = moveTerminalToGrid(panel.id);
+      if (moved) closeDockTerminal(panel.id);
+      return moved;
+    });
   }, [panel.id, moveTerminalToGrid, closeDockTerminal]);
 
   const chrome = useMemo(() => deriveTerminalChrome({ kind: panel.kind }), [panel.kind]);

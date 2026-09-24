@@ -7,6 +7,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { getGridLayoutSnapshot } from "@/components/Terminal/gridLayoutSnapshot";
+import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 export function registerTerminalLayoutActions(
   actions: ActionRegistry,
@@ -41,7 +42,7 @@ export function registerTerminalLayoutActions(
 
         useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-        state.moveTerminalToDock(targetId);
+        animatePanelMove(targetId, "minimize", () => state.moveTerminalToDock(targetId));
 
         const moved = usePanelStore.getState().panelsById[targetId];
         if (moved?.location === "dock") {
@@ -72,7 +73,7 @@ export function registerTerminalLayoutActions(
           return;
         }
         useLayoutUndoStore.getState().pushLayoutSnapshot();
-        state.moveTerminalToGrid(targetId);
+        animatePanelMove(targetId, "restore", () => state.moveTerminalToGrid(targetId));
       }
     },
   }));
@@ -288,9 +289,9 @@ export function registerTerminalLayoutActions(
       // wipe the user's redo history and then change nothing.
       useLayoutUndoStore.getState().pushLayoutSnapshot();
       if (toGrid) {
-        state.moveTerminalToGrid(targetId);
+        animatePanelMove(targetId, "restore", () => state.moveTerminalToGrid(targetId));
       } else {
-        state.moveTerminalToDock(targetId);
+        animatePanelMove(targetId, "minimize", () => state.moveTerminalToDock(targetId));
         state.openDockTerminal(targetId);
       }
     },
