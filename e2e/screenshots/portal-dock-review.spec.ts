@@ -84,7 +84,9 @@ test.afterAll(async () => {
 
 async function open(page: Page, fixture: FixtureName, theme: string): Promise<Locator> {
   const spec = FIXTURES[fixture];
-  await page.setViewportSize({ width: spec.width + 120, height: spec.height + 80 });
+  // PortalDock clamps a restored width so the editor keeps 400px of viewport;
+  // leave that much room or every fixture photographs at the 320px minimum.
+  await page.setViewportSize({ width: spec.width + 520, height: spec.height + 80 });
   await stubViteHmrClient(page);
   await page.mouse.move(0, 0);
   page.removeAllListeners("pageerror");
@@ -101,6 +103,7 @@ async function open(page: Page, fixture: FixtureName, theme: string): Promise<Lo
   }
   // A Tailwind utility resolving proves the stylesheet landed, not just markup.
   await expect(page.locator(DOCK)).toHaveCSS("display", "flex");
+  await expect(page.locator(DOCK)).toHaveCSS("width", `${spec.width}px`);
   await page.addStyleTag({ content: FREEZE_CSS });
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(200);
