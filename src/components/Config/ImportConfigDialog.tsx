@@ -34,11 +34,11 @@ function changeCount(section: ConfigBundlePreviewSection): number {
   return section.add + section.update;
 }
 
-/** "3 added, 1 replaced" — the actual operations, not a bare total. */
+/** "1 replaced, 3 added" — the actual operations, in the order the row lists them. */
 function describeSection(section: ConfigBundlePreviewSection): string {
   const parts: string[] = [];
-  if (section.add > 0) parts.push(`${section.add} added`);
   if (section.update > 0) parts.push(`${section.update} replaced`);
+  if (section.add > 0) parts.push(`${section.add} added`);
   return parts.join(", ");
 }
 
@@ -101,11 +101,16 @@ function outcomeMessage(report: ConfigImportReport, preview: ConfigBundlePreview
     return `Configuration imported — ${countLabel(applied, "setting", "settings")} changed${tail}`;
   }
   const more = reasons.length > 1 ? `, plus ${reasons.length - 1} more in the inbox` : "";
-  return `Configuration imported with ${reasons.length} skipped. ${reasons[0]}${more}${tail}`;
+  return `Configuration imported with ${countLabel(reasons.length, "setting", "settings")} skipped. ${reasons[0]}${more}${tail}`;
 }
 
 interface ApplyFailure {
   description: string;
+  /**
+   * What was written is unknown — the apply threw, or its rollback failed.
+   * A backup taken now would capture the damage, not the pre-import values.
+   */
+  uncertain: boolean;
   /** The raw error, when the description had to translate it. */
   detail?: string;
 }
@@ -150,14 +155,20 @@ function SectionRow({ section }: { section: ConfigBundlePreviewSection }) {
       {added.length > 0 && (
         <p className={DETAIL}>
           Adds {hiddenAdded > 0 ? `${shownAdded.join(", ")} and ` : joinNames(shownAdded)}
-          {hiddenAdded > 0 && (
-            <button
-              type="button"
-              className="rounded-[var(--radius-sm)] text-text-primary underline underline-offset-2 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-              onClick={() => setShowAllAdded(true)}
-            >
-              {hiddenAdded} more
-            </button>
+          {/* One stable disclosure that relabels rather than unmounting, so a
+              keyboard user keeps their place after expanding. */}
+          {added.length > MAX_NAMED && (
+            <>
+              {hiddenAdded === 0 && " "}
+              <button
+                type="button"
+                aria-expanded={showAllAdded}
+                className="rounded-[var(--radius-sm)] text-text-primary underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                onClick={() => setShowAllAdded((open) => !open)}
+              >
+                {showAllAdded ? "show fewer" : `${hiddenAdded} more`}
+              </button>
+            </>
           )}
         </p>
       )}
@@ -327,8 +338,9 @@ export function ImportConfigDialog() {
       // A throw means the apply never reported back, so what was written is
       // unknown — say that rather than guess in either direction.
       setApplyFailure({
+        uncertain: true,
         description:
-          "Daintree couldn't confirm what was written. Check these settings in Settings before trying again.",
+          "Daintree couldn't confirm what was written, so some of these may already have changed. Check them in Settings before trying again.",
         detail: formatErrorMessage(error, ""),
       });
       setFailureCount((n) => n + 1);
@@ -345,6 +357,7 @@ export function ImportConfigDialog() {
       // still holds what the user was importing, so closing it would take the
       // retry away along with the explanation.
       setApplyFailure({
+        uncertain: report.restoreFailed === true,
         description: report.errors[0] ?? "The bundle couldn't be applied. Nothing was changed.",
       });
       setFailureCount((n) => n + 1);
@@ -413,7 +426,6 @@ export function ImportConfigDialog() {
       variant="destructive"
       isConfirmLoading={isApplying}
       onConfirm={handleConfirm}
-      hint={isApplying ? "Importing…" : undefined}
       bodyResetKey={failureCount}
       hasPreview
     >
@@ -430,7 +442,9 @@ export function ImportConfigDialog() {
       )}
       {/* Ahead of the list, not after it: the way back has to be seen before
           the confirm, and a busy preview scrolls past anything below it. */}
-      {replacesAny && (
+      {/* Once what was written is unknown, exporting would capture the damage
+          rather than a way back — keep a backup already taken, offer no new one. */}
+      {replacesAny && (!applyFailure?.uncertain || (exportNote && !exportNote.failed)) && (
         <div
           ref={backupRef}
           className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2"
@@ -441,7 +455,7 @@ export function ImportConfigDialog() {
             }
             role="status"
           >
-            {exportNote?.text ?? "Export the current values first to keep a way back"}
+            {exportNote?.text ?? "Save the current values before importing"}
           </p>
           {(!exportNote || exportNote.failed) && (
             <Button

@@ -400,6 +400,7 @@ describe("ConfigBundleService.apply", () => {
 
     expect(report.outcome).toBe("rolled-back");
     expect(report.rolledBack).toBe(false);
+    expect(report.restoreFailed).toBe(true);
     expect(report.errors[0]).toContain("so worktree path pattern may be partly changed");
   });
 
@@ -441,6 +442,8 @@ describe("ConfigBundleService.apply", () => {
 
     expect(report.outcome).toBe("rolled-back");
     expect(report.rolledBack).toBe(true);
+    // A restore that worked leaves nothing in an unknown state.
+    expect(report.restoreFailed).toBe(false);
     expect(report.errors[0]).toContain("No changes were kept");
     // The write that landed before the throw must be gone, or the report above
     // is a claim the service never made good on.
@@ -506,8 +509,13 @@ describe("ConfigBundleService.preview", () => {
     mockStore.set("userAgentRegistry", { shared: agent("shared", { name: "Local" }) });
     mockStore.set("keybindingOverrides.overrides", { "terminal.new": ["Cmd+T"] });
     mockStore.set("appTheme", { colorSchemeId: "daintree" });
-    mockStore.set("notificationSettings", { soundEnabled: true });
+    mockStore.set("notificationSettings", {
+      soundEnabled: true,
+      quietHoursStartMin: 1320,
+      waitingEscalationDelayMs: 30000,
+    });
     mockStore.set("worktreeConfig", { pathPattern: "old/{branch-slug}" });
+    const longPattern = `${"deeply/nested/".repeat(6)}{branch-slug}`;
     mockProjectStore.recipes = [{ id: "r1", name: "Old fleet", terminals: [], createdAt: 1 }];
     const { service } = makeService();
 
@@ -519,8 +527,12 @@ describe("ConfigBundleService.preview", () => {
       agentSettings: { claude: { customFlags: "--verbose" } },
       keybindingOverrides: { "terminal.new": ["Cmd+Shift+T"], "not.a.real.action": ["Cmd+J"] },
       appTheme: { colorSchemeId: "bondi" },
-      notificationSettings: { soundEnabled: false },
-      worktreeConfig: { pathPattern: "trees/{branch-slug}" },
+      notificationSettings: {
+        soundEnabled: false,
+        quietHoursStartMin: 60,
+        waitingEscalationDelayMs: 120000,
+      },
+      worktreeConfig: { pathPattern: longPattern },
       globalRecipes: [
         { id: "r1", name: "Renamed fleet", terminals: [] },
         { id: "r2", name: "Nightly triage", terminals: [] },
@@ -554,9 +566,19 @@ describe("ConfigBundleService.preview", () => {
     expect(scheme?.from).toBeDefined();
     expect(scheme?.to).toBeDefined();
     expect(scheme?.from).not.toBe(scheme?.to);
+    // A path is shown whole however long it is; the row is built to wrap it.
     expect(byKey.get("worktreeConfig/pathPattern")).toMatchObject({
       from: "old/{branch-slug}",
-      to: "trees/{branch-slug}",
+      to: longPattern,
+    });
+    // Stored minutes and milliseconds read as a time of day and a duration.
+    expect(byKey.get("notificationSettings/quietHoursStartMin")).toMatchObject({
+      from: "22:00",
+      to: "01:00",
+    });
+    expect(byKey.get("notificationSettings/waitingEscalationDelayMs")).toMatchObject({
+      from: "30s",
+      to: "2 min",
     });
     expect(byKey.get("agentSettings/claude")?.from).toBeUndefined();
     // A replacement renamed by the bundle is named by what the user has now —

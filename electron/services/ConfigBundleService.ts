@@ -173,12 +173,31 @@ function humanizeKey(key: string): string {
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : key;
 }
 
-/** A scalar as a person would read it, or undefined when it isn't one worth showing. */
-function displayScalar(value: unknown): string | undefined {
+/**
+ * A scalar as a person would read it, or undefined when it isn't one worth
+ * showing. `maxLength` keeps free-form strings from flooding a row; a value the
+ * row is built to wrap (a path pattern) passes Infinity.
+ */
+function displayScalar(value: unknown, maxLength = 60): string | undefined {
   if (typeof value === "boolean") return value ? "On" : "Off";
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value === "string" && value.trim() !== "" && value.length <= 60) return value;
+  if (typeof value === "string" && value.trim() !== "" && value.length <= maxLength) return value;
   return undefined;
+}
+
+/** Notification settings store minutes-since-midnight and millisecond delays; show them as time. */
+function displayNotificationValue(key: string, value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (key.endsWith("Min")) {
+      const minutes = ((Math.floor(value) % 1440) + 1440) % 1440;
+      return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+    }
+    if (key.endsWith("Ms")) {
+      const seconds = Math.round(value / 1000);
+      return seconds >= 60 && seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`;
+    }
+  }
+  return displayScalar(value);
 }
 
 let defaultShortcutDescriptions: Map<string, string> | undefined;
@@ -278,16 +297,16 @@ function describeChanges(
           key,
           kind,
           label: NOTIFICATION_FIELD_LABELS[key] ?? humanizeKey(key),
-          from: kind === "update" ? displayScalar(currentRecord[key]) : undefined,
-          to: displayScalar(incomingRecord[key]),
+          from: kind === "update" ? displayNotificationValue(key, currentRecord[key]) : undefined,
+          to: displayNotificationValue(key, incomingRecord[key]),
         };
       case "worktreeConfig":
         return {
           key,
           kind,
           label: "Path pattern",
-          from: kind === "update" ? displayScalar(currentRecord[key]) : undefined,
-          to: displayScalar(incomingRecord[key]),
+          from: kind === "update" ? displayScalar(currentRecord[key], Infinity) : undefined,
+          to: displayScalar(incomingRecord[key], Infinity),
         };
       case "globalRecipes": {
         const nameIn = (list: unknown) => {
@@ -447,7 +466,13 @@ export class ConfigBundleService {
             )
           : sections;
 
-        return { outcome: "rolled-back", sections: settled, errors, rolledBack };
+        return {
+          outcome: "rolled-back",
+          sections: settled,
+          errors,
+          rolledBack,
+          restoreFailed: failedRestores.length > 0,
+        };
       }
     }
 

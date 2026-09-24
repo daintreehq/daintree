@@ -150,8 +150,12 @@ describe("ImportConfigDialog", () => {
       Array.from({ length: 6 }, (_, i) => `New ${i}`).filter((n) => !bodyText().includes(n));
     expect(hidden().length).toBeGreaterThan(0);
     const more = screen.getByRole("button", { name: `${hidden().length} more` });
+    expect(more.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(more);
     expect(hidden()).toEqual([]);
+    // The same control stays mounted, so keyboard focus has somewhere to be.
+    expect(more.isConnected).toBe(true);
+    expect(more.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("puts the way back ahead of the list it protects", async () => {
@@ -191,6 +195,46 @@ describe("ImportConfigDialog", () => {
     expect(bodyText()).toContain(reason);
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
     expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("withdraws the backup offer only once what was written is unknown", async () => {
+    const backupOffered = () => screen.queryByRole("button", { name: /Export a backup/ }) !== null;
+    const failWith = async (outcome: () => void) => {
+      outcome();
+      await open(REPLACING);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Import configuration" }));
+      });
+    };
+
+    // A clean rollback leaves the pre-import values intact: a backup is still one.
+    await failWith(() =>
+      applyImport.mockResolvedValue({
+        outcome: "rolled-back",
+        sections: [],
+        errors: ["Couldn't import theme: disk full. No changes were kept."],
+        rolledBack: true,
+      } satisfies ConfigImportReport)
+    );
+    expect(backupOffered()).toBe(true);
+    cleanup();
+
+    // A failed restore or a thrown apply leaves them unknown.
+    await failWith(() =>
+      applyImport.mockResolvedValue({
+        outcome: "rolled-back",
+        sections: [],
+        errors: ["Couldn't import theme: disk full. Undoing … may be partly changed."],
+        rolledBack: false,
+        restoreFailed: true,
+      } satisfies ConfigImportReport)
+    );
+    expect(backupOffered()).toBe(false);
+    cleanup();
+
+    await failWith(() => applyImport.mockRejectedValue(new Error("reply was never sent")));
+    expect(backupOffered()).toBe(false);
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 
   it("reports a stale window, not a failed import, when only the refresh fails", async () => {

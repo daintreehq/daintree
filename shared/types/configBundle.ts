@@ -106,6 +106,12 @@ export interface ConfigImportReport {
   errors: string[];
   /** True when a section failed and previously-applied sections were restored. */
   rolledBack: boolean;
+  /**
+   * True when a section failed AND undoing the earlier sections failed too, so
+   * the configuration is now partly changed. The one rolled-back state in which
+   * the pre-import values can't be assumed intact.
+   */
+  restoreFailed?: boolean;
 }
 
 /**
