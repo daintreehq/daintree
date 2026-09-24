@@ -63,6 +63,21 @@ const WAIT_UNTIL_READY_POLL_INTERVAL_MS = 500;
 /** States a wait stops on — every state that is not still in progress. */
 const SETTLED_SETUP_STATES = new Set(["ready", "failed", "timed-out", "needs-approval", "unknown"]);
 
+/**
+ * Same ceiling and for the same reason as the readiness wait: the renderer
+ * dispatch path times out at 30s. PR detection polls every 30s focused and
+ * every 2 minutes blurred, so several expired calls in a row are normal.
+ */
+const MAX_WAIT_FOR_PR_TIMEOUT_MS = 25_000;
+
+/**
+ * A local store read rather than a host round trip, so this can be tighter
+ * than the readiness poll at no cost.
+ */
+const WAIT_FOR_PR_POLL_INTERVAL_MS = 250;
+
+const MAX_WAIT_FOR_PR_TARGETS = 32;
+
 export function registerWorktreeQueryActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -379,6 +394,100 @@ export function registerWorktreeQueryActions(
           }
           await new Promise((resolve) =>
             setTimeout(resolve, Math.min(WAIT_UNTIL_READY_POLL_INTERVAL_MS, remaining))
+          );
+        }
+      },
+    })
+  );
+
+  actions.set("worktree.waitForPullRequest", () =>
+    defineAction({
+      id: "worktree.waitForPullRequest",
+      title: "Wait for worktree pull request",
+      description:
+        "Wait until a pull request is detected for any of the given worktrees. Detection is a cached background poll, so this reports when a PR was seen, not when it was opened, and a PR is not proof its agent has finished. Returns at once for a PR already detected. Running out of time is not a failure: drop the worktrees that matched and call again.",
+      category: "worktree",
+      kind: "query",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        worktreeIds: z
+          .array(z.string().min(1))
+          .min(1)
+          .max(MAX_WAIT_FOR_PR_TARGETS)
+          .describe(
+            `Worktrees to wait on, 1 to ${MAX_WAIT_FOR_PR_TARGETS}. The wait ends when any of them has a detected PR.`
+          ),
+        timeoutMs: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_WAIT_FOR_PR_TIMEOUT_MS)
+          .optional()
+          .describe(
+            `Milliseconds to wait; 0 reads now. Default and maximum ${MAX_WAIT_FOR_PR_TIMEOUT_MS}. Detection runs every 30s to 2min, so call again.`
+          ),
+      }),
+      resultSchema: z.object({
+        worktrees: z
+          .array(
+            z.object({
+              worktreeId: z.string(),
+              prNumber: z.number().nullable(),
+              prUrl: z.string().nullable(),
+              prState: z.enum(["open", "merged", "closed", "declined"]).nullable(),
+            })
+          )
+          .describe(
+            "One entry per requested worktree, in request order. PR fields are null where none has been detected yet."
+          ),
+        timedOut: z
+          .boolean()
+          .describe(
+            "True when no requested worktree had a detected PR by the deadline. Call again to keep waiting."
+          ),
+      }),
+      mcpOutputSchema: true,
+      mcpAnnotations: {
+        readOnlyHint: true,
+        // A wait's answer depends on when it is asked.
+        idempotentHint: false,
+        destructiveHint: false,
+      },
+      run: async ({ worktreeIds, timeoutMs }) => {
+        // Captured once so a project switch mid-wait cannot redirect the read.
+        const store = getCurrentViewStore();
+        const budgetMs = Math.min(
+          timeoutMs ?? MAX_WAIT_FOR_PR_TIMEOUT_MS,
+          MAX_WAIT_FOR_PR_TIMEOUT_MS
+        );
+        const deadline = Date.now() + budgetMs;
+
+        for (;;) {
+          const { worktrees } = store.getState();
+          const rows = worktreeIds.map((worktreeId) => {
+            const worktree = worktrees.get(worktreeId);
+            if (!worktree) {
+              throw new Error("Unknown worktree — this project has no worktree with that id.");
+            }
+            // `linked` is the source of truth (#8452); the flat pr* fields can
+            // outlive a branch switch that cleared it. `linked: null` is that
+            // explicit clear, and it reads as "not detected" like absence does.
+            const pr = worktree.linked?.pr;
+            return {
+              worktreeId,
+              prNumber: pr?.ref.number ?? null,
+              prUrl: pr?.url ?? null,
+              prState: pr?.state ?? null,
+            };
+          });
+          const detected = rows.some((row) => row.prNumber !== null);
+          const remaining = deadline - Date.now();
+          if (detected || remaining <= 0) {
+            return { worktrees: rows, timedOut: !detected };
+          }
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.min(WAIT_FOR_PR_POLL_INTERVAL_MS, remaining))
           );
         }
       },
