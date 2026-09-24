@@ -27,6 +27,7 @@ import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { actionService } from "@/services/ActionService";
 import type { ComputedSubtitle, WorktreeReviewState } from "./hooks/useWorktreeStatus";
 import { SECTION_LABEL, CARD_DENSITY } from "./sectionChrome";
+import { useCardFocusHandoff } from "./hooks/useCardFocusHandoff";
 import { resourceLifecycleVisibility } from "../utils/resourceLifecycle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -738,8 +739,12 @@ export function WorktreeDeleteErrorBanner({
     e.stopPropagation();
     onDismiss?.();
   };
+  // Retry and Dismiss both clear the error, which unmounts this banner from
+  // under the button that was pressed.
+  const focusHandoffRef = useCardFocusHandoff<HTMLDivElement>();
   return (
     <div
+      ref={focusHandoffRef}
       role="alert"
       aria-live="assertive"
       data-testid="worktree-delete-error-banner"
@@ -828,8 +833,12 @@ export function WorktreeIssueErrorBanner({
     e.stopPropagation();
     onDismiss?.();
   };
+  // Retry and Dismiss both drop the outbox entry, which unmounts this banner
+  // from under the button that was pressed.
+  const focusHandoffRef = useCardFocusHandoff<HTMLDivElement>();
   return (
     <div
+      ref={focusHandoffRef}
       role="alert"
       aria-live="assertive"
       data-testid="worktree-issue-error-banner"
