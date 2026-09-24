@@ -77,6 +77,53 @@ export function computeTrackPageTarget(
   return Math.abs(clamped - m.scrollTop) < 1 ? null : clamped;
 }
 
+export interface TrackHold {
+  /** Page once toward `pointerY`; true when it moved and a hold is now armed. */
+  press(pointerY: number, smooth: boolean): boolean;
+  /** Retarget a held press. A hold that caught up with the pointer resumes. */
+  move(pointerY: number): void;
+  release(): void;
+}
+
+/**
+ * Press-and-hold paging on the track, the way a native scrollbar does it: one
+ * page on press, repeats after a delay, a pause once the handle reaches the
+ * pointer, and a resume if the still-held pointer moves on past it. `page`
+ * scrolls one step toward the pointer and reports whether anything moved.
+ */
+export function createTrackHold(page: (pointerY: number, smooth: boolean) => boolean): TrackHold {
+  let pointerY = 0;
+  let held = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const schedule = (delay: number) => {
+    timer = setTimeout(tick, delay);
+  };
+  const tick = () => {
+    timer = null;
+    if (held && page(pointerY, false)) schedule(TRACK_REPEAT_INTERVAL_MS);
+  };
+  const release = () => {
+    held = false;
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+  };
+  return {
+    press(y, smooth) {
+      release();
+      pointerY = y;
+      if (!page(y, smooth)) return false;
+      held = true;
+      schedule(TRACK_REPEAT_DELAY_MS);
+      return true;
+    },
+    move(y) {
+      pointerY = y;
+      if (held && timer === null) schedule(TRACK_REPEAT_INTERVAL_MS);
+    },
+    release,
+  };
+}
+
 /**
  * A custom, always-visible scroll handle for the agent panel grid — modelled
  * on xterm's (VS Code's) slider rather than the OS scrollbar. The native
@@ -109,18 +156,6 @@ export function GridScrollbar({
   const trackRef = useRef<HTMLDivElement>(null);
   const thumbRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startY: number; startScrollTop: number } | null>(null);
-  const trackHoldRef = useRef<{
-    pointerY: number;
-    timer: ReturnType<typeof setTimeout> | null;
-  } | null>(null);
-
-  const stopTrackHold = useCallback(() => {
-    const hold = trackHoldRef.current;
-    if (hold?.timer != null) clearTimeout(hold.timer);
-    trackHoldRef.current = null;
-  }, []);
-
-  useEffect(() => stopTrackHold, [stopTrackHold]);
 
   useEffect(() => {
     const el = scrollRoot;
@@ -179,9 +214,9 @@ export function GridScrollbar({
 
   const onThumbPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!scrollRoot) return;
-      e.preventDefault();
       e.stopPropagation();
+      if (!scrollRoot || e.button !== 0) return;
+      e.preventDefault();
       e.currentTarget.setPointerCapture(e.pointerId);
       dragRef.current = { startY: e.clientY, startScrollTop: scrollRoot.scrollTop };
       setPhase("drag");
@@ -227,10 +262,9 @@ export function GridScrollbar({
   }, []);
 
   const pageTowardPointer = useCallback(
-    (smooth: boolean): boolean => {
+    (pointerY: number, smooth: boolean): boolean => {
       const track = trackRef.current;
-      const hold = trackHoldRef.current;
-      if (!scrollRoot || !track || !hold) return false;
+      if (!scrollRoot || !track) return false;
       const next = computeTrackPageTarget(
         {
           scrollTop: scrollRoot.scrollTop,
@@ -239,7 +273,7 @@ export function GridScrollbar({
         },
         track.clientHeight,
         THUMB_MIN_PX,
-        hold.pointerY
+        pointerY
       );
       if (next === null) return false;
       scrollRoot.scrollTo({ top: next, behavior: smooth ? "smooth" : "auto" });
@@ -248,40 +282,37 @@ export function GridScrollbar({
     [scrollRoot]
   );
 
-  const onTrackPointerDown = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      // A press in the empty track pages toward the pointer, then repeats while
-      // held until the handle reaches it — a native scrollbar's contract.
-      const track = trackRef.current;
-      if (!scrollRoot || !track || e.button !== 0) return;
-      e.preventDefault();
-      e.stopPropagation();
-      stopTrackHold();
-      trackHoldRef.current = {
-        pointerY: e.clientY - track.getBoundingClientRect().top,
-        timer: null,
-      };
-      if (!pageTowardPointer(!prefersReducedMotion())) {
-        stopTrackHold();
-        return;
-      }
+  // Built in an effect, not a memo: the pager reads the track ref, which the
+  // React Compiler treats as a render-time ref read if it is created in render.
+  const trackHoldRef = useRef<TrackHold | null>(null);
+  useEffect(() => {
+    const hold = createTrackHold(pageTowardPointer);
+    trackHoldRef.current = hold;
+    return () => {
+      hold.release();
+      if (trackHoldRef.current === hold) trackHoldRef.current = null;
+    };
+  }, [pageTowardPointer]);
+
+  const onTrackPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const track = trackRef.current;
+    const hold = trackHoldRef.current;
+    if (!track || !hold || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const pointerY = e.clientY - track.getBoundingClientRect().top;
+    if (hold.press(pointerY, !prefersReducedMotion())) {
       track.setPointerCapture(e.pointerId);
-      const repeat = () => {
-        const hold = trackHoldRef.current;
-        if (!hold) return;
-        hold.timer = pageTowardPointer(false) ? setTimeout(repeat, TRACK_REPEAT_INTERVAL_MS) : null;
-      };
-      trackHoldRef.current.timer = setTimeout(repeat, TRACK_REPEAT_DELAY_MS);
-    },
-    [scrollRoot, pageTowardPointer, stopTrackHold]
-  );
+    }
+  }, []);
 
   const onTrackPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const hold = trackHoldRef.current;
     const track = trackRef.current;
-    if (!hold || !track) return;
-    hold.pointerY = e.clientY - track.getBoundingClientRect().top;
+    if (!track) return;
+    trackHoldRef.current?.move(e.clientY - track.getBoundingClientRect().top);
   }, []);
+
+  const stopTrackHold = useCallback(() => trackHoldRef.current?.release(), []);
 
   const onWheel = useCallback(
     (e: React.WheelEvent<HTMLDivElement>) => {
@@ -313,7 +344,10 @@ export function GridScrollbar({
       onPointerCancel={stopTrackHold}
       onLostPointerCapture={stopTrackHold}
       onWheel={onWheel}
-      className="absolute z-20 rounded-full bg-[var(--scrollbar-track)]"
+      // On light themes the track's tint darkens exactly the pixels the thumb
+      // is read against — enough to drop svalbard's thumb under 3:1 — while
+      // barely registering itself (~1.06:1), so the track goes clear there.
+      className="absolute z-20 rounded-full bg-[var(--scrollbar-track)] [.light_&]:bg-transparent"
       style={{
         right: BAR_INSET_PX,
         top: TRACK_INSET_PX,

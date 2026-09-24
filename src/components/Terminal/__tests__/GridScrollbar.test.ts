@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { computeThumbGeometry, computeTrackPageTarget } from "../GridScrollbar";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { computeThumbGeometry, computeTrackPageTarget, createTrackHold } from "../GridScrollbar";
 
 describe("computeThumbGeometry", () => {
   it("returns null when the content does not overflow", () => {
@@ -114,5 +114,81 @@ describe("computeTrackPageTarget", () => {
 
   it("does nothing when the content does not overflow", () => {
     expect(computeTrackPageTarget(metrics(0, 1000), TRACK, MIN, 700)).toBeNull();
+  });
+});
+
+describe("createTrackHold", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  /** A handle on a 1000px track that moves 100px per page and stops under the pointer. */
+  function simulatedTrack(start = 0) {
+    const state = { handle: start, pages: 0, smooth: [] as boolean[] };
+    const page = (pointerY: number, smooth: boolean) => {
+      if (Math.abs(pointerY - state.handle) < 50) return false;
+      state.handle +=
+        Math.sign(pointerY - state.handle) * Math.min(100, Math.abs(pointerY - state.handle));
+      state.pages += 1;
+      state.smooth.push(smooth);
+      return true;
+    };
+    return { state, hold: createTrackHold(page) };
+  }
+
+  it("pages once on press and only repeats after the hold delay", () => {
+    const { state, hold } = simulatedTrack();
+    expect(hold.press(900, true)).toBe(true);
+    expect(state.pages).toBe(1);
+    vi.advanceTimersByTime(300);
+    expect(state.pages).toBe(1);
+    vi.advanceTimersByTime(2000);
+    expect(state.pages).toBeGreaterThan(1);
+  });
+
+  it("repeats until the handle reaches the pointer, then stops paging", () => {
+    const { state, hold } = simulatedTrack();
+    hold.press(600, true);
+    vi.advanceTimersByTime(5000);
+    expect(Math.abs(state.handle - 600)).toBeLessThan(50);
+    const settled = state.pages;
+    vi.advanceTimersByTime(5000);
+    expect(state.pages).toBe(settled);
+  });
+
+  it("resumes a caught-up hold when the held pointer moves on", () => {
+    const { state, hold } = simulatedTrack();
+    hold.press(400, true);
+    vi.advanceTimersByTime(5000);
+    expect(Math.abs(state.handle - 400)).toBeLessThan(50);
+    hold.move(900);
+    vi.advanceTimersByTime(5000);
+    expect(Math.abs(state.handle - 900)).toBeLessThan(50);
+  });
+
+  it("stops paging on release, even mid-repeat", () => {
+    const { state, hold } = simulatedTrack();
+    hold.press(900, true);
+    vi.advanceTimersByTime(500);
+    hold.release();
+    const atRelease = state.pages;
+    hold.move(0);
+    vi.advanceTimersByTime(5000);
+    expect(state.pages).toBe(atRelease);
+  });
+
+  it("uses the caller's motion choice for the press and instant pages for repeats", () => {
+    const { state, hold } = simulatedTrack();
+    hold.press(900, true);
+    vi.advanceTimersByTime(5000);
+    expect(state.smooth[0]).toBe(true);
+    expect(state.smooth.slice(1).every((s) => s === false)).toBe(true);
+  });
+
+  it("arms nothing when the press itself has nowhere to go", () => {
+    const { state, hold } = simulatedTrack(500);
+    expect(hold.press(510, true)).toBe(false);
+    hold.move(900);
+    vi.advanceTimersByTime(5000);
+    expect(state.pages).toBe(0);
   });
 });
