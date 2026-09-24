@@ -396,7 +396,6 @@ export function CrashRecoveryDialog({
             <div className="rounded-lg overflow-hidden" data-testid="recovery-error">
               <InlineStatusBanner
                 severity="error"
-                icon={AlertTriangle}
                 title="Recovery failed"
                 description={recoveryError}
                 animated={false}

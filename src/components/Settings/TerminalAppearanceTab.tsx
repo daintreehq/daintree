@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle } from "lucide-react";
 import { useTerminalColorSchemeStore, useTerminalFontStore } from "@/store";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { BUILT_IN_SCHEMES } from "@/config/terminalColorSchemes";
@@ -234,7 +233,6 @@ export function TerminalAppearanceTab({
                     <InlineStatusBanner
                       className="rounded-[var(--radius-md)]"
                       severity="error"
-                      icon={AlertCircle}
                       title={fontError.title}
                       description="Your terminals keep the last saved font, so nothing changes on restart."
                       action={{ id: "retry", label: "Retry", onClick: fontError.retry }}

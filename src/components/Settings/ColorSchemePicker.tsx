@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle } from "lucide-react";
 import {
   BUILT_IN_SCHEMES,
   DEFAULT_SCHEME_ID,
@@ -306,7 +305,6 @@ export function ColorSchemePicker({
           <InlineStatusBanner
             className="rounded-[var(--radius-md)]"
             severity="error"
-            icon={AlertCircle}
             title={error.title}
             description={error.description}
             action={{ id: "retry", label: "Retry", onClick: error.retry }}

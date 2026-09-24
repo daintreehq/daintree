@@ -1,5 +1,5 @@
 import { useRef, type ReactNode } from "react";
-import { AlertCircle, Puzzle, Search } from "lucide-react";
+import { Puzzle, Search } from "lucide-react";
 import type { ProjectSurfaceChoice } from "@shared/types/plugin";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Button } from "@/components/ui/button";
@@ -217,7 +217,6 @@ export function ProjectSurfaceFrame({ children }: { children: ReactNode }) {
           the rule is simply never to pass one here. */}
       {failedSave !== null ? (
         <InlineStatusBanner
-          icon={AlertCircle}
           title="Couldn't save the canvas choice"
           severity="error"
           role="alert"

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useId, useRef } from "react";
-import { AlertCircle, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -225,7 +225,6 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
             <InlineStatusBanner
               className="rounded-[var(--radius-md)]"
               severity="error"
-              icon={AlertCircle}
               title="Couldn't load commands"
               description="Your overrides are safe. Retry to load the command list."
               action={{ id: "retry", label: "Retry", onClick: () => setLoadAttempt((n) => n + 1) }}

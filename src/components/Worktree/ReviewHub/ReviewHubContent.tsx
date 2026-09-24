@@ -32,7 +32,6 @@ import {
   ArrowUpFromLine,
   ChevronRight,
   AlertTriangle,
-  CircleAlert,
   GitBranch,
 } from "lucide-react";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
@@ -1952,7 +1951,6 @@ export function ReviewHubContent({
             severity="error"
             role="status"
             ariaLive="polite"
-            icon={CircleAlert}
             title={actionError.title}
             description={actionError.detail}
             onClose={() => setActionError(null)}
@@ -2060,7 +2058,6 @@ export function ReviewHubContent({
                   severity="error"
                   role="status"
                   ariaLive="polite"
-                  icon={CircleAlert}
                   title={`Couldn't compare with ${mainBranch}`}
                   description={baseBranchError}
                   action={{
@@ -2162,7 +2159,6 @@ export function ReviewHubContent({
                   <InlineStatusBanner
                     severity="error"
                     role="alert"
-                    icon={CircleAlert}
                     title="Couldn't load changes"
                     description={loadError}
                     action={{
