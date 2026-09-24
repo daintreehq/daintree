@@ -708,8 +708,11 @@ body,
   100% {
     opacity: 1;
   }
+  /* The floor is a visibility budget, not a style choice: at the trough a bone
+   * is 70% of its 10% tint, the faintest it ever gets, and that still has to
+   * read on the palest surface of the lightest theme and the darkest sidebar. */
   50% {
-    opacity: 0.6;
+    opacity: 0.7;
   }
 }
 
@@ -3189,12 +3192,12 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     opacity: 1;
   }
 
-  /* Skeleton bones double their tint. At 8% a bone is deliberately quiet; a
+  /* Skeleton bones double their tint. At 10% a bone is deliberately quiet; a
    * user who asked for more contrast should not have to hunt for the shape of
    * what is loading. Still a tint of `--theme-tint`, so it keeps contrasting
    * with whatever surface it sits on. */
   [data-skeleton-bone] {
-    background-color: color-mix(in oklab, var(--theme-tint) 16%, transparent);
+    background-color: color-mix(in oklab, var(--theme-tint) 20%, transparent);
   }
 
   .terminal-selected,

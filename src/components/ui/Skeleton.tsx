@@ -38,6 +38,18 @@ export interface SkeletonProps extends Omit<
 }
 
 /**
+ * False on the first commit, true from the next. A live region only announces
+ * changes made after assistive tech has registered it, so a region that mounts
+ * with its message already inside is often never spoken: render it empty, then
+ * insert the message once this flips (WCAG technique ARIA22).
+ */
+export function useLiveRegionReady(): boolean {
+  const [ready, setReady] = useState(false);
+  useEffect(() => setReady(true), []);
+  return ready;
+}
+
+/**
  * ARIA status wrapper for loading skeletons. Owns `role="status"`, `aria-live="polite"`,
  * and an sr-only label. The sr-only span is absolutely positioned and takes no layout
  * space, so flex/grid classes on `className` apply directly to the bone children.
@@ -46,6 +58,7 @@ export interface SkeletonProps extends Omit<
  * updates until it clears, and on a live region it holds back the region's own
  * message — so the one thing this wrapper exists to say could go unspoken for the
  * whole wait. The bones are `aria-hidden`, so there is no churn for it to suppress.
+ * The sr-only message is inserted one commit after the region, so it is announced.
  */
 export function Skeleton({
   label = "Loading",
@@ -54,6 +67,7 @@ export function Skeleton({
   className,
   ...rest
 }: SkeletonProps) {
+  const ready = useLiveRegionReady();
   if (inert) {
     return (
       <div {...rest} aria-hidden="true" className={className}>
@@ -64,7 +78,7 @@ export function Skeleton({
 
   return (
     <div {...rest} role="status" aria-live="polite" aria-label={label} className={className}>
-      <span className="sr-only">{label}</span>
+      <span className="sr-only">{ready ? label : ""}</span>
       {children}
     </div>
   );
@@ -101,7 +115,7 @@ export function SkeletonBone({
       aria-hidden="true"
       data-skeleton-bone=""
       className={cn(
-        // `bg-tint/[0.08]`, not `bg-muted`. `--muted` is aliased to
+        // `bg-tint/[0.1]`, not `bg-muted`. `--muted` is aliased to
         // `--theme-surface-panel` (src/index.css:734) and is never redefined by any
         // theme, so a bone painted with it is EXACTLY its own background on any panel
         // surface — all 15 themes — and on any dialog body on the 8 dark ones. The
@@ -113,7 +127,7 @@ export function SkeletonBone({
         // Radius is the text-line step. A bone that stands in for a control or an
         // avatar names its own (`rounded-[var(--radius-md)]`, `rounded-full`) and
         // wins the merge.
-        "bg-tint/[0.08] rounded-[var(--radius-xs)]",
+        "bg-tint/[0.1] rounded-[var(--radius-xs)]",
         pulseClass(immediate),
         shimmer && "animate-skeleton-shimmer",
         className
@@ -162,7 +176,7 @@ export function SkeletonText({
           data-skeleton-bone=""
           className={cn(
             // Same surface collision as `SkeletonBone` — see the note there.
-            "bg-tint/[0.08] rounded-[var(--radius-xs)]",
+            "bg-tint/[0.1] rounded-[var(--radius-xs)]",
             lineHeightClassName,
             TEXT_LINE_WIDTHS[i % TEXT_LINE_WIDTHS.length],
             pulseClass(immediate),

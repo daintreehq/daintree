@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/utils", () => ({
@@ -31,6 +32,17 @@ describe("Skeleton", () => {
       const status = screen.getByRole("status");
       expect(status.getAttribute("aria-live")).toBe("polite");
       expect(status.closest('[aria-busy="true"]')).toBeNull();
+    });
+
+    it("registers the live region empty and inserts its message a commit later", () => {
+      // A live region only announces changes made after assistive tech has
+      // registered it; one that mounts with its message inside is often silent.
+      // Static markup is the first commit, before any effect runs.
+      const first = document.createElement("div");
+      first.innerHTML = renderToStaticMarkup(<Skeleton label="Loading files" />);
+      expect(first.querySelector('[role="status"]')?.textContent).toBe("");
+      render(<Skeleton label="Loading files" />);
+      expect(screen.getByRole("status").textContent).toBe("Loading files");
     });
 
     it("uses default label when none provided", () => {

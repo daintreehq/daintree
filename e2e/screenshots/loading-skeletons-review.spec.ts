@@ -104,6 +104,20 @@ const SHOTS: Shot[] = [
       await expect(
         page.locator(".sidebar-worktree-card:not([data-pending-creation-path])")
       ).toHaveCount(3);
+      // The placeholder must hold the list's rhythm: same height as a real row.
+      // Polled, because a cold first page can measure before its fonts settle.
+      const rows = page.locator(".sidebar-worktree-card");
+      await expect
+        .poll(
+          async () =>
+            new Set(
+              await rows.evaluateAll((els) =>
+                els.map((r) => Math.round(r.getBoundingClientRect().height))
+              )
+            ).size,
+          { message: "placeholder row height differs from the real rows", timeout: 5_000 }
+        )
+        .toBe(1);
     },
   },
   {

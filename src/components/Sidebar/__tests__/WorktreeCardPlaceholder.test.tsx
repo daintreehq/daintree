@@ -2,6 +2,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { PendingCreation } from "@/store/worktreeStore";
 import { SKELETON_HINT_FIRST_THRESHOLD_MS } from "@/components/ui/Skeleton";
@@ -41,11 +42,28 @@ describe("WorktreeCardPlaceholder", () => {
           onDismiss={vi.fn()}
         />
       );
-      const status = screen.getByRole("status", {
-        name: "Creating worktree feature/stream-upload-retry",
-      });
+      const status = screen.getByRole("status");
+      expect(status.textContent).toBe("Creating worktree feature/stream-upload-retry");
       expect(status.closest('[aria-busy="true"]')).toBeNull();
       expect(container.textContent).toContain("stream-upload-retry");
+    });
+
+    it("registers its live region empty and fills it a commit later, so it is announced", () => {
+      // Static markup is the first commit, before any effect runs.
+      const row = (
+        <TooltipProvider>
+          <WorktreeCardPlaceholder
+            pendingCreation={pending()}
+            onRetry={vi.fn()}
+            onDismiss={vi.fn()}
+          />
+        </TooltipProvider>
+      );
+      const first = document.createElement("div");
+      first.innerHTML = renderToStaticMarkup(row);
+      expect(first.querySelector('[role="status"]')?.textContent).toBe("");
+      render(row);
+      expect(screen.getByRole("status").textContent).toContain("feature/stream-upload-retry");
     });
 
     it("is shaped like the sidebar card it becomes", () => {
