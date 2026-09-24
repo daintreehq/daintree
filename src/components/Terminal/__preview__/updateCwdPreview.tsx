@@ -5,6 +5,7 @@ import { resolveAppTheme } from "@shared/theme/themes";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { usePanelStore } from "@/store/panelStore";
+import { useProjectStore } from "@/store/projectStore";
 import { UpdateCwdDialog } from "../UpdateCwdDialog";
 import "@/index.css";
 
@@ -20,7 +21,7 @@ import "@/index.css";
  * Query parameters (the screenshot spec drives these):
  *   ?theme=daintree|bondi|…     built-in theme id
  *   ?cwd=short|long             which missing directory the terminal had
- *   ?check=ok|missing|hang      how `system.checkDirectory` answers
+ *   ?check=ok|hang|error        how `system.checkDirectory` answers (see the shim)
  *   ?restart=ok|fail            how the restart answers
  */
 
@@ -36,6 +37,16 @@ const cwd = CWDS[params.get("cwd") ?? "short"] ?? CWDS.short!;
 applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
 document.body.style.background = "var(--color-surface-canvas)";
 document.body.style.margin = "0";
+
+useProjectStore.setState({
+  currentProject: {
+    id: "proj-daintree",
+    path: "/Users/greg/Projects/daintree",
+    name: "Daintree",
+    emoji: "🌳",
+    lastOpened: Date.now(),
+  },
+});
 
 usePanelStore.setState({
   updateTerminalCwd: () => undefined,

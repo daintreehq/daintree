@@ -17,6 +17,10 @@
  *   DAINTREE_SHOT_DIR         output directory (default artifacts/update-cwd-shots)
  *   DAINTREE_SHOT_THEMES      comma-separated theme sweep (default daintree,bondi,namib,redwoods)
  *
+ * States: rest, long (a long missing path), missing (a typo submitted), empty,
+ * check-failed (the directory check itself rejected), validating (the check
+ * held past the Doherty gate), restart-failed.
+ *
  * Output:
  *   <state>-<theme>.png       the dialog card, every state in every theme
  *   rest-<theme>-window.png   the whole window with the scrim, first theme only
@@ -81,15 +85,19 @@ async function submitTyped(page: Page, card: Locator, value: string) {
   await field.press("Enter");
 }
 
+const INVALID = 'input[aria-invalid="true"]';
+/** Mirrors `HANG_PATH` in updateCwdShims.ts: the one folder whose check the shim holds or fails. */
+const SLOW_PATH = "/Users/greg/Projects/daintree/packages";
+
 const STATES: StateSpec[] = [
   { name: "rest", query: "cwd=short" },
   { name: "long", query: "cwd=long" },
   {
     name: "missing",
-    query: "cwd=short&check=missing",
+    query: "cwd=short",
     act: async (page, card) => {
       await submitTyped(page, card, TYPO_PATH);
-      return '[role="alert"]';
+      return INVALID;
     },
   },
   {
@@ -97,15 +105,24 @@ const STATES: StateSpec[] = [
     query: "cwd=short",
     act: async (page, card) => {
       await submitTyped(page, card, "");
-      return '[role="alert"]';
+      return INVALID;
+    },
+  },
+  {
+    name: "check-failed",
+    query: "cwd=short&check=error",
+    act: async (page, card) => {
+      await submitTyped(page, card, SLOW_PATH);
+      return INVALID;
     },
   },
   {
     name: "validating",
     query: "cwd=short&check=hang",
     act: async (page, card) => {
-      await submitTyped(page, card, "/Users/greg/Projects/daintree");
-      return 'button[disabled], button[aria-busy="true"]';
+      await submitTyped(page, card, SLOW_PATH);
+      // Past the Doherty gate, so the frame shows what a slow check shows.
+      return 'button[aria-busy="true"]';
     },
   },
   {
@@ -113,7 +130,7 @@ const STATES: StateSpec[] = [
     query: "cwd=short&restart=fail",
     act: async (page, card) => {
       await submitTyped(page, card, "/Users/greg/Projects/daintree");
-      return '[role="alert"]';
+      return "text=Couldn't restart the terminal";
     },
   },
 ];
