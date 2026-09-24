@@ -38,6 +38,7 @@ export function FigureRail({
 }: FigureRailProps) {
   const [selectedFigureNumber, setSelectedFigureNumber] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const lastViewedRef = useRef<number | null>(null);
   const [edges, setEdges] = useState({ start: false, end: false });
   const figureCount = figures.length;
 
@@ -83,7 +84,10 @@ export function FigureRail({
     }
     if (handledRequestRef.current === figureRequest) return;
     handledRequestRef.current = figureRequest;
-    if (known && open) setSelectedFigureNumber(figureNumber);
+    if (known && open) {
+      setSelectedFigureNumber(figureNumber);
+      lastViewedRef.current = figureNumber;
+    }
     onFigureRequestHandled?.();
   }, [figureRequest, figures, onFigureRequestHandled]);
 
@@ -128,7 +132,21 @@ export function FigureRail({
 
   const selectFigure = (figureNumber: number) => {
     setSelectedFigureNumber(figureNumber);
+    lastViewedRef.current = figureNumber;
     onActivateFigure?.(figureNumber);
+  };
+
+  // After stepping in the lightbox, closing returns the user to the figure they
+  // were last looking at — focusing its thumbnail also scrolls it into view —
+  // rather than to the one they opened.
+  const resolveLastViewedThumbnail = () => {
+    const figureNumber = lastViewedRef.current;
+    if (figureNumber === null) return null;
+    return (
+      scrollRef.current?.querySelector<HTMLElement>(
+        `[data-figure-number="${figureNumber}"] button`
+      ) ?? null
+    );
   };
 
   return (
@@ -158,6 +176,7 @@ export function FigureRail({
         selectedFigureNumber={selectedFigureNumber}
         onClose={() => setSelectedFigureNumber(null)}
         onSelectFigure={selectFigure}
+        restoreFocusTo={resolveLastViewedThumbnail}
       />
     </div>
   );
@@ -185,7 +204,22 @@ function FigureThumbnail({ figure, isNewest, isCurrent, onClick }: FigureThumbna
   // Bumping the nonce remounts the <img> to fire a fresh request on retry.
   const [retryNonce, setRetryNonce] = useState(0);
   const openButtonRef = useRef<HTMLButtonElement>(null);
+  const retryButtonRef = useRef<HTMLButtonElement>(null);
   const [focusAfterRetry, setFocusAfterRetry] = useState(false);
+  const [focusRetryAfterFailure, setFocusRetryAfterFailure] = useState(false);
+
+  // A failure unmounts the thumbnail button; if that button held focus, hand it
+  // to the Retry that replaces it. A failure elsewhere never moves focus.
+  const handleError = () => {
+    if (document.activeElement === openButtonRef.current) setFocusRetryAfterFailure(true);
+    setStatus("failed");
+  };
+
+  useEffect(() => {
+    if (!focusRetryAfterFailure || status !== "failed") return;
+    retryButtonRef.current?.focus({ preventScroll: true });
+    setFocusRetryAfterFailure(false);
+  }, [focusRetryAfterFailure, status]);
 
   const handleRetry = () => {
     setStatus("pending");
@@ -222,6 +256,7 @@ function FigureThumbnail({ figure, isNewest, isCurrent, onClick }: FigureThumbna
         <div className="flex h-full w-full flex-col items-center justify-center gap-1 pb-4 text-text-secondary">
           <ImageOff className="w-4 h-4" aria-hidden="true" />
           <button
+            ref={retryButtonRef}
             type="button"
             onClick={handleRetry}
             aria-label={`Retry figure ${figure.figureNumber}`}
@@ -258,7 +293,7 @@ function FigureThumbnail({ figure, isNewest, isCurrent, onClick }: FigureThumbna
             alt={figure.altText ?? `Figure ${figure.figureNumber}`}
             referrerPolicy="no-referrer"
             onLoad={() => setStatus("loaded")}
-            onError={() => setStatus("failed")}
+            onError={handleError}
             className={cn(
               "h-full w-full object-cover transition-opacity duration-150",
               status === "loaded" ? "opacity-100" : "opacity-0"

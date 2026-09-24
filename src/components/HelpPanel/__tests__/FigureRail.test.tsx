@@ -103,6 +103,21 @@ describe("FigureRail", () => {
     );
   });
 
+  it("hands focus to Retry when the focused thumbnail's image fails", () => {
+    render(<FigureRail figures={[makeFigure(1)]} />);
+    screen.getByRole("button", { name: "Figure 1: Caption 1" }).focus();
+    fireEvent.error(screen.getByAltText("Alt 1"));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Retry figure 1" }));
+  });
+
+  it("leaves focus alone when a thumbnail it isn't on fails", () => {
+    render(<FigureRail figures={[makeFigure(1), makeFigure(2)]} />);
+    const other = screen.getByRole("button", { name: "Figure 2: Caption 2" });
+    other.focus();
+    fireEvent.error(screen.getByAltText("Alt 1"));
+    expect(document.activeElement).toBe(other);
+  });
+
   it("gives each failed thumbnail a figure-scoped retry label", () => {
     render(<FigureRail figures={[makeFigure(1), makeFigure(2)]} />);
     fireEvent.error(screen.getByAltText("Alt 1"));
@@ -182,6 +197,18 @@ describe("FigureRail", () => {
     fireEvent.keyDown(window, { key: "ArrowRight", metaKey: true });
     fireEvent.keyDown(window, { key: "ArrowRight", altKey: true });
     expect(within(lightbox).getByText("Figure 1, 1 of 2")).toBeTruthy();
+  });
+
+  it("leaves Home and End to a focused caption instead of jumping figures", () => {
+    render(<FigureRail figures={[makeFigure(1), makeFigure(2), makeFigure(3)]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Figure 2: Caption 2" }));
+    const lightbox = screen.getByTestId("figure-lightbox");
+
+    fireEvent.keyDown(within(lightbox).getByText("Caption 2"), { key: "End" });
+    expect(within(lightbox).getByText("Figure 2, 2 of 3")).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "End" });
+    expect(within(lightbox).getByText("Figure 3, 3 of 3")).toBeTruthy();
   });
 
   it("returns to fit whenever the figure on screen changes", () => {

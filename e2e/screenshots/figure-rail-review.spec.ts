@@ -394,6 +394,20 @@ test("assistant figure rail and lightbox — states and themes", async ({ page }
     for (let i = 0; i < 5; i += 1) await page.keyboard.press("ArrowRight");
     await settleLightbox(page);
     written.push(await snapPage(page, `lightbox-last-${base}.png`));
+
+    // Closing after stepping returns focus to the figure last viewed, not the
+    // one that opened the lightbox — and focusing it brings it into view.
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("figure-lightbox")).toBeHidden();
+    await page.waitForTimeout(300);
+    const returnedTo = await page.evaluate(
+      () =>
+        document.activeElement
+          ?.closest("[data-figure-number]")
+          ?.getAttribute("data-figure-number") ?? null
+    );
+    expect(returnedTo).toBe("5");
+    written.push(await snap(rail, `several-${base}-rail-after-close.png`));
   }
 
   // An `[image #N]` click in the terminal: the rail marks that figure current and
@@ -451,6 +465,6 @@ test("assistant figure rail and lightbox — states and themes", async ({ page }
 
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * 5 + 11);
+  expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * 5 + 12);
   console.log(`[figure-rail-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });

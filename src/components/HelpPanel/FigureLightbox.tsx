@@ -13,6 +13,8 @@ interface FigureLightboxProps {
   onClose: () => void;
   /** Select a different figure by its figureNumber (drives prev/next navigation). */
   onSelectFigure: (figureNumber: number) => void;
+  /** Where focus goes on close, in preference to the thumbnail that opened it. */
+  restoreFocusTo?: () => HTMLElement | null;
 }
 
 type LoadStatus = "pending" | "loaded" | "failed";
@@ -34,6 +36,7 @@ export function FigureLightbox({
   selectedFigureNumber,
   onClose,
   onSelectFigure,
+  restoreFocusTo,
 }: FigureLightboxProps) {
   const selectedIndex =
     selectedFigureNumber === null
@@ -71,6 +74,44 @@ export function FigureLightbox({
   }
 
   const stageRef = useRef<HTMLDivElement>(null);
+  // The dialog surface mounts a render after it opens, so an effect keyed only
+  // on the caption would measure before the element exists and never again —
+  // the callback ref below also bumps this to re-run it once the node is there.
+  const captionRef = useRef<HTMLParagraphElement | null>(null);
+  const [captionMounted, setCaptionMounted] = useState(false);
+  const attachCaption = (node: HTMLParagraphElement | null) => {
+    captionRef.current = node;
+    setCaptionMounted(node !== null);
+  };
+  const [captionScroll, setCaptionScroll] = useState({ overflows: false, atEnd: true });
+
+  // A caption longer than its two-line box scrolls in place; fade its bottom
+  // edge while there is more below, and make it a focusable region so the
+  // keyboard can read the rest.
+  const caption = figure?.caption;
+  useEffect(() => {
+    const el = captionRef.current;
+    if (!el) {
+      setCaptionScroll({ overflows: false, atEnd: true });
+      return;
+    }
+    const measure = () => {
+      const overflows = el.scrollHeight > el.clientHeight + 1;
+      const atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+      setCaptionScroll((prev) =>
+        prev.overflows === overflows && prev.atEnd === atEnd ? prev : { overflows, atEnd }
+      );
+    };
+    el.scrollTop = 0;
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      observer.disconnect();
+    };
+  }, [caption, captionMounted]);
 
   const hasPrev = selectedIndex > 0;
   const hasNext = selectedIndex !== -1 && selectedIndex < figures.length - 1;
@@ -85,9 +126,13 @@ export function FigureLightbox({
     const handler = (e: KeyboardEvent) => {
       if (e.isComposing || e.repeat || e.defaultPrevented) return;
       if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-      // An enlarged figure scrolls with these keys while its stage has focus.
-      if (e.target instanceof Node && stageRef.current?.contains(e.target) && isActualSize) {
-        return;
+      // Scroll regions keep their own keys: an enlarged figure's stage scrolls
+      // with all of them, a long caption with Home/End.
+      if (e.target instanceof Node) {
+        if (isActualSize && stageRef.current?.contains(e.target)) return;
+        if ((e.key === "Home" || e.key === "End") && captionRef.current?.contains(e.target)) {
+          return;
+        }
       }
       let index: number | null = null;
       if (e.key === "ArrowLeft" && hasPrev) index = selectedIndex - 1;
@@ -124,6 +169,8 @@ export function FigureLightbox({
       onClose={onClose}
       size="5xl"
       maxHeight="max-h-[92vh]"
+      restoreFocusTo={restoreFocusTo}
+      preferRestoreFocusTo
       data-testid="figure-lightbox"
     >
       <AppDialog.Header>
@@ -235,7 +282,21 @@ export function FigureLightbox({
           <figcaption className="flex h-19 items-start gap-4 border-t border-border-default pt-3">
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               {figure.caption && (
-                <p className="max-h-10 overflow-y-auto text-sm text-text-primary select-text">
+                <p
+                  ref={attachCaption}
+                  tabIndex={captionScroll.overflows ? 0 : undefined}
+                  role={captionScroll.overflows ? "region" : undefined}
+                  aria-label={captionScroll.overflows ? "Figure caption" : undefined}
+                  className="max-h-10 overflow-y-auto rounded-[var(--radius-sm)] text-sm text-text-primary select-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                  style={
+                    captionScroll.overflows && !captionScroll.atEnd
+                      ? {
+                          maskImage: "linear-gradient(to bottom, black 55%, transparent)",
+                          WebkitMaskImage: "linear-gradient(to bottom, black 55%, transparent)",
+                        }
+                      : undefined
+                  }
+                >
                   {figure.caption}
                 </p>
               )}
