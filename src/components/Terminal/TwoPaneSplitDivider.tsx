@@ -221,7 +221,7 @@ export function TwoPaneSplitDivider({
         // for this region. Outline rather than ring so it is the same mark the
         // forced-colors override redraws, and inset so it stays inside the track
         // instead of painting over both pane borders.
-        "outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+        "outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
       )}
       style={{ width: DIVIDER_WIDTH_PX }}
       onMouseDown={handleMouseDown}

@@ -180,6 +180,15 @@ async function enter(page: Page, state: CloseState): Promise<void> {
     }
     const focused = await separator.evaluate((el) => el.matches(":focus-visible"));
     if (!focused) throw new Error("focus: keyboard focus never reached the divider");
+    // A focus state with no painted indicator is exactly the defect worth catching,
+    // so it fails the run instead of producing a plausible picture.
+    const outline = await separator.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { style: style.outlineStyle, width: parseFloat(style.outlineWidth) };
+    });
+    if (outline.style === "none" || !(outline.width >= 1)) {
+      throw new Error(`focus: divider paints no outline (${JSON.stringify(outline)})`);
+    }
     await page.waitForTimeout(200);
   } else if (state === "drag") {
     const before = await valueNow(page);
