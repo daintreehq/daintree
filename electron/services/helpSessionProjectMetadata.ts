@@ -58,13 +58,16 @@ function cleanValue(value: string | undefined): string | null {
 
 /**
  * Strip credentials from a git remote URL, or return null when it can't be
- * shown safely. HTTPS remotes can embed a token as userinfo, and query strings
- * occasionally carry one too. Local-path and `file:` remotes are omitted: they
- * name nothing a forge CLI can use.
+ * shown safely. HTTPS remotes can embed a token as userinfo. Local-path and
+ * `file:` remotes are omitted: they name nothing a forge CLI can use.
  */
 export function sanitizeGitRemoteUrl(raw: string): string | null {
   const url = raw.trim();
   if (url.length === 0) return null;
+  // `?`/`#` are where tokens hide in a query, and where the WHATWG parser and
+  // git disagree on the authority: `ssh://TOKEN#@host/repo` is host `TOKEN` to
+  // URL but user `TOKEN#` to git. A real remote has no use for either.
+  if (/[?#]/.test(url)) return null;
 
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
     let parsed: URL;
@@ -81,16 +84,13 @@ export function sanitizeGitRemoteUrl(raw: string): string | null {
     if (!parsed.hostname || parsed.host.includes("%")) return null;
     parsed.username = "";
     parsed.password = "";
-    parsed.search = "";
-    parsed.hash = "";
     return parsed.toString();
   }
 
   // scp-like syntax: `[user@]host:path`. The host never contains `@`, so
   // userinfo can't hide inside it. A single-letter host is a Windows drive
-  // (`C:\repo`), which git treats as a local path. `?`/`#` have no meaning in
-  // an scp path, so a remote carrying them is omitted rather than trusted.
-  const scp = /^(?:[^@/\s]+@)?(\[[^\]\s@]+\]|[^:/\\\s@[\]]+):(?!\/\/)([^\s?#]+)$/.exec(url);
+  // (`C:\repo`), which git treats as a local path.
+  const scp = /^(?:[^@/\s]+@)?(\[[^\]\s@]+\]|[^:/\\\s@[\]]+):(?!\/\/)(\S+)$/.exec(url);
   if (!scp) return null;
   const host = scp[1];
   if (/^[a-z]$/i.test(host)) return null;

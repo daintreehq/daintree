@@ -26,7 +26,7 @@ describe("sanitizeGitRemoteUrl", () => {
     ["https://github.com/acme/repo.git", "https://github.com/acme/repo.git"],
     ["https://TOKEN@github.com/acme/repo.git", "https://github.com/acme/repo.git"],
     [
-      "https://user:secret@gitlab.example.com/acme/repo.git?private_token=x#frag",
+      "https://user:secret@gitlab.example.com/acme/repo.git",
       "https://gitlab.example.com/acme/repo.git",
     ],
     ["ssh://git@host.example:2222/acme/repo.git", "ssh://host.example:2222/acme/repo.git"],
@@ -50,6 +50,10 @@ describe("sanitizeGitRemoteUrl", () => {
     "TOKEN@h:repo",
     "git@github.com:acme/repo.git?private_token=SECRET",
     "git@github.com:acme/repo.git#SECRET",
+    "https://gitlab.example.com/acme/repo.git?private_token=SECRET",
+    // WHATWG URL and git disagree on where these authorities end.
+    "ssh://TOKEN#@host.example/acme/repo.git",
+    "ssh://TOKEN?@host.example/acme/repo.git",
   ])("omits %j", (raw) => {
     expect(sanitizeGitRemoteUrl(raw)).toBeNull();
   });
