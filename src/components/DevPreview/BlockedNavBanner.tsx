@@ -159,7 +159,15 @@ export interface BlockedNavBannerProps {
   onDispatch: (action: BlockedNavAction) => void;
 }
 
-type CopyState = "idle" | "copied" | "failed";
+/**
+ * Feedback from an action the user took, keyed by the URL it acted on. An
+ * awaited result can land after the banner has moved on to another link, and
+ * it must not describe that one.
+ */
+interface ActionFeedback {
+  url: string;
+  kind: "copied" | "copy-failed" | "open-failed";
+}
 
 /** Mirrors `canOpenExternal`'s allow-list: anything not web is handed to the OS. */
 function schemeLabel(scheme: string, url: string): string {
@@ -172,34 +180,28 @@ export function BlockedNavBanner({
   webviewElement,
   onDispatch,
 }: BlockedNavBannerProps) {
-  const [copyState, setCopyState] = useState<CopyState>("idle");
-  const [openFailed, setOpenFailed] = useState(false);
+  const [feedback, setFeedback] = useState<ActionFeedback | null>(null);
   const url = state?.url;
 
   const handleCopyUrl = useCallback(async () => {
     if (!url) return;
     try {
       await window.electron.clipboard.writeText(url);
-      setCopyState("copied");
+      setFeedback({ url, kind: "copied" });
     } catch {
-      setCopyState("failed");
+      setFeedback({ url, kind: "copy-failed" });
     }
   }, [url]);
 
-  // Auto-reset the copy label after a beat. Driven by an effect rather than a
-  // timer ref so no ref is reachable from render — the React Compiler flags
-  // transitive ref reads from a render-phase call.
+  // Copy feedback reverts after a beat; a failed open stands until the user
+  // acts. Driven by an effect rather than a timer ref so no ref is reachable
+  // from render — the React Compiler flags transitive ref reads from a
+  // render-phase call.
   useEffect(() => {
-    if (copyState === "idle") return;
-    const timer = setTimeout(() => setCopyState("idle"), COPY_FEEDBACK_MS);
+    if (!feedback || feedback.kind === "open-failed") return;
+    const timer = setTimeout(() => setFeedback(null), COPY_FEEDBACK_MS);
     return () => clearTimeout(timer);
-  }, [copyState]);
-
-  // Feedback belongs to the URL it was about, not to the next one.
-  useEffect(() => {
-    setCopyState("idle");
-    setOpenFailed(false);
-  }, [url]);
+  }, [feedback]);
 
   // Listen for OAuth loopback status events from main process
   useEffect(() => {
@@ -278,25 +280,24 @@ export function BlockedNavBanner({
 
   const handleOpenExternal = async () => {
     const target = state.url;
-    setOpenFailed(false);
     try {
       await window.electron.system.openExternal(target);
       onDispatch({ type: "DISMISS_IF_URL", url: target });
     } catch {
-      // The banner stays and says so: the link is still here to copy.
-      setOpenFailed(true);
+      setFeedback({ url: target, kind: "open-failed" });
     }
   };
 
   const { phase } = state;
+  const current = feedback?.url === state.url ? feedback.kind : null;
   const destination = describeDestination(state.url);
   const hostLabel = destination?.kind === "web" ? destination.host : null;
 
   const copyAction: BannerAction = {
     id: "copy-url",
     label:
-      copyState === "copied" ? "Copied" : copyState === "failed" ? "Couldn't copy" : "Copy URL",
-    icon: copyState === "copied" ? Check : Copy,
+      current === "copied" ? "Copied" : current === "copy-failed" ? "Couldn't copy" : "Copy URL",
+    icon: current === "copied" ? Check : Copy,
     onClick: handleCopyUrl,
     variant: "dismiss",
   };
@@ -316,14 +317,36 @@ export function BlockedNavBanner({
     variant: "primary",
   };
 
+  // The user asked for the system browser and didn't get it: that is a
+  // failure of something they did, so it reads as one, and copying is the
+  // only way left to follow the link.
+  if (phase === "blocked" && !state.isOAuth && current === "open-failed") {
+    return (
+      <InlineStatusBanner
+        severity="error"
+        layout="pane"
+        title="Couldn't open the link"
+        description="Your system didn't hand it to a browser or app."
+        contextLine={state.url}
+        action={{ ...copyAction, variant: "primary" }}
+        onClose={handleDismiss}
+        role="alert"
+      />
+    );
+  }
+
   switch (phase) {
     case "blocked": {
       const actions: BannerAction[] = [];
-      let title: string;
+      let title: React.ReactNode;
       if (state.isOAuth) {
-        title = hostLabel
-          ? `Can't show the ${hostLabel} sign-in here`
-          : "Can't show this sign-in page here";
+        title = hostLabel ? (
+          <>
+            Can&apos;t show the <HostName host={hostLabel} /> sign-in here
+          </>
+        ) : (
+          "Can't show this sign-in page here"
+        );
         actions.push({
           id: "oauth-start",
           label: "Sign in via browser",
@@ -333,11 +356,15 @@ export function BlockedNavBanner({
         });
       } else {
         title =
-          destination?.kind === "web"
-            ? `Can't open ${destination.host} here`
-            : destination?.kind === "scheme"
-              ? `Can't open ${schemeLabel(destination.scheme, state.url)} links here`
-              : "Can't open this link here";
+          destination?.kind === "web" ? (
+            <>
+              Can&apos;t open <HostName host={destination.host} /> here
+            </>
+          ) : destination?.kind === "scheme" ? (
+            `Can't open ${schemeLabel(destination.scheme, state.url)} links here`
+          ) : (
+            "Can't open this link here"
+          );
         if (state.canOpenExternal) {
           actions.push({
             id: "open-external",
@@ -358,11 +385,9 @@ export function BlockedNavBanner({
           layout="pane"
           title={title}
           description={
-            openFailed
-              ? "Your system couldn't open this link. Copy it instead."
-              : state.isOAuth
-                ? "Sign in through your browser and the session comes back to the preview."
-                : undefined
+            state.isOAuth
+              ? "Sign in through your browser and the session comes back to the preview."
+              : undefined
           }
           // The OAuth request's query string is noise once the title names the
           // host; an ordinary link's path is what tells the user which page.
@@ -431,6 +456,14 @@ export function BlockedNavBanner({
       );
     }
   }
+}
+
+/**
+ * A hostname may break anywhere, so an unbroken label starts on the title's
+ * first line instead of dropping below the words in front of it.
+ */
+function HostName({ host }: { host: string }) {
+  return <span className="break-all">{host}</span>;
 }
 
 /** The banner's glyph slot takes an icon; this lends it the shared spinner. */

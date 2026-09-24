@@ -24,7 +24,7 @@ export interface BlockedNavFixture {
   errorCause?: "not-ready" | "failed";
   errorMessage?: string;
   /** A pointer or keyboard drive the spec performs after load. */
-  drive?: "copied" | "overflow-open" | "keyboard-focus";
+  drive?: "copied" | "overflow-open" | "keyboard-focus" | "open-failed";
 }
 
 const DOCS_URL = "https://docs.stripe.com/payments/checkout/how-checkout-works?lang=node";
@@ -92,6 +92,14 @@ export const BLOCKED_NAV_FIXTURES = {
     url: OAUTH_URL,
     canOpenExternal: true,
     phase: "oauth-timed-out",
+  },
+  // The system refused the link (no handler, a sandbox, a broken default).
+  "open-failed": {
+    width: 900,
+    url: DOCS_URL,
+    canOpenExternal: true,
+    phase: "blocked",
+    drive: "open-failed",
   },
   copied: { width: 900, url: DOCS_URL, canOpenExternal: true, phase: "blocked", drive: "copied" },
   "overflow-open": {

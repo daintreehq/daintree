@@ -90,7 +90,8 @@ async function open(page: Page, fixture: BlockedNavFixtureName, theme: string): 
   await page.mouse.move(0, 0);
   page.removeAllListeners("pageerror");
   page.on("pageerror", (error) => console.warn(`[blocked-nav-shots] pageerror: ${error.message}`));
-  const url = `${server!.baseURL}/blocked-nav-banner-preview.html?theme=${theme}&fixture=${fixture}`;
+  const rejectOpen = BLOCKED_NAV_FIXTURES[fixture].drive === "open-failed";
+  const url = `${server!.baseURL}/blocked-nav-banner-preview.html?theme=${theme}&fixture=${fixture}${rejectOpen ? "&openExternal=reject" : ""}`;
   const frame = page.locator(FRAME).first();
   try {
     await page.goto(url);
@@ -118,6 +119,12 @@ async function drive(page: Page, fixture: BlockedNavFixtureName): Promise<void> 
     case "copied": {
       await banner.getByRole("button", { name: /copy url/i }).click();
       await expect(banner.getByRole("button", { name: /copied/i })).toBeVisible();
+      await page.mouse.move(0, 0);
+      break;
+    }
+    case "open-failed": {
+      await banner.getByRole("button", { name: /open in external browser/i }).click();
+      await expect(bannerLocator(page)).toContainText("Couldn't open the link");
       await page.mouse.move(0, 0);
       break;
     }
@@ -163,7 +170,9 @@ async function expectFixtureState(page: Page, name: BlockedNavFixtureName): Prom
   if (!box || box.height < 24) {
     throw new Error(`banner has no real box (${JSON.stringify(box)}) — refusing to write`);
   }
-  await expect(banner).toContainText(PHASE_TITLE[fixture.phase]);
+  await expect(banner).toContainText(
+    fixture.drive === "open-failed" ? /Couldn't open the link/ : PHASE_TITLE[fixture.phase]
+  );
 }
 
 /** The banner's title per phase — what proves the phase reached the render. */

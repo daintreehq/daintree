@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -24,7 +24,12 @@ vi.mock("@/components/ui/popover", () => ({
   ),
 }));
 
-import { BlockedNavBanner, blockedNavReducer, type BlockedNavAction } from "../BlockedNavBanner";
+import {
+  BlockedNavBanner,
+  blockedNavReducer,
+  type BlockedNavAction,
+  type BlockedNavState,
+} from "../BlockedNavBanner";
 
 type Phase =
   | "blocked"
@@ -50,14 +55,17 @@ beforeAll(() => {
   });
 });
 
+const openExternal = vi.fn<(url: string) => Promise<void>>();
+
 beforeEach(() => {
+  openExternal.mockReset();
   (window as unknown as { electron: unknown }).electron = {
     webview: {
       onOAuthLoopbackStatus: vi.fn(() => () => {}),
       cancelOAuthLoopback: vi.fn().mockResolvedValue(undefined),
     },
     clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
-    system: { openExternal: vi.fn() },
+    system: { openExternal },
   };
 });
 
@@ -297,5 +305,70 @@ describe("BlockedNavBanner destination naming", () => {
   it("names a custom-scheme destination by its scheme, not its first path word", () => {
     const title = titleFor("slack://open?team=T1");
     expect(title).toContain("slack:");
+  });
+});
+
+describe("BlockedNavBanner action feedback", () => {
+  const linkState = (url: string): BlockedNavState => ({
+    url,
+    canOpenExternal: true,
+    sessionStorageSnapshot: [],
+    isOAuth: false,
+    phase: "blocked",
+    errorCause: null,
+    errorMessage: null,
+  });
+
+  function deferred() {
+    let reject!: (err: Error) => void;
+    const promise = new Promise<void>((_, r) => {
+      reject = r;
+    });
+    return { promise, reject };
+  }
+
+  // Asking for the system browser and not getting it is a failure of the
+  // user's own action: it interrupts, and copying is the one way left.
+  it("turns a refused open into an error whose recovery is copying", async () => {
+    const open = deferred();
+    openExternal.mockImplementation(() => open.promise);
+    const { container } = render(
+      <BlockedNavBanner
+        state={linkState("https://docs.example.com/a")}
+        panelId="p-1"
+        webviewElement={null}
+        onDispatch={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /open in external browser/i }));
+    await act(async () => {
+      open.reject(new Error("no handler"));
+      await open.promise.catch(() => {});
+    });
+    const root = bannerRoot(container);
+    expect(root.getAttribute("role")).toBe("alert");
+    const labels = Array.from(root.querySelectorAll("button")).map((b) =>
+      (b.getAttribute("aria-label") ?? b.textContent ?? "").trim()
+    );
+    expect(labels.some((l) => /open in external browser/i.test(l))).toBe(false);
+    expect(labels.some((l) => /copy url/i.test(l))).toBe(true);
+  });
+
+  // A result awaited on one link must not describe the link that replaced it.
+  it("never shows a late result against a different link", async () => {
+    const open = deferred();
+    openExternal.mockImplementation(() => open.promise);
+    const props = { panelId: "p-1", webviewElement: null, onDispatch: vi.fn() };
+    const { container, rerender } = render(
+      <BlockedNavBanner state={linkState("https://a.example.com/")} {...props} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /open in external browser/i }));
+    rerender(<BlockedNavBanner state={linkState("https://b.example.com/")} {...props} />);
+    await act(async () => {
+      open.reject(new Error("no handler"));
+      await open.promise.catch(() => {});
+    });
+    expect(bannerRoot(container).getAttribute("role")).toBe("status");
+    expect(bannerRoot(container).textContent).toContain("b.example.com");
   });
 });

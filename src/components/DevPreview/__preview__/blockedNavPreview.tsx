@@ -1,3 +1,4 @@
+import "./blockedNavShims";
 import "./installShims";
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { createRoot } from "react-dom/client";
