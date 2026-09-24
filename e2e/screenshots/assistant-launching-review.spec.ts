@@ -134,12 +134,18 @@ async function open(
   return { panel, body };
 }
 
-/** A state that renders nothing is the defect a skeleton harness exists to catch. */
+/** A state that renders nothing is the defect a loading-state harness exists to catch. */
 async function expectPainted(body: Locator, name: string, kind: "launch" | "gate") {
   if (kind === "gate") {
     await expect(body.getByTestId("help-version-too-old"), `${name}: gate missing`).toBeVisible();
   } else {
-    await expect(body.locator('[role="status"]'), `${name}: skeleton missing`).toBeVisible();
+    // The announcer is sr-only, so "painted" means it carries a phase and the
+    // visible spinner group beside it has a real box.
+    await expect(body.locator('[role="status"]').first(), `${name}: no phase`).not.toHaveText("");
+    await expect(
+      body.locator('[aria-hidden="true"] p').first(),
+      `${name}: label missing`
+    ).toBeVisible();
   }
 }
 

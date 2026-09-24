@@ -5,12 +5,32 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { systemClient } from "@/clients/systemClient";
 import { sanitizeForClipboard } from "@/lib/clipboardSanitize";
 
-export function CopyableCommand({ command, inspectUrl }: { command: string; inspectUrl?: string }) {
+export function CopyableCommand({
+  command,
+  inspectUrl,
+  wrap = false,
+}: {
+  command: string;
+  inspectUrl?: string;
+  /**
+   * Break the command across lines instead of truncating it. For narrow hosts where
+   * the command is the instruction itself, so an ellipsis would hide the part that
+   * matters (the package name sits at the end of an install line).
+   */
+  wrap?: boolean;
+}) {
   const { copied, copy } = useCopyWithFeedback();
 
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-sm)] bg-overlay-subtle border border-border-default font-mono text-xs select-text group">
-      <span className="flex-1 truncate text-text-secondary">{command}</span>
+      <span
+        className={cn(
+          "flex-1 min-w-0 text-text-secondary",
+          wrap ? "whitespace-normal break-words" : "truncate"
+        )}
+      >
+        {command}
+      </span>
       {inspectUrl && (
         <Tooltip>
           <TooltipTrigger asChild>

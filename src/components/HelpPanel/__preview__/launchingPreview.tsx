@@ -2,6 +2,7 @@ import { StrictMode, useEffect, useId, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { resolveAppTheme } from "@shared/theme/themes";
 import { WorktreeStoreProvider } from "@/contexts/WorktreeStoreContext";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import type { HelpSessionPhase, VersionTooOld } from "@/controllers/HelpSessionController";
 import { installPreviewShims } from "./previewShims";
@@ -139,7 +140,10 @@ function App() {
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <WorktreeStoreProvider>
-      <App />
+      {/* The app mounts one at its root; the gate's copy buttons carry tooltips. */}
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>
     </WorktreeStoreProvider>
   </StrictMode>
 );

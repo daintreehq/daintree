@@ -19,6 +19,7 @@ export {
   BellDot, // watch alert / notify on completion
   Bot, // a commit author that is a bot account (a `[bot]` name) with no picture — shape says machine where initials would say person
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
+  CircleArrowUp, // a CLI below the version Daintree needs — the same up-arrow-in-a-circle plugins show for an available update
   CircleCheck, // finished run — blue awaiting review, neutral once acknowledged (Pilot's review and done bands)
   CircleDashed, // run the user snoozed — quiet until it wakes (Pilot's snoozed band)
   CircleDot, // shell that is alive and doing nothing, so the amber hollow circle means waiting and only waiting (Pilot's idle band)
