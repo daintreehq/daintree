@@ -362,7 +362,9 @@ interface StepButtonProps {
 /**
  * Always rendered, even at the ends: removing the button that holds focus when
  * the last step lands would drop focus out of the dialog's tab sequence. At the
- * ends it announces itself unavailable and ignores activation instead.
+ * ends it announces itself unavailable and ignores activation instead, and takes
+ * no pointer events so its hover state can't suggest otherwise — keyboard focus
+ * is unaffected.
  */
 function StepButton({ ref, direction, available, onStep }: StepButtonProps) {
   const Icon = direction === "previous" ? ChevronLeft : ChevronRight;
@@ -376,7 +378,7 @@ function StepButton({ ref, direction, available, onStep }: StepButtonProps) {
       onClick={() => {
         if (available) onStep();
       }}
-      className="shrink-0 rounded-full aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
+      className="shrink-0 rounded-full aria-disabled:opacity-40 aria-disabled:pointer-events-none"
     >
       <Icon aria-hidden="true" />
     </Button>
