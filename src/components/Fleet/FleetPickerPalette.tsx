@@ -3,6 +3,7 @@ import { m } from "framer-motion";
 import { Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
+import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { FleetPickerContent, FleetPickerFooterHint } from "@/components/Fleet/FleetPickerContent";
 import { useFleetPicker } from "@/hooks/useFleetPicker";
 import { useUiMotionTransition } from "@/hooks/useShouldSkipMotion";
@@ -174,7 +175,10 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
         mode={commitMode}
         onRecalled={onClose}
         onManage={() => {
-          // The palette is modal; hand over to the dialog rather than stack them.
+          // The palette is modal; hand over to the dialog rather than stack
+          // them. The palette's own focus restore runs after its exit
+          // animation and would pull focus back out of the dialog.
+          suppressPaletteFocusRestore();
           onClose();
           setManageOpen(true);
         }}

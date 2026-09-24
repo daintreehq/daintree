@@ -725,6 +725,8 @@ export function FleetArmingRibbon(): ReactElement | null {
               <DropdownMenu
                 open={selectionMenuOpen}
                 onOpenChange={(open) => {
+                  // A hand-off only ever covers the close it was requested for.
+                  if (open) dialogHandoffRef.current = false;
                   setSelectionMenuOpen(open);
                   if (!open) clearPreviewArmedIds();
                 }}
