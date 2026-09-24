@@ -88,7 +88,8 @@ async function loadPicker(page: Page, theme: string, fixture: Fixture): Promise<
 
 const dialog = (page: Page) => page.locator('[role="dialog"][aria-label="Command picker"]');
 const input = (page: Page) => page.getByRole("combobox", { name: "Search commands" });
-const options = (page: Page) => dialog(page).locator('[role="option"]');
+// Command rows only: category band labels are inert options too.
+const options = (page: Page) => dialog(page).locator('[role="option"][data-command-id]');
 
 /** Never write an unverified frame: the dialog must have a real box and the rows it claims. */
 async function snap(
@@ -200,7 +201,7 @@ test("Command picker — states and themes", async ({ page }) => {
 
     // No forge provider: every shipped command is unavailable.
     await loadPicker(page, theme, "no-forge");
-    await expect(dialog(page).locator('[role="option"][aria-disabled="true"]')).toHaveCount(2);
+    await expect(options(page).and(page.locator('[aria-disabled="true"]'))).toHaveCount(2);
     written.push(await snap(page, `06-no-forge--${theme}.png`, 2));
 
     // Every category band, a disabled row among live ones, and a list that scrolls.

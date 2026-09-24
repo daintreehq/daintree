@@ -3,33 +3,40 @@ import { render, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import React from "react";
 
+type RenderItem = (
+  item: unknown,
+  index: number,
+  selected: boolean,
+  onHoverIndex: (index: number) => void
+) => React.ReactNode;
+
 let capturedProps: {
   isFiltering?: boolean;
   onConfirm: () => void;
   onQueryChange: (q: string) => void;
+  onSelectNext: () => void;
   query: string;
-  renderItem?: (item: unknown, index: number, selected: boolean) => React.ReactNode;
+  results: CommandManifestEntry[];
+  selectedIndex: number;
+  getActionLabel?: (item: CommandManifestEntry) => string | null;
+  renderItem?: RenderItem;
 } | null = null;
 
 vi.mock("@/components/ui/SearchablePalette", () => ({
-  SearchablePalette: vi.fn(
-    (props: {
-      isFiltering?: boolean;
-      onConfirm: () => void;
-      onQueryChange: (q: string) => void;
-      query: string;
-      renderItem?: (item: unknown, index: number, selected: boolean) => React.ReactNode;
-    }) => {
-      capturedProps = {
-        isFiltering: props.isFiltering,
-        onConfirm: props.onConfirm,
-        onQueryChange: props.onQueryChange,
-        query: props.query,
-        renderItem: props.renderItem,
-      };
-      return null;
-    }
-  ),
+  SearchablePalette: vi.fn((props: NonNullable<typeof capturedProps>) => {
+    capturedProps = {
+      isFiltering: props.isFiltering,
+      onConfirm: props.onConfirm,
+      onQueryChange: props.onQueryChange,
+      onSelectNext: props.onSelectNext,
+      query: props.query,
+      results: props.results,
+      selectedIndex: props.selectedIndex,
+      getActionLabel: props.getActionLabel,
+      renderItem: props.renderItem,
+    };
+    return null;
+  }),
 }));
 
 vi.mock("@/lib/utils", () => ({
@@ -59,7 +66,7 @@ vi.mock("react", async (importOriginal) => {
   };
 });
 
-import { CommandPicker } from "../CommandPicker";
+import { CommandPicker, getCommandActionLabel, scoreCommand } from "../CommandPicker";
 import type { CommandManifestEntry } from "@shared/types/commands";
 
 function makeCmd(overrides: Partial<CommandManifestEntry> = {}): CommandManifestEntry {
@@ -83,12 +90,23 @@ const commands: CommandManifestEntry[] = [
   makeCmd({ id: "sys.restart", label: "Restart", category: "system" }),
 ];
 
-function renderPicker(onSelect = vi.fn()) {
+/** The option row renderItem draws for an item, past any band label above it. */
+function rowOf(item: CommandManifestEntry, index: number) {
+  const element = capturedProps!.renderItem!(item, index, true, vi.fn()) as React.ReactElement<{
+    children: React.ReactNode;
+  }>;
+  return React.Children.toArray(element.props.children).find(
+    (c): c is React.ReactElement<{ onClick: () => void; "aria-describedby"?: string }> =>
+      React.isValidElement(c) && (c.props as Record<string, unknown>)["data-command-id"] === item.id
+  )!;
+}
+
+function renderPicker(onSelect = vi.fn(), list: CommandManifestEntry[] = commands) {
   capturedProps = null;
   return render(
     React.createElement(CommandPicker, {
       isOpen: true,
-      commands,
+      commands: list,
       isLoading: false,
       onSelect,
       onDismiss: vi.fn(),
@@ -150,16 +168,8 @@ describe("CommandPicker confirm guard", () => {
     expect(capturedProps!.isFiltering).toBe(true);
 
     // Simulate clicking a row — renderItem produces the button element
-    const element = capturedProps!.renderItem!(commands[0], 0, true) as React.ReactElement<{
-      children: React.ReactNode;
-    }>;
-    const children = React.Children.toArray(element.props.children);
-    const button = children.find(
-      (c): c is React.ReactElement<{ onClick: () => void }> =>
-        React.isValidElement(c) && c.type === "button"
-    )!;
     act(() => {
-      button.props.onClick();
+      rowOf(commands[0]!, 0).props.onClick();
     });
     expect(onSelect).not.toHaveBeenCalled();
   });
@@ -169,16 +179,8 @@ describe("CommandPicker confirm guard", () => {
     renderPicker(onSelect);
 
     // Not stale — useDeferredValue passthrough
-    const element = capturedProps!.renderItem!(commands[0], 0, true) as React.ReactElement<{
-      children: React.ReactNode;
-    }>;
-    const children = React.Children.toArray(element.props.children);
-    const button = children.find(
-      (c): c is React.ReactElement<{ onClick: () => void }> =>
-        React.isValidElement(c) && c.type === "button"
-    )!;
     act(() => {
-      button.props.onClick();
+      rowOf(commands[0]!, 0).props.onClick();
     });
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
@@ -198,5 +200,107 @@ describe("CommandPicker confirm guard", () => {
     });
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "gh.pr" }));
+  });
+});
+
+describe("CommandPicker unavailable commands", () => {
+  const list = [
+    makeCmd({ id: "gh.off", category: "github", enabled: false, disabledReason: "No forge" }),
+    makeCmd({ id: "gh.on", category: "github" }),
+    makeCmd({ id: "git.off", category: "git", enabled: false, disabledReason: "Off here" }),
+  ];
+
+  it("starts the highlight on the first command Enter can run", () => {
+    renderPicker(vi.fn(), list);
+    const selected = capturedProps!.results[capturedProps!.selectedIndex]!;
+    expect(selected.enabled).toBe(true);
+  });
+
+  it("keeps unavailable rows in the arrow-key path", () => {
+    renderPicker(vi.fn(), list);
+    const visited = new Set<string>();
+    for (let i = 0; i < list.length; i++) {
+      act(() => capturedProps!.onSelectNext());
+      visited.add(capturedProps!.results[capturedProps!.selectedIndex]!.id);
+    }
+    expect(visited.size).toBe(list.length);
+  });
+
+  it("does not act on an unavailable row from Enter or a click", () => {
+    const onSelect = vi.fn();
+    renderPicker(onSelect, list);
+    const offIndex = capturedProps!.results.findIndex((c) => !c.enabled);
+    for (let i = 0; i < list.length && capturedProps!.selectedIndex !== offIndex; i++) {
+      act(() => capturedProps!.onSelectNext());
+    }
+    expect(capturedProps!.selectedIndex).toBe(offIndex);
+    act(() => capturedProps!.onConfirm());
+    act(() => rowOf(capturedProps!.results[offIndex]!, offIndex).props.onClick());
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("associates the reason with its row", () => {
+    renderPicker(vi.fn(), list);
+    for (const [index, cmd] of capturedProps!.results.entries()) {
+      const describedBy = rowOf(cmd, index).props["aria-describedby"] ?? "";
+      const reasonIds = describedBy.split(" ").filter((id) => id.endsWith("-reason"));
+      expect(reasonIds.length).toBe(cmd.enabled ? 0 : 1);
+    }
+  });
+});
+
+describe("getCommandActionLabel", () => {
+  it("offers no Enter hint for an unavailable command", () => {
+    expect(getCommandActionLabel(makeCmd({ enabled: false }))).toBeNull();
+  });
+
+  it("tells a form-first command apart from one that runs at once", () => {
+    const form = getCommandActionLabel(makeCmd({ hasBuilder: true }));
+    const run = getCommandActionLabel(makeCmd({ hasBuilder: false }));
+    expect(form).toBeTruthy();
+    expect(run).toBeTruthy();
+    expect(form).not.toBe(run);
+  });
+});
+
+describe("CommandPicker search", () => {
+  const createIssue = makeCmd({
+    id: "github:create-issue",
+    category: "github",
+    description:
+      "Create a GitHub issue in the current repository. Use structured sections, file links, and task lists to make issues self-contained for autonomous work.",
+    keywords: ["issue", "create", "bug"],
+  });
+  const workIssue = makeCmd({
+    id: "github:work-issue",
+    category: "github",
+    description:
+      "Start working on a GitHub issue by creating an isolated worktree. Fetches issue details.",
+    keywords: ["worktree", "branch"],
+  });
+  const sync = makeCmd({
+    id: "git:sync-branch",
+    category: "git",
+    description: "Rebase the current branch onto its upstream and push the result.",
+  });
+
+  it("drops a command whose only match is letters scattered through its description", () => {
+    // "worktree" is a subsequence of create-issue's description but no word in it.
+    expect(scoreCommand(createIssue, "worktree")).toBeNull();
+    expect(scoreCommand(workIssue, "worktree")).not.toBeNull();
+    expect(scoreCommand(sync, "issue")).toBeNull();
+  });
+
+  it("ranks a match in the command name above one in the description", () => {
+    const inName = scoreCommand(workIssue, "work")!;
+    const inDescription = scoreCommand(sync, "upstream")!;
+    expect(inName).toBeGreaterThan(inDescription);
+  });
+
+  it("puts the best match first under Enter", () => {
+    renderPicker(vi.fn(), [createIssue, sync, workIssue]);
+    act(() => capturedProps!.onQueryChange("work"));
+    expect(capturedProps!.results[0]!.id).toBe("github:work-issue");
+    expect(capturedProps!.results[capturedProps!.selectedIndex]!.id).toBe("github:work-issue");
   });
 });

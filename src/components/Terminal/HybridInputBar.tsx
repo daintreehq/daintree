@@ -1046,19 +1046,30 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 <span className="text-xs text-text-secondary">Finishing dictation…</span>
               </div>
             )}
-            <button
-              ref={pickerRef}
-              type="button"
-              onClick={openPicker}
-              disabled={disabled}
-              // `h-6` gives the picker a 24px target without changing the
-              // glyph: at `leading-5` alone the button was 20px tall, under the
-              // WCAG 2.5.8 floor, and its spacing circle overlaps the canvas.
-              className="flex h-6 shrink-0 items-center select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-daintree-accent/65 hover:text-daintree-accent/85 transition-colors cursor-pointer focus-visible:outline-hidden"
-              aria-label="Open command picker"
-            >
-              ❯
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  ref={pickerRef}
+                  type="button"
+                  onClick={openPicker}
+                  disabled={disabled}
+                  // `size-6` is the WCAG 2.5.8 floor on both axes: at `leading-5`
+                  // the button was 20px tall, and at its old `pl-2 pr-1` it was
+                  // 19px wide with its spacing circle over the canvas.
+                  //
+                  // Neutral, not accent: this marker sits in every composer on
+                  // screen, and accent is one signal per focus region — the
+                  // composer's own focus ring already spends it. Its keyboard
+                  // focus is a neutral outline on the glyph, so a Tab onto it
+                  // reads as the button and not as the editor beside it.
+                  className="flex size-6 shrink-0 items-center justify-center select-none rounded-[var(--radius-sm)] font-mono text-xs font-semibold leading-5 text-text-secondary hover:text-text-primary transition-colors cursor-pointer focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-border-strong focus-visible:text-text-primary"
+                  aria-label="Open command picker"
+                >
+                  <span aria-hidden="true">❯</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Open command picker</TooltipContent>
+            </Tooltip>
             <ContextMenu>
               <ContextMenuTrigger asChild onContextMenu={handleEditorContextMenu}>
                 {/* `min-w-0`: a flex item defaults to `min-width: auto`, so the

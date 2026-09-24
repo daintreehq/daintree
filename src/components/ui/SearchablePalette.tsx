@@ -145,9 +145,11 @@ export interface SearchablePaletteProps<T> {
    * `footer` or `getFooter` is also set — those win, in that order. Use a
    * stable reference (module-level fn or `useCallback`) to avoid recomputing
    * the footer node every render. Called only while a row is selected; with
-   * nothing selected the footer carries no hint.
+   * nothing selected the footer carries no hint. Return `null` for a selection
+   * Enter will not act on (an unavailable row) and the footer carries no hint
+   * for it either.
    */
-  getActionLabel?: (selectedItem: T) => string;
+  getActionLabel?: (selectedItem: T) => string | null;
   /** Additional className for AppPaletteDialog.Body */
   bodyClassName?: string;
   /** Custom content before the list */
