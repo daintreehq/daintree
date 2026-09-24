@@ -49,7 +49,7 @@ describe("Label in Name on the canvas-home context rows", () => {
 
     // The visible counts belong in the name too — the label replaces the
     // element's text content, so anything it omits is inaudible.
-    expect(label).toContain("5 active day");
+    expect(label).toContain("5 of 60 active days");
   });
 
   it("the '+N more' resume affordance keeps its visible string verbatim", async () => {

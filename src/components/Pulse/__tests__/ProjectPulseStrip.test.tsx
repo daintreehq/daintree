@@ -123,7 +123,7 @@ describe("ProjectPulseStrip", () => {
     render(<ProjectPulseStrip worktreeId="wt1" />);
     expect(
       screen.getByRole("button", {
-        name: /^project pulse — 5 of 60 days active, 2 day streak, show activity$/i,
+        name: /^project pulse — 5 of 60 active days, 2 day streak, show activity$/i,
       })
     ).toBeTruthy();
   });
@@ -133,7 +133,7 @@ describe("ProjectPulseStrip", () => {
     render(<ProjectPulseStrip worktreeId="wt1" />);
     // Anchored so a spurious streak suffix fails.
     expect(
-      screen.getByRole("button", { name: /^project pulse — 1 of 60 days active, show activity$/i })
+      screen.getByRole("button", { name: /^project pulse — 1 of 60 active days, show activity$/i })
     ).toBeTruthy();
   });
 

@@ -193,7 +193,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
   // speech-input user can say what they read — and "Show project activity"
   // shares no phrase with the "Project pulse" printed on the button.
   const activityLabel = pulse
-    ? `Project pulse — ${pulse.activeDays} of ${pulse.projectAgeDays} days active${
+    ? `Project pulse — ${pulse.activeDays} of ${pulse.projectAgeDays} active days${
         hasStreak ? `, ${pulse.currentStreakDays} day streak` : ""
       }, show activity`
     : "Project pulse — show activity";
