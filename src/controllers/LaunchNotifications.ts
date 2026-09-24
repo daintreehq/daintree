@@ -148,7 +148,7 @@ export class LaunchNotifications {
     } else if (kind === "skills-sync-failed") {
       notifyLaunchFailed(
         agentId,
-        "Daintree couldn't refresh this project's assistant commands and skills. Try again."
+        "Daintree couldn't load this project's assistant folder. Try again."
       );
     } else {
       notifyLaunchFailed(agentId, "The agent didn't start. Try again.");

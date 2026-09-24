@@ -224,7 +224,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
             "Daintree's assistant services didn't start. Check assistant settings, then try again.";
         } else if (code === "USER_CONTENT_SYNC_FAILED") {
           message =
-            "Daintree couldn't refresh this project's assistant commands and skills, so the session didn't start. Try again.";
+            "Daintree couldn't load this project's assistant folder, so the session didn't start. Try again.";
         } else if (code === "MIXED_AGENT_LANES") {
           message =
             "Another session in this project is running a different agent. Sessions of one project share a folder and use one agent, so stop that session first or open this one with the same agent.";

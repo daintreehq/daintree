@@ -86,6 +86,7 @@ describe("registerHelpAssistantHandlers", () => {
       customArgs: "",
       idleHibernateMinutes: 5,
       debugLogging: false,
+      loadGlobalHooksAndServers: false,
     });
   });
 
@@ -109,6 +110,7 @@ describe("registerHelpAssistantHandlers", () => {
       customArgs: "",
       idleHibernateMinutes: 5,
       debugLogging: false,
+      loadGlobalHooksAndServers: false,
     });
   });
 
@@ -179,6 +181,18 @@ describe("registerHelpAssistantHandlers", () => {
 
     storeMock.set.mockClear();
     await handler(null, { debugLogging: "yes" as unknown as boolean });
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("persists loadGlobalHooksAndServers and rejects a non-boolean value", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { loadGlobalHooksAndServers: true });
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.loadGlobalHooksAndServers", true);
+
+    storeMock.set.mockClear();
+    await handler(null, { loadGlobalHooksAndServers: "yes" as unknown as boolean });
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
@@ -347,6 +361,7 @@ describe("registerHelpAssistantHandlers", () => {
       customArgs: "",
       idleHibernateMinutes: 5,
       debugLogging: false,
+      loadGlobalHooksAndServers: false,
     });
   });
 
