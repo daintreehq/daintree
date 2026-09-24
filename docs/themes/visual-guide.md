@@ -224,13 +224,13 @@ There is no dedicated `activity-failed` token — failure surfaces use `status-d
 
 ### Resize Handle
 
-Between the sidebar and content grid, there's a draggable resize handle:
+The draggable separators with a grip (sidebar, two-pane split, file tree, Portal dock, diagnostics dock, dock popover, dev-preview drawer) share one vocabulary; the Assistant panel's handle is a gripless track with the same focus outline:
 
 ```
-| (drag handle: 3px wide, visible on hover as a 2px rounded bar)
+| (a 6–12px track holding a 1px rounded grip that widens to 2px on hover)
 ```
 
-The handle is nearly invisible by default (`bg-daintree-text/20`), brightens on hover (`/35`) and again while dragging (`/50`), and turns accent-colored only on keyboard focus. These are background composites, not the retired text ramp — they belong to the alpha-modified `daintree-*` set left to #12029.
+The grip is nearly invisible at rest (`bg-text-primary/20`), brightens on hover (`/35`) and again while dragging (`/50`). The diagnostics dock's horizontal grip runs a step lighter (`/15`, `/30`), and the two-pane split raises each step on light themes. Hover styling is dropped while a drag is held, otherwise the hover variant outranks the drag state and the two render identically. Keyboard focus is a solid inset `outline-accent-primary` outline on the track with the grip kept neutral, so focus carries exactly one accent mark and is the same outline the forced-colors override redraws. Handles whose region already spends its accent (dock popover, dev-preview drawer) signal focus with the neutral track lift and a brighter grip instead. Keys follow the window-splitter pattern: arrows step, and where a handle binds them, Home and End jump to its limits — never to a reset, which belongs to Enter, Space or double-click.
 
 ---
 

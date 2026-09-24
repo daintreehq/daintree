@@ -1343,8 +1343,9 @@ export function FileBrowserPane({
                 data-testid="file-browser-sidebar-resize"
                 className={cn(
                   "group absolute -right-1.5 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center",
-                  "transition-colors hover:bg-overlay-soft focus:bg-tint/[0.04] focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/50",
-                  isResizing && "bg-overlay-medium"
+                  "transition-colors outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+                  // Hover styling is off while resizing, or it outranks the drag state.
+                  isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft"
                 )}
                 onMouseDown={handleResizeStart}
                 onDoubleClick={handleResizeDoubleClick}
@@ -1352,9 +1353,11 @@ export function FileBrowserPane({
               >
                 <div
                   className={cn(
-                    "h-8 w-px rounded-full transition-[width] delay-100 duration-150 group-hover:w-0.5",
-                    "bg-daintree-text/20 group-hover:bg-daintree-text/35 group-focus:bg-accent-primary",
-                    isResizing && "bg-daintree-text/50"
+                    "h-8 rounded-full transition-[width] delay-100 duration-150",
+                    // The focus outline is the accent; the grip stays neutral.
+                    isResizing
+                      ? "w-0.5 bg-text-primary/50"
+                      : "w-px bg-text-primary/20 group-hover:w-0.5 group-hover:bg-text-primary/35 group-focus-visible:w-0.5 group-focus-visible:bg-text-primary/50"
                   )}
                 />
               </div>
