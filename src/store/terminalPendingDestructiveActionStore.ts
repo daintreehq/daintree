@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { ActionSource } from "@shared/types/actions";
 
 /**
  * Ephemeral UI state for worktree-session destructive confirmations
@@ -70,6 +71,12 @@ export interface TerminalPendingDestructiveActionSnapshot {
    * worktree is no longer in the live map, so its row supplies this itself.
    */
   worktreeTitle?: string;
+  /**
+   * How the unconfirmed dispatch arrived. The confirm re-dispatches a
+   * keybinding-raised action as a keybinding, so the shortcut hint doesn't
+   * teach the user the combo they just pressed.
+   */
+  dispatchSource?: ActionSource;
   /** Terminal id for single-terminal actions (kill/restart). */
   terminalId?: string;
   /** Display title of the terminal a single-terminal action targets. */

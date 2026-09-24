@@ -5,6 +5,7 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import { TRASH_TTL_SECONDS } from "@/components/Layout/trashCountdown";
 import { actionService } from "@/services/ActionService";
+import type { ActionSource } from "@shared/types/actions";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
@@ -79,8 +80,8 @@ export function buildRestartRunningAgentCopy(terminalTitle?: string): Destructiv
 function recentlyClosedSentence(count: number): string {
   const ttl = `${TRASH_TTL_SECONDS}\u00a0seconds`;
   return count === 1
-    ? `It moves to Recently closed, where it keeps running and can be restored for ${ttl}.`
-    : `They move to Recently closed, where they keep running and can be restored for ${ttl}.`;
+    ? `It moves to Recently closed and keeps running for ${ttl}. Restore it before then, or its process ends.`
+    : `They move to Recently closed and keep running for ${ttl}. Restore them before then, or their processes end.`;
 }
 
 function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DestructiveConfirmCopy {
@@ -256,9 +257,11 @@ function TargetPreview({
       {groups.map((group) => (
         <div key={group.worktreeId || "__none"} className="px-3 py-2">
           {showGroupTitles && (
-            <div className="mb-1.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
-              <GroupIcon className="h-3 w-3 shrink-0" aria-hidden="true" />
-              <span className="truncate font-mono">{group.worktreeTitle}</span>
+            <div className="mb-1.5 flex min-w-0 items-start gap-1.5 text-xs text-text-secondary">
+              <GroupIcon className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 font-mono [overflow-wrap:anywhere]">
+                {group.worktreeTitle}
+              </span>
             </div>
           )}
           <ul
@@ -312,6 +315,10 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
 
   const handleConfirm = useCallback(() => {
     if (pending === null) return;
+    // Answer in the voice the action arrived in: a keybinding-raised confirm
+    // must not be read back as a pointer dispatch, or the shortcut hint teaches
+    // the combo the user just pressed.
+    const source: ActionSource = pending.dispatchSource === "keybinding" ? "keybinding" : "user";
     let announcement: string | null = null;
     switch (pending.kind) {
       case "kill":
@@ -322,7 +329,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         void actionService.dispatch(
           "terminal.kill",
           { terminalId: pending.terminalId, confirmed: true },
-          { source: "user" }
+          { source }
         );
         announcement = "Terminal killed";
         break;
@@ -331,18 +338,18 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         void actionService.dispatch(
           "terminal.restart",
           { terminalId: pending.terminalId, confirmed: true },
-          { source: "user" }
+          { source }
         );
         announcement = "Terminal restarted";
         break;
       case "killAll": {
-        void actionService.dispatch("terminal.killAll", { confirmed: true }, { source: "user" });
+        void actionService.dispatch("terminal.killAll", { confirmed: true }, { source });
         const noun = pending.targetCount === 1 ? "terminal" : "terminals";
         announcement = `Killed ${pending.targetCount} ${noun}`;
         break;
       }
       case "restartAll": {
-        void actionService.dispatch("terminal.restartAll", { confirmed: true }, { source: "user" });
+        void actionService.dispatch("terminal.restartAll", { confirmed: true }, { source });
         const noun = pending.targetCount === 1 ? "terminal" : "terminals";
         announcement = `Restarted ${pending.targetCount} ${noun}`;
         break;
@@ -352,7 +359,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         void actionService.dispatch(
           "worktree.sessions.restartAll",
           { worktreeId: pending.worktreeId, confirmed: true },
-          { source: "user" }
+          { source }
         );
         const noun = pending.targetCount === 1 ? "session" : "sessions";
         announcement = `Restarted ${pending.targetCount} ${noun}`;
@@ -363,7 +370,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         void actionService.dispatch(
           "worktree.sessions.trashAll",
           { worktreeId: pending.worktreeId, confirmed: true },
-          { source: "user" }
+          { source }
         );
         const noun = pending.targetCount === 1 ? "session" : "sessions";
         announcement = `Trashed ${pending.targetCount} ${noun}`;
@@ -374,7 +381,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         void actionService.dispatch(
           "worktree.sessions.endAll",
           { worktreeId: pending.worktreeId, confirmed: true },
-          { source: "user" }
+          { source }
         );
         const noun = pending.targetCount === 1 ? "session" : "sessions";
         announcement = `Ended ${pending.targetCount} ${noun}`;
@@ -385,7 +392,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         void actionService.dispatch(
           "worktree.sessions.clearHistory",
           { worktreeId: pending.worktreeId, confirmed: true },
-          { source: "user" }
+          { source }
         );
         announcement = "Cleared session history";
         break;
@@ -399,7 +406,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         void actionService.dispatch(
           "worktree.sessions.trashAll",
           { worktreeId: pending.worktreeId, confirmed: true },
-          { source: "user" }
+          { source }
         );
         const noun = pending.targetCount === 1 ? "terminal" : "terminals";
         announcement = `Closed ${pending.targetCount} ${noun}`;
@@ -418,7 +425,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           void actionService.dispatch(
             "worktree.sessions.trashAll",
             { worktreeId: entry.worktreeId, confirmed: true },
-            { source: "user" }
+            { source }
           );
         }
         const noun = pending.targetCount === 1 ? "terminal" : "terminals";

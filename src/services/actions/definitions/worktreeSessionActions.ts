@@ -111,6 +111,7 @@ export function registerWorktreeSessionActions(
       if (confirmed !== true && runningAgents.length > 0) {
         useTerminalPendingDestructiveActionStore.getState().request({
           kind: "worktreeRestartAll",
+          dispatchSource: ctx.dispatchSource,
           targetCount: targets.length,
           runningAgentCount: runningAgents.length,
           worktreeId: targetWorktreeId,
@@ -233,6 +234,7 @@ export function registerWorktreeSessionActions(
         // and keybinding dispatches would silently fire `bulkTrashByWorktree`.
         useTerminalPendingDestructiveActionStore.getState().request({
           kind: "worktreeTrashAll",
+          dispatchSource: ctx.dispatchSource,
           targetCount: targets.length,
           runningAgentCount: collectRunningAgentTerminals(targets).length,
           worktreeId: targetWorktreeId,
@@ -295,6 +297,7 @@ export function registerWorktreeSessionActions(
       if (confirmed !== true && ctx.dispatchSource !== "agent") {
         useTerminalPendingDestructiveActionStore.getState().request({
           kind: "worktreeEndAll",
+          dispatchSource: ctx.dispatchSource,
           targetCount: targets.length,
           runningAgentCount: collectRunningAgentTerminals(targets).length,
           worktreeId: targetWorktreeId,
@@ -345,6 +348,7 @@ export function registerWorktreeSessionActions(
       if (confirmed !== true && ctx.dispatchSource !== "agent") {
         useTerminalPendingDestructiveActionStore.getState().request({
           kind: "worktreeClearHistory",
+          dispatchSource: ctx.dispatchSource,
           targetCount: 0,
           runningAgentCount: 0,
           worktreeId: targetWorktreeId,

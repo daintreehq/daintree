@@ -415,6 +415,7 @@ export function registerTerminalLifecycleActions(
         stageConfirmation(
           {
             kind: "kill",
+            dispatchSource: ctx?.dispatchSource,
             targetCount: 1,
             runningAgentCount: 1,
             terminalId: targetId,
@@ -559,6 +560,7 @@ export function registerTerminalLifecycleActions(
         stageConfirmation(
           {
             kind: "restart",
+            dispatchSource: ctx?.dispatchSource,
             targetCount: 1,
             runningAgentCount: 1,
             terminalId: targetId,
@@ -889,6 +891,7 @@ export function registerTerminalLifecycleActions(
         stageConfirmation(
           {
             kind: "killAll",
+            dispatchSource: ctx?.dispatchSource,
             targetCount: targets.length,
             runningAgentCount: runningAgents.length,
             preview: buildDestructivePreview(targets),
@@ -931,6 +934,7 @@ export function registerTerminalLifecycleActions(
         stageConfirmation(
           {
             kind: "restartAll",
+            dispatchSource: ctx?.dispatchSource,
             targetCount: targets.length,
             runningAgentCount: runningAgents.length,
             preview: buildDestructivePreview(targets),
