@@ -160,6 +160,16 @@ export function FigureRail({
         aria-label="Figures"
         className="flex flex-row items-center gap-2 h-full overflow-x-auto overflow-y-hidden px-2 scroll-px-6 scrollbar-none"
         style={edgeMask(edges)}
+        // Chromium leaves a partly visible element where it is on focus, which
+        // here means half under an edge fade; bring a focused thumbnail fully
+        // in, clear of the fade (`scroll-px-6`).
+        onFocus={(e) => {
+          if (e.target instanceof HTMLElement) {
+            e.target
+              .closest("[data-figure-number]")
+              ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+          }
+        }}
       >
         {figures.map((figure) => (
           <FigureThumbnail
@@ -244,9 +254,11 @@ function FigureThumbnail({ figure, isNewest, isCurrent, onClick }: FigureThumbna
         status === "loaded"
           ? "border-border-default hover:border-border-strong"
           : "border-border-strong",
-        // Offset clear of the thumbnail so the inset accent focus ring on the
-        // button inside stays distinguishable from it.
+        // Both rings sit outside the tile, against the rail, so neither depends
+        // on the image under it: neutral for current, accent (taking over the
+        // same outline) while the thumbnail's button has keyboard focus.
         isCurrent && "outline-2 outline-offset-1 outline-text-secondary",
+        "has-[[data-thumbnail-open]:focus-visible]:outline-2 has-[[data-thumbnail-open]:focus-visible]:outline-offset-1 has-[[data-thumbnail-open]:focus-visible]:outline-accent-primary",
         isNewest && "animate-figure-arrive"
       )}
       data-testid="figure-thumbnail"
@@ -276,7 +288,12 @@ function FigureThumbnail({ figure, isNewest, isCurrent, onClick }: FigureThumbna
               ? `Figure ${figure.figureNumber}: ${figure.caption}`
               : `Figure ${figure.figureNumber}`
           }
-          className="block h-full w-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+          data-thumbnail-open=""
+          // The inset offset does nothing while the outline is hidden; it is the
+          // hook forced-colors mode's global Highlight ring keys off to draw
+          // inside this button, where the tile's overflow can't clip it.
+          // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the tile paints this button's focus ring outside the image (has-[[data-thumbnail-open]:focus-visible])
+          className="block h-full w-full focus-visible:outline-hidden focus-visible:-outline-offset-2"
         >
           {/* Animated WebP demo loops play natively through the browser image
               decoder — no decoding hint or poster-swap is needed, and rail

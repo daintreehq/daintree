@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Ref } from "react";
 import { ChevronLeft, ChevronRight, ImageOff, RotateCw } from "lucide-react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
@@ -116,10 +116,32 @@ export function FigureLightbox({
   const hasPrev = selectedIndex > 0;
   const hasNext = selectedIndex !== -1 && selectedIndex < figures.length - 1;
 
+  const previousButtonRef = useRef<HTMLButtonElement>(null);
+  const nextButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Stepping swaps the stage and caption content; if focus is on something that
+  // swap removes (the stage's Retry, an overflowing caption), move it to the
+  // step button in the direction of travel first so it stays in the dialog.
   const goTo = (index: number) => {
     const target = figures[index];
-    if (target && index !== selectedIndex) onSelectFigure(target.figureNumber);
+    if (!target || index === selectedIndex) return;
+    const active = document.activeElement;
+    const inSwappedContent =
+      active instanceof Node &&
+      active !== stageRef.current &&
+      (stageRef.current?.contains(active) || captionRef.current?.contains(active));
+    if (inSwappedContent) {
+      const toward = index < selectedIndex ? previousButtonRef : nextButtonRef;
+      toward.current?.focus({ preventScroll: true });
+    }
+    onSelectFigure(target.figureNumber);
   };
+  // The window key handler below reads the latest `goTo` through this ref
+  // rather than re-subscribing on every render.
+  const goToRef = useRef(goTo);
+  useEffect(() => {
+    goToRef.current = goTo;
+  });
 
   useEffect(() => {
     if (!isOpen) return;
@@ -141,11 +163,11 @@ export function FigureLightbox({
       else if (e.key === "End" && hasNext) index = figures.length - 1;
       if (index === null) return;
       e.preventDefault();
-      onSelectFigure(figures[index]!.figureNumber);
+      goToRef.current(index);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isOpen, hasPrev, hasNext, selectedIndex, figures, onSelectFigure, isActualSize]);
+  }, [isOpen, hasPrev, hasNext, selectedIndex, figures, isActualSize]);
 
   // Warm the neighbours so stepping doesn't flash an empty stage.
   useEffect(() => {
@@ -192,6 +214,7 @@ export function FigureLightbox({
         <figure className="m-0 flex flex-col gap-3">
           <div className="flex h-[min(64vh,680px)] items-center gap-2">
             <StepButton
+              ref={previousButtonRef}
               direction="previous"
               available={hasPrev}
               onStep={() => goTo(selectedIndex - 1)}
@@ -269,6 +292,7 @@ export function FigureLightbox({
               )}
             </div>
             <StepButton
+              ref={nextButtonRef}
               direction="next"
               available={hasNext}
               onStep={() => goTo(selectedIndex + 1)}
@@ -329,6 +353,7 @@ export function FigureLightbox({
 }
 
 interface StepButtonProps {
+  ref: Ref<HTMLButtonElement>;
   direction: "previous" | "next";
   available: boolean;
   onStep: () => void;
@@ -339,10 +364,11 @@ interface StepButtonProps {
  * the last step lands would drop focus out of the dialog's tab sequence. At the
  * ends it announces itself unavailable and ignores activation instead.
  */
-function StepButton({ direction, available, onStep }: StepButtonProps) {
+function StepButton({ ref, direction, available, onStep }: StepButtonProps) {
   const Icon = direction === "previous" ? ChevronLeft : ChevronRight;
   return (
     <Button
+      ref={ref}
       variant="subtle"
       size="icon"
       aria-label={direction === "previous" ? "Previous figure" : "Next figure"}

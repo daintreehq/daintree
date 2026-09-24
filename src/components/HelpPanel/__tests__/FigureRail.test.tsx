@@ -211,6 +211,23 @@ describe("FigureRail", () => {
     expect(within(lightbox).getByText("Figure 3, 3 of 3")).toBeTruthy();
   });
 
+  // Stepping swaps the stage's content; focus on something the swap removes has
+  // to land on a control that survives it, or it leaves the modal.
+  it("keeps focus in the dialog when stepping away from a focused Retry", () => {
+    render(<FigureRail figures={[makeFigure(1), makeFigure(2)]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Figure 1: Caption 1" }));
+    const lightbox = screen.getByTestId("figure-lightbox");
+    fireEvent.error(within(lightbox).getByAltText("Alt 1"));
+    within(lightbox).getByRole("button", { name: "Retry" }).focus();
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+
+    expect(within(lightbox).getByText("Figure 2, 2 of 2")).toBeTruthy();
+    expect(document.activeElement).toBe(
+      within(lightbox).getByRole("button", { name: "Next figure" })
+    );
+  });
+
   it("returns to fit whenever the figure on screen changes", () => {
     render(<FigureRail figures={[makeFigure(1), makeFigure(2)]} />);
     fireEvent.load(screen.getByAltText("Alt 1"));

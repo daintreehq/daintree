@@ -371,6 +371,27 @@ test("assistant figure rail and lightbox — states and themes", async ({ page }
     await page.waitForTimeout(250);
     written.push(await snap(rail, `several-${base}-rail-focus.png`));
 
+    // The same ring over the light figure, where a ring drawn on the image
+    // itself would fall below 3:1.
+    for (let i = 0; i < 3; i += 1) await page.keyboard.press("Tab");
+    const onFour = await page.evaluate(
+      () =>
+        document.activeElement
+          ?.closest("[data-figure-number]")
+          ?.getAttribute("data-figure-number") ?? null
+    );
+    expect(onFour).toBe("4");
+    await page.waitForTimeout(250);
+    const focusClear = await rail.evaluate((el) => {
+      const scroller = el.querySelector('[role="list"]')!.getBoundingClientRect();
+      const thumb = el.querySelector('[data-figure-number="4"]')!.getBoundingClientRect();
+      return thumb.left >= scroller.left + 20 && thumb.right <= scroller.right - 20;
+    });
+    expect(focusClear).toBe(true);
+    written.push(await snap(rail, `several-${base}-rail-focus-light.png`));
+    // Back to the first thumbnail for the keyboard-open path below.
+    for (let i = 0; i < 3; i += 1) await page.keyboard.press("Shift+Tab");
+
     // Keyboard-open the lightbox from the focused thumbnail, which is how a keyboard
     // user reaches it, and look at where focus lands.
     await page.keyboard.press("Enter");
@@ -465,6 +486,6 @@ test("assistant figure rail and lightbox — states and themes", async ({ page }
 
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * 5 + 12);
+  expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * 5 + 13);
   console.log(`[figure-rail-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });
