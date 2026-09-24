@@ -357,7 +357,7 @@ export const theme: BuiltInThemeSource = {
     // budget — but it deliberately stops short of the beam ivory, which stays
     // reserved for an agent waiting on you.
     "pulse-heat-color": "#827862",
-    "pulse-heat-1": "#1B1813",
+    "pulse-heat-1": "#25201A",
     "pulse-heat-2": "#362F25",
     "pulse-heat-3": "#59523F",
     "pulse-heat-4": "#827862",
