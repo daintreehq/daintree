@@ -317,6 +317,7 @@ describe("SearchablePalette loading announcement", () => {
     rerender(
       <SearchablePalette<Item> {...base} results={[{ id: "a" }, { id: "b" }]} isLoading={false} />
     );
+    vi.advanceTimersByTime(400);
     expect(announceMock).toHaveBeenCalledTimes(2);
     expect(announceMock).toHaveBeenLastCalledWith("2 results", "polite");
   });
@@ -327,5 +328,36 @@ describe("SearchablePalette loading announcement", () => {
     rerender(<SearchablePalette<Item> {...base} results={[]} isLoading={false} />);
     vi.advanceTimersByTime(1000);
     expect(announceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not restart the loading announcement when rows arrive mid-load", () => {
+    const { rerender } = render(<SearchablePalette<Item> {...base} results={[]} isLoading />);
+    vi.advanceTimersByTime(300);
+    rerender(<SearchablePalette<Item> {...base} results={[{ id: "a" }]} isLoading />);
+    vi.advanceTimersByTime(150);
+    expect(announceMock).toHaveBeenCalledTimes(1);
+    rerender(<SearchablePalette<Item> {...base} results={[{ id: "a" }, { id: "b" }]} isLoading />);
+    vi.advanceTimersByTime(1000);
+    expect(announceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("speaks one count when a load and a filter pass settle together", () => {
+    const { rerender } = render(
+      <SearchablePalette<Item> {...base} query="a" results={[]} isLoading isFiltering />
+    );
+    vi.advanceTimersByTime(400);
+    announceMock.mockClear();
+    rerender(
+      <SearchablePalette<Item>
+        {...base}
+        query="a"
+        results={[{ id: "a" }]}
+        isLoading={false}
+        isFiltering={false}
+      />
+    );
+    vi.advanceTimersByTime(1000);
+    expect(announceMock).toHaveBeenCalledTimes(1);
+    expect(announceMock).toHaveBeenCalledWith("1 result", "polite");
   });
 });
