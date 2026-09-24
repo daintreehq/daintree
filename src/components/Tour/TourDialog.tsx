@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { TourControls } from "./TourControls";
@@ -52,6 +52,8 @@ function TourBody({
   const state = useTourPlayerState(player);
   // Holding stops a finished chapter's countdown; any new chapter or replay starts fresh.
   const [heldAt, setHeldAt] = useState<number | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const backLeavingRef = useRef(false);
   const held = state.status === "ended" && heldAt === state.chapterIndex;
   const chapter = TOUR_CHAPTERS[state.chapterIndex]!;
   const isLast = state.chapterIndex === TOUR_CHAPTERS.length - 1;
@@ -61,6 +63,12 @@ function TourBody({
   useEffect(() => {
     if (state.status === "playing") setHeldAt(null);
   }, [state.status]);
+
+  useLayoutEffect(() => {
+    if (!backLeavingRef.current) return;
+    backLeavingRef.current = false;
+    bodyRef.current?.querySelector<HTMLElement>("[data-confirm-role='confirm']")?.focus();
+  }, [state.chapterIndex]);
 
   const reachedRef = useRef(onChapterReached);
   const completedRef = useRef(onCompleted);
@@ -119,7 +127,7 @@ function TourBody({
     // Player keys mirror common video players and cover the whole dialog —
     // header and footer too, where focus starts. `contents` keeps the dialog's
     // own column layout intact.
-    <div className="contents" onKeyDown={onKeyDown}>
+    <div ref={bodyRef} className="contents" onKeyDown={onKeyDown}>
       <AppDialog.Header>
         <div className="flex min-w-0 items-center gap-3">
           <AppDialog.Title
@@ -167,13 +175,22 @@ function TourBody({
         </div>
       </div>
       <AppDialog.Footer
-        // Back stays on the first chapter, unavailable rather than gone, so
-        // stepping back onto it never takes the focused button away.
-        secondaryAction={{
-          label: "Back",
-          disabled: state.chapterIndex === 0,
-          onClick: () => player.previous(),
-        }}
+        secondaryAction={
+          state.chapterIndex > 0
+            ? {
+                label: "Back",
+                onClick: () => {
+                  // Back leaves with the first chapter; its focus goes to Next.
+                  const active = document.activeElement;
+                  backLeavingRef.current =
+                    state.chapterIndex === 1 &&
+                    active instanceof HTMLElement &&
+                    active.dataset.confirmRole === "cancel";
+                  player.previous();
+                },
+              }
+            : undefined
+        }
         primaryAction={{ label: isLast ? "Finish" : "Next", onClick: advance }}
       />
     </div>

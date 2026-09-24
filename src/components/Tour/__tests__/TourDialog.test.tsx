@@ -16,19 +16,20 @@ vi.mock("@/components/ui/AppDialog", () => {
   }: {
     hint?: ReactNode;
     primaryAction?: { label: string; onClick: () => void };
-    secondaryAction?: { label: string; onClick: () => void; disabled?: boolean };
+    secondaryAction?: { label: string; onClick: () => void };
   }) => (
     <div>
       <span data-testid="hint">{hint}</span>
       {secondaryAction && (
-        <button
-          aria-disabled={secondaryAction.disabled || undefined}
-          onClick={secondaryAction.disabled ? undefined : secondaryAction.onClick}
-        >
+        <button data-confirm-role="cancel" onClick={secondaryAction.onClick}>
           {secondaryAction.label}
         </button>
       )}
-      {primaryAction && <button onClick={primaryAction.onClick}>{primaryAction.label}</button>}
+      {primaryAction && (
+        <button data-confirm-role="confirm" onClick={primaryAction.onClick}>
+          {primaryAction.label}
+        </button>
+      )}
     </div>
   );
   return { AppDialog };
@@ -93,7 +94,7 @@ describe("TourDialog", () => {
   it("steps forward and back through chapters and reports each one reached", () => {
     const { props } = renderDialog();
     expect(screen.getByRole("heading", { level: 3 }).textContent).toBe(TOUR_CHAPTERS[0]!.title);
-    expect(screen.getByRole("button", { name: "Back" }).getAttribute("aria-disabled")).toBe("true");
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByRole("heading", { level: 3 }).textContent).toBe(TOUR_CHAPTERS[1]!.title);
@@ -103,8 +104,9 @@ describe("TourDialog", () => {
     back.focus();
     fireEvent.click(back);
     expect(screen.getByRole("heading", { level: 3 }).textContent).toBe(TOUR_CHAPTERS[0]!.title);
-    // Back is unavailable on the first chapter but still there, still focused.
-    expect(document.activeElement).toBe(back);
+    // Back goes with the first chapter; the focus it held moves to Next.
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Next" }));
   });
 
   it("resumes on the chapter it was opened at", () => {
