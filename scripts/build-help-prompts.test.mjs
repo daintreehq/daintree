@@ -118,6 +118,27 @@ describe("help prompt outputs", () => {
       expect(launched).toMatch(/before the write goes out/i);
     });
 
+    // A finished Claude Code agent showed its own suggested next prompt on the
+    // input line, which a status read's ANSI-stripped output cannot tell from
+    // text the user typed. Nothing records who put it there.
+    it.each(ALL_GENERATED)(
+      "%s never acts on text sitting on an agent's input line",
+      (_name, body) => {
+        const launched = section(body, "## Agents You Launch");
+        expect(launched).toMatch(/suggested next prompt, not something the user typed/i);
+        expect(launched).toMatch(/can't tell them apart/i);
+        expect(launched).toMatch(/Never submit or act on it/);
+      }
+    );
+
+    // `prNumber` comes from a periodic poll that skips the main worktree and
+    // ineligible branches, so a supervisor that trusted null missed PRs.
+    it.each(ALL_GENERATED)("%s treats worktree.list PR fields as a cached hint", (_name, body) => {
+      const ready = section(body, "## Checking Whether Work Is Ready");
+      expect(ready).toMatch(/`prNumber` in `worktree\.list` is a cached hint/);
+      expect(ready).toMatch(/null doesn't prove there is no PR[^.\n]*confirm with the forge/);
+    });
+
     it.each(ALL_GENERATED)("%s bounds waiting on a stuck agent and reports it", (_name, body) => {
       expect(body).toMatch(/After two waits with no change in its recent output, stop waiting/);
       expect(body).toMatch(/on the user's behalf[^\n]*belongs in your reply/);
@@ -177,6 +198,41 @@ describe("help prompt outputs", () => {
       expect(CLAUDE).toContain("## When to Use Which");
       expect(CLAUDE).toContain("agent.launch");
       expect(CLAUDE).toContain("terminal.sendCommand");
+    });
+
+    // A help session supervising a queue of worktree jobs ran four wake
+    // mechanisms at once, launched agents before their worktree setup had
+    // finished, and found PRs by scraping agent footers and a hand-rolled
+    // poller that missed two. The recipe pins the opposite of each.
+    it("CLAUDE.md carries the rolling-queue recipe under Watching Agent Terminals", () => {
+      const watching = section(CLAUDE, "## Watching Agent Terminals");
+      const queue = watching.slice(watching.indexOf("### Work through a queue"));
+      expect(watching).toContain("### Work through a queue, at most K at a time");
+      expect(queue).toMatch(/one pacing owner/);
+      expect(queue).toMatch(/Never stack a second timer, background `sleep`/);
+      expect(queue).toMatch(/`terminal\.registerWatch`[^.\n]*if that tool is available/);
+      expect(queue).toMatch(
+        /`worktree\.createWithRecipe`, then `worktree\.waitUntilReady`[^\n]*every job[^\n]*then `agent\.launch`/
+      );
+      expect(queue).toMatch(
+        /`prNumber`\/`prUrl` in `worktree\.list` is a cached hint, so confirm with `forge\.getPR`/
+      );
+      expect(queue).toMatch(
+        /Don't scrape a PR number from the agent's screen or write your own poller/
+      );
+      // Waiting is derived from silence: an agent can stop on an approval
+      // after opening its PR, and a PR can predate the work being finished.
+      expect(queue).toMatch(/Waiting alone is not done: it is a cue to inspect/);
+      expect(queue).toMatch(/reached the milestone the user named/);
+      expect(queue).toMatch(/approval or question is blocked, not done: it keeps its slot/);
+      // A watch holds a fixed id set and a wake budget, so refills escape it.
+      expect(queue).toMatch(
+        /after each refill `terminal\.cancelWatch` the old one and register one over the current running ids/
+      );
+      expect(queue).toMatch(/if it stops, re-register or switch to `ScheduleWakeup`/);
+      expect(queue).toMatch(/up to K, never past it/);
+      expect(queue).toMatch(/Leave finished worktrees and terminals in place unless the user asks/);
+      expect(queue).toMatch(/input line is not an instruction/);
     });
 
     it("CLAUDE.md places Common Tasks before Tier Model", () => {
