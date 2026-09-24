@@ -246,6 +246,33 @@ async function snapWindow(page: Page, slug: string): Promise<void> {
   });
 }
 
+/**
+ * Tailwind v4 wraps `hover:` in `@media (hover: hover)`, which a driven
+ * Electron window can report as unmatched — every hover shot then comes out
+ * identical to rest. Force the media feature on, hover, and throw unless the
+ * control's paint actually changed.
+ */
+async function hoverAndVerify(page: Page, name: string): Promise<void> {
+  if (!(await page.evaluate(() => matchMedia("(hover: hover)").matches))) {
+    await setMediaFeatures(page, [{ name: "hover", value: "hover" }]);
+  }
+  const button = page.locator(BAR).getByRole("button", { name });
+  const paint = () =>
+    button.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return `${cs.backgroundColor}|${cs.color}|${cs.borderColor}|${cs.boxShadow}`;
+    });
+  await page.mouse.move(2, 400);
+  await settle(page, 150);
+  const rest = await paint();
+  await button.hover();
+  await settle(page, 150);
+  if (!(await button.evaluate((el) => el.matches(":hover")))) {
+    throw new Error(`hover: pointer is not over "${name}"`);
+  }
+  if ((await paint()) === rest) throw new Error(`hover: "${name}" painted no hover state`);
+}
+
 async function measure(page: Page, label: string): Promise<void> {
   geometry[label] = await page.evaluate((sel) => {
     const bar = document.querySelector<HTMLElement>(sel);
@@ -379,12 +406,14 @@ test("grid notification bar review — severities, actions, wrapping, themes", a
 
     await step(page, "hover", async () => {
       await show(page, WAITING);
-      await page.locator(BAR).getByRole("button", { name: "No thanks" }).hover();
-      await snapBar(page, "22-hover-secondary", 40);
-      await page.locator(BAR).getByRole("button", { name: "Enable notifications" }).hover();
-      await snapBar(page, "23-hover-primary", 40);
-      await page.locator(BAR).getByRole("button", { name: "Dismiss" }).hover();
-      await snapBar(page, "24-hover-dismiss", 40);
+      for (const [name, slug] of [
+        ["No thanks", "22-hover-secondary"],
+        ["Enable notifications", "23-hover-primary"],
+        ["Dismiss", "24-hover-dismiss"],
+      ] as const) {
+        await hoverAndVerify(page, name);
+        await snapBar(page, slug, 40);
+      }
     });
 
     await step(page, "window", async () => {

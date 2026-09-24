@@ -452,13 +452,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       expectedOccurrences: 1,
       rationale: "Recorded result carried by a success notification on the grid bar",
     },
-    {
-      category: "outcome",
-      signature: "text-status-success",
-      anchor: 'titleClass: "text-status-success"',
-      expectedOccurrences: 1,
-      rationale: "Recorded result carried by a success notification on the grid bar",
-    },
   ],
   "src/components/Terminal/MissingCliGate.tsx": [
     {
@@ -767,5 +760,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 90;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 94;
+export const EXPECTED_STATUS_SUCCESS_SITES = 89;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 93;

@@ -1,6 +1,8 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { restoreFocusTo } from "@/lib/accessibility";
 import {
   BANNER_ENTER_DURATION,
   BANNER_EXIT_DURATION,
@@ -12,48 +14,35 @@ import {
   useNotificationStore,
   type Notification,
 } from "@/store/notificationStore";
+import { SEVERITY_ICON } from "./InlineStatusBanner";
 
 // Background uses the pre-baked status-surface wash (rgba, polarity-aware) and
 // the border mixes the status color toward the opaque grid surface. Both avoid
 // color-mix(..., transparent), which black-shifts on light backgrounds in oklab.
+// Severity lives in the wash and the glyph only: severity-coloured type misses
+// 4.5:1 on most themes, so the title and body stay on the neutral text ramp.
 const STATUS_CONFIG = {
   success: {
-    icon: CheckCircle2,
     containerClass:
       "border-[color-mix(in_oklab,var(--color-status-success)_35%,var(--color-surface-grid))] bg-status-success-surface",
     iconClass: "text-status-success",
-    titleClass: "text-status-success",
   },
   error: {
-    icon: XCircle,
     containerClass:
       "border-[color-mix(in_oklab,var(--color-status-error)_35%,var(--color-surface-grid))] bg-status-error-surface",
     iconClass: "text-status-error",
-    titleClass: "text-status-error",
   },
   info: {
-    icon: Info,
     containerClass:
       "border-[color-mix(in_oklab,var(--color-status-info)_35%,var(--color-surface-grid))] bg-status-info-surface",
     iconClass: "text-status-info",
-    titleClass: "text-status-info",
   },
   warning: {
-    icon: AlertTriangle,
     containerClass:
       "border-[color-mix(in_oklab,var(--color-status-warning)_35%,var(--color-surface-grid))] bg-status-warning-surface",
     iconClass: "text-status-warning",
-    titleClass: "text-status-warning",
   },
-} satisfies Record<
-  Notification["type"],
-  {
-    icon: React.ComponentType<{ className?: string }>;
-    containerClass: string;
-    iconClass: string;
-    titleClass: string;
-  }
->;
+} satisfies Record<Notification["type"], { containerClass: string; iconClass: string }>;
 
 function getActions(notification: Notification) {
   if (notification.actions && notification.actions.length > 0) {
@@ -88,28 +77,61 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
   // override it (settings → reduced-animations, perf governor → performance-mode).
   const prefersReducedMotion =
     typeof window !== "undefined" &&
-    (window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+    ((typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches) ||
       (typeof document !== "undefined" &&
         (document.body.getAttribute("data-reduce-animations") === "true" ||
           document.body.getAttribute("data-performance-mode") === "true")));
 
-  // displayedNotification lags `notification` so the bar can keep rendering
-  // through the exit animation after the store entry is already gone, and so
-  // the live region can be cleared mid-swap without unmounting.
-  const initialNotification = notification ?? null;
-  const [displayedNotification, setDisplayedNotification] = useState<Notification | null>(
-    initialNotification
-  );
-  const [isVisible, setIsVisible] = useState(prefersReducedMotion && initialNotification !== null);
+  // Two views of the same notification, deliberately out of step:
+  //   - `presented` is what the strip draws. It lags `notification` only so the
+  //     strip can keep painting through its exit fade, and switches straight
+  //     to a replacement so the strip never blanks or changes height mid-swap.
+  //   - `announced` is what the live region holds. It always starts empty and
+  //     fills LIVE_REGION_SWAP_DELAY later, so AT hears a fresh addition to a
+  //     region that already existed — including for a notification that was in
+  //     the store before this component mounted.
+  const [presented, setPresented] = useState<Notification | null>(notification ?? null);
+  const [announced, setAnnounced] = useState<Notification | null>(null);
+  const [isVisible, setIsVisible] = useState(prefersReducedMotion && notification !== undefined);
   const exitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const entryFrameRef = useRef<number | null>(null);
   const swapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const cardRef = useRef<HTMLDivElement>(null);
+  // Whether keyboard focus is on one of the strip's controls, and where it came
+  // from. When the notification leaves (dismissed, actioned, replaced) the
+  // control goes with it, and Chromium drops focus on <body> without a blur —
+  // so focus is handed back to where the user was working instead.
+  const focusWithinRef = useRef(false);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+
+  const handleFocusCapture = (e: React.FocusEvent) => {
+    const card = cardRef.current;
+    if (!card) return;
+    focusWithinRef.current = true;
+    const from = e.relatedTarget;
+    if (from instanceof HTMLElement && !card.contains(from)) returnFocusRef.current = from;
+  };
+  const handleBlurCapture = (e: React.FocusEvent) => {
+    const card = cardRef.current;
+    if (!card) return;
+    if (e.relatedTarget instanceof Node && card.contains(e.relatedTarget)) return;
+    if (e.relatedTarget) focusWithinRef.current = false;
+  };
+  const releaseFocus = () => {
+    if (!focusWithinRef.current) return;
+    focusWithinRef.current = false;
+    const region = cardRef.current?.closest<HTMLElement>('[role="region"]');
+    restoreFocusTo(returnFocusRef.current, region);
+  };
+
   useEffect(() => {
     if (!notification) {
       // Notification cleared: cancel any in-flight entry rAF or swap timer
-      // (either would otherwise re-open the bar mid-collapse), collapse, then
-      // unmount content after the exit window.
+      // (either would otherwise re-open the bar mid-collapse), hand focus back
+      // before the controls go inert, collapse, then unmount content after the
+      // exit window.
       if (entryFrameRef.current !== null) {
         cancelAnimationFrame(entryFrameRef.current);
         entryFrameRef.current = null;
@@ -118,11 +140,13 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
         clearTimeout(swapTimeoutRef.current);
         swapTimeoutRef.current = null;
       }
+      releaseFocus();
       setIsVisible(false);
       if (exitTimeoutRef.current !== null) clearTimeout(exitTimeoutRef.current);
       exitTimeoutRef.current = setTimeout(() => {
         exitTimeoutRef.current = null;
-        setDisplayedNotification(null);
+        setPresented(null);
+        setAnnounced(null);
       }, BANNER_EXIT_DURATION);
       return;
     }
@@ -133,47 +157,30 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
       exitTimeoutRef.current = null;
     }
 
-    // Replacement detection: there is (or was) live-region content that needs
-    // to be flushed before the new notification is announced. Covers two cases:
-    //   - displayed is non-null with a different id (active swap)
-    //   - a swap is already in flight (live region cleared, target pending)
-    //     and a third notification arrives — retarget the pending swap.
-    const isReplacement =
-      (displayedNotification !== null && displayedNotification.id !== notification.id) ||
-      swapTimeoutRef.current !== null;
+    const isReplacement = presented !== null && presented.id !== notification.id;
 
-    if (isReplacement) {
-      // VoiceOver buffer flush: clear the live region first, wait ~150ms, then
-      // re-populate so AT picks up the change as a fresh announcement. The
-      // delay is a screen-reader concern, NOT motion — do not gate it on
-      // prefers-reduced-motion.
-      if (entryFrameRef.current !== null) {
-        cancelAnimationFrame(entryFrameRef.current);
-        entryFrameRef.current = null;
-      }
-      if (swapTimeoutRef.current !== null) {
-        clearTimeout(swapTimeoutRef.current);
-      }
-      setDisplayedNotification(null);
-      // Ensure the bar stays open during the swap gap (e.g. if a swap arrives
-      // mid-exit). Idempotent when already true.
-      setIsVisible(true);
-      swapTimeoutRef.current = setTimeout(() => {
-        swapTimeoutRef.current = null;
-        setDisplayedNotification(notification);
-      }, LIVE_REGION_SWAP_DELAY);
-      return;
-    }
+    // VoiceOver buffer flush: clear the live region first, wait ~150ms, then
+    // re-populate so AT picks up the change as a fresh announcement. The delay
+    // is a screen-reader concern, NOT motion — do not gate it on
+    // prefers-reduced-motion. A third notification arriving mid-gap retargets
+    // the pending announcement, so only the latest is spoken.
+    setPresented(notification);
+    setAnnounced(null);
+    if (swapTimeoutRef.current !== null) clearTimeout(swapTimeoutRef.current);
+    swapTimeoutRef.current = setTimeout(() => {
+      swapTimeoutRef.current = null;
+      setAnnounced(notification);
+    }, LIVE_REGION_SWAP_DELAY);
 
-    // First entry from an empty live region: set content and animate in on the
-    // next frame so the browser sees the h-0/opacity-0 state before transitioning.
-    // Skip the rAF under reduced motion — the transition is zeroed out anyway.
-    setDisplayedNotification(notification);
     if (entryFrameRef.current !== null) {
       cancelAnimationFrame(entryFrameRef.current);
       entryFrameRef.current = null;
     }
-    if (prefersReducedMotion) {
+    // A replacement arriving mid-exit re-opens the strip at once; so does
+    // anything under reduced motion, where the transition is zeroed anyway.
+    // A first entry opens on the next frame so the browser sees the collapsed
+    // state before transitioning.
+    if (isReplacement || prefersReducedMotion) {
       setIsVisible(true);
     } else {
       entryFrameRef.current = requestAnimationFrame(() => {
@@ -183,7 +190,24 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
     }
   }, [notification?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Refresh the dwell lock whenever the displayed notification changes.
+  // The store can revise a notification in place — new message, new actions,
+  // same id. Pick that up without replaying the entry or the swap gap.
+  useEffect(() => {
+    if (!notification) return;
+    setPresented((p) => (p && p.id === notification.id ? notification : p));
+    setAnnounced((a) => (a && a.id === notification.id ? notification : a));
+  }, [notification]);
+
+  // A replacement can unmount the focused action (its label keys it). If that
+  // left focus on <body>, hand it back rather than stranding the user.
+  useEffect(() => {
+    if (!focusWithinRef.current) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    releaseFocus();
+  }, [presented?.id]);
+
+  // Refresh the dwell lock whenever the presented notification changes.
   // Uses a layout effect so the lock is set before paint — a contender
   // arriving in the same render cycle as the first mount cannot preempt
   // before the dwell guard is in place.
@@ -192,12 +216,12 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
       clearTimeout(dwellTimeoutRef.current);
       dwellTimeoutRef.current = null;
     }
-    if (!displayedNotification) {
+    if (!presented) {
       lockedIdRef.current = undefined;
       return;
     }
-    lockedIdRef.current = displayedNotification.id;
-    const firstShownAt = displayedNotification.firstShownAt ?? Date.now();
+    lockedIdRef.current = presented.id;
+    const firstShownAt = presented.firstShownAt ?? Date.now();
     const dwellRemaining = firstShownAt + GRID_BAR_DWELL_FLOOR_MS - Date.now();
     if (dwellRemaining <= 0) {
       // Already past the floor; nudge a re-render so the selector can pick
@@ -209,7 +233,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
       dwellTimeoutRef.current = null;
       setDwellTick((t) => t + 1);
     }, dwellRemaining);
-  }, [displayedNotification?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [presented?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => {
@@ -232,22 +256,24 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
     };
   }, []);
 
-  const config = displayedNotification ? STATUS_CONFIG[displayedNotification.type] : null;
-  const Icon = config?.icon;
-  const actions = displayedNotification ? getActions(displayedNotification) : [];
+  const config = presented ? STATUS_CONFIG[presented.type] : null;
+  const Icon = presented ? SEVERITY_ICON[presented.type] : null;
+  const actions = presented ? getActions(presented) : [];
 
   // While not visible (entry pre-rAF or mid-exit), the bar is visually
   // collapsed but still in the DOM. Keep the wrapper out of the accessibility
   // tree's "imperceptible" state (no `inert`) so the live-region announcement
-  // fires when content lands. Suppress focus/click on action buttons instead.
+  // fires when content lands. Suppress focus/click on the controls instead.
   const interactionGuard = isVisible ? {} : { tabIndex: -1, "aria-hidden": true as const };
-  const buttonPointerClass = isVisible ? "" : "pointer-events-none";
+  const buttonPointerClass = isVisible ? undefined : "pointer-events-none";
 
   return (
     <div
       data-testid="grid-notification-bar"
       className={cn(
-        "grid-notification-wrapper shrink-0 overflow-hidden transition-[height,opacity]",
+        // Height snaps rather than animates: easing the strip's height would
+        // resize every terminal beneath it on every frame.
+        "grid-notification-wrapper shrink-0 overflow-hidden transition-[opacity]",
         isVisible
           ? "h-auto opacity-100 ease-[var(--ease-snappy)]"
           : "h-0 opacity-0 ease-[var(--ease-exit)]"
@@ -259,83 +285,81 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
       }}
     >
       <div
+        ref={cardRef}
+        onFocusCapture={handleFocusCapture}
+        onBlurCapture={handleBlurCapture}
         className={cn(
-          "flex items-center gap-3 rounded-[var(--radius-sm)] border px-3 py-2.5 shadow-[var(--theme-shadow-ambient)]",
+          // Laid out like the InlineStatusBanner strips stacked beneath it:
+          // controls trail the text, and drop beneath it — aligned past the
+          // glyph, dismiss holding the right edge — once the grid is too
+          // narrow for a sentence and two actions to share a row.
+          "@container/banner relative flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-[var(--radius-sm)] border px-3 py-2 shadow-[var(--theme-shadow-ambient)]",
           config?.containerClass,
           className
         )}
       >
-        {/* Live region: text content only. APG anti-pattern to nest action
-         *  buttons here — they render as siblings below. Always mounted (even
-         *  when empty) so AT registers the region on page load rather than
-         *  ignoring a late-mounted live region. */}
-        <div
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          className="flex min-w-0 flex-1 items-center gap-3"
-        >
-          {displayedNotification && Icon && config && (
+        {/* Live region: text only, always mounted, visually hidden. APG
+         *  anti-pattern to nest the controls here, and keeping it separate from
+         *  the visible text is what lets the strip hold its content through
+         *  the announcement gap. */}
+        <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+          {announced && (
             <>
-              <Icon className={cn("h-4 w-4 shrink-0", config.iconClass)} aria-hidden="true" />
-              <div className="min-w-0 flex-1">
-                {displayedNotification.title && (
-                  <p
-                    className={cn(
-                      "text-xs font-mono uppercase tracking-wide leading-tight",
-                      config.titleClass
-                    )}
-                  >
-                    {displayedNotification.title}
-                  </p>
-                )}
-                <div className="text-xs leading-snug text-text-primary">
-                  {displayedNotification.message}
-                </div>
-              </div>
+              {announced.title && <span>{announced.title}. </span>}
+              <span>{announced.message}</span>
             </>
           )}
         </div>
+
+        {presented && Icon && config && (
+          <div aria-hidden="true" className="flex min-w-0 flex-1 items-start gap-2">
+            <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", config.iconClass)} />
+            <div className="min-w-0 flex-1 break-words">
+              {presented.title ? (
+                <>
+                  <p className="text-sm font-medium text-text-primary">{presented.title}</p>
+                  <div className="mt-0.5 text-xs text-text-secondary">{presented.message}</div>
+                </>
+              ) : (
+                <div className="text-sm text-text-primary">{presented.message}</div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Controls: action buttons first, dismiss trailing. Dismiss is always
          *  present — the grid bar carries signals from outside the visible UI,
          *  so the user must be able to clear one that is already handled or
          *  irrelevant without waiting for a duration persistent notifications
-         *  do not have. Ordering matches Toast (actions, then close). */}
-        {displayedNotification && (
-          <div className="flex shrink-0 items-center gap-1.5">
+         *  do not have. Same Button mapping as InlineStatusBanner: the
+         *  recommended action is the outlined one, the alternative is ghost,
+         *  and severity stays in the wash rather than on the buttons. */}
+        {presented && (
+          <div className="flex shrink-0 items-center gap-1 @max-[52rem]/banner:basis-full @max-[52rem]/banner:flex-wrap @max-[52rem]/banner:gap-y-1 @max-[52rem]/banner:pl-6">
             {actions.map((action, index) => (
-              <button
+              <Button
                 key={`${action.label}-${index}`}
-                type="button"
+                variant={action.variant === "secondary" ? "ghost" : "outline"}
+                size="sm"
                 onClick={() => {
                   void action.onClick();
                 }}
-                className={cn(
-                  "h-7 rounded-[var(--radius-xs)] px-3 text-xs font-medium transition-colors",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/60",
-                  action.variant === "secondary"
-                    ? "border border-tint/15 bg-tint/5 text-daintree-text/80 hover:bg-tint/10 hover:text-text-primary"
-                    : "border border-status-info/30 bg-status-info/15 text-status-info hover:bg-status-info/20",
-                  buttonPointerClass
-                )}
+                className={buttonPointerClass}
                 {...interactionGuard}
               >
                 {action.label}
-              </button>
+              </Button>
             ))}
-            <button
-              type="button"
-              onClick={() => removeNotification(displayedNotification.id)}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => removeNotification(presented.id)}
               aria-label="Dismiss"
-              className={cn(
-                "flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-xs)] text-daintree-text/60 transition-colors hover:bg-tint/10 hover:text-daintree-text/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/60",
-                buttonPointerClass
-              )}
+              className={cn("@max-[52rem]/banner:ml-auto", buttonPointerClass)}
               {...interactionGuard}
             >
-              <X className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
+              <X aria-hidden="true" />
+            </Button>
           </div>
         )}
       </div>

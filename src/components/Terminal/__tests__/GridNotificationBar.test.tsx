@@ -52,6 +52,18 @@ function getLiveRegion(container: HTMLElement): HTMLElement | null {
   return container.querySelector('[role="status"]');
 }
 
+/** What the strip draws — the text a sighted user reads, outside the live region. */
+function shownText(container: HTMLElement): string {
+  const card = getWrapper(container)?.firstElementChild;
+  if (!card) return "";
+  return Array.from(card.children)
+    .filter(
+      (el) => el.getAttribute("role") !== "status" && el.getAttribute("aria-hidden") === "true"
+    )
+    .map((el) => el.textContent ?? "")
+    .join("");
+}
+
 describe("GridNotificationBar animation", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -118,7 +130,7 @@ describe("GridNotificationBar animation", () => {
     addGridBar({ message: "Goodbye" });
     const { container } = render(<GridNotificationBar />);
     act(() => {
-      vi.advanceTimersByTime(16);
+      vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY);
     });
 
     expect(getWrapper(container)?.className).toContain("h-auto");
@@ -150,11 +162,11 @@ describe("GridNotificationBar animation", () => {
 
   it("interrupts a pending exit and applies the swap delay when a replacement arrives", () => {
     addGridBar({ message: "First" });
-    const { container, getByText, queryByText } = render(<GridNotificationBar />);
+    const { container } = render(<GridNotificationBar />);
     act(() => {
       vi.advanceTimersByTime(16);
     });
-    expect(getByText("First")).toBeTruthy();
+    expect(shownText(container)).toContain("First");
 
     // A → null → B before the exit timer fires.
     act(() => {
@@ -171,22 +183,22 @@ describe("GridNotificationBar animation", () => {
       vi.advanceTimersByTime(16);
     });
 
-    // Mid-swap: live region cleared, "Second" not yet rendered.
-    expect(queryByText("Second")).toBeNull();
-    expect(queryByText("First")).toBeNull();
+    // Mid-swap: the strip already draws "Second" — it never blanks — while the
+    // live region stays empty until the announcement gap has passed.
+    expect(shownText(container)).toContain("Second");
+    expect(shownText(container)).not.toContain("First");
     expect(getLiveRegion(container)?.textContent).toBe("");
 
-    // After the swap delay, "Second" appears.
     act(() => {
       vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY);
     });
-    expect(getByText("Second")).toBeTruthy();
+    expect(getLiveRegion(container)?.textContent).toContain("Second");
 
     // Original exit timer's deadline passes; "Second" stays (exit was cancelled).
     act(() => {
       vi.advanceTimersByTime(BANNER_EXIT_DURATION);
     });
-    expect(getByText("Second")).toBeTruthy();
+    expect(shownText(container)).toContain("Second");
     expect(getWrapper(container)?.className).toContain("h-auto");
   });
 
@@ -225,7 +237,7 @@ describe("GridNotificationBar animation", () => {
     addGridBar({ message: "Announce me" });
     const { container } = render(<GridNotificationBar />);
     act(() => {
-      vi.advanceTimersByTime(16);
+      vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY);
     });
 
     const wrapper = getWrapper(container);
@@ -387,7 +399,7 @@ describe("GridNotificationBar animation", () => {
   });
 
   it("animates in when a notification is added after mount", () => {
-    const { container, getByText } = render(<GridNotificationBar />);
+    const { container } = render(<GridNotificationBar />);
     // Always-mounted: wrapper exists, just collapsed.
     expect(getWrapper(container)).not.toBeNull();
     expect(getWrapper(container)?.className).toContain("h-0");
@@ -397,7 +409,7 @@ describe("GridNotificationBar animation", () => {
     });
 
     // Synchronously rendered, but collapsed pending rAF.
-    expect(getByText("Late arrival")).toBeTruthy();
+    expect(shownText(container)).toContain("Late arrival");
     expect(getWrapper(container)?.className).toContain("h-0");
 
     act(() => {
@@ -475,11 +487,11 @@ describe("GridNotificationBar swap delay", () => {
 
   it("clears the live region and waits LIVE_REGION_SWAP_DELAY before announcing the replacement", () => {
     const firstId = addGridBar({ message: "First" });
-    const { container, queryByText, getByText } = render(<GridNotificationBar />);
+    const { container } = render(<GridNotificationBar />);
     act(() => {
       vi.advanceTimersByTime(16);
     });
-    expect(getByText("First")).toBeTruthy();
+    expect(shownText(container)).toContain("First");
 
     // Direct A→B swap (no intermediate null).
     act(() => {
@@ -487,22 +499,21 @@ describe("GridNotificationBar swap delay", () => {
       addGridBar({ message: "Second" });
     });
 
-    // Live region is cleared immediately on swap.
+    // Live region is cleared immediately on swap; the strip switches at once.
     expect(getLiveRegion(container)?.textContent).toBe("");
-    expect(queryByText("First")).toBeNull();
-    expect(queryByText("Second")).toBeNull();
+    expect(shownText(container)).not.toContain("First");
+    expect(shownText(container)).toContain("Second");
 
-    // Just under the swap delay: still empty.
+    // Just under the swap delay: the live region is still empty.
     act(() => {
       vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY - 1);
     });
-    expect(queryByText("Second")).toBeNull();
+    expect(getLiveRegion(container)?.textContent).toBe("");
 
-    // At the swap delay boundary: "Second" appears.
+    // At the swap delay boundary: "Second" is announced.
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(getByText("Second")).toBeTruthy();
     expect(getLiveRegion(container)?.textContent).toContain("Second");
     // Bar never collapsed visually — isVisible stayed true.
     expect(getWrapper(container)?.className).toContain("h-auto");
@@ -510,11 +521,11 @@ describe("GridNotificationBar swap delay", () => {
 
   it("re-announces same-text content when the id changes (VoiceOver buffer flush)", () => {
     const firstId = addGridBar({ message: "Saved" });
-    const { container, queryByText, getByText } = render(<GridNotificationBar />);
+    const { container } = render(<GridNotificationBar />);
     act(() => {
       vi.advanceTimersByTime(16);
     });
-    expect(getByText("Saved")).toBeTruthy();
+    expect(shownText(container)).toContain("Saved");
 
     // Same message text, fresh id — must clear and re-announce so AT re-reads it.
     act(() => {
@@ -523,22 +534,22 @@ describe("GridNotificationBar swap delay", () => {
     });
 
     expect(getLiveRegion(container)?.textContent).toBe("");
-    expect(queryByText("Saved")).toBeNull();
+    expect(shownText(container)).toContain("Saved");
 
     act(() => {
       vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY - 1);
     });
-    expect(queryByText("Saved")).toBeNull();
+    expect(getLiveRegion(container)?.textContent).toBe("");
 
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(getByText("Saved")).toBeTruthy();
+    expect(getLiveRegion(container)?.textContent).toContain("Saved");
   });
 
   it("collapses pending swaps so only the latest notification is announced (A→B→C)", () => {
     const firstId = addGridBar({ message: "First" });
-    const { queryByText, getByText } = render(<GridNotificationBar />);
+    const { container } = render(<GridNotificationBar />);
     act(() => {
       vi.advanceTimersByTime(16);
     });
@@ -558,8 +569,8 @@ describe("GridNotificationBar swap delay", () => {
     });
 
     // Second was retargeted to Third — Second never appears.
-    expect(queryByText("Second")).toBeNull();
-    expect(getByText("Third")).toBeTruthy();
+    expect(shownText(container)).not.toContain("Second");
+    expect(shownText(container)).toContain("Third");
   });
 });
 
@@ -577,13 +588,13 @@ describe("GridNotificationBar reduced motion", () => {
 
   it("renders the bar visible immediately without a rAF entry tick", () => {
     addGridBar({ message: "Instant" });
-    const { container, getByText } = render(<GridNotificationBar />);
+    const { container } = render(<GridNotificationBar />);
 
     // No rAF needed: wrapper starts visible.
     const wrapper = getWrapper(container);
     expect(wrapper?.className).toContain("h-auto");
     expect(wrapper?.className).toContain("opacity-100");
-    expect(getByText("Instant")).toBeTruthy();
+    expect(shownText(container)).toContain("Instant");
   });
 
   it("zeroes out the wrapper transition duration", () => {
@@ -596,9 +607,9 @@ describe("GridNotificationBar reduced motion", () => {
 
   it("still applies the 150ms swap delay even under reduced motion", () => {
     const firstId = addGridBar({ message: "First" });
-    const { container, queryByText, getByText } = render(<GridNotificationBar />);
+    const { container } = render(<GridNotificationBar />);
 
-    expect(getByText("First")).toBeTruthy();
+    expect(shownText(container)).toContain("First");
 
     act(() => {
       useNotificationStore.getState().removeNotification(firstId);
@@ -612,12 +623,12 @@ describe("GridNotificationBar reduced motion", () => {
     act(() => {
       vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY - 1);
     });
-    expect(queryByText("Second")).toBeNull();
+    expect(getLiveRegion(container)?.textContent).toBe("");
 
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(getByText("Second")).toBeTruthy();
+    expect(getLiveRegion(container)?.textContent).toContain("Second");
   });
 });
 
@@ -635,11 +646,11 @@ describe("GridNotificationBar selection contract", () => {
 
   it("does not preempt a low-priority notification with a high-priority one inside the dwell floor", () => {
     addGridBar({ message: "Low priority", priority: "low" });
-    const { container, getByText, queryByText } = render(<GridNotificationBar />);
+    const { container } = render(<GridNotificationBar />);
     act(() => {
       vi.advanceTimersByTime(16);
     });
-    expect(getByText("Low priority")).toBeTruthy();
+    expect(shownText(container)).toContain("Low priority");
 
     // Higher-priority contender arrives well inside the dwell window.
     act(() => {
@@ -648,25 +659,25 @@ describe("GridNotificationBar selection contract", () => {
     });
 
     // Dwell still active — newcomer is queued, low-priority stays.
-    expect(getByText("Low priority")).toBeTruthy();
-    expect(queryByText("High priority")).toBeNull();
+    expect(shownText(container)).toContain("Low priority");
+    expect(shownText(container)).not.toContain("High priority");
     expect(getLiveRegion(container)?.textContent).toContain("Low priority");
   });
 
   it("preempts the locked notification once the dwell floor elapses", () => {
     addGridBar({ message: "Low priority", priority: "low" });
-    const { getByText, queryByText } = render(<GridNotificationBar />);
+    const { container } = render(<GridNotificationBar />);
     act(() => {
       vi.advanceTimersByTime(16);
     });
-    expect(getByText("Low priority")).toBeTruthy();
+    expect(shownText(container)).toContain("Low priority");
 
     act(() => {
       vi.advanceTimersByTime(1000);
       addGridBar({ message: "High priority", priority: "high" });
     });
     // Still locked.
-    expect(queryByText("High priority")).toBeNull();
+    expect(shownText(container)).not.toContain("High priority");
 
     // Advance past the dwell floor + the live-region swap delay.
     act(() => {
@@ -676,17 +687,17 @@ describe("GridNotificationBar selection contract", () => {
       vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY + 16);
     });
 
-    expect(getByText("High priority")).toBeTruthy();
-    expect(queryByText("Low priority")).toBeNull();
+    expect(shownText(container)).toContain("High priority");
+    expect(shownText(container)).not.toContain("Low priority");
   });
 
   it("never lets a lower-priority newcomer preempt a higher-priority displayed notification, even after dwell", () => {
     addGridBar({ message: "High priority", priority: "high" });
-    const { getByText, queryByText } = render(<GridNotificationBar />);
+    const { container } = render(<GridNotificationBar />);
     act(() => {
       vi.advanceTimersByTime(16);
     });
-    expect(getByText("High priority")).toBeTruthy();
+    expect(shownText(container)).toContain("High priority");
 
     // Lower-priority newcomer arrives after dwell has fully elapsed.
     act(() => {
@@ -699,28 +710,28 @@ describe("GridNotificationBar selection contract", () => {
 
     // High-priority wins on score regardless of dwell — selection contract,
     // not just dwell, keeps it visible.
-    expect(getByText("High priority")).toBeTruthy();
-    expect(queryByText("Low priority")).toBeNull();
+    expect(shownText(container)).toContain("High priority");
+    expect(shownText(container)).not.toContain("Low priority");
   });
 
   it("picks the winning notification on first mount when multiple grid-bar notifications exist", () => {
     addGridBar({ message: "Low first", priority: "low" });
     addGridBar({ message: "High after", priority: "high" });
 
-    const { getByText, queryByText } = render(<GridNotificationBar />);
+    const { container } = render(<GridNotificationBar />);
     act(() => {
       vi.advanceTimersByTime(16);
     });
 
     // Old behavior (bare .find()) would show "Low first". New contract picks
     // the high-priority winner regardless of insertion order.
-    expect(getByText("High after")).toBeTruthy();
-    expect(queryByText("Low first")).toBeNull();
+    expect(shownText(container)).toContain("High after");
+    expect(shownText(container)).not.toContain("Low first");
   });
 
   it("locks the dwell window even when a higher-priority contender arrives in the same paint cycle", () => {
     const lowId = addGridBar({ message: "Low priority", priority: "low" });
-    const { getByText, queryByText } = render(<GridNotificationBar />);
+    const { container } = render(<GridNotificationBar />);
 
     // No rAF tick yet — entry hasn't even animated in. Add a high-priority
     // contender immediately, in the same paint cycle. The useLayoutEffect
@@ -734,8 +745,8 @@ describe("GridNotificationBar selection contract", () => {
       vi.advanceTimersByTime(16);
     });
 
-    expect(getByText("Low priority")).toBeTruthy();
-    expect(queryByText("High priority")).toBeNull();
+    expect(shownText(container)).toContain("Low priority");
+    expect(shownText(container)).not.toContain("High priority");
 
     // Cleanup: remove the low one to let the high one come up so afterEach
     // doesn't time out on pending dwell.
@@ -745,16 +756,16 @@ describe("GridNotificationBar selection contract", () => {
     act(() => {
       vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY + 16);
     });
-    expect(getByText("High priority")).toBeTruthy();
+    expect(shownText(container)).toContain("High priority");
   });
 
   it("releases promptly when the locked notification is dismissed mid-dwell", () => {
     addGridBar({ message: "Low priority", priority: "low" });
-    const { getByRole, getByText, queryByText } = render(<GridNotificationBar />);
+    const { container, getByRole } = render(<GridNotificationBar />);
     act(() => {
       vi.advanceTimersByTime(16);
     });
-    expect(getByText("Low priority")).toBeTruthy();
+    expect(shownText(container)).toContain("Low priority");
 
     act(() => {
       vi.advanceTimersByTime(1000);
@@ -763,7 +774,7 @@ describe("GridNotificationBar selection contract", () => {
     act(() => {
       addGridBar({ message: "High priority", priority: "high" });
     });
-    expect(queryByText("High priority")).toBeNull();
+    expect(shownText(container)).not.toContain("High priority");
 
     // User dismisses the locked low one through the rendered control, ~1s into
     // a 5s floor. Removing it drops it from the candidate set, so the lock
@@ -775,8 +786,8 @@ describe("GridNotificationBar selection contract", () => {
       vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY + 16);
     });
 
-    expect(getByText("High priority")).toBeTruthy();
-    expect(queryByText("Low priority")).toBeNull();
+    expect(shownText(container)).toContain("High priority");
+    expect(shownText(container)).not.toContain("Low priority");
   });
 
   it("clears the dwell timer on unmount without firing setState afterwards", () => {
@@ -800,5 +811,122 @@ describe("GridNotificationBar selection contract", () => {
 
     errorSpy.mockRestore();
     warnSpy.mockRestore();
+  });
+});
+
+describe("GridNotificationBar presentation invariants", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    stubMatchMedia(false);
+    useNotificationStore.getState().reset();
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    document.body.innerHTML = "";
+  });
+
+  it("mounts its live region empty even when a notification is already waiting, then announces it", () => {
+    addGridBar({ message: "Already here" });
+    const { container } = render(<GridNotificationBar />);
+
+    expect(getLiveRegion(container)?.textContent).toBe("");
+    expect(shownText(container)).toContain("Already here");
+
+    act(() => {
+      vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY);
+    });
+    expect(getLiveRegion(container)?.textContent).toContain("Already here");
+  });
+
+  it("never draws an empty strip while a replacement waits to be announced", () => {
+    const firstId = addGridBar({ message: "First" });
+    const { container } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY);
+    });
+
+    act(() => {
+      useNotificationStore.getState().removeNotification(firstId);
+      addGridBar({ message: "Second" });
+    });
+    for (let t = 0; t <= LIVE_REGION_SWAP_DELAY; t += 10) {
+      expect(shownText(container).trim()).not.toBe("");
+      act(() => {
+        vi.advanceTimersByTime(10);
+      });
+    }
+  });
+
+  it("draws a revised message for the same notification without replaying the announcement gap", () => {
+    const id = addGridBar({ message: "Swap is 80% full" });
+    const { container } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY);
+    });
+
+    act(() => {
+      useNotificationStore.getState().updateNotification(id, { message: "Swap is 95% full" });
+    });
+    expect(shownText(container)).toContain("Swap is 95% full");
+    expect(getLiveRegion(container)?.textContent).toContain("Swap is 95% full");
+  });
+
+  it("keeps severity off the text: only the glyph carries a status colour", () => {
+    for (const type of ["info", "warning", "error", "success"] as const) {
+      useNotificationStore.getState().reset();
+      addGridBar({ type, title: "Something happened", message: "Details" });
+      const { container, unmount } = render(<GridNotificationBar />);
+      const coloured = Array.from(
+        container.querySelectorAll<HTMLElement>("[class*='text-status-']")
+      );
+      expect(coloured.length).toBeGreaterThan(0);
+      for (const el of coloured) expect(el.tagName.toLowerCase()).toBe("svg");
+      unmount();
+    }
+  });
+
+  it("gives the recommended action a different treatment from the alternative", () => {
+    addGridBar({
+      message: "Pick one",
+      actions: [
+        { label: "Enable", onClick: vi.fn(), variant: "primary" },
+        { label: "Not now", onClick: vi.fn(), variant: "secondary" },
+      ],
+    });
+    const { getByRole } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    expect(getByRole("button", { name: "Enable" }).className).not.toBe(
+      getByRole("button", { name: "Not now" }).className
+    );
+  });
+
+  it("hands focus back to where the user was when they dismiss from the keyboard", () => {
+    const outside = document.createElement("button");
+    outside.textContent = "Terminal";
+    document.body.appendChild(outside);
+    addGridBar({ message: "Dismiss me" });
+    const { getByRole } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+
+    outside.focus();
+    const dismiss = getByRole("button", { name: "Dismiss" });
+    act(() => {
+      dismiss.focus();
+    });
+    expect(document.activeElement).toBe(dismiss);
+
+    act(() => {
+      fireEvent.click(dismiss);
+    });
+    act(() => {
+      vi.advanceTimersByTime(BANNER_EXIT_DURATION);
+    });
+    expect(document.activeElement).toBe(outside);
   });
 });
