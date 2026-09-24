@@ -1,5 +1,4 @@
-import { useCallback } from "react";
-import { isMac } from "@/lib/platform";
+import { KbdChord } from "@/components/ui/Kbd";
 import { SettingsShortcutCapture } from "./SettingsShortcutCapture";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 
@@ -9,50 +8,89 @@ export interface AgentShortcutCaptureProps {
   onCancel: () => void;
   /** Compact rendering for inline contexts like the agent tray dropdown. */
   compact?: boolean;
+  /** The agent's binding in force now; `""` when it has none. */
+  currentCombo?: string;
 }
 
-const AGENT_COMBO_PATTERN_MAC = /^Cmd\+Alt\+[A-Za-z]$/;
-const AGENT_COMBO_PATTERN_WIN_LINUX = /^Cmd\+Alt\+[A-Za-z]$/;
+/**
+ * The internal combo format uses "Cmd+" on every platform — SettingsShortcutCapture
+ * maps ctrlKey to "Cmd" off macOS — so one pattern covers Cmd+Alt+letter on Mac
+ * and Ctrl+Alt+letter elsewhere, and matches the stored bindings in
+ * defaultKeybindings.ts.
+ */
+const AGENT_COMBO_PATTERN = /^Cmd\+Alt\+[A-Za-z]$/;
+const AGENT_MODIFIERS = ["Cmd", "Alt"];
 
 /**
- * Thin wrapper around SettingsShortcutCapture that enforces the agent-shortcut
- * convention (Cmd+Alt+letter on Mac, Ctrl+Alt+letter elsewhere). The internal
- * combo format uses "Cmd+" on both platforms — SettingsShortcutCapture's
- * keydown handler maps ctrlKey to "Cmd" on non-Mac. We compare against that
- * canonical internal format, not the display form, so the validator stays
- * consistent with stored bindings in defaultKeybindings.ts.
+ * Keeps teaching the rule while modifiers are down, so following the live text
+ * never leads into a rejection: release what is extra, add what is missing, and
+ * only then ask for the letter.
+ */
+function agentHeldHint(held: string[]) {
+  const extra = held.filter((mod) => !AGENT_MODIFIERS.includes(mod));
+  if (extra.length > 0) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        Release
+        <KbdChord shortcut={extra.join("+")} />
+      </span>
+    );
+  }
+  const missing = AGENT_MODIFIERS.filter((mod) => !held.includes(mod));
+  if (missing.length > 0) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        Add
+        <KbdChord shortcut={missing.join("+")} />
+      </span>
+    );
+  }
+  return "Now press a letter";
+}
+
+function validateAgentCombo(combo: string) {
+  if (AGENT_COMBO_PATTERN.test(combo)) return null;
+  // Key caps rather than raw glyphs, so the reason is spoken as key names.
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      Agent shortcuts are
+      <KbdChord shortcut="Cmd+Alt" />
+      and a letter
+    </span>
+  );
+}
+
+/**
+ * SettingsShortcutCapture held to the agent-shortcut convention: one stroke of
+ * Cmd+Alt+letter (Ctrl+Alt+letter off macOS), stated before the first attempt,
+ * and never left sharing a combo with another action.
  */
 export function AgentShortcutCapture({
   agentId,
   onCapture,
   onCancel,
   compact = false,
+  currentCombo,
 }: AgentShortcutCaptureProps) {
-  const actionId = `agent.${agentId}`;
-  const mac = isMac();
-
-  const validateCombo = useCallback(
-    (combo: string): string | null => {
-      // Single-stroke combos only (no chords) for agent shortcuts.
-      if (combo.includes(" ")) {
-        return mac ? "Agent shortcuts use ⌘⌥ + letter" : "Agent shortcuts use Ctrl+Alt+letter";
-      }
-      const pattern = mac ? AGENT_COMBO_PATTERN_MAC : AGENT_COMBO_PATTERN_WIN_LINUX;
-      if (!pattern.test(combo)) {
-        return mac ? "Agent shortcuts use ⌘⌥ + letter" : "Agent shortcuts use Ctrl+Alt+letter";
-      }
-      return null;
-    },
-    [mac]
-  );
-
   return (
     <SettingsShortcutCapture
       onCapture={onCapture}
       onCancel={onCancel}
-      excludeActionId={actionId}
-      validateCombo={validateCombo}
+      excludeActionId={`agent.${agentId}`}
+      validateCombo={validateAgentCombo}
       compact={compact}
+      autoStart
+      currentCombo={currentCombo}
+      singleStroke
+      blockConflicts
+      heldHint={agentHeldHint}
+      recordingHint={
+        <span className="inline-flex items-center gap-1.5">
+          Hold
+          <KbdChord shortcut="Cmd+Alt" foreground="primary" />
+          and press a letter
+        </span>
+      }
     />
   );
 }
