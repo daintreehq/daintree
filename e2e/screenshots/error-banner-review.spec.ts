@@ -161,7 +161,10 @@ test("compact error banner — every scene, every theme", async ({ context }) =>
   for (const scene of ERROR_BANNER_SCENES) {
     written.push(
       await withPage(context, `${scene.name} ${first}`, async (page) =>
-        snap(await open(page, `theme=${first}&scene=${scene.name}`, 1), `${scene.name}-${first}.png`)
+        snap(
+          await open(page, `theme=${first}&scene=${scene.name}`, 1),
+          `${scene.name}-${first}.png`
+        )
       )
     );
   }

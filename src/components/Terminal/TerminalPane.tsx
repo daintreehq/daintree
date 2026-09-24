@@ -1362,6 +1362,7 @@ function TerminalPaneComponent({
         // Flush to the pane's edges like every other banner in this slot; each
         // row draws its own band and divider.
         <CompactErrorList
+          variant="flush"
           className="shrink-0"
           errors={terminalErrors}
           maxInline={2}

@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
+import { act, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { primeRadix } from "@/components/ui/radix-loader";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorBanner } from "../ErrorBanner";
 import type { ErrorRecord } from "@/store/errorStore";
 import { useErrorStore } from "@/store/errorStore";
@@ -12,6 +15,13 @@ vi.mock("@/services/ActionService", () => ({
     dispatch: (...args: unknown[]) => mockDispatch(...args),
   },
 }));
+
+// The app root supplies the provider the message tooltip needs.
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
+
+beforeAll(async () => {
+  await primeRadix();
+});
 
 function makeError(overrides: Partial<ErrorRecord> = {}): ErrorRecord {
   return {
@@ -68,23 +78,35 @@ describe("ErrorBanner", () => {
     // The glyph says "error", not "which subsystem" — a folder for git and a
     // triangle for config read as a file and a warning.
     it("draws the same severity glyph whatever the error type", () => {
-      const glyphs = (["git", "process", "filesystem", "network", "config", "unknown"] as const).map(
-        (type) => {
-          const { container, unmount } = render(
-            <ErrorBanner error={makeError({ type })} onDismiss={onDismiss} />
-          );
-          const svg = container.querySelector("svg")!.outerHTML;
-          unmount();
-          return svg;
-        }
-      );
+      const glyphs = (
+        ["git", "process", "filesystem", "network", "config", "unknown"] as const
+      ).map((type) => {
+        const { container, unmount } = render(
+          <ErrorBanner error={makeError({ type })} onDismiss={onDismiss} />
+        );
+        const svg = container.querySelector("svg")!.outerHTML;
+        unmount();
+        return svg;
+      });
       expect(new Set(glyphs).size).toBe(1);
     });
 
-    it("keeps the complete message available when a long one is shortened", () => {
+    // Whatever the row shortens stays reachable from the keyboard: the message
+    // becomes a tab stop whose tooltip holds the whole text.
+    it("makes a shortened message a tab stop, and leaves a whole one alone", () => {
       const long = `${"a".repeat(400)} tail`;
-      render(<ErrorBanner error={makeError({ message: long })} onDismiss={onDismiss} />);
-      expect(screen.getByTitle(long)).toBeTruthy();
+      const { container, unmount } = render(
+        <ErrorBanner error={makeError({ message: long })} onDismiss={onDismiss} />
+      );
+      const stop = container.querySelector<HTMLElement>("span[tabindex='0']");
+      expect(stop?.textContent).not.toBe(long);
+      expect(stop?.textContent?.length).toBeGreaterThan(0);
+      unmount();
+
+      const { container: short } = render(
+        <ErrorBanner error={makeError({ message: "Push failed" })} onDismiss={onDismiss} />
+      );
+      expect(short.querySelector("span[tabindex='0']")).toBeNull();
     });
 
     it("strips terminal escapes from the message", () => {
@@ -177,9 +199,7 @@ describe("ErrorBanner", () => {
       render(
         <ErrorBanner error={makeError({ ...retryable })} onDismiss={onDismiss} onRetry={vi.fn()} />
       );
-      expect(screen.getByRole("button", { name: "Retry" }).className).not.toMatch(
-        /status-success/
-      );
+      expect(screen.getByRole("button", { name: "Retry" }).className).not.toMatch(/status-success/);
     });
 
     it("renders exactly one contextual action beside the dismiss", () => {

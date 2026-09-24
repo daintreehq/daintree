@@ -165,7 +165,7 @@ export function WorktreeDetails({
           {/* Errors (if any) */}
           {worktreeErrors.length > 0 && (
             <CompactErrorList
-              className="rounded-[var(--radius-md)]"
+              variant="inset"
               errors={worktreeErrors}
               // Rows wrap their message rather than clip it, so two is what the
               // details area's 208px holds before the rest move to the disclosure.

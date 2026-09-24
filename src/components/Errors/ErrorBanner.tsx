@@ -1,11 +1,13 @@
-import { useCallback } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { RotateCcw } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import type { ErrorRecord, RetryAction } from "@/store/errorStore";
 import { RECURRENCE_THRESHOLD, useErrorStore } from "@/store/errorStore";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { actionService } from "@/services/ActionService";
 import { boundedErrorText, sanitizeErrorText } from "@/utils/errorText";
+import { cn } from "@/lib/utils";
 
 /**
  * Decide which CTA the banner should render. Pure function of `retryability`
@@ -46,6 +48,32 @@ function bannerCtaFor(error: ErrorRecord, hasOnRetry: boolean): BannerCta {
  * card's 320px — and the rest stays in the tooltip.
  */
 const MESSAGE_LIMIT = 300;
+
+/**
+ * Whether the clamp is hiding lines. `useTruncationDetection` measures width
+ * only, and a line clamp overflows downward.
+ */
+function useClamped<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [clamped, setClamped] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setClamped(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  });
+  return [ref, clamped] as const;
+}
+
+/* Restated under the variant on purpose: Tailwind v4 compiles the
+   outline-suppressing utility to an unconditional `--tw-outline-style: none`,
+   which cancels `focus-visible:outline-2` unless the style is set again there. */
+const FOCUS_RING =
+  "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 
 export interface ErrorBannerProps {
   error: ErrorRecord;
@@ -98,6 +126,8 @@ export function ErrorBanner({
   }, [error.recoveryAction]);
 
   const message = sanitizeErrorText(error.message);
+  const shown = boundedErrorText(message, MESSAGE_LIMIT);
+  const [messageRef, clamped] = useClamped<HTMLSpanElement>();
   const progress = error.retryProgress;
 
   let action: BannerAction | undefined;
@@ -133,14 +163,31 @@ export function ErrorBanner({
       severity="error"
       layout="inline"
       // Rows stack, and several assertive regions talking over each other is
-      // worse than none; a polite status still announces an arrival.
+      // worse than none. A region mounted already filled is not reliably read
+      // either, so arrivals are announced once by the list, and the row stays
+      // quiet — including when the overflow popover reveals it again.
       role="status"
+      ariaLive="off"
       animated={animated}
       className={className}
       title={
-        <span className="line-clamp-3 [overflow-wrap:anywhere]" title={message}>
-          {boundedErrorText(message, MESSAGE_LIMIT)}
-        </span>
+        // Clamped, the message becomes a tab stop whose tooltip holds the rest,
+        // so the part a clamp hides is reachable without running the action.
+        <TruncatedTooltip
+          content={message}
+          isTruncated={clamped || shown !== message}
+          contentClassName="max-w-md [overflow-wrap:anywhere]"
+        >
+          <span
+            ref={messageRef}
+            className={cn(
+              "line-clamp-3 [overflow-wrap:anywhere] rounded-[var(--radius-sm)]",
+              FOCUS_RING
+            )}
+          >
+            {shown}
+          </span>
+        </TruncatedTooltip>
       }
       description={description}
       action={action}

@@ -30,7 +30,7 @@ installPreviewShims();
  *   ?scene=terminal-overflow     one scene on its own (default: every scene)
  *
  * The pane chrome, terminal lines and card header are harness decoration. The
- * class names passed to the list mirror `TerminalPane`'s and `WorktreeDetails`'.
+ * list's variant and class names mirror `TerminalPane`'s and `WorktreeDetails`'.
  */
 
 const params = new URLSearchParams(window.location.search);
@@ -48,9 +48,18 @@ for (const el of [document.documentElement, document.body]) {
 
 const noop = () => undefined;
 
-function List({ scene, className }: { scene: ErrorBannerScene; className?: string }) {
+function List({
+  scene,
+  variant,
+  className,
+}: {
+  scene: ErrorBannerScene;
+  variant: "flush" | "inset";
+  className?: string;
+}) {
   return (
     <CompactErrorList
+      variant={variant}
       className={className}
       errors={scene.errors}
       maxInline={scene.maxInline}
@@ -73,10 +82,12 @@ function TerminalHost({ scene }: { scene: ErrorBannerScene }) {
         className="flex h-8 shrink-0 items-center gap-2 border-b border-divider px-3 text-xs surface-toolbar"
       >
         <span className="h-3 w-3 rounded-full bg-overlay-medium" />
-        <span className="truncate font-medium text-text-primary">Claude — tighten auth retries</span>
+        <span className="truncate font-medium text-text-primary">
+          Claude — tighten auth retries
+        </span>
       </div>
       <div data-banner-slot>
-        <List scene={scene} className="shrink-0" />
+        <List scene={scene} variant="flush" className="shrink-0" />
       </div>
       <div
         data-harness-decoration
@@ -106,7 +117,7 @@ function CardHost({ scene }: { scene: ErrorBannerScene }) {
         <span className="text-text-secondary">3 files changed · 2 ahead</span>
       </div>
       <div data-banner-slot className="px-3 pb-2.5 space-y-4">
-        <List scene={scene} className="rounded-[var(--radius-md)]" />
+        <List scene={scene} variant="inset" />
         <div
           data-harness-decoration
           aria-hidden="true"

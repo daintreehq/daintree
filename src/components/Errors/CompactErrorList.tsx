@@ -1,10 +1,42 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { ChevronDown } from "lucide-react";
-import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { Popover, PopoverAnchor, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ErrorBanner } from "./ErrorBanner";
 import type { ErrorRecord, RetryAction } from "@/store/errorStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { getVisibleTabbableElements } from "@/lib/accessibility";
+import { sanitizeErrorText } from "@/utils/errorText";
+import { BANNER_TINT_ALPHA } from "@shared/config/windowChrome";
+
+/**
+ * Errors already announced, across every mount. A list remounts whenever its
+ * host does — a worktree card's details reopening, a pane moving — and an
+ * error the user heard about an hour ago is not news the second time.
+ */
+const announced = new Set<string>();
+const ANNOUNCED_CAP = 500;
+
+function announceArrivals(errors: ErrorRecord[]) {
+  // Restored from the last session: already on screen at launch, not arriving.
+  const fresh = errors.filter((e) => !announced.has(e.id) && !e.fromPreviousSession);
+  for (const e of errors) announced.add(e.id);
+  if (announced.size > ANNOUNCED_CAP) {
+    for (const id of [...announced].slice(0, announced.size - ANNOUNCED_CAP)) announced.delete(id);
+  }
+  if (fresh.length === 0) return;
+  const { announce } = useAnnouncerStore.getState();
+  announce(
+    fresh.length === 1
+      ? `Error: ${sanitizeErrorText(fresh[0]!.message)}`
+      : `${fresh.length} new errors`,
+    "polite"
+  );
+}
+
+/** Each row is a direct child of the list, or of the open popover. */
+const ROW = ":scope > [role='status']";
 
 interface ErrorListHandlers {
   onDismiss: (id: string) => void;
@@ -17,8 +49,18 @@ interface CompactErrorListProps extends ErrorListHandlers {
   errors: ErrorRecord[];
   /** How many banners render inline before the rest move behind the trigger. */
   maxInline: number;
+  /**
+   * `flush` meets the host's edges, as a banner does across the top of a pane:
+   * every row, the last included, closes with its divider. `inset` sits inside
+   * a card's padding: the group is rounded and the last divider goes, since
+   * the rounded edge already ends it.
+   */
+  variant: "flush" | "inset";
   className?: string;
 }
+
+/** Rows and the disclosure end on their own divider; an inset group drops the last. */
+const INSET = "rounded-[var(--radius-md)] [&>:last-child]:border-b-0!";
 
 /**
  * A bounded stack of compact error banners, with the tail behind a real
@@ -37,22 +79,70 @@ interface CompactErrorListProps extends ErrorListHandlers {
 export function CompactErrorList({
   errors,
   maxInline,
+  variant,
   className,
+  onDismiss,
   ...handlers
 }: CompactErrorListProps) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    announceArrivals(errors);
+  }, [errors]);
+
+  // A dismissed row takes its focused × with it. Hand focus to the row that
+  // takes its place — the next, else the previous, inline or in the popover —
+  // then to the disclosure, then to the host itself, so the user stays where
+  // they were working rather than being thrown to the top of the app. Moved
+  // before the removal, so the row's own unmount has nothing to recover.
+  const handleDismiss = useCallback(
+    (id: string) => {
+      const active = document.activeElement;
+      const rows = [
+        ...(rootRef.current?.querySelectorAll<HTMLElement>(ROW) ?? []),
+        ...(popoverRef.current?.querySelectorAll<HTMLElement>(ROW) ?? []),
+      ];
+      const index = active ? rows.findIndex((row) => row.contains(active)) : -1;
+      if (index !== -1) {
+        const neighbour = [rows[index + 1], rows[index - 1]]
+          .map((row) => row && getVisibleTabbableElements(row)[0])
+          .find(Boolean);
+        const target =
+          neighbour ??
+          rootRef.current?.querySelector<HTMLElement>("[data-testid='compact-error-overflow']") ??
+          rootRef.current?.parentElement?.closest<HTMLElement>("[tabindex]");
+        target?.focus({ preventScroll: true });
+      }
+      onDismiss(id);
+    },
+    [onDismiss]
+  );
+
   if (errors.length === 0) return null;
 
   const inline = errors.slice(0, maxInline);
   const hidden = errors.slice(maxInline);
+  const rowHandlers = { ...handlers, onDismiss: handleDismiss };
 
   return (
     // One column of bands, the way every inline banner family stacks. The host
     // decides the outer shape: flush to a pane's edges, or rounded in a card.
-    <div className={cn("flex flex-col overflow-hidden", className)}>
+    <div
+      ref={rootRef}
+      className={cn("flex flex-col overflow-hidden", variant === "inset" && INSET, className)}
+    >
       {inline.map((error) => (
-        <ErrorBanner key={error.id} error={error} {...handlers} />
+        <ErrorBanner key={error.id} error={error} {...rowHandlers} />
       ))}
-      {hidden.length > 0 && <ErrorOverflow errors={hidden} {...handlers} />}
+      {hidden.length > 0 && (
+        <ErrorOverflow
+          errors={hidden}
+          anchorRef={rootRef}
+          contentRef={popoverRef}
+          {...rowHandlers}
+        />
+      )}
     </div>
   );
 }
@@ -65,13 +155,40 @@ export function CompactErrorList({
  * while the disclosure is open and a later error would remount it already
  * open, stealing focus from whatever the user moved on to.
  */
-function ErrorOverflow({ errors, ...handlers }: ErrorListHandlers & { errors: ErrorRecord[] }) {
+function ErrorOverflow({
+  errors,
+  anchorRef,
+  contentRef,
+  ...handlers
+}: ErrorListHandlers & {
+  errors: ErrorRecord[];
+  anchorRef: RefObject<HTMLDivElement | null>;
+  contentRef: RefObject<HTMLDivElement | null>;
+}) {
   const [open, setOpen] = useState(false);
+  // Radix measures an anchor through `getBoundingClientRect`; this reads the
+  // list's box at measure time, so a list that grows or shrinks stays anchored.
+  const [anchor] = useState(() => ({
+    current: {
+      getBoundingClientRect: () => anchorRef.current?.getBoundingClientRect() ?? new DOMRect(),
+    },
+  }));
   const label = `Show ${errors.length} more ${errors.length === 1 ? "error" : "errors"}`;
 
   return (
-    <div className="flex border-b border-divider px-3 py-1">
+    // Part of the error group rather than a strip of its own: the same band
+    // and divider as the rows above it.
+    <div
+      className="flex px-3 py-1.5"
+      style={{
+        backgroundColor: `color-mix(in oklab, var(--color-status-error) ${BANNER_TINT_ALPHA * 100}%, transparent)`,
+        borderBottom: "1px solid color-mix(in oklab, var(--color-status-error) 20%, transparent)",
+      }}
+    >
       <Popover open={open} onOpenChange={setOpen}>
+        {/* Anchored to the whole list, not the trigger, so the hidden rows open
+            at the list's width with every column where the inline rows put it. */}
+        <PopoverAnchor virtualRef={anchor} />
         <PopoverTrigger asChild>
           <Button
             variant="ghost"
@@ -94,8 +211,9 @@ function ErrorOverflow({ errors, ...handlers }: ErrorListHandlers & { errors: Er
           </Button>
         </PopoverTrigger>
         <PopoverContent
+          ref={contentRef}
           align="start"
-          sideOffset={4}
+          sideOffset={2}
           collisionPadding={8}
           aria-label="More errors"
           // A portal moves the DOM but not the React tree, so a row's Retry would
@@ -103,9 +221,9 @@ function ErrorOverflow({ errors, ...handlers }: ErrorListHandlers & { errors: Er
           onClick={(e) => e.stopPropagation()}
           // Bounded against Radix's own available height rather than a fixed
           // pixel cap, so a long tail scrolls inside the popover instead of
-          // running past the viewport edge. The width is a reading measure, not
-          // the trigger's, and never wider than the window can hold.
-          className="flex w-96 max-w-[calc(100vw-16px)] flex-col max-h-[var(--radix-popover-content-available-height)] overflow-y-auto"
+          // running past the viewport edge. The last row's divider would double
+          // the popover's own border.
+          className="flex w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-16px)] flex-col max-h-[var(--radix-popover-content-available-height)] overflow-y-auto [&>:last-child]:border-b-0!"
         >
           {errors.map((error) => (
             <ErrorBanner key={error.id} error={error} animated={false} {...handlers} />
