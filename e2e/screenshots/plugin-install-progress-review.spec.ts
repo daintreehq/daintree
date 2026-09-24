@@ -157,7 +157,9 @@ async function openFixture(
   await page.waitForTimeout(settleMs);
   // An empty slot means the banner returned null — a picture of the stand-in
   // dressed up as a passing run.
-  const banner = page.locator("[data-install-progress] [role='status']").first();
+  // `:not(.sr-only)`: the step announcer is a status region too, and it is
+  // mounted whether or not the banner is.
+  const banner = page.locator("[data-install-progress] [role='status']:not(.sr-only)").first();
   await expect(banner, `fixture "${fixture}" rendered no banner`).toBeAttached();
   return shell;
 }

@@ -44,6 +44,7 @@ import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { stableArgsSha256 } from "../../utils/pluginMcpHash.js";
 import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { describePluginInstallSource } from "../../../shared/utils/pluginInstallSource.js";
 import {
   getPluginToolbarButtonIds,
   getToolbarButtonConfig,
@@ -265,11 +266,15 @@ const INSTALL_JOB_ID_PATTERN = /^[0-9a-fA-F-]{8,64}$/;
 async function withInstallJob(
   ctx: IpcContext,
   jobId: string | undefined,
+  source: string,
   run: (effectiveJobId: string | undefined) => Promise<PluginInstallResult>
 ): Promise<PluginInstallResult> {
   if (!jobId || !INSTALL_JOB_ID_PATTERN.test(jobId)) return run(undefined);
+  // The renderer can't name a file-picker install on its own — the path only
+  // exists here — so every event carries the label.
+  const label = describePluginInstallSource(source);
   const registered = pluginInstallJobs.begin(jobId, (event) => {
-    sendToRendererContext(ctx, CHANNELS.PLUGIN_INSTALL_PROGRESS, event);
+    sendToRendererContext(ctx, CHANNELS.PLUGIN_INSTALL_PROGRESS, { ...event, source: label });
   });
   if (!registered) return run(undefined);
   try {
@@ -313,7 +318,8 @@ async function handleInstallFromFile(
   }
   // The job starts once a path exists — time spent in the native picker isn't
   // install progress, and a Cancel button for it would duplicate the picker's own.
-  return withInstallJob(ctx, jobId, (id) => handleInstallFromPath(result.filePaths[0]!, id));
+  const archivePath = result.filePaths[0]!;
+  return withInstallJob(ctx, jobId, archivePath, (id) => handleInstallFromPath(archivePath, id));
 }
 
 // Bounded download limits for install-from-URL (F24). Mirrors the spec in
@@ -366,7 +372,7 @@ async function handleInstallFromPathOp(
   path: string,
   jobId?: string
 ): Promise<PluginInstallResult> {
-  return withInstallJob(ctx, jobId, (id) => handleInstallFromPath(path, id));
+  return withInstallJob(ctx, jobId, path, (id) => handleInstallFromPath(path, id));
 }
 
 /** Namespace entry for install-from-URL — registers the job, then delegates. */
@@ -376,7 +382,7 @@ async function handleInstallFromUrlOp(
   jobId?: string,
   expected?: PluginInstallExpectation
 ): Promise<PluginInstallResult> {
-  return withInstallJob(ctx, jobId, (id) => handleInstallFromUrl(url, id, expected));
+  return withInstallJob(ctx, jobId, url, (id) => handleInstallFromUrl(url, id, expected));
 }
 
 const ARCHIVE_HASH_PATTERN = /^[0-9a-f]{64}$/;

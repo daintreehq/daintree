@@ -1779,6 +1779,11 @@ export interface PluginInstallProgressEvent {
   entry?: string;
   /** False once the install has passed the commit point and can no longer be cancelled. */
   cancellable: boolean;
+  /**
+   * What is being installed: the archive's file name, or the URL without its
+   * query string. Set by main on every event of a job.
+   */
+  source?: string;
 }
 
 export interface LoadedPluginInfo {

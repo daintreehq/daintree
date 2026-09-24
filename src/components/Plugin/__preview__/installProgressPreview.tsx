@@ -36,17 +36,24 @@ interface InstallFixture {
   progress: PluginInstallProgressEvent | null;
   cancelRequested?: boolean;
   restartRequired?: boolean;
+  /** The hook's own label, shown until an event carries main's. */
+  pendingSource?: string;
 }
+
+/** What main labels a URL install by: host and path, query stripped. */
+const URL_SOURCE = "plugins.example.com/acme/telemetry-exporter-2.4.1.dntr";
 
 const event = (over: Partial<PluginInstallProgressEvent>): PluginInstallProgressEvent => ({
   jobId: "preview-job",
   phase: "downloading",
   cancellable: true,
+  source: URL_SOURCE,
   ...over,
 });
 
 const FIXTURES: Record<string, InstallFixture> = {
-  starting: { progress: null },
+  // Before main's first event the hook supplies the label it already knows.
+  starting: { progress: null, pendingSource: URL_SOURCE },
   downloading: { progress: event({ phase: "downloading" }) },
   extracting: { progress: event({ phase: "extracting", entry: "dist/index.js" }) },
   "extracting-long": {
@@ -154,20 +161,22 @@ function Shell() {
       style={{ width, height: 420 }}
     >
       <HeaderStandIn />
+      {/* Mirrors PluginManagerView: the restart offer waits while a job runs. */}
       {fixture!.restartRequired && (
         <InlineStatusBanner
           icon={AlertTriangle}
-          title="Restart required to apply plugin changes"
+          title="Restart once the install finishes to apply plugin changes"
           severity="warning"
           role="status"
           animated={false}
-          actions={[{ id: "restart", label: "Restart", variant: "primary", onClick: () => {} }]}
+          actions={[]}
         />
       )}
       <div data-install-progress className="contents">
         <PluginInstallProgressBanner
           isInstalling
           progress={fixture!.progress}
+          source={fixture!.progress?.source ?? fixture!.pendingSource ?? null}
           cancelRequested={fixture!.cancelRequested ?? false}
           onCancel={() => {}}
         />

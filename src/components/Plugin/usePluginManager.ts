@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { describePluginInstallSource } from "@shared/utils/pluginInstallSource";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type {
@@ -196,14 +197,19 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // point (`isInstalling` for file/URL/drop, `isReinstalling` for an update) and
   // are cleared unconditionally by whichever call settles first — so a
   // reinstall would show no banner at all, and a superseded install's `finally`
-  // could hide its successor's. This one is owned solely by `runInstallJob` and
-  // cleared under the same job-identity guard as the progress state.
+  // could hide its successor's. This one is set by `runInstallJob` (or by the
+  // job's first event, for a file-picker install) and cleared under the same
+  // job-identity guard as the progress state.
   const [hasActiveInstallJob, setHasActiveInstallJob] = useState(false);
   // Set the moment the user clicks Cancel, so the button stops accepting
   // clicks before main answers. Never unset here: either the install ends (and
   // `runInstallJob` clears it) or main refused because the install already
   // committed — in which case there is nothing left to cancel either way.
   const [cancelRequested, setCancelRequested] = useState(false);
+  // What the in-flight job is installing, as the caller knew it before main's
+  // first event. Main's events carry the authoritative label; this covers the
+  // gap before the first one.
+  const [pendingInstallSource, setPendingInstallSource] = useState<string | null>(null);
 
   // Progress subscription. Its own mount-once effect with no dependencies —
   // folding it into the `refreshKey` loading effect would resubscribe on every
@@ -213,6 +219,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     return window.electron.plugin.onInstallProgress((event) => {
       if (event.jobId !== installJobIdRef.current) return;
       setInstallProgress(event);
+      setHasActiveInstallJob(true);
     });
   }, []);
 
@@ -222,13 +229,22 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
    * rather than only after the first progress event arrives. The `finally`
    * clears state only if this job is still the current one, so a superseding
    * install can't have its banner wiped by its predecessor settling late.
+   *
+   * `source` is the path or URL when the caller already knows it. Without one,
+   * main is still asking the user for it in the native file picker — the job
+   * only begins once a path exists — so it counts as active from main's first
+   * event rather than behind a picker the user hasn't answered.
    */
-  const runInstallJob = async <T>(run: (jobId: string) => Promise<T>): Promise<T> => {
+  const runInstallJob = async <T>(
+    run: (jobId: string) => Promise<T>,
+    source?: string
+  ): Promise<T> => {
     const jobId = crypto.randomUUID();
     installJobIdRef.current = jobId;
     setInstallProgress(null);
     setCancelRequested(false);
-    setHasActiveInstallJob(true);
+    setPendingInstallSource(source === undefined ? null : describePluginInstallSource(source));
+    setHasActiveInstallJob(source !== undefined);
     try {
       return await run(jobId);
     } finally {
@@ -236,6 +252,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
         installJobIdRef.current = null;
         setInstallProgress(null);
         setCancelRequested(false);
+        setPendingInstallSource(null);
         setHasActiveInstallJob(false);
       }
     }
@@ -492,10 +509,12 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const performInstallFromUrl = async (url: string, expected?: PluginInstallExpectation) => {
     setIsInstalling(true);
     try {
-      const result = await runInstallJob((jobId) =>
-        expected
-          ? window.electron.plugin.installFromUrl(url, jobId, expected)
-          : window.electron.plugin.installFromUrl(url, jobId)
+      const result = await runInstallJob(
+        (jobId) =>
+          expected
+            ? window.electron.plugin.installFromUrl(url, jobId, expected)
+            : window.electron.plugin.installFromUrl(url, jobId),
+        url
       );
       handleInstallResult(result);
       // Keep the dialog open for URL-correctable failures so the user can edit
@@ -617,8 +636,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
           continue;
         }
         try {
-          const result = await runInstallJob((jobId) =>
-            window.electron.plugin.installFromPath(path, jobId)
+          const result = await runInstallJob(
+            (jobId) => window.electron.plugin.installFromPath(path, jobId),
+            path
           );
           // A cancel abandons the whole drop, not just this file — the user
           // stopped the batch, so silently installing the rest would ignore them.
@@ -899,8 +919,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     setPendingUpdate(null);
     try {
       setError(null);
-      const result = await runInstallJob((jobId) =>
-        window.electron.plugin.installFromUrl(url, jobId, expected)
+      const result = await runInstallJob(
+        (jobId) => window.electron.plugin.installFromUrl(url, jobId, expected),
+        url
       );
       handleInstallResult(result);
       advanceUpdateQueue();
@@ -943,6 +964,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     isInstalling,
     hasActiveInstallJob,
     installProgress,
+    installSource: installProgress?.source ?? pendingInstallSource,
     cancelRequested,
     cancelActiveInstall,
     handleInstallFromFile,

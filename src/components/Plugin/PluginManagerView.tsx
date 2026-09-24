@@ -698,18 +698,28 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
       {restartRequired && (
         <InlineStatusBanner
           icon={AlertTriangle}
-          title="Restart required to apply plugin changes"
+          // A restart mid-install would take the install down with it, so the
+          // offer waits for the job to settle rather than competing with it.
+          title={
+            pm.hasActiveInstallJob
+              ? "Restart once the install finishes to apply plugin changes"
+              : "Restart required to apply plugin changes"
+          }
           severity="warning"
           role="status"
-          actions={[
-            {
-              id: "restart",
-              label: isRestarting ? "Restarting…" : "Restart",
-              variant: "primary",
-              onClick: () => setIsRestartConfirmOpen(true),
-              disabled: isRestarting,
-            },
-          ]}
+          actions={
+            pm.hasActiveInstallJob
+              ? []
+              : [
+                  {
+                    id: "restart",
+                    label: isRestarting ? "Restarting…" : "Restart",
+                    variant: "primary",
+                    onClick: () => setIsRestartConfirmOpen(true),
+                    disabled: isRestarting,
+                  },
+                ]
+          }
         />
       )}
 
@@ -718,6 +728,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
       <PluginInstallProgressBanner
         isInstalling={pm.hasActiveInstallJob}
         progress={pm.installProgress}
+        source={pm.installSource}
         cancelRequested={pm.cancelRequested}
         onCancel={pm.cancelActiveInstall}
       />

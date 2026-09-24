@@ -2,13 +2,19 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ReactNode } from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PluginManagerView } from "../PluginManagerView";
 import { CAPABILITY_META } from "../capabilityMeta";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { LoadedPluginInfo, SettingDefinition } from "@shared/types/plugin";
+import type {
+  LoadedPluginInfo,
+  PluginInstallProgressEvent,
+  PluginInstallResult,
+  SettingDefinition,
+} from "@shared/types/plugin";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -928,6 +934,35 @@ describe("PluginManagerView", () => {
     await waitFor(() => expect(screen.getByText(/isn't available yet/)).toBeTruthy());
   });
 
+  it("shows no install progress while the native file picker is still open", async () => {
+    let emit: ((event: PluginInstallProgressEvent) => void) | undefined;
+    vi.mocked(window.electron.plugin.onInstallProgress).mockImplementation((cb) => {
+      emit = cb;
+      return () => {};
+    });
+    let settleInstall: ((result: PluginInstallResult) => void) | undefined;
+    vi.mocked(window.electron.plugin.installFromFile).mockImplementation(
+      () => new Promise((resolve) => (settleInstall = resolve))
+    );
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from file" }));
+    // Main opens the picker first and only begins the job once a path exists,
+    // so past the gate there is still nothing to report — or to cancel.
+    await new Promise((resolve) => setTimeout(resolve, UI_DOHERTY_THRESHOLD + 150));
+    expect(screen.queryByRole("button", { name: "Cancel install" })).toBeNull();
+
+    const jobId = vi.mocked(window.electron.plugin.installFromFile).mock.calls[0]![0] as string;
+    act(() => emit!({ jobId, phase: "extracting", cancellable: true, source: "acme.dntr" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Cancel install" })).toBeTruthy()
+    );
+    expect(screen.getByText("acme.dntr")).toBeTruthy();
+
+    await act(async () => settleInstall!({ status: "cancelled" }));
+  });
+
   it("gates an http:// URL behind a confirm dialog before calling installFromUrl", async () => {
     renderDialog();
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
@@ -1277,6 +1312,33 @@ describe("PluginManagerView", () => {
         expect(screen.getByText("Restart required to apply plugin changes")).toBeTruthy()
       );
       expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy();
+    });
+
+    it("holds the Restart offer back while an install is running", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ disabled: true, pendingRestart: true }),
+      ]);
+      let settleInstall: ((result: PluginInstallResult) => void) | undefined;
+      vi.mocked(window.electron.plugin.installFromUrl).mockImplementation(
+        () => new Promise((resolve) => (settleInstall = resolve))
+      );
+      renderDialog();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+      await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+      fireEvent.change(screen.getByLabelText("Plugin URL"), {
+        target: { value: "https://example.com/p.dntr" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Install" }));
+      await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalled());
+
+      // Relaunching now would take the install down with it.
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Restart" })).toBeNull());
+      expect(screen.getByText(/Restart once the install finishes/)).toBeTruthy();
+
+      await act(async () => settleInstall!({ status: "cancelled" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy());
     });
 
     it("does not surface the restart bar after toggling a live plugin (#10887)", async () => {
@@ -1761,7 +1823,11 @@ describe("PluginManagerView", () => {
       await findPluginRowButton("Plugin00");
       input.focus();
       fireEvent.change(input, { target: { value: "Plugin01" } });
-      const status = screen.getByRole("status", { hidden: true });
+      // The search announcer, not the install banner's step announcer that
+      // shares the view.
+      const status = within(
+        screen.getByRole("group", { name: "Filter plugins" }).parentElement!
+      ).getByRole("status", { hidden: true });
       await waitFor(() => expect(status.textContent).toBe("1 matching plugin"), {
         timeout: 2000,
       });
