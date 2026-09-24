@@ -249,7 +249,7 @@ export function MockKeys({
 export interface MockMenuItem {
   icon?: React.ReactNode;
   label: string;
-  hint?: string;
+  hint?: React.ReactNode;
   /** A second, quieter line under the label (the action palette's summary). */
   detail?: string;
   /** Dimmed row: present but not the one being pointed at. */
@@ -267,6 +267,7 @@ export function MockMenu({
   y,
   width,
   header,
+  anchor = "menu",
 }: {
   items: readonly MockMenuItem[];
   active: number;
@@ -275,6 +276,8 @@ export function MockMenu({
   y: number;
   width: number;
   header?: React.ReactNode;
+  /** Prefix for each row's spotlight anchor, so two open menus stay distinct. */
+  anchor?: string;
 }) {
   return (
     <div
@@ -287,7 +290,7 @@ export function MockMenu({
     >
       {header}
       {items.map((item, i) => (
-        <div key={item.label} data-tour-anchor={`menu-${i}`}>
+        <div key={item.label} data-tour-anchor={`${anchor}-${i}`}>
           {item.separator && <div className="mx-1 my-1 h-px bg-border-subtle" />}
           <div
             className={cn(

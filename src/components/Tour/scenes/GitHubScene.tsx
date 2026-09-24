@@ -1,4 +1,12 @@
-import { CircleDot, CornerDownRight, GitPullRequest } from "lucide-react";
+import {
+  CircleDot,
+  Copy,
+  CornerDownRight,
+  ExternalLink,
+  GitPullRequest,
+  MoreHorizontal,
+} from "lucide-react";
+import { FolderGit2 } from "@/components/icons";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import type { CIStatus } from "@shared/types/forge";
 import { cn } from "@/lib/utils";
@@ -16,19 +24,30 @@ import { MockEmptyGrid, MockMenu, MockSearchField, MockSpotlight } from "./scene
 
 const ISSUES = ANCHOR["forge-issues"];
 const LIST = { x: 290, y: ISSUES.y + 14, width: 216 };
-// #51, the second row, is the one picked; measured from the render.
-const ISSUE_ROW = { x: LIST.x + 90, y: 92 };
+// Clicking an issue opens it on the forge; a worktree comes from the row's
+// actions menu. #51 is the second row; its menu button is measured from the render.
+const ISSUE_MENU = { x: 487, y: 91 };
+const ROW_MENU = { x: ISSUE_MENU.x - 132, y: ISSUE_MENU.y + 10, width: 140 };
+const CREATE_ITEM = { x: ROW_MENU.x + 50, y: ROW_MENU.y + 17 };
 
-// Picking an issue opens the new worktree form with its branch already named.
 const DIALOG = { x: 230, y: 90, width: 250 };
 const CREATE_BUTTON = { x: 417, y: 189 };
 const BRANCH = "feature/issue-51-dark-mode-for-settings";
 
+const ISSUES_LIST = [
+  ["#52 Checkout total rounds wrong", "2h"],
+  ["#51 Dark mode for settings", "1d"],
+  ["#48 Slow product images", "3d"],
+  ["#45 Add order history", "5d"],
+] as const;
+
 const CURSOR: readonly CursorStep[] = [
   { cue: "list", at: ISSUES },
   { cue: "list", offset: 0.5, at: ISSUES, click: true },
-  { cue: "pick", at: ISSUE_ROW },
-  { cue: "pick", offset: 0.5, at: ISSUE_ROW, click: true },
+  { cue: "pick", at: ISSUE_MENU },
+  { cue: "pick", offset: 0.5, at: ISSUE_MENU, click: true },
+  { cue: "choose", at: CREATE_ITEM },
+  { cue: "choose", offset: 0.5, at: CREATE_ITEM, click: true },
   { cue: "create", at: CREATE_BUTTON },
   { cue: "create", offset: 0.6, at: CREATE_BUTTON, click: true },
 ];
@@ -67,7 +86,8 @@ function CIGlyph({ passed }: { passed: boolean }) {
 export function GitHubScene() {
   const pill = useCue("pill");
   const listOpen = useCue("list", 0.6);
-  const dialog = useCue("pick", 0.6);
+  const rowMenu = useCue("pick", 0.6);
+  const dialog = useCue("choose", 0.6);
   const created = useCue("create", 0.7);
   const badge = useCue("badge");
   const checksPassed = useCue("badge", 1.8);
@@ -131,11 +151,36 @@ export function GitHubScene() {
             <span className="text-text-secondary">Search issues…</span>
           </MockSearchField>
         }
+        items={ISSUES_LIST.map(([label, age], i) => ({
+          icon: <CircleDot />,
+          label,
+          hint: (
+            <span className="flex items-center gap-1.5">
+              {age}
+              <span
+                data-tour-anchor={i === 1 ? "issue-51-menu" : undefined}
+                className={cn(
+                  "inline-flex rounded-sm",
+                  i === 1 && rowMenu && "bg-overlay-medium text-text-primary"
+                )}
+              >
+                <MoreHorizontal aria-hidden="true" />
+              </span>
+            </span>
+          ),
+        }))}
+      />
+      <MockMenu
+        visible={rowMenu && !dialog}
+        anchor="issue-actions"
+        active={0}
+        x={ROW_MENU.x}
+        y={ROW_MENU.y}
+        width={ROW_MENU.width}
         items={[
-          { icon: <CircleDot />, label: "#52 Checkout total rounds wrong", hint: "2h" },
-          { icon: <CircleDot />, label: "#51 Dark mode for settings", hint: "1d" },
-          { icon: <CircleDot />, label: "#48 Slow product images", hint: "3d" },
-          { icon: <CircleDot />, label: "#45 Add order history", hint: "5d" },
+          { icon: <FolderGit2 />, label: "Create worktree" },
+          { icon: <ExternalLink />, label: "Open on GitHub" },
+          { icon: <Copy />, label: "Copy number" },
         ]}
       />
       <div

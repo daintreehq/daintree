@@ -207,7 +207,7 @@ describe("TourDialog", () => {
     it("says the next chapter starts on its own, and that it stopped once held", () => {
       const { end } = renderAt(1);
       end();
-      expect(screen.getByRole("status").textContent).toMatch(/starts in 3 seconds/);
+      expect(screen.getByRole("status").textContent).toMatch(/starts in 1.5 seconds/);
       fireEvent.click(screen.getByRole("button", { name: "Stay here" }));
       expect(screen.getByRole("status").textContent).toBe("Auto-advance paused");
     });

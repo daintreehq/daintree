@@ -31,7 +31,7 @@ export const TOUR_CHAPTERS: readonly TourChapter[] = [
     summary:
       "A worktree is a separate working folder on its own branch. Use one per task, and agents on different tasks don't step on each other's files.",
     narration:
-      "Everything starts with a [[project]] project: any git repository you open. [[list]] Its worktrees sit down the left. Each one is a separate working folder on [[branch]] its own branch, so use one per task, and agents on different tasks don't step on each other's files. [[plus]] To start a new task, click the plus button, [[name]] name its branch, like add search, [[create]] and create the worktree. It opens empty, ready for its first agent.",
+      "Everything starts with a [[project]] project: any folder you open. When it's a git repository, [[list]] its worktrees sit down the left. Each one is a separate working folder on [[branch]] its own branch, so use one per task, and agents on different tasks don't step on each other's files. [[plus]] To start a new task, click the plus button, [[name]] name its branch, like add search, [[create]] and create the worktree. It opens empty, ready for its first agent.",
   },
   {
     id: "agents",
@@ -85,9 +85,9 @@ export const TOUR_CHAPTERS: readonly TourChapter[] = [
     id: "github",
     title: "Work from your issues",
     summary:
-      "Add your GitHub or GitLab token and the toolbar counts open issues and pull requests. Start a worktree from an issue; its pull request and checks show on the card.",
+      "Add your GitHub or GitLab token and the toolbar counts open issues and pull requests. Start a worktree from an issue's actions menu; its pull request and checks show on the card.",
     narration:
-      "Daintree works with whichever code forge you're on, GitHub or GitLab. [[pill]] Once you add your token in Settings, the counts in the toolbar are the project's open issues and pull requests. [[list]] Click one to browse them. [[pick]] Choose an issue, and the new worktree form opens with its branch already named. [[create]] Create it, and the worktree stays tied to that issue. [[badge]] Later, once a pull request is open, its status and checks show right on the worktree's card.",
+      "Daintree works with whichever code forge you're on, GitHub or GitLab. [[pill]] Once you add your token in Settings, the counts in the toolbar are the project's open issues and pull requests. [[list]] Click one to browse them. Clicking an issue's title opens it in your browser; to work on it here, [[pick]] open its actions menu and [[choose]] choose Create worktree. The form opens with the branch already named. [[create]] Create it, and the worktree stays tied to that issue. [[badge]] Later, once a pull request is open, its status and checks show right on the worktree's card.",
   },
   {
     id: "review",

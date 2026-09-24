@@ -21,7 +21,7 @@ import { MockEmptyGrid, MockSpotlight } from "./sceneParts";
 const DIALOG = { x: GRID_RECT.x + 119, y: 84, width: 230 } as const;
 const NAME_FIELD = { x: DIALOG.x + 120, y: DIALOG.y + 114 };
 // Measured from the render: the dialog's Create worktree button.
-const CREATE_BUTTON = { x: DIALOG.x + 164, y: DIALOG.y + 150 };
+const CREATE_BUTTON = { x: 448, y: 235 };
 // The name is done before the pointer sets off for Create.
 const CREATE = { cue: "create" } as const;
 
@@ -108,7 +108,10 @@ export function WorktreesScene() {
             </div>
           </div>
           <div className="flex justify-end">
-            <span className="rounded-md bg-text-primary px-2.5 py-1 text-3xs font-medium text-text-inverse">
+            <span
+              data-tour-anchor="create-worktree-button"
+              className="rounded-md bg-text-primary px-2.5 py-1 text-3xs font-medium text-text-inverse"
+            >
               Create worktree
             </span>
           </div>

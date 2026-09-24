@@ -61,7 +61,7 @@ export function TourCaption() {
 }
 
 /** How long a finished chapter waits before moving on by itself. */
-export const TOUR_AUTO_ADVANCE_MS = 3000;
+export const TOUR_AUTO_ADVANCE_MS = 1500;
 
 export interface TourEndCard {
   /** Title of the chapter Next leads to; null on the last chapter. */
@@ -119,14 +119,14 @@ function StayHereButton({
 
 /** Whole seconds left on a running countdown, for the visible readout. */
 function useCountdown(running: boolean): number {
-  const total = Math.round(TOUR_AUTO_ADVANCE_MS / 1000);
+  const total = Math.ceil(TOUR_AUTO_ADVANCE_MS / 1000);
   const [left, setLeft] = useState(total);
   useEffect(() => {
     if (!running) return;
     const started = performance.now();
     const timer = window.setInterval(() => {
-      const elapsed = Math.floor((performance.now() - started) / 1000);
-      setLeft(Math.max(1, total - elapsed));
+      const remaining = TOUR_AUTO_ADVANCE_MS - (performance.now() - started);
+      setLeft(Math.max(1, Math.ceil(remaining / 1000)));
     }, COUNTDOWN_TICK_MS);
     return () => {
       window.clearInterval(timer);
@@ -138,7 +138,7 @@ function useCountdown(running: boolean): number {
 
 /**
  * What the stage becomes when a chapter has played out: one large, obvious way
- * on, with a ring that drains over three seconds and then moves on by itself —
+ * on, with a ring that drains over a second and a half and then moves on by itself —
  * the tour keeps its pace without waiting to be pushed. The last chapter
  * doesn't advance on its own; finishing is the user's call.
  */
