@@ -30,6 +30,8 @@ export interface DestructiveConfirmFixture {
         nodeModulesAge: DirAge;
       });
   sizes: "hang" | "error" | DevPreviewDestructivePreviewSizes;
+  /** The confirmed operation is running. */
+  confirming?: boolean;
   /** A keyboard drive the spec performs after load. */
   drive?: "tab-to-confirm";
 }
@@ -122,6 +124,12 @@ export const DESTRUCTIVE_FIXTURES = {
     sizes: reinstallSizes(1.9 * 1024 * MB),
   },
   "reinstall-error": { tier: "reinstallAndRestart", meta: "error", sizes: "error" },
+  "reinstall-confirming": {
+    tier: "reinstallAndRestart",
+    meta: metaFor(),
+    sizes: reinstallSizes(612.4 * MB),
+    confirming: true,
+  },
   "reinstall-keyboard": {
     tier: "reinstallAndRestart",
     meta: metaFor(),

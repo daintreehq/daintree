@@ -34,6 +34,7 @@ createRoot(document.getElementById("root")!).render(
           projectId="8e8efe1218ac32d2d9784706"
           tier={fixture.tier}
           isOpen
+          isConfirming={fixture.confirming ?? false}
           onClose={() => undefined}
           onConfirm={() => undefined}
         />

@@ -658,6 +658,9 @@ export function DevPreviewPane({
     "restartAndClearCache" | "reinstallAndRestart" | null
   >(null);
   const isRestartConfirmOpen = pendingRestartTier !== null;
+  // Deleting node_modules can take a while before the IPC settles; without this
+  // the dialog sat there looking unconfirmed and Cancel still looked live.
+  const [isRestartConfirming, setIsRestartConfirming] = useState(false);
 
   const handleRequestRestartAndClearCache = useCallback(() => {
     setPendingRestartTier("restartAndClearCache");
@@ -677,16 +680,19 @@ export function DevPreviewPane({
     if (!tier || !currentProjectId) return;
 
     confirmRestartInFlightRef.current = true;
+    setIsRestartConfirming(true);
 
     const onSuccess = () => {
       resetPreviewWebviewState();
       confirmRestartInFlightRef.current = false;
+      setIsRestartConfirming(false);
       setPendingRestartTier(null);
     };
 
     const onError = (err: unknown) => {
       console.warn("[DevPreviewPane] Restart confirm failed", err);
       confirmRestartInFlightRef.current = false;
+      setIsRestartConfirming(false);
       setPendingRestartTier(null);
     };
 
@@ -1232,6 +1238,7 @@ export function DevPreviewPane({
           projectId={currentProjectId}
           tier={pendingRestartTier}
           isOpen={isRestartConfirmOpen}
+          isConfirming={isRestartConfirming}
           onClose={handleRestartConfirmClose}
           onConfirm={handleRestartConfirm}
         />

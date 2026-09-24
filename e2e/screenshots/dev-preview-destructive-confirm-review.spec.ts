@@ -147,7 +147,14 @@ async function expectFixtureState(page: Page, name: DestructiveFixtureName): Pro
     await expect(confirm).toBeDisabled();
     return;
   }
-  await expect(confirm).toBeEnabled();
+  if (spec.confirming) {
+    await expect(page.locator('[data-confirm-role="cancel"]')).toHaveAttribute(
+      "aria-disabled",
+      "true"
+    );
+  } else {
+    await expect(confirm).toBeEnabled();
+  }
   const cwdTail = spec.meta.cwd.split("/").pop()!;
   if (spec.tier === "reinstallAndRestart") {
     await expect(card.getByText(new RegExp(cwdTail)).first()).toBeVisible();
