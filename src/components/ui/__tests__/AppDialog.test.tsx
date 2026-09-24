@@ -254,6 +254,56 @@ describe("AppDialog focus trapping", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  // A locked dialog stacked over a dismissible one (a running confirm over
+  // Settings) must swallow Escape, not let it fall through to the dialog
+  // underneath — that closes Settings and unmounts the confirm mid-run.
+  it("keeps Escape from reaching the dialog underneath a locked one", async () => {
+    const onCloseBelow = vi.fn();
+    const onCloseAbove = vi.fn();
+    const stack = (aboveDismissible: boolean) => (
+      <>
+        <Dispatcher />
+        <AppDialog isOpen={true} onClose={onCloseBelow} data-testid="below">
+          <AppDialog.Body>
+            <button type="button">Below</button>
+          </AppDialog.Body>
+        </AppDialog>
+        <AppDialog
+          isOpen={true}
+          onClose={onCloseAbove}
+          dismissible={aboveDismissible}
+          zIndex="nested"
+          data-testid="above"
+        >
+          <AppDialog.Body>
+            <button type="button">Above</button>
+          </AppDialog.Body>
+        </AppDialog>
+      </>
+    );
+    // From the focused element, as a real keypress travels: through the
+    // document-level backstops and on to the window dispatcher.
+    const escapeFromFocus = () =>
+      act(() => {
+        (document.activeElement ?? document.body).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
+        );
+      });
+    const { rerender } = render(stack(false));
+    await act(() => vi.runAllTimersAsync());
+
+    escapeFromFocus();
+    expect(onCloseAbove).not.toHaveBeenCalled();
+    expect(onCloseBelow).not.toHaveBeenCalled();
+
+    // Once the lock lifts, Escape closes the top dialog and only that one.
+    rerender(stack(true));
+    await act(() => vi.runAllTimersAsync());
+    escapeFromFocus();
+    expect(onCloseAbove).toHaveBeenCalledOnce();
+    expect(onCloseBelow).not.toHaveBeenCalled();
+  });
+
   it("restores focus to previously focused element on close", async () => {
     const outerButton = document.createElement("button");
     outerButton.textContent = "Outer";
