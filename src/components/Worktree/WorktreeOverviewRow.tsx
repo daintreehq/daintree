@@ -489,7 +489,10 @@ export function WorktreeOverviewRow({
                   />
                 ))
               ) : (
-                <div className="rounded-[var(--radius-lg)] border border-border-default bg-overlay-soft">
+                // The strip is 28px against the 20px headline line every other
+                // section starts with; lifting it by half the difference puts
+                // "N active" on the same centre line as the title beside it.
+                <div className="-mt-1 rounded-[var(--radius-lg)] border border-border-default bg-overlay-soft">
                   <button
                     type="button"
                     tabIndex={-1}
