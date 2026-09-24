@@ -2,7 +2,7 @@ import "./installShims";
 import { createRoot } from "react-dom/client";
 import { resolveAppTheme } from "@shared/theme/themes";
 import { DEFAULT_SYSTEM_LINKS } from "@shared/types/portal";
-import type { WorktreeState } from "@shared/types/worktree";
+import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { primeRadix } from "@/components/ui/radix-loader";
@@ -44,7 +44,17 @@ const WORKTREE_NAMES: Record<string, string> = {
 const worktreeStore = createWorktreeStore();
 worktreeStore.setState({
   worktrees: new Map(
-    Object.entries(WORKTREE_NAMES).map(([id, name]) => [id, { id, name } as WorktreeState])
+    Object.entries(WORKTREE_NAMES).map(([id, name]): [string, WorktreeSnapshot] => [
+      id,
+      {
+        id,
+        worktreeId: id,
+        path: `/Users/you/code/orchid-studio-worktrees/${id}`,
+        name,
+        branch: name,
+        isCurrent: id === "wt-main",
+      },
+    ])
   ),
 });
 setCurrentViewStore(worktreeStore);

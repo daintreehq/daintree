@@ -45,6 +45,7 @@ export function PortalDock() {
     setOpen,
     defaultNewTabUrl,
     showDevDashboard,
+    toggleDevDashboard,
   } = usePortalStore(
     useShallow((s) => ({
       width: s.width,
@@ -56,6 +57,7 @@ export function PortalDock() {
       setOpen: s.setOpen,
       defaultNewTabUrl: s.defaultNewTabUrl,
       showDevDashboard: s.showDevDashboard,
+      toggleDevDashboard: s.toggleDevDashboard,
     }))
   );
   const contentRef = useRef<HTMLDivElement>(null);
@@ -538,7 +540,7 @@ export function PortalDock() {
               <div className="flex-1 bg-surface-sidebar" />
             )}
           </div>
-          {showDevDashboard && <DevServerDashboard />}
+          {showDevDashboard && <DevServerDashboard onHide={toggleDevDashboard} />}
         </aside>
       </ContextMenuTrigger>
       <ContextMenuContent>

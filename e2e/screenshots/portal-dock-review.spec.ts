@@ -24,8 +24,8 @@ import { mkdirSync, readdirSync, realpathSync, rmSync } from "fs";
 import path from "path";
 import { BUILT_IN_THEME_SOURCES } from "@shared/theme/builtInThemeSources";
 import {
-  FIXTURES,
   FIXTURE_NAMES,
+  getFixture,
   type FixtureName,
 } from "../../src/components/Portal/__preview__/fixtures";
 import {
@@ -83,7 +83,7 @@ test.afterAll(async () => {
 });
 
 async function open(page: Page, fixture: FixtureName, theme: string): Promise<Locator> {
-  const spec = FIXTURES[fixture];
+  const spec = getFixture(fixture);
   // PortalDock clamps a restored width so the editor keeps 400px of viewport;
   // leave that much room or every fixture photographs at the 320px minimum.
   await page.setViewportSize({ width: spec.width + 520, height: spec.height + 80 });
@@ -111,7 +111,7 @@ async function open(page: Page, fixture: FixtureName, theme: string): Promise<Lo
 }
 
 async function drive(page: Page, fixture: FixtureName): Promise<void> {
-  const spec = FIXTURES[fixture] as { drive?: string };
+  const spec = getFixture(fixture);
   switch (spec.drive) {
     case "hover-row": {
       await page
@@ -155,7 +155,7 @@ async function drive(page: Page, fixture: FixtureName): Promise<void> {
 }
 
 async function expectFixtureState(page: Page, name: FixtureName): Promise<void> {
-  const spec = FIXTURES[name];
+  const spec = getFixture(name);
   const dashboard = page.getByRole("region", { name: /dev servers/i });
   if (spec.showDevDashboard) await expect(dashboard).toBeVisible();
   else await expect(dashboard).toHaveCount(0);
@@ -167,7 +167,7 @@ async function expectFixtureState(page: Page, name: FixtureName): Promise<void> 
   }
   const launchpad =
     spec.activeTabId === null || spec.tabs.find((t) => t.id === spec.activeTabId)?.url === null;
-  if (launchpad && !("noLinks" in spec)) {
+  if (launchpad && !spec.noLinks) {
     await expect(page.getByRole("button", { name: /Claude/ }).first()).toBeVisible();
   }
 }

@@ -2,14 +2,14 @@
 // `<style>` through `innerHTML`, which throws without the app's default policy.
 import "@/lib/trustedTypesPolicy";
 import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
-import { FIXTURES, isFixtureName } from "./fixtures";
+import { getFixture, isFixtureName } from "./fixtures";
 
 // Imported first by `preview.tsx`, so the bridge answers with the fixture's dev
 // sessions before `allDevSessionsStore` subscribes. Only ever a harness: with a
 // real bridge on the window this page is running inside the app.
 const isHarness = !Reflect.get(window, "electron");
 const requested = new URLSearchParams(window.location.search).get("fixture") ?? "";
-const sessions = isFixtureName(requested) ? (FIXTURES[requested].devSessions ?? []) : [];
+const sessions = isFixtureName(requested) ? (getFixture(requested).devSessions ?? []) : [];
 
 installPreviewShims({
   devPreview: new Proxy(

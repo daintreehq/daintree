@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -44,6 +44,12 @@ import {
 } from "@/components/ui/context-menu";
 
 const noopTabAction = (_tabId: string) => {};
+
+const tabDomId = (tabId: string) => `portal-tab-${tabId}`;
+
+// Shared with the dev-preview browser toolbar so both browser chromes read as one family.
+const iconButtonClass =
+  "toolbar-icon-button shrink-0 p-1.5 rounded-[var(--radius-md)] text-text-secondary disabled:opacity-30 disabled:cursor-not-allowed";
 
 function SortableTab({
   tab,
@@ -98,6 +104,7 @@ function SortableTab({
           style={style}
           {...attributes}
           {...listeners}
+          id={tabDomId(tab.id)}
           role="tab"
           aria-selected={isActive}
           aria-label={tab.title}
@@ -107,27 +114,29 @@ function SortableTab({
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
               onClick(tab.id);
+            } else if (e.key === "Delete" || e.key === "Backspace") {
+              e.preventDefault();
+              onClose(tab.id);
             }
           }}
           className={cn(
-            "group relative flex items-center gap-2 px-3 py-1.5 text-xs font-medium cursor-pointer select-none transition",
-            "rounded-full border shadow-[var(--theme-shadow-ambient)]",
-            "min-w-[80px] max-w-[200px]",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+            "group relative flex shrink-0 items-center gap-1.5 h-8 pl-2.5 pr-1 text-xs cursor-pointer select-none",
+            "rounded-[var(--radius-md)] border transition-colors duration-150",
+            "min-w-[88px] max-w-[180px]",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
             isActive
-              ? "bg-tint/[0.08] text-text-primary border-daintree-accent/40 ring-1 ring-inset ring-daintree-accent/30"
-              : "bg-overlay-subtle text-text-secondary border-divider hover:bg-overlay-medium hover:text-text-primary",
-            isDragging &&
-              "opacity-80 scale-105 shadow-[var(--theme-shadow-floating)] cursor-grabbing"
+              ? "bg-overlay-emphasis text-text-primary border-border-strong"
+              : "text-text-secondary border-transparent hover:bg-overlay-soft hover:text-text-primary",
+            isDragging && "opacity-80 shadow-[var(--theme-shadow-floating)] cursor-grabbing"
           )}
         >
-          {tab.icon && (
-            <div className="flex-shrink-0">
-              <PortalIcon icon={tab.icon} size="tab" />
-            </div>
-          )}
-          <span className="truncate max-w-[120px]">{tab.title}</span>
+          <span className="flex w-3.5 h-3.5 shrink-0 items-center justify-center">
+            <PortalIcon icon={tab.icon ?? "globe"} size="tab" />
+          </span>
+          <span className="min-w-0 flex-1 truncate">{tab.title}</span>
           <button
+            type="button"
+            tabIndex={-1}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
@@ -135,13 +144,12 @@ function SortableTab({
             }}
             aria-label={`Close ${tab.title}`}
             className={cn(
-              "p-0.5 rounded-full transition-colors ml-1",
-              isActive
-                ? "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06]"
-                : "text-daintree-text/40 hover:text-text-primary hover:bg-tint/[0.06] opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              "flex w-6 h-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors duration-150",
+              "hover:text-text-primary hover:bg-overlay-medium",
+              !isActive && "opacity-0 group-hover:opacity-100"
             )}
           >
-            <X className="w-3 h-3" />
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
       </ContextMenuTrigger>
@@ -255,200 +263,223 @@ export function PortalToolbar({
     [getBrowserTabLabel]
   );
 
+  useEffect(() => {
+    if (!activeTabId) return;
+    document
+      .getElementById(tabDomId(activeTabId))
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeTabId]);
+
+  const focusTab = (index: number) => {
+    const tab = tabs[index];
+    if (!tab) return;
+    onTabClick(tab.id);
+    document.getElementById(tabDomId(tab.id))?.focus();
+  };
+
   return (
-    <div className="flex flex-col bg-surface-canvas border-b border-border-default">
-      {/* Top Row: Navigation Controls */}
-      <div className="flex items-center justify-between px-2 py-1.5">
-        <div className="flex items-center gap-0.5">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={onGoBack}
-                disabled={!activeTabId}
-                aria-label="Go back"
-                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Go back</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={onGoForward}
-                disabled={!activeTabId}
-                aria-label="Go forward"
-                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
-              >
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Go forward</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={onReload}
-                disabled={!activeTabId}
-                aria-label="Reload"
-                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
-              >
-                <RotateCw className="w-3.5 h-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Reload</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={onCopyUrl}
-                disabled={!activeTabId || !hasActiveUrl}
-                aria-label="Copy URL"
-                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
-              >
-                <Link2 className="w-3.5 h-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Copy URL</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={onOpenExternal}
-                disabled={!activeTabId || !hasActiveUrl}
-                aria-label="Open in external browser"
-                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Open in external browser</TooltipContent>
-          </Tooltip>
-        </div>
-
-        <div className="flex items-center gap-1">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={toggleDevDashboard}
-                aria-label="Toggle dev server dashboard"
-                aria-pressed={showDevDashboard}
-                className={cn(
-                  "p-1 rounded transition-colors",
-                  showDevDashboard
-                    ? "bg-overlay-subtle text-text-primary"
-                    : "hover:bg-tint/[0.06] text-muted-foreground hover:text-text-primary"
-                )}
-              >
-                <Server className="w-3.5 h-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {showDevDashboard ? "Hide dev servers" : "Show dev servers"}
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={onClose}
-                aria-label="Close portal"
-                aria-keyshortcuts={closePortalAriaShortcut}
-                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-text-primary transition-colors ml-1"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {createTooltipContent("Close portal", closePortalShortcut)}
-            </TooltipContent>
-          </Tooltip>
-        </div>
-      </div>
-
-      {/* Bottom Row: Tab Pills */}
-      <div className="px-2 pb-2">
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCorners}
-          onDragEnd={handleDragEnd}
-          accessibility={{ announcements: browserTabAnnouncements }}
-        >
-          <SortableContext items={tabs.map((t) => t.id)} strategy={horizontalListSortingStrategy}>
-            <div
-              className="flex flex-wrap gap-2 items-center"
-              role="tablist"
-              aria-orientation="horizontal"
-              onKeyDown={(e) => {
-                if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-                  e.preventDefault();
-                  const currentIndex = tabs.findIndex((t) => t.id === activeTabId);
-                  if (currentIndex === -1) return;
-                  const nextIndex =
-                    e.key === "ArrowLeft"
-                      ? currentIndex > 0
-                        ? currentIndex - 1
-                        : tabs.length - 1
-                      : currentIndex < tabs.length - 1
-                        ? currentIndex + 1
-                        : 0;
-                  onTabClick(tabs[nextIndex]!.id);
-                }
-              }}
+    <div className="flex flex-col bg-surface-canvas border-b border-divider">
+      <div className="flex items-center gap-0.5 h-10 px-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onGoBack}
+              disabled={!hasActiveUrl}
+              aria-label="Go back"
+              className={iconButtonClass}
             >
-              {tabs.map((tab, index) => (
-                <SortableTab
-                  key={tab.id}
-                  tab={tab}
-                  isActive={activeTabId === tab.id}
-                  onClick={onTabClick}
-                  onClose={onTabClose}
-                  onDuplicate={duplicateTab}
-                  onCloseOthers={closeOthers}
-                  onCloseToRight={closeToRight}
-                  onCopyUrl={copyTabUrl}
-                  onOpenExternal={openTabExternal}
-                  onReload={reloadTab}
-                  tabCount={tabs.length}
-                  tabIndex={index}
-                />
-              ))}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={onNewTab}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      safeFireAndForget(
-                        window.electron.portal.showNewTabMenu({
-                          x: e.screenX,
-                          y: e.screenY,
-                          links: enabledLinks.map((link) => ({
-                            title: link.title,
-                            url: link.url,
-                          })),
-                          defaultNewTabUrl,
-                        }),
-                        { context: "Opening portal new-tab menu" }
-                      );
-                    }}
-                    className="flex items-center justify-center w-8 h-[26px] rounded-full bg-overlay-subtle hover:bg-overlay-soft text-daintree-text/70 hover:text-text-primary border border-divider transition"
-                    aria-label="New Tab"
-                    aria-keyshortcuts={newTabAriaShortcut}
-                    aria-haspopup="menu"
-                  >
-                    <Plus className="w-4 h-4" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {createTooltipContent("New Tab", newTabShortcut)}
-                </TooltipContent>
-              </Tooltip>
-            </div>
-          </SortableContext>
-        </DndContext>
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Go back</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onGoForward}
+              disabled={!hasActiveUrl}
+              aria-label="Go forward"
+              className={iconButtonClass}
+            >
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Go forward</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onReload}
+              disabled={!hasActiveUrl}
+              aria-label="Reload"
+              className={iconButtonClass}
+            >
+              <RotateCw className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Reload</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onCopyUrl}
+              disabled={!activeTabId || !hasActiveUrl}
+              aria-label="Copy URL"
+              className={iconButtonClass}
+            >
+              <Link2 className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Copy URL</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onOpenExternal}
+              disabled={!activeTabId || !hasActiveUrl}
+              aria-label="Open in external browser"
+              className={iconButtonClass}
+            >
+              <ExternalLink className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Open in external browser</TooltipContent>
+        </Tooltip>
+
+        <div className="flex-1" />
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={toggleDevDashboard}
+              aria-label="Dev servers"
+              aria-pressed={showDevDashboard}
+              className={iconButtonClass}
+            >
+              <Server className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {showDevDashboard ? "Hide dev servers" : "Show dev servers"}
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close portal"
+              aria-keyshortcuts={closePortalAriaShortcut}
+              className={iconButtonClass}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {createTooltipContent("Close portal", closePortalShortcut)}
+          </TooltipContent>
+        </Tooltip>
       </div>
+
+      {tabs.length > 0 && (
+        <div className="flex items-center gap-1 px-2 pb-2">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCorners}
+            onDragEnd={handleDragEnd}
+            accessibility={{ announcements: browserTabAnnouncements }}
+          >
+            <SortableContext items={tabs.map((t) => t.id)} strategy={horizontalListSortingStrategy}>
+              <div
+                className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-none"
+                role="tablist"
+                aria-label="Portal tabs"
+                aria-orientation="horizontal"
+                onKeyDown={(e) => {
+                  const currentIndex = tabs.findIndex((t) => t.id === activeTabId);
+                  const last = tabs.length - 1;
+                  let next: number;
+                  switch (e.key) {
+                    case "ArrowLeft":
+                      next = currentIndex > 0 ? currentIndex - 1 : last;
+                      break;
+                    case "ArrowRight":
+                      next = currentIndex < last ? currentIndex + 1 : 0;
+                      break;
+                    case "Home":
+                      next = 0;
+                      break;
+                    case "End":
+                      next = last;
+                      break;
+                    default:
+                      return;
+                  }
+                  e.preventDefault();
+                  focusTab(next);
+                }}
+              >
+                {tabs.map((tab, index) => (
+                  <SortableTab
+                    key={tab.id}
+                    tab={tab}
+                    isActive={activeTabId === tab.id}
+                    onClick={onTabClick}
+                    onClose={onTabClose}
+                    onDuplicate={duplicateTab}
+                    onCloseOthers={closeOthers}
+                    onCloseToRight={closeToRight}
+                    onCopyUrl={copyTabUrl}
+                    onOpenExternal={openTabExternal}
+                    onReload={reloadTab}
+                    tabCount={tabs.length}
+                    tabIndex={index}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onNewTab}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  safeFireAndForget(
+                    window.electron.portal.showNewTabMenu({
+                      x: e.screenX,
+                      y: e.screenY,
+                      links: enabledLinks.map((link) => ({
+                        title: link.title,
+                        url: link.url,
+                      })),
+                      defaultNewTabUrl,
+                    }),
+                    { context: "Opening portal new-tab menu" }
+                  );
+                }}
+                className={iconButtonClass}
+                aria-label="New Tab"
+                aria-keyshortcuts={newTabAriaShortcut}
+                aria-haspopup="menu"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {createTooltipContent("New Tab", newTabShortcut)}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      )}
     </div>
   );
 }

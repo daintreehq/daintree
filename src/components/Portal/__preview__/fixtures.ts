@@ -173,3 +173,7 @@ export function isFixtureName(value: string): value is FixtureName {
 }
 
 export const FIXTURE_NAMES = Object.keys(FIXTURES).filter(isFixtureName);
+
+export function getFixture(name: FixtureName): PortalFixture {
+  return FIXTURES[name];
+}
