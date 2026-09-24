@@ -451,6 +451,10 @@ export function InlineStatusBanner({
       className={cn(
         "flex items-center shrink-0",
         stacked ? "gap-2 ml-6" : "gap-1",
+        // Inline controls overhang the text line into the padding rather than
+        // setting its height, so the row stays one text line tall and the
+        // glyph lines up with the title whether or not the controls wrap.
+        isInline && "-my-1",
         // Beneath the text, the controls line up with it, past the glyph.
         // 52rem leaves the text column a real measure just above the
         // break: three actions and a dismiss run to ~400px, and a column
@@ -480,6 +484,9 @@ export function InlineStatusBanner({
             key={action.id}
             variant={variant}
             size={action.iconOnly ? "icon-sm" : "sm"}
+            // A raised, shadowed button reads louder than a routine one-line
+            // notice should; the ring alone marks it as a control.
+            className={cn(isInline && "shadow-none inset-shadow-none")}
             disabled={action.disabled}
             loading={action.loading}
             onClick={(e) => {
@@ -517,7 +524,7 @@ export function InlineStatusBanner({
         stacked
           ? "flex flex-col gap-2 px-3 py-2 shrink-0"
           : isInline
-            ? "flex items-start px-3 py-1 shrink-0 border-b border-divider"
+            ? "flex items-start px-3 py-1.5 shrink-0 border-b border-divider"
             : "flex items-center justify-between gap-3 px-3 py-2 shrink-0",
         // The strip wraps its controls beneath the text once the container is
         // narrower than a two-line sentence plus three actions can share.
@@ -556,12 +563,7 @@ export function InlineStatusBanner({
           is only legible on some of them is not a title. */}
       <div className={cn("flex items-start gap-2 min-w-0", wrapsControls && "flex-1")}>
         <IconComponent
-          className={cn(
-            "w-4 h-4 shrink-0",
-            // Centred on the first line, which the controls make 28px tall.
-            isInline ? "mt-1.5" : "mt-0.5",
-            isNeutral && "text-text-secondary"
-          )}
+          className={cn("w-4 h-4 shrink-0 mt-0.5", isNeutral && "text-text-secondary")}
           style={isNeutral ? undefined : { color: `var(${colorVar})` }}
           aria-hidden="true"
         />
@@ -569,7 +571,7 @@ export function InlineStatusBanner({
           // The controls flow with the text rather than sitting in a column of
           // their own: they follow the sentence on a wide pane, and on a narrow
           // one they wrap beneath it, starting where the text starts.
-          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
             <span className="text-sm font-medium text-text-primary">{title}</span>
             {description && <span className="text-xs text-text-secondary">{description}</span>}
             {controlsRow}
