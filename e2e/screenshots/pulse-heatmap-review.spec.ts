@@ -433,6 +433,17 @@ test("pulse heatmap review — heatmap and streak flame across states and themes
             { timeout: 3000 }
           )
           .toMatch(/open$/);
+        await page
+          .locator("[data-radix-popper-content-wrapper]")
+          .first()
+          .waitFor({ state: "visible", timeout: 3000 });
+        // Held past the app's 2.5s hint window: a day's tooltip is its only
+        // visible readout, so it has to still be there when a user reads it.
+        await page.waitForTimeout(3000);
+        await page
+          .locator("[data-radix-popper-content-wrapper]")
+          .first()
+          .waitFor({ state: "visible", timeout: 500 });
         await snap(page, CARD, "cell-focus", theme, TOOLTIP_PAD);
         await page.keyboard.press("Escape");
       });
@@ -442,9 +453,9 @@ test("pulse heatmap review — heatmap and streak flame across states and themes
         const target = page.locator(`${GRID} [role="gridcell"][data-heat-level="4"]`).nth(1);
         await target.hover();
         await page
-          .locator('[role="tooltip"]')
+          .locator("[data-radix-popper-content-wrapper]")
           .first()
-          .waitFor({ state: "attached", timeout: 3000 });
+          .waitFor({ state: "visible", timeout: 3000 });
         await snap(page, CARD, "cell-hover", theme, TOOLTIP_PAD);
         await page.mouse.move(2, 2);
         await settle(page, 200);

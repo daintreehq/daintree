@@ -122,8 +122,11 @@ function PulseHeatmapCell({
   ) as CSSProperties;
 
   return (
-    // 0ms: dense scrub-hover surface — skip-delay alone doesn't cover the cold first-cell hover (mirrors GitHub contribution-heatmap)
-    <Tooltip delayDuration={0}>
+    // 0ms: dense scrub-hover surface — skip-delay alone doesn't cover the cold first-cell hover (mirrors GitHub contribution-heatmap).
+    // autoDismiss off: this tooltip is the only place a day's date and count
+    // are shown, so it stays while the cell is hovered or focused rather than
+    // vanishing mid-read after the app-wide hint window.
+    <Tooltip delayDuration={0} autoDismiss={false}>
       <TooltipTrigger asChild>
         <button
           ref={cellRef}
