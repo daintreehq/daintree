@@ -9,12 +9,6 @@ interface BannerOverflowMenuProps {
   actions: BannerAction[];
   /** Accessible label for the trigger. Defaults to "More options". */
   ariaLabel?: string;
-  /**
-   * Which edge of the trigger the menu hangs from. `start` suits the stacked
-   * layout, whose controls sit at the band's left; a banner whose controls
-   * trail at the right edge (`strip`, `pane`) needs `end` to stay in the pane.
-   */
-  align?: "start" | "end";
 }
 
 /**
@@ -27,7 +21,6 @@ interface BannerOverflowMenuProps {
 export function BannerOverflowMenu({
   actions,
   ariaLabel = "More options",
-  align = "start",
 }: BannerOverflowMenuProps) {
   const [open, setOpen] = useState(false);
 
@@ -46,9 +39,9 @@ export function BannerOverflowMenu({
           <MoreHorizontal aria-hidden="true" />
         </Button>
       </PopoverTrigger>
-      {/* Stacked banners put the trigger at the left of the control row, where
-          an end-aligned menu would hang off the pane's left edge. */}
-      <PopoverContent align={align} sideOffset={4} className="flex flex-col p-1 min-w-44">
+      {/* `start`: the trigger sits at the left of a banner's control row, and
+          an end-aligned menu hangs off the pane's left edge. */}
+      <PopoverContent align="start" sideOffset={4} className="flex flex-col p-1 min-w-44">
         {actions.map((item) => {
           const isDanger = item.variant === "danger" || item.variant === "dangerFilled";
           const isDisabled = item.disabled || item.loading;

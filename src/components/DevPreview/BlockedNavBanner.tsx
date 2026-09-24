@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, type CSSProperties } from "react";
 import { Check, Copy, ExternalLink, RotateCw } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "../Terminal/InlineStatusBanner";
 import { BannerOverflowMenu } from "../Terminal/BannerOverflowMenu";
@@ -23,6 +23,13 @@ type OAuthPhase =
 type OAuthErrorCause = "not-ready" | "failed";
 
 interface BlockedNavState {
+  /**
+   * Identity of this notice. A new block mints a new one, even for the same
+   * URL; phase changes keep it. Feedback from an awaited action carries the
+   * token it started under and only lands if the banner still shows that
+   * notice.
+   */
+  notice: symbol;
   url: string;
   canOpenExternal: boolean;
   sessionStorageSnapshot: SessionStorageEntry[];
@@ -30,6 +37,10 @@ interface BlockedNavState {
   phase: OAuthPhase;
   errorCause: OAuthErrorCause | null;
   errorMessage: string | null;
+  /** The system refused to open this link. Stands until the notice goes. */
+  openFailed: boolean;
+  /** Transient result of the last Copy URL on this notice. */
+  copyFeedback: "copied" | "copy-failed" | null;
 }
 
 type BlockedNavAction =
@@ -47,17 +58,19 @@ type BlockedNavAction =
   /**
    * The invoke result of a failed sign-in. Main normally reports the failure
    * first as a status event; this only lands when that event was dropped, so it
-   * applies to the same attempt still in flight and never overwrites a terminal
+   * applies to the same notice still in flight and never overwrites a terminal
    * phase or a newer notice.
    */
-  | { type: "OAUTH_RESULT_FAILED"; url: string; timedOut: boolean; message?: string | null }
+  | { type: "OAUTH_RESULT_FAILED"; notice: symbol; timedOut: boolean; message?: string | null }
+  | { type: "OPEN_FAILED"; notice: symbol }
+  | { type: "COPY_RESULT"; notice: symbol; result: "copied" | "copy-failed" | null }
   | { type: "DISMISS" }
   /**
-   * Dismiss once an action on `url` has settled — but only if the banner is
-   * still about `url`. A block that arrived while the action was awaited is a
-   * new notice, and a late result must not close it.
+   * Dismiss once an action has settled — but only if the banner still shows
+   * the notice it started under. A block that arrived while the action was
+   * awaited is a new notice, and a late result must not close it.
    */
-  | { type: "DISMISS_IF_URL"; url: string };
+  | { type: "DISMISS_NOTICE"; notice: symbol };
 
 // How long the "Copied" confirmation label lingers before reverting to "Copy URL".
 const COPY_FEEDBACK_MS = 2000;
@@ -107,6 +120,7 @@ function blockedNavReducer(
       // its dismiss timer close a navigation blocked after it.
       if (state && isInFlight(state.phase)) return state;
       return {
+        notice: Symbol("blocked-nav-notice"),
         url: action.url,
         canOpenExternal: action.canOpenExternal,
         sessionStorageSnapshot: action.sessionStorageSnapshot,
@@ -114,6 +128,8 @@ function blockedNavReducer(
         phase: "blocked",
         errorCause: null,
         errorMessage: null,
+        openFailed: false,
+        copyFeedback: null,
       };
     }
     case "OAUTH_STARTED":
@@ -136,7 +152,7 @@ function blockedNavReducer(
           }
         : state;
     case "OAUTH_RESULT_FAILED":
-      if (!state || !isInFlight(state.phase) || state.url !== action.url) return state;
+      if (!state || !isInFlight(state.phase) || state.notice !== action.notice) return state;
       return action.timedOut
         ? { ...state, phase: "oauth-timed-out" }
         : {
@@ -147,8 +163,14 @@ function blockedNavReducer(
           };
     case "DISMISS":
       return null;
-    case "DISMISS_IF_URL":
-      return state && state.url === action.url ? null : state;
+    case "DISMISS_NOTICE":
+      return state && state.notice === action.notice ? null : state;
+    case "OPEN_FAILED":
+      return state && state.notice === action.notice ? { ...state, openFailed: true } : state;
+    case "COPY_RESULT":
+      return state && state.notice === action.notice
+        ? { ...state, copyFeedback: action.result }
+        : state;
   }
 }
 
@@ -157,16 +179,6 @@ export interface BlockedNavBannerProps {
   panelId: string;
   webviewElement: Electron.WebviewTag | null;
   onDispatch: (action: BlockedNavAction) => void;
-}
-
-/**
- * Feedback from an action the user took, keyed by the URL it acted on. An
- * awaited result can land after the banner has moved on to another link, and
- * it must not describe that one.
- */
-interface ActionFeedback {
-  url: string;
-  kind: "copied" | "copy-failed" | "open-failed";
 }
 
 /** Mirrors `canOpenExternal`'s allow-list: anything not web is handed to the OS. */
@@ -180,28 +192,20 @@ export function BlockedNavBanner({
   webviewElement,
   onDispatch,
 }: BlockedNavBannerProps) {
-  const [feedback, setFeedback] = useState<ActionFeedback | null>(null);
-  const url = state?.url;
+  const notice = state?.notice;
+  const copyFeedback = state?.copyFeedback ?? null;
 
-  const handleCopyUrl = useCallback(async () => {
-    if (!url) return;
-    try {
-      await window.electron.clipboard.writeText(url);
-      setFeedback({ url, kind: "copied" });
-    } catch {
-      setFeedback({ url, kind: "copy-failed" });
-    }
-  }, [url]);
-
-  // Copy feedback reverts after a beat; a failed open stands until the user
-  // acts. Driven by an effect rather than a timer ref so no ref is reachable
-  // from render — the React Compiler flags transitive ref reads from a
-  // render-phase call.
+  // Copy feedback reverts after a beat. Driven by an effect rather than a
+  // timer ref so no ref is reachable from render — the React Compiler flags
+  // transitive ref reads from a render-phase call.
   useEffect(() => {
-    if (!feedback || feedback.kind === "open-failed") return;
-    const timer = setTimeout(() => setFeedback(null), COPY_FEEDBACK_MS);
+    if (!copyFeedback || !notice) return;
+    const timer = setTimeout(
+      () => onDispatch({ type: "COPY_RESULT", notice, result: null }),
+      COPY_FEEDBACK_MS
+    );
     return () => clearTimeout(timer);
-  }, [feedback]);
+  }, [copyFeedback, notice, onDispatch]);
 
   // Listen for OAuth loopback status events from main process
   useEffect(() => {
@@ -252,7 +256,7 @@ export function BlockedNavBanner({
       return;
     }
 
-    const attemptUrl = state.url;
+    const { notice: attempt, url: attemptUrl } = state;
     try {
       const result = await window.electron.webview.startOAuthLoopback(
         attemptUrl,
@@ -263,14 +267,14 @@ export function BlockedNavBanner({
       if (!result.success && result.cause !== "cancelled") {
         onDispatch({
           type: "OAUTH_RESULT_FAILED",
-          url: attemptUrl,
+          notice: attempt,
           timedOut: result.cause === "timed-out",
         });
       }
     } catch (err) {
       onDispatch({
         type: "OAUTH_RESULT_FAILED",
-        url: attemptUrl,
+        notice: attempt,
         timedOut: false,
         // Empty fallback: with nothing observed, the detail line stays empty.
         message: formatErrorMessage(err, "") || null,
@@ -278,26 +282,39 @@ export function BlockedNavBanner({
     }
   };
 
-  const handleOpenExternal = async () => {
-    const target = state.url;
+  const handleCopyUrl = async () => {
+    const { notice: from, url } = state;
     try {
-      await window.electron.system.openExternal(target);
-      onDispatch({ type: "DISMISS_IF_URL", url: target });
+      await window.electron.clipboard.writeText(url);
+      onDispatch({ type: "COPY_RESULT", notice: from, result: "copied" });
     } catch {
-      setFeedback({ url: target, kind: "open-failed" });
+      onDispatch({ type: "COPY_RESULT", notice: from, result: "copy-failed" });
+    }
+  };
+
+  const handleOpenExternal = async () => {
+    const { notice: from, url } = state;
+    try {
+      await window.electron.system.openExternal(url);
+      onDispatch({ type: "DISMISS_NOTICE", notice: from });
+    } catch {
+      onDispatch({ type: "OPEN_FAILED", notice: from });
     }
   };
 
   const { phase } = state;
-  const current = feedback?.url === state.url ? feedback.kind : null;
   const destination = describeDestination(state.url);
   const hostLabel = destination?.kind === "web" ? destination.host : null;
 
   const copyAction: BannerAction = {
     id: "copy-url",
     label:
-      current === "copied" ? "Copied" : current === "copy-failed" ? "Couldn't copy" : "Copy URL",
-    icon: current === "copied" ? Check : Copy,
+      copyFeedback === "copied"
+        ? "Copied"
+        : copyFeedback === "copy-failed"
+          ? "Couldn't copy"
+          : "Copy URL",
+    icon: copyFeedback === "copied" ? Check : Copy,
     onClick: handleCopyUrl,
     variant: "dismiss",
   };
@@ -320,11 +337,10 @@ export function BlockedNavBanner({
   // The user asked for the system browser and didn't get it: that is a
   // failure of something they did, so it reads as one, and copying is the
   // only way left to follow the link.
-  if (phase === "blocked" && !state.isOAuth && current === "open-failed") {
+  if (phase === "blocked" && !state.isOAuth && state.openFailed) {
     return (
       <InlineStatusBanner
         severity="error"
-        layout="pane"
         title="Couldn't open the link"
         description="Your system didn't hand it to a browser or app."
         contextLine={state.url}
@@ -382,7 +398,6 @@ export function BlockedNavBanner({
         <InlineStatusBanner
           icon={ExternalLink}
           severity="warning"
-          layout="pane"
           title={title}
           description={
             state.isOAuth
@@ -403,7 +418,6 @@ export function BlockedNavBanner({
         <InlineStatusBanner
           icon={ExternalLink}
           severity="info"
-          layout="pane"
           title="Finish signing in from your browser"
           description={
             hostLabel
@@ -419,7 +433,6 @@ export function BlockedNavBanner({
         <InlineStatusBanner
           icon={SpinnerGlyph}
           severity="info"
-          layout="pane"
           title="Finishing sign-in"
           description="Bringing the session back into the preview."
           actions={[cancelAction]}
@@ -430,7 +443,6 @@ export function BlockedNavBanner({
       return (
         <InlineStatusBanner
           severity="success"
-          layout="pane"
           title={hostLabel ? `Signed in to ${hostLabel}` : "Signed in"}
           onClose={handleDismiss}
           autoDismissAfter={SIGN_IN_COMPLETED_DISMISS_MS}
@@ -443,13 +455,11 @@ export function BlockedNavBanner({
       return (
         <InlineStatusBanner
           severity="error"
-          layout="pane"
           title={title}
           description={description}
           contextLine={detail}
           action={retryAction}
-          // `end`: in the pane layout the trigger sits at the band's right edge.
-          trailingSlot={<BannerOverflowMenu actions={[copyAction]} align="end" />}
+          trailingSlot={<BannerOverflowMenu actions={[copyAction]} />}
           onClose={handleDismiss}
           role="alert"
         />
