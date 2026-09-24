@@ -62,8 +62,10 @@ const FIXTURES = [
   "hover",
   "drag",
   "track-hover",
-  "barely",
+  "pane-hover",
+  "tall",
   "fleet",
+  "min-thumb",
   "single-column",
   "fit",
 ] as const;
@@ -97,10 +99,11 @@ async function open(page: Page, theme: string, fixture: Fixture): Promise<void> 
   );
   await expect(page.locator("[data-preview-shell]")).toBeAttached();
   await page.evaluate(() => document.fonts.ready);
-  const panes = page.locator("[data-xterm-host]");
-  const count = await panes.count();
-  if (count === 0) throw new Error(`${fixture}: no panes rendered`);
-  await expect(page.locator('[data-xterm-host][data-ready="true"]')).toHaveCount(count, {
+  if ((await page.locator("[data-preview-pane]").count()) === 0) {
+    throw new Error(`${fixture}: no panes rendered`);
+  }
+  const terminals = await page.locator("[data-xterm-host]").count();
+  await expect(page.locator('[data-xterm-host][data-ready="true"]')).toHaveCount(terminals, {
     timeout: 20_000,
   });
 
@@ -122,6 +125,10 @@ async function open(page: Page, theme: string, fixture: Fixture): Promise<void> 
     // The thumb position is written in a rAF after the scroll event.
     await page.waitForTimeout(150);
     await verifyThumbPosition(page, fixture, scroll);
+    if (fixture === "min-thumb") {
+      const h = (await thumb(page).boundingBox())?.height ?? 0;
+      if (Math.abs(h - 44) > 1) throw new Error(`min-thumb: thumb is ${h}px, not the 44px floor`);
+    }
   }
   await page.mouse.move(2, 2);
   await page.waitForTimeout(200);
@@ -187,6 +194,15 @@ async function holdState(page: Page, fixture: Fixture): Promise<void> {
     await page.mouse.move(c.x, c.y + 30, { steps: 4 });
     await page.waitForTimeout(250);
   }
+  if (fixture === "pane-hover") {
+    // Wake the rightmost pane's own xterm scrollbar, which sits just left of
+    // the grid gutter, so the two bars are judged side by side.
+    const f = await frame(page).boundingBox();
+    if (!f) throw new Error("pane-hover: no frame box");
+    await page.mouse.move(f.x + f.width - 60, f.y + 160);
+    await page.mouse.wheel(0, -200);
+    await page.waitForTimeout(300);
+  }
   if (fixture === "track-hover") {
     const t = await thumb(page).boundingBox();
     const f = await frame(page).boundingBox();
@@ -213,7 +229,7 @@ test("Grid scrollbar — states and themes", async ({ browser }) => {
   const context = await browser.newContext({ deviceScaleFactor: SCALE });
   const page = await context.newPage();
   await stubViteHmrClient(page);
-  await page.setViewportSize({ width: 1340, height: 740 });
+  await page.setViewportSize({ width: 1340, height: 1120 });
   const pageErrors: string[] = [];
   page.on("pageerror", (e) => pageErrors.push(e.message));
   const written: string[] = [];
@@ -223,7 +239,12 @@ test("Grid scrollbar — states and themes", async ({ browser }) => {
       await open(page, theme, fixture);
       await holdState(page, fixture);
       written.push(await snapFrame(page, `${fixture}-${theme}.png`));
-      if (fixture === "hover" || fixture === "drag" || fixture === "track-hover") {
+      if (
+        fixture === "hover" ||
+        fixture === "drag" ||
+        fixture === "track-hover" ||
+        fixture === "pane-hover"
+      ) {
         written.push(await snapZoom(page, `${fixture}-zoom-${theme}.png`));
       }
       await releaseState(page, fixture);
@@ -237,7 +258,7 @@ test("Grid scrollbar — states and themes", async ({ browser }) => {
 
   // Forced colors replaces background colours; the thumb has to survive it.
   await page.emulateMedia({ forcedColors: "active" });
-  for (const fixture of ["middle", "hover"] as const) {
+  for (const fixture of ["middle", "hover", "drag"] as const) {
     await open(page, FULL_THEMES[0]!, fixture);
     await holdState(page, fixture);
     written.push(await snapFrame(page, `${fixture}-forced-colors.png`));

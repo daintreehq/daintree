@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 
 /** Total horizontal space the custom scrollbar reserves (bar + edge margin). */
 export const GRID_SCROLLBAR_GUTTER_PX = 22;
@@ -12,6 +13,11 @@ const BAR_INSET_PX = 4;
 const TRACK_INSET_PX = 4;
 /** Smallest the handle ever gets, so it stays grabbable on huge fleets. */
 const THUMB_MIN_PX = 44;
+/** Share of the viewport one track page moves, leaving a strip of overlap for context. */
+const TRACK_PAGE_FRACTION = 0.9;
+/** Press-and-hold on the track: first repeat after this, like a native scrollbar. */
+const TRACK_REPEAT_DELAY_MS = 450;
+const TRACK_REPEAT_INTERVAL_MS = 60;
 
 export interface ScrollMetrics {
   scrollTop: number;
@@ -37,6 +43,38 @@ export function computeThumbGeometry(
   const travel = trackHeight - height;
   const top = travel > 0 ? Math.round((m.scrollTop / maxScroll) * travel) : 0;
   return { height, top };
+}
+
+/**
+ * Next `scrollTop` for one track page toward `pointerY` (track-relative), or
+ * `null` once the handle already sits under the pointer. The page is clamped
+ * so the handle's centre never travels past the pointer — a click just beyond
+ * a long handle nudges it there instead of throwing the grid a whole page, and
+ * press-and-hold stops where the user is pointing rather than at an end.
+ */
+export function computeTrackPageTarget(
+  m: ScrollMetrics,
+  trackHeight: number,
+  minThumb: number,
+  pointerY: number
+): number | null {
+  const geo = computeThumbGeometry(m, trackHeight, minThumb);
+  if (!geo) return null;
+  if (pointerY >= geo.top && pointerY <= geo.top + geo.height) return null;
+  const maxScroll = m.scrollHeight - m.clientHeight;
+  const travel = trackHeight - geo.height;
+  if (travel <= 0) return null;
+  const centred = Math.max(
+    0,
+    Math.min(maxScroll, ((pointerY - geo.height / 2) / travel) * maxScroll)
+  );
+  const page = m.clientHeight * TRACK_PAGE_FRACTION;
+  const next =
+    pointerY < geo.top
+      ? Math.max(m.scrollTop - page, centred)
+      : Math.min(m.scrollTop + page, centred);
+  const clamped = Math.max(0, Math.min(maxScroll, next));
+  return Math.abs(clamped - m.scrollTop) < 1 ? null : clamped;
 }
 
 /**
@@ -71,6 +109,18 @@ export function GridScrollbar({
   const trackRef = useRef<HTMLDivElement>(null);
   const thumbRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startY: number; startScrollTop: number } | null>(null);
+  const trackHoldRef = useRef<{
+    pointerY: number;
+    timer: ReturnType<typeof setTimeout> | null;
+  } | null>(null);
+
+  const stopTrackHold = useCallback(() => {
+    const hold = trackHoldRef.current;
+    if (hold?.timer != null) clearTimeout(hold.timer);
+    trackHoldRef.current = null;
+  }, []);
+
+  useEffect(() => stopTrackHold, [stopTrackHold]);
 
   useEffect(() => {
     const el = scrollRoot;
@@ -164,31 +214,74 @@ export function GridScrollbar({
 
   const endDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     dragRef.current = null;
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-      e.currentTarget.releasePointerCapture(e.pointerId);
+    const el = e.currentTarget;
+    if (el.hasPointerCapture(e.pointerId)) {
+      el.releasePointerCapture(e.pointerId);
     }
-    setPhase("idle");
+    // Capture suppressed enter/leave for the whole drag, so the phase after
+    // release comes from where the pointer actually is, not where it started.
+    const r = el.getBoundingClientRect();
+    const over =
+      e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    setPhase(over ? "hover" : "idle");
   }, []);
 
-  const onTrackPointerDown = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      // A click in the empty track pages toward the click, like a real scrollbar.
+  const pageTowardPointer = useCallback(
+    (smooth: boolean): boolean => {
       const track = trackRef.current;
-      if (!scrollRoot || !track) return;
-      const live: ScrollMetrics = {
-        scrollTop: scrollRoot.scrollTop,
-        scrollHeight: scrollRoot.scrollHeight,
-        clientHeight: scrollRoot.clientHeight,
-      };
-      const geo = computeThumbGeometry(live, track.clientHeight, THUMB_MIN_PX);
-      if (!geo) return;
-      e.stopPropagation();
-      const clickY = e.clientY - track.getBoundingClientRect().top;
-      const dir = clickY < geo.top ? -1 : 1;
-      scrollRoot.scrollBy({ top: dir * scrollRoot.clientHeight * 0.9, behavior: "smooth" });
+      const hold = trackHoldRef.current;
+      if (!scrollRoot || !track || !hold) return false;
+      const next = computeTrackPageTarget(
+        {
+          scrollTop: scrollRoot.scrollTop,
+          scrollHeight: scrollRoot.scrollHeight,
+          clientHeight: scrollRoot.clientHeight,
+        },
+        track.clientHeight,
+        THUMB_MIN_PX,
+        hold.pointerY
+      );
+      if (next === null) return false;
+      scrollRoot.scrollTo({ top: next, behavior: smooth ? "smooth" : "auto" });
+      return true;
     },
     [scrollRoot]
   );
+
+  const onTrackPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      // A press in the empty track pages toward the pointer, then repeats while
+      // held until the handle reaches it — a native scrollbar's contract.
+      const track = trackRef.current;
+      if (!scrollRoot || !track || e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      stopTrackHold();
+      trackHoldRef.current = {
+        pointerY: e.clientY - track.getBoundingClientRect().top,
+        timer: null,
+      };
+      if (!pageTowardPointer(!prefersReducedMotion())) {
+        stopTrackHold();
+        return;
+      }
+      track.setPointerCapture(e.pointerId);
+      const repeat = () => {
+        const hold = trackHoldRef.current;
+        if (!hold) return;
+        hold.timer = pageTowardPointer(false) ? setTimeout(repeat, TRACK_REPEAT_INTERVAL_MS) : null;
+      };
+      trackHoldRef.current.timer = setTimeout(repeat, TRACK_REPEAT_DELAY_MS);
+    },
+    [scrollRoot, pageTowardPointer, stopTrackHold]
+  );
+
+  const onTrackPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const hold = trackHoldRef.current;
+    const track = trackRef.current;
+    if (!hold || !track) return;
+    hold.pointerY = e.clientY - track.getBoundingClientRect().top;
+  }, []);
 
   const onWheel = useCallback(
     (e: React.WheelEvent<HTMLDivElement>) => {
@@ -215,6 +308,10 @@ export function GridScrollbar({
       ref={trackRef}
       data-no-dnd
       onPointerDown={onTrackPointerDown}
+      onPointerMove={onTrackPointerMove}
+      onPointerUp={stopTrackHold}
+      onPointerCancel={stopTrackHold}
+      onLostPointerCapture={stopTrackHold}
       onWheel={onWheel}
       className="absolute z-20 rounded-full bg-[var(--scrollbar-track)]"
       style={{
@@ -236,6 +333,8 @@ export function GridScrollbar({
         aria-valuemin={0}
         aria-valuemax={100}
         tabIndex={-1}
+        data-grid-scrollbar-thumb=""
+        data-phase={phase}
         onPointerDown={onThumbPointerDown}
         onPointerMove={onThumbPointerMove}
         onPointerUp={endDrag}
@@ -244,8 +343,11 @@ export function GridScrollbar({
         onPointerEnter={() => setPhase((p) => (p === "drag" ? p : "hover"))}
         onPointerLeave={() => setPhase((p) => (p === "drag" ? p : "idle"))}
         className={cn(
-          "absolute inset-x-0 cursor-default rounded-full border-2 border-transparent bg-clip-padding transition-colors",
-          phase === "idle" ? "bg-[var(--scrollbar-thumb)]" : "bg-[var(--scrollbar-thumb-hover)]"
+          "absolute inset-x-0 cursor-default rounded-full border-2 border-transparent bg-clip-padding",
+          "transition-[background-color,border-color] duration-150 ease-out",
+          phase === "idle" && "bg-[var(--scrollbar-thumb)]",
+          phase === "hover" && "bg-[var(--scrollbar-thumb-hover)]",
+          phase === "drag" && "bg-[var(--scrollbar-thumb-active)]"
         )}
         style={{ height: geometry.height, top: 0 }}
       />

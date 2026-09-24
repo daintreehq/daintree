@@ -50,6 +50,8 @@ interface Fixture {
   scroll: number;
   /** Non-scroll mode: rows stretch to fill, no gutter, no bar. */
   fit?: boolean;
+  /** Quiet stand-in panes without xterms, for fleets too large to boot 100+ terminals. */
+  lite?: boolean;
 }
 
 /** Mirrored as `FIXTURES` in the spec — keep the two lists in step. */
@@ -60,8 +62,10 @@ const FIXTURES: Fixture[] = [
   { slug: "hover", panes: 6, cols: 2, width: 1100, height: 700, scroll: 0.5 },
   { slug: "drag", panes: 6, cols: 2, width: 1100, height: 700, scroll: 0.5 },
   { slug: "track-hover", panes: 6, cols: 2, width: 1100, height: 700, scroll: 0.5 },
-  { slug: "barely", panes: 5, cols: 2, width: 1100, height: 700, scroll: 0.3 },
+  { slug: "pane-hover", panes: 6, cols: 2, width: 1100, height: 700, scroll: 0 },
+  { slug: "tall", panes: 10, cols: 2, width: 1100, height: 1080, scroll: 0.3 },
   { slug: "fleet", panes: 36, cols: 3, width: 1300, height: 700, scroll: 0.4 },
+  { slug: "min-thumb", panes: 150, cols: 3, width: 1300, height: 700, scroll: 0.6, lite: true },
   { slug: "single-column", panes: 3, cols: 1, width: 560, height: 700, scroll: 0.5 },
   { slug: "fit", panes: 4, cols: 2, width: 1100, height: 700, scroll: 0, fit: true },
 ];
@@ -122,6 +126,7 @@ function XtermPane({
   }, [index, scheme]);
   return (
     <div
+      data-preview-pane=""
       className="flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-border-default bg-surface-panel"
       style={{ contain: "content" }}
     >
@@ -133,6 +138,22 @@ function XtermPane({
       <div className="min-h-0 flex-1 p-3" style={{ backgroundColor: background }}>
         <div ref={hostRef} data-xterm-host="" className="h-full w-full min-h-0 min-w-0" />
       </div>
+    </div>
+  );
+}
+
+function LitePane({ index }: { index: number }) {
+  return (
+    <div
+      data-preview-pane=""
+      className="flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-border-default bg-surface-panel"
+    >
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border-subtle px-3">
+        <span className="truncate text-xs text-text-secondary">
+          {TITLES[index % TITLES.length]}
+        </span>
+      </div>
+      <div className="min-h-0 flex-1 bg-surface-canvas" />
     </div>
   );
 }
@@ -172,9 +193,13 @@ function GridFixture({
             paddingRight: isScrollMode ? GRID_SCROLLBAR_GUTTER_PX : undefined,
           }}
         >
-          {Array.from({ length: fixture.panes }, (_, i) => (
-            <XtermPane key={i} index={i} scheme={scheme} />
-          ))}
+          {Array.from({ length: fixture.panes }, (_, i) =>
+            fixture.lite ? (
+              <LitePane key={i} index={i} />
+            ) : (
+              <XtermPane key={i} index={i} scheme={scheme} />
+            )
+          )}
         </div>
         <GridScrollbar scrollRoot={scrollRoot} revision={`${fixture.panes}:${fixture.cols}`} />
       </div>
