@@ -1292,7 +1292,7 @@ describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
     dispatchSpy.mockRestore();
   });
 
-  it("clears the pending delete when the armed set drains below 2", async () => {
+  it("keeps the delete confirm open when the armed set drains below 2", async () => {
     useFleetArmingStore.getState().armIds(["a", "b"]);
     render(<FleetArmingRibbon />);
 
@@ -1301,15 +1301,24 @@ describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
     });
     expect(screen.getByText("Delete 'My fleet'?")).toBeTruthy();
 
-    // Drain to 1 — the ribbon (and dialog) unmount via the armedCount<2 guard.
+    // The ribbon goes; the saved fleet is still there, so the cleanup stands.
     await act(async () => {
       useFleetArmingStore.getState().armIds(["a"]);
     });
-    expect(screen.queryByText("Delete 'My fleet'?")).toBeNull();
+    expect(screen.queryByTestId("fleet-selection-menu-trigger")).toBeNull();
+    expect(screen.getByText("Delete 'My fleet'?")).toBeTruthy();
+  });
 
-    // Re-arm: the dialog must NOT resurface for the stale fleet id.
+  it("drops the pending delete when the saved fleet itself disappears", async () => {
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    render(<FleetArmingRibbon />);
     await act(async () => {
-      useFleetArmingStore.getState().armIds(["a", "b"]);
+      fireEvent.click(screen.getByText("My fleet"));
+    });
+    await act(async () => {
+      useProjectSettingsStore.setState({
+        settings: { runCommands: [], fleetSavedScopes: [] } as ProjectSettings,
+      });
     });
     expect(screen.queryByText("Delete 'My fleet'?")).toBeNull();
   });

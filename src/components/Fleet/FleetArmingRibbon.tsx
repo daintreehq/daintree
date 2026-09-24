@@ -194,17 +194,16 @@ export function FleetArmingRibbon(): ReactElement | null {
     }
   }, [armedCount, popoverOpen]);
 
-  // The fleet-delete confirm renders only in the armedCount>=2 branch. If the
-  // armed set drains below 2 while it's pending, the dialog unmounts without
-  // an onClose — clear the id so it can't resurface for a stale fleet when
-  // the count climbs back. Also drop it if the scope disappears entirely
-  // (deleted from another window) so the title can't show a phantom name.
+  // The fleet-delete confirm lives with the other fleet dialogs, outside the
+  // ribbon's armedCount>=2 branch, so a pane closing mid-confirm doesn't
+  // cancel the cleanup. Drop it only if the scope itself disappears (deleted
+  // from another window) so the title can't show a phantom name.
   useEffect(() => {
     if (pendingDeleteFleetId === null) return;
-    if (armedCount < 2 || !savedScopes.some((s) => s.id === pendingDeleteFleetId)) {
+    if (!savedScopes.some((s) => s.id === pendingDeleteFleetId)) {
       setPendingDeleteFleetId(null);
     }
-  }, [armedCount, pendingDeleteFleetId, savedScopes]);
+  }, [pendingDeleteFleetId, savedScopes]);
 
   // Escape stack: confirmation cancel is owned here so a pending confirm
   // absorbs bare Escape before it reaches the targets. The armed-list
@@ -429,12 +428,13 @@ export function FleetArmingRibbon(): ReactElement | null {
   // doesn't strand a live Enter listener with no visible UI. The failure
   // banner is rendered alongside so a prior partial-failure surface stays
   // visible while the user is in the confirm flow.
-  // Rendered first in a fragment from every branch below — the same tree
-  // position, so it keeps its state — including the one where the ribbon
+  // The fleet dialogs (save, manage, delete confirm), rendered first in a
+  // fragment from every branch below — the same tree position, so they keep
+  // their state — including the one where the ribbon
   // itself is gone: a pane closing while someone names a fleet must not take
   // the dialog and the typed name with it. The dialog explains when a
   // snapshot can no longer be saved.
-  const saveDialog = (
+  const fleetDialogs = (
     <>
       <SaveFleetDialog
         isOpen={saveDialogOpen}
@@ -445,6 +445,25 @@ export function FleetArmingRibbon(): ReactElement | null {
       <SavedFleetsDialog
         isOpen={manageDialogOpen}
         onClose={() => setManageDialogOpen(false)}
+        restoreFocusTo={selectionTriggerRef}
+      />
+      <ConfirmDialog
+        isOpen={pendingDeleteFleetId !== null}
+        variant="destructive"
+        title={`Delete '${pendingDeleteScope?.name ?? "fleet"}'?`}
+        description="This removes the saved fleet. The terminals it points to are not affected."
+        confirmLabel="Delete fleet"
+        onConfirm={() => {
+          if (pendingDeleteFleetId !== null) {
+            void actionService.dispatch(
+              "fleet.deleteNamedFleet",
+              { id: pendingDeleteFleetId },
+              { source: "user" }
+            );
+          }
+          setPendingDeleteFleetId(null);
+        }}
+        onClose={() => setPendingDeleteFleetId(null)}
         restoreFocusTo={selectionTriggerRef}
       />
     </>
@@ -458,7 +477,7 @@ export function FleetArmingRibbon(): ReactElement | null {
     );
     return (
       <>
-        {saveDialog}
+        {fleetDialogs}
         <div data-testid="fleet-arming-ribbon-group">
           <FleetFailureBanner />
           <div
@@ -493,7 +512,7 @@ export function FleetArmingRibbon(): ReactElement | null {
   }
 
   if (armedCount < 2) {
-    return <>{saveDialog}</>;
+    return <>{fleetDialogs}</>;
   }
 
   // Below the early returns so the five O(panels) scans and the menu JSX
@@ -619,27 +638,8 @@ export function FleetArmingRibbon(): ReactElement | null {
 
   return (
     <>
-      {saveDialog}
+      {fleetDialogs}
       <div data-testid="fleet-arming-ribbon-group">
-        <ConfirmDialog
-          isOpen={pendingDeleteFleetId !== null}
-          variant="destructive"
-          title={`Delete '${pendingDeleteScope?.name ?? "fleet"}'?`}
-          description="This removes the saved fleet. The terminals it points to are not affected."
-          confirmLabel="Delete fleet"
-          onConfirm={() => {
-            if (pendingDeleteFleetId !== null) {
-              void actionService.dispatch(
-                "fleet.deleteNamedFleet",
-                { id: pendingDeleteFleetId },
-                { source: "user" }
-              );
-            }
-            setPendingDeleteFleetId(null);
-          }}
-          onClose={() => setPendingDeleteFleetId(null)}
-          restoreFocusTo={selectionTriggerRef}
-        />
         <FleetFailureBanner />
         <AnimatePresence initial={false}>
           <m.div
