@@ -34,8 +34,8 @@ import "@/index.css";
  *     fresh        a current profile: four agents pinned, the shipped side arrays
  *     legacy       a profile from before agents left the default left array, so
  *                  every agent id still sits in it (most of them off)
- *     populated    fresh plus pinned recipes and plugin panels, two plugin
- *                  buttons (one promoted), a hidden right-side button, and
+ *     populated    fresh plus pinned recipes, two plugin buttons (one promoted,
+ *                  with no stored position), hidden right-side buttons, and
  *                  modified launcher options
  *     empty-right  every right-side button moved to the left
  *   ?width=687     dialog content column width in px (the 4xl dialog minus its nav)
@@ -118,8 +118,8 @@ function seed(): void {
     );
     for (const id of recipeIds) pinnedButtons[id] = true;
     leftButtons = [...leftButtons, ...recipeIds];
+    // Promoted the way the setter does it: an explicit pin and no stored position.
     pinnedButtons["acme.pull-requests"] = true;
-    rightButtons = ["acme.pull-requests" as AnyToolbarButtonId, ...rightButtons];
     pinnedButtons["notification-center"] = false;
     pinnedButtons["voice-recording"] = false;
     pinnedButtons["dev-server"] = true;

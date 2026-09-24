@@ -38,6 +38,12 @@ const withFallback = <T extends object>(target: T) =>
   });
 
 installPreviewShims({
+  // A pin write that never answers leaves the store's optimistic write in place.
+  // The inert reply would roll it back, and a real-looking reply would run the
+  // first-launch pin seeding over the fixture.
+  agentSettings: withFallback({
+    set: () => new Promise(() => undefined),
+  }),
   plugin: withFallback({
     toolbarButtons: async () => (fixture === "populated" ? PREVIEW_PLUGIN_BUTTONS : []),
     onToolbarButtonsChanged: () => () => {},

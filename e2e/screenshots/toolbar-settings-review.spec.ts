@@ -80,8 +80,10 @@ const STATES: State[] = [
     name: "agents-expanded",
     fixture: "fresh",
     drive: async (page) => {
-      await page.getByRole("button", { name: /^Show all \d+ agents$/ }).click();
-      await expect(page.getByRole("button", { name: "Show pinned agents only" })).toBeVisible();
+      await page.getByRole("button", { name: /^Show \d+ agents? that aren.t installed$/ }).click();
+      await expect(
+        page.getByRole("button", { name: "Hide agents that aren't installed" })
+      ).toBeVisible();
     },
   },
   {
@@ -122,6 +124,18 @@ const STATES: State[] = [
       await page.waitForTimeout(300);
     },
     crop: columnsCrop,
+  },
+  {
+    name: "toggled",
+    fixture: "legacy",
+    drive: async (page) => {
+      // One row switched off in a column and one switched on from the list
+      // below: both rows must stay where they were pressed.
+      await page.locator("#toolbar-column-codex").click();
+      await page.locator("#toolbar-pool-gemini").click();
+      await expect(page.locator("#toolbar-column-codex")).toHaveAttribute("aria-checked", "false");
+      await expect(page.locator("#toolbar-pool-gemini")).toHaveAttribute("aria-checked", "true");
+    },
   },
   { name: "narrow", fixture: "legacy", width: 560, crop: columnsCrop },
   {
@@ -209,6 +223,12 @@ async function capture(context: BrowserContext, state: State, theme: string): Pr
     await page.mouse.move(0, 0);
     await page.waitForTimeout(300);
     if (state.drive) await state.drive(page);
+    // A drive can grow the page (a disclosure opening); grow the viewport with it.
+    const drivenBottom = await frame.evaluate((el) => el.getBoundingClientRect().bottom);
+    const viewport = page.viewportSize();
+    if (viewport && drivenBottom + 40 > viewport.height) {
+      await page.setViewportSize({ width: viewport.width, height: Math.ceil(drivenBottom) + 400 });
+    }
     await page.waitForTimeout(250);
     if (errors.length > 0) throw new Error(`page threw: ${errors.join(" | ")}`);
 
