@@ -1287,6 +1287,60 @@ describe("helpPanelStore persistence migration", () => {
       expect(store.getState().sessions[0]!.activeFigureNumber).toBeNull();
     });
 
+    it("a newly arrived figure takes over as current from an earlier reference", async () => {
+      installLocalStorage({});
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      const figure = (n: number) => ({
+        imageId: `img-${n}`,
+        figureNumber: n,
+        figureLabel: `image #${n}`,
+        url: `https://daintree.org/${n}.png`,
+      });
+      store.getState().addFigure(0, figure(1));
+      store.getState().setActiveFigureNumber(0, 1);
+
+      // A replayed push of the same figure is not an arrival.
+      store.getState().addFigure(0, figure(1));
+      expect(store.getState().sessions[0]!.activeFigureNumber).toBe(1);
+
+      store.getState().addFigure(0, figure(2));
+      expect(store.getState().sessions[0]!.activeFigureNumber).toBeNull();
+    });
+
+    it("activateFigure issues a fresh request each time, even for the current figure", async () => {
+      installLocalStorage({});
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().activateFigure(0, 2, false);
+      const first = store.getState().sessions[0]!.figureRequest;
+      store.getState().activateFigure(0, 2, true);
+      const second = store.getState().sessions[0]!.figureRequest;
+
+      expect(store.getState().sessions[0]!.activeFigureNumber).toBe(2);
+      expect(first?.open).toBe(false);
+      expect(second?.open).toBe(true);
+      expect(second!.seq).not.toBe(first!.seq);
+
+      store.getState().clearFigureRequest(0);
+      expect(store.getState().sessions[0]!.figureRequest).toBeUndefined();
+      // Clearing the request leaves the figure current.
+      expect(store.getState().sessions[0]!.activeFigureNumber).toBe(2);
+    });
+
+    it("clearFigures and clearTerminal drop a pending figure request", async () => {
+      installLocalStorage({});
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().activateFigure(0, 1, true);
+      store.getState().clearFigures(0);
+      expect(store.getState().sessions[0]!.figureRequest).toBeUndefined();
+
+      store.getState().activateFigure(0, 1, true);
+      store.getState().clearTerminal(0);
+      expect(store.getState().sessions[0]!.figureRequest).toBeUndefined();
+    });
+
     it("activeFigureNumber is NOT persisted", async () => {
       vi.useFakeTimers();
       try {

@@ -57,14 +57,25 @@ describe("FigureRail", () => {
     expect(thumbs).toHaveLength(3);
   });
 
-  it("shows a skeleton while a thumbnail image is pending, then the label once loaded", () => {
+  it("shows a skeleton while a thumbnail image is pending, and drops it once loaded", () => {
     const { container } = render(<FigureRail figures={[makeFigure(1)]} />);
-    // Pending: skeleton bone present, label badge absent.
     expect(container.querySelector(".animate-pulse-delayed")).not.toBeNull();
-    expect(screen.queryByText("image #1")).toBeNull();
 
     fireEvent.load(screen.getByAltText("Alt 1"));
-    expect(screen.getByText("image #1")).toBeTruthy();
+    expect(container.querySelector(".animate-pulse-delayed")).toBeNull();
+  });
+
+  // A thumbnail has to stay matchable to its `[image #N]` reference whatever its
+  // image is doing — the pending and failed states are exactly when a user is
+  // trying to work out which figure is missing.
+  it("labels every thumbnail with its figure label in every load state", () => {
+    render(<FigureRail figures={[makeFigure(1), makeFigure(2), makeFigure(3)]} />);
+    fireEvent.load(screen.getByAltText("Alt 1"));
+    fireEvent.error(screen.getByAltText("Alt 2"));
+
+    for (const [index, thumb] of screen.getAllByTestId("figure-thumbnail").entries()) {
+      expect(within(thumb).getByText(`image #${index + 1}`)).toBeTruthy();
+    }
   });
 
   it("surfaces a retry affordance when a thumbnail image fails, and a retry refetches", () => {
@@ -110,7 +121,7 @@ describe("FigureRail", () => {
     const lightbox = screen.getByTestId("figure-lightbox");
     expect(within(lightbox).getByText("image #1 · Daintree docs")).toBeTruthy();
     expect(within(lightbox).getByText("Caption 1")).toBeTruthy();
-    expect(within(lightbox).getByText("Viewing figure 1 of 2")).toBeTruthy();
+    expect(within(lightbox).getByText("Figure 1, 1 of 2")).toBeTruthy();
   });
 
   it("navigates figures with arrow keys, clamped at both ends", () => {
@@ -121,14 +132,127 @@ describe("FigureRail", () => {
     const lightbox = screen.getByTestId("figure-lightbox");
     // Clamp at the start: ArrowLeft on the first figure is a no-op.
     fireEvent.keyDown(window, { key: "ArrowLeft" });
-    expect(within(lightbox).getByText("Viewing figure 1 of 2")).toBeTruthy();
+    expect(within(lightbox).getByText("Figure 1, 1 of 2")).toBeTruthy();
 
     fireEvent.keyDown(window, { key: "ArrowRight" });
-    expect(within(lightbox).getByText("Viewing figure 2 of 2")).toBeTruthy();
+    expect(within(lightbox).getByText("Figure 2, 2 of 2")).toBeTruthy();
 
     // Clamp at the end: ArrowRight on the last figure is a no-op.
     fireEvent.keyDown(window, { key: "ArrowRight" });
-    expect(within(lightbox).getByText("Viewing figure 2 of 2")).toBeTruthy();
+    expect(within(lightbox).getByText("Figure 2, 2 of 2")).toBeTruthy();
+  });
+
+  // Removing the step control that holds focus when the last step lands would
+  // drop focus out of the modal's tab sequence.
+  it("keeps both step controls mounted at the ends, unavailable rather than removed", () => {
+    render(<FigureRail figures={[makeFigure(1), makeFigure(2)]} />);
+    fireEvent.load(screen.getByAltText("Alt 1"));
+    fireEvent.click(screen.getByRole("button", { name: "Figure 1: Caption 1" }));
+    const lightbox = screen.getByTestId("figure-lightbox");
+
+    const next = within(lightbox).getByRole("button", { name: "Next figure" });
+    fireEvent.click(next);
+    expect(within(lightbox).getByText("Figure 2, 2 of 2")).toBeTruthy();
+    expect(next.isConnected).toBe(true);
+    expect(next.getAttribute("aria-disabled")).toBe("true");
+
+    // Activating the unavailable end control does nothing.
+    fireEvent.click(next);
+    expect(within(lightbox).getByText("Figure 2, 2 of 2")).toBeTruthy();
+
+    const previous = within(lightbox).getByRole("button", { name: "Previous figure" });
+    expect(previous.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  describe("current figure", () => {
+    const current = () =>
+      screen
+        .getAllByTestId("figure-thumbnail")
+        .filter((t) => t.querySelector('[aria-current="true"]'))
+        .map((t) => t.getAttribute("data-figure-number"));
+
+    it("marks exactly one thumbnail current, defaulting to the newest", () => {
+      render(<FigureRail figures={[makeFigure(1), makeFigure(2), makeFigure(3)]} />);
+      expect(current()).toEqual(["3"]);
+    });
+
+    it("follows the figure an [image #N] reference made active", () => {
+      render(
+        <FigureRail
+          figures={[makeFigure(1), makeFigure(2), makeFigure(3)]}
+          activeFigureNumber={1}
+        />
+      );
+      expect(current()).toEqual(["1"]);
+    });
+
+    it("falls back to the newest when the active figure is no longer in the rail", () => {
+      render(<FigureRail figures={[makeFigure(1), makeFigure(2)]} activeFigureNumber={9} />);
+      expect(current()).toEqual(["2"]);
+    });
+
+    it("reports the figure the lightbox steps to as the new active figure", () => {
+      const onActivateFigure = vi.fn();
+      render(
+        <FigureRail figures={[makeFigure(1), makeFigure(2)]} onActivateFigure={onActivateFigure} />
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Figure 1: Caption 1" }));
+      fireEvent.keyDown(window, { key: "ArrowRight" });
+      expect(onActivateFigure.mock.calls.map(([n]) => n)).toEqual([1, 2]);
+    });
+  });
+
+  describe("[image #N] requests", () => {
+    it("opens the lightbox on the requested figure when the request asks to open", () => {
+      const onFigureRequestHandled = vi.fn();
+      render(
+        <FigureRail
+          figures={[makeFigure(1), makeFigure(2), makeFigure(3)]}
+          activeFigureNumber={2}
+          figureRequest={{ figureNumber: 2, open: true, seq: 1 }}
+          onFigureRequestHandled={onFigureRequestHandled}
+        />
+      );
+      const lightbox = screen.getByTestId("figure-lightbox");
+      expect(within(lightbox).getByText("Figure 2, 2 of 3")).toBeTruthy();
+      expect(onFigureRequestHandled).toHaveBeenCalledTimes(1);
+    });
+
+    it("reveals without opening when the request is a plain activation", () => {
+      const onFigureRequestHandled = vi.fn();
+      render(
+        <FigureRail
+          figures={[makeFigure(1), makeFigure(2)]}
+          figureRequest={{ figureNumber: 1, open: false, seq: 1 }}
+          onFigureRequestHandled={onFigureRequestHandled}
+        />
+      );
+      expect(screen.queryByTestId("figure-lightbox")).toBeNull();
+      expect(onFigureRequestHandled).toHaveBeenCalledTimes(1);
+    });
+
+    it("acts on a request once, however often the rail re-renders before it is cleared", () => {
+      const onFigureRequestHandled = vi.fn();
+      const request = { figureNumber: 1, open: true, seq: 4 };
+      const figures = [makeFigure(1), makeFigure(2)];
+      const { rerender } = render(
+        <FigureRail
+          figures={figures}
+          figureRequest={request}
+          onFigureRequestHandled={onFigureRequestHandled}
+        />
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
+      rerender(
+        <FigureRail
+          figures={[...figures]}
+          figureRequest={request}
+          onFigureRequestHandled={onFigureRequestHandled}
+        />
+      );
+      expect(screen.queryByTestId("figure-lightbox")).toBeNull();
+      expect(onFigureRequestHandled).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("auto-closes the lightbox when its figure disappears (session reset / eviction)", () => {

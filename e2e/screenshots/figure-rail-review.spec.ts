@@ -376,12 +376,56 @@ test("assistant figure rail and lightbox — states and themes", async ({ page }
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("figure-lightbox")).toBeVisible();
     await settleLightbox(page);
+    // The picture can't show where focus went if the control holding it draws no
+    // ring, so the DOM has to: it must be inside the dialog.
+    const focused = await page.evaluate(() => {
+      const el = document.activeElement;
+      const dialog = document.querySelector('[data-testid="figure-lightbox"]');
+      return {
+        inside: !!dialog && !!el && dialog.contains(el),
+        label: el?.getAttribute("aria-label") ?? el?.textContent ?? el?.tagName,
+      };
+    });
+    console.log(`[figure-rail-shots] keyboard-open focus: ${JSON.stringify(focused)}`);
+    expect(focused.inside).toBe(true);
     written.push(await snapPage(page, `lightbox-keyboard-open-${base}.png`));
 
     // The far end: the last figure, where "next" has nowhere to go.
     for (let i = 0; i < 5; i += 1) await page.keyboard.press("ArrowRight");
     await settleLightbox(page);
     written.push(await snapPage(page, `lightbox-last-${base}.png`));
+  }
+
+  // An `[image #N]` click in the terminal: the rail marks that figure current and
+  // scrolls it into view; Cmd/Ctrl+click also opens it.
+  {
+    const { rail } = await open(page, "several", base, DEFAULT_WIDTH, "&reference=2");
+    await settleThumbnails(page, 5);
+    await expect(rail.locator('[aria-current="true"]')).toHaveCount(1);
+    // Revealed means clear of the edge fade, not merely scrolled somewhere near.
+    const clearOfFade = await rail.evaluate((el) => {
+      const scroller = el.querySelector('[role="list"]')!.getBoundingClientRect();
+      const thumb = el.querySelector('[data-figure-number="2"]')!.getBoundingClientRect();
+      return thumb.left >= scroller.left + 20 && thumb.right <= scroller.right - 20;
+    });
+    expect(clearOfFade).toBe(true);
+    written.push(await snap(rail, `reference-2-${base}-rail.png`));
+  }
+  {
+    await open(page, "several", base, DEFAULT_WIDTH, "&reference=4&open=1");
+    await expect(page.getByTestId("figure-lightbox")).toBeVisible();
+    await settleLightbox(page);
+    written.push(await snapPage(page, `lightbox-reference-open-${base}.png`));
+  }
+
+  // Actual size on the portrait figure, whose fitted view is the smallest.
+  {
+    await open(page, "several", base);
+    await settleThumbnails(page, 5);
+    await openLightboxOn(page, 2);
+    await page.getByRole("button", { name: "Actual size" }).click();
+    await page.waitForTimeout(250);
+    written.push(await snapPage(page, `lightbox-actual-size-${base}.png`));
   }
 
   // Narrowest panel the resizer allows.
@@ -407,6 +451,6 @@ test("assistant figure rail and lightbox — states and themes", async ({ page }
 
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * 5 + 8);
+  expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * 5 + 11);
   console.log(`[figure-rail-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });

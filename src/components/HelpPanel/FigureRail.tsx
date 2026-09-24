@@ -1,9 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { ImageOff, RotateCw } from "lucide-react";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
-import type { HelpFigure } from "@/store/helpPanelStore";
+import type { HelpFigure, HelpFigureRequest } from "@/store/helpPanelStore";
 import { FigureLightbox } from "./FigureLightbox";
+
+interface FigureRailProps {
+  figures: HelpFigure[];
+  /** The figure an `[image #N]` reference or the lightbox last made current. */
+  activeFigureNumber?: number | null;
+  /** A pending `[image #N]` activation to reveal (and open, when asked). */
+  figureRequest?: HelpFigureRequest;
+  onActivateFigure?: (figureNumber: number) => void;
+  onFigureRequestHandled?: () => void;
+}
 
 /**
  * Fixed-height strip of thumbnails for the documentation figures the assistant
@@ -13,11 +23,29 @@ import { FigureLightbox } from "./FigureLightbox";
  * session (no per-image dismissal, so inline `[image #N]` references never go
  * dead) and clear on teardown via the store. Clicking a thumbnail expands it in
  * {@link FigureLightbox}.
+ *
+ * One thumbnail is always marked current: the figure an `[image #N]` click or
+ * the lightbox last picked, otherwise the newest — the one the assistant is
+ * talking about. The marker is a neutral outline so it survives forced colors
+ * and never competes with the accent focus ring.
  */
-export function FigureRail({ figures }: { figures: HelpFigure[] }) {
+export function FigureRail({
+  figures,
+  activeFigureNumber = null,
+  figureRequest,
+  onActivateFigure,
+  onFigureRequestHandled,
+}: FigureRailProps) {
   const [selectedFigureNumber, setSelectedFigureNumber] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ start: false, end: false });
   const figureCount = figures.length;
+
+  const newestFigureNumber = figures.reduce((max, f) => Math.max(max, f.figureNumber), -Infinity);
+  const currentFigureNumber =
+    activeFigureNumber !== null && figures.some((f) => f.figureNumber === activeFigureNumber)
+      ? activeFigureNumber
+      : newestFigureNumber;
 
   // Keep the newest figure in view as it arrives. Only reacts to the count so a
   // user who scrolled back isn't yanked on unrelated re-renders.
@@ -37,9 +65,71 @@ export function FigureRail({ figures }: { figures: HelpFigure[] }) {
     }
   }, [figures, selectedFigureNumber]);
 
+  // Act on an `[image #N]` click: bring its thumbnail into view, and open it
+  // when the click asked for that. Cleared once handled so switching lanes
+  // can't replay it.
+  // The scroll is idempotent and runs on every pass while the request is
+  // pending, so it still wins when the scroll-to-newest effect above re-runs
+  // after it (StrictMode's remount does exactly that); opening is once only.
+  const handledSeqRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!figureRequest) return;
+    const { figureNumber, open, seq } = figureRequest;
+    const known = figures.some((f) => f.figureNumber === figureNumber);
+    if (known) {
+      scrollRef.current
+        ?.querySelector(`[data-figure-number="${figureNumber}"]`)
+        ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+    if (handledSeqRef.current === seq) return;
+    handledSeqRef.current = seq;
+    if (known && open) setSelectedFigureNumber(figureNumber);
+    onFigureRequestHandled?.();
+  }, [figureRequest, figures, onFigureRequestHandled]);
+
+  // Fade whichever end has figures scrolled out of view — the scrollbar is
+  // hidden to keep the rail at its fixed height, so this is the only sign.
+  // `scroll-px-6` on the scroller matches the fade width, so a thumbnail
+  // revealed by focus or by a reference lands clear of it.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () => {
+      const start = el.scrollLeft > 1;
+      const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setEdges((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
+    };
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      observer.disconnect();
+    };
+  }, [figureCount]);
+
+  // A plain mouse wheel only scrolls vertically, which this rail can't do —
+  // map it onto the horizontal axis so mouse users can reach older figures.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      if (el.scrollWidth <= el.clientWidth) return;
+      e.preventDefault();
+      el.scrollLeft += e.deltaY;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [figureCount]);
+
   if (figureCount === 0) return null;
 
-  const newestFigureNumber = figures.reduce((max, f) => Math.max(max, f.figureNumber), -Infinity);
+  const selectFigure = (figureNumber: number) => {
+    setSelectedFigureNumber(figureNumber);
+    onActivateFigure?.(figureNumber);
+  };
 
   return (
     <div
@@ -48,14 +138,18 @@ export function FigureRail({ figures }: { figures: HelpFigure[] }) {
     >
       <div
         ref={scrollRef}
-        className="flex flex-row items-center gap-2 h-full overflow-x-auto overflow-y-hidden px-2 scrollbar-none"
+        role="list"
+        aria-label="Figures"
+        className="flex flex-row items-center gap-2 h-full overflow-x-auto overflow-y-hidden px-2 scroll-px-6 scrollbar-none"
+        style={edgeMask(edges)}
       >
         {figures.map((figure) => (
           <FigureThumbnail
             key={figure.imageId}
             figure={figure}
             isNewest={figure.figureNumber === newestFigureNumber}
-            onClick={() => setSelectedFigureNumber(figure.figureNumber)}
+            isCurrent={figure.figureNumber === currentFigureNumber}
+            onClick={() => selectFigure(figure.figureNumber)}
           />
         ))}
       </div>
@@ -63,19 +157,30 @@ export function FigureRail({ figures }: { figures: HelpFigure[] }) {
         figures={figures}
         selectedFigureNumber={selectedFigureNumber}
         onClose={() => setSelectedFigureNumber(null)}
-        onSelectFigure={setSelectedFigureNumber}
+        onSelectFigure={selectFigure}
       />
     </div>
   );
 }
 
+const EDGE_FADE = "24px";
+
+function edgeMask(edges: { start: boolean; end: boolean }): CSSProperties | undefined {
+  if (!edges.start && !edges.end) return undefined;
+  const start = edges.start ? `transparent 0, black ${EDGE_FADE}` : "black 0";
+  const end = edges.end ? `black calc(100% - ${EDGE_FADE}), transparent 100%` : "black 100%";
+  const mask = `linear-gradient(to right, ${start}, ${end})`;
+  return { maskImage: mask, WebkitMaskImage: mask };
+}
+
 interface FigureThumbnailProps {
   figure: HelpFigure;
   isNewest: boolean;
+  isCurrent: boolean;
   onClick: () => void;
 }
 
-function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
+function FigureThumbnail({ figure, isNewest, isCurrent, onClick }: FigureThumbnailProps) {
   const [status, setStatus] = useState<"pending" | "loaded" | "failed">("pending");
   // Bumping the nonce remounts the <img> to fire a fresh request on retry.
   const [retryNonce, setRetryNonce] = useState(0);
@@ -87,20 +192,28 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
 
   return (
     <div
+      role="listitem"
       className={cn(
-        "relative shrink-0 h-[72px] w-[104px] rounded-[var(--radius-md)] overflow-hidden border border-border-default bg-overlay-subtle",
+        "relative shrink-0 h-[72px] w-[104px] rounded-[var(--radius-md)] overflow-hidden border bg-overlay-subtle transition-[border-color] duration-150",
+        status === "loaded"
+          ? "border-border-default hover:border-border-strong"
+          : "border-border-strong",
+        // Offset clear of the thumbnail so the inset accent focus ring on the
+        // button inside stays distinguishable from it.
+        isCurrent && "outline-2 outline-offset-1 outline-text-secondary",
         isNewest && "animate-figure-arrive"
       )}
       data-testid="figure-thumbnail"
+      data-figure-number={figure.figureNumber}
     >
       {status === "failed" ? (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-text-secondary">
+        <div className="flex h-full w-full flex-col items-center justify-center gap-1 pb-4 text-text-secondary">
           <ImageOff className="w-4 h-4" aria-hidden="true" />
           <button
             type="button"
             onClick={handleRetry}
             aria-label={`Retry figure ${figure.figureNumber}`}
-            className="flex items-center gap-1 text-3xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded"
+            className="flex items-center gap-1 px-1.5 py-0.5 text-3xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-[var(--radius-sm)]"
           >
             <RotateCw className="w-2.5 h-2.5" aria-hidden="true" />
             Retry
@@ -110,6 +223,7 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
         <button
           type="button"
           onClick={onClick}
+          aria-current={isCurrent ? "true" : undefined}
           aria-label={
             figure.caption
               ? `Figure ${figure.figureNumber}: ${figure.caption}`
@@ -151,11 +265,15 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
         </Skeleton>
       )}
 
-      {status === "loaded" && (
-        <span className="pointer-events-none absolute bottom-0 left-0 right-0 bg-scrim-medium px-1.5 py-0.5 text-3xs font-medium text-text-primary">
-          {figure.figureLabel}
-        </span>
-      )}
+      {/* On an opaque chip rather than a scrim so it reads the same over any
+          image and in every theme, and in every state — a figure that is still
+          loading or failed still has to be matchable to its `[image #N]`. */}
+      <span
+        className="pointer-events-none absolute bottom-1 left-1 rounded-[var(--radius-sm)] border border-border-subtle bg-surface-panel-elevated px-1 text-3xs font-medium leading-4 text-text-primary"
+        aria-hidden="true"
+      >
+        {figure.figureLabel}
+      </span>
     </div>
   );
 }

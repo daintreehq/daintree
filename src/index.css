@@ -1149,13 +1149,15 @@ body,
  * so the accent ring is permitted under the accent-restraint rule rather than a
  * persistent multi-element marker. `forwards` settles to a transparent ring so
  * no residual outline lingers; the stable `key={imageId}` means it fires exactly
- * once per figure on mount. */
+ * once per figure on mount. The ring sits at 5px so it clears the rail's
+ * neutral current-figure outline (offset 1px, 2px wide) instead of hiding under
+ * it; the outline is what carries "current" once the pulse has gone. */
 @keyframes figure-arrive {
   0% {
-    box-shadow: 0 0 0 2px var(--color-accent-primary);
+    box-shadow: 0 0 0 5px var(--color-accent-primary);
   }
   100% {
-    box-shadow: 0 0 0 2px transparent;
+    box-shadow: 0 0 0 5px transparent;
   }
 }
 

@@ -2,7 +2,7 @@ import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { resolveAppTheme } from "@shared/theme/themes";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
-import type { HelpFigure } from "@/store/helpPanelStore";
+import type { HelpFigure, HelpFigureRequest } from "@/store/helpPanelStore";
 import { installPreviewShims } from "./previewShims";
 import { FigureRail } from "../FigureRail";
 import "@/index.css";
@@ -32,6 +32,8 @@ installPreviewShims();
  *   ?theme=daintree|bondi|…   built-in theme id
  *   ?fixture=several          which rail state to render
  *   ?width=380                panel width in CSS px (default 380, the app's default)
+ *   ?reference=N              simulate a click on `[image #N]` in the terminal
+ *   ?open=1                   …as a Cmd/Ctrl+click, which also opens the lightbox
  */
 
 const DOCS = "https://daintree.org/docs/figures";
@@ -101,6 +103,11 @@ const themeId = params.get("theme") ?? "daintree";
 const fixtureParam = params.get("fixture") ?? "";
 const fixtureName: FixtureName = isFixtureName(fixtureParam) ? fixtureParam : "several";
 const width = Number(params.get("width")) || 380;
+const referenceParam = Number(params.get("reference"));
+const initialRequest: HelpFigureRequest | undefined =
+  Number.isInteger(referenceParam) && referenceParam > 0
+    ? { figureNumber: referenceParam, open: params.get("open") === "1", seq: 1 }
+    : undefined;
 
 /** Stand-in terminal output, quiet enough that the rail is what the eye lands on. */
 function TerminalStandIn() {
@@ -123,6 +130,11 @@ function TerminalStandIn() {
 
 function App() {
   const [ready, setReady] = useState(false);
+  // The same two pieces of lane state `HelpPanel` feeds the rail from the store.
+  const [activeFigureNumber, setActiveFigureNumber] = useState<number | null>(
+    initialRequest?.figureNumber ?? null
+  );
+  const [figureRequest, setFigureRequest] = useState(initialRequest);
   const scheme = useMemo(() => resolveAppTheme(themeId), []);
 
   useEffect(() => {
@@ -149,7 +161,13 @@ function App() {
             Ask the assistant…
           </div>
         </div>
-        <FigureRail figures={FIXTURES[fixtureName]} />
+        <FigureRail
+          figures={FIXTURES[fixtureName]}
+          activeFigureNumber={activeFigureNumber}
+          figureRequest={figureRequest}
+          onActivateFigure={setActiveFigureNumber}
+          onFigureRequestHandled={() => setFigureRequest(undefined)}
+        />
         <div
           className="shrink-0 h-7 border-t border-border-default bg-surface-toolbar"
           aria-hidden="true"
