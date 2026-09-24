@@ -3799,7 +3799,7 @@ describe("HelpSessionService", () => {
         expect(block).toContain("`/tmp/project-fix` — branch `fix/help`");
         expect(block).toContain("- Forge remote: `origin` `https://github.com/acme/example.git`");
         expect(block).toContain("- Assistant tier setting: `action`");
-        expect(block).toContain("Daintree MCP tools: enabled");
+        expect(block).toContain("- Daintree MCP tools setting: `enabled`");
         // Shared by every lane: nothing lane- or session-scoped belongs here.
         expect(block).not.toContain(result.token);
         expect(block).not.toContain(result.sessionId);
@@ -3832,6 +3832,25 @@ describe("HelpSessionService", () => {
       );
       expect(block).toContain("- Path: `/tmp/project`");
       expect(block).not.toContain("- Name:");
+    });
+
+    it("launches without the facts when the reader never settles", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        service.setProjectMetadataReader(() => new Promise(() => {}));
+        const pending = service.provisionSession(provisionInput());
+        await vi.advanceTimersByTimeAsync(5000);
+        const result = await pending;
+        if (!result) throw new Error("expected result");
+
+        const block = metadataBlock(
+          await fs.readFile(path.join(result.sessionPath, "AGENTS.md"), "utf-8")
+        );
+        expect(block).toContain("- Path: `/tmp/project`");
+        expect(block).not.toContain("- Name:");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("refreshes the block in place on re-provision even when the template copy is skipped", async () => {

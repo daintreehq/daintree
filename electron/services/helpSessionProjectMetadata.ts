@@ -40,17 +40,20 @@ export interface ProjectMetadataInput {
 
 /**
  * Values land inside inline code spans in a file the agent treats as ground
- * truth, and the block is located by its HTML-comment markers — so a project
- * name carrying a newline, a backtick or a comment delimiter must not be able
- * to break out of its line or forge a marker. Anything oversized is dropped
- * rather than shortened: a truncated path would name a place that doesn't exist.
+ * truth, and the block is located by its HTML-comment markers — so a value
+ * carrying a newline, a backtick or a comment delimiter must not be able to
+ * break out of its line or forge a marker. Such values are dropped whole, never
+ * edited: stripping characters renames a path or branch into one that doesn't
+ * exist, and can reassemble the very delimiter it removed. Oversized values are
+ * dropped for the same reason rather than shortened.
  */
 function cleanValue(value: string | undefined): string | null {
-  if (typeof value !== "string") return null;
+  if (typeof value !== "string" || value.length === 0) return null;
   // eslint-disable-next-line no-control-regex
-  const cleaned = value.replace(/[\u0000-\u001f\u007f`]/g, "").replace(/<!--|-->/g, "");
-  if (cleaned.length === 0 || Buffer.byteLength(cleaned, "utf8") > MAX_VALUE_BYTES) return null;
-  return cleaned;
+  if (/[\u0000-\u001f\u007f`]/.test(value)) return null;
+  if (value.includes("<!--") || value.includes("-->")) return null;
+  if (Buffer.byteLength(value, "utf8") > MAX_VALUE_BYTES) return null;
+  return value;
 }
 
 /**
@@ -73,7 +76,9 @@ export function sanitizeGitRemoteUrl(raw: string): string | null {
     if (!["https:", "http:", "ssh:", "git:", "git+ssh:", "ssh+git:"].includes(parsed.protocol)) {
       return null;
     }
-    if (!parsed.hostname) return null;
+    // A percent-encoded authority (`ssh://TOKEN%40host/…`) is opaque to URL but
+    // decoded by git, so userinfo would survive the clearing below.
+    if (!parsed.hostname || parsed.host.includes("%")) return null;
     parsed.username = "";
     parsed.password = "";
     parsed.search = "";
@@ -81,11 +86,15 @@ export function sanitizeGitRemoteUrl(raw: string): string | null {
     return parsed.toString();
   }
 
-  // scp-like syntax: `[user@]host:path`. A single-letter host is a Windows
-  // drive (`C:\repo`), which git treats as a local path.
-  const scp = /^(?:[^@/\s]+@)?([^:/\\\s]{2,}):(?!\/\/)(\S+)$/.exec(url);
-  if (scp) return `${scp[1]}:${scp[2]}`;
-  return null;
+  // scp-like syntax: `[user@]host:path`. The host never contains `@`, so
+  // userinfo can't hide inside it. A single-letter host is a Windows drive
+  // (`C:\repo`), which git treats as a local path. `?`/`#` have no meaning in
+  // an scp path, so a remote carrying them is omitted rather than trusted.
+  const scp = /^(?:[^@/\s]+@)?(\[[^\]\s@]+\]|[^:/\\\s@[\]]+):(?!\/\/)([^\s?#]+)$/.exec(url);
+  if (!scp) return null;
+  const host = scp[1];
+  if (/^[a-z]$/i.test(host)) return null;
+  return `${host}:${scp[2]}`;
 }
 
 export function buildProjectMetadataAddendum(input: ProjectMetadataInput): string {
@@ -130,12 +139,10 @@ export function buildProjectMetadataAddendum(input: ProjectMetadataInput): strin
     if (remaining > 0) lines.push(`  - …and ${remaining} more not listed`);
   }
 
+  // Settings, not session state: lanes launched earlier keep whatever wiring
+  // they were provisioned with, and this block is shared by all of them.
   lines.push(`- Assistant tier setting: \`${input.tier}\``);
-  lines.push(
-    input.daintreeControl
-      ? "- Daintree MCP tools: enabled for this assistant (`daintree` server)"
-      : "- Daintree MCP tools: disabled for this assistant in Settings"
-  );
+  lines.push(`- Daintree MCP tools setting: \`${input.daintreeControl ? "enabled" : "disabled"}\``);
   lines.push("");
   return lines.join("\n");
 }

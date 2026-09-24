@@ -5,7 +5,6 @@ import { resolveForgeRemote } from "../../shared/utils/forgeRemoteSelection.js";
 import {
   sanitizeGitRemoteUrl,
   type HelpSessionProjectFacts,
-  type HelpSessionWorktreeFact,
 } from "./helpSessionProjectMetadata.js";
 
 // Lookup failures are logged by name only: git errors can echo the remote URL,
@@ -18,10 +17,14 @@ function warnLookupFailed(lookup: string, err: unknown): void {
 }
 
 async function readForgeRemote(
-  projectId: string,
-  projectPath: string
+  projectPath: string,
+  mainWorktreePath: string
 ): Promise<HelpSessionProjectFacts["forgeRemote"]> {
-  const settings = await projectStore.getProjectSettings(projectId);
+  // Settings are keyed on the main worktree's project, exactly as the forge
+  // toolbar resolves them (`readProjectForgeSettings`), so a project opened on
+  // a linked worktree reports the remote its forge actions actually use.
+  const project = await projectStore.getProjectByPath(mainWorktreePath);
+  const settings = project ? await projectStore.getProjectSettings(project.id) : null;
   const forgeRemote = settings?.forgeRemote ?? settings?.githubRemote ?? null;
   const override = settings?.forgeProviderOverride ?? null;
   const remotes = await gitServiceCache.getGitService(projectPath).listRemotes(projectPath);
@@ -37,14 +40,6 @@ async function readForgeRemote(
   return url ? { name: remote.name, url } : undefined;
 }
 
-async function readWorktrees(projectPath: string): Promise<HelpSessionWorktreeFact[]> {
-  const worktrees = await gitServiceCache.getGitService(projectPath).listWorktrees();
-  // A bare entry is the backing repository, not a working tree anyone can open.
-  return worktrees
-    .filter((wt) => !wt.bare)
-    .map((wt) => ({ path: wt.path, branch: wt.branch, isMainWorktree: wt.isMainWorktree }));
-}
-
 export async function readHelpSessionProjectFacts(
   projectId: string,
   projectPath: string
@@ -57,17 +52,25 @@ export async function readHelpSessionProjectFacts(
     warnLookupFailed("name", err);
   }
 
-  const [worktrees, forgeRemote] = await Promise.all([
-    readWorktrees(projectPath).catch((err: unknown) => {
+  const listed = await gitServiceCache
+    .getGitService(projectPath)
+    .listWorktrees()
+    .catch((err: unknown) => {
       warnLookupFailed("worktrees", err);
-      return undefined;
-    }),
-    readForgeRemote(projectId, projectPath).catch((err: unknown) => {
-      warnLookupFailed("forgeRemote", err);
-      return undefined;
-    }),
-  ]);
-  if (worktrees) facts.worktrees = worktrees;
+      return null;
+    });
+  if (listed) {
+    // A bare entry is the backing repository, not a working tree anyone can open.
+    facts.worktrees = listed
+      .filter((wt) => !wt.bare)
+      .map((wt) => ({ path: wt.path, branch: wt.branch, isMainWorktree: wt.isMainWorktree }));
+  }
+
+  const mainWorktreePath = listed?.find((wt) => wt.isMainWorktree)?.path ?? projectPath;
+  const forgeRemote = await readForgeRemote(projectPath, mainWorktreePath).catch((err: unknown) => {
+    warnLookupFailed("forgeRemote", err);
+    return undefined;
+  });
   if (forgeRemote) facts.forgeRemote = forgeRemote;
   return facts;
 }

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getProjectById: vi.fn(),
+  getProjectByPath: vi.fn(),
   getProjectSettings: vi.fn(),
   listWorktrees: vi.fn(),
   listRemotes: vi.fn(),
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../ProjectStore.js", () => ({
   projectStore: {
     getProjectById: mocks.getProjectById,
+    getProjectByPath: mocks.getProjectByPath,
     getProjectSettings: mocks.getProjectSettings,
   },
 }));
@@ -35,6 +37,7 @@ describe("readHelpSessionProjectFacts", () => {
     vi.restoreAllMocks();
     vi.spyOn(console, "warn").mockImplementation(() => {});
     mocks.getProjectById.mockReset().mockReturnValue({ name: "Example" });
+    mocks.getProjectByPath.mockReset().mockResolvedValue({ id: "proj-1" });
     mocks.getProjectSettings.mockReset().mockResolvedValue({});
     mocks.listWorktrees.mockReset().mockResolvedValue([
       { path: "/repo.git", branch: "", bare: true, isMainWorktree: true },
@@ -77,6 +80,38 @@ describe("readHelpSessionProjectFacts", () => {
     );
     const facts = await readHelpSessionProjectFacts("proj-1", "/work/example");
     expect(facts.forgeRemote?.name).toBe("gh");
+  });
+
+  it("honours a provider override by skipping hostname matching", async () => {
+    mocks.getProjectSettings.mockResolvedValue({ forgeProviderOverride: "gitea" });
+    mocks.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://git.internal.example/acme/x.git" },
+      { name: "mirror", fetchUrl: "https://github.com/acme/x.git" },
+    ]);
+    mocks.listMatchingProviders.mockImplementation((url: string) =>
+      url.includes("github.com") ? [{}] : []
+    );
+    const facts = await readHelpSessionProjectFacts("proj-1", "/work/example");
+    expect(facts.forgeRemote?.name).toBe("origin");
+    expect(mocks.listMatchingProviders).not.toHaveBeenCalled();
+  });
+
+  it("reads forge settings from the main worktree's project", async () => {
+    mocks.listWorktrees.mockResolvedValue([
+      { path: "/work/main", branch: "main", bare: false, isMainWorktree: true },
+      { path: "/work/linked", branch: "feat", bare: false, isMainWorktree: false },
+    ]);
+    mocks.getProjectByPath.mockResolvedValue({ id: "main-proj" });
+    mocks.getProjectSettings.mockImplementation(async (id: string) =>
+      id === "main-proj" ? { forgeRemote: "upstream" } : {}
+    );
+    mocks.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://github.com/me/x.git" },
+      { name: "upstream", fetchUrl: "https://github.com/acme/x.git" },
+    ]);
+    const facts = await readHelpSessionProjectFacts("linked-proj", "/work/linked");
+    expect(mocks.getProjectByPath).toHaveBeenCalledWith("/work/main");
+    expect(facts.forgeRemote?.name).toBe("upstream");
   });
 
   it("omits the forge remote when the configured one is missing", async () => {
