@@ -301,6 +301,8 @@ export function TerminalHeaderContent({
               )}
               style={{ fontVariantNumeric: "tabular-nums" }}
               role="status"
+              data-testid="terminal-resource-badge"
+              data-severity={stickySeverity}
             >
               <TerminalResourceSparkline history={resourceState.cpuHistory} />
               <span>
