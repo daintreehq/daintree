@@ -93,6 +93,9 @@ async function open(
   const modal = page.locator(MODAL);
   await expect(modal, `fleet "${fleet}" rendered no overview`).toBeVisible();
   await expect(modal.locator(ROW)).toHaveCount(FLEET_SIZES[fleet]);
+  // A `//` comment dropped into JSX children renders as text; no content here
+  // contains one, so any "//" on screen is source leaking into the UI.
+  await expect(modal).not.toContainText("//");
   await page.addStyleTag({ content: FREEZE_CSS });
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(300);
