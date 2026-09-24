@@ -71,7 +71,7 @@ describe("TerminalDestructiveActionConfirmDialog — deleted-worktree dismiss", 
     stage(2, 1);
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    expect(screen.getByText(/1 agent is working and will stop unless restored/)).toBeTruthy();
+    expect(screen.getByText(/^1 agent is working\.$/)).toBeTruthy();
   });
 
   it("stays silent about agents when none are running", () => {

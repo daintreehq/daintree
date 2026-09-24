@@ -42,11 +42,15 @@ function plural(count: number, singular: string, pluralForm = `${singular}s`): s
   return count === 1 ? singular : pluralForm;
 }
 
-function workingLead(count: number, outcome: string): string | undefined {
+/**
+ * `outcome` is omitted for recoverable actions, whose recovery sentence
+ * already says what happens to the process; repeating it in the lead would
+ * say the same thing twice.
+ */
+function workingLead(count: number, outcome?: string): string | undefined {
   if (count <= 0) return undefined;
-  return count === 1
-    ? `1 agent is working and ${outcome}.`
-    : `${count} agents are working and ${outcome}.`;
+  const subject = count === 1 ? "1 agent is working" : `${count} agents are working`;
+  return outcome ? `${subject} and ${outcome}.` : `${subject}.`;
 }
 
 /**
@@ -80,8 +84,8 @@ export function buildRestartRunningAgentCopy(terminalTitle?: string): Destructiv
 function recentlyClosedSentence(count: number): string {
   const ttl = `${TRASH_TTL_SECONDS}\u00a0seconds`;
   return count === 1
-    ? `It moves to Recently closed and keeps running for ${ttl}. Restore it before then, or its process ends.`
-    : `They move to Recently closed and keep running for ${ttl}. Restore them before then, or their processes end.`;
+    ? `It keeps running in Recently closed for ${ttl}. Restore it before then, or its process ends.`
+    : `They keep running in Recently closed for ${ttl}. Restore them before then, or their processes end.`;
 }
 
 function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DestructiveConfirmCopy {
@@ -132,7 +136,7 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
       const noun = plural(count, "session");
       return {
         title: `Trash ${count} ${noun} in ${worktree}?`,
-        lead: workingLead(pending.runningAgentCount, "will stop unless restored"),
+        lead: workingLead(pending.runningAgentCount),
         description: recentlyClosedSentence(count),
         confirmLabel: `Trash ${count} ${noun}`,
       };
@@ -163,7 +167,7 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
       const noun = plural(count, "terminal");
       return {
         title: `Close ${count} ${noun} from ${worktree}?`,
-        lead: workingLead(pending.runningAgentCount, "will stop unless restored"),
+        lead: workingLead(pending.runningAgentCount),
         description: recentlyClosedSentence(count),
         note:
           count === 1
@@ -180,7 +184,7 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
       const noun = plural(count, "terminal");
       return {
         title: `Close ${count} ${noun} from ${worktreeCount} ${worktreeNoun}?`,
-        lead: workingLead(pending.runningAgentCount, "will stop unless restored"),
+        lead: workingLead(pending.runningAgentCount),
         description: recentlyClosedSentence(count),
         note:
           count === 1
