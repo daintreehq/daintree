@@ -39,9 +39,13 @@ export interface SkeletonProps extends Omit<
 
 /**
  * ARIA status wrapper for loading skeletons. Owns `role="status"`, `aria-live="polite"`,
- * `aria-busy="true"`, and an sr-only label. The sr-only span is absolutely positioned
- * and takes no layout space, so flex/grid classes on `className` apply directly to the
- * bone children.
+ * and an sr-only label. The sr-only span is absolutely positioned and takes no layout
+ * space, so flex/grid classes on `className` apply directly to the bone children.
+ *
+ * Deliberately NOT `aria-busy`: that tells assistive tech to hold back a region's
+ * updates until it clears, and on a live region it holds back the region's own
+ * message — so the one thing this wrapper exists to say could go unspoken for the
+ * whole wait. The bones are `aria-hidden`, so there is no churn for it to suppress.
  */
 export function Skeleton({
   label = "Loading",
@@ -59,14 +63,7 @@ export function Skeleton({
   }
 
   return (
-    <div
-      {...rest}
-      role="status"
-      aria-live="polite"
-      aria-busy="true"
-      aria-label={label}
-      className={className}
-    >
+    <div {...rest} role="status" aria-live="polite" aria-label={label} className={className}>
       <span className="sr-only">{label}</span>
       {children}
     </div>
@@ -102,6 +99,7 @@ export function SkeletonBone({
     <div
       {...rest}
       aria-hidden="true"
+      data-skeleton-bone=""
       className={cn(
         // `bg-tint/[0.08]`, not `bg-muted`. `--muted` is aliased to
         // `--theme-surface-panel` (src/index.css:734) and is never redefined by any
@@ -111,7 +109,11 @@ export function SkeletonBone({
         // composite is the background at every frame. `--theme-tint` is white on dark
         // and black on light, so an alpha tint contrasts with whatever it is laid over
         // by construction and cannot collide with a surface again.
-        "bg-tint/[0.08] rounded-[var(--radius-lg)]",
+        //
+        // Radius is the text-line step. A bone that stands in for a control or an
+        // avatar names its own (`rounded-[var(--radius-md)]`, `rounded-full`) and
+        // wins the merge.
+        "bg-tint/[0.08] rounded-[var(--radius-xs)]",
         pulseClass(immediate),
         shimmer && "animate-skeleton-shimmer",
         className
@@ -157,9 +159,10 @@ export function SkeletonText({
       {Array.from({ length: count }).map((_, i) => (
         <div
           key={i}
+          data-skeleton-bone=""
           className={cn(
             // Same surface collision as `SkeletonBone` — see the note there.
-            "bg-tint/[0.08] rounded-[var(--radius-lg)]",
+            "bg-tint/[0.08] rounded-[var(--radius-xs)]",
             lineHeightClassName,
             TEXT_LINE_WIDTHS[i % TEXT_LINE_WIDTHS.length],
             pulseClass(immediate),
@@ -175,7 +178,7 @@ export function SkeletonText({
 // ~10s, so 8s preempts it with headroom while staying late enough not to draw
 // attention to a delay the user would otherwise tolerate. Second and action
 // thresholds keep a ~5s/~7s spacing above it so the ladder doesn't compress.
-const DEFAULT_FIRST_THRESHOLD_MS = 8_000;
+export const SKELETON_HINT_FIRST_THRESHOLD_MS = 8_000;
 const DEFAULT_SECOND_THRESHOLD_MS = 13_000;
 const DEFAULT_ACTION_THRESHOLD_MS = 20_000;
 
@@ -258,8 +261,8 @@ export interface SkeletonHintProps extends Omit<
  * with the first hint (so the user can bail as soon as the wait registers);
  * Retry waits for the later action threshold, where "try again" is the
  * meaningful recovery. Place as a sibling to the `<Skeleton>` wrapper — never
- * nested inside, because the wrapper's `aria-busy="true"` silences mutations
- * within its subtree on modern screen readers.
+ * nested inside: the wrapper is itself a live region, and a live region nested
+ * in another is announced twice or not at all depending on the screen reader.
  *
  * The sr-only span is always rendered so screen readers register the live
  * region up front; only its text content updates on phase change.
@@ -279,7 +282,7 @@ export function SkeletonHint({
   // Clamp thresholds to monotonic ascending order so a misconfigured prop (e.g.
   // actionThreshold smaller than the default secondThreshold) can't make the
   // phase walk backward when the later setTimeout fires.
-  const first = safeThreshold(firstThreshold, DEFAULT_FIRST_THRESHOLD_MS);
+  const first = safeThreshold(firstThreshold, SKELETON_HINT_FIRST_THRESHOLD_MS);
   const second = Math.max(first, safeThreshold(secondThreshold, DEFAULT_SECOND_THRESHOLD_MS));
   const action = Math.max(second, safeThreshold(actionThreshold, DEFAULT_ACTION_THRESHOLD_MS));
 
@@ -302,42 +305,47 @@ export function SkeletonHint({
   const showRetry = phase === "action" && hasRetry;
   const visibleCopy = hintCopy(phase, message);
 
-  // Only the copy is keyed, never the row. Re-keying the row on an escalation
-  // remounted Cancel with it, so a keyboard user waiting on a focused Cancel lost
-  // focus to <body> the moment the copy changed. The copy span re-fires its fade
-  // when the words change and keeps its node when they do not ("second" →
-  // "action" with no handlers); each button fades in once, when it surfaces.
   return (
     <div {...rest} className={className}>
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         {liveRegionCopy(phase, showCancel, showRetry, message)}
       </span>
       {phase !== "hidden" && (
-        <div className="flex items-center gap-2 text-text-secondary text-xs">
+        // The row itself is never keyed: a keyboard user who has tabbed to
+        // Cancel must keep it focused when the copy escalates or Retry
+        // surfaces beside it. Only the copy is keyed on its text, so an
+        // escalation re-fires its fade while a phase change that leaves the
+        // words unchanged ("second" → "action") does not; each button fades
+        // in once, as it mounts.
+        <div className="flex items-center gap-3 text-text-secondary text-xs">
           <span key={visibleCopy} aria-hidden="true" className="animate-hint-fade-in">
             {visibleCopy}
           </span>
-          {showCancel && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onCancel}
-              type="button"
-              className="animate-hint-fade-in"
-            >
-              {CANCEL_LABEL}
-            </Button>
-          )}
-          {showRetry && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onRetry}
-              type="button"
-              className="animate-hint-fade-in"
-            >
-              {RETRY_LABEL}
-            </Button>
+          {(showCancel || showRetry) && (
+            <div className="flex items-center gap-1.5">
+              {showCancel && (
+                <Button
+                  variant="subtle"
+                  size="xs"
+                  onClick={onCancel}
+                  type="button"
+                  className="animate-hint-fade-in"
+                >
+                  {CANCEL_LABEL}
+                </Button>
+              )}
+              {showRetry && (
+                <Button
+                  variant="subtle"
+                  size="xs"
+                  onClick={onRetry}
+                  type="button"
+                  className="animate-hint-fade-in"
+                >
+                  {RETRY_LABEL}
+                </Button>
+              )}
+            </div>
           )}
         </div>
       )}

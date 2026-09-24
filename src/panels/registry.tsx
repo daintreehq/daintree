@@ -142,7 +142,7 @@ function ReviewPaneWrapper(props: ComponentProps<typeof LazyReviewPane>) {
 function FilePaneWrapper(props: ComponentProps<typeof LazyFilePane>) {
   return (
     <ErrorBoundary variant="component" componentName="FilePane">
-      <Suspense fallback={<BrowserPaneSkeleton label="Loading file panel" />}>
+      <Suspense fallback={<BrowserPaneSkeleton label="Loading file panel" toolbar={false} />}>
         <ContentFadeIn className="flex flex-col h-full w-full flex-1 min-h-0">
           <LazyFilePane {...props} />
         </ContentFadeIn>
@@ -154,7 +154,7 @@ function FilePaneWrapper(props: ComponentProps<typeof LazyFilePane>) {
 function DiffPaneWrapper(props: ComponentProps<typeof LazyDiffPane>) {
   return (
     <ErrorBoundary variant="component" componentName="DiffPane">
-      <Suspense fallback={<BrowserPaneSkeleton label="Loading diff panel" />}>
+      <Suspense fallback={<BrowserPaneSkeleton label="Loading diff panel" toolbar={false} />}>
         <ContentFadeIn className="flex flex-col h-full w-full flex-1 min-h-0">
           <LazyDiffPane {...props} />
         </ContentFadeIn>
@@ -166,7 +166,7 @@ function DiffPaneWrapper(props: ComponentProps<typeof LazyDiffPane>) {
 function FileBrowserPaneWrapper(props: ComponentProps<typeof LazyFileBrowserPane>) {
   return (
     <ErrorBoundary variant="component" componentName="FileBrowserPane">
-      <Suspense fallback={<BrowserPaneSkeleton label="Loading file browser" />}>
+      <Suspense fallback={<BrowserPaneSkeleton label="Loading file browser" toolbar={false} />}>
         <ContentFadeIn className="flex flex-col h-full w-full flex-1 min-h-0">
           <LazyFileBrowserPane {...props} />
         </ContentFadeIn>

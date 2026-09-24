@@ -71,14 +71,14 @@ describe("FileVideoPreview", () => {
 
   it("holds a skeleton surface while the size probe is outstanding", () => {
     // Never settles: a stat stalled on a cold or contended disk is the wait the
-    // skeleton still exists for, so the surface must be an aria-busy status
-    // region rather than an ungated spinner.
+    // skeleton still exists for, so the surface must be a live status region
+    // rather than an ungated spinner.
     fetchMock.mockImplementation(() => new Promise(() => {}));
     const { container, getByRole } = render(
       <FileVideoPreview filePath="/repo/demo.mp4" rootPath="/repo" label="demo.mp4" />
     );
 
-    expect(getByRole("status").getAttribute("aria-busy")).toBe("true");
+    expect(getByRole("status").getAttribute("aria-live")).toBe("polite");
     expect(container.querySelector("video")).toBeNull();
   });
 

@@ -1,5 +1,10 @@
-import { AlertCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { TriangleAlert } from "lucide-react";
 import type { PendingCreation } from "@/store/worktreeStore";
+import { BranchLabel } from "@/components/Worktree/BranchLabel";
+import { Button } from "@/components/ui/button";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { SKELETON_HINT_FIRST_THRESHOLD_MS } from "@/components/ui/Skeleton";
 
 interface WorktreeCardPlaceholderProps {
   pendingCreation: PendingCreation;
@@ -7,63 +12,106 @@ interface WorktreeCardPlaceholderProps {
   onDismiss: (path: string) => void;
 }
 
+const CREATING_COPY = "Creating…";
+const STILL_CREATING_COPY = "Still creating…";
+
+/**
+ * True once the creation has been running past the skeleton hint's first
+ * threshold. Measured from `startedAt`, not from mount, so a list re-render
+ * that remounts the row does not restart the clock.
+ */
+function useIsSlow(startedAt: number, active: boolean): boolean {
+  const slowAt = startedAt + SKELETON_HINT_FIRST_THRESHOLD_MS;
+  const [slow, setSlow] = useState(() => Date.now() >= slowAt);
+  useEffect(() => {
+    if (!active || slow) return;
+    const id = setTimeout(() => setSlow(true), Math.max(0, slowAt - Date.now()));
+    return () => clearTimeout(id);
+  }, [active, slow, slowAt]);
+  return slow;
+}
+
 export function WorktreeCardPlaceholder({
   pendingCreation,
   onRetry,
   onDismiss,
 }: WorktreeCardPlaceholderProps) {
-  if (pendingCreation.status === "error") {
+  const isError = pendingCreation.status === "error";
+  const slow = useIsSlow(pendingCreation.startedAt, !isError);
+
+  if (isError) {
+    const title = `Couldn't create ${pendingCreation.branch}`;
+    // The sidebar's failed-row vocabulary (`WorktreeCardErrorFallback`): neutral
+    // surface, one red glyph, compact recovery buttons — so one failure doesn't
+    // paint a red block into the list. Retry reopens the create dialog with the
+    // branch filled in, which is where a conflict like "already exists" gets fixed.
     return (
       <div
         role="alert"
         data-pending-creation-path={pendingCreation.path}
-        className="border-b border-border-default px-4 py-3 bg-status-error/[0.06]"
+        className="flex items-start gap-2 border-b border-divider px-4 py-3"
       >
-        <div className="flex items-start gap-2">
-          <AlertCircle className="w-4 h-4 text-status-error mt-0.5 shrink-0" aria-hidden="true" />
-          <div className="flex-1 min-w-0 space-y-1">
-            <div className="text-sm font-medium text-text-primary">Couldn't create worktree</div>
-            <div className="text-xs text-text-secondary truncate" title={pendingCreation.branch}>
-              {pendingCreation.branch}
-            </div>
-            {pendingCreation.error && (
-              <div className="text-xs text-status-error/90 break-words">
-                {pendingCreation.error}
-              </div>
-            )}
-            <div className="flex items-center gap-3 pt-1">
-              <button
-                type="button"
-                onClick={() => onRetry(pendingCreation)}
-                className="text-xs font-medium text-text-primary underline underline-offset-2 hover:text-daintree-text/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-sm"
-              >
-                Retry
-              </button>
-              <button
-                type="button"
-                onClick={() => onDismiss(pendingCreation.path)}
-                className="text-xs text-text-secondary hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-sm"
-              >
-                Dismiss
-              </button>
-            </div>
+        <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-status-error" aria-hidden="true" />
+        <div className="min-w-0 flex-1 space-y-1">
+          <TruncatedTooltip content={title}>
+            <span className="block truncate text-xs text-text-primary">{title}</span>
+          </TruncatedTooltip>
+          {pendingCreation.error && (
+            <p
+              className="line-clamp-3 break-words text-xs text-text-secondary"
+              title={pendingCreation.error}
+            >
+              {pendingCreation.error}
+            </p>
+          )}
+          <div className="flex items-center gap-1.5 pt-1">
+            <Button
+              type="button"
+              variant="subtle"
+              size="xs"
+              onClick={() => onRetry(pendingCreation)}
+            >
+              Retry
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={() => onDismiss(pendingCreation.path)}
+            >
+              Dismiss
+            </Button>
           </div>
         </div>
       </div>
     );
   }
 
+  // Shaped like the collapsed card it turns into — same card chrome, gutter,
+  // `py-1` band and 22px header line — so the list keeps its rhythm and the real
+  // row lands in place. The branch is already known, so it is shown rather than
+  // stood in for; the status sits where the row's controls will appear.
   return (
     <div
       role="status"
-      aria-busy="true"
       aria-label={`Creating worktree ${pendingCreation.branch}`}
       data-pending-creation-path={pendingCreation.path}
-      className="border-b border-border-default px-4 py-3 flex flex-col gap-1.5"
+      data-variant="sidebar"
+      className="sidebar-worktree-card relative flex"
     >
-      <span className="sr-only">Creating worktree {pendingCreation.branch}</span>
-      <div className="h-3.5 w-2/3 bg-muted rounded animate-pulse-delayed" aria-hidden="true" />
-      <div className="h-3 w-1/3 bg-muted rounded animate-pulse-delayed" aria-hidden="true" />
+      <div className="w-4 shrink-0" aria-hidden="true" />
+      <div className="min-w-0 flex-1 pe-4">
+        <div className="py-1">
+          <div className="flex min-h-[22px] items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center">
+              <BranchLabel label={pendingCreation.branch} isActive={false} />
+            </div>
+            <span className="shrink-0 text-xs text-text-secondary">
+              {slow ? STILL_CREATING_COPY : CREATING_COPY}
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

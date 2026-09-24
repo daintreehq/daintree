@@ -685,35 +685,46 @@ body,
   opacity: 0.8;
 }
 
-/* Delayed pulse animation for skeleton loading states
- * Prevents "flash of loading state" (FOLS) for fast operations (<400ms).
- * Skeleton starts invisible and fades in only when animation begins after delay.
- */
-@keyframes pulse-delayed {
-  0% {
+/* Skeleton bone motion: a one-shot reveal, then a continuous pulse.
+ *
+ * They are two animations on purpose. The gate used to live inside the pulse's
+ * own keyframes (`0% { opacity: 0 }` then `0.1% { opacity: 1 }`), so every 2s
+ * iteration restarted from that invisible frame and each bone blinked out once a
+ * cycle. The reveal runs once, after the anti-flicker gate, filling backwards so
+ * the bone is hidden while the gate runs (prevents a flash of loading state for
+ * sub-400ms operations); the pulse starts where the reveal ends, at full
+ * opacity, and never drops below its floor. */
+@keyframes skeleton-reveal {
+  from {
     opacity: 0;
   }
-  0.1% {
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
     opacity: 1;
   }
   50% {
-    opacity: 0.5;
-  }
-  100% {
-    opacity: 1;
+    opacity: 0.6;
   }
 }
 
 .animate-pulse-delayed {
-  opacity: 0;
-  animation: pulse-delayed 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  animation-delay: var(--anti-flicker-delay);
+  animation-name: skeleton-reveal, skeleton-pulse;
+  animation-duration: 200ms, 2s;
+  animation-timing-function: ease-out, cubic-bezier(0.4, 0, 0.6, 1);
+  animation-delay: var(--anti-flicker-delay), calc(var(--anti-flicker-delay) + 200ms);
+  animation-iteration-count: 1, infinite;
+  animation-fill-mode: backwards, none;
   will-change: opacity;
 }
 
 .animate-pulse-immediate {
-  opacity: 1;
-  animation: pulse-delayed 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  animation: skeleton-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   will-change: opacity;
 }
 
@@ -778,10 +789,11 @@ body,
   will-change: transform;
 }
 
-/* Companion to long-running skeletons. SkeletonHint renders this class on its
- * visible row when the hint phase escalates so the new copy crossfades in
- * rather than snapping. Opacity-only — no spatial motion — so reduced-motion
- * bypasses just need to skip past the entry frame to opacity: 1.
+/* Companion to long-running skeletons. SkeletonHint renders this class on the
+ * copy each time it escalates, and on a recovery button as it surfaces, so new
+ * content fades in rather than snapping. The 200ms entry tier. Opacity-only — no
+ * spatial motion — so reduced-motion bypasses just need to skip past the entry
+ * frame to opacity: 1.
  */
 @keyframes hint-fade-in {
   from {
@@ -794,7 +806,7 @@ body,
 
 .animate-hint-fade-in {
   opacity: 0;
-  animation: hint-fade-in 500ms ease-out forwards;
+  animation: hint-fade-in 200ms ease-out forwards;
   will-change: opacity;
 }
 
@@ -1297,6 +1309,14 @@ body,
     opacity: 1;
     transform: none;
     will-change: auto;
+  }
+
+  /* Reduced motion removes the pulse, not the anti-flicker gate: a static bone
+   * that appears for a 100ms load is exactly the flash the gate exists to stop.
+   * A zero-length reveal filling backwards holds the bone hidden for the gate,
+   * then shows it in one step — no motion at all. */
+  .animate-pulse-delayed {
+    animation: skeleton-reveal 0s var(--anti-flicker-delay) backwards;
   }
 
   /* The all-clear flash has no static form: snapping it to opacity 1 like the
@@ -2535,6 +2555,15 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     outline-offset: 0;
   }
 
+  /* Skeleton bones are nothing but a translucent fill, which forced colors
+   * replaces with the canvas — the whole silhouette would vanish and a loading
+   * pane would read as an empty one. An inset GrayText outline keeps each
+   * bone's shape; GrayText is the system's own "not yet available" colour. */
+  [data-skeleton-bone] {
+    outline: 1px solid GrayText;
+    outline-offset: -1px;
+  }
+
   [data-trash-meter] > * {
     background-color: CanvasText;
     forced-color-adjust: none;
@@ -3158,6 +3187,14 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   /* Every quick-state glyph at full strength; the digit still says "empty". */
   .quick-state-glyph-empty {
     opacity: 1;
+  }
+
+  /* Skeleton bones double their tint. At 8% a bone is deliberately quiet; a
+   * user who asked for more contrast should not have to hunt for the shape of
+   * what is loading. Still a tint of `--theme-tint`, so it keeps contrasting
+   * with whatever surface it sits on. */
+  [data-skeleton-bone] {
+    background-color: color-mix(in oklab, var(--theme-tint) 16%, transparent);
   }
 
   .terminal-selected,

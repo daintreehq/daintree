@@ -86,11 +86,13 @@ describe("skeleton surface-collision contract", () => {
   });
 
   it("the skeleton pulse cannot be the thing that makes a bone visible", () => {
-    // `pulse-delayed` animates opacity between 0 and 1. Opacity on a fill that matches
-    // its background composites to the background at every frame, so the animation is
+    // `skeleton-pulse` animates opacity only. Opacity on a fill that matches its
+    // background composites to the background at every frame, so the animation is
     // never a substitute for a fill that contrasts. Pinned so a future "the pulse makes
     // it visible enough" argument has to contend with the keyframes.
-    const block = css.slice(css.indexOf("@keyframes pulse-delayed"));
+    const start = css.indexOf("@keyframes skeleton-pulse");
+    expect(start).toBeGreaterThan(-1);
+    const block = css.slice(start);
     const body = block.slice(0, block.indexOf("}\n}") + 3);
     expect(body).toMatch(/opacity/);
     expect(body).not.toMatch(/background|background-color/);

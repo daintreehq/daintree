@@ -90,11 +90,27 @@ const SHOTS: Shot[] = [
     },
   },
   {
+    fixture: "file-pane",
+    frames: ["peak"],
+    expectState: async (page) => {
+      await expect(page.getByRole("status", { name: "Loading file panel" })).toBeAttached();
+    },
+  },
+  {
     fixture: "worktree-creating",
-    frames: ["peak", "trough"],
+    frames: ["peak"],
     expectState: async (page) => {
       await expect(page.locator("[data-pending-creation-path]")).toHaveCount(1);
-      await expect(page.locator(".sidebar-worktree-card")).toHaveCount(3);
+      await expect(
+        page.locator(".sidebar-worktree-card:not([data-pending-creation-path])")
+      ).toHaveCount(3);
+    },
+  },
+  {
+    fixture: "worktree-creating-slow",
+    frames: ["peak"],
+    expectState: async (page) => {
+      await expect(page.locator("[data-pending-creation-path]")).toContainText("Still creating");
     },
   },
   {

@@ -27,7 +27,8 @@ import "@/index.css";
  * Query parameters:
  *   ?theme=<id>      built-in theme id
  *   ?fixture=<name>  primitives | hint | browser-pane | browser-pane-hint |
- *                    worktree-creating | worktree-error
+ *                    file-pane | worktree-creating | worktree-creating-slow |
+ *                    worktree-error
  *   ?fast=1          scales timers down 100x so the long-wait hint reaches its
  *                    later phases in a capture rather than in 20 real seconds
  */
@@ -146,7 +147,11 @@ function BrowserPaneFrame() {
       data-fixture={fixture}
       className="h-[420px] w-[720px] overflow-hidden rounded-[var(--radius-lg)] border border-divider bg-surface-panel"
     >
-      <BrowserPaneSkeleton />
+      {fixture === "file-pane" ? (
+        <BrowserPaneSkeleton label="Loading file panel" toolbar={false} />
+      ) : (
+        <BrowserPaneSkeleton />
+      )}
     </div>
   );
 }
@@ -185,7 +190,7 @@ function RealRow({
   } as unknown as WorktreeState;
   return (
     <div
-      className="sidebar-worktree-card group/card relative flex border-b border-divider"
+      className="sidebar-worktree-card group/card relative flex"
       data-variant="sidebar"
       data-hoverable="true"
     >
@@ -219,7 +224,7 @@ function RealRow({
 const CREATING: PendingCreation = {
   path: "/Users/dev/helios-worktrees/feature-stream-upload-retry",
   branch: "feature/stream-upload-retry",
-  startedAt: 0,
+  startedAt: Date.now(),
   status: "creating",
 };
 
@@ -249,9 +254,12 @@ function Fixture() {
       return <Hints />;
     case "browser-pane":
     case "browser-pane-hint":
+    case "file-pane":
       return <BrowserPaneFrame />;
     case "worktree-creating":
       return <WorktreeList pending={CREATING} />;
+    case "worktree-creating-slow":
+      return <WorktreeList pending={{ ...CREATING, startedAt: 0 }} />;
     case "worktree-error":
       return <WorktreeList pending={FAILED} />;
     default:

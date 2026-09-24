@@ -84,7 +84,7 @@ describe("DevPreviewPaneFallback", () => {
     expect(screen.getByRole("button", { name: "More panel actions" })).toBeTruthy();
 
     const loadingCanvas = screen.getByRole("status", { name: "Loading dev preview panel" });
-    expect(loadingCanvas.getAttribute("aria-busy")).toBe("true");
+    expect(loadingCanvas.getAttribute("aria-live")).toBe("polite");
     expect(
       container.querySelectorAll(".animate-pulse-immediate, .animate-pulse-delayed")
     ).toHaveLength(0);
