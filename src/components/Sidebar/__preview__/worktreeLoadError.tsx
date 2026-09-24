@@ -73,12 +73,15 @@ const WORKTREES: WorktreeSnapshot[] = [
 
 const SHORT_ERROR = "fatal: not a git repository (or any of the parent directories): .git";
 
-/** What a real git failure looks like once it has passed through the bridge. */
+/**
+ * What a real git failure looks like: main sends `formatErrorMessage(error)`,
+ * which for simple-git is git's own stderr, several lines of it.
+ */
 const LONG_ERROR =
-  "Error invoking remote method 'worktree:list': Error: git worktree list --porcelain failed " +
-  "with exit code 128: fatal: '/Users/greg/Projects/daintree-worktrees/design-worktree-load-error-banner/.git' " +
-  "does not appear to be a git repository\nfatal: Could not read from remote repository.\n\n" +
-  "Please make sure you have the correct access rights and the repository exists.";
+  "fatal: '/Users/greg/Projects/daintree-worktrees/design-worktree-load-error-banner/.git' " +
+  "does not appear to be a git repository\nfatal: unable to read worktree metadata in " +
+  "/Users/greg/Projects/daintree/.git/worktrees/design-worktree-load-error-banner: " +
+  "Permission denied\nhint: check that the repository still exists and that you can read it";
 
 const SERVICE_ERROR = "Workspace host exited unexpectedly (code 1)";
 

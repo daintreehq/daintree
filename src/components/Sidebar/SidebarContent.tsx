@@ -18,7 +18,7 @@ import {
   type ScrollerProps,
   type VirtuosoHandle,
 } from "react-virtuoso";
-import { AlertTriangle, FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
+import { FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
@@ -159,8 +159,7 @@ const SIDEBAR_VIRTUOSO_OVERSCAN_PX = 600;
 // ~14s workspace-host restart budget so it fires before `setFatalError`.
 const RECONNECT_ESCALATE_MS = 10_000;
 
-const WORKTREE_DISCONNECTED_MESSAGE =
-  "The workspace service isn't connected, so worktrees can't load.";
+const WORKTREE_DISCONNECTED_MESSAGE = "The workspace service isn't connected to this project.";
 
 // Fixed-count shimmer card placeholders for the worktree sidebar loading state.
 // Follows the same 3-bone structure as the `.skel-card` design in the
@@ -494,8 +493,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       }, 50);
     },
   });
-  const { worktrees, isLoading, isInitialized, isReconnecting, reconnectingAt, error, refresh } =
-    useWorktrees();
+  const {
+    worktrees,
+    isLoading: isStoreLoading,
+    isInitialized,
+    isReconnecting,
+    reconnectingAt,
+    error,
+    refresh,
+  } = useWorktrees();
   const [bannerDismissed, setBannerDismissed] = useState(false);
   useEffect(() => {
     setBannerDismissed(false);
@@ -561,6 +567,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // can't see a scratch, which is why the sidebar had nothing to render in one.
   const workspaceRoot = useWorkspaceRoot();
   const worktreeLoadError = useProjectStore((state) => state.worktreeLoadError);
+  // A load that already failed is not still loading. The store keeps
+  // `isLoading` when a switch's load throws, and the skeleton under the
+  // failure banner said the list was loading and had failed at once.
+  const isLoading = isStoreLoading && worktreeLoadError === null;
   useProjectSettings();
   const { availability, agentSettings } = useAgentLauncher();
   const {
@@ -1575,14 +1585,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       </ErrorBoundary>
     );
 
-  // Hoisted before the early returns so the failed-switch banner (#8400)
-  // surfaces regardless of which loading/empty/error branch the sidebar is in
-  // — when a switch's worktree load throws, the store stays empty so every
-  // other branch would otherwise show no trace of the failure.
-  const worktreeLoadErrorBanner = worktreeLoadError ? (
-    <WorktreeLoadErrorBanner error={worktreeLoadError} />
-  ) : null;
-
   // An open project whose worktree store never received a snapshot has no port
   // to the workspace service. That is a connection failure, not an empty
   // repository, so it must never fall through to the "Open a Git repository"
@@ -1599,7 +1601,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const errorBanner =
     error !== null && (!bannerDismissed || !canDismissErrorBanner) ? (
       <InlineStatusBanner
-        icon={AlertTriangle}
         title="Workspace service unavailable"
         contextLine={error}
         severity="warning"
@@ -1616,6 +1617,21 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           },
         ]}
       />
+    ) : null;
+
+  // Hoisted before the early returns so the failed-switch banner (#8400)
+  // surfaces regardless of which empty/populated branch the sidebar is in —
+  // when a switch's worktree load throws, the store stays empty so every
+  // other branch would otherwise show no trace of the failure. An open project
+  // with no snapshot once loading has settled is a connection failure (#12576)
+  // and takes the same banner. It yields to the service banner: a crashed host
+  // needs Restart, and Retry beside it offers a fix that cannot work.
+  const loadFailure =
+    worktreeLoadError ??
+    (isProjectDisconnected && !isLoading && error === null ? WORKTREE_DISCONNECTED_MESSAGE : null);
+  const worktreeLoadErrorBanner =
+    loadFailure !== null && errorBanner === null ? (
+      <WorktreeLoadErrorBanner error={loadFailure} />
     ) : null;
 
   // Mounted in both the zero-worktree early return and the main return path so
@@ -1659,7 +1675,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   if (isLoading && worktrees.length === 0) {
     return (
       <div className="flex flex-col h-full">
-        {worktreeLoadErrorBanner}
         <div className="flex items-center px-3 py-3 border-b border-divider shrink-0">
           <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
             Worktrees
@@ -1695,16 +1710,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return (
       <>
         <div className="flex flex-col h-full">
-          {worktreeLoadErrorBanner ??
-            (isProjectDisconnected && error === null ? (
-              <WorktreeLoadErrorBanner error={WORKTREE_DISCONNECTED_MESSAGE} />
-            ) : null)}
           <div className="flex items-center px-3 py-3 border-b border-divider shrink-0">
             <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
               Worktrees
             </h2>
           </div>
           {errorBanner}
+          {worktreeLoadErrorBanner}
 
           {/* A failed load or a missing connection already has an open
               project — the "Open a Git repository" nudge would contradict the
@@ -1783,7 +1795,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   );
   return (
     <div className="flex flex-col h-full">
-      {worktreeLoadErrorBanner}
       {/* Header Section */}
       {/* The control zone carries ONE horizontal rule, at its bottom edge. When
           the search rail renders it owns that rule, so the header goes without;
@@ -1907,7 +1918,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         />
       )}
 
+      {/* Both failure banners take the slot below the control zone, so a
+          failure about the list reads as belonging to the list. */}
       {errorBanner}
+      {worktreeLoadErrorBanner}
 
       {/* SR-only live region for keyboard reorder announcements. dnd-kit's
           built-in announcer can't see external mutations like Alt+Arrow, so

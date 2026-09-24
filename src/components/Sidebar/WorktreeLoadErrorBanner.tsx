@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { AlertCircle, RotateCcw } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { boundedErrorText } from "@/utils/errorText";
 import { actionService } from "@/services/ActionService";
@@ -49,17 +49,20 @@ export function WorktreeLoadErrorBanner({
     icon: RotateCcw,
     variant: "primary",
     onClick: () => void handleRetry(),
-    title: "Retry loading worktrees",
     ariaLabel: "Retry loading worktrees",
     loading: isRetrying,
   };
 
   return (
+    // Polite status, not the default alert: a list that failed to load in the
+    // background is not worth interrupting speech for, and it reads at the same
+    // urgency as the workspace-service banner that shares its slot.
     <InlineStatusBanner
-      icon={AlertCircle}
       title="Couldn't load worktrees"
       description={boundedErrorText(error)}
       severity="error"
+      role="status"
+      ariaLive="polite"
       action={retryAction}
       className={className}
     />

@@ -92,4 +92,14 @@ describe("WorktreeLoadErrorBanner (#8400)", () => {
       ).toBeNull()
     );
   });
+
+  it("announces politely and never interrupts speech", () => {
+    // A list that failed to load in the background is not time-critical, and
+    // it shares a slot with the polite workspace-service banner.
+    const { container } = render(<WorktreeLoadErrorBanner error="boom" />);
+    expect(container.querySelector("[role='alert'], [aria-live='assertive']")).toBeNull();
+    const region = screen.getByRole("status");
+    expect(region.getAttribute("aria-live")).toBe("polite");
+    expect(region.textContent).toContain("Couldn't load worktrees");
+  });
 });
