@@ -2802,15 +2802,23 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       expect(selectedOption(container)?.id).toBe(before);
     });
 
-    it("cancels in place on Escape and leaves the launcher open", () => {
+    it("cancels in place on Escape and leaves the launcher open", async () => {
       const { container } = renderButton({ agents: READY });
       openCapture(container);
       expect(container.querySelector('[data-testid="capture-widget-claude"]')).toBeTruthy();
+      // The recorder held focus; its controls are about to unmount.
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
 
       // The shell runs the consumer veto ahead of its own query-clear rule.
       const event = { preventDefault: vi.fn(), defaultPrevented: false };
-      popoverEscapeKeyDownSpy?.(event as unknown as KeyboardEvent);
+      act(() => {
+        popoverEscapeKeyDownSpy?.(event as unknown as KeyboardEvent);
+      });
       expect(event.preventDefault).toHaveBeenCalled();
+      expect(container.querySelector('[data-testid="capture-widget-claude"]')).toBeNull();
+
+      await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+      expect(document.activeElement).toBe(searchInput(container));
     });
 
     it("clears the recorder when the launcher closes", () => {

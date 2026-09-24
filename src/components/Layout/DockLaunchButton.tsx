@@ -1012,7 +1012,9 @@ export function DockLaunchButton({
         onEscapeKeyDown={(event) => {
           if (capturingRowKey === null) return;
           event.preventDefault();
-          setCapturingRowKey(null);
+          // The recorder's own controls unmount with it; hand focus back to the
+          // query the same way its Cancel does.
+          finishCapture();
         }}
         // Keep the launcher open during capture so a stray click on the capture
         // row's own controls doesn't tear down an in-progress recording. The
