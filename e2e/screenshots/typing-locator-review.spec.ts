@@ -181,14 +181,17 @@ test("Typing locator — states and themes", async ({ browser }) => {
     await settled(page, "refused");
     written.push(await snapZoom(page, "refused", `05-refused-${theme}.png`));
 
-    // Motion frames: the transition is stretched to STRETCH_MS so a frame 40% of
-    // the way in is photographed deterministically, whatever the screenshot costs.
+    // Motion frames: the transition is stretched to STRETCH_MS so a frame
+    // part-way through is photographed deterministically, whatever the
+    // screenshot costs.
     const timings = await page.evaluate(
       () => (window as unknown as HarnessWindow).__typingLocator.timings
     );
     const stretch = await page.addStyleTag({ content: STRETCH_CSS });
     await show(page, "locate", "all");
-    await page.waitForTimeout(STRETCH_MS * 0.4);
+    // Early: the enter easing is a critically damped spring, so by 40% of the
+    // way in the pill is already all but settled.
+    await page.waitForTimeout(STRETCH_MS * 0.15);
     written.push(await snapZoom(page, "locate", `07-enter-mid-${theme}.png`));
     await show(page, "locate", "unmount");
     await page.waitForTimeout(timings.dwell + STRETCH_MS * 0.4);

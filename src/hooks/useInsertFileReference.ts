@@ -120,8 +120,24 @@ function report(message: TypingLocatorMessage): void {
   useAnnouncerStore.getState().announce(formatTypingLocatorMessage(message), "polite");
 }
 
-function reportRefused(): void {
-  report({ kind: "file-refused", lead: "File reference not added: no agent available" });
+/**
+ * The pill's own wording for each gate — it names the reason the click did
+ * nothing, so a refusal never claims "no agent" while agents sit on screen.
+ * Mirrors the menu's `INSERT_REFUSAL_COPY` in intent, not in text: that one is
+ * phrased for a disabled row, this one completes "File reference not added:".
+ */
+const REFUSAL_RECEIPT = {
+  "workspace-unavailable": "no workspace",
+  "fleet-broadcast-armed": "the fleet is armed",
+  "hybrid-input-disabled": "the input bar is off",
+  "backend-unavailable": "the terminal service is unavailable",
+  "recorded-target-unavailable": "that agent can't take input",
+  "no-eligible-agent": "no agent available",
+  "multiple-eligible-agents": "type to an agent first",
+} as const satisfies Record<InsertFileReferenceRefusalReason, string>;
+
+function reportRefused(reason: InsertFileReferenceRefusalReason): void {
+  report({ kind: "file-refused", lead: `File reference not added: ${REFUSAL_RECEIPT[reason]}` });
 }
 
 /**
@@ -188,7 +204,7 @@ export function useInsertFileReference(): InsertFileReference {
     // the menu can sit open while the agent it named exits or locks.
     const panelState = usePanelStore.getState();
     const inputStore = useTerminalInputStore.getState();
-    const { targetId: resolvedId } = resolveInsertTarget({
+    const { targetId: resolvedId, reason } = resolveInsertTarget({
       panelsById: panelState.panelsById,
       panelIds: panelState.panelIds,
       backendStatus: panelState.backendStatus,
@@ -202,7 +218,9 @@ export function useInsertFileReference(): InsertFileReference {
       // Only reachable in the race the re-resolve exists for — the rendered
       // gate disables the affordance otherwise. Announcing it beats a dead
       // click, which is by definition something the user cannot observe.
-      reportRefused();
+      // `reason` is null only if a resolved id has no panel, which the
+      // resolver rules out; the type cannot see that.
+      reportRefused(reason ?? "no-eligible-agent");
       return false;
     }
 

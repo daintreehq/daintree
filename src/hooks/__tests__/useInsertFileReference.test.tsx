@@ -520,6 +520,27 @@ describe("useInsertFileReference — writing", () => {
     expect(announceMock).toHaveBeenCalledWith(formatTypingLocatorMessage(shown), "polite");
   });
 
+  it("names the gate that refused at click time, not a blanket no-agent", () => {
+    // Agents are on screen; the fleet was armed while the menu sat open.
+    const { result } = renderHook(() => useInsertFileReference());
+    fleetState.armedIds = new Set(["t-1", "t-2"]);
+    act(() => {
+      expect(result.current.insert("/repo/a.ts")).toBe(false);
+    });
+    const armed = formatTypingLocatorMessage(showLocatorMock.mock.calls[0]![0]);
+
+    // The agent dies instead — a different gate, so a different receipt.
+    fleetState.armedIds = new Set();
+    seedPanels(agentPanel("t-1", { runtimeStatus: "exited" }));
+    act(() => {
+      expect(result.current.insert("/repo/a.ts")).toBe(false);
+    });
+    const gone = formatTypingLocatorMessage(showLocatorMock.mock.calls[1]![0]);
+
+    expect(armed).not.toBe(gone);
+    expect(armed).not.toMatch(/no agent/i);
+  });
+
   it("ignores an empty path rather than writing a bare @", () => {
     const { result } = renderHook(() => useInsertFileReference());
     act(() => {
