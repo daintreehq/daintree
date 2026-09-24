@@ -1,5 +1,3 @@
-import { useCallback } from "react";
-import { isMac } from "@/lib/platform";
 import { KbdChord } from "@/components/ui/Kbd";
 import { SettingsShortcutCapture } from "./SettingsShortcutCapture";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
@@ -21,6 +19,46 @@ export interface AgentShortcutCaptureProps {
  * defaultKeybindings.ts.
  */
 const AGENT_COMBO_PATTERN = /^Cmd\+Alt\+[A-Za-z]$/;
+const AGENT_MODIFIERS = ["Cmd", "Alt"];
+
+/**
+ * Keeps teaching the rule while modifiers are down, so following the live text
+ * never leads into a rejection: release what is extra, add what is missing, and
+ * only then ask for the letter.
+ */
+function agentHeldHint(held: string[]) {
+  const extra = held.filter((mod) => !AGENT_MODIFIERS.includes(mod));
+  if (extra.length > 0) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        Release
+        <KbdChord shortcut={extra.join("+")} />
+      </span>
+    );
+  }
+  const missing = AGENT_MODIFIERS.filter((mod) => !held.includes(mod));
+  if (missing.length > 0) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        Add
+        <KbdChord shortcut={missing.join("+")} />
+      </span>
+    );
+  }
+  return "Now press a letter";
+}
+
+function validateAgentCombo(combo: string) {
+  if (AGENT_COMBO_PATTERN.test(combo)) return null;
+  // Key caps rather than raw glyphs, so the reason is spoken as key names.
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      Agent shortcuts are
+      <KbdChord shortcut="Cmd+Alt" />
+      and a letter
+    </span>
+  );
+}
 
 /**
  * SettingsShortcutCapture held to the agent-shortcut convention: one stroke of
@@ -34,27 +72,18 @@ export function AgentShortcutCapture({
   compact = false,
   currentCombo,
 }: AgentShortcutCaptureProps) {
-  const mac = isMac();
-
-  const validateCombo = useCallback(
-    (combo: string): string | null =>
-      AGENT_COMBO_PATTERN.test(combo)
-        ? null
-        : `Agent shortcuts are ${mac ? "⌘⌥" : "Ctrl+Alt"} and a letter`,
-    [mac]
-  );
-
   return (
     <SettingsShortcutCapture
       onCapture={onCapture}
       onCancel={onCancel}
       excludeActionId={`agent.${agentId}`}
-      validateCombo={validateCombo}
+      validateCombo={validateAgentCombo}
       compact={compact}
       autoStart
       currentCombo={currentCombo}
       singleStroke
       blockConflicts
+      heldHint={agentHeldHint}
       recordingHint={
         <span className="inline-flex items-center gap-1.5">
           Hold

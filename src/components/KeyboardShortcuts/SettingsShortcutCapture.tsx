@@ -36,7 +36,7 @@ export interface SettingsShortcutCaptureProps {
    * button is disabled. Use to enforce domain rules like "agent shortcuts
    * must use Cmd+Alt+letter" without baking domain copy into this widget.
    */
-  validateCombo?: (combo: string) => string | null;
+  validateCombo?: (combo: string) => React.ReactNode | null;
   /**
    * Compact rendering for inline contexts like dropdowns. Drops the outer
    * card chrome, tightens spacing, shrinks action buttons, and auto-starts
@@ -67,6 +67,12 @@ export interface SettingsShortcutCaptureProps {
    * in the rejection after it.
    */
   recordingHint?: React.ReactNode;
+  /**
+   * What the armed field says while modifiers are down, given those modifiers in
+   * combo order ("Cmd", "Alt"…). Lets a constrained binding keep teaching its shape
+   * (release the extra one, add the missing one) instead of a generic "press a key".
+   */
+  heldHint?: (held: string[]) => React.ReactNode;
   /**
    * Keep Save disabled while the combo is still bound to another action. Two
    * bindings of equal priority on one combo leave one of them silently dead, so a
@@ -106,6 +112,7 @@ export function SettingsShortcutCapture({
   currentCombo,
   singleStroke = false,
   recordingHint,
+  heldHint,
   blockConflicts = false,
 }: SettingsShortcutCaptureProps) {
   // A consumer that mounts this in response to an explicit click (the compact
@@ -125,9 +132,14 @@ export function SettingsShortcutCapture({
   // A combo the validator refused. The recorder stays armed with it on show, so the
   // next press is the retry, with no separate step to start recording again.
   const [rejected, setRejected] = useState<string | null>(null);
+  // Bumped when a transition removes the focused control without changing whether
+  // the draft can be saved (a restored draft, an Unbind that leaves another
+  // conflict), so the focus effect below still runs.
+  const [focusRequest, setFocusRequest] = useState(0);
   const saveRef = useRef<HTMLButtonElement>(null);
   const recordAgainRef = useRef<HTMLButtonElement>(null);
   const unbindRef = useRef<HTMLButtonElement>(null);
+  const idleRef = useRef<HTMLButtonElement>(null);
   const recorderRef = useRef<HTMLDivElement>(null);
   // What was captured before "Record again", so Escape can put it back rather
   // than throwing away a combo the user already had.
@@ -215,13 +227,35 @@ export function SettingsShortcutCapture({
         setHeld([]);
         setRejected(null);
         if (previousDraftRef.current.length > 0) {
+          // The restored draft is a finished capture again, and the recorder that
+          // held focus is gone, so the focus effect picks its next control.
           setCapturedCombos(previousDraftRef.current);
-          // The recorder that held focus is gone; the restored combo's Save is next.
-          requestAnimationFrame(() => saveRef.current?.focus());
+          setChordStep("complete");
+          setFocusRequest((n) => n + 1);
         } else {
           setCapturedCombos([]);
           onCancel();
         }
+        return;
+      }
+
+      // Tab can never be a single-stroke binding, so rather than record it the
+      // recorder stands down and hands the keyboard back: Remove and Cancel are
+      // otherwise out of reach until some valid combo has been captured.
+      if (singleStroke && e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        clearChordTimeout();
+        chordTokenRef.current += 1;
+        setRecording(false);
+        setHeld([]);
+        setRejected(null);
+        if (previousDraftRef.current.length > 0) {
+          setCapturedCombos(previousDraftRef.current);
+          setChordStep("complete");
+        } else {
+          setCapturedCombos([]);
+          setChordStep("first");
+        }
+        setFocusRequest((n) => n + 1);
         return;
       }
 
@@ -304,14 +338,19 @@ export function SettingsShortcutCapture({
   // A capture that cannot be saved as it stands (unchanged, or still bound elsewhere)
   // lands on the control that moves it forward instead of on a disabled Save.
   useEffect(() => {
-    if (chordStep !== "complete" || recording) return;
+    if (recording) return;
+    if (chordStep !== "complete") {
+      // Stood down with nothing captured: the idle field is the way back in.
+      if (focusRequest > 0) idleRef.current?.focus();
+      return;
+    }
     const target = canSave
       ? saveRef.current
       : blockingConflict
         ? unbindRef.current
         : recordAgainRef.current;
     target?.focus();
-  }, [chordStep, recording, canSave, blockingConflict]);
+  }, [chordStep, recording, canSave, blockingConflict, focusRequest]);
 
   // The Edit button that opened the recorder unmounts with it, so focus moves to
   // the recorder itself rather than falling to the page.
@@ -424,8 +463,9 @@ export function SettingsShortcutCapture({
       }
 
       setConflictRefreshKey((prev) => prev + 1);
-      // The Unbind button goes away with the conflict; Save is the next step.
-      requestAnimationFrame(() => saveRef.current?.focus());
+      // The Unbind button goes away with the conflict; the focus effect moves on
+      // to Save, or to the next Unbind when another conflict still blocks it.
+      setFocusRequest((n) => n + 1);
 
       notify({
         type: "success",
@@ -541,7 +581,9 @@ export function SettingsShortcutCapture({
               ) : held.length > 0 ? (
                 <span className="inline-flex items-center gap-2">
                   <KbdChord shortcut={held.join("+")} foreground="primary" />
-                  <span className="text-text-secondary">Now press a key</span>
+                  <span className="text-text-secondary">
+                    {heldHint ? heldHint(held) : "Now press a key"}
+                  </span>
                 </span>
               ) : rejected ? (
                 // The refused combo stays in view beside the reason below, and the
@@ -578,6 +620,7 @@ export function SettingsShortcutCapture({
             </div>
           ) : (
             <button
+              ref={idleRef}
               type="button"
               data-testid="shortcut-capture-field"
               onClick={handleStartRecording}

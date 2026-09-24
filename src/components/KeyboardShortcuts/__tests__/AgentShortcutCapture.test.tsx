@@ -156,6 +156,55 @@ describe("AgentShortcutCapture", () => {
     expect(screen.getByRole("button", { name: "Unbind Launch Codex agent" })).toBeTruthy();
   });
 
+  it("keeps teaching the rule while modifiers are down", () => {
+    render(<AgentShortcutCapture agentId="claude" onCapture={onCapture} onCancel={onCancel} />);
+
+    press("Shift", { ctrl: true, alt: true, shift: true });
+    expect(field().textContent).toMatch(/Release/);
+
+    press("Alt", { alt: true });
+    expect(field().textContent).toMatch(/Add/);
+
+    press("Control", { ctrl: true, alt: true });
+    expect(field().textContent).toMatch(/letter/);
+  });
+
+  it("hands the keyboard back on Tab instead of recording it", () => {
+    render(
+      <AgentShortcutCapture
+        agentId="claude"
+        currentCombo="Cmd+Alt+C"
+        onCapture={onCapture}
+        onCancel={onCancel}
+      />
+    );
+
+    press("Tab");
+
+    expect(field().getAttribute("data-recording")).toBeNull();
+    expect(document.activeElement).toBe(field());
+    expect(screen.queryByTestId("shortcut-capture-validation-error")).toBeNull();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("never leaves focus on a disabled Save when Escape restores a draft", () => {
+    render(
+      <AgentShortcutCapture
+        agentId="claude"
+        currentCombo="Cmd+Alt+C"
+        onCapture={onCapture}
+        onCancel={onCancel}
+      />
+    );
+
+    press("c", { ctrl: true, alt: true });
+    fireEvent.click(screen.getByRole("button", { name: "Record again" }));
+    press("Escape");
+
+    const focused = document.activeElement;
+    expect(focused instanceof HTMLButtonElement && !focused.disabled).toBe(true);
+  });
+
   it("offers Remove only when there is a binding to remove", () => {
     const { rerender } = render(
       <AgentShortcutCapture
