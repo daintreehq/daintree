@@ -148,7 +148,7 @@ export const PUSH_BANNER_CONFIGS: Record<GitOperationReason, PushBannerConfig> =
     detailPolicy: "hide",
   },
   unknown: {
-    message: "See details for more.",
+    message: "Git didn't say why in a form Daintree recognizes. The output below has the details.",
     detailPolicy: "collapse",
   },
 };
@@ -218,14 +218,14 @@ export function getPushBannerConfig(
   if (state.reason === "push-rejected-outdated") {
     const remoteCount = behindCount && behindCount > 0 ? behindCount : null;
     const message = remoteCount
-      ? `Remote has ${remoteCount} new commit${remoteCount === 1 ? "" : "s"}. Pull and rebase, or force push to overwrite.`
-      : "The remote has new commits. Pull and rebase, or force push to overwrite.";
+      ? `The remote has ${remoteCount} new commit${remoteCount === 1 ? "" : "s"}. Pull and rebase before pushing.`
+      : "The remote has new commits. Pull and rebase before pushing.";
     return {
       ...base,
       message,
       secondaryCta:
         state.leaseSha && state.branchName
-          ? { kind: "force-push", label: "Force push" }
+          ? { kind: "force-push", label: "Force push…" }
           : undefined,
     };
   }

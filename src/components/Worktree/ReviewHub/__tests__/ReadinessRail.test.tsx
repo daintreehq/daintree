@@ -273,4 +273,68 @@ describe("ReadinessRail", () => {
     }
     expect(announced.size).toBe(3);
   });
+
+  it("announces a change of condition even when the verdict stays the same", () => {
+    const announce = (id: ReviewReadinessItem["id"], label: string) => {
+      render(
+        <ReadinessRail
+          summary={makeSummary({
+            level: "blocked",
+            blockers: [item({ id, severity: "blocker", label })],
+          })}
+          onCta={vi.fn()}
+        />
+      );
+      const text = screen.getByTestId("review-readiness-level").textContent;
+      cleanup();
+      return text;
+    };
+    // Two blockers under one verdict: a region holding only "Blocked" would not
+    // change between them, so nothing would be announced.
+    expect(announce("conflicts", "3 conflicted files")).not.toBe(
+      announce("detached-head", "Detached HEAD")
+    );
+  });
+
+  it("keeps the action and the disclosure out of the live region", () => {
+    render(
+      <ReadinessRail
+        summary={makeSummary({
+          level: "blocked",
+          blockers: [
+            item({ id: "conflicts", severity: "blocker", action: { kind: "focus-conflicts" } }),
+          ],
+          infos: [item({ id: "pr-missing" })],
+        })}
+        onCta={vi.fn()}
+      />
+    );
+    const region = screen.getByTestId("review-readiness-level");
+    expect(region.querySelector("button")).toBeNull();
+  });
+
+  it("marks every severity glyph so forced colours can repaint it", () => {
+    render(
+      <ReadinessRail
+        summary={makeSummary({
+          level: "blocked",
+          blockers: [item({ id: "conflicts", severity: "blocker" })],
+          warnings: [item({ id: "nothing-staged", severity: "warning" })],
+          infos: [item({ id: "pr-missing" })],
+        })}
+        onCta={vi.fn()}
+      />
+    );
+    openDisclosure();
+    const glyphs = [
+      screen.getByTestId("review-readiness-level").querySelector("svg"),
+      ...["nothing-staged", "pr-missing"].map((id) =>
+        screen.getByTestId(`readiness-item-${id}`).querySelector("svg")
+      ),
+    ];
+    for (const glyph of glyphs) {
+      expect(glyph).not.toBeNull();
+      expect(glyph!.hasAttribute("data-severity-glyph")).toBe(true);
+    }
+  });
 });

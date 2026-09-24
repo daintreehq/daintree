@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { AlertTriangle, CheckCircle2, FileEdit, Info, XCircle } from "lucide-react";
 import { InlineStatusBanner, type InlineStatusBannerSeverity } from "../InlineStatusBanner";
 import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
@@ -286,6 +286,27 @@ describe("InlineStatusBanner", () => {
     expect(slot.compareDocumentPosition(dismiss) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("puts every control before the dismiss in DOM order, in every layout", () => {
+    for (const layout of ["stacked", "strip", "pane", "inline"] as const) {
+      render(
+        <InlineStatusBanner
+          title="Push failed"
+          description="The remote has new commits."
+          descriptionExtras={<button type="button">Server output</button>}
+          severity="error"
+          animated={false}
+          layout={layout}
+          action={{ id: "fix", label: "Pull and rebase", onClick: () => {} }}
+          trailingSlot={<button type="button">Force push…</button>}
+          onClose={() => {}}
+        />
+      );
+      const buttons = screen.getAllByRole("button");
+      expect(buttons.at(-1)?.getAttribute("aria-label"), layout).toBe("Dismiss");
+      cleanup();
+    }
+  });
+
   it("renders descriptionExtras as a sibling, never inside the description paragraph", () => {
     const { container } = render(
       <InlineStatusBanner
@@ -455,13 +476,11 @@ describe("InlineStatusBanner", () => {
           onClose={onClose}
         />
       );
-      const title = screen.getByText("25 panels open");
       const dismiss = screen.getByRole("button", { name: "Dismiss" });
-      // Dismiss lives inside the title's row (the justify-between wrapper),
-      // not in the controls row beneath the description.
-      const titleRow = title.parentElement;
-      expect(titleRow?.className).toContain("justify-between");
-      expect(titleRow?.contains(dismiss)).toBe(true);
+      // Dismiss sits in the title row's corner, not in a controls row beneath
+      // the description — and there is no controls row to hold it.
+      expect(dismiss.closest("[data-banner-controls]")).toBeNull();
+      expect(document.querySelector("[data-banner-controls]")).toBeNull();
     });
 
     it("fires onClose when the title-row dismiss is clicked", () => {
@@ -601,11 +620,13 @@ describe("InlineStatusBanner", () => {
           onClose={onClose}
         />
       );
-      const title = screen.getByText("25 panels open");
       const dismiss = screen.getByRole("button", { name: "Dismiss" });
-      const titleParent = title.closest('[class*="justify-between"]');
-      expect(titleParent).toBeTruthy();
-      expect(titleParent!.contains(dismiss)).toBe(true);
+      const extras = screen.getByRole("button", { name: "Close completed" });
+      expect(dismiss.closest("[data-banner-controls]")).toBeNull();
+      // The corner dismiss still comes after the banner's own content.
+      expect(
+        extras.compareDocumentPosition(dismiss) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
     });
 
     it("does not render an empty controls row when hasDescription, no actions, and onClose is present", () => {

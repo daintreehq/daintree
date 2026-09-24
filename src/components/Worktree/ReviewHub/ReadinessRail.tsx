@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AlertTriangle, ChevronDown, CircleAlert, Info } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { cn } from "@/lib/utils";
@@ -34,6 +35,8 @@ const SEVERITY: Record<ReviewReadinessSeverity, { Icon: typeof CircleAlert; tone
   info: { Icon: Info, toneClass: "text-text-secondary" },
 };
 
+const GLYPH_CLASS = "w-3.5 h-3.5 shrink-0";
+
 const CTA_LABELS: Record<ReviewReadinessCta["kind"], string> = {
   "focus-conflicts": "Show conflicts",
   "focus-staged": "Show files",
@@ -44,21 +47,9 @@ const CTA_LABELS: Record<ReviewReadinessCta["kind"], string> = {
 /* The action sits immediately after the message it belongs to rather than pinned to
    the far edge: "Show conflicts" only means anything next to "3 conflicted files",
    and a control stranded at the right margin of a wide strip is the one a screen
-   magnifier never reaches. */
-/* `focus-visible:outline-solid` is load-bearing, not decoration. Tailwind v4 compiles the
-   outline-suppressing utility below to `--tw-outline-style: none` on the element
-   unconditionally, and compiles `focus-visible:outline-2` to
-   `outline-style: var(--tw-outline-style)` — so the two cancel and the ring never paints
-   however right its colour and width look. Restating the style under the variant is what
-   makes the focus indicator visible; the capture harness asserts the computed outline. */
-const FOCUS_RING =
-  "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
-
-const CTA_CLASS = cn(
-  "inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded text-2xs font-medium transition-colors",
-  "bg-filter-selected-bg-soft hover:bg-tint/[0.14] text-text-primary",
-  FOCUS_RING
-);
+   magnifier never reaches. The shared Button at `xs` keeps the 24px target the
+   strip's own pill fell short of; the type stays at the strip's size. */
+const CTA_CLASS = "h-6 px-2 text-2xs";
 
 interface ReadinessRailProps {
   summary: ReviewReadinessSummary;
@@ -96,41 +87,47 @@ export function ReadinessRail({ summary, onCta }: ReadinessRailProps) {
       aria-label="Review readiness"
       className="flex items-center gap-2 px-4 py-1.5 border-b border-divider text-2xs"
     >
+      {/* The live region spans the verdict AND the condition: moving from one
+          blocker to another keeps the verdict word, so a region holding only
+          "Blocked" changed nothing a screen reader could announce. The CTA and
+          the disclosure stay outside it. */}
       <span
         data-testid="review-readiness-level"
         data-level={summary.level}
         role="status"
-        className="flex items-center shrink-0"
+        aria-atomic="true"
+        className="flex items-center gap-2 min-w-0"
       >
-        <Icon className={cn("w-3.5 h-3.5 shrink-0", toneClass)} aria-hidden="true" />
-        <span className="sr-only">{LEVEL_LABEL[summary.level]}</span>
-      </span>
+        <Icon data-severity-glyph="" className={cn(GLYPH_CLASS, toneClass)} aria-hidden="true" />
+        <span className="sr-only">{LEVEL_LABEL[summary.level]}: </span>
 
-      <TruncatedTooltip content={fullText}>
-        <span data-testid={`readiness-item-${primary.id}`} className="min-w-0 truncate">
-          {/* Weight and colour separate the condition from its advice — an em dash
+        <TruncatedTooltip content={fullText}>
+          <span data-testid={`readiness-item-${primary.id}`} className="min-w-0 truncate">
+            {/* Weight and colour separate the condition from its advice — an em dash
               turns the pair into one run of prose, which is how three items used to
               read as a single sentence. Weight also survives `prefers-contrast:
               more`, where the colour difference is flattened away. */}
-          <span className="font-medium text-text-primary">{primary.label}</span>
-          {primary.detail && (
-            // The literal space stays: adjacent inline spans concatenate in the
-            // accessibility tree, so dropping it would announce "changedCheck". The
-            // margin is what opens the optical gap.
-            <span className="ml-1 text-text-secondary"> {primary.detail}</span>
-          )}
-        </span>
-      </TruncatedTooltip>
+            <span className="font-medium text-text-primary">{primary.label}</span>
+            {primary.detail && (
+              // The literal space stays: adjacent inline spans concatenate in the
+              // accessibility tree, so dropping it would announce "changedCheck". The
+              // margin is what opens the optical gap.
+              <span className="ml-1 text-text-secondary"> {primary.detail}</span>
+            )}
+          </span>
+        </TruncatedTooltip>
+      </span>
 
       {primary.action && (
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="xs"
           data-testid={`readiness-cta-${primary.id}`}
           onClick={() => onCta(primary.action!)}
-          className={CTA_CLASS}
+          className={cn("shrink-0", CTA_CLASS)}
         >
           {CTA_LABELS[primary.action.kind]}
-        </button>
+        </Button>
       )}
 
       {rest.length > 0 && <ReadinessOverflow items={rest} onCta={onCta} />}
@@ -155,18 +152,17 @@ function ReadinessOverflow({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        type="button"
-        data-testid="review-readiness-overflow"
-        aria-label={`${items.length} more: ${items.map((i) => i.label).join(", ")}`}
-        className={cn(
-          "inline-flex items-center gap-0.5 shrink-0 px-1.5 py-0.5 rounded text-2xs transition-colors",
-          "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]",
-          FOCUS_RING
-        )}
-      >
-        {items.length} more
-        <ChevronDown className="w-3 h-3 shrink-0" aria-hidden="true" />
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="xs"
+          data-testid="review-readiness-overflow"
+          aria-label={`${items.length} more: ${items.map((i) => i.label).join(", ")}`}
+          className="shrink-0 h-6 px-1.5 gap-0.5 text-2xs font-normal"
+        >
+          {items.length} more
+          <ChevronDown aria-hidden="true" />
+        </Button>
       </PopoverTrigger>
       <PopoverContent
         align="end"
@@ -181,25 +177,30 @@ function ReadinessOverflow({
               <li
                 key={item.id}
                 data-testid={`readiness-item-${item.id}`}
-                className="flex items-start gap-2 px-2 py-1.5 rounded"
+                className="flex items-start gap-2 px-2 py-1.5"
               >
-                <Icon className={cn("w-3.5 h-3.5 shrink-0 mt-px", toneClass)} aria-hidden="true" />
+                <Icon
+                  data-severity-glyph=""
+                  className={cn(GLYPH_CLASS, "mt-px", toneClass)}
+                  aria-hidden="true"
+                />
                 <span className="min-w-0 flex-1">
                   <span className="font-medium text-text-primary">{item.label}</span>
                   {item.detail && <span className="block text-text-secondary">{item.detail}</span>}
                 </span>
                 {item.action && (
-                  <button
-                    type="button"
+                  <Button
+                    variant="subtle"
+                    size="xs"
                     data-testid={`readiness-cta-${item.id}`}
                     onClick={() => {
                       onCta(item.action!);
                       setOpen(false);
                     }}
-                    className={CTA_CLASS}
+                    className={cn("shrink-0", CTA_CLASS)}
                   >
                     {CTA_LABELS[item.action.kind]}
-                  </button>
+                  </Button>
                 )}
               </li>
             );
