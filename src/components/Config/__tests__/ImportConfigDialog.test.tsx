@@ -237,6 +237,59 @@ describe("ImportConfigDialog", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 
+  it("keeps the outcome unknown across a retry that rolls back cleanly", async () => {
+    applyImport.mockRejectedValueOnce(new Error("reply was never sent")).mockResolvedValueOnce({
+      outcome: "rolled-back",
+      sections: [],
+      errors: ["Couldn't import theme: disk full. No changes were kept."],
+      rolledBack: true,
+      restoreFailed: false,
+    } satisfies ConfigImportReport);
+    await open(REPLACING);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Import configuration" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    });
+
+    // The second rollback only undid the second attempt; the first may still be
+    // on disk, so the backup stays withdrawn and the banner says why.
+    expect(screen.queryByRole("button", { name: /Export a backup/ })).toBeNull();
+    expect(bodyText()).toMatch(/earlier attempt may already have changed/);
+  });
+
+  it("doesn't call an import where nothing landed 'imported'", async () => {
+    applyImport.mockResolvedValue({
+      outcome: "applied",
+      rolledBack: false,
+      errors: [],
+      sections: [
+        {
+          section: "keybindingOverrides",
+          present: true,
+          applied: 0,
+          unchanged: 0,
+          skipped: 1,
+          failed: 0,
+          errors: [],
+          leaves: [{ key: "terminal.new", status: "skipped", reason: "not a valid shortcut" }],
+        },
+      ],
+    } satisfies ConfigImportReport);
+    await open(REPLACING);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Import configuration" }));
+    });
+
+    const message = notifyMock.mock.calls.at(-1)?.[0].message ?? "";
+    expect(message).not.toMatch(/^Configuration imported/);
+    // The skip is still named by what the user saw in the preview.
+    expect(message).toContain("New terminal");
+  });
+
   it("reports a stale window, not a failed import, when only the refresh fails", async () => {
     applyImport.mockResolvedValue({
       outcome: "applied",

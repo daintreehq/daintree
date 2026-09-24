@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Check } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { notify } from "@/lib/notify";
+import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
@@ -100,8 +102,14 @@ function outcomeMessage(report: ConfigImportReport, preview: ConfigBundlePreview
   if (reasons.length === 0) {
     return `Configuration imported — ${countLabel(applied, "setting", "settings")} changed${tail}`;
   }
+  const skipped = countLabel(reasons.length, "setting", "settings");
   const more = reasons.length > 1 ? `, plus ${reasons.length - 1} more in the inbox` : "";
-  return `Configuration imported with ${countLabel(reasons.length, "setting", "settings")} skipped. ${reasons[0]}${more}${tail}`;
+  // Nothing landed: "imported" would claim an outcome that didn't happen.
+  const lead =
+    applied === 0
+      ? `No settings imported — ${skipped} skipped.`
+      : `Configuration imported with ${skipped} skipped.`;
+  return `${lead} ${reasons[0]}${more}${tail}`;
 }
 
 interface ApplyFailure {
@@ -197,6 +205,17 @@ export function ImportConfigDialog() {
   const [failureCount, setFailureCount] = useState(0);
   const backupRef = useRef<HTMLDivElement>(null);
   /**
+   * Sticky for the life of this preview: once one attempt left the outcome
+   * unknown, a later clean rollback only restores the state *that* attempt
+   * started from, which may already carry the earlier attempt's writes.
+   */
+  const [outcomeUnknown, setOutcomeUnknown] = useState(false);
+  const outcomeUnknownRef = useRef(false);
+  const markOutcomeUnknown = useCallback((unknown: boolean) => {
+    outcomeUnknownRef.current = unknown;
+    setOutcomeUnknown(unknown);
+  }, []);
+  /**
    * Synchronous single-flight gate. `isApplying` is state and settles a render
    * later, so two activations in the same tick would both pass a state check —
    * opening two native pickers, or applying the same bundle twice.
@@ -207,7 +226,8 @@ export function ImportConfigDialog() {
     setPreview(null);
     setApplyFailure(null);
     setExportNote(null);
-  }, []);
+    markOutcomeUnknown(false);
+  }, [markOutcomeUnknown]);
 
   const beginImport = useCallback(async () => {
     if (inFlight.current) return;
@@ -262,11 +282,12 @@ export function ImportConfigDialog() {
 
       setApplyFailure(null);
       setExportNote(null);
+      markOutcomeUnknown(false);
       setPreview(result);
     } finally {
       inFlight.current = false;
     }
-  }, []);
+  }, [markOutcomeUnknown]);
 
   useEffect(() => {
     const handler = () => {
@@ -337,6 +358,7 @@ export function ImportConfigDialog() {
       logError("[importConfig] Failed to apply configuration bundle", error);
       // A throw means the apply never reported back, so what was written is
       // unknown — say that rather than guess in either direction.
+      markOutcomeUnknown(true);
       setApplyFailure({
         uncertain: true,
         description:
@@ -356,9 +378,16 @@ export function ImportConfigDialog() {
       // Kept open rather than dismissed: the dialog is the only surface that
       // still holds what the user was importing, so closing it would take the
       // retry away along with the explanation.
+      const earlierUnknown = outcomeUnknownRef.current;
+      const uncertain = earlierUnknown || report.restoreFailed === true;
+      if (uncertain) markOutcomeUnknown(true);
+      const reason = report.errors[0] ?? "The bundle couldn't be applied. Nothing was changed.";
       setApplyFailure({
-        uncertain: report.restoreFailed === true,
-        description: report.errors[0] ?? "The bundle couldn't be applied. Nothing was changed.",
+        uncertain,
+        description:
+          earlierUnknown && !report.restoreFailed
+            ? `${reason} An earlier attempt may already have changed some of these, so check them in Settings.`
+            : reason,
       });
       setFailureCount((n) => n + 1);
       return;
@@ -400,7 +429,7 @@ export function ImportConfigDialog() {
         : {}),
       supersedeKey: IMPORT_CONFIG_ACTION_ID,
     });
-  }, [preview, close]);
+  }, [preview, close, markOutcomeUnknown]);
 
   if (!preview) return null;
 
@@ -444,17 +473,22 @@ export function ImportConfigDialog() {
           the confirm, and a busy preview scrolls past anything below it. */}
       {/* Once what was written is unknown, exporting would capture the damage
           rather than a way back — keep a backup already taken, offer no new one. */}
-      {replacesAny && (!applyFailure?.uncertain || (exportNote && !exportNote.failed)) && (
+      {replacesAny && (!outcomeUnknown || (exportNote && !exportNote.failed)) && (
         <div
           ref={backupRef}
           className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2"
         >
           <p
-            className={
-              exportNote?.failed ? "text-xs text-status-error" : "text-xs text-text-secondary"
-            }
+            className={cn(
+              "flex items-center gap-1.5 text-xs",
+              exportNote?.failed ? "text-status-error" : "text-text-secondary"
+            )}
             role="status"
           >
+            {/* Neutral, not success-green: a finished side step, not the outcome. */}
+            {exportNote && !exportNote.failed && (
+              <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            )}
             {exportNote?.text ?? "Save the current values before importing"}
           </p>
           {(!exportNote || exportNote.failed) && (
