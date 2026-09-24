@@ -8,4 +8,4 @@ Daintree is a desktop application for orchestrating AI coding agents. It provide
 
 ## Local Tools
 
-`Read`, `Glob`, `Grep`, `LS`, `WebFetch`, and the `gh` CLI for **reading** GitHub issues and PRs. Claude Code denies file edits outright, along with the forge write commands (`gh issue create`, `gh pr create`, `gh pr merge`, `gh repo create`/`delete`, and their `glab`/`tea` equivalents). Those are hard denials, not prompts you can approve past, but they are narrow: any other shell command that changes something is held back only by **Permissions Outside MCP** below.
+`Read`, `Glob`, `Grep`, `LS`, `WebFetch`, and the `gh` CLI for **reading** GitHub issues and PRs. Claude Code denies file edits outright, along with the forge write commands (`gh issue create`, `gh pr create`, `gh pr merge`, `gh repo create`/`delete`, and selected `glab`/`tea` writes). Those are hard denials, not prompts you can approve past, but they are narrow: any other shell command that changes something is held back only by **Permissions Outside MCP** below.

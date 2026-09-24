@@ -175,6 +175,32 @@ describe("help prompt outputs", () => {
       expect(section(body, "## Finding the Right Tool")).toMatch(/tool name is the action ID/);
     });
 
+    // The tier binds only the MCP server. Claude's deny list is narrow and
+    // Codex has none, so the no-shell-workaround rule has to be stated to both
+    // rather than left to whichever enforcement happens to exist.
+    it.each(ALL_GENERATED)("%s keeps local tools from standing in for the tier", (_name, body) => {
+      const perms = section(body, "## Permissions Outside MCP");
+      expect(perms).toMatch(/deny list/);
+      expect(perms).toMatch(/Codex has none/);
+      expect(perms).toMatch(/Never use the shell/);
+      const tier = section(body, "## Tier Model");
+      expect(tier).toMatch(/Don't retry and don't look for a way around it/);
+      expect(tier).toMatch(/new help session/);
+      expect(tier).toMatch(/`unavailable`/);
+    });
+
+    // The renderer's launcher refuses a launch while another of the same agent
+    // id is still starting; CLAUDE.md once told Claude to fire them in parallel.
+    it.each(ALL_GENERATED)("%s serialises launches of the same agent id", (_name, body) => {
+      expect(body).toMatch(/same `agentId` one at a time/);
+      expect(body).not.toMatch(/parallel batches of up to 4/);
+    });
+
+    it.each(ALL_GENERATED)("%s checks an owned transcript read for completeness", (_name, body) => {
+      expect(body).toMatch(/`message\.truncated`/);
+      expect(body).toMatch(/Confirm with the user before closing several terminals/);
+    });
+
     it.each(ALL_GENERATED)("%s lists the canonical topics", (_name, body) => {
       expect(body).toContain("## Topics You Can Help With");
       expect(body).toContain("Getting started and first-run setup");

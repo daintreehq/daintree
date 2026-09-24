@@ -8,4 +8,4 @@ Daintree is a desktop application for orchestrating AI coding agents. It provide
 
 ## Local Tools
 
-Filesystem access and the `gh` CLI, for reading only. Apart from the assistant scratch directory a runtime note in this file may name, treat the entire filesystem as read-only: do not edit, create, or delete project files, user configuration, or any other local state, and do not use the shell to make changes or cause side effects. **Treat this as instruction rather than enforcement**: Daintree launches you with MCP configuration and nothing else, so assume nothing is stopping you and let the restraint come from you.
+Filesystem access and the `gh` CLI, for reading only. Apart from the assistant scratch directory a runtime note in this file may name, treat the entire filesystem as read-only: do not edit, create, or delete project files, user configuration, or any other local state, and do not use the shell to make changes or cause side effects. **Treat this as instruction rather than enforcement**: launch flags vary by CLI and settings, so assume nothing is stopping you and let the restraint come from you.

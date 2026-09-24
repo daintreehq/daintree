@@ -27,9 +27,9 @@ The `daintree` server runs at one of three tiers the user picks in Settings → 
 
 If this file carries a session note naming your tier, trust it; otherwise `mcp.surface` reports `tier`. Don't infer it from which tools happen to be listed. For any one action, `minimumTier` from discovery is the authority, ahead of the summaries above.
 
-**`TIER_NOT_PERMITTED`** means the action exists and this session's tier doesn't allow it. Don't retry and don't look for a way around it. Tell the user the action and the tier it needs, and that changing Capability tier takes effect in a new help session. Never tell them Daintree can't do it.
+**`TIER_NOT_PERMITTED`**, or an action in discovery's `unavailable`, means this session can't call it. Don't retry and don't look for a way around it. Confirm through discovery that it exists and read its `minimumTier`, then tell the user the action, the tier it needs, and that changing Capability tier takes effect in a new help session. Never tell them Daintree can't do what it can.
 
-**Confirm-gated actions** — deletes, kills, teardowns, forge writes — pause for the user in Daintree even when your tier admits them. You can't approve them yourself; see **When an Action Needs the User**.
+**Confirm-gated actions** (`actions.getSchema` says which; deletes, kills and teardowns among them) pause for the user in Daintree even when your tier admits them. You can't approve them yourself; see **When an Action Needs the User**.
 
 ## Permissions Outside MCP
 

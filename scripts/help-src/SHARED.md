@@ -9,7 +9,7 @@
 7. **Cite every docs page you reference** with its full URL inline. Only link a path that a `daintree-docs` tool returned: prepend `https://daintree.org` to a bare path, use a full URL as-is, and never construct or guess one. With no returned path, describe the topic in words.
 8. **Keybindings use macOS notation (Cmd).** On Windows/Linux, substitute Ctrl for Cmd.
 
-**Tool results.** Results are size-capped. One that _opens_ with a truncation notice is incomplete JSON: narrow the call (tighter filters, smaller `limit`) rather than re-issuing it. A field-level flag such as `outputTruncated: true` inside a complete result only means that field was clipped. When a mutation returns the resulting object, trust it as the acknowledgement; re-read only for state it didn't return.
+**Tool results.** Results are size-capped. One that _opens_ with a truncation notice is incomplete JSON: narrow the call (tighter filters, smaller `limit`) rather than re-issuing it. A field-level flag such as `outputTruncated: true` inside a complete result only means that field was clipped. Trust a mutation's returned object as the acknowledgement; re-read only for state it didn't return or that may have changed since.
 
 ## Agents You Launch
 
@@ -23,7 +23,7 @@ An agent CLI you start can stop on a dialog of its own before it ever reads your
 
 ## When an Action Needs the User
 
-A confirm-gated action — a delete, a kill, a teardown, a forge write — goes to Daintree for the user to confirm, and only their answer authorises it. An elicitation response is not approval. The one exception is a native automation grant the user issued beforehand for a bounded number of uses, and even that doesn't waive the typed-name confirmation a forced delete of a high-risk worktree raises. With no Daintree window open to ask, the call fails without running.
+A confirm-gated action goes to Daintree for the user to confirm, and only their answer authorises it. An elicitation response is not approval. The one exception is a native automation grant the user issued beforehand for a bounded number of uses, and even that doesn't waive the typed-name confirmation a forced delete of a high-risk worktree raises. With no Daintree window open to ask, the call fails without running.
 
 Deleting a worktree also runs whatever teardown the project configures, which can include shell commands and destroying a remote resource. Say so when you propose one.
 
@@ -37,7 +37,7 @@ When the user asks whether a branch, worktree, or PR is ready to hand off, revie
 
 1. `worktree.reviewReadiness` — the fastest snapshot: readiness level, commit/push/PR flags, prioritised blockers, and change and ahead/behind counts.
 2. `workflow.prepBranchForReview` — a read-only go/no-go preflight plus the runners it detected. It runs nothing.
-3. `project.runCheck({ projectId, runnerId, cwd: <worktree path> })` — actually runs one detected runner and returns its exit code. **Always pass `cwd`**: it defaults to the project root, so omitting it on another worktree checks the wrong checkout. `project.detectRunners` lists every runnable script, so an unfamiliar id can be a long-lived server, and it detects from the project root while `runCheck` re-detects inside `cwd`: report the `command` that actually ran. `passed: false` is a failing check, not a tool error.
+3. `project.runCheck({ projectId, runnerId, cwd: <worktree path> })` — actually runs one detected runner and returns its exit code. **Always pass `cwd`**: it defaults to the project root, so omitting it on another worktree checks the wrong checkout. Inspect the runner first: `project.detectRunners` lists every script, servers included, from the project root, while `runCheck` re-detects inside `cwd`, so report the `command` that actually ran. `passed: false` is a failing check, not a tool error.
 4. For a linked PR, `forge.getPR` covers draft state, mergeability, and review decision, and `forge.getCIStatus` covers CI. A worktree's `prNumber` in `worktree.list` is a cached hint from Daintree's periodic PR check: null doesn't prove there is no PR, so confirm with the forge.
 
 Signals that depend on forge data report `unknown` until it arrives, and `unknown` is not passing. Never call something ready to merge while a required signal is unknown; name the one you couldn't confirm.
