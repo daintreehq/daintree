@@ -236,6 +236,29 @@ async function snapBar(page: Page, slug: string, below = 120): Promise<void> {
   });
 }
 
+/**
+ * Playwright's screenshot path re-applies its own emulation and drops the
+ * hover media override, so hover shots are taken on the CDP session that set
+ * it. Same clip as `snapBar`.
+ */
+async function snapBarViaCdp(page: Page, slug: string, below = 120): Promise<void> {
+  await settle(page);
+  const box = await page.locator(BAR).boundingBox();
+  if (!box || box.height < 24) throw new Error(`${slug}: grid bar not open`);
+  mediaSession ??= await page.context().newCDPSession(page);
+  const { data } = await mediaSession.send("Page.captureScreenshot", {
+    format: "png",
+    clip: {
+      x: Math.max(0, box.x - 12),
+      y: Math.max(0, box.y - 12),
+      width: box.width + 24,
+      height: box.height + 12 + below,
+      scale: 1,
+    },
+  });
+  writeFileSync(path.join(OUTPUT_DIR, `${slug}.png`), Buffer.from(data, "base64"));
+}
+
 async function snapWindow(page: Page, slug: string): Promise<void> {
   await settle(page);
   await page.screenshot({
@@ -412,7 +435,7 @@ test("grid notification bar review — severities, actions, wrapping, themes", a
         ["Dismiss", "24-hover-dismiss"],
       ] as const) {
         await hoverAndVerify(page, name);
-        await snapBar(page, slug, 40);
+        await snapBarViaCdp(page, slug, 40);
       }
     });
 
@@ -429,6 +452,13 @@ test("grid notification bar review — severities, actions, wrapping, themes", a
       await snapBar(page, "40-narrow-forge-two-actions");
       await show(page, WAITING);
       await snapBar(page, "41-narrow-waiting-two-actions");
+      await setWindowSize(ctx!, 860, 760);
+      await settle(page, 800);
+      await show(page, FORGE);
+      await measure(page, "42-narrower-forge");
+      await snapBar(page, "42-narrower-forge-two-actions");
+      await show(page, STALLED);
+      await snapBar(page, "43-narrower-no-actions");
       await setWindowSize(ctx!, 1680, 1050);
       await settle(page, 800);
     });

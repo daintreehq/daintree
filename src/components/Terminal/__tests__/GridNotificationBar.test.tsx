@@ -873,6 +873,47 @@ describe("GridNotificationBar presentation invariants", () => {
     expect(getLiveRegion(container)?.textContent).toContain("Swap is 95% full");
   });
 
+  it("announces a revision that lands during the announcement gap, not the queued copy", () => {
+    const id = addGridBar({ message: "Old copy" });
+    const { container } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(30);
+    });
+    act(() => {
+      useNotificationStore.getState().updateNotification(id, { message: "Revised copy" });
+    });
+    act(() => {
+      vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY);
+    });
+    expect(getLiveRegion(container)?.textContent).toContain("Revised copy");
+    expect(getLiveRegion(container)?.textContent).not.toContain("Old copy");
+  });
+
+  it("keeps focus off <body> when a same-id revision replaces the focused action", () => {
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    const id = addGridBar({
+      message: "Couldn't reach the server",
+      actions: [{ label: "Retry", onClick: vi.fn() }],
+    });
+    const { getByRole } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    outside.focus();
+    act(() => {
+      getByRole("button", { name: "Retry" }).focus();
+    });
+
+    act(() => {
+      useNotificationStore
+        .getState()
+        .updateNotification(id, { actions: [{ label: "Install", onClick: vi.fn() }] });
+    });
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(outside);
+  });
+
   it("keeps severity off the text: only the glyph carries a status colour", () => {
     for (const type of ["info", "warning", "error", "success"] as const) {
       useNotificationStore.getState().reset();
@@ -902,6 +943,21 @@ describe("GridNotificationBar presentation invariants", () => {
     expect(getByRole("button", { name: "Enable" }).className).not.toBe(
       getByRole("button", { name: "Not now" }).className
     );
+  });
+
+  it("only lets the controls drop beneath the text when there are actions to drop", () => {
+    const dismissRow = () =>
+      document.querySelector('[aria-label="Dismiss"]')?.parentElement?.className ?? "";
+
+    addGridBar({ message: "Nothing to do" });
+    const first = render(<GridNotificationBar />);
+    expect(dismissRow()).not.toContain("basis-full");
+    first.unmount();
+
+    useNotificationStore.getState().reset();
+    addGridBar({ message: "Pick one", actions: [{ label: "Enable", onClick: vi.fn() }] });
+    render(<GridNotificationBar />);
+    expect(dismissRow()).toContain("basis-full");
   });
 
   it("hands focus back to where the user was when they dismiss from the keyboard", () => {

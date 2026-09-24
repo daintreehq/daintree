@@ -97,6 +97,9 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
   const exitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const entryFrameRef = useRef<number | null>(null);
   const swapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The newest store copy of the notification, so an announcement that lands
+  // after a same-id revision speaks the revision, not what was queued.
+  const latestRef = useRef<Notification | undefined>(notification);
 
   const cardRef = useRef<HTMLDivElement>(null);
   // Whether keyboard focus is on one of the strip's controls, and where it came
@@ -169,7 +172,8 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
     if (swapTimeoutRef.current !== null) clearTimeout(swapTimeoutRef.current);
     swapTimeoutRef.current = setTimeout(() => {
       swapTimeoutRef.current = null;
-      setAnnounced(notification);
+      const latest = latestRef.current;
+      setAnnounced(latest?.id === notification.id ? latest : notification);
     }, LIVE_REGION_SWAP_DELAY);
 
     if (entryFrameRef.current !== null) {
@@ -193,19 +197,22 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
   // The store can revise a notification in place — new message, new actions,
   // same id. Pick that up without replaying the entry or the swap gap.
   useEffect(() => {
+    latestRef.current = notification;
     if (!notification) return;
     setPresented((p) => (p && p.id === notification.id ? notification : p));
     setAnnounced((a) => (a && a.id === notification.id ? notification : a));
   }, [notification]);
 
-  // A replacement can unmount the focused action (its label keys it). If that
-  // left focus on <body>, hand it back rather than stranding the user.
+  // A replacement or a same-id revision can unmount the focused action (its
+  // label keys it). If that left focus on <body>, hand it back rather than
+  // stranding the user. Runs after every render: the controls can change
+  // without the id doing so.
   useEffect(() => {
     if (!focusWithinRef.current) return;
     const active = document.activeElement;
     if (active && active !== document.body && active.isConnected) return;
     releaseFocus();
-  }, [presented?.id]);
+  });
 
   // Refresh the dwell lock whenever the presented notification changes.
   // Uses a layout effect so the lock is set before paint — a contender
@@ -293,7 +300,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
           // controls trail the text, and drop beneath it — aligned past the
           // glyph, dismiss holding the right edge — once the grid is too
           // narrow for a sentence and two actions to share a row.
-          "@container/banner relative flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-[var(--radius-sm)] border px-3 py-2 shadow-[var(--theme-shadow-ambient)]",
+          "@container/banner relative flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-[var(--radius-sm)] border px-3 py-2",
           config?.containerClass,
           className
         )}
@@ -335,7 +342,17 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
          *  recommended action is the outlined one, the alternative is ghost,
          *  and severity stays in the wash rather than on the buttons. */}
         {presented && (
-          <div className="flex shrink-0 items-center gap-1 @max-[52rem]/banner:basis-full @max-[52rem]/banner:flex-wrap @max-[52rem]/banner:gap-y-1 @max-[52rem]/banner:pl-6">
+          <div
+            className={cn(
+              "flex shrink-0 items-center gap-1",
+              // Only a row with actions drops; a lone dismiss always trails the
+              // text. 40rem, not the sibling strips' 52rem: this bar carries two
+              // labelled actions beside a two-line sentence comfortably at the
+              // width a laptop grid leaves once the sidebar is open.
+              actions.length > 0 &&
+                "@max-[40rem]/banner:basis-full @max-[40rem]/banner:flex-wrap @max-[40rem]/banner:gap-y-1 @max-[40rem]/banner:pl-6"
+            )}
+          >
             {actions.map((action, index) => (
               <Button
                 key={`${action.label}-${index}`}
@@ -355,7 +372,10 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
               size="icon-sm"
               onClick={() => removeNotification(presented.id)}
               aria-label="Dismiss"
-              className={cn("@max-[52rem]/banner:ml-auto", buttonPointerClass)}
+              className={cn(
+                actions.length > 0 && "@max-[40rem]/banner:ml-auto",
+                buttonPointerClass
+              )}
               {...interactionGuard}
             >
               <X aria-hidden="true" />
