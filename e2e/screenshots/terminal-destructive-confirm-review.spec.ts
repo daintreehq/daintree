@@ -375,13 +375,13 @@ test("terminal destructive confirm review — every copy variant", async () => {
     await step(page, "kill", async () => {
       await running();
       await dispatch(page, "terminal.kill", { terminalId: agentA });
-      await snapDialog(page, "01-kill", /^Kill terminal with running agent\?$/, { window: true });
+      await snapDialog(page, "01-kill", /^Kill '.+'\?$/, { window: true });
     });
 
     await step(page, "restart", async () => {
       await running();
       await dispatch(page, "terminal.restart", { terminalId: agentA });
-      await snapDialog(page, "02-restart", /^Restart terminal with running agent\?$/);
+      await snapDialog(page, "02-restart", /^Restart '.+'\?$/);
     });
 
     await step(page, "kill-all", async () => {
@@ -399,26 +399,22 @@ test("terminal destructive confirm review — every copy variant", async () => {
     await step(page, "worktree-restart-all", async () => {
       await running();
       await dispatch(page, "worktree.sessions.restartAll");
-      await snapDialog(
-        page,
-        "05-worktree-restart-all",
-        /^Restart \d+ sessions in this worktree\?$/
-      );
+      await snapDialog(page, "05-worktree-restart-all", /^Restart \d+ sessions in '.+'\?$/);
     });
 
     await step(page, "worktree-trash-all", async () => {
       await dispatch(page, "worktree.sessions.trashAll");
-      await snapDialog(page, "06-worktree-trash-all", /^Trash \d+ sessions in this worktree\?$/);
+      await snapDialog(page, "06-worktree-trash-all", /^Trash \d+ sessions in '.+'\?$/);
     });
 
     await step(page, "worktree-end-all", async () => {
       await dispatch(page, "worktree.sessions.endAll");
-      await snapDialog(page, "07-worktree-end-all", /^End \d+ sessions in this worktree\?$/);
+      await snapDialog(page, "07-worktree-end-all", /^End \d+ sessions in '.+'\?$/);
     });
 
     await step(page, "clear-history", async () => {
       await dispatch(page, "worktree.sessions.clearHistory");
-      await snapDialog(page, "08-clear-history", /^Clear session history for this worktree\?$/);
+      await snapDialog(page, "08-clear-history", /^Clear session history for '.+'\?$/);
     });
 
     // Keyboard focus, delivered by the keyboard so Chromium paints :focus-visible. The
@@ -429,7 +425,7 @@ test("terminal destructive confirm review — every copy variant", async () => {
       await page.locator(DIALOG).last().waitFor({ state: "visible", timeout: 8000 });
       await settle(page, 300);
       await page.keyboard.press("Tab");
-      await snapDialog(page, "09-focus-destructive", /^Kill terminal with running agent\?$/);
+      await snapDialog(page, "09-focus-destructive", /^Kill '.+'\?$/);
     });
 
     // Deleted worktrees. One first, for the single-row dismiss, then the second, which
@@ -446,7 +442,7 @@ test("terminal destructive confirm review — every copy variant", async () => {
       const card = page.locator(`[aria-label^="Deleted worktree:"]`).first();
       await card.waitFor({ state: "visible", timeout: 30_000 });
       await card.locator('button[aria-label^="Close "]').first().click();
-      await snapDialog(page, "10-deleted-single", /^Close \d+ terminals?\?$/);
+      await snapDialog(page, "10-deleted-single", /^Close \d+ terminals? from '.+'\?$/);
     });
 
     await step(page, "deleted-group", async () => {

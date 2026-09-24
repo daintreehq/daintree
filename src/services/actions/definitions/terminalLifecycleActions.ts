@@ -17,6 +17,7 @@ import {
   type TerminalPendingDestructiveActionSnapshot,
 } from "@/store/terminalPendingDestructiveActionStore";
 import {
+  buildDestructivePreview,
   collectRunningAgentTerminals,
   terminalHasRunningAgentSession,
 } from "@/utils/destructiveSessionConfirm";
@@ -412,7 +413,13 @@ export function registerTerminalLifecycleActions(
       // paused states where stopping is non-disruptive.
       if (!isConfirmed(args, ctx) && terminalHasRunningAgentSession(terminal)) {
         stageConfirmation(
-          { kind: "kill", targetCount: 1, runningAgentCount: 1, terminalId: targetId },
+          {
+            kind: "kill",
+            targetCount: 1,
+            runningAgentCount: 1,
+            terminalId: targetId,
+            terminalTitle: terminal?.title,
+          },
           "Killing this terminal"
         );
       }
@@ -550,7 +557,13 @@ export function registerTerminalLifecycleActions(
       const terminal = state.panelsById[targetId];
       if (!isConfirmed(args, ctx) && terminalHasRunningAgentSession(terminal)) {
         stageConfirmation(
-          { kind: "restart", targetCount: 1, runningAgentCount: 1, terminalId: targetId },
+          {
+            kind: "restart",
+            targetCount: 1,
+            runningAgentCount: 1,
+            terminalId: targetId,
+            terminalTitle: terminal?.title,
+          },
           "Restarting this terminal"
         );
       }
@@ -878,6 +891,7 @@ export function registerTerminalLifecycleActions(
             kind: "killAll",
             targetCount: targets.length,
             runningAgentCount: runningAgents.length,
+            preview: buildDestructivePreview(targets),
           },
           "Killing every terminal"
         );
@@ -919,6 +933,7 @@ export function registerTerminalLifecycleActions(
             kind: "restartAll",
             targetCount: targets.length,
             runningAgentCount: runningAgents.length,
+            preview: buildDestructivePreview(targets),
           },
           "Restarting every terminal"
         );

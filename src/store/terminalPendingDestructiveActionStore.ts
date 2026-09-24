@@ -41,18 +41,19 @@ export type TerminalPendingDestructiveActionKind =
   // terminals it is about to trash rather than just count them.
   | "deletedWorktreeGroupDismiss";
 
-/** One terminal the group-dismiss confirm is about to trash. */
-export interface DeletedWorktreeGroupPreviewTerminal {
+/** One terminal a confirm is about to act on, as the preview list shows it. */
+export interface DestructivePreviewTerminal {
   terminalId: string;
   terminalTitle: string;
+  /** Observed agent state is `working` — the same gate that raised the confirm. */
   hasRunningAgent: boolean;
 }
 
-/** One deleted worktree in the group-dismiss confirm, with its terminals. */
-export interface DeletedWorktreeGroupPreviewWorktree {
+/** The terminals a confirm acts on in one worktree. */
+export interface DestructivePreviewGroup {
   worktreeId: string;
   worktreeTitle: string;
-  terminals: DeletedWorktreeGroupPreviewTerminal[];
+  terminals: DestructivePreviewTerminal[];
 }
 
 export interface TerminalPendingDestructiveActionSnapshot {
@@ -63,15 +64,23 @@ export interface TerminalPendingDestructiveActionSnapshot {
   runningAgentCount: number;
   /** Worktree id for worktree-scoped actions. */
   worktreeId?: string;
+  /**
+   * Display name of the worktree a worktree-scoped action targets, captured
+   * when the confirm is requested so the title can name it. A deleted
+   * worktree is no longer in the live map, so its row supplies this itself.
+   */
+  worktreeTitle?: string;
   /** Terminal id for single-terminal actions (kill/restart). */
   terminalId?: string;
+  /** Display title of the terminal a single-terminal action targets. */
+  terminalTitle?: string;
   /**
-   * The actual terminals a `deletedWorktreeGroupDismiss` will trash, grouped by
-   * their deleted worktree. Required for that kind — D2 (#7880) wants the
-   * dialog to preview real content, and a bulk clear spanning several worktrees
-   * is the one case where a count tells the user nothing about what they lose.
+   * The actual terminals the action will touch, grouped by worktree, with the
+   * working ones flagged. Required for `deletedWorktreeGroupDismiss` — D2
+   * (#7880) wants the dialog to preview real content — and carried by every
+   * bulk kind so a count never stands in for which terminals hold live work.
    */
-  preview?: DeletedWorktreeGroupPreviewWorktree[];
+  preview?: DestructivePreviewGroup[];
 }
 
 interface TerminalPendingDestructiveActionState {

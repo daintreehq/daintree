@@ -6,7 +6,11 @@ import { nextFrame } from "@/services/terminal/revealUntilStable";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
-import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
+import {
+  buildDestructivePreview,
+  collectRunningAgentTerminals,
+  resolveWorktreeDisplayName,
+} from "@/utils/destructiveSessionConfirm";
 import { isForegroundDispatch } from "./dispatchSource";
 
 // Shared by argsSchema + run() so the worktree id is extracted via a validated
@@ -110,6 +114,8 @@ export function registerWorktreeSessionActions(
           targetCount: targets.length,
           runningAgentCount: runningAgents.length,
           worktreeId: targetWorktreeId,
+          worktreeTitle: resolveWorktreeDisplayName(targetWorktreeId),
+          preview: buildDestructivePreview(targets),
         });
         return;
       }
@@ -230,6 +236,8 @@ export function registerWorktreeSessionActions(
           targetCount: targets.length,
           runningAgentCount: collectRunningAgentTerminals(targets).length,
           worktreeId: targetWorktreeId,
+          worktreeTitle: resolveWorktreeDisplayName(targetWorktreeId),
+          preview: buildDestructivePreview(targets),
         });
         return;
       }
@@ -290,6 +298,8 @@ export function registerWorktreeSessionActions(
           targetCount: targets.length,
           runningAgentCount: collectRunningAgentTerminals(targets).length,
           worktreeId: targetWorktreeId,
+          worktreeTitle: resolveWorktreeDisplayName(targetWorktreeId),
+          preview: buildDestructivePreview(targets),
         });
         return;
       }
@@ -338,6 +348,7 @@ export function registerWorktreeSessionActions(
           targetCount: 0,
           runningAgentCount: 0,
           worktreeId: targetWorktreeId,
+          worktreeTitle: resolveWorktreeDisplayName(targetWorktreeId),
         });
         return;
       }

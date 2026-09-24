@@ -268,7 +268,7 @@ test.describe.serial("Full: terminal agent-state and status surfaces", () => {
       await clickTerminalContextMenuItem(panel, "Restart Terminal");
       const dialog = window.getByRole("alertdialog");
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
-      await expect(dialog).toContainText("Restart terminal with running agent?");
+      await expect(dialog).toContainText("Its agent is working and will be interrupted.");
       // Cancel — leave the agent session intact.
       await window.locator('[data-confirm-role="cancel"]').click();
       await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
@@ -279,7 +279,7 @@ test.describe.serial("Full: terminal agent-state and status surfaces", () => {
       await clickTerminalContextMenuItem(panel, "Kill Terminal");
       const dialog = window.getByRole("alertdialog");
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
-      await expect(dialog).toContainText("Kill terminal with running agent?");
+      await expect(dialog).toContainText("Its agent is working and will be stopped.");
       await window.locator('[data-confirm-role="cancel"]').click();
       await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
     });
