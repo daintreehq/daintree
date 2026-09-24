@@ -9,7 +9,8 @@
  * (#11505) — the Escape path already guards that, and this is the pointer path.
  *
  * Separate from `ESCAPE_BACKSTOP_DIALOG_ATTR`: that one tracks whether a dialog
- * will *take* an Escape keypress, so it is absent on a non-dismissible dialog.
- * This one only asks "is this an app dialog", which is true either way.
+ * owns the Escape keypress (it closes, or while locked swallows it), and is
+ * absent once the dialog is closing. This one only asks "is this an app
+ * dialog".
  */
 export const APP_DIALOG_SURFACE_ATTR = "data-app-dialog-surface";

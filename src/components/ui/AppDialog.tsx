@@ -448,9 +448,11 @@ export function AppDialog({
         aria-describedby={descriptionId}
         // Marks the surface as one a Radix layer underneath can hand Escape to
         // — see `ESCAPE_BACKSTOP_DIALOG_ATTR`. Tracks the backstop registration
-        // (`isOpen && dismissible`), not merely being mounted: a dialog mid-exit
-        // has already unregistered and could not take the keypress.
-        {...(isOpen && dismissible ? { [ESCAPE_BACKSTOP_DIALOG_ATTR]: "" } : {})}
+        // (`isOpen`), not merely being mounted: a dialog mid-exit has already
+        // unregistered and could not take the keypress. A locked dialog keeps
+        // it — its backstop swallows the keypress, and without the marker the
+        // dock popover underneath would take Escape and dismiss itself.
+        {...(isOpen ? { [ESCAPE_BACKSTOP_DIALOG_ATTR]: "" } : {})}
         // Unconditional, unlike the Escape backstop above: `handleDockInteractOutside`
         // needs to recognise this surface whether or not the dialog is dismissible.
         {...{ [APP_DIALOG_SURFACE_ATTR]: "" }}

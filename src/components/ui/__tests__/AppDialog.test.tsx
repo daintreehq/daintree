@@ -1356,6 +1356,29 @@ describe("AppDialog Escape yielded by the layer underneath", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  // A locked dialog (a confirm mid-run) is still the surface that owns Escape:
+  // the dock must step aside for it, or Radix dismisses the dock underneath.
+  it("keeps the dock popover open under a locked dialog, and the dialog too", () => {
+    const onClose = vi.fn();
+    render(
+      <AppDialog isOpen onClose={onClose} dismissible={false}>
+        <button>Confirm</button>
+      </AppDialog>
+    );
+    openRadixLayerBehind();
+    screen.getByText("Confirm").focus();
+    armDockGuard(document.createElement("div"));
+
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    act(() => {
+      (document.activeElement ?? document.body).dispatchEvent(event);
+    });
+
+    // The dock's Radix layer honours preventDefault on its escape handler.
+    expect(event.defaultPrevented).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("leaves the dock popover to handle Escape while focus is still in the terminal", () => {
     const onClose = vi.fn();
     const dockPortal = document.createElement("div");
