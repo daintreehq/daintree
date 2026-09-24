@@ -56,7 +56,7 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
 /**
  * Mirrors `FIXTURES` in the preview. Every banner waits out the 400ms Doherty
  * gate and a 250ms entrance; `still-working` also waits out the five-second
- * long-wait note.
+ * long-wait note, as do the two `still-*` states past the commit point and mid-cancel.
  */
 const FIXTURES = [
   { name: "starting", settleMs: 900 },
@@ -66,6 +66,8 @@ const FIXTURES = [
   { name: "validating", settleMs: 900 },
   { name: "activating", settleMs: 900 },
   { name: "still-working", settleMs: 5_600 },
+  { name: "still-finishing", settleMs: 5_600 },
+  { name: "still-cancelling", settleMs: 5_600 },
   { name: "cancelling", settleMs: 900 },
   { name: "with-restart", settleMs: 900 },
 ] as const;

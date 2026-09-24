@@ -65,6 +65,11 @@ const FIXTURES: Record<string, InstallFixture> = {
   validating: { progress: event({ phase: "validating" }) },
   activating: { progress: event({ phase: "activating", cancellable: false }) },
   "still-working": { progress: event({ phase: "downloading" }) },
+  "still-finishing": { progress: event({ phase: "activating", cancellable: false }) },
+  "still-cancelling": {
+    progress: event({ phase: "extracting", entry: "assets/icon.png" }),
+    cancelRequested: true,
+  },
   cancelling: {
     progress: event({ phase: "extracting", entry: "assets/icon.png" }),
     cancelRequested: true,
