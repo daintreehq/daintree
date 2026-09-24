@@ -2993,6 +2993,13 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     color: inherit;
   }
 
+  /* Resource readouts' warning marks and the pane badge's CPU line, for the
+     same reason: their hue is an amber or red the forced canvas cannot hold,
+     and the mark's shape and the line's height already say what the hue did. */
+  [data-resource-glyph] {
+    color: inherit;
+  }
+
   /* The one mark whose emptiness IS the state.
      The sidebar footer's readout says working with a filled dot and idle with a
      hollow ring, so the shape carries the distinction where colour cannot — and

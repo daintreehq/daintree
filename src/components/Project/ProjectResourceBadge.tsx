@@ -160,7 +160,11 @@ function MemorySummary({
       />
       {workloadNote !== null && (
         <div className="flex items-center gap-1 text-2xs text-text-secondary">
-          <TriangleAlert className="h-3 w-3 shrink-0 text-status-warning" aria-hidden="true" />
+          <TriangleAlert
+            className="h-3 w-3 shrink-0 text-status-warning"
+            data-resource-glyph=""
+            aria-hidden="true"
+          />
           {workloadNote}
         </div>
       )}
@@ -829,7 +833,11 @@ export function ProjectResourceBadge({
                 the count on the left and Run command on the right, a worded
                 chip left 320px with "4 a…" — the warning cost the row its
                 first answer. The triangle carries the severity colour. */}
-            <TriangleAlert className="h-3 w-3 shrink-0 text-status-warning" aria-hidden="true" />
+            <TriangleAlert
+              className="h-3 w-3 shrink-0 text-status-warning"
+              data-resource-glyph=""
+              aria-hidden="true"
+            />
             <span className="sr-only">High app memory</span>
           </span>
         )}
@@ -859,6 +867,7 @@ export function ProjectResourceBadge({
               <div className="flex items-start gap-1.5 text-2xs text-text-primary">
                 <TriangleAlert
                   className="mt-px h-3 w-3 shrink-0 text-status-warning"
+                  data-resource-glyph=""
                   aria-hidden="true"
                 />
                 Daintree's own memory use is high for this machine

@@ -233,3 +233,30 @@ describe("forced-colors stroked agent-state glyphs", () => {
     for (const svg of svgs) expect(svg).toContain("data-agent-state-glyph");
   });
 });
+
+describe("forced-colors resource glyphs", () => {
+  // The CPU line and the amber/red band marks carry their hue on the svg
+  // itself, so without the hook the hue survives onto the forced canvas.
+  it("hands resource glyphs their parent's forced ink, not their band hue", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    expect(block).toMatch(/\[data-resource-glyph\]\s*\{[^}]*color:\s*inherit/);
+  });
+
+  it("is actually emitted wherever a resource readout tints a glyph", () => {
+    for (const file of [
+      "src/components/Terminal/TerminalResourceSparkline.tsx",
+      "src/components/Terminal/TerminalHeaderContent.tsx",
+      "src/components/Project/ProjectResourceBadge.tsx",
+    ]) {
+      const source = fs.readFileSync(path.join(REPO_ROOT, file), "utf8");
+      const tinted = source.match(
+        /<(svg|Icon|TriangleAlert|OctagonAlert)\s[^>]*text-status-[^>]*>/g
+      );
+      const hooked = source.match(
+        /<(svg|Icon|TriangleAlert|OctagonAlert)\s[^>]*data-resource-glyph[^>]*>/g
+      );
+      expect(hooked?.length ?? 0, file).toBeGreaterThan(0);
+      for (const tag of tinted ?? []) expect(tag, file).toContain("data-resource-glyph");
+    }
+  });
+});
