@@ -16,7 +16,7 @@
  * Env knobs:
  *   DAINTREE_SHOT_DEVCONSOLE   required — any truthy value runs the capture
  *   DAINTREE_SHOT_DIR          required — an ABSOLUTE output directory outside the repo
- *   DAINTREE_SHOT_THEMES       themes for the per-state captures (default daintree,bondi,svalbard)
+ *   DAINTREE_SHOT_THEMES       themes for the per-state captures (default daintree,namib,svalbard)
  */
 
 import { test, expect, type Locator, type Page } from "@playwright/test";
@@ -38,7 +38,7 @@ import {
 
 const ENABLED = !!process.env.DAINTREE_SHOT_DEVCONSOLE;
 const OUT_DIR = process.env.DAINTREE_SHOT_DIR ?? "";
-const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,svalbard")
+const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,namib,svalbard")
   .split(",")
   .map((t) => t.trim())
   .filter(Boolean);

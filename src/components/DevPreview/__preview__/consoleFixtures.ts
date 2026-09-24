@@ -85,11 +85,12 @@ const str = (value: string) => ({ type: "primitive" as const, kind: "string" as 
 function uncaught(message: string, frames: CdpStackFrame[]): Row {
   // CDP's exception description carries V8's own rendering of the stack after
   // the message line, exactly as `handleExceptionThrown` passes it through.
+  // V8's own spellings: a native frame has no location, an unnamed one has no name.
   const tail = frames
-    .map(
-      (f) =>
-        `    at ${f.functionName || "<anonymous>"} (${f.url}:${f.lineNumber}:${f.columnNumber})`
-    )
+    .map((f) => {
+      const where = f.url ? `${f.url}:${f.lineNumber}:${f.columnNumber}` : "<anonymous>";
+      return f.functionName ? `    at ${f.functionName} (${where})` : `    at ${where}`;
+    })
     .join("\n");
   return {
     level: "error",
@@ -180,7 +181,7 @@ const SESSION: Row[] = [ROW_BOOT, ROW_LOG, ROW_WARN, ROW_FETCH, ROW_NETWORK, ROW
 
 export const CONSOLE_FIXTURES = {
   "session-collapsed": { width: 900, height: 360, rows: SESSION },
-  "uncaught-expanded": { width: 900, height: 420, rows: SESSION, expand: [5] },
+  "uncaught-expanded": { width: 900, height: 520, rows: [ROW_LOG, ROW_UNCAUGHT], expand: [1] },
   "warning-expanded": { width: 900, height: 420, rows: SESSION, expand: [2] },
   "log-expanded": { width: 900, height: 360, rows: SESSION, expand: [1, 3] },
   "trace-deep": { width: 900, height: 520, rows: [ROW_BOOT, ROW_TRACE], expand: [1] },
