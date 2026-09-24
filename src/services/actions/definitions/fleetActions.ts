@@ -789,13 +789,7 @@ function buildSavedScope(args: SaveNamedFleetArgs): FleetSavedScope | null {
 function applySavedScope(scope: FleetSavedScope): void {
   const fleet = useFleetArmingStore.getState();
   if (scope.kind === "snapshot") {
-    const { panelsById } = usePanelStore.getState();
-    const validIds: string[] = [];
-    const ids = Array.isArray(scope.terminalIds) ? scope.terminalIds : [];
-    for (const id of ids) {
-      if (isFleetArmEligible(getNarrowPanel(panelsById, id))) validIds.push(id);
-    }
-    fleet.armIds(validIds);
+    fleet.armIds(resolveSavedScopeIds(scope));
     return;
   }
   if (scope.stateFilter === "all") {
@@ -903,28 +897,31 @@ function generateScopeId(): string {
 }
 
 /**
- * Compute how many panes a saved scope would currently arm. Used by the UI to
- * render live counts on saved-fleet rows. Predicate scopes re-evaluate against
- * the current panel state; snapshot scopes return the count of still-eligible
- * stored IDs (silent drop semantics).
+ * The panes a saved scope would arm right now. Snapshots keep only their
+ * still-eligible stored IDs (silent drop semantics); predicates re-evaluate
+ * against the current panel state and active worktree.
  */
-export function computeSavedScopePaneCount(scope: FleetSavedScope): number {
+export function resolveSavedScopeIds(scope: FleetSavedScope): string[] {
   if (scope.kind === "snapshot") {
     const { panelsById } = usePanelStore.getState();
     const ids = Array.isArray(scope.terminalIds) ? scope.terminalIds : [];
-    let n = 0;
-    for (const id of ids) {
-      if (isFleetArmEligible(getNarrowPanel(panelsById, id))) n++;
-    }
-    return n;
+    return ids.filter((id) => isFleetArmEligible(getNarrowPanel(panelsById, id)));
   }
   const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId ?? null;
   if (scope.stateFilter === "all") {
-    return collectEligibleIds(scope.scope, activeWorktreeId).length;
+    return collectEligibleIds(scope.scope, activeWorktreeId);
   }
   return computeArmByStateIds(
     scope.stateFilter as FleetArmStatePreset,
     scope.scope,
     activeWorktreeId
-  ).length;
+  );
+}
+
+/**
+ * Compute how many panes a saved scope would currently arm. Used by the UI to
+ * render live counts on saved-fleet rows.
+ */
+export function computeSavedScopePaneCount(scope: FleetSavedScope): number {
+  return resolveSavedScopeIds(scope).length;
 }

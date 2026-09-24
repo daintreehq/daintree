@@ -327,12 +327,12 @@ test("fleet ribbon — states, interactions and themes", async ({ page }) => {
     );
   }
   {
-    // The selection menu with saved fleets and the inline save form.
+    // The selection menu with saved fleets and its save entry.
     const { frame } = await open(page, "armed-3", primary, FRAME_WIDTH);
     await page.getByTestId("fleet-selection-menu-trigger").click();
     await page.waitForTimeout(300);
     written.push(
-      await snap(page, frame, page.getByTestId("fleet-save-form"), `selection-menu--${primary}.png`)
+      await snap(page, frame, page.getByTestId("fleet-save-open"), `selection-menu--${primary}.png`)
     );
   }
   {

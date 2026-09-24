@@ -1,10 +1,9 @@
 import type { ReactElement } from "react";
-import { Trash2 } from "lucide-react";
 import type { FleetSavedScope } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { FLEET_RIBBON_ICON_BUTTON_CLASS } from "./fleetRibbonStyles";
+import { describeRule, formatSavedFleetCount, savedFleetAccessibleName } from "./savedFleetMeta";
 
 interface SavedFleetRowProps {
   scope: FleetSavedScope;
@@ -21,45 +20,66 @@ export function SavedFleetRow({
   count,
   isStale,
 }: SavedFleetRowProps): ReactElement {
-  const flavorLabel = scope.kind === "snapshot" ? "Snapshot" : "Live";
+  // A live rule matching nothing right now would recall an empty fleet. It
+  // stays listed and focusable but inert, like any disabled menu row — the
+  // rule may match again later, and the manage dialog can still delete it.
+  const isEmptyRule = scope.kind === "predicate" && count === 0;
   return (
     <DropdownMenuItem
-      aria-disabled={isStale || undefined}
-      onSelect={() => {
-        if (isStale) return;
+      aria-label={
+        isStale
+          ? `${savedFleetAccessibleName(scope, count)}, select to delete`
+          : savedFleetAccessibleName(scope, count)
+      }
+      aria-disabled={isEmptyRule || undefined}
+      // One action per menu row, like every other menu in the app: recall.
+      // Delete/Backspace is the accelerator to the same confirm the manage
+      // dialog offers as a button — not advertised on an inert row.
+      aria-keyshortcuts={isEmptyRule ? undefined : "Delete"}
+      title={scope.name}
+      onSelect={(e) => {
+        if (isEmptyRule) {
+          e.preventDefault();
+          return;
+        }
+        // A stale snapshot can't be recalled, and deleting it is the one thing
+        // it's still for — so selecting it opens the delete confirm rather than
+        // sitting there disabled.
+        if (isStale) {
+          onRequestDelete(scope.id);
+          return;
+        }
         void actionService.dispatch("fleet.recallNamedFleet", { id: scope.id }, { source: "user" });
       }}
-      data-testid="fleet-saved-row"
-      className="flex items-center gap-2"
-    >
-      {/* Only the recall half fades when a snapshot is stale — Delete is
-          exactly the action a dead snapshot still wants. */}
-      <span className={cn("flex-1 truncate", isStale && "opacity-50")}>{scope.name}</span>
-      <span className={cn("text-3xs text-text-secondary tabular-nums", isStale && "opacity-50")}>
-        {count} · {flavorLabel}
-      </span>
-      <button
-        type="button"
-        aria-label={`Delete fleet "${scope.name}"`}
-        data-testid="fleet-saved-row-delete"
-        onClick={(e) => {
-          // Stop the parent DropdownMenuItem's onSelect from firing the recall
-          // when the user clicks the trash icon. The confirm dialog is hoisted
-          // to FleetArmingRibbon (outside this dropdown tree) so it survives
-          // the menu closing — see #8023.
+      onKeyDown={(e) => {
+        if (isEmptyRule) return;
+        if (e.key === "Delete" || e.key === "Backspace") {
           e.preventDefault();
-          e.stopPropagation();
           onRequestDelete(scope.id);
-        }}
-        onPointerDown={(e) => {
-          // Radix DropdownMenuItem also commits on pointerdown — guard the
-          // delete from triggering recall by stopping propagation early.
-          e.stopPropagation();
-        }}
-        className={FLEET_RIBBON_ICON_BUTTON_CLASS}
+        }
+      }}
+      data-testid="fleet-saved-row"
+      data-stale={isStale || undefined}
+      className="gap-3"
+    >
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate",
+          isStale || isEmptyRule ? "text-text-secondary" : "text-text-primary"
+        )}
       >
-        <Trash2 className="h-3 w-3" />
-      </button>
+        {scope.name}
+      </span>
+      <span aria-hidden="true" className="ml-auto flex shrink-0 items-center gap-3">
+        {scope.kind === "predicate" && (
+          <span className="text-2xs text-text-secondary">{describeRule(scope)}</span>
+        )}
+        <span className="text-2xs tabular-nums text-text-secondary">
+          {formatSavedFleetCount(scope, count)}
+        </span>
+        {/* Says out loud what selecting this row now does. */}
+        {isStale && <span className="text-2xs text-text-secondary">Delete…</span>}
+      </span>
     </DropdownMenuItem>
   );
 }

@@ -1,10 +1,9 @@
 import type { KeyboardEvent } from "react";
 
 /**
- * The APG radio-group keyboard model for the two hand-rolled segmented
- * controls in Fleet (`SaveFleetForm`, `FleetPickerPalette`): arrows move and
- * check, Home/End jump, and the group is one tab stop through a roving
- * `tabIndex`. `ui/SegmentedRadioGroup` owns the same model but keeps its thumb
+ * The APG radio-group keyboard model for the hand-rolled segmented control in
+ * `FleetPickerPalette`: arrows move and check, Home/End jump, and the group is
+ * one tab stop through a roving `tabIndex`. `ui/SegmentedRadioGroup` owns the same model but keeps its thumb
  * outside the radio buttons and exposes no per-option test ids, which the
  * palette's tests depend on — so the model is shared here rather than the
  * component.
