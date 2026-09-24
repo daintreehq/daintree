@@ -66,7 +66,7 @@ vi.mock("react", async (importOriginal) => {
   };
 });
 
-import { CommandPicker, getCommandActionLabel, scoreCommand } from "../CommandPicker";
+import { CommandPicker, getCommandActionLabel, matchRanges, scoreCommand } from "../CommandPicker";
 import type { CommandManifestEntry } from "@shared/types/commands";
 
 function makeCmd(overrides: Partial<CommandManifestEntry> = {}): CommandManifestEntry {
@@ -324,5 +324,33 @@ describe("CommandPicker search", () => {
     act(() => capturedProps!.onQueryChange("work"));
     expect(capturedProps!.results[0]!.id).toBe("github:work-issue");
     expect(capturedProps!.results[capturedProps!.selectedIndex]!.id).toBe("github:work-issue");
+  });
+});
+
+describe("matchRanges", () => {
+  const covered = (text: string, ranges: readonly (readonly [number, number])[]) =>
+    ranges.map(([a, b]) => text.slice(a, b + 1).toLowerCase()).join("");
+
+  it("marks exactly the characters the term matched", () => {
+    const text = "Start working on a GitHub issue by creating an isolated worktree";
+    for (const term of ["worktree", "git", "isolated"]) {
+      expect(covered(text, matchRanges(text, term, false))).toBe(term);
+    }
+  });
+
+  it("prefers the start of a word over the middle of one", () => {
+    const [range] = matchRanges("reissue an issue", "issue", false);
+    expect(range![0]).toBe("reissue an ".length);
+  });
+
+  it("marks scattered letters only where scattered matching applies", () => {
+    expect(covered("github:work-issue", matchRanges("github:work-issue", "gwi", true))).toBe("gwi");
+    expect(matchRanges("Create a GitHub issue", "cgi", false)).toEqual([]);
+  });
+
+  it("ignores the slash a query copies from the row", () => {
+    expect(matchRanges("github:work-issue", "/github", true)).toEqual(
+      matchRanges("github:work-issue", "github", true)
+    );
   });
 });

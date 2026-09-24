@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback, useDeferredValue } from "rea
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { KBD_CLASS } from "@/components/ui/AppPaletteDialog";
+import { HighlightedText } from "@/components/ui/HighlightedText";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { paletteSummary } from "@/lib/paletteSummary";
 import type { CommandManifestEntry, CommandCategory } from "@shared/types/commands";
@@ -81,6 +82,46 @@ function isSubsequence(needle: string, haystack: string): boolean {
     if (haystack[j] === needle[i]) i++;
   }
   return i === needle.length;
+}
+
+type Range = readonly [number, number];
+
+/**
+ * Where each query term landed in `text`, for match emphasis — the same places
+ * `scoreCommand` looks: a word start first, then anywhere, and for the command
+ * name only, letters in order. A term that matched only a keyword has nothing
+ * visible to point at and marks nothing.
+ */
+export function matchRanges(text: string, query: string, allowScattered: boolean): Range[] {
+  const lower = text.toLowerCase();
+  const ranges: Range[] = [];
+  for (const raw of query.toLowerCase().split(/\s+/)) {
+    const term = stripCommandSlash(raw);
+    if (!term) continue;
+    let at = -1;
+    for (let i = lower.indexOf(term); i !== -1; i = lower.indexOf(term, i + 1)) {
+      if (i === 0 || !/[a-z0-9]/.test(lower[i - 1]!)) {
+        at = i;
+        break;
+      }
+    }
+    if (at === -1) at = lower.indexOf(term);
+    if (at !== -1) {
+      ranges.push([at, at + term.length - 1]);
+      continue;
+    }
+    if (!allowScattered) continue;
+    const scattered: Range[] = [];
+    let j = 0;
+    for (let i = 0; i < lower.length && j < term.length; i++) {
+      if (lower[i] === term[j]) {
+        scattered.push([i, i]);
+        j++;
+      }
+    }
+    if (j === term.length) ranges.push(...scattered);
+  }
+  return ranges;
 }
 
 function firstEnabledIndex(commands: CommandManifestEntry[]): number {
@@ -207,6 +248,7 @@ export function CommandPicker({
         const summaryId = `command-${cmd.id}-summary`;
         const reasonId = `command-${cmd.id}-reason`;
         const reason = !cmd.enabled ? cmd.disabledReason : undefined;
+        const summary = paletteSummary(cmd.description);
         return (
           <div key={cmd.id}>
             {category && (
@@ -255,7 +297,11 @@ export function CommandPicker({
                     cmd.enabled ? "text-text-primary" : "text-text-secondary"
                   )}
                 >
-                  /{cmd.id}
+                  /
+                  <HighlightedText
+                    text={cmd.id}
+                    indices={trimmedQuery ? matchRanges(cmd.id, trimmedQuery, true) : undefined}
+                  />
                 </span>
                 {/* Only where it is true: an unavailable row opens nothing. */}
                 {cmd.hasBuilder && cmd.enabled && (
@@ -268,7 +314,10 @@ export function CommandPicker({
                 )}
               </div>
               <div id={summaryId} className="truncate text-xs text-text-secondary">
-                {paletteSummary(cmd.description)}
+                <HighlightedText
+                  text={summary}
+                  indices={trimmedQuery ? matchRanges(summary, trimmedQuery, false) : undefined}
+                />
               </div>
               {reason && (
                 <div id={reasonId} className="text-xs italic text-text-secondary">
