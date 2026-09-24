@@ -560,6 +560,12 @@ export function WorktreeOverviewModal({
     onClose();
   }, [hasSelection, clearSelection, onClose]);
 
+  const handleSearchEscape = useCallback(() => {
+    if (!hasSelection) return false;
+    clearSelection();
+    return true;
+  }, [hasSelection, clearSelection]);
+
   const createWorktree = useCallback(() => {
     void actionService.dispatch("worktree.createDialog.open", undefined, { source: "user" });
   }, []);
@@ -582,6 +588,7 @@ export function WorktreeOverviewModal({
       isLast={isLast}
       onActivate={activateWorktree}
       onToggleSelect={handleRowToggleSelect}
+      onBeforeMenuAction={onClose}
     />
   );
 
@@ -612,6 +619,7 @@ export function WorktreeOverviewModal({
               inputRef={searchInputRef}
               onArrowIntoResults={handleArrowIntoResults}
               chipCounts={chipCounts}
+              onEscape={handleSearchEscape}
             />
             {/* The sidebar's own quick-state bar, full-bleed under the field
                 like the agent overview's, so the header's rule closes the

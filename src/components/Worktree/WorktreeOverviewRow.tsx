@@ -7,9 +7,16 @@ import { getWorktreeBranchLabel, getWorktreeHeadline } from "@/lib/worktreeHeadl
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
-import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import {
+  ContextMenu,
+  ContextMenuActionItem,
+  ContextMenuContent,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import type { ChipState } from "./utils/computeChipState";
 import { getBranchTypeIcon } from "./BranchLabel";
@@ -55,11 +62,11 @@ function useSessionMarks(worktreeId: string): SessionMark[] {
       .filter((t) => t.location !== "trash")
       .map((terminal) => {
         const chrome = deriveTerminalChrome(terminal);
-        return {
-          terminal,
-          chrome,
-          state: getTerminalAgentDisplayState(chrome, terminal.agentState),
-        };
+        // The raw state, not the compact indicator's coerced one: that helper
+        // reads idle and completed as waiting, which put amber circles on rows
+        // the Attention count beside them did not include.
+        const state = chrome.isAgent && !chrome.hasExited ? terminal.agentState : undefined;
+        return { terminal, chrome, state };
       });
     // Agents before plain terminals, then by how much each one needs the user.
     return marks.sort((a, b) => {
@@ -94,6 +101,8 @@ export interface WorktreeOverviewRowProps {
   isLast: boolean;
   onActivate: (worktreeId: string) => void;
   onToggleSelect: (worktreeId: string, event: React.MouseEvent) => void;
+  /** Called as a context-menu action starts, so the overview gets out of its way. */
+  onBeforeMenuAction: () => void;
 }
 
 export function WorktreeOverviewRow({
@@ -107,6 +116,7 @@ export function WorktreeOverviewRow({
   isLast,
   onActivate,
   onToggleSelect,
+  onBeforeMenuAction,
 }: WorktreeOverviewRowProps) {
   const marks = useSessionMarks(worktree.id);
   const headline = getWorktreeHeadline(worktree);
@@ -137,204 +147,304 @@ export function WorktreeOverviewRow({
   const hiddenCount = marks.length - shownMarks.length;
   const lead = leadLine(marks[0]);
 
-  const sessionsLabel = marks
-    .map((m) => `${m.chrome.label}${m.state ? ` ${STATE_LABELS[m.state]}` : ""}`)
-    .join(", ");
+  const sessionLines = marks.map((m) => ({
+    id: m.terminal.id,
+    name: `${m.chrome.label}${m.state ? `, ${STATE_LABELS[m.state]}` : ""}`,
+    detail: leadLine(m)?.text,
+  }));
+  const sessionsLabel = sessionLines
+    .map((l) => (l.detail && l.detail !== l.name ? `${l.name}: ${l.detail}` : l.name))
+    .join("; ");
+
+  const menuArgs = { worktreeId: worktree.id };
 
   return (
     <div role="row" className="contents">
-      <div
-        id={cellId}
-        role="gridcell"
-        aria-selected={isSelected}
-        data-worktree-overview-cell={worktree.id}
-        data-overview-cursor={isCursor ? "true" : undefined}
-        aria-current={isCurrent ? "true" : undefined}
-        onClick={(e) => {
-          if (e.metaKey || e.ctrlKey || e.shiftKey) {
-            onToggleSelect(worktree.id, e);
-            return;
-          }
-          onActivate(worktree.id);
-        }}
-        className={cn(
-          "group/row relative grid items-center gap-x-4 px-3 py-2.5 cursor-pointer select-none",
-          OVERVIEW_ROW_COLUMNS,
-          !isLast && "border-b border-divider",
-          "transition-colors duration-150 ease-out",
-          isSelected ? "bg-overlay-medium" : "hover:bg-overlay-soft",
-          // Cursor only while the grid holds focus — see the modal for why.
-          isCursor &&
-            "group-focus/overview-grid:outline group-focus/overview-grid:outline-2 group-focus/overview-grid:-outline-offset-2 group-focus/overview-grid:outline-accent-primary"
-        )}
-      >
-        {chipState !== null && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <WorktreeStatusTick state={chipState} variant="sidebar" />
-            </TooltipTrigger>
-            <TooltipContent side="right" align="start" className="text-xs">
-              {CHIP_LABELS[chipState]}
-            </TooltipContent>
-          </Tooltip>
-        )}
-
-        {/* Worktree: the sidebar card's identity, in the sidebar's words. */}
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
-              {TypeIcon && (
-                <TypeIcon
-                  className={cn(
-                    "h-3.5 w-3.5 text-text-secondary",
-                    isSelecting || isSelected ? "hidden" : "group-hover/row:hidden"
-                  )}
-                  strokeWidth={worktree.isMainWorktree ? 2 : 2.5}
-                  aria-hidden="true"
-                />
-              )}
-              <span
-                aria-hidden="true"
-                data-overview-checkbox=""
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleSelect(worktree.id, e);
-                }}
-                className={cn(
-                  "absolute inset-0 items-center justify-center rounded-[var(--radius-xs)] border",
-                  isSelecting || isSelected || !TypeIcon ? "flex" : "hidden group-hover/row:flex",
-                  isSelected
-                    ? "border-border-interactive bg-overlay-emphasis text-text-primary"
-                    : "border-border-default text-transparent hover:border-border-interactive"
-                )}
-              >
-                <Check className="h-3 w-3" strokeWidth={3} />
-              </span>
-            </span>
-            <span
-              className={cn(
-                "truncate text-sm",
-                isCurrent ? "font-medium text-text-primary" : "text-text-primary"
-              )}
-            >
-              {title}
-            </span>
-            {isCurrent && <span className="shrink-0 text-2xs text-text-secondary">· current</span>}
-          </div>
-          <div className="mt-0.5 flex items-center gap-2 min-w-0 pl-6 text-2xs text-text-secondary">
-            <span className="truncate font-mono">{branchLabel}</span>
-            {showPr && PrIcon && (
-              <span
-                className="flex shrink-0 items-center gap-1"
-                aria-label={`Pull request ${pr.ref.number}, ${pr.state}${ci ? `, ${ci.ariaLabel}` : ""}`}
-              >
-                <PrIcon className={cn("h-3 w-3", getPrStateColor(pr.state))} aria-hidden="true" />
-                <span className="font-mono tabular-nums">#{pr.ref.number}</span>
-                {ci?.kind === "icon" && (
-                  <ci.Icon className={cn("h-3 w-3", ci.colorClass)} aria-hidden="true" />
-                )}
-                {ci?.kind === "dot" && (
-                  <span
-                    className={cn("h-1.5 w-1.5 rounded-full", ci.colorClass)}
-                    aria-hidden="true"
-                  />
-                )}
-              </span>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            id={cellId}
+            role="gridcell"
+            aria-selected={isSelected}
+            data-worktree-overview-cell={worktree.id}
+            data-overview-cursor={isCursor ? "true" : undefined}
+            aria-current={isCurrent ? "true" : undefined}
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey) {
+                onToggleSelect(worktree.id, e);
+                return;
+              }
+              onActivate(worktree.id);
+            }}
+            className={cn(
+              "group/row relative grid items-center gap-x-4 px-3 py-2.5 cursor-pointer select-none",
+              OVERVIEW_ROW_COLUMNS,
+              !isLast && "border-b border-divider",
+              "transition-colors duration-150 ease-out",
+              isSelected ? "bg-overlay-medium" : "hover:bg-overlay-soft",
+              // Cursor only while the grid holds focus — see the modal for why.
+              isCursor &&
+                "group-focus/overview-grid:outline group-focus/overview-grid:outline-2 group-focus/overview-grid:-outline-offset-2 group-focus/overview-grid:outline-accent-primary"
             )}
-          </div>
-        </div>
+          >
+            {chipState !== null && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <WorktreeStatusTick state={chipState} variant="sidebar" />
+                </TooltipTrigger>
+                <TooltipContent side="right" align="start" className="text-xs">
+                  {CHIP_LABELS[chipState]}
+                </TooltipContent>
+              </Tooltip>
+            )}
 
-        {/* Agents: who is in there, in what state, and what the one that needs you is on. */}
-        <div className="min-w-0">
-          {marks.length > 0 ? (
-            <>
-              <div className="flex items-center gap-2" role="img" aria-label={sessionsLabel}>
-                {shownMarks.map(({ terminal, chrome, state }) => {
-                  const StateIcon = state ? STATE_ICONS[state] : null;
-                  return (
-                    <span key={terminal.id} className="flex items-center gap-1" aria-hidden="true">
-                      <TerminalIcon
-                        kind={terminal.kind}
-                        chrome={chrome}
-                        className="h-3 w-3 shrink-0"
-                      />
-                      {StateIcon && state && (
-                        <StateIcon
-                          className={cn(
-                            "h-3 w-3",
-                            STATE_COLORS[state],
-                            state === "working" && "animate-spin-slow motion-reduce:animate-none"
-                          )}
-                        />
+            {/* Worktree: the sidebar card's identity, in the sidebar's words. */}
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
+                  {TypeIcon && (
+                    <TypeIcon
+                      className={cn(
+                        "h-3.5 w-3.5 text-text-secondary",
+                        isSelecting || isSelected
+                          ? "hidden"
+                          : cn(
+                              "group-hover/row:hidden",
+                              isCursor && "group-focus/overview-grid:hidden"
+                            )
                       )}
-                    </span>
-                  );
-                })}
-                {hiddenCount > 0 && (
-                  <span className="text-2xs tabular-nums text-text-secondary" aria-hidden="true">
-                    +{hiddenCount}
+                      strokeWidth={worktree.isMainWorktree ? 2 : 2.5}
+                      aria-hidden="true"
+                    />
+                  )}
+                  <span
+                    aria-hidden="true"
+                    data-overview-checkbox=""
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleSelect(worktree.id, e);
+                    }}
+                    className={cn(
+                      "absolute inset-0 items-center justify-center rounded-[var(--radius-xs)] border",
+                      isSelecting || isSelected || !TypeIcon
+                        ? "flex"
+                        : cn(
+                            "hidden group-hover/row:flex",
+                            isCursor && "group-focus/overview-grid:flex"
+                          ),
+                      isSelected
+                        ? "border-border-interactive bg-overlay-emphasis text-text-primary"
+                        : "border-border-default text-transparent hover:border-border-interactive"
+                    )}
+                  >
+                    <Check className="h-3 w-3" strokeWidth={3} />
+                  </span>
+                </span>
+                <TruncatedTooltip content={title}>
+                  <span
+                    className={cn(
+                      "truncate text-sm",
+                      isCurrent ? "font-medium text-text-primary" : "text-text-primary"
+                    )}
+                  >
+                    {title}
+                  </span>
+                </TruncatedTooltip>
+                {isCurrent && (
+                  <span className="shrink-0 text-2xs text-text-secondary">· current</span>
+                )}
+              </div>
+              <div className="mt-0.5 flex items-center gap-2 min-w-0 pl-6 text-2xs text-text-secondary">
+                <span className="truncate font-mono">{branchLabel}</span>
+                {showPr && PrIcon && (
+                  <span
+                    className="flex shrink-0 items-center gap-1"
+                    aria-label={`Pull request ${pr.ref.number}, ${pr.state}${ci ? `, ${ci.ariaLabel}` : ""}`}
+                  >
+                    <PrIcon
+                      className={cn("h-3 w-3", getPrStateColor(pr.state))}
+                      aria-hidden="true"
+                    />
+                    <span className="font-mono tabular-nums">#{pr.ref.number}</span>
+                    {ci?.kind === "icon" && (
+                      <ci.Icon className={cn("h-3 w-3", ci.colorClass)} aria-hidden="true" />
+                    )}
+                    {ci?.kind === "dot" && (
+                      <span
+                        className={cn("h-1.5 w-1.5 rounded-full", ci.colorClass)}
+                        aria-hidden="true"
+                      />
+                    )}
                   </span>
                 )}
               </div>
-              {lead && (
-                <div
-                  className={cn(
-                    "mt-0.5 truncate text-2xs text-text-secondary",
-                    lead.mono && "font-mono"
+            </div>
+
+            {/* Agents: who is in there, in what state, and what the one that needs you is on. */}
+            {marks.length > 0 ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2" role="img" aria-label={sessionsLabel}>
+                      {shownMarks.map(({ terminal, chrome, state }) => {
+                        const StateIcon = state ? STATE_ICONS[state] : null;
+                        return (
+                          <span
+                            key={terminal.id}
+                            className="flex items-center gap-1"
+                            aria-hidden="true"
+                          >
+                            <TerminalIcon
+                              kind={terminal.kind}
+                              chrome={chrome}
+                              className="h-3 w-3 shrink-0"
+                            />
+                            {StateIcon && state && state !== "idle" && state !== "exited" && (
+                              <StateIcon
+                                className={cn(
+                                  "h-3 w-3",
+                                  STATE_COLORS[state],
+                                  state === "working" &&
+                                    "animate-spin-slow motion-reduce:animate-none"
+                                )}
+                              />
+                            )}
+                          </span>
+                        );
+                      })}
+                      {hiddenCount > 0 && (
+                        <span
+                          className="text-2xs tabular-nums text-text-secondary"
+                          aria-hidden="true"
+                        >
+                          +{hiddenCount}
+                        </span>
+                      )}
+                    </div>
+                    {lead && (
+                      <div
+                        className={cn(
+                          "mt-0.5 truncate text-2xs text-text-secondary",
+                          lead.mono && "font-mono"
+                        )}
+                      >
+                        {lead.text}
+                      </div>
+                    )}
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" align="start" className="max-w-[360px] text-xs">
+                  <ul className="flex flex-col gap-1">
+                    {sessionLines.map((line) => (
+                      <li key={line.id}>
+                        <span className="text-text-primary">{line.name}</span>
+                        {line.detail && line.detail !== line.name && (
+                          <span className="block text-text-secondary">{line.detail}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className="text-2xs text-text-secondary">No sessions</span>
+            )}
+
+            {/* Changes: size of the diff, then its file count and drift from upstream. */}
+            <div className="min-w-0 text-right tabular-nums">
+              <div className="text-xs text-text-secondary">
+                {changes === null ? (
+                  "—"
+                ) : fileCount > 0 ? (
+                  <>
+                    <span className="text-text-primary">+{insertions}</span> −{deletions}
+                  </>
+                ) : (
+                  "Clean"
+                )}
+              </div>
+              {(fileCount > 0 || ahead > 0 || behind > 0) && (
+                <div className="mt-0.5 flex items-center justify-end gap-1.5 text-2xs text-text-secondary">
+                  {conflictCount > 0 && (
+                    <span
+                      className="flex items-center gap-0.5 text-status-error"
+                      aria-label={`${conflictCount} conflict${conflictCount === 1 ? "" : "s"}`}
+                    >
+                      <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                      {conflictCount}
+                    </span>
                   )}
-                >
-                  {lead.text}
+                  {fileCount > 0 && (
+                    <span>
+                      {fileCount} file{fileCount === 1 ? "" : "s"}
+                    </span>
+                  )}
+                  {(ahead > 0 || behind > 0) && (
+                    <span className="font-mono">
+                      {ahead > 0 && <span aria-label={`${ahead} ahead`}>↑{ahead}</span>}
+                      {ahead > 0 && behind > 0 && " "}
+                      {behind > 0 && <span aria-label={`${behind} behind`}>↓{behind}</span>}
+                    </span>
+                  )}
                 </div>
               )}
-            </>
-          ) : (
-            <span className="text-2xs text-text-secondary">No sessions</span>
-          )}
-        </div>
-
-        {/* Changes: size of the diff, then its file count and drift from upstream. */}
-        <div className="min-w-0 text-right tabular-nums">
-          <div className="text-xs text-text-secondary">
-            {changes === null ? (
-              "—"
-            ) : fileCount > 0 ? (
-              <>
-                <span className="text-text-primary">+{insertions}</span> −{deletions}
-              </>
-            ) : (
-              "Clean"
-            )}
-          </div>
-          {(fileCount > 0 || ahead > 0 || behind > 0) && (
-            <div className="mt-0.5 flex items-center justify-end gap-1.5 text-2xs text-text-secondary">
-              {conflictCount > 0 ? (
-                <span className="flex items-center gap-1 text-status-error">
-                  <AlertTriangle className="h-3 w-3" aria-hidden="true" />
-                  {conflictCount} conflict{conflictCount === 1 ? "" : "s"}
-                </span>
-              ) : fileCount > 0 ? (
-                <span>
-                  {fileCount} file{fileCount === 1 ? "" : "s"}
-                </span>
-              ) : null}
-              {(ahead > 0 || behind > 0) && (
-                <span className="font-mono">
-                  {ahead > 0 && <span aria-label={`${ahead} ahead`}>↑{ahead}</span>}
-                  {ahead > 0 && behind > 0 && " "}
-                  {behind > 0 && <span aria-label={`${behind} behind`}>↓{behind}</span>}
-                </span>
-              )}
             </div>
-          )}
-        </div>
 
-        {/* Age of the last activity, the sidebar's own clock. */}
-        <div className="text-right text-2xs tabular-nums text-text-secondary">
-          {worktree.lastActivityTimestamp ? (
-            <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
-          ) : null}
-        </div>
-      </div>
+            {/* Age of the last activity, the sidebar's own clock. */}
+            <div className="text-right text-2xs tabular-nums text-text-secondary">
+              {worktree.lastActivityTimestamp ? (
+                <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
+              ) : null}
+            </div>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuActionItem
+            actionId="worktree.openEditor"
+            args={menuArgs}
+            onSelect={onBeforeMenuAction}
+          >
+            Open in editor
+          </ContextMenuActionItem>
+          <ContextMenuActionItem
+            actionId="worktree.reveal"
+            args={menuArgs}
+            onSelect={onBeforeMenuAction}
+          >
+            Reveal in Finder
+          </ContextMenuActionItem>
+          <ContextMenuActionItem
+            actionId="worktree.openReviewHub"
+            args={menuArgs}
+            onSelect={onBeforeMenuAction}
+          >
+            Open review hub
+          </ContextMenuActionItem>
+          {(showPr || worktree.issueNumber) && <ContextMenuSeparator />}
+          {showPr && (
+            <ContextMenuActionItem
+              actionId="worktree.openPR"
+              args={menuArgs}
+              onSelect={onBeforeMenuAction}
+            >
+              Open pull request
+            </ContextMenuActionItem>
+          )}
+          {worktree.issueNumber && (
+            <ContextMenuActionItem
+              actionId="worktree.openIssue"
+              args={menuArgs}
+              onSelect={onBeforeMenuAction}
+            >
+              Open issue
+            </ContextMenuActionItem>
+          )}
+          <ContextMenuSeparator />
+          <ContextMenuActionItem actionId="worktree.copyContext" args={menuArgs}>
+            Copy context
+          </ContextMenuActionItem>
+        </ContextMenuContent>
+      </ContextMenu>
     </div>
   );
 }

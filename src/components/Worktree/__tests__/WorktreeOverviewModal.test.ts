@@ -111,7 +111,7 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       const fill = rowSource.match(/isSelected\s*\?\s*"([^"]+)"/)?.[1] ?? "";
       expect(fill).toMatch(/\bbg-overlay-\w+/);
       expect(fill).not.toMatch(/accent/);
-      expect(rowSource).toMatch(/isSelecting\s*\|\|\s*isSelected[^\n]*"flex"/);
+      expect(rowSource).toMatch(/isSelecting\s*\|\|\s*isSelected\s*\|\|\s*!TypeIcon\s*\?\s*"flex"/);
     });
 
     it("does not introduce any forbidden accent token for selection treatment", () => {

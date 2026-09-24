@@ -200,6 +200,7 @@ const BUSY: WorktreeSeed[] = [
   {
     id: "wt-help-queue",
     branch: "docs/help-rolling-queue",
+    pr: { number: 12690, state: "open", ci: "failure" },
     commit: "docs(help): describe the rolling queue",
     commitAgoMin: 60 * 5,
     activityAgoMin: 60 * 5,
@@ -262,7 +263,7 @@ function snapshot(seed: WorktreeSeed): WorktreeSnapshot {
                   state: seed.pr.ci,
                   total: 4,
                   passed: seed.pr.ci === "success" ? 4 : 2,
-                  failed: 0,
+                  failed: seed.pr.ci === "failure" ? 2 : 0,
                   pending: seed.pr.ci === "pending" ? 2 : 0,
                 }
               : undefined,

@@ -30,6 +30,12 @@ interface WorktreeSidebarSearchBarProps {
    */
   trailing?: React.ReactNode;
   /**
+   * Offered Escape before the field spends it on clearing the query. Return
+   * true to claim the key — the overview uses this so an active selection is
+   * dismissed first, the same precedence Escape has everywhere else on it.
+   */
+  onEscape?: () => boolean;
+  /**
    * Filter scope / reorder status ("1 of 2 worktrees · Drag to reorder is off while
    * searching") rendered under the field, sharing a row with "Clear all".
    * Visual-only — screen readers are served by the caller's debounced
@@ -66,6 +72,7 @@ export function WorktreeSidebarSearchBar({
   statusText,
   filterSummaryText,
   trailing,
+  onEscape,
 }: WorktreeSidebarSearchBarProps) {
   const query = useWorktreeFilterStore((state) => state.query);
   const liveQuery = useWorktreeFilterStore((state) => state.liveQuery);
@@ -192,6 +199,10 @@ export function WorktreeSidebarSearchBar({
         setIsPopoverOpen(false);
         return;
       }
+      if (onEscape?.()) {
+        e.stopPropagation();
+        return;
+      }
       if (liveQuery) {
         e.stopPropagation();
         handleClearSearch();
@@ -199,7 +210,7 @@ export function WorktreeSidebarSearchBar({
       }
       internalRef.current?.blur();
     },
-    [isPopoverOpen, liveQuery, handleClearSearch, onArrowIntoResults]
+    [isPopoverOpen, liveQuery, handleClearSearch, onArrowIntoResults, onEscape]
   );
 
   const setRefs = useCallback(
