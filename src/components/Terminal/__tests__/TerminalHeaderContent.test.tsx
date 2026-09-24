@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { TerminalHeaderContent } from "../TerminalHeaderContent";
@@ -455,6 +456,71 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     expectMutedSeverity(wrapper!.getAttribute("data-severity"));
   });
 
+  it("earns amber from readings that swing between the amber and red bands", () => {
+    mockResourceEnabled = true;
+    mockResourceState = makeResourceState(10);
+    const { rerender, container } = render(
+      <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
+    );
+    const severity = () =>
+      container
+        .querySelector('[data-testid="terminal-resource-badge"]')!
+        .getAttribute("data-severity");
+
+    pollResource(rerender, 60, 1);
+    pollResource(rerender, 90, 2);
+    expectMutedSeverity(severity());
+    // Every poll has been above the amber threshold: the third earns it.
+    pollResource(rerender, 60, 3);
+    expect(severity()).toBe("amber");
+    pollResource(rerender, 90, 4);
+    pollResource(rerender, 60, 5);
+    // Red needs its own unbroken run above the red threshold.
+    expect(severity()).toBe("amber");
+  });
+
+  it("steps down to the hottest band seen during a quiet run, not straight through", () => {
+    mockResourceEnabled = true;
+    mockResourceState = makeResourceState(10);
+    const { rerender, container } = render(
+      <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
+    );
+    const severity = () =>
+      container
+        .querySelector('[data-testid="terminal-resource-badge"]')!
+        .getAttribute("data-severity");
+
+    pollResource(rerender, 90, 1);
+    pollResource(rerender, 90, 2);
+    pollResource(rerender, 90, 3);
+    expect(severity()).toBe("red");
+
+    [10, 60, 10, 10, 10].forEach((cpu, i) => pollResource(rerender, cpu, 4 + i));
+    expect(severity()).toBe("amber");
+  });
+
+  it("counts a sample once even when StrictMode mounts the effect twice", () => {
+    mockResourceEnabled = true;
+    mockResourceState = makeResourceState(90);
+    const { rerender, container } = render(
+      <StrictMode>
+        <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
+      </StrictMode>
+    );
+    mockResourceState = makeResourceState(90);
+    rerender(
+      <StrictMode>
+        <TerminalHeaderContent id="t1" kind="terminal" queueCount={1} />
+      </StrictMode>
+    );
+    // Two polls: one short of the escalation run.
+    expectMutedSeverity(
+      container
+        .querySelector('[data-testid="terminal-resource-badge"]')!
+        .getAttribute("data-severity")
+    );
+  });
+
   it("resets candidate counter when severity oscillates back during the run", () => {
     mockResourceEnabled = true;
     mockResourceState = makeResourceState(10);
@@ -529,9 +595,12 @@ describe("TerminalHeaderContent — resource breakdown", () => {
       };
       rerender(<TerminalHeaderContent id="t1" kind="terminal" queueCount={i} />);
     }
-    const names = Array.from(
-      screen.getByTestId("tooltip-content").querySelectorAll("tbody tr td:nth-child(2)")
-    ).map((td) => td.textContent);
+    const breakdownTip = screen
+      .getAllByTestId("tooltip-content")
+      .find((el) => el.querySelector("table"))!;
+    const names = Array.from(breakdownTip.querySelectorAll("tbody tr td:nth-child(2)")).map(
+      (td) => td.textContent
+    );
     expect(names[0]).toBe("tsserver");
   });
 
@@ -558,7 +627,7 @@ describe("TerminalHeaderContent — resource breakdown", () => {
     mockResourceEnabled = true;
     mockResourceState = { cpuPercent: 308.9, memoryKb: 2_500_000, cpuHistory: [1, 2], breakdown };
     const { unmount } = render(<TerminalHeaderContent id="t1" kind="terminal" />);
-    const note = /every core/;
+    const note = /summed across cores/;
     expect(screen.getByTestId("tooltip-content").textContent).toMatch(note);
     unmount();
 

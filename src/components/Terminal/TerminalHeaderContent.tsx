@@ -67,6 +67,9 @@ const SEVERITY_TONE: Record<ResourceSeverity, string> = {
   red: "text-status-error",
 };
 
+/** A mark's footprint: `w-3` plus its `mr-1`, reserved alongside the digits. */
+const SEVERITY_MARK_WIDTH = "1rem";
+
 /**
  * The band in shape, set immediately before the reading it is about. The
  * reading itself stays `text-text-secondary`: status hues on 10px numerals fall
@@ -77,7 +80,7 @@ function SeverityMark({ severity }: { severity: ResourceSeverity }) {
   const Icon = severity === "red" ? OctagonAlert : TriangleAlert;
   return (
     <Icon
-      className={cn("w-3 h-3 shrink-0 mr-0.5", SEVERITY_TONE[severity])}
+      className={cn("w-3 h-3 shrink-0 mr-1", SEVERITY_TONE[severity])}
       data-severity-mark={severity}
       data-resource-glyph=""
       aria-hidden="true"
@@ -95,49 +98,70 @@ const ESCALATION_HYSTERESIS_POLLS = 3;
 const DE_ESCALATION_HYSTERESIS_POLLS = 5;
 
 /**
- * The displayed band for one metric. `raw` changes identity once per poll (the
- * caller derives it from the poll's sample), so each effect run counts one poll;
- * `null` means no sample and resets to muted.
+ * The displayed band for one metric. `poll` changes identity once per sample,
+ * so each effect run counts one poll; `raw == null` means no sample and resets
+ * to muted.
+ *
+ * Runs count readings at or above a band, not readings of exactly that band: a
+ * pane swinging 60% / 90% / 60% is above amber on every poll and must earn it,
+ * where matching the exact band would reset on every swing and stay muted.
+ * Coming down, the run counts readings below the shown band and lands on the
+ * hottest band seen during it, so a quiet spell with a spike in it steps down
+ * rather than falling straight through.
  */
 function useStickySeverity(raw: ResourceSeverity | null, poll: unknown): ResourceSeverity {
   const [sticky, setSticky] = useState<ResourceSeverity>("muted");
-  const pendingCandidateRef = useRef<ResourceSeverity | null>(null);
-  const pendingCountRef = useRef(0);
+  // The bookkeeping lives in refs and is keyed to the poll it last counted, so
+  // StrictMode's doubled mount effect cannot count one sample twice.
+  const shownRef = useRef<ResourceSeverity>("muted");
+  const countedPollRef = useRef<unknown>(undefined);
+  const aboveRef = useRef<Record<"amber" | "red", number>>({ amber: 0, red: 0 });
+  const belowRef = useRef<{ count: number; peak: ResourceSeverity }>({ count: 0, peak: "muted" });
 
   useEffect(() => {
+    const above = aboveRef.current;
+    const below = belowRef.current;
+    const show = (next: ResourceSeverity) => {
+      shownRef.current = next;
+      setSticky(next);
+    };
+
     if (raw == null) {
-      pendingCandidateRef.current = null;
-      pendingCountRef.current = 0;
-      setSticky((current) => (current === "muted" ? current : "muted"));
+      countedPollRef.current = undefined;
+      above.amber = 0;
+      above.red = 0;
+      below.count = 0;
+      show("muted");
       return;
     }
+    if (countedPollRef.current === poll) return;
+    countedPollRef.current = poll;
 
-    setSticky((current) => {
-      if (raw === current) {
-        pendingCandidateRef.current = null;
-        pendingCountRef.current = 0;
-        return current;
-      }
+    const level = SEVERITY_ORDER[raw];
+    const shown = SEVERITY_ORDER[shownRef.current];
+    above.amber = level >= SEVERITY_ORDER.amber ? above.amber + 1 : 0;
+    above.red = level >= SEVERITY_ORDER.red ? above.red + 1 : 0;
 
-      if (raw === pendingCandidateRef.current) {
-        pendingCountRef.current += 1;
-      } else {
-        pendingCandidateRef.current = raw;
-        pendingCountRef.current = 1;
-      }
-
-      const threshold =
-        SEVERITY_ORDER[raw] > SEVERITY_ORDER[current]
-          ? ESCALATION_HYSTERESIS_POLLS
-          : DE_ESCALATION_HYSTERESIS_POLLS;
-      if (pendingCountRef.current < threshold) {
-        return current;
-      }
-
-      pendingCandidateRef.current = null;
-      pendingCountRef.current = 0;
-      return raw;
-    });
+    if (shown < SEVERITY_ORDER.red && above.red >= ESCALATION_HYSTERESIS_POLLS) {
+      below.count = 0;
+      show("red");
+      return;
+    }
+    if (shown < SEVERITY_ORDER.amber && above.amber >= ESCALATION_HYSTERESIS_POLLS) {
+      below.count = 0;
+      show("amber");
+      return;
+    }
+    if (level >= shown) {
+      below.count = 0;
+      return;
+    }
+    if (below.count === 0 || level > SEVERITY_ORDER[below.peak]) below.peak = raw;
+    below.count += 1;
+    if (below.count >= DE_ESCALATION_HYSTERESIS_POLLS) {
+      below.count = 0;
+      show(below.peak);
+    }
   }, [raw, poll]);
 
   return sticky;
@@ -386,11 +410,17 @@ export function TerminalHeaderContent({
                   SEVERITY_TONE[cpuSeverity]
                 )}
               />
-              {/* One block reserved at the width of "999% · 1023M", slack at its
-                  trailing end: the line holds still as digits come and go, and
-                  the reading stays tight against the line's end dot. */}
+              {/* One block reserved at the width of "999% · 1023M" plus any marks
+                  showing, slack at its trailing end: the line holds still as
+                  digits come and go, and the reading stays tight against the
+                  line's end dot. */}
               <span
-                className="flex min-w-[12ch] items-center text-text-secondary"
+                className="flex items-center text-text-secondary"
+                style={{
+                  minWidth: `calc(12ch + ${
+                    [cpuSeverity, memorySeverity].filter((b) => b !== "muted").length
+                  } * ${SEVERITY_MARK_WIDTH})`,
+                }}
                 aria-hidden="true"
               >
                 <SeverityMark severity={cpuSeverity} />
@@ -412,7 +442,7 @@ export function TerminalHeaderContent({
                   <thead>
                     <tr className="text-text-secondary">
                       <th className="text-left pr-2">PID</th>
-                      <th className="text-left pr-2">Name</th>
+                      <th className="text-left pr-3">Name</th>
                       <th className="text-right pr-2">CPU</th>
                       <th className="text-right">Mem</th>
                     </tr>
@@ -421,7 +451,7 @@ export function TerminalHeaderContent({
                     {breakdownRows.map((p) => (
                       <tr key={p.pid}>
                         <td className="pr-2 text-text-secondary">{p.pid}</td>
-                        <td className="pr-2 truncate max-w-[8rem]">{p.comm}</td>
+                        <td className="pr-3 truncate max-w-[8rem]">{p.comm}</td>
                         <td className="text-right pr-2">{p.cpuPercent.toFixed(1)}%</td>
                         <td className="text-right">{formatMemory(p.memoryKb)}</td>
                       </tr>
@@ -434,11 +464,12 @@ export function TerminalHeaderContent({
                 <div className="flex flex-col text-text-secondary">
                   {(resourceState.processCount ?? 0) > resourceState.breakdown.length && (
                     <span className="tabular-nums">
-                      Top {resourceState.breakdown.length} of {resourceState.processCount} processes
+                      Showing {resourceState.breakdown.length} of {resourceState.processCount}{" "}
+                      processes
                     </span>
                   )}
                   {resourceState.cpuPercent > 100 && (
-                    <span>CPU adds up every core; 100% is one</span>
+                    <span>CPU is summed across cores; 100% is one full core</span>
                   )}
                 </div>
               )}
