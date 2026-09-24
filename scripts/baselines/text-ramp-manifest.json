@@ -1,7 +1,7 @@
 {
   "generated": "2026-09-24",
-  "total": 135,
-  "files": 59,
+  "total": 132,
+  "files": 58,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -722,51 +722,6 @@
       "decision": "keep",
       "category": "icon-affordance",
       "evidence": "<Pin> is an icon — the colour is an affordance, not prose"
-    },
-    {
-      "file": "src/components/Layout/TrashGroupItem.tsx",
-      "ordinal": 0,
-      "line": 131,
-      "start": 5440,
-      "end": 5461,
-      "token": "text-daintree-text/60",
-      "variants": "",
-      "step": 60,
-      "group": "src/components/Layout/TrashGroupItem.tsx#5420",
-      "branch": "5381T",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<ChevronDown> is an icon — the colour is an affordance, not prose"
-    },
-    {
-      "file": "src/components/Layout/TrashGroupItem.tsx",
-      "ordinal": 1,
-      "line": 133,
-      "start": 5527,
-      "end": 5548,
-      "token": "text-daintree-text/60",
-      "variants": "",
-      "step": 60,
-      "group": "src/components/Layout/TrashGroupItem.tsx#5507",
-      "branch": "5381F",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<ChevronRight> is an icon — the colour is an affordance, not prose"
-    },
-    {
-      "file": "src/components/Layout/TrashGroupItem.tsx",
-      "ordinal": 2,
-      "line": 138,
-      "start": 5718,
-      "end": 5739,
-      "token": "text-daintree-text/70",
-      "variants": "",
-      "step": 70,
-      "group": "src/components/Layout/TrashGroupItem.tsx#5698",
-      "branch": "",
-      "decision": "keep",
-      "category": "opacity-composite",
-      "evidence": "opacity-* on the element or a static ancestor composites through this text"
     },
     {
       "file": "src/components/McpConfirmDialog.tsx",

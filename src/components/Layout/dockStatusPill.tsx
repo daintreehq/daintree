@@ -1,6 +1,5 @@
 import { useCallback, useRef, type ReactNode } from "react";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
-import { FolderGit2 } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 /**
@@ -21,19 +20,19 @@ interface DockStatusPillLabelProps {
   /** A qualifier on the count ("1 waiting"), dropped along with the label word. */
   detail?: ReactNode;
   /**
-   * Some of the count is in the active worktree. Marked with the worktree
-   * glyph rather than words or a second number: the tray is tight, and the
-   * exact split lives in the name and tooltip.
+   * Some of the count is in the active worktree. Carried by the count's tone
+   * alone — bright when it touches this worktree, the label's quieter tone
+   * when it is all elsewhere — so scope costs no width and no extra mark. The
+   * exact split lives in the name, the tooltip, and the popover's sections.
    */
   hasLocal?: boolean;
   compact: boolean;
 }
 
 /**
- * Glyph, word, count, qualifier, local marker — in that order on every pill.
- * When the dock runs short of width, or the user picks compact density, the
- * word and the qualifier go and the count stays beside its glyph, never on
- * top of it. The local marker stays: it is the only on-pill scope cue.
+ * Glyph, word, count, qualifier — in that order on every pill. When the dock
+ * runs short of width, or the user picks compact density, the word and the
+ * qualifier go and the count stays beside its glyph, never on top of it.
  */
 export function DockStatusPillLabel({
   icon,
@@ -48,22 +47,44 @@ export function DockStatusPillLabel({
     <>
       {icon}
       {!compact && <span className={cn("font-medium", condensable)}>{label}</span>}
-      <span className="font-medium tabular-nums text-text-primary">
+      <span
+        data-dock-pill-local={hasLocal ? "" : undefined}
+        // Without a local share the count inherits the pill's own tone, so it
+        // lifts with the label on hover and open instead of lagging behind it.
+        className={cn("font-medium tabular-nums", hasLocal && "text-text-primary")}
+      >
         <AnimatedLabel label={String(count)} />
       </span>
       {!compact && detail && (
         <span className={cn("tabular-nums text-text-secondary", condensable)}>· {detail}</span>
       )}
-      {hasLocal && (
-        <FolderGit2
-          data-dock-pill-local=""
-          className="-ml-0.5 size-3! text-text-secondary"
-          aria-hidden="true"
-        />
-      )}
     </>
   );
 }
+
+/**
+ * One section of a status popover's list — "This worktree", then "Other
+ * worktrees". Every popover splits the same way, so the pill's project-wide
+ * count always opens onto the same answer to "which of these is here".
+ */
+export function DockPopoverSection({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div role="group" aria-label={label} className="flex shrink-0 flex-col gap-px">
+      <div
+        className="flex h-5 items-center px-2 text-3xs font-medium text-text-secondary"
+        aria-hidden="true"
+      >
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+export const DOCK_POPOVER_SECTIONS = [
+  { key: "here", label: "This worktree" },
+  { key: "elsewhere", label: "Other worktrees" },
+] as const;
 
 /** "across all worktrees", with the local share when there is one. */
 export function dockStatusScopeDescription(total: number, here: number): string {

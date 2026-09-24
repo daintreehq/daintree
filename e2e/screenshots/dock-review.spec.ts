@@ -24,6 +24,9 @@
  *   rest-<theme>-context.png        the strip under its stand-in sidebar and grid
  *   rest-<theme>-waiting-open.png   the Waiting popover, open
  *   rest-<theme>-trash-open.png     the Trash popover, open
+ *   busy-<theme>-trash-open.png     the Trash popover, split by worktree
+ *   busy-<theme>-background-open.png the Background popover, split by worktree
+ *   busy-<theme>-errors-open.png    the Errors popover
  *   busy-<theme>-compact.png        compact density
  *   busy-<theme>-comfortable.png    comfortable density
  *   busy-<theme>-narrow.png         a narrow window — the rail scrolls
@@ -222,6 +225,36 @@ test("content dock — every state, every theme", async ({ context }) => {
     })
   );
 
+  written.push(
+    await withPage(context, "busy trash open", async (page) => {
+      await load(page, "busy", theme);
+      await page.locator('[data-testid="trash-container"]').click();
+      const popover = page.locator('[role="dialog"][aria-label="Recently closed terminals"]');
+      await expect(popover).toBeVisible();
+      await expect(popover.getByRole("group", { name: "This worktree" })).toBeVisible();
+      await expect(popover.getByRole("group", { name: "Other worktrees" })).toBeVisible();
+      await page.waitForTimeout(350);
+      return snap(page.locator("body"), `busy-${theme}-trash-open.png`);
+    })
+  );
+
+  for (const [what, pill, dialog] of [
+    ["background", /^Background/, "Backgrounded panels"],
+    ["errors", /^Errors/, "Errored terminals"],
+  ] as const) {
+    written.push(
+      await withPage(context, `busy ${what} open`, async (page) => {
+        await load(page, "busy", theme);
+        await page.getByRole("button", { name: pill }).first().click();
+        const popover = page.locator(`[role="dialog"][aria-label="${dialog}"]`);
+        await expect(popover).toBeVisible();
+        await expect(popover.getByRole("group", { name: "Other worktrees" })).toBeVisible();
+        await page.waitForTimeout(350);
+        return snap(page.locator("body"), `busy-${theme}-${what}-open.png`);
+      })
+    );
+  }
+
   for (const density of ["compact", "comfortable"] as const) {
     written.push(
       await withPage(context, `busy ${density}`, async (page) =>
@@ -238,6 +271,6 @@ test("content dock — every state, every theme", async ({ context }) => {
 
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBe(THEMES.length * FIXTURES.length + 6);
+  expect(onDisk.length).toBe(THEMES.length * FIXTURES.length + 9);
   console.log(`[dock-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });

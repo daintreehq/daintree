@@ -30,6 +30,8 @@ interface TrashGroupItemProps {
     trashedInfo: TrashedTerminal;
   }>;
   worktreeName?: string;
+  /** False under "This worktree", where the section already names it. */
+  showWorktree?: boolean;
   earliestExpiry: number;
   /** Raise a permanent removal for the container to confirm. */
   onRequestRemove: (request: TrashRemovalRequest) => void;
@@ -40,6 +42,7 @@ export function TrashGroupItem({
   groupMetadata,
   terminals,
   worktreeName,
+  showWorktree = true,
   earliestExpiry,
   onRequestRemove,
 }: TrashGroupItemProps) {
@@ -128,14 +131,14 @@ export function TrashGroupItem({
           aria-controls={`trash-group-${groupRestoreId}`}
         >
           {isExpanded ? (
-            <ChevronDown className="w-3 h-3 text-daintree-text/60" />
+            <ChevronDown className="w-3 h-3 text-text-secondary" />
           ) : (
-            <ChevronRight className="w-3 h-3 text-daintree-text/60" />
+            <ChevronRight className="w-3 h-3 text-text-secondary" />
           )}
         </Button>
 
         <div className="shrink-0 mt-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
-          <Layers className="w-3 h-3 text-daintree-text/70" />
+          <Layers className="w-3 h-3 text-text-secondary" />
         </div>
 
         <div className="flex-1 min-w-0">
@@ -146,14 +149,14 @@ export function TrashGroupItem({
               same x in both and the two kinds of row can be ranked together. */}
           <div className="flex items-center gap-1.5 mt-0.5 text-2xs">
             <TrashCountdownLabel countdown={countdown} name={groupName} />
-            {worktreeName ? (
+            {worktreeName && showWorktree ? (
               <>
                 <span aria-hidden="true" className="text-text-muted">
                   &middot;
                 </span>
                 <span className="truncate text-text-secondary">{worktreeName}</span>
               </>
-            ) : isOrphan ? (
+            ) : isOrphan && showWorktree ? (
               <>
                 <span aria-hidden="true" className="text-text-muted">
                   &middot;

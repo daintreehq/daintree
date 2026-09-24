@@ -17,6 +17,8 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import {
   DOCK_STATUS_PILL_CLASS,
   DOCK_STATUS_PILL_OPEN_CLASS,
+  DOCK_POPOVER_SECTIONS,
+  DockPopoverSection,
   DockStatusPillLabel,
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
@@ -61,9 +63,10 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
   const { worktreeMap } = useWorktrees();
   const focusHandoff = useDockPopoverFocusHandoff();
   const count = terminals.length;
-  const hereCount = terminals.filter(
-    (t) => (t.worktreeId ?? null) === (activeWorktreeId ?? null)
-  ).length;
+  const isHere = (t: PtyPanelData) => (t.worktreeId ?? null) === (activeWorktreeId ?? null);
+  const hereTerminals = terminals.filter(isHere);
+  const elsewhereTerminals = terminals.filter((t) => !isHere(t));
+  const hereCount = hereTerminals.length;
   // Lagged count keeps the label stable while the pill fades out via the
   // .dock-status-pill exit transition instead of flashing "(0)".
   const displayCount = useExitLaggedCount(count);
@@ -125,64 +128,72 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
             </div>
 
             <div className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto">
-              {terminals.map((terminal) => {
-                const worktreeName =
-                  terminal.worktreeId && terminal.worktreeId !== activeWorktreeId
-                    ? worktreeMap.get(terminal.worktreeId)?.name
-                    : undefined;
+              {DOCK_POPOVER_SECTIONS.map((section) => {
+                const items = section.key === "here" ? hereTerminals : elsewhereTerminals;
+                if (items.length === 0) return null;
                 return (
-                  <button
-                    key={terminal.id}
-                    type="button"
-                    onClick={() => {
-                      const worktreeId = terminal.worktreeId?.trim();
-                      if (worktreeId && worktreeId !== activeWorktreeId) {
-                        trackTerminalFocus(worktreeId, terminal.id);
-                        selectWorktree(worktreeId);
-                      }
-                      activateTerminal(terminal.id);
-                      pingTerminal(terminal.id);
-                      focusHandoff.markHandoff();
-                      setIsOpen(false);
-                    }}
-                    className="flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group text-left outline-hidden hover:bg-tint/5 focus:bg-tint/5"
-                  >
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-                        <TerminalIcon
-                          kind={terminal.kind}
-                          chrome={deriveTerminalChrome(terminal)}
-                          className="h-3 w-3"
-                        />
-                      </div>
-                      <span className="text-xs truncate font-medium text-text-secondary group-hover:text-text-primary transition-colors">
-                        {terminal.title}
-                      </span>
-                      {worktreeName && (
-                        <span className="truncate text-3xs text-text-secondary">
-                          {worktreeName}
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-2.5 shrink-0">
-                      <Icon
-                        className={cn("w-3 h-3", config.iconColor)}
-                        aria-label={config.statusAriaLabel}
-                      />
-
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div className="text-text-secondary">
-                            {getLocationIcon(terminal.location)}
+                  <DockPopoverSection key={section.key} label={section.label}>
+                    {items.map((terminal) => {
+                      const worktreeName =
+                        section.key === "elsewhere" && terminal.worktreeId
+                          ? worktreeMap.get(terminal.worktreeId)?.name
+                          : undefined;
+                      return (
+                        <button
+                          key={terminal.id}
+                          type="button"
+                          onClick={() => {
+                            const worktreeId = terminal.worktreeId?.trim();
+                            if (worktreeId && worktreeId !== activeWorktreeId) {
+                              trackTerminalFocus(worktreeId, terminal.id);
+                              selectWorktree(worktreeId);
+                            }
+                            activateTerminal(terminal.id);
+                            pingTerminal(terminal.id);
+                            focusHandoff.markHandoff();
+                            setIsOpen(false);
+                          }}
+                          className="flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group text-left outline-hidden hover:bg-tint/5 focus:bg-tint/5"
+                        >
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
+                              <TerminalIcon
+                                kind={terminal.kind}
+                                chrome={deriveTerminalChrome(terminal)}
+                                className="h-3 w-3"
+                              />
+                            </div>
+                            <span className="text-xs truncate font-medium text-text-secondary group-hover:text-text-primary transition-colors">
+                              {terminal.title}
+                            </span>
+                            {worktreeName && (
+                              <span className="truncate text-3xs text-text-secondary">
+                                {worktreeName}
+                              </span>
+                            )}
                           </div>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">
-                          {terminal.location === "dock" ? "Docked" : "On Grid"}
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                  </button>
+
+                          <div className="flex items-center gap-2.5 shrink-0">
+                            <Icon
+                              className={cn("w-3 h-3", config.iconColor)}
+                              aria-label={config.statusAriaLabel}
+                            />
+
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <div className="text-text-secondary">
+                                  {getLocationIcon(terminal.location)}
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom">
+                                {terminal.location === "dock" ? "Docked" : "On Grid"}
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </DockPopoverSection>
                 );
               })}
             </div>

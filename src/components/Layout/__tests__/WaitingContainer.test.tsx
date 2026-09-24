@@ -260,6 +260,8 @@ describe("WaitingContainer", () => {
       });
       expect(trigger.querySelector("[data-dock-pill-local]")).not.toBeNull();
       expect(trigger.textContent).not.toContain("here");
+      // Scope rides on the count itself: the state glyph is the pill's only mark.
+      expect(trigger.querySelectorAll("svg")).toHaveLength(1);
     });
 
     it("drops the local marker when nothing is waiting here", () => {

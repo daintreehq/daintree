@@ -26,6 +26,8 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import {
   DOCK_STATUS_PILL_CLASS,
   DOCK_STATUS_PILL_OPEN_CLASS,
+  DOCK_POPOVER_SECTIONS,
+  DockPopoverSection,
   DockStatusPillLabel,
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
@@ -169,6 +171,20 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
 
     return items;
   }, [terminals, backgroundedTerminals]);
+
+  // Same split as the Waiting popover; order holds within each section.
+  const { hereItems, elsewhereItems } = useMemo(() => {
+    const here: BackgroundDisplayItem[] = [];
+    const elsewhere: BackgroundDisplayItem[] = [];
+    for (const item of displayItems) {
+      const worktreeId =
+        item.type === "group"
+          ? (item.groupMetadata.worktreeId ?? item.terminals[0]?.worktreeId)
+          : item.terminal.worktreeId;
+      ((worktreeId ?? null) === (activeWorktreeId ?? null) ? here : elsewhere).push(item);
+    }
+    return { hereItems: here, elsewhereItems: elsewhere };
+  }, [displayItems, activeWorktreeId]);
 
   const focusHandoff = useDockPopoverFocusHandoff();
 
@@ -348,36 +364,47 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
             </div>
 
             <div className="p-1 flex flex-col gap-1 max-h-[360px] overflow-y-auto">
-              {displayItems.map((item) => {
-                if (item.type === "group") {
-                  return (
-                    <BackgroundGroupItem
-                      key={item.groupRestoreId}
-                      groupRestoreId={item.groupRestoreId}
-                      groupMetadata={item.groupMetadata}
-                      terminals={item.terminals}
-                      worktreeMap={worktreeMap}
-                      watchedPanels={watchedPanels}
-                      onRestoreGroup={handleRestoreGroup}
-                      onRestoreSingle={handleRestoreSingle}
-                      onWatchToggle={handleWatchToggle}
-                      onKill={(id) => setKillConfirmId(id)}
-                    />
-                  );
-                }
-                const worktreeName = item.terminal.worktreeId
-                  ? worktreeMap.get(item.terminal.worktreeId)?.name
-                  : undefined;
+              {DOCK_POPOVER_SECTIONS.map((section) => {
+                const items = section.key === "here" ? hereItems : elsewhereItems;
+                if (items.length === 0) return null;
+                const showWorktree = section.key === "elsewhere";
                 return (
-                  <BackgroundSingleItem
-                    key={item.terminal.id}
-                    terminal={item.terminal}
-                    worktreeName={worktreeName}
-                    isWatched={watchedPanels.has(item.terminal.id)}
-                    onRestore={handleRestoreSingle}
-                    onWatchToggle={handleWatchToggle}
-                    onKill={(id) => setKillConfirmId(id)}
-                  />
+                  <DockPopoverSection key={section.key} label={section.label}>
+                    {items.map((item) => {
+                      if (item.type === "group") {
+                        return (
+                          <BackgroundGroupItem
+                            key={item.groupRestoreId}
+                            groupRestoreId={item.groupRestoreId}
+                            groupMetadata={item.groupMetadata}
+                            terminals={item.terminals}
+                            worktreeMap={worktreeMap}
+                            showWorktree={showWorktree}
+                            watchedPanels={watchedPanels}
+                            onRestoreGroup={handleRestoreGroup}
+                            onRestoreSingle={handleRestoreSingle}
+                            onWatchToggle={handleWatchToggle}
+                            onKill={(id) => setKillConfirmId(id)}
+                          />
+                        );
+                      }
+                      const worktreeName =
+                        showWorktree && item.terminal.worktreeId
+                          ? worktreeMap.get(item.terminal.worktreeId)?.name
+                          : undefined;
+                      return (
+                        <BackgroundSingleItem
+                          key={item.terminal.id}
+                          terminal={item.terminal}
+                          worktreeName={worktreeName}
+                          isWatched={watchedPanels.has(item.terminal.id)}
+                          onRestore={handleRestoreSingle}
+                          onWatchToggle={handleWatchToggle}
+                          onKill={(id) => setKillConfirmId(id)}
+                        />
+                      );
+                    })}
+                  </DockPopoverSection>
                 );
               })}
             </div>
@@ -550,6 +577,7 @@ function BackgroundGroupItem({
   groupMetadata,
   terminals,
   worktreeMap,
+  showWorktree,
   watchedPanels,
   onRestoreGroup,
   onRestoreSingle,
@@ -560,6 +588,7 @@ function BackgroundGroupItem({
   groupMetadata: TrashedTerminalGroupMetadata;
   terminals: PtyPanelData[];
   worktreeMap: ReturnType<typeof useWorktrees>["worktreeMap"];
+  showWorktree: boolean;
   watchedPanels: Set<string>;
   onRestoreGroup: (groupRestoreId: string, metadata: TrashedTerminalGroupMetadata) => void;
   onRestoreSingle: (terminal: PtyPanelData) => void;
@@ -570,6 +599,10 @@ function BackgroundGroupItem({
   const tabCount = terminals.length;
   const groupName = `Tab group (${tabCount} ${tabCount === 1 ? "tab" : "tabs"})`;
   const groupWaiting = terminals.filter((t) => t.agentState === "waiting").length;
+  // Named on the header too, so a collapsed group still says where it lives.
+  const groupWorktreeId = groupMetadata.worktreeId ?? terminals[0]?.worktreeId;
+  const groupWorktreeName =
+    showWorktree && groupWorktreeId ? worktreeMap.get(groupWorktreeId)?.name : undefined;
 
   return (
     <div className="rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors">
@@ -597,6 +630,11 @@ function BackgroundGroupItem({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors">
             {groupName}
+            {groupWorktreeName && (
+              <span className="ml-1.5 text-3xs text-text-secondary font-normal">
+                {groupWorktreeName}
+              </span>
+            )}
             {groupWaiting > 0 && (
               <span className="ml-1.5 text-3xs text-text-secondary font-normal tabular-nums">
                 · {groupWaiting} waiting
@@ -629,9 +667,10 @@ function BackgroundGroupItem({
               return 0;
             })
             .map((terminal) => {
-              const worktreeName = terminal.worktreeId
-                ? worktreeMap.get(terminal.worktreeId)?.name
-                : undefined;
+              const worktreeName =
+                showWorktree && terminal.worktreeId
+                  ? worktreeMap.get(terminal.worktreeId)?.name
+                  : undefined;
               return (
                 <BackgroundSingleItem
                   key={terminal.id}
