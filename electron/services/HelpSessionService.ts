@@ -28,6 +28,12 @@ import {
   type AssistantUserInstructions,
   type AssistantUserMcpServer,
 } from "./AssistantUserConfig.js";
+import {
+  PROJECT_METADATA_END,
+  PROJECT_METADATA_START,
+  buildProjectMetadataAddendum,
+  type HelpSessionProjectFacts,
+} from "./helpSessionProjectMetadata.js";
 import type {
   PendingHelpHibernation,
   PendingHelpHibernationStore,
@@ -50,6 +56,14 @@ import {
 // killing — that's what powers the renderer's `[[hibernateSessions]]` resume
 // the next time the user reopens the project.
 type PtyKillClient = Pick<PtyClient, "kill" | "gracefulKill">;
+
+// Injected rather than imported: the reader pulls in ProjectStore (sqlite) and
+// the git service cache, which this eagerly-loaded service must not drag into
+// startup — and which the test suite can then replace with a plain function.
+export type ProjectMetadataReader = (
+  projectId: string,
+  projectPath: string
+) => Promise<HelpSessionProjectFacts>;
 
 const SESSIONS_DIR_NAME = "help-sessions";
 const META_FILE_NAME = "meta.json";
@@ -123,6 +137,10 @@ const USER_INSTRUCTIONS_BLOCK_MARKERS = {
 // renderer-crash backstop, so the coarse timing is intentional.
 const ORPHAN_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
 const ORPHAN_SESSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+// Project metadata is informational, so a git call that hangs must not hold
+// the assistant launch hostage — past this bound the block is written without
+// the facts the reader would have supplied.
+const PROJECT_METADATA_READ_TIMEOUT_MS = 5000;
 
 function isHelpAssistantTier(value: unknown): value is HelpAssistantTier {
   return value === "workbench" || value === "action" || value === "system";
@@ -508,6 +526,7 @@ export class HelpSessionService {
   private readonly panelVisibleByProjectId = new Map<string, boolean>();
   private onMcpSessionRevokedFn: ((token: string) => void) | null = null;
   private disposed = false;
+  private projectMetadataReader: ProjectMetadataReader | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   setMcpRegistry(registry: WindowRegistry): void {
@@ -516,6 +535,10 @@ export class HelpSessionService {
 
   setPtyClient(client: PtyKillClient | null): void {
     this.ptyClient = client;
+  }
+
+  setProjectMetadataReader(reader: ProjectMetadataReader | null): void {
+    this.projectMetadataReader = reader;
   }
 
   /**
@@ -984,6 +1007,10 @@ export class HelpSessionService {
     // switch, hibernate race).
     this.displacePriorSessions(input.projectId, slot);
 
+    // Gathered before taking the directory lock so a slow git call doesn't
+    // serialize sibling lanes behind it. Never throws.
+    const projectFacts = await this.readProjectFacts(input.projectId, input.projectPath);
+
     // Every lane of a project provisions into ONE directory, so the file work
     // below is serialized per directory as well as per lane. The lane lock
     // above guards the single-backend invariant; this one guards the template
@@ -1121,6 +1148,19 @@ export class HelpSessionService {
         // Uses managed markers so re-provision replaces the block in place instead
         // of accumulating duplicate stanzas.
         await this.writeScratchAddendum(sessionPath, scratchPath);
+        // Same unconditional placement, for the same reason: the facts change
+        // independently of the template, and every lane shares these files, so
+        // only project-level observations go in — never a lane's focus.
+        await this.writeProjectMetadataAddendum(
+          sessionPath,
+          buildProjectMetadataAddendum({
+            projectId: input.projectId,
+            projectPath: input.projectPath,
+            tier,
+            daintreeControl: settings.daintreeControl,
+            facts: projectFacts,
+          })
+        );
         // Another live lane of this project may still be pointing at an older
         // sidecar; it is only safe to retire old ones when none is.
         // A sibling mid-provision counts too: it may already have published
@@ -2589,6 +2629,43 @@ export class HelpSessionService {
         this.replaceOrAppendScratchBlock(path.join(sessionPath, name), addendum)
       )
     );
+  }
+
+  private async writeProjectMetadataAddendum(sessionPath: string, addendum: string): Promise<void> {
+    const markers = { start: PROJECT_METADATA_START, end: PROJECT_METADATA_END };
+    const targets = ["CLAUDE.md", "AGENTS.md"];
+    await Promise.all(
+      targets.map((name) => this.writeManagedBlock(path.join(sessionPath, name), markers, addendum))
+    );
+  }
+
+  private async readProjectFacts(
+    projectId: string,
+    projectPath: string
+  ): Promise<HelpSessionProjectFacts> {
+    const reader = this.projectMetadataReader;
+    if (!reader) return {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        reader(projectId, projectPath),
+        new Promise<HelpSessionProjectFacts>((resolve) => {
+          timer = setTimeout(() => {
+            console.warn("[HelpSessionService] Project metadata read timed out; omitting it");
+            resolve({});
+          }, PROJECT_METADATA_READ_TIMEOUT_MS);
+          timer.unref?.();
+        }),
+      ]);
+    } catch (err) {
+      console.warn(
+        "[HelpSessionService] Project metadata read failed; omitting it:",
+        formatErrorMessage(err, "unknown error")
+      );
+      return {};
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private buildScratchAddendum(_scratchPath: string): string {
