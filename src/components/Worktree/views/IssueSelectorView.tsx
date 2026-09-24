@@ -6,6 +6,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
 
 interface IssueLinkerViewProps {
   projectPath: string;
@@ -93,14 +94,13 @@ export function AssignIssueToggle({
           aria-hidden="true"
         />
       </span>
-      {currentUserAvatar ? (
-        <img
-          src={`${currentUserAvatar}${currentUserAvatar.includes("?") ? "&" : "?"}s=48`}
-          alt=""
-          className="h-4 w-4 shrink-0 rounded-full"
-        />
+      {/* One 16px slot either way, so the label starts at the same x. */}
+      {currentUser ? (
+        <Avatar src={avatarUrlAtSize(currentUserAvatar, 32)} alt="" className="h-4 w-4" />
       ) : (
-        <UserPlus className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <span className="flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
+          <UserPlus className="h-3.5 w-3.5" />
+        </span>
       )}
       <span className="truncate">Assign to {currentUser ? `@${currentUser}` : "me"}</span>
     </label>

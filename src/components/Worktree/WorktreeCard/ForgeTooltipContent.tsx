@@ -19,7 +19,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import type { BadgeFreshnessCause } from "@/components/Layout/FreshnessUtils";
 import { cn } from "@/lib/utils";
-import { Avatar } from "@/components/ui/Avatar";
+import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 
@@ -57,17 +57,6 @@ function formatDate(epochMs: number): string {
   });
 }
 
-// Forge avatar CDNs commonly honour a `?s=` pixel size. Request 2× the
-// rendered size for crisp HiDPI, replacing any existing `s=` so we never
-// double up the param; providers that ignore it serve the original.
-function withAvatarSize(url: string | undefined, size: number): string {
-  if (!url) return "";
-  if (/[?&]s=\d+/.test(url)) {
-    return url.replace(/([?&])s=\d+/, `$1s=${size}`);
-  }
-  return `${url}${url.includes("?") ? "&" : "?"}s=${size}`;
-}
-
 // Author / single-assignee avatar: the login renders as adjacent text, so the
 // image is decorative (`alt=""`) and carries no redundant hover title.
 function ForgeAvatar({
@@ -81,7 +70,7 @@ function ForgeAvatar({
 }) {
   return (
     <Avatar
-      src={withAvatarSize(user.avatarUrl, urlSize)}
+      src={avatarUrlAtSize(user.avatarUrl, urlSize)}
       alt=""
       className={cn(sizeClass, "shrink-0")}
     />
@@ -115,7 +104,7 @@ function AssigneeMeta({ assignees }: { assignees: ForgeUser[] }) {
         {assignees.slice(0, 3).map((user) => (
           <Avatar
             key={user.login}
-            src={withAvatarSize(user.avatarUrl, 24)}
+            src={avatarUrlAtSize(user.avatarUrl, 24)}
             alt=""
             className="w-3 h-3 shrink-0"
           />

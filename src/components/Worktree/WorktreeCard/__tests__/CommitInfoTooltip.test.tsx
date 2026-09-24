@@ -108,8 +108,10 @@ describe("CommitInfoTooltip", () => {
       />
     );
     const img = container.querySelector("img")!;
-    expect(img.className).toContain("rounded-md");
-    expect(img.className).not.toContain("rounded-full");
+    // md and up are 8px+ corners — a full circle at the 16–24px this renders
+    // at, which would paint the bot as a person.
+    expect(img.className).not.toMatch(/rounded-(md|lg|xl|full)\b/);
+    expect(img.className).toMatch(/rounded-/);
   });
 
   it("shows a generic header and no avatar when the author is absent", () => {
