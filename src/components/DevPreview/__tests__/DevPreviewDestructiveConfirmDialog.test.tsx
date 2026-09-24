@@ -510,10 +510,11 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
 
     const path = await screen.findByTestId("dev-preview-destructive-node-modules-path");
     expect(path.textContent).toBe(`${cwd}/node_modules`);
-    const breaks = path.querySelectorAll("wbr");
-    expect(breaks.length).toBeGreaterThan(0);
-    for (const wbr of breaks) {
-      expect(wbr.previousSibling?.textContent).toMatch(/[/\\]$/);
+    // One unbreakable box per folder: every box but the last ends at a separator.
+    const segments = Array.from(path.children);
+    expect(segments.length).toBeGreaterThan(1);
+    for (const segment of segments.slice(0, -1)) {
+      expect(segment.textContent).toMatch(/[/\\]$/);
     }
   });
 
@@ -642,5 +643,44 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
     expect(
       screen.getByTestId("dev-preview-destructive-reinstall-preview").hasAttribute("aria-busy")
     ).toBe(false);
+  });
+
+  it("announces an empty outcome without waiting on sizes it doesn't need", async () => {
+    const cases = [
+      {
+        tier: "restartAndClearCache" as const,
+        meta: {
+          ...baseMeta,
+          cacheDirs: baseMeta.cacheDirs.map((d) => ({ ...d, exists: false, mtimeMs: null })),
+        },
+      },
+      {
+        tier: "reinstallAndRestart" as const,
+        meta: {
+          ...baseMeta,
+          nodeModules: { relPath: "node_modules", exists: false, mtimeMs: null },
+        },
+      },
+    ];
+    for (const { tier, meta } of cases) {
+      stubDevPreviewIpc({
+        getDestructivePreviewMeta: vi.fn().mockResolvedValue(meta),
+        getDestructivePreviewSizes: vi.fn().mockReturnValue(new Promise(() => {})),
+      });
+      render(
+        <DevPreviewDestructiveConfirmDialog
+          panelId="panel-1"
+          projectId="project-1"
+          tier={tier}
+          isOpen={true}
+          onClose={() => {}}
+          onConfirm={() => {}}
+        />
+      );
+      const status = screen.getByTestId("dev-preview-destructive-status");
+      await waitFor(() => expect(status.textContent).toMatch(/ready/i));
+      expect(status.textContent).not.toMatch(/measur/i);
+      cleanup();
+    }
   });
 });

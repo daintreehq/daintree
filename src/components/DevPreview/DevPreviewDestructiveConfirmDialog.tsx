@@ -1,5 +1,6 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { PathSegments } from "@/components/ui/PathSegments";
 import {
   Bone,
   MissingValue,
@@ -220,40 +221,33 @@ function settledAnnouncement(
   sizes: SizesState
 ): string {
   if (!meta) return "";
+  // An empty outcome is known the moment the metadata lands; there is no size
+  // to wait for, so it never waits behind one.
+  const present = meta.cacheDirs.filter((d) => d.exists);
+  if (tier === "restartAndClearCache" && present.length === 0) {
+    return "Preview ready. No build caches found.";
+  }
+  if (tier === "reinstallAndRestart" && !meta.nodeModules.exists) {
+    return "Preview ready. node_modules isn't there.";
+  }
   if (sizes === "pending") return "Preview ready. Measuring sizes.";
   if (sizes === "failed") return "Preview ready. Sizes couldn't be measured.";
   if (tier === "restartAndClearCache") {
-    const present = meta.cacheDirs.filter((d) => d.exists);
-    if (present.length === 0) return "Preview ready. No build caches found.";
     const total = cacheTotal(present, sizes);
     return typeof total === "number"
       ? `Preview ready. ${present.length} ${present.length === 1 ? "cache" : "caches"}, ${formatBytes(total)} in all.`
       : "Preview ready. Some sizes couldn't be measured.";
   }
-  if (!meta.nodeModules.exists) return "Preview ready. node_modules isn't there.";
   return typeof sizes.nodeModulesSizeBytes === "number"
     ? `Preview ready. node_modules is ${formatBytes(sizes.nodeModulesSizeBytes)}.`
     : "Preview ready. The size couldn't be measured.";
 }
 
-/**
- * A path that wraps at its separators, and only mid-name when one segment is
- * wider than the column on its own — `node` / `_modules` was the old break.
- */
+/** A full path, wrapping only between folders (see `PathSegments`). */
 function PathValue({ path, testId }: { path: string; testId?: string }) {
-  const parts = path.split(/(?<=[/\\])/);
   return (
-    <span
-      className="font-mono text-text-primary [overflow-wrap:anywhere]"
-      data-testid={testId}
-      title={path}
-    >
-      {parts.map((part, i) => (
-        <Fragment key={i}>
-          {part}
-          {i < parts.length - 1 && <wbr />}
-        </Fragment>
-      ))}
+    <span className="font-mono text-text-primary" data-testid={testId} title={path}>
+      <PathSegments path={path} />
     </span>
   );
 }
