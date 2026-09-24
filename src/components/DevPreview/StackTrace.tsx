@@ -1,7 +1,7 @@
 import { Fragment, useId } from "react";
-import { ChevronRight } from "lucide-react";
 import type { CdpStackFrame, CdpStackTrace } from "@shared/types/ipc/webviewConsole";
 import { cn } from "@/lib/utils";
+import { DisclosureChevron } from "./DisclosureChevron";
 import {
   frameFileName,
   frameFullLocation,
@@ -23,20 +23,6 @@ interface StackTraceProps {
 
 const TOGGLE_CLASS =
   "inline-flex items-center gap-1 whitespace-nowrap rounded-[var(--radius-sm)] px-1 -mx-1 text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors duration-150 ease-out select-none";
-
-/** The console's one disclosure glyph: stacks, library runs, groups, objects. */
-export function DisclosureChevron({ expanded }: { expanded: boolean }) {
-  return (
-    <ChevronRight
-      data-animated-chevron
-      aria-hidden="true"
-      className={cn(
-        "w-3 h-3 shrink-0 transition-transform duration-150 ease-out",
-        expanded && "rotate-90"
-      )}
-    />
-  );
-}
 
 /** A path that wraps at its separators before it ever breaks a name. */
 function BreakablePath({ path }: { path: string }) {

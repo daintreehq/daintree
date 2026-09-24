@@ -15,7 +15,8 @@ import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { sanitizeForClipboard } from "@/lib/clipboardSanitize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { ObjectInspector } from "./ObjectInspector";
-import { DisclosureChevron, StackLocation, StackTrace } from "./StackTrace";
+import { DisclosureChevron } from "./DisclosureChevron";
+import { StackLocation, StackTrace } from "./StackTrace";
 import { stripV8StackTail } from "./stackFrames";
 
 interface ConsolePanelProps {

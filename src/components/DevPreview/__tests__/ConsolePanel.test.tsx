@@ -338,6 +338,16 @@ describe("accessibility", () => {
     expect(expanded.getAttribute("aria-expanded")).toBe("true");
   });
 
+  it("exposes expand state on an expandable object argument", () => {
+    seedConsoleRow({
+      args: [{ type: "object", objectId: "o1", description: "Object", preview: "{a: 1}" }],
+    });
+    render(<ConsolePanel paneId={mockPaneId} webContentsId={1} />);
+
+    const toggle = screen.getByRole("button", { name: /\{a: 1\}/ });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("keeps the row copy button label constant after copying", () => {
     seedConsoleRow({ summaryText: "stable label" });
     renderPanel();

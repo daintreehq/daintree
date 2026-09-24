@@ -160,6 +160,12 @@ async function drive(page: Page, fixture: ConsoleStackFixture): Promise<void> {
       await expect(target).toBeFocused();
       break;
     }
+    case "object-open": {
+      await page.getByRole("button", { name: /ORC-114/ }).click();
+      await expect(page.locator(FRAME).getByText("sku", { exact: true })).toBeVisible();
+      await page.mouse.move(0, 0);
+      break;
+    }
     case "row-focus": {
       // Keyboard focus on the row itself swaps the short source for the full path.
       const row = rowFor(page, fixture, 1);

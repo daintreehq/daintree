@@ -1,6 +1,10 @@
 import { useState, useCallback } from "react";
 import type { CdpRemoteArg, CdpPropertyDescriptor } from "@shared/types/ipc/webviewConsole";
 import { cn } from "@/lib/utils";
+import { Spinner } from "@/components/ui/Spinner";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
+import { DisclosureChevron } from "./DisclosureChevron";
 
 interface ObjectInspectorProps {
   arg: CdpRemoteArg;
@@ -93,6 +97,8 @@ export function ObjectInspector({
   const [properties, setProperties] = useState<CdpPropertyDescriptor[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [fetchError, setFetchError] = useState(false);
+  // Most property reads land inside the gate, where an indicator would only flash.
+  const showLoading = useDeferredLoading(isLoading, UI_INLINE_LOADING_GATE_MS);
 
   const handleExpand = useCallback(async () => {
     if (isExpanded) {
@@ -162,13 +168,15 @@ export function ObjectInspector({
       <button
         type="button"
         onClick={() => void handleExpand()}
+        aria-expanded={isExpanded}
+        aria-busy={isLoading || undefined}
         className={cn(
           "inline text-left hover:bg-tint/5 rounded px-0.5 -mx-0.5 transition-colors",
           isExpanded ? "text-text-primary" : "text-text-secondary"
         )}
       >
-        <span className="text-daintree-text/40 mr-0.5 select-none">
-          {isLoading ? "⏳" : isExpanded ? "▼" : "▶"}
+        <span className="inline-flex align-middle mr-0.5 text-text-secondary select-none">
+          {showLoading ? <Spinner size="xs" /> : <DisclosureChevron expanded={isExpanded} />}
         </span>
         {displayText}
       </button>

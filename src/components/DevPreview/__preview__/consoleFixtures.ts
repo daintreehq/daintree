@@ -146,6 +146,22 @@ const ROW_UNCAUGHT = uncaught(
   "TypeError: Cannot read properties of undefined (reading 'price')",
   CART_FRAMES
 );
+const ROW_OBJECT_WARN: Row = {
+  level: "warning",
+  cdpType: "warning",
+  args: [
+    {
+      type: "object",
+      objectId: "obj-1",
+      className: "Object",
+      description: "Object",
+      preview: "{sku: 'ORC-114', qty: 0, price: undefined}",
+    },
+  ],
+  summaryText: "{sku: 'ORC-114', qty: 0, price: undefined}",
+  stackTrace: { callFrames: CART_FRAMES.slice(1) },
+  timestamp: 0,
+};
 const ROW_TRACE: Row = {
   level: "log",
   cdpType: "trace",
@@ -174,7 +190,7 @@ export interface ConsoleStackFixture {
    */
   expand?: number[];
   /** A pointer or keyboard drive the spec performs after expansion. */
-  drive?: "keyboard-focus" | "hover-toggle" | "row-focus";
+  drive?: "keyboard-focus" | "hover-toggle" | "row-focus" | "object-open";
 }
 
 const SESSION: Row[] = [ROW_BOOT, ROW_LOG, ROW_WARN, ROW_FETCH, ROW_NETWORK, ROW_UNCAUGHT];
@@ -188,6 +204,14 @@ export const CONSOLE_FIXTURES = {
   "native-frames": { width: 900, height: 360, rows: [ROW_BOOT, ROW_NATIVE], expand: [1] },
   "narrow-long-urls": { width: 460, height: 520, rows: [ROW_LOG, ROW_LONG], expand: [1] },
   "keyboard-focus": { width: 900, height: 360, rows: SESSION, drive: "keyboard-focus" },
+  "object-arg": { width: 900, height: 360, rows: [ROW_LOG, ROW_OBJECT_WARN] },
+  "object-open": {
+    width: 900,
+    height: 360,
+    rows: [ROW_LOG, ROW_OBJECT_WARN],
+    expand: [1],
+    drive: "object-open",
+  },
   "row-focus": { width: 460, height: 360, rows: [ROW_LOG, ROW_LONG], drive: "row-focus" },
   "hover-toggle": { width: 900, height: 360, rows: SESSION, drive: "hover-toggle" },
 } satisfies Record<string, ConsoleStackFixture>;

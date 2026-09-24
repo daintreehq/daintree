@@ -1,3 +1,4 @@
+import "./installConsoleShims";
 import "./installShims";
 import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -73,7 +74,8 @@ function App() {
           className="border border-overlay rounded-sm overflow-hidden"
           style={{ width: fixture.width, height: fixture.height }}
         >
-          <ConsolePanel paneId={CONSOLE_PANE_ID} />
+          {/* A webContents id makes object arguments expandable, as in the app. */}
+          <ConsolePanel paneId={CONSOLE_PANE_ID} webContentsId={1} />
         </div>
       </div>
     </TooltipProvider>
