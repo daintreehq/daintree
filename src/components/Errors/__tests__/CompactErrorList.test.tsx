@@ -317,6 +317,26 @@ describe("CompactErrorList", () => {
       expect(document.activeElement).toBe(inlineActions[inlineActions.length - 1]);
     });
 
+    it("lands on the neighbour's control, not its clamped message", () => {
+      function Clamped() {
+        const [errors, setErrors] = useState(() =>
+          makeErrors(2).map((e, i) => (i === 0 ? { ...e, message: `${"y".repeat(400)} end` } : e))
+        );
+        return (
+          <CompactErrorList
+            variant="flush"
+            errors={errors}
+            maxInline={2}
+            onDismiss={(id) => setErrors((all) => all.filter((e) => e.id !== id))}
+          />
+        );
+      }
+      render(<Clamped />);
+      screen.getAllByRole("button", { name: "Dismiss error" })[1]!.focus();
+      dismissFocused();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "View errors" }));
+    });
+
     it("falls back to the host when the only row goes", () => {
       render(<Harness initial={1} maxInline={2} />);
       screen.getByRole("button", { name: "Dismiss error" }).focus();

@@ -106,7 +106,11 @@ export function CompactErrorList({
       const index = active ? rows.findIndex((row) => row.contains(active)) : -1;
       if (index !== -1) {
         const neighbour = [rows[index + 1], rows[index - 1]]
-          .map((row) => row && getVisibleTabbableElements(row)[0])
+          // A control, not the first tabbable: a clamped message is a tab stop,
+          // and focusing it would open its tooltip over the list.
+          .map(
+            (row) => row && getVisibleTabbableElements(row).find((el) => el.tagName === "BUTTON")
+          )
           .find(Boolean);
         const target =
           neighbour ??
