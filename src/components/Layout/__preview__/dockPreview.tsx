@@ -210,6 +210,7 @@ const FIXTURES: Record<string, Fixture> = {
         })
       ),
       fromAgent(agent("x-bg", "claude", { worktreeId: "wt-main", location: "background" })),
+      pane("p-bg-here", "npm run storybook", { location: "background" }),
       trashedPane("tr-1", "npm run dev", "wt-main"),
       trashedPane("tr-2", "Codex", "wt-12383"),
       trashedPane("tr-3", "zsh", ACTIVE),

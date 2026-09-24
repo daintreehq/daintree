@@ -258,6 +258,7 @@ describe("BackgroundContainer", () => {
       mockTerminals = [
         makeTerminal({
           id: "t1",
+          worktreeId: "wt-2",
           title: "Fix auth bug",
           agentState: "waiting",
           activityHeadline: "Awaiting permission",
@@ -268,10 +269,24 @@ describe("BackgroundContainer", () => {
       const row = screen.getByTestId("background-single-item");
       const text = row.textContent ?? "";
       expect(text).toContain("Fix auth bug");
-      expect(text).toContain("feature-auth");
+      expect(text).toContain("feature-ui");
       expect(text).toContain("waiting");
       expect(text).toContain("Awaiting permission");
       expect(within(row).getByTestId("live-time-ago")).toBeTruthy();
+    });
+
+    it("splits rows by worktree and names the worktree only under other worktrees", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t1", title: "Local", worktreeId: "wt-1" }),
+        makeTerminal({ id: "t2", title: "Remote", worktreeId: "wt-2" }),
+      ];
+      render(<BackgroundContainer />);
+      const here = screen.getByRole("group", { name: "This worktree" }).textContent ?? "";
+      const away = screen.getByRole("group", { name: "Other worktrees" }).textContent ?? "";
+      expect(here).toContain("Local");
+      expect(here).not.toContain("feature-auth");
+      expect(away).toContain("Remote");
+      expect(away).toContain("feature-ui");
     });
 
     it("uses ambient border + tint for waiting state, not panel-state classes", () => {
