@@ -140,7 +140,7 @@ function FilterSection({
             // Underlined rather than a bare colour step: at rest this sat at
             // the same tone as the heading beside it, so nothing marked it as
             // a control rather than a second label.
-            className="absolute inset-y-0 right-[calc(var(--spacing)*8.5)] my-auto flex h-6 items-center rounded-[var(--radius-sm)] px-1 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+            className="absolute inset-y-0 right-8.5 my-auto flex h-6 items-center rounded-[var(--radius-sm)] px-1 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             Clear
           </button>
