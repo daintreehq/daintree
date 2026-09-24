@@ -3,7 +3,7 @@ import { useLayoutEffect, useRef } from "react";
 import { render, fireEvent, act } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { Avatar } from "../Avatar";
+import { Avatar, avatarUrlAtSize } from "../Avatar";
 
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
@@ -120,6 +120,15 @@ describe("Avatar", () => {
       expect(container.querySelector("img")).toBeFalsy();
       const fallback = container.querySelector("[data-avatar-fallback]");
       expect(fallback!.getAttribute("data-avatar-fallback")).toBe("failed");
+      expect(container.querySelector(".animate-pulse-delayed")).toBeFalsy();
+      unmount();
+    }
+  });
+
+  it("keeps a blank URL blank through the sizing helper", () => {
+    for (const url of [undefined, "", "   "]) {
+      const { container, unmount } = render(<Avatar src={avatarUrlAtSize(url, 32)} alt="" />);
+      expect(container.querySelector("img")).toBeFalsy();
       expect(container.querySelector(".animate-pulse-delayed")).toBeFalsy();
       unmount();
     }

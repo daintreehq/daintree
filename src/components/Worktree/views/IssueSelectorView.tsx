@@ -95,7 +95,7 @@ export function AssignIssueToggle({
         />
       </span>
       {/* One 16px slot either way, so the label starts at the same x. */}
-      {currentUserAvatar ? (
+      {currentUser ? (
         <Avatar src={avatarUrlAtSize(currentUserAvatar, 32)} alt="" className="h-4 w-4" />
       ) : (
         <span className="flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">

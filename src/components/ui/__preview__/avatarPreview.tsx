@@ -154,6 +154,7 @@ function AssignRows() {
   const [a, setA] = useState(true);
   const [b, setB] = useState(false);
   const [c, setC] = useState(false);
+  const [d, setD] = useState(false);
   return (
     <div className="rounded-[var(--radius-md)] bg-surface-panel p-3 space-y-3">
       <AssignIssueToggle
@@ -167,6 +168,12 @@ function AssignRows() {
         onSetAssignWorktreeToSelf={setB}
         currentUser="broken-sam"
         currentUserAvatar={url("broken-sam")}
+      />
+      <AssignIssueToggle
+        assignWorktreeToSelf={d}
+        onSetAssignWorktreeToSelf={setD}
+        currentUser="nourl-lee"
+        currentUserAvatar={undefined}
       />
       <AssignIssueToggle
         assignWorktreeToSelf={c}

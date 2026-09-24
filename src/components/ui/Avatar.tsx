@@ -35,7 +35,7 @@ function initialStatus(src: string): AvatarStatus {
  * serve the original.
  */
 export function avatarUrlAtSize(url: string | undefined, px: number): string {
-  if (!url) return "";
+  if (!url?.trim()) return "";
   if (/[?&]s=\d+/.test(url)) return url.replace(/([?&])s=\d+/, `$1s=${px}`);
   return `${url}${url.includes("?") ? "&" : "?"}s=${px}`;
 }
@@ -76,13 +76,14 @@ export function Avatar({ src, alt, title, className, shape = "circle" }: AvatarP
             radius,
             // Loading is the shared skeleton bone; failed is the static
             // neutral chip CommitAuthorAvatar uses for a picture-less bot.
+            // `medium`, not `soft`: soft all but vanishes on the dark panels.
             status === "loading"
               ? "bg-tint/[0.08] animate-pulse-delayed"
-              : "bg-overlay-soft text-text-secondary"
+              : "bg-overlay-medium text-text-secondary"
           )}
         >
           {status === "failed" && (
-            <User className="w-[62%] h-[62%]" strokeWidth={2.25} aria-hidden="true" />
+            <User className="w-[70%] h-[70%]" strokeWidth={2.5} aria-hidden="true" />
           )}
         </span>
       )}

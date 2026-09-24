@@ -1197,7 +1197,7 @@ export function BulkCreateWorktreeDialog({
                         aria-hidden="true"
                       />
                     </span>
-                    {currentUserAvatar ? (
+                    {currentUser ? (
                       <Avatar
                         src={avatarUrlAtSize(currentUserAvatar, 32)}
                         alt=""
