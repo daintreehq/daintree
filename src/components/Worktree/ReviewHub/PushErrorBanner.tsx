@@ -91,6 +91,9 @@ export function PushErrorBanner({
             onClick={() => dispatchCta(primary)}
             loading={pullRebasing && primary.kind === "pull-rebase"}
             disabled={pullRebasing && primary.kind !== "pull-rebase"}
+            // Forced colours strip the fill that sets the two apart and border
+            // every button alike; weight is left alone, so the safe fix keeps it.
+            className="forced-colors:font-semibold"
             data-testid="review-hub-push-error-cta"
             data-cta-kind={primary.kind}
           >
