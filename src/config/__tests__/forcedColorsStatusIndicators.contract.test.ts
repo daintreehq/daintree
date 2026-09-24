@@ -51,6 +51,17 @@ function readForcedColorsBlocks(file: string): string {
 }
 
 describe("forced-colors status-indicator contract (#8936)", () => {
+  it("index.css repaints severity glyphs coloured on the SVG itself", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    // Chromium forces an inherited currentColor but not a colour set on the
+    // SVG, so both the marker and a status utility on the svg must be caught,
+    // and !important must beat the banner glyph's inline colour.
+    const rule = block.match(/([^{}]*)\{[^}]*color:\s*CanvasText\s*!important[^}]*\}/g) ?? [];
+    const selectors = rule.join("\n");
+    expect(selectors).toContain("[data-severity-glyph]");
+    expect(selectors).toMatch(/svg\[class\*="-status-"\]/);
+  });
+
   it("index.css repaints the ActivityLight active dot with CanvasText !important", () => {
     const block = readForcedColorsBlocks(INDEX_CSS);
     expect(block).toContain('[data-activity-active="true"]');
