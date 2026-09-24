@@ -82,7 +82,8 @@ export function PilotParkEditor({
   const [note, setNote] = useState(target.existingPark?.note ?? "");
   const [gateId, setGateId] = useState<string>(target.existingPark?.gateRunId ?? GATE_NONE);
   const [pending, setPending] = useState<PendingVerb | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  /** The failure, with the verb it belongs to so the alert describes that button. */
+  const [error, setError] = useState<{ verb: PendingVerb; message: string } | null>(null);
   /** Set when the chosen gate's run closed under the editor and the park fell back to manual. */
   const [gateLost, setGateLost] = useState(false);
   const busy = pending !== null;
@@ -92,6 +93,7 @@ export function PilotParkEditor({
   const gateLabelId = `${ids}-gate-label`;
   const gateHelpId = `${ids}-gate-help`;
   const errorId = `${ids}-error`;
+  const targetId = `${ids}-target`;
 
   /**
    * Submitting disables the whole form, and a disabled form with no other sign
@@ -181,7 +183,7 @@ export function PilotParkEditor({
         .then(() => onClose(true))
         .catch((cause: unknown) => {
           setPending(null);
-          setError(formatErrorMessage(cause, fallback));
+          setError({ verb, message: formatErrorMessage(cause, fallback) });
         });
     },
     [busy, onClose]
@@ -280,7 +282,7 @@ export function PilotParkEditor({
       className="flex flex-col gap-4 px-1 py-2"
       onKeyDown={handleKeyDown}
     >
-      <div className="flex min-w-0 items-start gap-2.5">
+      <div id={targetId} className="flex min-w-0 items-start gap-2.5">
         <TerminalIcon
           chrome={target.row.chrome}
           className="mt-0.5 h-4 w-4 shrink-0"
@@ -291,7 +293,7 @@ export function PilotParkEditor({
               title can be read before committing to parking it. */}
           <p
             data-testid="pilot-park-target"
-            className="line-clamp-2 text-sm font-medium break-words text-text-primary"
+            className="line-clamp-2 text-sm font-medium break-words text-pretty text-text-primary"
           >
             {target.row.title}
           </p>
@@ -315,6 +317,9 @@ export function PilotParkEditor({
           disabled={busy}
           placeholder="Why is this parked?"
           data-testid="pilot-park-note"
+          // Focus lands here first, so this is where a screen reader learns
+          // which run the form is about.
+          aria-describedby={targetId}
         />
       </div>
 
@@ -332,7 +337,9 @@ export function PilotParkEditor({
             aria-describedby={gateHelpId}
             data-testid="pilot-park-gates"
             onKeyDown={handleGateKeyDown}
-            className="flex flex-col py-1"
+            // Right inset clears the overlay scrollbar, which otherwise sits on
+            // the focused row's ring.
+            className="flex flex-col gap-px p-1 pr-2"
           >
             {gateOptions.map(({ id, candidate }) => {
               const checked = id === effectiveGateId;
@@ -340,7 +347,7 @@ export function PilotParkEditor({
                 <label
                   key={id}
                   className={cn(
-                    "flex min-h-8 items-center gap-2.5 px-2.5 py-1.5 text-sm transition-colors",
+                    "flex min-h-8 items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-sm transition-colors",
                     busy ? "cursor-not-allowed" : "cursor-pointer",
                     "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
                     checked
@@ -408,6 +415,10 @@ export function PilotParkEditor({
           {chosenGate === null
             ? "Stays parked until you unpark it"
             : `Returns to Waiting${note.trim().length > 0 ? " with your note" : ""} when ${chosenGate.row.title} next finishes working`}
+          {/* An exited run only releases the park if it is started again, so
+              the choice is legal but the consequence is worth a clause. */}
+          {chosenGate?.row.run.agentState === "exited" &&
+            ". It has exited, so that only happens if it runs again"}
         </p>
         {gateLost && (
           <p
@@ -422,7 +433,7 @@ export function PilotParkEditor({
 
       {error !== null && (
         <p id={errorId} role="alert" className="text-xs text-status-danger">
-          {error}
+          {error.message}
         </p>
       )}
 
@@ -441,7 +452,7 @@ export function PilotParkEditor({
               onClick={confirm}
               disabled={busy && pending !== "park"}
               loading={showBusy && pending === "park"}
-              aria-describedby={error !== null ? errorId : undefined}
+              aria-describedby={error?.verb === "park" ? errorId : undefined}
               data-testid="pilot-park-confirm"
             >
               {primaryLabel}
@@ -453,12 +464,13 @@ export function PilotParkEditor({
             </Button>
             {isReparking && (
               <Button
-                variant="ghost"
+                variant="subtle"
                 size="sm"
                 onClick={unpark}
                 disabled={busy && pending !== "unpark"}
                 loading={showBusy && pending === "unpark"}
                 data-no-submit
+                aria-describedby={error?.verb === "unpark" ? errorId : undefined}
                 data-testid="pilot-park-unpark"
               >
                 Unpark

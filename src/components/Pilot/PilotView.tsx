@@ -720,6 +720,10 @@ function PilotFooter({
  * so one hand-written cache was costing the entire component its automatic
  * ones. Called bare, the compiler caches the result itself.
  */
+function parkModeLabel(target: PilotParkTarget): string {
+  return target.existingPark !== undefined ? "Edit park" : "Park agent";
+}
+
 function findParkTarget(
   liveGroups: PilotProjectGroup[],
   parkTargetId: string | null
@@ -1704,7 +1708,15 @@ export function PilotView() {
       // The scoped view renders the breadcrumb above the search box, so the
       // dialog's default — first tabbable — put the keyboard on "All agents".
       initialFocusRef={searchRef}
-      ariaLabel={scopedName === null ? "All agents" : `Agents in ${scopedName}`}
+      // Follows the visible header, so a screen reader hears the mode it is in
+      // rather than the name of a list no longer on screen.
+      ariaLabel={
+        parkTarget !== null
+          ? parkModeLabel(parkTarget)
+          : scopedName === null
+            ? "All agents"
+            : `Agents in ${scopedName}`
+      }
       tier="overview"
     >
       <AppPaletteDialog.Header
@@ -1712,9 +1724,7 @@ export function PilotView() {
         // a title for a surface no longer on screen.
         label={
           parkTarget !== null
-            ? parkTarget.existingPark !== undefined
-              ? "Edit park"
-              : "Park agent"
+            ? parkModeLabel(parkTarget)
             : scopedName === null
               ? "All agents"
               : "Agents by worktree"

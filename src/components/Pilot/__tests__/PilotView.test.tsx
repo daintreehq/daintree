@@ -1985,6 +1985,81 @@ describe("PilotView", () => {
       expect(body.contains(screen.getByTestId("pilot-park-cancel"))).toBe(false);
     });
 
+    it("names the dialog for the editing mode, and says it on screen", () => {
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+      const listName = screen.getByRole("dialog").getAttribute("aria-label");
+      altEnter();
+
+      const dialog = screen.getByRole("dialog");
+      const name = dialog.getAttribute("aria-label") ?? "";
+      expect(name).not.toBe(listName);
+      // Label-in-name: what a screen reader announces is what the header shows.
+      expect(dialog.textContent).toContain(name);
+    });
+
+    it("describes the autofocused note with the run it parks", () => {
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+      altEnter();
+
+      const note = screen.getByTestId("pilot-park-note");
+      const described = (note.getAttribute("aria-describedby") ?? "")
+        .split(" ")
+        .map((id) => document.getElementById(id)?.textContent ?? "")
+        .join(" ");
+      expect(described).toContain("auth spike");
+    });
+
+    it("ties a failed unpark to Unpark, not to Park", async () => {
+      unparkRunMock.mockRejectedValue(new Error("Run attention service unavailable"));
+      seed([
+        run({
+          agentState: "waiting",
+          title: "auth spike",
+          since: NOW - 60_000,
+          park: { parkedAt: NOW - 30_000, note: "old note" },
+        }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("pilot-park-unpark"));
+      });
+
+      const alertId = screen.getByRole("alert").id;
+      expect(alertId).not.toBe("");
+      const describedBy = (testId: string) =>
+        (screen.getByTestId(testId).getAttribute("aria-describedby") ?? "").split(" ");
+      expect(describedBy("pilot-park-unpark")).toContain(alertId);
+      expect(describedBy("pilot-park-confirm")).not.toContain(alertId);
+    });
+
+    it("warns that an exited gate only releases if it runs again", () => {
+      seed([
+        run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        run({ runId: "t2", agentState: "working", title: "alpha", since: NOW - 30_000 }),
+        run({ runId: "t3", agentState: "exited", title: "alpha", since: NOW - 90_000 }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+
+      const group = screen.getByRole("radiogroup");
+      const help = () =>
+        document.getElementById(group.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+      const [working, exited] = screen
+        .getAllByRole("radio")
+        .filter((r) => r.getAttribute("aria-label")?.startsWith("alpha"));
+      fireEvent.click(working!);
+      const workingCopy = help();
+      fireEvent.click(exited!);
+
+      // Same title, so any difference is the exited caveat alone.
+      expect(help().startsWith(workingCopy)).toBe(true);
+      expect(help().length).toBeGreaterThan(workingCopy.length);
+    });
+
     it("commits with Enter from the gate list, with the gate under the cursor", async () => {
       seed([
         run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
