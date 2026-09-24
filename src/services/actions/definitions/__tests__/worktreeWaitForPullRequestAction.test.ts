@@ -105,7 +105,7 @@ describe("worktree.waitForPullRequest", () => {
 
     const result = await pending;
     expect(result.timedOut).toBe(false);
-    expect((result.worktrees as Array<{ prNumber: number | null }>)[1].prNumber).toBe(7);
+    expect((result.worktrees as Array<{ prNumber: number | null }>)[1]?.prNumber).toBe(7);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -166,7 +166,7 @@ describe("worktree.waitForPullRequest", () => {
 
     const result = await pending;
     expect(result.timedOut).toBe(false);
-    expect((result.worktrees as Array<{ prNumber: number | null }>)[1].prNumber).toBe(4);
+    expect((result.worktrees as Array<{ prNumber: number | null }>)[1]?.prNumber).toBe(4);
   });
 
   it("keeps the sibling rows' answer when one worktree is deleted mid-wait", async () => {
