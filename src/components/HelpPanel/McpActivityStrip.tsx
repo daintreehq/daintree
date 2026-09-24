@@ -6,6 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { logWarn } from "@/utils/logger";
+import { actionService } from "@/services/ActionService";
 import type { McpAuditRecord } from "@shared/types";
 import type { McpToolActivityState } from "@/controllers/HelpSessionController";
 import { RecentCallsPopover } from "./RecentCallsPopover";
@@ -14,6 +15,9 @@ import { FOOTER_ITEM_CLASS } from "./footerItem";
 // Deliberately small — the popover is a quick glance at what the assistant
 // just did, not a full audit surface.
 const MAX_RECENT_CALLS = 5;
+
+/** DOM id of the full audit log on the MCP server settings tab. */
+const MCP_AUDIT_LOG_SECTION_ID = "mcp-audit-log";
 
 /**
  * How long a settled success row stays visible before decaying back to the
@@ -52,16 +56,21 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
   const [records, setRecords] = useState<McpAuditRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  // Bumped to re-read the log without closing: a Retry, or a call settling
+  // while the popover is open.
+  const [reloadKey, setReloadKey] = useState(0);
 
   // Monotonic token: discard any fetch that resolves after a newer open/session
   // change so a slow response can't overwrite fresher state.
   const fetchSeq = useRef(0);
+  const hasRecords = useRef(false);
 
   // A session change invalidates the open popover — its calls belong to the old
   // session. Close it, drop the stale list, and bump the fetch token so any
   // in-flight request from the previous session can't land its results.
   useEffect(() => {
     fetchSeq.current++;
+    hasRecords.current = false;
     setOpen(false);
     setRecords([]);
     setLoading(false);
@@ -72,7 +81,8 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
     if (!open || !sessionId) return;
 
     const seq = ++fetchSeq.current;
-    setLoading(true);
+    // A refresh keeps the rows on screen; only a first read shows the skeleton.
+    setLoading((wasLoading) => wasLoading || !hasRecords.current);
     setError(false);
 
     void (async () => {
@@ -82,6 +92,7 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
         // Audit records carry the MCP transport id in `sessionId`; the help
         // session id the renderer holds only ever matches `helpSessionId`.
         const mine = all.filter((r) => r.helpSessionId === sessionId).slice(0, MAX_RECENT_CALLS);
+        hasRecords.current = mine.length > 0;
         setRecords(mine);
         setLoading(false);
       } catch (err) {
@@ -91,7 +102,17 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
         setLoading(false);
       }
     })();
-  }, [open, sessionId]);
+  }, [open, sessionId, reloadKey]);
+
+  // A call that settles while the popover is open is exactly the one the user
+  // opened it to watch for, so the list follows it rather than going stale.
+  const settledKey =
+    activity?.status === "settled"
+      ? `${activity.turnId ?? activity.startedAt}:${activity.callCount}`
+      : null;
+  useEffect(() => {
+    if (settledKey !== null) setReloadKey((k) => k + 1);
+  }, [settledKey]);
 
   // Doherty gate for the in-flight row. Keyed on the coalescing turn (or the
   // call's start timestamp) so a burst within one turn doesn't re-arm the
@@ -178,9 +199,22 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
         collisionPadding={8}
         onOpenAutoFocus={(event) => event.preventDefault()}
         aria-label="Recent tool calls"
-        className="w-72"
+        className="w-80"
       >
-        <RecentCallsPopover records={records} loading={loading} error={error} />
+        <RecentCallsPopover
+          records={records}
+          loading={loading}
+          error={error}
+          onRetry={() => setReloadKey((k) => k + 1)}
+          onOpenAuditLog={() => {
+            setOpen(false);
+            void actionService.dispatch(
+              "app.settings.openTab",
+              { tab: "mcp", sectionId: MCP_AUDIT_LOG_SECTION_ID },
+              { source: "user" }
+            );
+          }}
+        />
       </PopoverContent>
     </Popover>
   );
