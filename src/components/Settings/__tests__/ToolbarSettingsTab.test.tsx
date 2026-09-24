@@ -603,8 +603,15 @@ describe("ToolbarSettingsTab — one row per button", () => {
     expect(codexSwitch.isConnected).toBe(true);
     expect(poolSection(container)!.contains(codexSwitch)).toBe(true);
     expect(codexSwitch.getAttribute("aria-checked")).toBe("true");
-    // And, now on the toolbar, it shows up where it landed as well.
+    // Still one switch for it while the user is working there.
+    expect(switchNamesIn(container).filter((n) => n === switchName("Codex agent"))).toHaveLength(1);
+
+    // Once the pointer leaves the section, it moves up to where it landed.
+    act(() => {
+      fireEvent.pointerLeave(poolSection(container)!.parentElement!);
+    });
     expect(switchNamesIn(leftColumn(container))).toContain(switchName("Codex agent"));
+    expect(switchNamesIn(container).filter((n) => n === switchName("Codex agent"))).toHaveLength(1);
   });
 });
 
@@ -991,6 +998,24 @@ describe("ToolbarSettingsTab — plugin button promotion (#11304)", () => {
     const { container } = render(<ToolbarSettingsTab />);
     expect(switchNamesIn(rightColumn(container))).toContain(switchName("Hello ping"));
     expect(switchNamesIn(poolSection(container))).not.toContain(switchName("Hello ping"));
+  });
+
+  it("gives a demoted contribution with no stored slot a row below, not no row", () => {
+    mockToolbarState = makeToolbarState({
+      ...mockToolbarState.layout,
+      pinnedButtons: { "acme.ping": true },
+    });
+    const { container, getByLabelText, rerender } = render(<ToolbarSettingsTab />);
+    expect(rightColumn(container).contains(getByLabelText(switchName("Hello ping")))).toBe(true);
+
+    fireEvent.click(getByLabelText(switchName("Hello ping")));
+    expect(setPluginButtonPromotedMock).toHaveBeenCalledWith("acme.ping", false);
+    mockToolbarState = makeToolbarState({ ...mockToolbarState.layout, pinnedButtons: {} });
+    rerender(<ToolbarSettingsTab />);
+
+    // Its column row had nowhere left to render; the switch to undo it must still exist.
+    expect(switchNamesIn(container).filter((n) => n === switchName("Hello ping"))).toHaveLength(1);
+    expect(switchNamesIn(poolSection(container))).toContain(switchName("Hello ping"));
   });
 
   it("routes the plugin switch to setPluginButtonPromoted, never toggleButtonVisibility", () => {

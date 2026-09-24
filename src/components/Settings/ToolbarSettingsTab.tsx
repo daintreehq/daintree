@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   DndContext,
   DragOverlay,
@@ -196,11 +204,14 @@ function ToolbarButtonCard({
           {draggable ? (
             <span
               {...(gripProps ?? {})}
-              className="shrink-0 cursor-grab rounded-[var(--radius-sm)] outline-offset-2 active:cursor-grabbing"
+              // The colour sits on the wrapper, not the SVG: forced colours keep an
+              // SVG's own colour (`preserve-parent-color`), so a class on the glyph
+              // would stay theme grey in high-contrast mode.
+              className="shrink-0 cursor-grab rounded-[var(--radius-sm)] text-text-secondary outline-offset-2 active:cursor-grabbing"
               aria-hidden={gripProps ? undefined : true}
               aria-label={gripProps ? `Reorder ${metadata.label}` : undefined}
             >
-              <GripVertical aria-hidden="true" className="h-4 w-4 text-text-secondary" />
+              <GripVertical aria-hidden="true" className="h-4 w-4" />
             </span>
           ) : (
             <span className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -615,17 +626,33 @@ export function ToolbarSettingsTab() {
     [placementState]
   );
 
-  // A button on the toolbar always has its column row — one switched on from
-  // the list below shows up where it landed, as well as staying put down there.
+  // Every button has exactly one switch on the page. A button on the toolbar is
+  // in its column — unless it was just switched on from the list below, where
+  // it stays until the user moves on — and a row switched off in a column
+  // stays there, off.
   const inArrangement = (id: AnyToolbarButtonId) =>
-    isOnToolbar(id) || rowHomes.get(id) === "arrangement";
-  // Anything without a column row lands here, including a button that reads as
-  // on but has no slot yet (a promoted panel button whose position a sibling
-  // view's write dropped) — so every button keeps exactly one switch.
+    rowHomes.get(id) === "arrangement" || (isOnToolbar(id) && rowHomes.get(id) !== "pool");
+  // Anything without a column row lands in the list below: including a button
+  // that reads as on but has no slot (a promoted panel button whose position a
+  // sibling view's write dropped), and a slotless plugin button just demoted,
+  // whose column row has nowhere left to render.
   const hasColumnRow = (id: AnyToolbarButtonId) =>
-    isOnToolbar(id) && (groupedLeft.includes(id) || groupedRight.includes(id));
-  const inPool = (id: AnyToolbarButtonId) =>
-    rowHomes.get(id) === "pool" || (!hasColumnRow(id) && rowHomes.get(id) !== "arrangement");
+    (groupedLeft.includes(id) || groupedRight.includes(id)) && inArrangement(id);
+  const inPool = (id: AnyToolbarButtonId) => rowHomes.get(id) === "pool" || !hasColumnRow(id);
+
+  // Rows switched on from the list below move up into their columns once the
+  // user is done there: the pointer has left the section and focus isn't in it.
+  // A switch that still has focus hands it to the same button's column switch.
+  const poolSectionRef = useRef<HTMLDivElement>(null);
+  const settlePoolRows = () => {
+    const settling = [...rowHomes].filter(([, home]) => home === "pool").map(([id]) => id);
+    if (settling.length === 0) return;
+    const focused = settling.find(
+      (id) => document.activeElement?.id === poolSwitchId(id) && isOnToolbar(id)
+    );
+    if (focused) setFocusTargets([`#${window.CSS.escape(columnSwitchId(focused))}`]);
+    setRowHomes((prev) => new Map([...prev].filter(([, home]) => home !== "pool")));
+  };
 
   const rememberHome = (id: AnyToolbarButtonId, home: RowHome) => {
     setRowHomes((prev) => {
@@ -872,9 +899,12 @@ export function ToolbarSettingsTab() {
     );
     setFocusTargets([
       `#${window.CSS.escape(columnSwitchId(buttonId))}`,
+      `#${window.CSS.escape(poolSwitchId(buttonId))}`,
       ...neighbours.map((id) => `#${window.CSS.escape(columnSwitchId(id))}`),
       '#toolbar-left-buttons [role="switch"]',
       '#toolbar-right-buttons [role="switch"]',
+      '#toolbar-hidden-buttons [role="switch"]',
+      '#toolbar-launcher [role="switch"]',
     ]);
     rememberHome(buttonId, "arrangement");
     handleToggle(buttonId, side);
@@ -994,91 +1024,103 @@ export function ToolbarSettingsTab() {
         one of them can be pinned.
       */}
       {hasPool && (
-        <SettingsSection
-          id="toolbar-hidden-buttons"
-          title="Not on the toolbar"
-          description="Switch one on to give it a toolbar button. Agents and panels stay in the launcher either way, and plugin buttons in the plugin tray."
+        <div
+          ref={poolSectionRef}
+          onPointerLeave={() => {
+            if (!poolSectionRef.current?.contains(document.activeElement)) settlePoolRows();
+          }}
+          onBlur={(event) => {
+            const next = event.relatedTarget;
+            if (next instanceof Node && poolSectionRef.current?.contains(next)) return;
+            if (!poolSectionRef.current?.matches(":hover")) settlePoolRows();
+          }}
         >
-          {poolAgents.length > 0 && (
-            <SettingsGroup label="Agents" id={uninstalledAgentListId}>
-              {listedPoolAgents.map((buttonId) => (
-                <PoolButtonRow
-                  key={buttonId}
-                  buttonId={buttonId}
-                  isVisible={isOnToolbar(buttonId)}
-                  onToggle={(id) => handlePoolToggle(id, "left")}
-                  metadata={allMetadata[buttonId]}
-                />
-              ))}
-              {uninstalledAgentCount > 0 && (
-                <div>
-                  <button
-                    type="button"
-                    aria-expanded={showUninstalledAgents}
-                    aria-controls={uninstalledAgentListId}
-                    onClick={() => setShowUninstalledAgents((v) => !v)}
-                    className={cn(
-                      "group flex w-full items-center gap-2 py-2.5 pl-4 pr-4 text-left",
-                      "text-sm text-text-secondary hover:text-text-primary transition-colors",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
-                    )}
-                  >
-                    <ChevronRight
+          <SettingsSection
+            id="toolbar-hidden-buttons"
+            title="Not on the toolbar"
+            description="Switch one on to give it a toolbar button. Agents and panels stay in the launcher either way, and plugin buttons in the plugin tray."
+          >
+            {poolAgents.length > 0 && (
+              <SettingsGroup label="Agents" id={uninstalledAgentListId}>
+                {listedPoolAgents.map((buttonId) => (
+                  <PoolButtonRow
+                    key={buttonId}
+                    buttonId={buttonId}
+                    isVisible={isOnToolbar(buttonId)}
+                    onToggle={(id) => handlePoolToggle(id, "left")}
+                    metadata={allMetadata[buttonId]}
+                  />
+                ))}
+                {uninstalledAgentCount > 0 && (
+                  <div>
+                    <button
+                      type="button"
+                      aria-expanded={showUninstalledAgents}
+                      aria-controls={uninstalledAgentListId}
+                      onClick={() => setShowUninstalledAgents((v) => !v)}
                       className={cn(
-                        "w-3.5 h-3.5 shrink-0 transition-transform duration-150",
-                        showUninstalledAgents ? "rotate-90" : "rotate-0"
+                        "group flex w-full items-center gap-2 py-2.5 pl-4 pr-4 text-left",
+                        "text-sm text-text-secondary hover:text-text-primary transition-colors",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
                       )}
-                      aria-hidden="true"
-                    />
-                    {showUninstalledAgents
-                      ? "Hide agents that aren't installed"
-                      : `Show ${uninstalledAgentCount} ${uninstalledAgentCount === 1 ? "agent" : "agents"} that aren't installed`}
-                  </button>
-                </div>
-              )}
-            </SettingsGroup>
-          )}
-          {poolPanels.length > 0 && (
-            <SettingsGroup label="Panels">
-              {poolPanels.map((buttonId) => (
-                <PoolButtonRow
-                  key={buttonId}
-                  buttonId={buttonId}
-                  isVisible={isOnToolbar(buttonId)}
-                  onToggle={(id) => handlePoolToggle(id, "left")}
-                  metadata={allMetadata[buttonId]}
-                />
-              ))}
-            </SettingsGroup>
-          )}
-          {poolPlugins.length > 0 && (
-            <SettingsGroup label="Plugin buttons">
-              {poolPlugins.map((buttonId) => (
-                <PoolButtonRow
-                  key={buttonId}
-                  buttonId={buttonId}
-                  isVisible={isOnToolbar(buttonId)}
-                  onToggle={(id) => handlePoolToggle(id, "right")}
-                  metadata={allMetadata[buttonId]}
-                  showDescription
-                />
-              ))}
-            </SettingsGroup>
-          )}
-          {poolBuiltIns.length > 0 && (
-            <SettingsGroup label="Other buttons">
-              {poolBuiltIns.map((buttonId) => (
-                <PoolButtonRow
-                  key={buttonId}
-                  buttonId={buttonId}
-                  isVisible={isOnToolbar(buttonId)}
-                  onToggle={(id) => handlePoolToggle(id, sideOf(id))}
-                  metadata={allMetadata[buttonId]}
-                />
-              ))}
-            </SettingsGroup>
-          )}
-        </SettingsSection>
+                    >
+                      <ChevronRight
+                        className={cn(
+                          "w-3.5 h-3.5 shrink-0 transition-transform duration-150",
+                          showUninstalledAgents ? "rotate-90" : "rotate-0"
+                        )}
+                        aria-hidden="true"
+                      />
+                      {showUninstalledAgents
+                        ? "Hide agents that aren't installed"
+                        : `Show ${uninstalledAgentCount} ${uninstalledAgentCount === 1 ? "agent" : "agents"} that aren't installed`}
+                    </button>
+                  </div>
+                )}
+              </SettingsGroup>
+            )}
+            {poolPanels.length > 0 && (
+              <SettingsGroup label="Panels">
+                {poolPanels.map((buttonId) => (
+                  <PoolButtonRow
+                    key={buttonId}
+                    buttonId={buttonId}
+                    isVisible={isOnToolbar(buttonId)}
+                    onToggle={(id) => handlePoolToggle(id, "left")}
+                    metadata={allMetadata[buttonId]}
+                  />
+                ))}
+              </SettingsGroup>
+            )}
+            {poolPlugins.length > 0 && (
+              <SettingsGroup label="Plugin buttons">
+                {poolPlugins.map((buttonId) => (
+                  <PoolButtonRow
+                    key={buttonId}
+                    buttonId={buttonId}
+                    isVisible={isOnToolbar(buttonId)}
+                    onToggle={(id) => handlePoolToggle(id, "right")}
+                    metadata={allMetadata[buttonId]}
+                    showDescription
+                  />
+                ))}
+              </SettingsGroup>
+            )}
+            {poolBuiltIns.length > 0 && (
+              <SettingsGroup label="Other buttons">
+                {poolBuiltIns.map((buttonId) => (
+                  <PoolButtonRow
+                    key={buttonId}
+                    buttonId={buttonId}
+                    isVisible={isOnToolbar(buttonId)}
+                    onToggle={(id) => handlePoolToggle(id, sideOf(id))}
+                    metadata={allMetadata[buttonId]}
+                  />
+                ))}
+              </SettingsGroup>
+            )}
+          </SettingsSection>
+        </div>
       )}
 
       <SettingsSection id="toolbar-launcher" title="Launcher palette">
