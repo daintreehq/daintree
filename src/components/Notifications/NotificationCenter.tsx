@@ -1496,10 +1496,14 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
             className={cn(
               "absolute bottom-2 left-1/2 -translate-x-1/2 z-10",
               "inline-flex items-center gap-1.5 px-3 py-1 rounded-full",
-              "bg-overlay-raised border border-border-strong",
+              // Opaque, like ScrollPill: it floats over notification rows, and
+              // `overlay-raised` is ~4% alpha on dark themes, so the rows read
+              // through it. The hover tint layers as an image over the fill.
+              "bg-surface-panel-elevated border border-border-default",
               "shadow-[var(--theme-shadow-floating)]",
               "text-2xs font-medium text-text-secondary",
-              "hover:text-text-primary hover:bg-overlay-raised",
+              "hover:text-text-primary hover:border-border-strong",
+              "hover:bg-[linear-gradient(var(--color-overlay-hover),var(--color-overlay-hover))]",
               "transition-[translate,opacity] motion-reduce:transition-none",
               showJumpPill
                 ? "opacity-100 translate-y-0 pointer-events-auto"

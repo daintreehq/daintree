@@ -173,6 +173,15 @@ export const UI_ACTION_SUCCESS_DWELL_MS = 2000;
  *  — discovery cue, not an undo affordance. */
 export const UI_TRANSIENT_HINT_DWELL_MS = 1_000;
 
+/** How long the typing locator names the pane a keystroke landed in. Longer
+ *  than a discovery hint: the user has to look up from the keyboard, find the
+ *  pill, and read a pane title they may not have seen before. */
+export const UI_TYPING_LOCATOR_DWELL_MS = 2_000;
+
+/** How long the locator holds a file-reference receipt. A full sentence, and
+ *  on refusal the only sign that the click did nothing. */
+export const UI_TYPING_LOCATOR_REPORT_DWELL_MS = 3_000;
+
 export const UI_TOOLTIP_DELAY_DURATION = 500;
 export const UI_TOOLTIP_SKIP_DELAY_DURATION = DURATION_300;
 

@@ -61,6 +61,6 @@ export {
   Radar, // an agent pane watching other terminals, which Daintree may wake when they change — distinct from BellDot, the user's own watch alert
   ServerCog, // a worktree's runtime — dev-server and remote-environment lifecycle
   Sprout, // origin / first step (main worktree, first agent launch)
-  TriangleAlert, // a setting failing validation, an environment reporting a failure, or a pane's CPU or memory in its amber band — a shape, not a hue, so it survives forced colors
+  TriangleAlert, // a setting failing validation, an environment reporting a failure, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";

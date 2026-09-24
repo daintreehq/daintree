@@ -6,7 +6,11 @@ import type { BackendStatus, PanelGridState } from "@/store/panelStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalInputStore, type LastTypedAgentTarget } from "@/store/terminalInputStore";
-import { useTypingLocatorStore } from "@/store/typingLocatorStore";
+import {
+  formatTypingLocatorMessage,
+  useTypingLocatorStore,
+  type TypingLocatorMessage,
+} from "@/store/typingLocatorStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
@@ -111,13 +115,29 @@ export function resolveInsertTarget(inputs: TargetInputs): InsertTargetResolutio
  * Both receipts go through the same pair: the pill for sighted users, a polite
  * announcement because the pill is `aria-hidden`.
  */
-function report(message: string): void {
+function report(message: TypingLocatorMessage): void {
   useTypingLocatorStore.getState().showLocator(message);
-  useAnnouncerStore.getState().announce(message, "polite");
+  useAnnouncerStore.getState().announce(formatTypingLocatorMessage(message), "polite");
 }
 
-function reportRefused(): void {
-  report("No agent is available for a file reference");
+/**
+ * The pill's own wording for each gate — it names the reason the click did
+ * nothing, so a refusal never claims "no agent" while agents sit on screen.
+ * Mirrors the menu's `INSERT_REFUSAL_COPY` in intent, not in text: that one is
+ * phrased for a disabled row, this one completes "File reference not added:".
+ */
+const REFUSAL_RECEIPT = {
+  "workspace-unavailable": "no workspace",
+  "fleet-broadcast-armed": "the fleet is armed",
+  "hybrid-input-disabled": "the input bar is off",
+  "backend-unavailable": "the terminal service is unavailable",
+  "recorded-target-unavailable": "that agent can't take input",
+  "no-eligible-agent": "no agent available",
+  "multiple-eligible-agents": "type to an agent first",
+} as const satisfies Record<InsertFileReferenceRefusalReason, string>;
+
+function reportRefused(reason: InsertFileReferenceRefusalReason): void {
+  report({ kind: "file-refused", lead: `File reference not added: ${REFUSAL_RECEIPT[reason]}` });
 }
 
 /**
@@ -184,7 +204,7 @@ export function useInsertFileReference(): InsertFileReference {
     // the menu can sit open while the agent it named exits or locks.
     const panelState = usePanelStore.getState();
     const inputStore = useTerminalInputStore.getState();
-    const { targetId: resolvedId } = resolveInsertTarget({
+    const { targetId: resolvedId, reason } = resolveInsertTarget({
       panelsById: panelState.panelsById,
       panelIds: panelState.panelIds,
       backendStatus: panelState.backendStatus,
@@ -198,7 +218,9 @@ export function useInsertFileReference(): InsertFileReference {
       // Only reachable in the race the re-resolve exists for — the rendered
       // gate disables the affordance otherwise. Announcing it beats a dead
       // click, which is by definition something the user cannot observe.
-      reportRefused();
+      // `reason` is null only if a resolved id has no panel, which the
+      // resolver rules out; the type cannot see that.
+      reportRefused(reason ?? "no-eligible-agent");
       return false;
     }
 
@@ -223,7 +245,11 @@ export function useInsertFileReference(): InsertFileReference {
     // silently claim the routing target on the sole-agent fallback path.
 
     panelState.pingTerminal(resolvedId);
-    report(`File reference added to ${getTerminalDisplayTitle(target, "compact")}`);
+    report({
+      kind: "file-added",
+      lead: "File reference added to",
+      target: getTerminalDisplayTitle(target, "full"),
+    });
     return true;
   }, []);
 
