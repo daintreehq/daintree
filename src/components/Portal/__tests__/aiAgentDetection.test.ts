@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
+import { LINK_TEMPLATES } from "@shared/types/portal";
+import { isRegisteredAgent } from "@/config/agents";
 
 describe("getAIAgentInfo", () => {
   it("should detect Claude URLs", () => {
@@ -86,5 +88,21 @@ describe("getAIAgentInfo", () => {
       title: "ChatGPT",
       icon: "codex",
     });
+  });
+
+  // A shipped service whose host isn't recognised opens with the page's own
+  // title and no brand mark, so its tab reads differently from the launchpad row.
+  it.each(Object.entries(LINK_TEMPLATES))(
+    "recognises the shipped %s link as the same service",
+    (_key, template) => {
+      expect(getAIAgentInfo(template.url)).toEqual({
+        title: template.title,
+        icon: template.icon,
+      });
+    }
+  );
+
+  it.each(Object.entries(LINK_TEMPLATES))("ships %s with a registered brand mark", (_key, t) => {
+    expect(isRegisteredAgent(t.icon)).toBe(true);
   });
 });
