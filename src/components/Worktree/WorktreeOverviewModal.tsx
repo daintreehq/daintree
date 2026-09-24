@@ -297,6 +297,7 @@ export function WorktreeOverviewModal({
   // Anchor for contiguous range selection. Survives filter changes by design
   // (lesson #4729) — only deliberate actions reset it.
   const selectionAnchorRef = useRef<string | null>(null);
+  const gridRef = useRef<HTMLDivElement | null>(null);
 
   // Must mirror DOM render order so keyboard navigation indexes into the right
   // row. When grouped, the DOM flattens groupedSections in section order; the
@@ -406,6 +407,9 @@ export function WorktreeOverviewModal({
     }
     closeSessionsIdsRef.current = [];
     setIsCloseSessionsConfirmOpen(false);
+    // The confirm hands focus back to the button that opened it, which leaves
+    // with the selection; give it to the list instead.
+    gridRef.current?.focus({ preventScroll: true });
     clearSelection();
     useAnnouncerStore
       .getState()
@@ -418,8 +422,6 @@ export function WorktreeOverviewModal({
     closeSessionsIdsRef.current = [];
     setIsCloseSessionsConfirmOpen(false);
   }, []);
-
-  const gridRef = useRef<HTMLDivElement | null>(null);
 
   /** ArrowDown out of the search field hands keyboard control to the list. */
   const handleArrowIntoResults = useCallback(() => {
@@ -553,13 +555,27 @@ export function WorktreeOverviewModal({
     return () => document.removeEventListener("keydown", markEscapeDismissal, true);
   }, [isOpen]);
 
+  const selectionBarRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * Leaving selection mode unmounts the bulk bar. If focus is on one of its
+   * controls, hand it to the list first — the cursor row it was acting on is
+   * still there — or the keyboard is stranded on the document.
+   */
+  const exitSelection = useCallback(() => {
+    if (selectionBarRef.current?.contains(document.activeElement)) {
+      gridRef.current?.focus({ preventScroll: true });
+    }
+    clearSelection();
+  }, [clearSelection]);
+
   const handleDismiss = useCallback(() => {
     if (escapeDismissRef.current && hasSelection) {
-      clearSelection();
+      exitSelection();
       return;
     }
     onClose();
-  }, [hasSelection, clearSelection, onClose]);
+  }, [hasSelection, exitSelection, onClose]);
 
   /**
    * The row menu for the keyboard. The list keeps DOM focus while the cursor is
@@ -782,41 +798,43 @@ export function WorktreeOverviewModal({
               apply to. */}
           {hasSelection ? (
             <AppPaletteDialog.Footer className="shrink-0 justify-between">
-              <div className="flex items-center gap-3 min-w-0">
-                <span className="text-text-primary font-medium tabular-nums">
-                  {selectedIds.size} selected
-                </span>
-                <button
-                  type="button"
-                  onClick={clearSelection}
-                  className={cn(
-                    "rounded-[var(--radius-sm)] px-1.5 py-0.5 text-xs text-text-secondary",
-                    "hover:bg-overlay-soft hover:text-text-primary transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-                  )}
-                >
-                  Clear
-                </button>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="subtle"
-                  size="sm"
-                  onClick={handleCloseSessionsClick}
-                  data-testid="worktree-bulk-close-sessions"
-                >
-                  Close sessions
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={bulkRemove.handleRemoveClick}
-                  disabled={bulkRemove.isExecuting}
-                  data-testid="worktree-bulk-remove"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  Remove worktrees
-                </Button>
+              <div ref={selectionBarRef} className="contents">
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="text-text-primary font-medium tabular-nums">
+                    {selectedIds.size} selected
+                  </span>
+                  <button
+                    type="button"
+                    onClick={exitSelection}
+                    className={cn(
+                      "rounded-[var(--radius-sm)] px-1.5 py-0.5 text-xs text-text-secondary",
+                      "hover:bg-overlay-soft hover:text-text-primary transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+                    )}
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    onClick={handleCloseSessionsClick}
+                    data-testid="worktree-bulk-close-sessions"
+                  >
+                    Close sessions
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={bulkRemove.handleRemoveClick}
+                    disabled={bulkRemove.isExecuting}
+                    data-testid="worktree-bulk-remove"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Remove worktrees
+                  </Button>
+                </div>
               </div>
             </AppPaletteDialog.Footer>
           ) : filteredWorktrees.length > 0 ? (

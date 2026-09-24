@@ -159,6 +159,13 @@ test("Worktree overview — fleets, states and themes", async ({ page }) => {
     await expect(modal.locator('[aria-selected="true"]')).toHaveCount(2);
     await page.waitForTimeout(150);
     written.push(await shoot(page, `selection-${theme}.png`));
+
+    // Leaving selection mode from the bar's own Clear must hand focus to the
+    // list, not strand it on the document as the bar unmounts.
+    await modal.getByRole("button", { name: "Clear", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await expect(modal.locator('[aria-selected="true"]')).toHaveCount(0);
+    await expect(modal.getByRole("grid")).toBeFocused();
   }
 
   // The row menu from the keyboard: Shift+F10 on the cursor row, which lists
