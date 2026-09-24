@@ -215,6 +215,11 @@ const initialState: HelpPanelState = {
  * state unchanged when the lane isn't open — a late callback from a lane the
  * user just closed must not resurrect it.
  */
+// Monotonic across the store's lifetime rather than derived from the pending
+// request: the rail clears a request once handled, and a count restarted from
+// that cleared state would reissue a number the rail has already acted on.
+let figureRequestSeq = 0;
+
 function patchSlot(
   state: HelpPanelState,
   slot: number,
@@ -538,7 +543,7 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           patchSlot(s, slot, (entry) => ({
             ...entry,
             activeFigureNumber: figureNumber,
-            figureRequest: { figureNumber, open, seq: (entry.figureRequest?.seq ?? 0) + 1 },
+            figureRequest: { figureNumber, open, seq: ++figureRequestSeq },
           }))
         ),
 

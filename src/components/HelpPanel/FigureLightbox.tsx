@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, ImageOff, RotateCw } from "lucide-react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
@@ -61,9 +61,16 @@ export function FigureLightbox({
   });
   const status: LoadStatus = load.key === imageKey ? load.status : "pending";
 
-  // Actual size is per figure: stepping to another one goes back to fit.
-  const [actualSizeImageId, setActualSizeImageId] = useState<string | null>(null);
-  const isActualSize = figure !== undefined && actualSizeImageId === figure.imageId;
+  // Actual size belongs to the figure on screen: any change of figure — a step,
+  // or the rail opening another — goes back to fit.
+  const [isActualSize, setIsActualSize] = useState(false);
+  const [sizedImageId, setSizedImageId] = useState(figure?.imageId);
+  if (figure && figure.imageId !== sizedImageId) {
+    setSizedImageId(figure.imageId);
+    setIsActualSize(false);
+  }
+
+  const stageRef = useRef<HTMLDivElement>(null);
 
   const hasPrev = selectedIndex > 0;
   const hasNext = selectedIndex !== -1 && selectedIndex < figures.length - 1;
@@ -76,7 +83,12 @@ export function FigureLightbox({
   useEffect(() => {
     if (!isOpen) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.isComposing || e.repeat) return;
+      if (e.isComposing || e.repeat || e.defaultPrevented) return;
+      if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      // An enlarged figure scrolls with these keys while its stage has focus.
+      if (e.target instanceof Node && stageRef.current?.contains(e.target) && isActualSize) {
+        return;
+      }
       let index: number | null = null;
       if (e.key === "ArrowLeft" && hasPrev) index = selectedIndex - 1;
       else if (e.key === "ArrowRight" && hasNext) index = selectedIndex + 1;
@@ -88,7 +100,7 @@ export function FigureLightbox({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isOpen, hasPrev, hasNext, selectedIndex, figures, onSelectFigure]);
+  }, [isOpen, hasPrev, hasNext, selectedIndex, figures, onSelectFigure, isActualSize]);
 
   // Warm the neighbours so stepping doesn't flash an empty stage.
   useEffect(() => {
@@ -104,7 +116,7 @@ export function FigureLightbox({
   if (!figure) return null;
 
   const position = isOpen ? selectedIndex + 1 : figures.indexOf(figure) + 1;
-  const toggleActualSize = () => setActualSizeImageId(isActualSize ? null : figure.imageId);
+  const toggleActualSize = () => setIsActualSize((on) => !on);
 
   return (
     <AppDialog
@@ -137,9 +149,15 @@ export function FigureLightbox({
               available={hasPrev}
               onStep={() => goTo(selectedIndex - 1)}
             />
+            {/* Focusable at actual size so the keyboard can scroll it; always a
+                programmatic focus target so Retry has somewhere to hand focus. */}
             <div
+              ref={stageRef}
+              tabIndex={isActualSize ? 0 : -1}
+              role={isActualSize ? "region" : undefined}
+              aria-label={isActualSize ? `Figure ${figure.figureNumber} at actual size` : undefined}
               className={cn(
-                "relative h-full min-w-0 flex-1 rounded-[var(--radius-md)] bg-overlay-subtle",
+                "relative h-full min-w-0 flex-1 rounded-[var(--radius-md)] bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
                 isActualSize ? "overflow-auto" : "overflow-hidden"
               )}
               data-testid="figure-lightbox-stage"
@@ -151,7 +169,15 @@ export function FigureLightbox({
                 >
                   <ImageOff className="w-8 h-8" aria-hidden="true" />
                   <p className="text-sm">Couldn't load figure {figure.figureNumber}</p>
-                  <Button variant="subtle" size="sm" onClick={() => setRetryNonce((n) => n + 1)}>
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    onClick={() => {
+                      setRetryNonce((n) => n + 1);
+                      // Retry unmounts itself; keep focus inside the dialog.
+                      stageRef.current?.focus({ preventScroll: true });
+                    }}
+                  >
                     <RotateCw aria-hidden="true" />
                     Retry
                   </Button>
@@ -203,12 +229,13 @@ export function FigureLightbox({
           </div>
 
           {/* Attribution frame — kept outside the <img> so a documentation image
-              can't pass as Daintree's own UI. A caption of up to two lines fits
-              without moving anything; a longer one scrolls in place. */}
-          <figcaption className="flex min-h-[3.25rem] items-start gap-4 border-t border-border-default pt-3">
+              can't pass as Daintree's own UI. Fixed height: two caption lines fit,
+              a longer caption scrolls in place, so the dialog — and the step
+              buttons in it — never resize from one figure to the next. */}
+          <figcaption className="flex h-19 items-start gap-4 border-t border-border-default pt-3">
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               {figure.caption && (
-                <p className="max-h-16 overflow-y-auto text-sm text-text-primary select-text">
+                <p className="max-h-10 overflow-y-auto text-sm text-text-primary select-text">
                   {figure.caption}
                 </p>
               )}

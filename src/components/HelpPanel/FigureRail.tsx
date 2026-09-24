@@ -71,18 +71,18 @@ export function FigureRail({
   // The scroll is idempotent and runs on every pass while the request is
   // pending, so it still wins when the scroll-to-newest effect above re-runs
   // after it (StrictMode's remount does exactly that); opening is once only.
-  const handledSeqRef = useRef<number | null>(null);
+  const handledRequestRef = useRef<HelpFigureRequest | null>(null);
   useEffect(() => {
     if (!figureRequest) return;
-    const { figureNumber, open, seq } = figureRequest;
+    const { figureNumber, open } = figureRequest;
     const known = figures.some((f) => f.figureNumber === figureNumber);
     if (known) {
       scrollRef.current
         ?.querySelector(`[data-figure-number="${figureNumber}"]`)
         ?.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
-    if (handledSeqRef.current === seq) return;
-    handledSeqRef.current = seq;
+    if (handledRequestRef.current === figureRequest) return;
+    handledRequestRef.current = figureRequest;
     if (known && open) setSelectedFigureNumber(figureNumber);
     onFigureRequestHandled?.();
   }, [figureRequest, figures, onFigureRequestHandled]);
@@ -184,15 +184,27 @@ function FigureThumbnail({ figure, isNewest, isCurrent, onClick }: FigureThumbna
   const [status, setStatus] = useState<"pending" | "loaded" | "failed">("pending");
   // Bumping the nonce remounts the <img> to fire a fresh request on retry.
   const [retryNonce, setRetryNonce] = useState(0);
+  const openButtonRef = useRef<HTMLButtonElement>(null);
+  const [focusAfterRetry, setFocusAfterRetry] = useState(false);
 
   const handleRetry = () => {
     setStatus("pending");
     setRetryNonce((n) => n + 1);
+    // Retry unmounts itself, so hand focus to the thumbnail that replaces it
+    // rather than letting it fall out of the rail.
+    setFocusAfterRetry(true);
   };
+
+  useEffect(() => {
+    if (!focusAfterRetry || status === "failed") return;
+    openButtonRef.current?.focus({ preventScroll: true });
+    setFocusAfterRetry(false);
+  }, [focusAfterRetry, status]);
 
   return (
     <div
       role="listitem"
+      aria-current={isCurrent ? "true" : undefined}
       className={cn(
         "relative shrink-0 h-[72px] w-[104px] rounded-[var(--radius-md)] overflow-hidden border bg-overlay-subtle transition-[border-color] duration-150",
         status === "loaded"
@@ -221,9 +233,9 @@ function FigureThumbnail({ figure, isNewest, isCurrent, onClick }: FigureThumbna
         </div>
       ) : (
         <button
+          ref={openButtonRef}
           type="button"
           onClick={onClick}
-          aria-current={isCurrent ? "true" : undefined}
           aria-label={
             figure.caption
               ? `Figure ${figure.figureNumber}: ${figure.caption}`

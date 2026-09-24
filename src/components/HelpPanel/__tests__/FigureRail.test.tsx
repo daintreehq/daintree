@@ -92,6 +92,17 @@ describe("FigureRail", () => {
     expect(screen.queryByRole("button", { name: "Retry figure 1" })).toBeNull();
   });
 
+  it("hands focus to the thumbnail when Retry removes itself", () => {
+    render(<FigureRail figures={[makeFigure(1)]} />);
+    fireEvent.error(screen.getByAltText("Alt 1"));
+    const retry = screen.getByRole("button", { name: "Retry figure 1" });
+    retry.focus();
+    fireEvent.click(retry);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Figure 1: Caption 1" })
+    );
+  });
+
   it("gives each failed thumbnail a figure-scoped retry label", () => {
     render(<FigureRail figures={[makeFigure(1), makeFigure(2)]} />);
     fireEvent.error(screen.getByAltText("Alt 1"));
@@ -164,11 +175,37 @@ describe("FigureRail", () => {
     expect(previous.getAttribute("aria-disabled")).toBeNull();
   });
 
+  it("ignores arrow keys that carry a modifier", () => {
+    render(<FigureRail figures={[makeFigure(1), makeFigure(2)]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Figure 1: Caption 1" }));
+    const lightbox = screen.getByTestId("figure-lightbox");
+    fireEvent.keyDown(window, { key: "ArrowRight", metaKey: true });
+    fireEvent.keyDown(window, { key: "ArrowRight", altKey: true });
+    expect(within(lightbox).getByText("Figure 1, 1 of 2")).toBeTruthy();
+  });
+
+  it("returns to fit whenever the figure on screen changes", () => {
+    render(<FigureRail figures={[makeFigure(1), makeFigure(2)]} />);
+    fireEvent.load(screen.getByAltText("Alt 1"));
+    fireEvent.click(screen.getByRole("button", { name: "Figure 1: Caption 1" }));
+    const lightbox = screen.getByTestId("figure-lightbox");
+    fireEvent.load(within(lightbox).getByAltText("Alt 1"));
+    const toggle = within(lightbox).getByRole("button", { name: "Actual size" });
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(
+      within(lightbox).getByRole("button", { name: "Actual size" }).getAttribute("aria-pressed")
+    ).toBe("false");
+  });
+
   describe("current figure", () => {
     const current = () =>
       screen
         .getAllByTestId("figure-thumbnail")
-        .filter((t) => t.querySelector('[aria-current="true"]'))
+        .filter((t) => t.getAttribute("aria-current") === "true")
         .map((t) => t.getAttribute("data-figure-number"));
 
     it("marks exactly one thumbnail current, defaulting to the newest", () => {
@@ -183,6 +220,12 @@ describe("FigureRail", () => {
           activeFigureNumber={1}
         />
       );
+      expect(current()).toEqual(["1"]);
+    });
+
+    it("keeps marking a failed thumbnail current", () => {
+      render(<FigureRail figures={[makeFigure(1), makeFigure(2)]} activeFigureNumber={1} />);
+      fireEvent.error(screen.getByAltText("Alt 1"));
       expect(current()).toEqual(["1"]);
     });
 
@@ -229,6 +272,20 @@ describe("FigureRail", () => {
       );
       expect(screen.queryByTestId("figure-lightbox")).toBeNull();
       expect(onFigureRequestHandled).toHaveBeenCalledTimes(1);
+    });
+
+    // The store clears a request once the rail handles it; a later activation
+    // must never be mistaken for the one already handled, whatever it carries.
+    it("acts on every new request, even one that repeats an earlier request's fields", () => {
+      const figures = [makeFigure(1), makeFigure(2)];
+      const { rerender } = render(
+        <FigureRail figures={figures} figureRequest={{ figureNumber: 1, open: false, seq: 1 }} />
+      );
+      rerender(<FigureRail figures={figures} figureRequest={undefined} />);
+      rerender(
+        <FigureRail figures={figures} figureRequest={{ figureNumber: 1, open: true, seq: 1 }} />
+      );
+      expect(screen.getByTestId("figure-lightbox")).toBeTruthy();
     });
 
     it("acts on a request once, however often the rail re-renders before it is cleared", () => {
