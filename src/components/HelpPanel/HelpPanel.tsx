@@ -219,6 +219,8 @@ export function HelpPanel({
     conversationTouched,
     focusRequest,
     figures,
+    activeFigureNumber,
+    figureRequest,
     markConversationStarted,
     setWidth,
     setOpen,
@@ -239,6 +241,8 @@ export function HelpPanel({
       conversationTouched: selectSlot(s, s.activeSlot).conversationTouched,
       focusRequest: s.focusRequest,
       figures: selectSlot(s, s.activeSlot).figures,
+      activeFigureNumber: selectSlot(s, s.activeSlot).activeFigureNumber,
+      figureRequest: selectSlot(s, s.activeSlot).figureRequest,
       markConversationStarted: s.markConversationStarted,
       setWidth: s.setWidth,
       setOpen: s.setOpen,
@@ -1577,7 +1581,19 @@ export function HelpPanel({
                   />
                 </Suspense>
               )}
-              {figures.length > 0 && <FigureRail figures={figures} />}
+              {figures.length > 0 && (
+                <FigureRail
+                  figures={figures}
+                  activeFigureNumber={activeFigureNumber}
+                  figureRequest={figureRequest}
+                  onActivateFigure={(figureNumber) =>
+                    useHelpPanelStore.getState().setActiveFigureNumber(activeSlot, figureNumber)
+                  }
+                  onFigureRequestHandled={() =>
+                    useHelpPanelStore.getState().clearFigureRequest(activeSlot)
+                  }
+                />
+              )}
             </>
           )
         ) : session.assistantVersionTooOld ? (

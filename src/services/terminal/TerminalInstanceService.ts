@@ -1533,10 +1533,9 @@ class TerminalInstanceService {
             const state = useHelpPanelStore.getState();
             const slot = selectSlotForTerminal(state, id);
             if (slot === null) return;
-            state.setActiveFigureNumber(slot, figureNumber);
-            // Lightbox open on modified-click lands with the figure rail
-            // (#9829); the highlight is the interim affordance until then.
-            void openLightbox;
+            // Plain click marks the figure current in the rail; Cmd/Ctrl+click
+            // also opens it in the lightbox.
+            state.activateFigure(slot, figureNumber, openLightbox);
           }
         );
       } catch (err) {

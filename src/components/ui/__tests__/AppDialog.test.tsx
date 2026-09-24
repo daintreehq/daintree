@@ -532,6 +532,67 @@ describe("AppDialog focus trapping", () => {
       );
     }
 
+    async function openClosePreferring(
+      restoreFocusTo: FocusTarget,
+      preferRestoreFocusTo: boolean
+    ): Promise<void> {
+      const dialog = (isOpen: boolean) => (
+        <>
+          <Dispatcher />
+          <AppDialog
+            isOpen={isOpen}
+            onClose={() => {}}
+            restoreFocusTo={restoreFocusTo}
+            preferRestoreFocusTo={preferRestoreFocusTo}
+          >
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      const { rerender } = render(dialog(true));
+      await act(() => vi.runAllTimersAsync());
+      rerender(dialog(false));
+    }
+
+    it("tries restoreFocusTo before a still-mounted trigger when preferred", async () => {
+      const { root, trigger } = setupTriggerAndRoot();
+      const preferred = document.createElement("button");
+      preferred.textContent = "Preferred";
+      document.body.appendChild(preferred);
+
+      await openClosePreferring(() => preferred, true);
+
+      expect(document.activeElement).toBe(preferred);
+      preferred.remove();
+      trigger.remove();
+      root.remove();
+    });
+
+    it("still returns to the trigger when the preferred target resolves to nothing", async () => {
+      const { root, trigger } = setupTriggerAndRoot();
+
+      await openClosePreferring(() => null, true);
+
+      expect(document.activeElement).toBe(trigger);
+      trigger.remove();
+      root.remove();
+    });
+
+    it("returns to a still-mounted trigger when restoreFocusTo is not preferred", async () => {
+      const { root, trigger } = setupTriggerAndRoot();
+      const successor = document.createElement("button");
+      document.body.appendChild(successor);
+
+      await openClosePreferring(() => successor, false);
+
+      expect(document.activeElement).toBe(trigger);
+      successor.remove();
+      trigger.remove();
+      root.remove();
+    });
+
     it("focuses a connected ref target instead of the #root fallback", async () => {
       const { root, fallbackButton, trigger } = setupTriggerAndRoot();
       const successor = document.createElement("button");

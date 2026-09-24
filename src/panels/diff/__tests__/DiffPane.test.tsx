@@ -343,17 +343,24 @@ describe("DiffPane — file stepping", () => {
     );
   });
 
-  it("disables the boundary buttons at each end", () => {
+  // Unavailable, not natively disabled: a focused Next that reaches the last
+  // file must keep focus, and a native `disabled` drops it to <body>.
+  it("marks the boundary buttons unavailable at each end without making them unfocusable", () => {
+    const unavailable = (label: string) => {
+      const button = screen.getByLabelText(label);
+      expect(button.hasAttribute("disabled")).toBe(false);
+      return button.getAttribute("aria-disabled") === "true";
+    };
     seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet });
     const { unmount } = renderPane();
-    expect(screen.getByLabelText("Previous file").hasAttribute("disabled")).toBe(true);
-    expect(screen.getByLabelText("Next file").hasAttribute("disabled")).toBe(false);
+    expect(unavailable("Previous file")).toBe(true);
+    expect(unavailable("Next file")).toBe(false);
     unmount();
 
     seedPanel({ filePath: "c.ts", fileStatus: "modified", changeSet });
     renderPane();
-    expect(screen.getByLabelText("Previous file").hasAttribute("disabled")).toBe(false);
-    expect(screen.getByLabelText("Next file").hasAttribute("disabled")).toBe(true);
+    expect(unavailable("Previous file")).toBe(false);
+    expect(unavailable("Next file")).toBe(true);
   });
 
   it("clamps the keyboard shortcuts at both boundaries instead of stepping off the set", () => {
