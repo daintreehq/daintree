@@ -296,8 +296,8 @@ interface PoolButtonRowProps {
   isVisible: boolean;
   onToggle: (buttonId: AnyToolbarButtonId) => void;
   metadata: ToolbarButtonMetadata | undefined;
-  /** Only where it adds something the label doesn't — which plugin a button came from. */
-  showDescription?: boolean;
+  /** Only where it adds something the label doesn't: which plugin, or that the CLI is missing. */
+  description?: string;
 }
 
 // A button that is not on the toolbar: no position to show, so no grip and no
@@ -309,7 +309,7 @@ function PoolButtonRow({
   isVisible,
   onToggle,
   metadata,
-  showDescription = false,
+  description,
 }: PoolButtonRowProps) {
   if (!metadata) return null;
   const Icon = metadata.icon;
@@ -323,7 +323,10 @@ function PoolButtonRow({
         </span>
       }
       labelText={metadata.label}
-      description={showDescription ? metadata.description : undefined}
+      description={
+        // Indented past the icon, so it reads under the name it qualifies.
+        description ? <span className="block pl-6.5">{description}</span> : undefined
+      }
       onRowClick={() => onToggle(buttonId)}
       control={({ descriptionId }) => (
         <SettingsSwitch
@@ -654,9 +657,12 @@ export function ToolbarSettingsTab() {
     setRowHomes((prev) => new Map([...prev].filter(([, home]) => home !== "pool")));
   };
 
+  // The latest switch pressed decides: a slotless plugin button switched off in
+  // its column drops into the list below, and switching it back on there must
+  // keep that row — the one holding focus — rather than the column it left.
   const rememberHome = (id: AnyToolbarButtonId, home: RowHome) => {
     setRowHomes((prev) => {
-      if (prev.has(id)) return prev;
+      if (prev.get(id) === home) return prev;
       const next = new Map(prev);
       next.set(id, home);
       return next;
@@ -923,14 +929,18 @@ export function ToolbarSettingsTab() {
   const poolAgents = LAUNCHABLE_AGENT_IDS.filter(inPool);
   // The inventory rule: agents whose CLI isn't on this machine are the healthy
   // remainder, disclosed on request. One the user toggled this visit stays out.
-  const isUninstalledAgent = (id: AnyToolbarButtonId) =>
+  const isNotInstalled = (id: AnyToolbarButtonId) =>
     agentAvailability != null &&
-    (agentAvailability[id] === undefined || agentAvailability[id] === "missing") &&
-    !rowHomes.has(id);
+    (agentAvailability[id] === undefined || agentAvailability[id] === "missing");
+  const isUninstalledAgent = (id: AnyToolbarButtonId) => isNotInstalled(id) && !rowHomes.has(id);
   const uninstalledAgentCount = poolAgents.filter(isUninstalledAgent).length;
-  const listedPoolAgents = showUninstalledAgents
-    ? poolAgents
-    : poolAgents.filter((id) => !isUninstalledAgent(id));
+  // Installed first, so the disclosure opens the rest below them rather than
+  // interleaving them; the order depends only on availability, never on a
+  // toggle, so no row moves under the pointer.
+  const listedPoolAgents = [
+    ...poolAgents.filter((id) => !isNotInstalled(id)),
+    ...poolAgents.filter(isNotInstalled),
+  ].filter((id) => showUninstalledAgents || !isUninstalledAgent(id));
   const poolPanels = LAUNCHER_PANEL_BUTTON_IDS.filter(inPool);
   const poolPlugins = pluginButtonIds.filter(inPool);
   const poolBuiltIns = withoutDuplicates([...groupedLeft, ...groupedRight]).filter(
@@ -1049,6 +1059,7 @@ export function ToolbarSettingsTab() {
                     isVisible={isOnToolbar(buttonId)}
                     onToggle={(id) => handlePoolToggle(id, "left")}
                     metadata={allMetadata[buttonId]}
+                    description={isNotInstalled(buttonId) ? "Not installed" : undefined}
                   />
                 ))}
                 {uninstalledAgentCount > 0 && (
@@ -1101,7 +1112,7 @@ export function ToolbarSettingsTab() {
                     isVisible={isOnToolbar(buttonId)}
                     onToggle={(id) => handlePoolToggle(id, "right")}
                     metadata={allMetadata[buttonId]}
-                    showDescription
+                    description={allMetadata[buttonId]?.description}
                   />
                 ))}
               </SettingsGroup>

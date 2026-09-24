@@ -1018,6 +1018,31 @@ describe("ToolbarSettingsTab — plugin button promotion (#11304)", () => {
     expect(switchNamesIn(poolSection(container))).toContain(switchName("Hello ping"));
   });
 
+  it("keeps the pressed switch when a slotless contribution goes off and back on", () => {
+    mockToolbarState = makeToolbarState({
+      ...mockToolbarState.layout,
+      pinnedButtons: { "acme.ping": true },
+    });
+    const { container, getByLabelText, rerender } = render(<ToolbarSettingsTab />);
+
+    fireEvent.click(getByLabelText(switchName("Hello ping")));
+    mockToolbarState = makeToolbarState({ ...mockToolbarState.layout, pinnedButtons: {} });
+    rerender(<ToolbarSettingsTab />);
+
+    const poolSwitch = getByLabelText(switchName("Hello ping"));
+    expect(poolSection(container)!.contains(poolSwitch)).toBe(true);
+    fireEvent.click(poolSwitch);
+    mockToolbarState = makeToolbarState({
+      ...mockToolbarState.layout,
+      pinnedButtons: { "acme.ping": true },
+    });
+    rerender(<ToolbarSettingsTab />);
+
+    expect(poolSwitch.isConnected).toBe(true);
+    expect(poolSwitch.getAttribute("aria-checked")).toBe("true");
+    expect(switchNamesIn(container).filter((n) => n === switchName("Hello ping"))).toHaveLength(1);
+  });
+
   it("routes the plugin switch to setPluginButtonPromoted, never toggleButtonVisibility", () => {
     // The generic hide toggle can only write `false`, which under tray-default
     // semantics would leave the button un-promoted no matter how often it is
