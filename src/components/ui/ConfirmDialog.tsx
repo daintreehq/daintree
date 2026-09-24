@@ -241,6 +241,10 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     <AppDialog
       isOpen={isOpen}
       onClose={handleClose}
+      // Cancel is already disabled while the confirm runs; Escape, the backdrop
+      // and the close button have to agree, or dismissing mid-apply unmounts the
+      // only surface that can report how it ended.
+      dismissible={!isConfirmLoading}
       size={size}
       variant={variant}
       hasPreview={hasPreview}

@@ -79,6 +79,8 @@ interface AppDialogContextValue {
   titleId: string;
   descriptionId: string;
   variant: DialogVariant;
+  /** Mirrors the dialog's `dismissible`, so the close button can say it's unavailable. */
+  dismissible: boolean;
 }
 
 const AppDialogContext = createContext<AppDialogContextValue | null>(null);
@@ -407,7 +409,9 @@ export function AppDialog({
   if (!shouldRender) return null;
 
   return createPortal(
-    <AppDialogContext.Provider value={{ onClose: handleClose, titleId, descriptionId, variant }}>
+    <AppDialogContext.Provider
+      value={{ onClose: handleClose, titleId, descriptionId, variant, dismissible }}
+    >
       <div
         className={cn(
           "fixed inset-0 flex items-center justify-center bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur)] backdrop-saturate-[var(--theme-material-saturation)]",
@@ -553,6 +557,9 @@ AppDialog.CloseButton = function AppDialogCloseButton({
   return (
     <SurfaceHeaderCloseButton
       onClick={context?.onClose}
+      // A locked dialog swallows the click anyway; say so instead of offering
+      // an X that looks live beside a disabled Cancel.
+      disabled={context ? !context.dismissible : false}
       className={className}
       aria-label={ariaLabel}
     />
