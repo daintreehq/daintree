@@ -57,6 +57,7 @@ function samplesOf(fixture: ResourceBadgeFixture, i: number) {
     cpuPercent: fixture.cpu[i]!,
     memoryKb: memory,
     breakdown: fixture.breakdown ?? [],
+    processCount: fixture.processCount ?? fixture.breakdown?.length,
   };
 }
 

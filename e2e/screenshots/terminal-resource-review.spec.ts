@@ -31,7 +31,7 @@ import path from "path";
 import { startPreviewServer, stubViteHmrClient } from "../helpers/previewHarness";
 import {
   FIXTURE_NAMES,
-  TOOLTIP_FIXTURE,
+  TOOLTIP_FIXTURES,
   type FixtureName,
 } from "../../src/components/Terminal/__preview__/resourceBadgeFixtures";
 
@@ -170,6 +170,34 @@ async function snapZoom(page: Page, name: FixtureName, file: string): Promise<st
   return out;
 }
 
+function tooltip(page: Page) {
+  return page.locator("[data-radix-popper-content-wrapper]").first();
+}
+
+async function snapTooltip(page: Page, name: FixtureName, file: string): Promise<string> {
+  const tip = tooltip(page);
+  await expect(tip, `${name}: tooltip never opened`).toBeVisible({ timeout: 3_000 });
+  await expect(tip, `${name}: tooltip has no breakdown`).toContainText(/PID/);
+  await page.waitForTimeout(250);
+  const h = (await header(page, name).boundingBox())!;
+  const t = (await tip.boundingBox())!;
+  const x = Math.min(h.x, t.x) - 8;
+  const right = Math.max(h.x + h.width, t.x + t.width) + 8;
+  const out = path.join(OUT_DIR, file);
+  await page.screenshot({
+    path: out,
+    clip: { x, y: h.y - 8, width: right - x, height: t.y + t.height - h.y + 16 },
+  });
+  return out;
+}
+
+async function dismissTooltip(page: Page): Promise<void> {
+  await page.mouse.move(635, 1395);
+  await page.keyboard.press("Escape");
+  await expect(tooltip(page), "tooltip stayed open into the next capture").toBeHidden();
+  await page.waitForTimeout(200);
+}
+
 test("Terminal resource badge — states and themes", async ({ browser }) => {
   test.info().annotations.push({
     type: "conditional-skip",
@@ -198,27 +226,24 @@ test("Terminal resource badge — states and themes", async ({ browser }) => {
     }
 
     // The per-process breakdown, opened by a real pointer.
-    await badge(page, TOOLTIP_FIXTURE).hover();
-    const tip = page.locator("[data-radix-popper-content-wrapper]").first();
-    await expect(tip, "tooltip never opened").toBeVisible({ timeout: 3_000 });
-    await expect(tip).toContainText(/cargo/);
-    await page.waitForTimeout(250);
-    {
-      const h = (await header(page, TOOLTIP_FIXTURE).boundingBox())!;
-      const t = (await tip.boundingBox())!;
-      const x = Math.min(h.x, t.x) - 8;
-      const right = Math.max(h.x + h.width, t.x + t.width) + 8;
-      const out = path.join(OUT_DIR, `tooltip--${theme}.png`);
-      await page.screenshot({
-        path: out,
-        clip: { x, y: h.y - 8, width: right - x, height: t.y + t.height - h.y + 16 },
-      });
-      written.push(out);
+    for (const name of TOOLTIP_FIXTURES) {
+      await badge(page, name).hover();
+      written.push(await snapTooltip(page, name, `tooltip--${name}--${theme}.png`));
+      await dismissTooltip(page);
     }
-    await page.mouse.move(635, 1395);
-    await page.keyboard.press("Escape");
-    await expect(tip, "tooltip stayed open into the contact sheet").toBeHidden();
-    await page.waitForTimeout(200);
+
+    // The same breakdown reached from the keyboard: focus lands on the badge,
+    // its ring shows, and the tooltip opens without a pointer.
+    {
+      const target = badge(page, "warm");
+      await page.keyboard.press("Shift");
+      await target.focus();
+      const ringed = await target.evaluate((el) => el.matches(":focus-visible"));
+      if (!ringed) throw new Error("warm: badge did not take :focus-visible — refusing to write");
+      written.push(await snapTooltip(page, "warm", `focus--warm--${theme}.png`));
+      await target.blur();
+      await dismissTooltip(page);
+    }
 
     const shell = page.locator("[data-preview-shell]");
     const out = path.join(OUT_DIR, `sheet--${theme}.png`);

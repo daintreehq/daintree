@@ -25,6 +25,8 @@ export interface ResourceBadgeFixture {
   /** Memory for every sample, or one value per sample. */
   memoryKb: number | number[];
   breakdown?: TerminalResourceProcess[];
+  /** Processes in the tree when `breakdown` is the capped top ten. */
+  processCount?: number;
   queueCount?: number;
   sessionCost?: number;
   sessionTokens?: number;
@@ -94,7 +96,8 @@ export const FIXTURES = {
   hot: {
     what: "a release build pegging several cores — ps reports 380%, over the 100% the line can draw",
     title: "cargo build --release",
-    cpu: [...wobble(6, 40, 20, 5), ...wobble(24, 380, 40, 13)],
+    // The last sample is the breakdown's sum, as the pty-host would report it.
+    cpu: [...wobble(6, 40, 20, 5), ...wobble(23, 360, 50, 13), 397],
     memoryKb: [
       ...Array.from({ length: 12 }, (_, i) => 900_000 + i * 60_000),
       ...Array.from({ length: 18 }, () => 2_874_000),
@@ -102,16 +105,24 @@ export const FIXTURES = {
     breakdown: BUILD_BREAKDOWN,
   },
   "memory-heavy": {
-    what: "quiet CPU but a language server holding 2.3G — red earned by memory alone",
+    what: "quiet CPU but a language server holding 2.3G — red earned by memory alone, its row kept past the cap",
     title: "Codex: port the billing worker",
     agentId: "codex",
     agentState: "working",
-    cpu: wobble(30, 6, 4, 19),
+    cpu: [...wobble(29, 6, 4, 19), 6.6],
     memoryKb: 2_411_000,
+    processCount: 14,
     breakdown: [
-      { pid: 70101, comm: "codex", cpuPercent: 4.2, memoryKb: 402_000 },
-      { pid: 70144, comm: "tsserver", cpuPercent: 1.8, memoryKb: 2_004_000 },
-      { pid: 70100, comm: "zsh", cpuPercent: 0, memoryKb: 4_100 },
+      { pid: 70101, comm: "codex", cpuPercent: 4.2, memoryKb: 238_000 },
+      { pid: 70160, comm: "node", cpuPercent: 0.6, memoryKb: 61_000 },
+      { pid: 70161, comm: "esbuild", cpuPercent: 0.5, memoryKb: 24_000 },
+      { pid: 70162, comm: "rg", cpuPercent: 0.4, memoryKb: 12_800 },
+      { pid: 70163, comm: "git", cpuPercent: 0.3, memoryKb: 9_400 },
+      { pid: 70164, comm: "node", cpuPercent: 0.2, memoryKb: 48_000 },
+      { pid: 70165, comm: "prettier", cpuPercent: 0.2, memoryKb: 31_000 },
+      { pid: 70166, comm: "eslint_d", cpuPercent: 0.1, memoryKb: 88_000 },
+      { pid: 70100, comm: "zsh", cpuPercent: 0.1, memoryKb: 4_100 },
+      { pid: 70144, comm: "tsserver", cpuPercent: 0, memoryKb: 1_874_000 },
     ],
   },
   cooled: {
@@ -149,5 +160,5 @@ export const FIXTURE_NAMES = Object.keys(FIXTURES).filter(
   (key): key is FixtureName => key in FIXTURES
 );
 
-/** The fixture whose tooltip the harness opens — the one with the most rows. */
-export const TOOLTIP_FIXTURE: FixtureName = "hot";
+/** Fixtures whose breakdown the harness opens: over one core, and past the row cap. */
+export const TOOLTIP_FIXTURES: FixtureName[] = ["hot", "memory-heavy"];
