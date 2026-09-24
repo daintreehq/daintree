@@ -1,5 +1,5 @@
 import "./installShims";
-import { StrictMode, use, useEffect, useMemo, useState, type ReactNode } from "react";
+import { StrictMode, use, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { resolveAppTheme } from "@shared/theme/themes";
 import type { WorktreeSnapshot } from "@shared/types";
@@ -36,6 +36,7 @@ import {
   type GridSceneName,
 } from "./gridScenes";
 import { GRID_GAP_PX } from "@/lib/terminalLayout";
+import { TwoPaneSplitDivider, DIVIDER_WIDTH_PX } from "@/components/Terminal/TwoPaneSplitDivider";
 import "@/index.css";
 
 /**
@@ -492,9 +493,55 @@ function GridScenePane({ pane }: { pane: GridPane }) {
  * canvas, the grid background token, the gutter and the edge padding. The gutter
  * comes from the same constant the grid reads, so a change there shows up here.
  */
+/**
+ * The two-pane split, drawn the way `ContentGridDefault` draws it in split mode: no
+ * gutter, and the real `TwoPaneSplitDivider` in a fixed track between two `fr`
+ * tracks. The ratio is local so a real drag and real keys move it; the layout's
+ * clamp and store are what this leaves out.
+ */
+function SplitSceneView({ name, def }: { name: GridSceneName; def: GridScene }) {
+  const initial = def.split ?? 0.5;
+  const [ratio, setRatio] = useState(initial);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [left, right] = def.panes;
+  return (
+    <div
+      ref={gridRef}
+      data-preview-grid={name}
+      className="bg-noise p-1"
+      style={{
+        width: def.width,
+        height: def.height,
+        display: "grid",
+        gridTemplateColumns: `minmax(0, ${ratio}fr) ${DIVIDER_WIDTH_PX}px minmax(0, ${1 - ratio}fr)`,
+        gridAutoRows: "minmax(0, 1fr)",
+        gap: 0,
+        backgroundColor: "var(--color-grid-bg)",
+      }}
+    >
+      {left && <GridScenePane pane={left} />}
+      <TwoPaneSplitDivider
+        containerRef={gridRef}
+        ratio={ratio}
+        onRatioChange={setRatio}
+        onRatioCommit={noop}
+        onDoubleClick={() => setRatio(initial)}
+      />
+      {right && <GridScenePane pane={right} />}
+    </div>
+  );
+}
+
 function GridSceneView({ name }: { name: GridSceneName }) {
   const def: GridScene = GRID_SCENES[name];
   const branch = def.panes.find((p: GridPane) => p.branch)?.branch;
+  if (def.split !== undefined) {
+    return (
+      <SeedWorktrees fixture={{ branch }}>
+        <SplitSceneView name={name} def={def} />
+      </SeedWorktrees>
+    );
+  }
   return (
     <SeedWorktrees fixture={{ branch }}>
       <div
