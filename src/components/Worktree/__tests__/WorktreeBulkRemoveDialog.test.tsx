@@ -345,7 +345,7 @@ describe("WorktreeBulkRemoveDialog — gating", () => {
 
     const status = document.querySelector('[role="status"]');
     expect(status).not.toBeNull();
-    expect(status!.getAttribute("aria-busy")).toBe("true");
+    expect(status!.getAttribute("aria-live")).toBe("polite");
     // A zero-count row would be a claim the evidence has not made yet.
     expect(document.querySelector('[data-testid="bulk-remove-file-list"]')).toBeNull();
   });

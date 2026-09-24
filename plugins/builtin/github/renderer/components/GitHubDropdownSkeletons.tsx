@@ -138,7 +138,6 @@ export function GitHubResourceListSkeleton({
       className="relative w-[450px] flex flex-col h-[500px]"
       role="status"
       aria-live="polite"
-      aria-busy="true"
       aria-label="Loading GitHub results"
     >
       <span className="sr-only">Loading GitHub results</span>
@@ -231,11 +230,19 @@ export function GitHubResourceRowsSkeleton({ count, immediate, type }: ResourceR
         >
           <div
             data-state-mark
-            className={cn("w-4 h-4 bg-muted", RESOURCE_ROW_STATE_MARK, RESOURCE_STATE_BONE[type])}
+            data-skeleton-bone=""
+            className={cn(
+              "w-4 h-4 bg-tint/[0.1]",
+              RESOURCE_ROW_STATE_MARK,
+              RESOURCE_STATE_BONE[type]
+            )}
           />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 h-6">
-              <div className="h-4 bg-muted rounded flex-1" />
+              <div
+                data-skeleton-bone=""
+                className="h-4 bg-tint/[0.1] rounded-[var(--radius-xs)] flex-1"
+              />
               {/* Every rail slot the loaded row reserves, from the one order
                   that names them. One short and the title bar jumps the
                   moment data lands — which is the bug this row shipped for
@@ -246,16 +253,25 @@ export function GitHubResourceRowsSkeleton({ count, immediate, type }: ResourceR
                   if (!slot.bone) return null;
                   return (
                     <span key={id} data-rail-slot={id} className={cn(RAIL_SLOT, slot.box)}>
-                      <span className={cn("bg-muted", slot.bone)} />
+                      <span data-skeleton-bone="" className={cn("bg-tint/[0.1]", slot.bone)} />
                     </span>
                   );
                 })}
               </div>
             </div>
             <div className="flex items-center gap-1.5 mt-1 h-4">
-              <div className="h-3 bg-muted rounded w-12" />
-              <div className="h-3 bg-muted rounded w-16" />
-              <div className="h-3 bg-muted rounded w-10" />
+              <div
+                data-skeleton-bone=""
+                className="h-3 bg-tint/[0.1] rounded-[var(--radius-xs)] w-12"
+              />
+              <div
+                data-skeleton-bone=""
+                className="h-3 bg-tint/[0.1] rounded-[var(--radius-xs)] w-16"
+              />
+              <div
+                data-skeleton-bone=""
+                className="h-3 bg-tint/[0.1] rounded-[var(--radius-xs)] w-10"
+              />
             </div>
           </div>
         </div>
@@ -280,11 +296,12 @@ export function ForgeOptionRowsSkeleton({ count, immediate }: SkeletonProps) {
     <div aria-hidden="true">
       {Array.from({ length: renderCount }).map((_, i) => (
         <div key={i} className={cn(FORGE_OPTION_ROW, pulseClass)}>
-          <div className="w-3 h-3 rounded-full bg-muted shrink-0" />
+          <div data-skeleton-bone="" className="w-3 h-3 rounded-full bg-tint/[0.1] shrink-0" />
           <div data-option-line className={FORGE_OPTION_LINE}>
             <div
+              data-skeleton-bone=""
               className={cn(
-                "h-4 bg-muted rounded-lg",
+                "h-4 bg-tint/[0.1] rounded-[var(--radius-xs)]",
                 OPTION_BONE_WIDTHS[i % OPTION_BONE_WIDTHS.length]
               )}
             />
@@ -301,7 +318,7 @@ export function CommitListSkeleton({ count, immediate }: SkeletonProps) {
   const pulseClass = showImmediate ? "animate-pulse-immediate" : "animate-pulse-delayed";
 
   return (
-    <div role="status" aria-live="polite" aria-busy="true" aria-label="Loading commits">
+    <div role="status" aria-live="polite" aria-label="Loading commits">
       <span className="sr-only">Loading commits</span>
       <div aria-hidden="true" className="divide-y divide-[var(--border-divider)]">
         {Array.from({ length: renderCount }).map((_, i) => (
@@ -313,13 +330,28 @@ export function CommitListSkeleton({ count, immediate }: SkeletonProps) {
             {/* The same bones as the commits list it stands in for (the host's
                 LocalCommitsDropdown skeleton), so the swap is one shape. */}
             <div className="flex items-start gap-2 h-full">
-              <div className="w-4 h-4 rounded-full bg-tint/[0.08] mt-0.5 shrink-0" />
+              <div
+                data-skeleton-bone=""
+                className="w-4 h-4 rounded-full bg-tint/[0.1] mt-0.5 shrink-0"
+              />
               <div className="flex-1 min-w-0">
-                <div className="h-5 bg-tint/[0.08] rounded-[var(--radius-sm)] w-3/4" />
+                <div
+                  data-skeleton-bone=""
+                  className="h-5 bg-tint/[0.1] rounded-[var(--radius-xs)] w-3/4"
+                />
                 <div className="mt-0.5 flex items-center gap-1.5">
-                  <div className="h-4 bg-tint/[0.08] rounded-[var(--radius-sm)] w-20" />
-                  <div className="h-4 bg-tint/[0.08] rounded-[var(--radius-sm)] w-12" />
-                  <div className="ml-auto h-4 bg-tint/[0.08] rounded-[var(--radius-sm)] w-14" />
+                  <div
+                    data-skeleton-bone=""
+                    className="h-4 bg-tint/[0.1] rounded-[var(--radius-xs)] w-20"
+                  />
+                  <div
+                    data-skeleton-bone=""
+                    className="h-4 bg-tint/[0.1] rounded-[var(--radius-xs)] w-12"
+                  />
+                  <div
+                    data-skeleton-bone=""
+                    className="ml-auto h-4 bg-tint/[0.1] rounded-[var(--radius-xs)] w-14"
+                  />
                 </div>
               </div>
             </div>

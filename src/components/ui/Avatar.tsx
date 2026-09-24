@@ -71,6 +71,7 @@ export function Avatar({ src, alt, title, className, shape = "circle" }: AvatarP
       {status !== "loaded" && (
         <span
           data-avatar-fallback={status}
+          data-skeleton-bone={status === "loading" ? "" : undefined}
           className={cn(
             "absolute inset-0 flex items-center justify-center",
             radius,

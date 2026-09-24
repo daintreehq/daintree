@@ -181,11 +181,11 @@ export function AgentHelpOutput({ agentId, agentName, availability }: AgentHelpO
   if (isLoading) {
     body = (
       <div className="px-4 py-3 space-y-2 animate-pulse-delayed" aria-hidden="true">
-        <div className="h-3 bg-overlay-medium rounded-sm w-3/4" />
-        <div className="h-3 bg-overlay-medium rounded-sm w-1/2" />
-        <div className="h-3 bg-overlay-medium rounded-sm w-5/6" />
-        <div className="h-3 bg-overlay-medium rounded-sm w-2/3" />
-        <div className="h-3 bg-overlay-medium rounded-sm w-1/3" />
+        <div data-skeleton-bone="" className="h-3 bg-overlay-medium rounded-sm w-3/4" />
+        <div data-skeleton-bone="" className="h-3 bg-overlay-medium rounded-sm w-1/2" />
+        <div data-skeleton-bone="" className="h-3 bg-overlay-medium rounded-sm w-5/6" />
+        <div data-skeleton-bone="" className="h-3 bg-overlay-medium rounded-sm w-2/3" />
+        <div data-skeleton-bone="" className="h-3 bg-overlay-medium rounded-sm w-1/3" />
       </div>
     );
   } else if (error) {

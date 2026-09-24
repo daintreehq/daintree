@@ -156,10 +156,19 @@ function BucketRowSkeleton({ stillWorking }: { stillWorking: boolean }) {
   return (
     <div className="flex flex-col gap-1.5" aria-busy="true">
       <div className="flex items-baseline justify-between gap-3">
-        <span className="bg-overlay-emphasis animate-pulse-immediate h-3 w-16 rounded-[var(--radius-xs)]" />
-        <span className="bg-overlay-emphasis animate-pulse-immediate h-2.5 w-20 rounded-[var(--radius-xs)]" />
+        <span
+          data-skeleton-bone=""
+          className="bg-overlay-emphasis animate-pulse-immediate h-3 w-16 rounded-[var(--radius-xs)]"
+        />
+        <span
+          data-skeleton-bone=""
+          className="bg-overlay-emphasis animate-pulse-immediate h-2.5 w-20 rounded-[var(--radius-xs)]"
+        />
       </div>
-      <div className="bg-overlay-emphasis animate-pulse-immediate h-1.5 rounded-full" />
+      <div
+        data-skeleton-bone=""
+        className="bg-overlay-emphasis animate-pulse-immediate h-1.5 rounded-full"
+      />
       <span className="text-text-secondary text-2xs">
         {stillWorking ? "Still checking quotas…" : "Checking quotas…"}
       </span>
