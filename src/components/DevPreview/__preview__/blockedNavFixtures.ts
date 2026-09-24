@@ -86,6 +86,8 @@ export const BLOCKED_NAV_FIXTURES = {
     phase: "blocked",
   },
   "narrow-blocked": { width: 480, url: DOCS_URL, canOpenExternal: true, phase: "blocked" },
+  // The narrowest pane a grid leaves: two labelled actions no longer fit a row.
+  "tiny-oauth-offer": { width: 320, url: OAUTH_URL, canOpenExternal: true, phase: "blocked" },
   "narrow-oauth-offer": { width: 480, url: OAUTH_URL, canOpenExternal: true, phase: "blocked" },
   "narrow-oauth-error": {
     width: 480,

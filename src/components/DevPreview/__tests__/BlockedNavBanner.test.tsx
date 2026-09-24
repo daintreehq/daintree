@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { useReducer } from "react";
+import { useEffect, useReducer } from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 
@@ -349,16 +349,21 @@ describe("BlockedNavBanner action feedback", () => {
   }
 
   /** The banner wired to its real reducer, as DevPreviewPane mounts it. */
-  function Mounted({ initial }: { initial: string }) {
+  function Mounted({
+    initial,
+    onDispatchReady,
+  }: {
+    initial: string;
+    onDispatchReady?: (dispatch: (action: BlockedNavAction) => void) => void;
+  }) {
     const [state, dispatch] = useReducer(blockedNavReducer, null, () =>
       blockedNavReducer(null, blocked(initial))
     );
-    reblock = (url) => dispatch(blocked(url));
+    useEffect(() => onDispatchReady?.(dispatch), [onDispatchReady, dispatch]);
     return (
       <BlockedNavBanner state={state} panelId="p-1" webviewElement={null} onDispatch={dispatch} />
     );
   }
-  let reblock: (url: string) => void = () => {};
 
   // Asking for the system browser and not getting it is a failure of the
   // user's own action: it interrupts, and copying is the one way left.
@@ -384,14 +389,85 @@ describe("BlockedNavBanner action feedback", () => {
   it("never shows a late result against a different link", async () => {
     const open = deferred();
     openExternal.mockImplementation(() => open.promise);
-    const { container } = render(<Mounted initial="https://a.example.com/" />);
+    let dispatch: (action: BlockedNavAction) => void = () => {};
+    const { container } = render(
+      <Mounted initial="https://a.example.com/" onDispatchReady={(d) => (dispatch = d)} />
+    );
     fireEvent.click(screen.getByRole("button", { name: /open in external browser/i }));
-    act(() => reblock("https://b.example.com/"));
+    act(() => {
+      dispatch(blocked("https://b.example.com/"));
+    });
     await act(async () => {
       open.reject(new Error("no handler"));
       await open.promise.catch(() => {});
     });
     expect(bannerRoot(container).getAttribute("role")).toBe("status");
     expect(bannerRoot(container).textContent).toContain("b.example.com");
+  });
+});
+
+describe("BlockedNavBanner copy feedback lifetime", () => {
+  const blocked = (url: string): BlockedNavAction => ({
+    type: "BLOCKED",
+    url,
+    canOpenExternal: true,
+    sessionStorageSnapshot: [],
+  });
+
+  function timedOutWith(result: "copied" | "copy-failed") {
+    let state = blockedNavReducer(null, blocked("https://accounts.example.com/authorize"));
+    state = blockedNavReducer(state, { type: "OAUTH_STARTED" });
+    state = blockedNavReducer(state, { type: "OAUTH_TIMED_OUT" });
+    if (!state) throw new Error("no state");
+    return blockedNavReducer(state, { type: "COPY_RESULT", notice: state.notice, result });
+  }
+
+  // On an error the copy lives in the overflow menu, which closes before the
+  // copy settles: the outcome has to be readable on the band itself.
+  it("reports a demoted copy's outcome outside the closed menu", () => {
+    for (const result of ["copied", "copy-failed"] as const) {
+      const { container, unmount } = render(
+        <BlockedNavBanner
+          state={timedOutWith(result)}
+          panelId="p-1"
+          webviewElement={null}
+          onDispatch={vi.fn()}
+        />
+      );
+      const menu = screen.getByTestId("overflow-content");
+      const outside = Array.from(bannerRoot(container).querySelectorAll('[role="status"]')).filter(
+        (el) => !menu.contains(el)
+      );
+      expect(outside.map((el) => el.textContent).join(" ")).toMatch(/copied|couldn't copy/i);
+      unmount();
+    }
+  });
+
+  // Success fades; a failure stays until the user acts.
+  it("times out a successful copy but never a failed one", () => {
+    vi.useFakeTimers();
+    try {
+      for (const result of ["copied", "copy-failed"] as const) {
+        const onDispatch = vi.fn<(action: BlockedNavAction) => void>();
+        const { unmount } = render(
+          <BlockedNavBanner
+            state={timedOutWith(result)}
+            panelId="p-1"
+            webviewElement={null}
+            onDispatch={onDispatch}
+          />
+        );
+        act(() => {
+          vi.advanceTimersByTime(60_000);
+        });
+        const cleared = onDispatch.mock.calls.some(
+          ([a]) => a.type === "COPY_RESULT" && a.result === null
+        );
+        expect(cleared).toBe(result === "copied");
+        unmount();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

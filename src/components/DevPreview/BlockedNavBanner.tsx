@@ -72,7 +72,8 @@ type BlockedNavAction =
    */
   | { type: "DISMISS_NOTICE"; notice: symbol };
 
-// How long the "Copied" confirmation label lingers before reverting to "Copy URL".
+// How long "Copied" lingers. A failed copy has no timer: when copying is the
+// way forward, the failure has to stay readable until the user acts on it.
 const COPY_FEEDBACK_MS = 2000;
 // "Signed in" is a confirmation, not a state: the banner says the round trip
 // through the browser landed and then gets out of the way. Longer than the copy
@@ -199,7 +200,7 @@ export function BlockedNavBanner({
   // timer ref so no ref is reachable from render — the React Compiler flags
   // transitive ref reads from a render-phase call.
   useEffect(() => {
-    if (!copyFeedback || !notice) return;
+    if (copyFeedback !== "copied" || !notice) return;
     const timer = setTimeout(
       () => onDispatch({ type: "COPY_RESULT", notice, result: null }),
       COPY_FEEDBACK_MS
@@ -459,7 +460,18 @@ export function BlockedNavBanner({
           description={description}
           contextLine={detail}
           action={retryAction}
-          trailingSlot={<BannerOverflowMenu actions={[copyAction]} />}
+          trailingSlot={
+            <>
+              <BannerOverflowMenu actions={[copyAction]} />
+              {/* The menu closes before the copy settles, so its result is
+                  reported on the band, where it stays in view. */}
+              {copyFeedback && (
+                <span role="status" className="text-xs text-text-secondary">
+                  {copyFeedback === "copied" ? "URL copied" : "Couldn't copy the URL"}
+                </span>
+              )}
+            </>
+          }
           onClose={handleDismiss}
           role="alert"
         />
