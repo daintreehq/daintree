@@ -1972,6 +1972,19 @@ describe("PilotView", () => {
       expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
     });
 
+    it("keeps the park actions outside the scrolling body", () => {
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+      altEnter();
+
+      // A tall form on a short window scrolls the body; the verbs must not go
+      // with it.
+      const body = screen.getByRole("group", { name: "Agents" });
+      expect(body.contains(screen.getByTestId("pilot-park-editor"))).toBe(true);
+      expect(body.contains(screen.getByTestId("pilot-park-confirm"))).toBe(false);
+      expect(body.contains(screen.getByTestId("pilot-park-cancel"))).toBe(false);
+    });
+
     it("commits with Enter from the gate list, with the gate under the cursor", async () => {
       seed([
         run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -63,11 +64,20 @@ export function PilotParkEditor({
   target,
   candidates,
   onClose,
+  footerSlot,
 }: {
   target: PilotParkTarget;
   candidates: PilotGateCandidate[];
   /** `changed` is true when a park was created, replaced or lifted. */
   onClose: (changed: boolean) => void;
+  /**
+   * Where the action bar renders: the dialog's footer, outside the body's
+   * scroller. Inside it, a 60vh body on a short window scrolled Park itself
+   * out of view and faded it under the "more below" cue. Portalled, so the
+   * buttons still sit in this component's React tree — Enter handling and the
+   * `data-no-submit` opt-outs reach them unchanged.
+   */
+  footerSlot: HTMLElement | null;
 }) {
   const [note, setNote] = useState(target.existingPark?.note ?? "");
   const [gateId, setGateId] = useState<string>(target.existingPark?.gateRunId ?? GATE_NONE);
@@ -128,11 +138,12 @@ export function PilotParkEditor({
       setGateId(GATE_NONE);
       setGateLost(true);
       // The removed radio took focus with it if it held it.
-      if (!rootRef.current?.contains(document.activeElement)) {
+      const focus = document.activeElement;
+      if (!rootRef.current?.contains(focus) && !footerSlot?.contains(focus)) {
         gateRefs.current.get(GATE_NONE)?.focus();
       }
     }
-  }, [gateId, candidates]);
+  }, [gateId, candidates, footerSlot]);
   /**
    * What the radiogroup RENDERS from, never the raw state: the sync effect
    * above lands one commit late, and a frame whose checked id points at a
@@ -264,7 +275,9 @@ export function PilotParkEditor({
     <div
       ref={rootRef}
       data-testid="pilot-park-editor"
-      className="flex flex-col gap-4 px-3 pt-3 pb-3"
+      // The body scroller pads by 8px; 4 more puts the form on the same 12px
+      // column as the dialog's header label and the footer's Park button.
+      className="flex flex-col gap-4 px-1 py-2"
       onKeyDown={handleKeyDown}
     >
       <div className="flex min-w-0 items-start gap-2.5">
@@ -419,51 +432,55 @@ export function PilotParkEditor({
         </p>
       )}
 
-      <div className="flex items-center gap-2">
-        <Button
-          variant="contrast"
-          size="sm"
-          onClick={confirm}
-          disabled={busy && pending !== "park"}
-          loading={showBusy && pending === "park"}
-          aria-describedby={error !== null ? errorId : undefined}
-          data-testid="pilot-park-confirm"
-        >
-          {primaryLabel}
-          {/* Inherits the button's own ink rather than taking a chip: a
+      {footerSlot !== null &&
+        createPortal(
+          <div className="flex w-full items-center gap-2">
+            <Button
+              variant="contrast"
+              size="sm"
+              onClick={confirm}
+              disabled={busy && pending !== "park"}
+              loading={showBusy && pending === "park"}
+              aria-describedby={error !== null ? errorId : undefined}
+              data-testid="pilot-park-confirm"
+            >
+              {primaryLabel}
+              {/* Inherits the button's own ink rather than taking a chip: a
               boxed keycap on the inverse fill reads as a second control. */}
-          <kbd aria-hidden="true" className={cn(KBD_BARE_CLASS, "text-current")}>
-            ↵
-          </kbd>
-        </Button>
-        {isReparking && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={unpark}
-            disabled={busy && pending !== "unpark"}
-            loading={showBusy && pending === "unpark"}
-            data-no-submit
-            data-testid="pilot-park-unpark"
-          >
-            Unpark
-          </Button>
+              <kbd aria-hidden="true" className={cn(KBD_BARE_CLASS, "text-current")}>
+                ↵
+              </kbd>
+            </Button>
+            {isReparking && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={unpark}
+                disabled={busy && pending !== "unpark"}
+                loading={showBusy && pending === "unpark"}
+                data-no-submit
+                data-testid="pilot-park-unpark"
+              >
+                Unpark
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onClose(false)}
+              disabled={busy}
+              data-no-submit
+              data-testid="pilot-park-cancel"
+              className="ml-auto"
+            >
+              Cancel
+              <kbd aria-hidden="true" className={KBD_BARE_CLASS}>
+                esc
+              </kbd>
+            </Button>
+          </div>,
+          footerSlot
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => onClose(false)}
-          disabled={busy}
-          data-no-submit
-          data-testid="pilot-park-cancel"
-          className="ml-auto"
-        >
-          Cancel
-          <kbd aria-hidden="true" className={KBD_BARE_CLASS}>
-            esc
-          </kbd>
-        </Button>
-      </div>
     </div>
   );
 }

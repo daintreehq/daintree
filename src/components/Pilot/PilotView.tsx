@@ -1175,6 +1175,8 @@ export function PilotView() {
   }, [scope]);
 
   const parkEditing = parkTarget !== null;
+  /** The footer node the park editor portals its action bar into. */
+  const [parkFooterSlot, setParkFooterSlot] = useState<HTMLDivElement | null>(null);
 
   const closeParkEditor = useCallback((_changed: boolean) => {
     setParkTargetId(null);
@@ -1851,6 +1853,7 @@ export function PilotView() {
             target={parkTarget}
             candidates={gateCandidates}
             onClose={closeParkEditor}
+            footerSlot={parkFooterSlot}
           />
         )}
 
@@ -2035,6 +2038,11 @@ export function PilotView() {
         strip under the empty state. Drop the whole footer instead of shipping a
         divider with nothing beneath it.
       */}
+      {parkEditing && (
+        <AppPaletteDialog.Footer>
+          <div ref={setParkFooterSlot} className="flex w-full items-center" />
+        </AppPaletteDialog.Footer>
+      )}
       {!parkEditing && (actionLabel !== null || summary !== "") && (
         <AppPaletteDialog.Footer>
           <PilotFooter
