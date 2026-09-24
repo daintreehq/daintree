@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SearchField } from "@/components/ui/SearchField";
 import { KBD_CLASS, KbdChord } from "@/components/ui/Kbd";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { PALETTE_HEADER_ATTR } from "./paletteHeaderAttr";
@@ -787,82 +788,34 @@ export function PaletteFooterHints({ primaryHint, hints = [] }: PaletteFooterHin
   );
 }
 
-// The search box IS the palette, not a form field sitting inside one, so it
-// takes a recessed wash over the dialog surface rather than the standalone
-// `surface-input` fill. Alpha-based, so it reads the same over a dialog and
-// over the dock launcher's popover.
-//
-// The focus lift that pairs with it draws `selection-outline`, the same token
-// and the same strength `PALETTE_ROW_CLASS` uses for the selected row, so the
-// focused field and the selected row read as one treatment; the ring is that
-// colour again at half alpha, a halo around the border rather than a second
-// signal. Change them together. Neutral rather than accent (#11686): the row,
-// its old rail and this field were three accent signals in one focus region.
-// Tailwind needs the variants written out at each use site, so they live inline
-// below.
-const PALETTE_INPUT_SURFACE =
-  "bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)]";
-
-interface AppPaletteInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+interface AppPaletteInputProps extends Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "size" | "prefix"
+> {
   inputRef?: React.Ref<HTMLInputElement>;
   /**
-   * Optional leading adornment rendered inside the input's border, left of the
-   * editable text. Used by `ActionPalette` to surface a mode-prefix chip
-   * (e.g. `> Commands`). When present, the input loses its hardcoded left
-   * padding so the adornment sits flush with the inner edge.
+   * Optional leading adornment rendered inside the field, between the
+   * magnifier and the editable text. Used by `ActionPalette` to surface a
+   * mode-prefix chip (e.g. `> Commands`).
    */
   inputPrefix?: React.ReactNode;
 }
 
+/**
+ * The palette's search box: the shared search field at its palette size, so it
+ * is the same control as the Worktrees rail and the settings search, one tier
+ * larger. Its neutral focus edge is `selection-outline`, the token
+ * `PALETTE_ROW_CLASS` uses for the selected row's rail — the focused field and
+ * the selected row read as one treatment, so change them together. Neutral
+ * rather than accent (#11686): the field is focused whenever the palette is
+ * open, so accent here would be lit on every opening.
+ */
 AppPaletteDialog.Input = function AppPaletteInput({
-  className,
   inputRef,
   inputPrefix,
   ...props
 }: AppPaletteInputProps) {
-  if (inputPrefix) {
-    return (
-      <div
-        className={cn(
-          // `min-h-9.5` is the plain input's own height (py-2 + a 20px line +
-          // the border), so entering a mode doesn't shrink the field and
-          // hitch the whole list up by a few pixels.
-          "flex w-full min-h-9.5 items-center gap-1.5 pl-2 pr-3 py-1",
-          PALETTE_INPUT_SURFACE,
-          // Neutral focus — see `PALETTE_INPUT_SURFACE`.
-          "focus-within:border-selection-outline focus-within:ring-1 focus-within:ring-selection-outline/50"
-        )}
-      >
-        {inputPrefix}
-        <input
-          ref={inputRef}
-          type="text"
-          className={cn(
-            "flex-1 min-w-0 bg-transparent px-0 py-0 text-sm",
-            "text-text-primary placeholder:text-text-placeholder",
-            "focus:outline-hidden focus:border-transparent focus:ring-0",
-            className
-          )}
-          {...props}
-        />
-      </div>
-    );
-  }
-  return (
-    <input
-      ref={inputRef}
-      type="text"
-      className={cn(
-        "w-full px-3 py-2 text-sm",
-        PALETTE_INPUT_SURFACE,
-        "text-text-primary placeholder:text-text-placeholder",
-        // Neutral focus — see `PALETTE_INPUT_SURFACE`.
-        "focus:outline-hidden focus:border-selection-outline focus:ring-1 focus:ring-selection-outline/50",
-        className
-      )}
-      {...props}
-    />
-  );
+  return <SearchField size="palette" inputRef={inputRef} prefix={inputPrefix} {...props} />;
 };
 
 interface AppPaletteEmptyProps {

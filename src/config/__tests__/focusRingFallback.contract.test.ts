@@ -558,13 +558,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   // wrapper's ring is the only focus indication. The scanner can't see the
   // sibling JSX parent, so these get per-occurrence allowlists.
   {
-    file: "src/components/Settings/SettingsDialog.tsx",
-    fragment:
-      "settings-search-input flex-1 min-w-0 text-xs bg-transparent text-text-primary focus:outline-hidden",
-    reason:
-      "Parent shows focus: wrapper at line 578 has `focus-within:border-accent-primary focus-within:ring-1`",
-  },
-  {
     file: "src/components/FileViewer/FileViewerModal.tsx",
     fragment:
       "w-44 bg-transparent text-xs text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
@@ -598,12 +591,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Parent shows focus: the output well wrapper carries `has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent-primary`; the scroller has no vertical padding of its own, so a ring on it would sit inside the wrapper's border.",
   },
   {
-    file: "src/components/ui/AppPaletteDialog.tsx",
-    fragment: "focus:outline-hidden focus:border-transparent focus:ring-0",
-    reason:
-      "Parent shows focus: the prefixed-input wrapper carries `focus-within:border-selection-outline focus-within:ring-1`.",
-  },
-  {
     file: "src/components/Settings/ColorSchemePicker.tsx",
     fragment:
       "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
@@ -614,13 +601,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     fragment:
       "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
     reason: "Parent shows focus: wrapper at line 477 has `focus-within:border-accent-primary`",
-  },
-  {
-    file: "src/components/Worktree/WorktreeSidebarSearchBar.tsx",
-    fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden",
-    reason:
-      "Parent shows focus: the field wrapper carries `has-[input:focus-visible]:outline outline-2 outline-accent-primary`. Moved off the alpha-accent border + 1px alpha ring, which measured 2.61:1 and 1.47:1 against their grounds.",
   },
   {
     file: "src/components/Layout/LocalCommitsDropdown.tsx",

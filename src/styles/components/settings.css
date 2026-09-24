@@ -34,20 +34,13 @@
   );
 }
 
+/* The settings nav search is the shared search field (search-field.css); these map
+   the theme's own settings hooks onto it. An unset hook leaves the custom property
+   invalid, so the field falls back to its family defaults. */
 .settings-search {
-  --_bg: var(--settings-search-bg, var(--theme-surface-input));
-  background: var(--_bg);
-}
-
-/* Fallbacks are the contrast-floored tokens, not text-muted, which has no dark-theme
-   floor: the placeholder takes the input well's placeholder tier, and the glyph and
-   the version line are read, so they take the secondary ramp. */
-.settings-search-icon {
-  color: var(--settings-search-muted, var(--theme-text-secondary));
-}
-
-.settings-search-input::placeholder {
-  color: var(--settings-search-muted, var(--theme-text-placeholder));
+  --search-field-bg: var(--settings-search-bg);
+  --search-field-icon: var(--settings-search-muted);
+  --search-field-placeholder: var(--settings-search-muted);
 }
 
 .settings-meta {
@@ -89,25 +82,6 @@
    inset ring and the 2px accent marker are all dropped, leaving every section row
    identical and no way to tell which one you are looking at. */
 @media (forced-colors: active) {
-  /* Same reason as the prefers-contrast rule below: the wrapper carries the boundary. */
-  .settings-search-input {
-    border: none;
-  }
-
-  /* `outline-hidden` is a transparent outline so that this mode can paint it — which
-     here drew a square box inside the rounded field once search took focus on open.
-     The field's focus belongs on its wrapper, the same edge the pointer sees. */
-  /* !important: Tailwind's `outline-hidden` sits in the utilities layer, which outranks
-     this file, and in this mode it is exactly the outline being removed. */
-  .settings-search-input:focus {
-    outline: none !important;
-  }
-
-  .settings-search:focus-within {
-    outline: 2px solid Highlight;
-    outline-offset: -1px;
-  }
-
   /* Outline, not fill. A `Highlight` background makes Chromium paint a Canvas backplate
      behind the label, which comes out as a solid white block where the text should be —
      verified in the capture harness. An inset outline says "selected" without putting
@@ -146,13 +120,6 @@
 
   .settings-nav-item[data-active="true"] {
     border: 2px solid var(--theme-text-primary);
-  }
-
-  /* The search field's perceivable boundary is its wrapper, so the generic
-     "border on every native form control" rule gives the inner input a second,
-     square-cornered box inside the rounded pill. One control, one border. */
-  .settings-search-input {
-    border: none;
   }
 }
 

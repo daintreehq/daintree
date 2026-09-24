@@ -1,0 +1,171 @@
+/* The search field family: one control, two sizes, used wherever the app offers
+   a place to type a query (the Worktrees rail, the settings nav, the palette
+   headers, the settings-tab searches).
+
+   Rest is a recessed well with a quiet hairline. The magnifier identifies the
+   field (WCAG 1.4.11 needs a 3:1 boundary only when nothing else does), so the
+   perimeter does not have to shout — `border-input`'s 3:1 edge stays with form
+   fields, where the boundary is all there is.
+
+   Focus is neutral: the edge steps up to `selection-outline`, the same stroke
+   the palette's selected row uses, and the well lifts by one overlay wash. No
+   accent. Palette inputs are focused whenever their palette is open, so an
+   accent ring would spend the region's one accent on chrome that is always lit.
+
+   Sites keep their theme hooks by setting `--search-field-bg` on the field
+   (the rail maps `worktree-search-input-bg`, the settings nav maps
+   `settings-search-bg`). Single-level fallbacks only: Chromium 148 drops a
+   multi-layer var() chain inside color-mix() to transparent. */
+.search-field {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  background-color: var(--search-field-bg, var(--theme-surface-canvas));
+  border: 1px solid var(--theme-border-default);
+  border-radius: var(--radius-md);
+  color: var(--theme-text-primary);
+  cursor: text;
+  transition:
+    border-color var(--duration-150) ease-out,
+    background-image var(--duration-150) ease-out;
+}
+
+.search-field[data-size="compact"] {
+  height: 1.75rem;
+  gap: 0.375rem;
+  padding-inline: 0.5rem;
+  font-size: var(--text-xs);
+}
+
+.search-field[data-size="palette"] {
+  min-height: 2.375rem;
+  gap: 0.5rem;
+  padding-inline: 0.75rem;
+  font-size: var(--text-sm);
+}
+
+/* Composited over the resting fill rather than replacing it, so a theme's own
+   field colour still reads as itself when focused. */
+.search-field:has(.search-field-input:focus-visible) {
+  background-image: linear-gradient(var(--theme-overlay-hover), var(--theme-overlay-hover));
+  border-color: var(--theme-selection-outline);
+}
+
+.search-field:has(.search-field-input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.search-field-icon {
+  flex-shrink: 0;
+  pointer-events: none;
+  /* Secondary, not muted: this glyph is what identifies the field, and
+     text-muted has no dark-theme contrast floor. */
+  color: var(--search-field-icon, var(--theme-text-secondary));
+}
+
+.search-field[data-size="compact"] .search-field-icon {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.search-field[data-size="palette"] .search-field-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.search-field-input {
+  flex: 1 1 0%;
+  min-width: 0;
+  align-self: stretch;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+  /* The field owns the focus indicator; the input's own ring would draw a
+     second, square box around the text run inside it. */
+  outline: none;
+}
+
+/* The placeholder is the field's visible label, so it takes the secondary
+   ramp rather than the de-emphasised form-placeholder tier. */
+.search-field-input::placeholder {
+  color: var(--search-field-placeholder, var(--theme-text-secondary));
+  opacity: 1;
+}
+
+.search-field-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+/* The trailing clear control: quiet until hovered, and its keyboard ring is
+   the neutral stroke too, so tabbing to it does not put accent inside the
+   field. */
+.search-field-clear {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-block: -0.125rem;
+  border-radius: var(--radius-sm);
+  color: var(--theme-text-secondary);
+  cursor: default;
+  transition: color var(--duration-150) ease-out;
+}
+
+.search-field-clear:hover {
+  color: var(--theme-text-primary);
+}
+
+.search-field-clear:focus-visible {
+  outline: 2px solid var(--theme-selection-outline);
+  outline-offset: -2px;
+}
+
+@variant reduce-motion {
+  .search-field,
+  .search-field-clear {
+    transition: none;
+  }
+}
+
+/* Deliberately NOT merged with the `prefers-contrast: more` block below: macOS
+   fires only prefers-contrast, Windows swaps in system colours, and only this
+   path discards backgrounds outright. Same rationale as src/index.css. */
+@media (forced-colors: active) {
+  .search-field {
+    border-color: CanvasText;
+  }
+
+  .search-field:has(.search-field-input:focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: -1px;
+  }
+
+  /* The global `*:focus-visible` rule would draw a second box around the
+     text run; the field's outline above is the one indicator. */
+  .search-field-input:focus-visible {
+    outline: none !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  /* One control, one border: the generic "border on every native form control"
+     rule would give the inner input a square box inside the rounded field. */
+  .search-field-input {
+    border: none;
+  }
+
+  .search-field {
+    border-color: var(--theme-border-input);
+  }
+
+  .search-field:has(.search-field-input:focus-visible) {
+    border-color: var(--theme-text-primary);
+    outline: 1px solid var(--theme-text-primary);
+    outline-offset: 0;
+  }
+}
