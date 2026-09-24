@@ -195,8 +195,6 @@ test("terminal banner family — every state, three pane widths, every theme", a
 
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBe(
-    THEMES.length * WIDTHS.length * GROUPS.length + overflowWidths.length
-  );
+  expect(onDisk.length).toBe(THEMES.length * WIDTHS.length * GROUPS.length + overflowWidths.length);
   console.log(`[terminal-banner-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });

@@ -55,7 +55,8 @@ function scrollback(error: TerminalScrollbackRestoreError, isRestarting = false)
   );
 }
 
-const MOVE_DESTINATION = "/Users/greg/Projects/Daintree/daintree-worktrees/fix-sidebar-sync-signals";
+const MOVE_DESTINATION =
+  "/Users/greg/Projects/Daintree/daintree-worktrees/fix-sidebar-sync-signals";
 
 export type BannerPlacement = "top" | "bottom";
 
