@@ -21,6 +21,7 @@ export interface InjectToastOptions {
   correlationId?: string;
   historyEntryId?: string;
   actionLabel?: string;
+  actions?: { label: string; variant?: "primary" | "secondary" }[];
   successLabel?: string;
   asyncAction?: boolean;
   asyncDelayMs?: number;
@@ -68,6 +69,7 @@ export async function injectToast(page: Page, opts: InjectToastOptions = {}): Pr
       correlationId: o.correlationId,
       historyEntryId: o.historyEntryId,
       actionLabel: o.actionLabel,
+      actions: o.actions,
       successLabel: o.successLabel,
       asyncAction: o.asyncAction,
       asyncDelayMs: o.asyncDelayMs,
