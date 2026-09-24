@@ -5,6 +5,11 @@ import { cn } from "@/lib/utils";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import type { VoiceInputError } from "@shared/types";
+import {
+  COMPOSER_CONTROL_FOCUS_CLASS,
+  COMPOSER_CONTROL_HOVER_BG_CLASS,
+  COMPOSER_CONTROL_TEXT_CLASS,
+} from "./composerControlStyles";
 
 /**
  * Maps a `VoiceInputError` to a concise tooltip string. Transient errors
@@ -328,20 +333,16 @@ export function VoiceInputButton({
         className={cn(
           "relative flex items-center justify-center rounded-full transition duration-150",
           "h-6 w-6",
-          // The ring is inset because the wrapper above is `contain: strict`,
-          // which includes paint containment and clips descendants at its
-          // 24x24 box — and this button fills that box exactly, so an outward
-          // ring is painted straight into the clip. Insetting keeps the
-          // indicator visible without giving up the containment the orbit
-          // animation relies on.
-          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent-primary",
+          // The focus outline is inset because the wrapper above is
+          // `contain: strict`, which includes paint containment and clips
+          // descendants at its 24x24 box — and this button fills that box
+          // exactly, so an outward indicator is painted straight into the clip.
+          COMPOSER_CONTROL_FOCUS_CLASS,
           showOrbit
-            ? "bg-overlay-soft text-text-primary hover:bg-overlay-medium"
-            : cn(
-                status === "error"
-                  ? "text-activity-waiting hover:text-activity-waiting/80"
-                  : "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]"
-              ),
+            ? "bg-[color-mix(in_oklab,var(--ib-fg)_12%,transparent)] text-[var(--ib-fg)] hover:bg-[color-mix(in_oklab,var(--ib-fg)_18%,transparent)]"
+            : status === "error"
+              ? cn("text-activity-waiting", COMPOSER_CONTROL_HOVER_BG_CLASS)
+              : cn(COMPOSER_CONTROL_TEXT_CLASS, COMPOSER_CONTROL_HOVER_BG_CLASS),
           disabled && !isActive && "pointer-events-none opacity-40"
         )}
         aria-label={

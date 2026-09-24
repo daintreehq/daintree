@@ -41,6 +41,11 @@ import { Paperclip } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
+import {
+  COMPOSER_CONTROL_FOCUS_CLASS,
+  COMPOSER_CONTROL_HOVER_BG_CLASS,
+  COMPOSER_CONTROL_TEXT_CLASS,
+} from "./composerControlStyles";
 import { useVoiceWaitSubmit } from "./hooks/useVoiceWaitSubmit";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
 import type { CommandResult } from "@shared/types/commands";
@@ -1058,19 +1063,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   // the button was 20px tall, and at its old `pl-2 pr-1` it was
                   // 19px wide with its spacing circle over the canvas.
                   //
-                  // Neutral, not accent: this marker sits in every composer on
-                  // screen, and accent is one signal per focus region — the
-                  // composer's own focus ring already spends it.
-                  //
-                  // Drawn from the composer's own foreground, not the app's
-                  // text ramp. The shell is painted from the terminal palette,
-                  // which stays dark under a light app theme, so an app token
-                  // lands dark-on-dark there. Mixing toward `--ib-bg` rather
-                  // than transparent keeps it a solid colour whose contrast is
-                  // fixed by the pair, whichever polarity the terminal has.
-                  // Keyboard focus is an outline on the glyph itself, so a Tab
-                  // onto it reads as the button and not the editor beside it.
-                  className="flex h-6 w-6 shrink-0 items-center justify-center select-none rounded-[var(--radius-sm)] font-mono text-xs font-semibold leading-5 text-[color-mix(in_oklab,var(--ib-fg)_72%,var(--ib-bg))] hover:text-[var(--ib-fg)] transition-colors cursor-pointer focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-[color-mix(in_oklab,var(--ib-fg)_60%,var(--ib-bg))] focus-visible:text-[var(--ib-fg)]"
+                  // Colour comes from the shell's own palette, like every
+                  // control in it — see `composerControlStyles.ts`.
+                  className={cn(
+                    "flex h-6 w-6 shrink-0 items-center justify-center select-none rounded-[var(--radius-sm)] font-mono text-xs font-semibold leading-5 transition-colors cursor-pointer",
+                    COMPOSER_CONTROL_TEXT_CLASS,
+                    COMPOSER_CONTROL_FOCUS_CLASS
+                  )}
                   aria-label="Open command picker"
                 >
                   <span aria-hidden="true">❯</span>
@@ -1153,8 +1152,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       disabled={disabled}
                       className={cn(
                         "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
-                        "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]",
-                        "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary",
+                        COMPOSER_CONTROL_TEXT_CLASS,
+                        COMPOSER_CONTROL_HOVER_BG_CLASS,
+                        COMPOSER_CONTROL_FOCUS_CLASS,
                         "disabled:pointer-events-none disabled:opacity-40"
                       )}
                       aria-label="Attach files"
@@ -1173,7 +1173,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         // 24px to clear the WCAG 2.5.8 floor. The spacing
                         // exception cannot rescue a smaller one here — its circle
                         // overlaps the attach and mic targets either side.
-                        className="flex items-center justify-center h-6 w-6 rounded-full text-daintree-accent/55 hover:text-daintree-accent/80 hover:bg-tint/[0.06] transition-colors cursor-pointer"
+                        className={cn(
+                          "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
+                          COMPOSER_CONTROL_TEXT_CLASS,
+                          COMPOSER_CONTROL_HOVER_BG_CLASS,
+                          COMPOSER_CONTROL_FOCUS_CLASS
+                        )}
                         aria-label="Restore stashed input"
                       >
                         <Archive className="h-3.5 w-3.5" />
