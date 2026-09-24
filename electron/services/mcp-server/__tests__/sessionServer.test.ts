@@ -653,6 +653,9 @@ describe("sessionServer prompt handler", () => {
     );
     expect(queue).toMatch(/`prNumber`[^\n]*cached hint and null does not prove there is no PR/);
     expect(queue).toMatch(/suggested next prompt[^\n]*never submit or act on it/);
+    expect(queue).toMatch(/Waiting alone is not done, only a cue to inspect/);
+    expect(queue).toMatch(/approval or question is blocked and keeps its slot/);
+    expect(queue).toMatch(/pane watch[^\n]*after each refill cancel it[^\n]*current running ids/);
   });
 
   it("does not dispatch worktree.getCurrent for triage_terminals (static prompt)", async () => {

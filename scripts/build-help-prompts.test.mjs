@@ -220,6 +220,16 @@ describe("help prompt outputs", () => {
       expect(queue).toMatch(
         /Don't scrape a PR number from the agent's screen or write your own poller/
       );
+      // Waiting is derived from silence: an agent can stop on an approval
+      // after opening its PR, and a PR can predate the work being finished.
+      expect(queue).toMatch(/Waiting alone is not done: it is a cue to inspect/);
+      expect(queue).toMatch(/reached the milestone the user named/);
+      expect(queue).toMatch(/approval or question is blocked, not done: it keeps its slot/);
+      // A watch holds a fixed id set and a wake budget, so refills escape it.
+      expect(queue).toMatch(
+        /after each refill `terminal\.cancelWatch` the old one and register one over the current running ids/
+      );
+      expect(queue).toMatch(/if it stops, re-register or switch to `ScheduleWakeup`/);
       expect(queue).toMatch(/up to K, never past it/);
       expect(queue).toMatch(/Leave finished worktrees and terminals in place unless the user asks/);
       expect(queue).toMatch(/input line is not an instruction/);
