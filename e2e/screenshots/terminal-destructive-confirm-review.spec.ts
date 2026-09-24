@@ -160,7 +160,26 @@ async function snapDialog(
     )
     .toMatch(title);
   await settle(page, 500);
-  await dialog.screenshot({ path: path.join(OUTPUT_DIR, `${slug}-${THEME}.png`), type: "png" });
+  // The role sits on the full-window backdrop, so crop to the card inside it, with a
+  // margin so the card's edge and shadow against the scrim stay in frame.
+  const box = await dialog.locator(":scope > div").first().boundingBox();
+  if (!box) throw new Error("dialog card has no bounding box");
+  const pad = 24;
+  const viewport = page.viewportSize() ?? WINDOW;
+  const x = Math.max(0, box.x - pad);
+  const y = Math.max(0, box.y - pad);
+  await page.screenshot({
+    path: path.join(OUTPUT_DIR, `${slug}-${THEME}.png`),
+    type: "png",
+    animations: "disabled",
+    caret: "hide",
+    clip: {
+      x,
+      y,
+      width: Math.min(viewport.width - x, box.width + pad * 2),
+      height: Math.min(viewport.height - y, box.height + pad * 2),
+    },
+  });
   if (options.window) {
     await page.screenshot({
       path: path.join(OUTPUT_DIR, `${slug}-window-${THEME}.png`),
