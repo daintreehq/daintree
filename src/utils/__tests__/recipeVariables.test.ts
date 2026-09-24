@@ -3,6 +3,7 @@ import {
   replaceRecipeVariables,
   getAvailableVariables,
   detectUnresolvedVariables,
+  segmentRecipePrompt,
 } from "../recipeVariables";
 import type { RecipeContext } from "../recipeVariables";
 
@@ -162,5 +163,48 @@ describe("getAvailableVariables", () => {
     for (const v of vars) {
       expect(v.description).toBeTruthy();
     }
+  });
+});
+
+describe("segmentRecipePrompt", () => {
+  const joined = (text: string, context: RecipeContext | null) =>
+    segmentRecipePrompt(text, context)
+      .map((s) => (s.kind === "missing" ? "" : s.text))
+      .join("");
+
+  it("reassembles to exactly what launch sends", () => {
+    const context: RecipeContext = { branchName: "main", worktreePath: "/w" };
+    const prompts = [
+      "  Fix {{issue_number}} on {{branch_name}} at {{WORKTREE_PATH}}  ",
+      "{{foo}} {{number}}\n{{pr_number}}",
+      "no variables",
+      "{{ issue_number }} and {{issue-number}} and {{{branch_name}}}",
+    ];
+    for (const prompt of prompts) {
+      expect(joined(prompt, context)).toBe(replaceRecipeVariables(prompt.trim(), context));
+    }
+  });
+
+  it("classifies each token by what launch will do with it", () => {
+    const kinds = segmentRecipePrompt("{{branch_name}} {{issue_number}} {{foo}}", {
+      branchName: "main",
+    })
+      .filter((s) => s.kind !== "text")
+      .map((s) => s.kind);
+    expect(kinds).toEqual(["value", "missing", "unknown"]);
+  });
+
+  it("keeps known tokens as run-time variables when there is no context", () => {
+    const kinds = segmentRecipePrompt("{{Branch_Name}} {{foo}}", null)
+      .filter((s) => s.kind !== "text")
+      .map((s) => s.kind);
+    expect(kinds).toEqual(["variable", "unknown"]);
+  });
+
+  it("reports malformed spellings as unknown rather than dropping them", () => {
+    const unknown = segmentRecipePrompt("{{ issue_number }} {{issue-number}}", {})
+      .filter((s) => s.kind === "unknown")
+      .map((s) => s.text);
+    expect(unknown).toEqual(["{{ issue_number }}", "{{issue-number}}"]);
   });
 });

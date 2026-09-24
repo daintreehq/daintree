@@ -16,6 +16,7 @@
  *   DAINTREE_SHOT_RECIPES  required — any truthy value runs the capture
  *   DAINTREE_SHOT_DIR      required — an ABSOLUTE output directory outside the repo
  *   DAINTREE_SHOT_THEMES   themes for the rest-state sweep (default daintree,bondi,namib)
+ *   DAINTREE_SHOT_ONLY     manager|runner|variables — capture one group only
  *
  * Never writes a PNG it has not verified, and counts the files itself at the end.
  */
@@ -35,6 +36,8 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
   .split(",")
   .map((t) => t.trim())
   .filter(Boolean);
+const ONLY = process.env.DAINTREE_SHOT_ONLY ?? "";
+const wants = (group: string) => !ONLY || ONLY === group;
 
 test.use({ deviceScaleFactor: 2 });
 
@@ -82,6 +85,8 @@ interface OpenOptions {
   theme?: string;
   fixture?: string;
   edit?: string;
+  prompt?: string;
+  worktree?: string;
   width?: number;
   height?: number;
 }
@@ -91,6 +96,8 @@ async function open(page: Page, opts: OpenOptions): Promise<void> {
   await page.setViewportSize({ width: opts.width ?? 1280, height: opts.height ?? 900 });
   const query = new URLSearchParams({ view, theme, fixture });
   if (opts.edit) query.set("edit", opts.edit);
+  if (opts.prompt) query.set("prompt", opts.prompt);
+  if (opts.worktree) query.set("worktree", opts.worktree);
   await page.goto(`${server!.baseURL}/recipes-preview.html?${query}`, { waitUntil: "load" });
   await page.addStyleTag({ content: FREEZE_CSS });
   if (view === "manager") {
@@ -165,153 +172,209 @@ test("recipes review", async ({ page }) => {
   await page.goto(`${server!.baseURL}/recipes-preview.html`, { waitUntil: "load" });
   await page.waitForTimeout(3000);
 
-  // ── Manager ──
-  for (const theme of THEMES) {
-    await step(`manager-${theme}`, async () => {
-      await open(page, { view: "manager", theme });
-      await snap(page, DIALOG, `01-manager-populated-${theme}.png`);
-    });
-  }
-
-  await step("manager-crowded", async () => {
-    await open(page, { view: "manager", fixture: "crowded" });
-    await snap(page, DIALOG, "02-manager-crowded-top.png");
-    await page
-      .locator(`${DIALOG} section`)
-      .last()
-      .evaluate((el) => el.scrollIntoView({ block: "end" }));
-    await snap(page, DIALOG, "02-manager-crowded-bottom.png");
-  });
-
-  for (const fixture of ["empty", "global-only", "project-only"]) {
-    await step(`manager-${fixture}`, async () => {
-      await open(page, { view: "manager", fixture });
-      await snap(page, DIALOG, `03-manager-${fixture}.png`);
-    });
-  }
-
-  await step("manager-hover", async () => {
-    await open(page, { view: "manager" });
-    const name = page.locator(DIALOG).getByText("Design review", { exact: true }).first();
-    await name.hover();
-    await snap(page, DIALOG, "04-manager-row-hover.png");
-  });
-
-  await step("manager-more-menu", async () => {
-    await open(page, { view: "manager" });
-    await page.getByRole("button", { name: "More actions for recipe Design review" }).click();
-    await page.locator('[role="menu"]').waitFor({ state: "visible", timeout: 5000 });
-    expected.push("04-manager-more-menu.png");
-    await settle(page, 200);
-    await page.screenshot({ path: path.join(OUT_DIR, "04-manager-more-menu.png") });
-  });
-
-  await step("manager-filter", async () => {
-    await open(page, { view: "manager", fixture: "crowded" });
-    await page.getByRole("searchbox", { name: "Filter recipes" }).fill("test");
-    await snap(page, DIALOG, "04-manager-filter.png");
-  });
-
-  // Filtering from the bottom of a long list: the matches must land in view,
-  // not above the sticky field with blank space under it.
-  await step("manager-filter-from-bottom", async () => {
-    await open(page, { view: "manager", fixture: "crowded" });
-    await page
-      .locator(`${DIALOG} section`)
-      .last()
-      .evaluate((el) => el.scrollIntoView({ block: "end" }));
-    await page.getByRole("searchbox", { name: "Filter recipes" }).fill("work");
-    await snap(page, DIALOG, "04-manager-filter-from-bottom.png");
-  });
-
-  await step("manager-keyboard", async () => {
-    await open(page, { view: "manager" });
-    // Walk the tab order until focus lands inside a recipe row's actions.
-    for (let i = 0; i < 12; i++) {
-      await page.keyboard.press("Tab");
-      const label = await page.evaluate(
-        () => document.activeElement?.getAttribute("aria-label") ?? ""
-      );
-      if (/recipe/i.test(label) && !/close/i.test(label)) break;
+  if (wants("manager")) {
+    // ── Manager ──
+    for (const theme of THEMES) {
+      await step(`manager-${theme}`, async () => {
+        await open(page, { view: "manager", theme });
+        await snap(page, DIALOG, `01-manager-populated-${theme}.png`);
+      });
     }
-    await snap(page, DIALOG, "05-manager-keyboard.png");
-  });
 
-  await step("manager-narrow", async () => {
-    await open(page, { view: "manager", width: 720, height: 800 });
-    await snap(page, DIALOG, "06-manager-narrow.png", 8);
-  });
+    await step("manager-crowded", async () => {
+      await open(page, { view: "manager", fixture: "crowded" });
+      await snap(page, DIALOG, "02-manager-crowded-top.png");
+      await page
+        .locator(`${DIALOG} section`)
+        .last()
+        .evaluate((el) => el.scrollIntoView({ block: "end" }));
+      await snap(page, DIALOG, "02-manager-crowded-bottom.png");
+    });
 
-  await step("editor", async () => {
-    await open(page, { view: "manager", edit: "recipe-8" });
-    await snap(page, DIALOG, "07-editor-from-manager.png");
-  });
+    for (const fixture of ["empty", "global-only", "project-only"]) {
+      await step(`manager-${fixture}`, async () => {
+        await open(page, { view: "manager", fixture });
+        await snap(page, DIALOG, `03-manager-${fixture}.png`);
+      });
+    }
 
-  await step("manager-forced-colors", async () => {
-    await page.emulateMedia({ forcedColors: "active" });
-    await open(page, { view: "manager" });
-    await snap(page, DIALOG, "08-manager-forced-colors.png");
-    await page.emulateMedia({ forcedColors: "none" });
-  });
+    await step("manager-hover", async () => {
+      await open(page, { view: "manager" });
+      const name = page.locator(DIALOG).getByText("Design review", { exact: true }).first();
+      await name.hover();
+      await snap(page, DIALOG, "04-manager-row-hover.png");
+    });
 
-  // ── Canvas launcher ──
-  for (const fixture of ["empty", "suggestions", "one"]) {
-    await step(`runner-${fixture}`, async () => {
-      await open(page, { view: "runner", fixture });
-      await snap(page, CANVAS, `10-runner-${fixture}.png`);
+    await step("manager-more-menu", async () => {
+      await open(page, { view: "manager" });
+      await page.getByRole("button", { name: "More actions for recipe Design review" }).click();
+      await page.locator('[role="menu"]').waitFor({ state: "visible", timeout: 5000 });
+      expected.push("04-manager-more-menu.png");
+      await settle(page, 200);
+      await page.screenshot({ path: path.join(OUT_DIR, "04-manager-more-menu.png") });
+    });
+
+    await step("manager-filter", async () => {
+      await open(page, { view: "manager", fixture: "crowded" });
+      await page.getByRole("searchbox", { name: "Filter recipes" }).fill("test");
+      await snap(page, DIALOG, "04-manager-filter.png");
+    });
+
+    // Filtering from the bottom of a long list: the matches must land in view,
+    // not above the sticky field with blank space under it.
+    await step("manager-filter-from-bottom", async () => {
+      await open(page, { view: "manager", fixture: "crowded" });
+      await page
+        .locator(`${DIALOG} section`)
+        .last()
+        .evaluate((el) => el.scrollIntoView({ block: "end" }));
+      await page.getByRole("searchbox", { name: "Filter recipes" }).fill("work");
+      await snap(page, DIALOG, "04-manager-filter-from-bottom.png");
+    });
+
+    await step("manager-keyboard", async () => {
+      await open(page, { view: "manager" });
+      // Walk the tab order until focus lands inside a recipe row's actions.
+      for (let i = 0; i < 12; i++) {
+        await page.keyboard.press("Tab");
+        const label = await page.evaluate(
+          () => document.activeElement?.getAttribute("aria-label") ?? ""
+        );
+        if (/recipe/i.test(label) && !/close/i.test(label)) break;
+      }
+      await snap(page, DIALOG, "05-manager-keyboard.png");
+    });
+
+    await step("manager-narrow", async () => {
+      await open(page, { view: "manager", width: 720, height: 800 });
+      await snap(page, DIALOG, "06-manager-narrow.png", 8);
+    });
+
+    await step("editor", async () => {
+      await open(page, { view: "manager", edit: "recipe-8" });
+      await snap(page, DIALOG, "07-editor-from-manager.png");
+    });
+
+    await step("manager-forced-colors", async () => {
+      await page.emulateMedia({ forcedColors: "active" });
+      await open(page, { view: "manager" });
+      await snap(page, DIALOG, "08-manager-forced-colors.png");
+      await page.emulateMedia({ forcedColors: "none" });
     });
   }
 
-  for (const theme of THEMES) {
-    await step(`runner-populated-${theme}`, async () => {
-      await open(page, { view: "runner", theme });
-      await snap(page, CANVAS, `11-runner-populated-${theme}.png`);
+  if (wants("runner")) {
+    // ── Canvas launcher ──
+    for (const fixture of ["empty", "suggestions", "one"]) {
+      await step(`runner-${fixture}`, async () => {
+        await open(page, { view: "runner", fixture });
+        await snap(page, CANVAS, `10-runner-${fixture}.png`);
+      });
+    }
+
+    for (const theme of THEMES) {
+      await step(`runner-populated-${theme}`, async () => {
+        await open(page, { view: "runner", theme });
+        await snap(page, CANVAS, `11-runner-populated-${theme}.png`);
+      });
+    }
+
+    await step("runner-three", async () => {
+      await open(page, { view: "runner", fixture: "three" });
+      await snap(page, CANVAS, "12-runner-three.png");
+    });
+
+    await step("runner-many", async () => {
+      await open(page, { view: "runner", fixture: "many", height: 1400 });
+      await snap(page, CANVAS, "13-runner-many.png");
+    });
+
+    await step("runner-filter", async () => {
+      await open(page, { view: "runner", fixture: "many", height: 1100 });
+      await page.getByRole("combobox", { name: "Filter recipes" }).fill("test");
+      await page.keyboard.press("ArrowDown");
+      await snap(page, CANVAS, "14-runner-filter-keyboard.png");
+    });
+
+    await step("runner-filter-empty", async () => {
+      await open(page, { view: "runner", fixture: "many" });
+      await page.getByRole("combobox", { name: "Filter recipes" }).fill("zzqq");
+      await snap(page, CANVAS, "15-runner-filter-nomatch.png");
+    });
+
+    await step("runner-grid-keyboard", async () => {
+      await open(page, { view: "runner" });
+      await page.locator('[role="option"]').first().focus();
+      await page.keyboard.press("ArrowRight");
+      await snap(page, CANVAS, "16-runner-grid-keyboard.png");
+    });
+
+    await step("runner-narrow", async () => {
+      await open(page, { view: "runner", width: 460, height: 900 });
+      await snap(page, CANVAS, "17-runner-narrow.png", 8);
+    });
+
+    await step("runner-context-menu", async () => {
+      await open(page, { view: "runner", height: 1000 });
+      await page.locator('[role="option"]').first().click({ button: "right" });
+      await page.locator('[role="menu"]').waitFor({ state: "visible", timeout: 5000 });
+      expected.push("18-runner-context-menu.png");
+      await settle(page, 200);
+      await page.screenshot({ path: path.join(OUT_DIR, "18-runner-context-menu.png") });
     });
   }
 
-  await step("runner-three", async () => {
-    await open(page, { view: "runner", fixture: "three" });
-    await snap(page, CANVAS, "12-runner-three.png");
-  });
-
-  await step("runner-many", async () => {
-    await open(page, { view: "runner", fixture: "many", height: 1400 });
-    await snap(page, CANVAS, "13-runner-many.png");
-  });
-
-  await step("runner-filter", async () => {
-    await open(page, { view: "runner", fixture: "many", height: 1100 });
-    await page.getByRole("combobox", { name: "Filter recipes" }).fill("test");
-    await page.keyboard.press("ArrowDown");
-    await snap(page, CANVAS, "14-runner-filter-keyboard.png");
-  });
-
-  await step("runner-filter-empty", async () => {
-    await open(page, { view: "runner", fixture: "many" });
-    await page.getByRole("combobox", { name: "Filter recipes" }).fill("zzqq");
-    await snap(page, CANVAS, "15-runner-filter-nomatch.png");
-  });
-
-  await step("runner-grid-keyboard", async () => {
-    await open(page, { view: "runner" });
-    await page.locator('[role="option"]').first().focus();
-    await page.keyboard.press("ArrowRight");
-    await snap(page, CANVAS, "16-runner-grid-keyboard.png");
-  });
-
-  await step("runner-narrow", async () => {
-    await open(page, { view: "runner", width: 460, height: 900 });
-    await snap(page, CANVAS, "17-runner-narrow.png", 8);
-  });
-
-  await step("runner-context-menu", async () => {
-    await open(page, { view: "runner", height: 1000 });
-    await page.locator('[role="option"]').first().click({ button: "right" });
-    await page.locator('[role="menu"]').waitFor({ state: "visible", timeout: 5000 });
-    expected.push("18-runner-context-menu.png");
-    await settle(page, 200);
-    await page.screenshot({ path: path.join(OUT_DIR, "18-runner-context-menu.png") });
-  });
+  // ── Initial-prompt variable preview, inside the real editor ──
+  if (wants("variables")) {
+    const PROMPT_BLOCK = "div:has(> textarea#terminal-initial-prompt-0)";
+    const variableStates: Array<[string, OpenOptions]> = [
+      ["runtime-mixed", { view: "manager", prompt: "mixed" }],
+      ["runtime-short", { view: "manager", prompt: "short" }],
+      ["resolved-full", { view: "manager", prompt: "mixed", worktree: "full" }],
+      ["resolved-partial", { view: "manager", prompt: "mixed", worktree: "partial" }],
+      ["plain-no-variables", { view: "manager", prompt: "plain", worktree: "full" }],
+      ["runtime-typo", { view: "manager", prompt: "typo" }],
+      ["unknown-and-case", { view: "manager", prompt: "unknown", worktree: "partial" }],
+      ["long-path", { view: "manager", prompt: "long", worktree: "full" }],
+    ];
+    for (const [name, opts] of variableStates) {
+      await step(`variables-${name}`, async () => {
+        await open(page, { ...opts, edit: "recipe-1", height: 1200 });
+        await page.locator(PROMPT_BLOCK).scrollIntoViewIfNeeded();
+        await snap(page, PROMPT_BLOCK, `20-variables-${name}.png`, 16);
+      });
+    }
+    for (const theme of THEMES.filter((t) => t !== "daintree")) {
+      for (const worktree of ["full", "partial", undefined]) {
+        const tag = worktree ? `resolved-${worktree}` : "runtime";
+        await step(`variables-${tag}-${theme}`, async () => {
+          await open(page, {
+            view: "manager",
+            theme,
+            prompt: "mixed",
+            worktree,
+            edit: "recipe-1",
+            height: 1200,
+          });
+          await page.locator(PROMPT_BLOCK).scrollIntoViewIfNeeded();
+          await snap(page, PROMPT_BLOCK, `21-variables-${tag}-${theme}.png`, 16);
+        });
+      }
+    }
+    await step("variables-forced-colors", async () => {
+      await page.emulateMedia({ forcedColors: "active" });
+      await open(page, {
+        view: "manager",
+        prompt: "mixed",
+        worktree: "partial",
+        edit: "recipe-1",
+        height: 1200,
+      });
+      await page.locator(PROMPT_BLOCK).scrollIntoViewIfNeeded();
+      await snap(page, PROMPT_BLOCK, "22-variables-forced-colors.png", 16);
+      await page.emulateMedia({ forcedColors: "none" });
+    });
+  }
 
   const present = new Set(readdirSync(OUT_DIR));
   const missing = expected.filter((f) => !present.has(f));

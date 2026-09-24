@@ -270,7 +270,7 @@ export function RecipeEditor({
 
         <AppDialog.Body>
           <FormGrid>
-            <FormRow label="Recipe Name" htmlFor="recipe-name">
+            <FormRow label="Recipe name" htmlFor="recipe-name">
               <input
                 id="recipe-name"
                 type="text"
@@ -329,7 +329,7 @@ export function RecipeEditor({
             </FormRow>
 
             <FormRow
-              label="Auto-assign Issue"
+              label="Auto-assign issue"
               htmlFor="auto-assign"
               hint={
                 <p id="auto-assign-help" className="text-xs text-text-muted select-text">
@@ -359,7 +359,7 @@ export function RecipeEditor({
                   onClick={handleAddTerminal}
                   disabled={terminals.length >= MAX_TERMINALS_PER_RECIPE}
                 >
-                  + Add Terminal
+                  + Add terminal
                 </Button>
               }
             >
@@ -471,7 +471,7 @@ export function RecipeEditor({
                             htmlFor={`terminal-exit-behavior-${index}`}
                             className="block text-xs font-medium text-text-primary mb-1"
                           >
-                            After Exit
+                            After exit
                           </label>
                           <select
                             id={`terminal-exit-behavior-${index}`}
@@ -486,9 +486,9 @@ export function RecipeEditor({
                             aria-describedby={`terminal-exit-behavior-help-${index}`}
                             className="w-full px-2 pr-8 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary"
                           >
-                            <option value="trash">Send to Trash (default)</option>
-                            <option value="keep">Keep for Review</option>
-                            <option value="remove">Remove Completely</option>
+                            <option value="trash">Send to trash (default)</option>
+                            <option value="keep">Keep for review</option>
+                            <option value="remove">Remove completely</option>
                           </select>
                           <p
                             id={`terminal-exit-behavior-help-${index}`}
@@ -530,7 +530,7 @@ export function RecipeEditor({
                             htmlFor={`terminal-initial-prompt-${index}`}
                             className="block text-xs font-medium text-text-primary mb-1"
                           >
-                            Initial Prompt (optional)
+                            Initial prompt (optional)
                           </label>
                           <textarea
                             id={`terminal-initial-prompt-${index}`}
@@ -541,7 +541,7 @@ export function RecipeEditor({
                             placeholder="e.g., Review the latest changes and suggest improvements"
                             rows={2}
                             aria-describedby={`terminal-initial-prompt-help-${index}`}
-                            className="w-full px-2 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary resize-y min-h-[60px]"
+                            className="w-full px-2 py-1.5 bg-surface-sidebar border border-border-default rounded-lg text-sm text-text-primary resize-y min-h-[60px] field-sizing-content max-h-60"
                           />
                           <RecipeVariablePreview
                             initialPrompt={terminal.initialPrompt || ""}
@@ -549,7 +549,7 @@ export function RecipeEditor({
                           />
                           <p
                             id={`terminal-initial-prompt-help-${index}`}
-                            className="text-xs text-text-muted mt-1 select-text"
+                            className="text-xs text-text-secondary mt-1.5 select-text"
                           >
                             Variables:{" "}
                             <code className="text-text-secondary">{"{{issue_number}}"}</code>,{" "}
@@ -564,7 +564,7 @@ export function RecipeEditor({
                             htmlFor={`terminal-agent-exit-behavior-${index}`}
                             className="block text-xs font-medium text-text-primary mb-1"
                           >
-                            After Exit
+                            After exit
                           </label>
                           <select
                             id={`terminal-agent-exit-behavior-${index}`}
@@ -579,9 +579,9 @@ export function RecipeEditor({
                             aria-describedby={`terminal-agent-exit-behavior-help-${index}`}
                             className="w-full px-2 pr-8 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary"
                           >
-                            <option value="keep">Keep for Review (default)</option>
-                            <option value="trash">Send to Trash</option>
-                            <option value="remove">Remove Completely</option>
+                            <option value="keep">Keep for review (default)</option>
+                            <option value="trash">Send to trash</option>
+                            <option value="remove">Remove completely</option>
                           </select>
                           <p
                             id={`terminal-agent-exit-behavior-help-${index}`}
@@ -600,7 +600,7 @@ export function RecipeEditor({
                             htmlFor={`terminal-dev-command-${index}`}
                             className="block text-xs font-medium text-text-primary mb-1"
                           >
-                            Dev Command (optional)
+                            Dev command (optional)
                           </label>
                           <input
                             id={`terminal-dev-command-${index}`}
@@ -625,7 +625,7 @@ export function RecipeEditor({
                             htmlFor={`terminal-dev-exit-behavior-${index}`}
                             className="block text-xs font-medium text-text-primary mb-1"
                           >
-                            After Exit
+                            After exit
                           </label>
                           <select
                             id={`terminal-dev-exit-behavior-${index}`}
@@ -640,9 +640,9 @@ export function RecipeEditor({
                             aria-describedby={`terminal-dev-exit-behavior-help-${index}`}
                             className="w-full px-2 pr-8 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary"
                           >
-                            <option value="trash">Send to Trash (default)</option>
-                            <option value="keep">Keep for Review</option>
-                            <option value="remove">Remove Completely</option>
+                            <option value="trash">Send to trash (default)</option>
+                            <option value="keep">Keep for review</option>
+                            <option value="remove">Remove completely</option>
                           </select>
                           <p
                             id={`terminal-dev-exit-behavior-help-${index}`}

@@ -10,6 +10,7 @@ import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { Project, RecipeTerminal, RunCommand, TerminalRecipe } from "@/types";
+import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import { RecipeManager } from "../RecipeManager";
 import { RecipeEditor } from "../RecipeEditor";
 import { RecipeRunner } from "@/components/Terminal/RecipeRunner/RecipeRunner";
@@ -31,6 +32,9 @@ import "@/index.css";
  *   ?view=manager|runner      which surface to mount (default manager)
  *   ?fixture=…                inventory, see MANAGER_FIXTURES / RUNNER_FIXTURES
  *   ?edit=<recipe id>         open the editor on that recipe instead
+ *   ?prompt=…                 replace the edited recipe's first agent prompt, see PROMPT_FIXTURES
+ *   ?worktree=full|partial    open the editor against a seeded worktree, so the
+ *                             variable preview resolves (omit for run-time mode)
  */
 
 const params = new URLSearchParams(window.location.search);
@@ -38,6 +42,8 @@ const themeId = params.get("theme") ?? "daintree";
 const view = params.get("view") === "runner" ? "runner" : "manager";
 const fixture = params.get("fixture") ?? "populated";
 const editId = params.get("edit");
+const promptFixture = params.get("prompt");
+const worktreeFixture = params.get("worktree");
 
 const DAY = 24 * 60 * 60 * 1000;
 const PROJECT_ID = "preview-project";
@@ -228,6 +234,52 @@ const SUGGESTIONS: RunCommand[] = [
   { id: "npm-test", name: "test", command: "npm test" },
 ] as RunCommand[];
 
+const PROMPT_FIXTURES: Record<string, string> = {
+  short: "/work {{issue_number}}",
+  mixed:
+    "Pick up {{issue_number}} on {{branch_name}}.\nThe checkout is at {{worktree_path}} and the open PR is {{pr_number}}.\nRun the tests before you push.",
+  typo: "Pick up {{ issue_number }} and check {{isue_number}} before you start.",
+  plain: "Review the latest changes and suggest improvements.",
+  unknown: "Follow {{Branch_Name}} and use {{foo}} as the ticket id.",
+  long: "Audit {{worktree_path}}/packages/dashboard-widgets/src/components/charts/__tests__ for flaky suites and report back on {{number}}.",
+};
+
+const PREVIEW_WORKTREE_ID = "wt-preview";
+const WORKTREE_FIXTURES: Record<string, Partial<WorktreeSnapshot>> = {
+  full: {
+    branch: "feature/1287-chart-legend-overflow",
+    issueNumber: 1287,
+    linked: {
+      providerId: "github",
+      pr: {
+        ref: {
+          number: 1301,
+          owner: "helios",
+          repo: "dashboard",
+          providerId: "github",
+          rawData: {},
+        },
+        url: "https://example.com/pull/1301",
+        state: "open",
+      },
+    },
+  } as Partial<WorktreeSnapshot>,
+  partial: { branch: "spike/legend-layout" },
+};
+
+function editedRecipe(): TerminalRecipe | undefined {
+  const found = useRecipeStore.getState().recipes.find((r) => r.id === editId);
+  const prompt = promptFixture ? PROMPT_FIXTURES[promptFixture] : undefined;
+  if (!found || prompt === undefined) return found;
+  let replaced = false;
+  const terminals = found.terminals.map((t) => {
+    if (replaced || t.type === "terminal" || t.type === "dev-preview") return t;
+    replaced = true;
+    return { ...t, initialPrompt: prompt };
+  });
+  return { ...found, terminals };
+}
+
 function seedStores(): void {
   const inv = view === "runner" ? runnerInventory() : (MANAGER_FIXTURES[fixture] ?? populated)();
   useRecipeStore.setState({
@@ -258,10 +310,21 @@ seedStores();
 // The editor reads the per-view worktree store and throws without a provider.
 const worktreeStore = createWorktreeStore();
 setCurrentViewStore(worktreeStore);
+const seededWorktree = worktreeFixture ? WORKTREE_FIXTURES[worktreeFixture] : undefined;
+if (seededWorktree) {
+  const snapshot = {
+    id: PREVIEW_WORKTREE_ID,
+    path: "/Users/dev/helios-dashboard-worktrees/chart-legend-overflow",
+    name: "chart-legend-overflow",
+    isCurrent: false,
+    ...seededWorktree,
+  } as WorktreeSnapshot;
+  worktreeStore.setState({ worktrees: new Map([[PREVIEW_WORKTREE_ID, snapshot]]) });
+}
 
 function ManagerView() {
   const [editing, setEditing] = useState<TerminalRecipe | undefined>(() =>
-    editId ? useRecipeStore.getState().recipes.find((r) => r.id === editId) : undefined
+    editId ? editedRecipe() : undefined
   );
   return (
     <>
@@ -274,7 +337,7 @@ function ManagerView() {
       {editing && (
         <RecipeEditor
           recipe={editing}
-          worktreeId={editing.worktreeId}
+          worktreeId={seededWorktree ? PREVIEW_WORKTREE_ID : editing.worktreeId}
           defaultScope={editing.projectId === undefined ? "global" : "project"}
           isOpen
           onClose={() => setEditing(undefined)}

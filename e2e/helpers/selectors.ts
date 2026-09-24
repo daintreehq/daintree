@@ -325,7 +325,7 @@ export const SEL = {
     terminalTitle: (i: number) => `#terminal-title-${i}`,
     terminalCommand: (i: number) => `#terminal-command-${i}`,
     terminalExitBehavior: (i: number) => `#terminal-exit-behavior-${i}`,
-    addTerminalButton: 'button:has-text("+ Add Terminal")',
+    addTerminalButton: 'button:has-text("+ Add terminal")',
     createButton: 'button:has-text("Create Recipe")',
     updateButton: 'button:has-text("Update Recipe")',
     cancelButton: 'button:has-text("Cancel")',
