@@ -1163,6 +1163,31 @@ describe("AgentButton preset UX", () => {
       expect(primary?.getAttribute("aria-label")).toBe("Start Claude — waiting");
     });
 
+    it.each([
+      ["loading", undefined],
+      ["unavailable", "missing"],
+    ])("still names a visible pip's state while the CLI is %s", (_label, availability) => {
+      mockSettings = settingsWith({ claude: {} });
+      mockPanelsById = { "panel-1": activePanel("waiting") };
+      mockPanelIds = ["panel-1"];
+      mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
+      mockActiveWorktreeId = "wt-1";
+
+      const { container, getAllByRole, getAllByTestId } = render(
+        <AgentButton
+          type="claude"
+          availability={availability as unknown as CliAvailability[string]}
+        />
+      );
+
+      const badge = container.querySelector('.relative span[aria-hidden="true"]');
+      expect(badge?.getAttribute("data-visible")).toBe("true");
+      const primary = getAllByRole("button")[0];
+      expect(primary?.getAttribute("aria-label")).toMatch(/— waiting$/);
+      const tooltipTexts = getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+      expect(tooltipTexts.some((t) => t.endsWith("— waiting"))).toBe(true);
+    });
+
     it("hides the badge span when the helper returns null (passive state)", () => {
       mockSettings = settingsWith({ claude: {} });
       mockPanelsById = { "panel-1": activePanel("working") };

@@ -326,13 +326,15 @@ export function AgentButton({
   // recovery panel, not Settings — so both surfaces borrow the dock's hint
   // rather than naming an action this button no longer performs (#11760).
   const unavailableLabel = unavailableAgentHint(config.name, availability);
+  // The pip draws whether or not the CLI is launchable, so every branch
+  // carries its state — a waiting session outlives an availability re-probe.
   const tooltipLabel = isLoading
-    ? `Checking ${config.name} CLI…`
+    ? `Checking ${config.name} CLI…${visibleStateSuffix}`
     : isLaunchable
       ? signInUnconfirmed
         ? `Start ${config.name}${presetSegment}${visibleStateSuffix} — sign-in not detected`
         : `Start ${config.name}${presetSegment}${visibleStateSuffix}`
-      : unavailableLabel;
+      : `${unavailableLabel}${visibleStateSuffix}`;
   const tooltipShortcut = isLaunchable ? effectiveCombo : undefined;
   const chevronTooltip = isLoading
     ? `Checking ${config.name} CLI availability...`
@@ -347,10 +349,10 @@ export function AgentButton({
   const isChevronDisabled = isLoading || !isLaunchable;
 
   const ariaLabel = isLoading
-    ? `Checking ${config.name} CLI`
+    ? `Checking ${config.name} CLI${visibleStateSuffix}`
     : isLaunchable
       ? `Start ${config.name}${visibleStateSuffix}`
-      : unavailableLabel;
+      : `${unavailableLabel}${visibleStateSuffix}`;
 
   const handleClick = (e?: ReactMouseEvent<HTMLElement>) => {
     if (isLoading) return;
