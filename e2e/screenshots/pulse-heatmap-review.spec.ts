@@ -286,10 +286,22 @@ async function snap(
   selector: string,
   state: string,
   theme: string,
-  pad = { top: 16, right: 16, bottom: 16, left: 16 }
+  pad = { top: 16, right: 16, bottom: 16, left: 16 },
+  hoverTarget?: string
 ): Promise<void> {
+  // Park the pointer for every state that is not about hover. "Collapse"
+  // sits exactly where the strip re-renders, so after collapsing the pointer
+  // is already over the strip and its rest capture would quietly be a hover.
+  if (!state.includes("hover")) await page.mouse.move(2, 2);
   await revealWhole(page, selector);
   await settle(page);
+  // Hover is re-asserted at the last moment: another window taking OS focus
+  // during the settle sends Chromium a mouse-leave, and the capture silently
+  // becomes the rest state.
+  if (hoverTarget) {
+    await page.locator(hoverTarget).first().hover();
+    await settle(page, 150);
+  }
   const box = await page.locator(selector).first().boundingBox();
   if (!box) throw new Error(`no bounding box for ${selector}`);
   const viewport = page.viewportSize() ?? WIDE;
@@ -389,10 +401,29 @@ test("pulse heatmap review — heatmap and streak flame across states and themes
       await step(`strip ${theme}`, () => snap(page, STRIP, "strip", theme));
 
       await step(`strip-hover ${theme}`, async () => {
-        await page.locator(STRIP).hover();
-        await settle(page, 300);
         expected.push(`pulse--strip-hover--${theme}.png`);
-        await snap(page, STRIP, "strip-hover", theme);
+        // Reveal before hovering: a scroll after the hover moves the strip
+        // out from under the pointer and the capture is the rest state again.
+        await revealWhole(page, STRIP);
+        const rest = await page
+          .locator(STRIP)
+          .evaluate((el) => getComputedStyle(el).backgroundColor);
+        await page.locator(STRIP).hover();
+        await expect
+          .poll(
+            () =>
+              page.locator(STRIP).evaluate(
+                (el, restBg) => ({
+                  hovered: el.matches(":hover"),
+                  filled: getComputedStyle(el).backgroundColor !== restBg,
+                }),
+                rest
+              ),
+            { timeout: 3000, message: "strip never took its hover state" }
+          )
+          .toEqual({ hovered: true, filled: true });
+        await settle(page, 300);
+        await snap(page, STRIP, "strip-hover", theme, undefined, STRIP);
         await page.mouse.move(2, 2);
       });
 
