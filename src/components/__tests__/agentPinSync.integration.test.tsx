@@ -444,6 +444,16 @@ function pinFor(view: ReturnType<typeof render>, id: string): HTMLElement {
   return found;
 }
 
+// Settings lists agents whose CLI isn't installed behind a disclosure once
+// availability data exists; open it so every agent's switch is reachable.
+function showUninstalledAgents(view: ReturnType<typeof render>): void {
+  const disclosure = Array.from(
+    view.container.querySelectorAll<HTMLElement>('button[aria-expanded="false"]')
+  ).find((el) => el.textContent?.includes("that aren't installed"));
+  if (!disclosure) throw new Error("no uninstalled-agent disclosure");
+  fireEvent.click(disclosure);
+}
+
 function isPinned(view: ReturnType<typeof render>, id: string): boolean {
   return pinFor(view, id).getAttribute("data-pinned") === "true";
 }
@@ -486,7 +496,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     tray.unmount();
 
     const settings = render(<ToolbarSettingsTab />);
-    const claudeSwitch = settings.getByLabelText("Toggle Claude agent visibility");
+    const claudeSwitch = settings.getByLabelText("Show Claude agent on the toolbar");
     expect(claudeSwitch.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(claudeSwitch);
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
@@ -510,9 +520,11 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
       },
     } as AgentSettings;
 
-    // Initial Settings render: gemini unchecked.
+    // Initial Settings render: gemini unchecked. No availability is known for
+    // it yet, so it sits behind the uninstalled-agent disclosure.
     const settings = render(<ToolbarSettingsTab />);
-    const geminiSwitchA = settings.getByLabelText("Toggle Gemini agent visibility");
+    showUninstalledAgents(settings);
+    const geminiSwitchA = settings.getByLabelText("Show Gemini agent on the toolbar");
     expect(geminiSwitchA.getAttribute("aria-checked")).toBe("false");
     settings.unmount();
 
@@ -526,7 +538,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     // Re-render Settings — gemini is now checked because the shared store
     // picked up the tray's write.
     const settings2 = render(<ToolbarSettingsTab />);
-    const geminiSwitchB = settings2.getByLabelText("Toggle Gemini agent visibility");
+    const geminiSwitchB = settings2.getByLabelText("Show Gemini agent on the toolbar");
     expect(geminiSwitchB.getAttribute("aria-checked")).toBe("true");
   });
 
@@ -536,7 +548,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     sharedAvailability = { claude: "ready" } as unknown as CliAvailability;
 
     const settings = render(<ToolbarSettingsTab />);
-    const claudeSwitch = settings.getByLabelText("Toggle Claude agent visibility");
+    const claudeSwitch = settings.getByLabelText("Show Claude agent on the toolbar");
     expect(claudeSwitch.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(claudeSwitch);
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
@@ -547,7 +559,8 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     sharedAvailability = { gemini: "missing" } as unknown as CliAvailability;
 
     const settings = render(<ToolbarSettingsTab />);
-    const geminiSwitch = settings.getByLabelText("Toggle Gemini agent visibility");
+    showUninstalledAgents(settings);
+    const geminiSwitch = settings.getByLabelText("Show Gemini agent on the toolbar");
     expect(geminiSwitch.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(geminiSwitch);
     expect(setAgentPinnedMock).toHaveBeenCalledWith("gemini", true);
@@ -555,8 +568,8 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
 
   it("Settings checkbox toggles for agent IDs never touch toolbarPreferencesStore.pinnedButtons", () => {
     const settings = render(<ToolbarSettingsTab />);
-    fireEvent.click(settings.getByLabelText("Toggle Claude agent visibility"));
-    fireEvent.click(settings.getByLabelText("Toggle Launcher visibility"));
+    fireEvent.click(settings.getByLabelText("Show Claude agent on the toolbar"));
+    fireEvent.click(settings.getByLabelText("Show Launcher on the toolbar"));
 
     // Agent -> setAgentPinned; plain built-in -> toggleButtonVisibility.
     // `terminal` is no longer either: since #11680 it is a launcher panel button

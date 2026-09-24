@@ -64,7 +64,8 @@ export function SettingsGroup({ children, className, label, id }: SettingsGroupP
 
   if (!label) return surface;
   return (
-    <div className="grid gap-2" id={id}>
+    // A 0-min track, so a long unbreakable row label can't widen the group past its column.
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-2" id={id}>
       <div id={labelId} className="text-xs font-medium text-text-secondary">
         {label}
       </div>
@@ -249,7 +250,9 @@ export function SettingsRow({
           id={labelId}
           // The hook a search result lands by when its section has no DOM id.
           data-settings-row-label=""
-          className={cn("text-sm font-medium text-text-primary", disabled && "opacity-50")}
+          // min-w-0 so a label that truncates (an icon + name) shrinks inside its
+          // column instead of painting under the controls on the rail.
+          className={cn("min-w-0 text-sm font-medium text-text-primary", disabled && "opacity-50")}
         >
           {label}
         </span>

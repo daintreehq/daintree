@@ -936,6 +936,13 @@ export const SETTINGS_REGISTRY = [
         keywords: ["toolbar", "buttons", "right", "reorder", "customize", "hide"],
       },
       {
+        id: "toolbar-hidden-buttons",
+        section: "Not on the toolbar",
+        title: "Add buttons to the toolbar",
+        description: "Pin an agent or panel, promote a plugin button, or show a hidden button",
+        keywords: ["toolbar", "pin", "agent", "panel", "plugin", "show", "hidden", "add"],
+      },
+      {
         id: "toolbar-launcher",
         section: "Launcher palette",
         title: "Launcher palette settings",
