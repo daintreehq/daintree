@@ -58,6 +58,19 @@ const FIXTURES: Record<string, Fixture> = {
       return c;
     })(),
   },
+  /** Enough branch types selected that a collapsed header's summary clips. */
+  "many-selected": {
+    counts: (() => {
+      const c = counts();
+      Object.assign(c.branchType, { feature: 7, bugfix: 3, chore: 2, docs: 1, deps: 4, wip: 1 });
+      return c;
+    })(),
+    seed: (s) => {
+      for (const value of ["feature", "bugfix", "chore", "docs", "deps"] as const) {
+        s.toggleTypeFilter(value);
+      }
+    },
+  },
 };
 
 export const FIXTURE_NAMES = Object.keys(FIXTURES);

@@ -57,7 +57,8 @@ const header = (page: Page, name: string) =>
 
 async function open(page: Page, fixture: string, theme: string) {
   await stubViteHmrClient(page);
-  await page.setViewportSize({ width: 420, height: 820 });
+  // Wide enough for a right-side tooltip, as the workspace beside the sidebar is.
+  await page.setViewportSize({ width: 820, height: 820 });
   await page.goto(`${baseURL}/worktree-filter-preview.html?theme=${theme}&fixture=${fixture}`);
   await expect(page.locator("[data-preview-shell]")).toBeAttached();
   await page.getByRole("button", { name: /^Filter and sort worktrees/ }).click();
@@ -84,7 +85,9 @@ async function snap(target: Locator, file: string): Promise<string> {
   if (!box || box.width < 100 || box.height < 100) {
     throw new Error(`${file}: target has no real box (${JSON.stringify(box)}) — refusing to write`);
   }
-  await expect(target.locator("button[aria-expanded][aria-controls]")).toHaveCount(7);
+  await expect(popover(target.page()).locator("button[aria-expanded][aria-controls]")).toHaveCount(
+    7
+  );
   const out = path.join(OUT_DIR, file);
   await target.screenshot({ path: out, animations: "disabled" });
   return out;
@@ -137,6 +140,25 @@ test("Worktree filter popover — states and themes", async ({ page }) => {
   await popover(page).getByRole("button", { name: "Clear Status filters" }).hover();
   await page.waitForTimeout(250);
   written.push(await snap(popover(page), `hover-clear-${theme}.png`));
+
+  // A filtered facet, collapsed: its header has to name what it is filtering by.
+  await open(page, "active", theme);
+  await header(page, "Status").click();
+  await expect(header(page, "Status")).toHaveAttribute("aria-expanded", "false");
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(250);
+  written.push(await snap(popover(page), `active-collapsed-${theme}.png`));
+
+  // A collapsed summary long enough to clip, with the full list on hover.
+  await open(page, "many-selected", theme);
+  await header(page, "Branch type").click();
+  await expect(header(page, "Branch type")).toHaveAttribute("aria-expanded", "false");
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(250);
+  written.push(await snap(popover(page), `summary-clipped-${theme}.png`));
+  await header(page, "Branch type").hover();
+  await expect(page.getByRole("tooltip")).toBeVisible({ timeout: 3000 });
+  written.push(await snap(page.locator("body"), `summary-tooltip-${theme}.png`));
 
   // Keyboard focus reached the way a keyboard user reaches it.
   await open(page, "default", theme);
