@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Info } from "lucide-react";
 import type { WslGitEligibility } from "@shared/types";
 import { Gauge } from "@/components/icons";
@@ -8,6 +8,7 @@ import { worktreeConfigClient } from "@/clients/worktreeConfigClient";
 import { useDeferredLoading, useSkeletonDisplayFloor } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { logError } from "@/utils/logger";
+import { useCardFocusHandoff } from "./hooks/useCardFocusHandoff";
 
 export interface WslGitBannerProps {
   worktreeId: string;
@@ -30,9 +31,18 @@ type RecheckState =
   | { phase: "idle" }
   | { phase: "running"; from: WslGitEligibility; sawPending: boolean }
   // `at` is the eligibility the outcome describes; a later snapshot retires it.
-  | { phase: "done"; outcome: "unchanged" | "no-answer" | "failed"; at: WslGitEligibility };
+  | {
+      phase: "done";
+      outcome: "changed" | "unchanged" | "no-answer" | "failed";
+      at: WslGitEligibility;
+    };
 
 type ActionError = "enable" | "dismiss" | null;
+
+// Every WSL card probes the same default distro, so they all stall together.
+// The first to stall says so; the rest stay quiet for this long.
+const STALL_ANNOUNCE_DEDUP_MS = 30_000;
+let lastStallAnnouncedAt = 0;
 
 const DISTRO_CLASS = "text-text-primary [overflow-wrap:anywhere]";
 
@@ -59,7 +69,9 @@ export const WslGitBanner = React.memo(function WslGitBanner({
   const [busy, setBusy] = useState<"enable" | "dismiss" | null>(null);
   const [actionError, setActionError] = useState<ActionError>(null);
   const [recheck, setRecheck] = useState<RecheckState>({ phase: "idle" });
-  const [root, setRoot] = useState<HTMLDivElement | null>(null);
+  const [stallAnnounced, setStallAnnounced] = useState(false);
+  // Enabling or declining unmounts this banner from the card.
+  const setRoot = useCardFocusHandoff<HTMLDivElement>();
 
   // Treat a missing value as "unprobed" — older snapshots predate the field.
   const eligibility: WslGitEligibility = wslGitEligible ?? "unprobed";
@@ -88,7 +100,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
       return;
     }
     if (eligibility !== recheck.from) {
-      setRecheck({ phase: "idle" });
+      setRecheck({ phase: "done", outcome: "changed", at: eligibility });
     } else if (recheck.sawPending) {
       setRecheck({ phase: "done", outcome: "unchanged", at: eligibility });
     }
@@ -108,20 +120,14 @@ export const WslGitBanner = React.memo(function WslGitBanner({
     return () => clearTimeout(timer);
   }, [rechecking]);
 
-  // Enabling or declining unmounts this banner from the card. If focus was on
-  // one of its buttons it would fall to <body>; hand it to the card's own
-  // keyboard target instead. Layout cleanup runs before React detaches the node.
-  useLayoutEffect(() => {
-    if (!root) return;
-    return () => {
-      if (!root.contains(document.activeElement)) return;
-      const row = root.closest("[data-worktree-row]");
-      const target =
-        row?.querySelector<HTMLElement>("[data-card-select-overlay]") ??
-        root.closest<HTMLElement>('[role="gridcell"]');
-      target?.focus({ preventScroll: true });
-    };
-  }, [root]);
+  const stalledOnItsOwn = showStuck && recheck.phase === "idle";
+  useEffect(() => {
+    if (!stalledOnItsOwn) return;
+    const now = Date.now();
+    if (now - lastStallAnnouncedAt < STALL_ANNOUNCE_DEDUP_MS) return;
+    lastStallAnnouncedAt = now;
+    setStallAnnounced(true);
+  }, [stalledOnItsOwn]);
 
   // Promise-method cleanup instead of try/finally: statement-level finally
   // clauses bail React Compiler memoization for the whole component.
@@ -169,13 +175,23 @@ export const WslGitBanner = React.memo(function WslGitBanner({
 
   const view = showSkeleton ? "probing" : shown === "unprobed" ? "stuck" : shown;
 
+  // `result` is shown and spoken; `spoken` adds what only needs saying because
+  // the banner's own change already shows it.
   let result: string | null = null;
+  let spoken: string | null = null;
   if (actionError === "enable") result = "Couldn't enable WSL git.";
   else if (actionError === "dismiss") result = "Couldn't hide this.";
   else if (recheck.phase === "done" && recheck.at === eligibility) {
     if (recheck.outcome === "failed") result = "Couldn't re-check.";
     else if (recheck.outcome === "no-answer") result = "WSL didn't answer.";
-    else if (view === "ineligible") result = "Checked. Still not the default distro.";
+    else if (recheck.outcome === "unchanged" && view === "ineligible")
+      result = "Checked. Still not the default distro.";
+    else if (recheck.outcome === "changed" && view === "eligible")
+      spoken = "Checked. WSL git is available for this worktree.";
+    else if (recheck.outcome === "changed" && view === "ineligible")
+      spoken = "Checked. Git runs from Windows for this worktree.";
+  } else if (stallAnnounced && view === "stuck") {
+    spoken = "Couldn't read your default WSL distro. Git runs from Windows for now.";
   }
 
   const distro = wslDistro ? <span className={DISTRO_CLASS}>{wslDistro}</span> : null;
@@ -224,8 +240,8 @@ export const WslGitBanner = React.memo(function WslGitBanner({
               <span className="text-text-secondary">
                 {view === "eligible" ? (
                   <>
-                    Git runs from Windows here. Running it inside {distro ?? "WSL"} instead makes
-                    status checks <span className="whitespace-nowrap">5–10×</span> faster.
+                    Git runs from Windows. Run it in {distro ?? "WSL"} for{" "}
+                    <span className="whitespace-nowrap">5–10×</span> faster status checks.
                   </>
                 ) : view === "ineligible" ? (
                   <>
@@ -278,7 +294,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
       {/* Always mounted and never display:none, so it is in the accessibility
           tree before a result is written into it. */}
       <span role="status" aria-live="polite" className="sr-only">
-        {result}
+        {result ?? spoken}
       </span>
     </div>
   );

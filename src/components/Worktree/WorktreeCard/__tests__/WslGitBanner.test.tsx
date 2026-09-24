@@ -209,4 +209,35 @@ describe("WslGitBanner", () => {
     expect(banner().getAttribute("data-state")).toBe("ineligible");
     expect(liveRegion()?.textContent).toBe("");
   });
+
+  it("announces a re-check whose answer changed, though nothing new is written on screen", async () => {
+    const { rerender } = render(<Host eligibility="ineligible" />);
+    fireEvent.click(screen.getByRole("button", { name: "Re-check" }));
+    await flush();
+    rerender(<Host eligibility="unprobed" />);
+    rerender(<Host eligibility="eligible" />);
+    expect(banner().getAttribute("data-state")).toBe("eligible");
+    expect(liveRegion()?.textContent).not.toBe("");
+  });
+
+  it("says a stalled probe once for every card that stalls with it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    render(
+      <>
+        <Host eligibility="unprobed" />
+        <Host eligibility="unprobed" />
+      </>
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(6000);
+    });
+    const regions = screen
+      .getAllByTestId("wsl-git-banner")
+      .map((b) => b.querySelector('[role="status"][aria-live="polite"]')?.textContent ?? "");
+    expect(
+      regions.every((_, i) => screen.getAllByTestId("wsl-git-banner")[i]!.dataset.state === "stuck")
+    ).toBe(true);
+    expect(regions.filter((t) => t !== "")).toHaveLength(1);
+  });
 });
