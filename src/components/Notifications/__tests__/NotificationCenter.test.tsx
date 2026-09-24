@@ -517,6 +517,21 @@ describe("NotificationCenter muted pill", () => {
     expect(screen.queryByTestId("notification-muted-pill")).toBeNull();
   });
 
+  it("names OS Do Not Disturb beside a session mute rather than hiding it", () => {
+    useNotificationSettingsStore.setState({
+      quietUntil: Date.now() + 60 * 60 * 1000,
+      osDndActive: true,
+    });
+    try {
+      render(<NotificationCenter open onClose={() => {}} />);
+      const pill = screen.getByTestId("notification-muted-pill");
+      expect(pill.textContent).toContain("Muted until");
+      expect(pill.textContent).toContain("OS Do Not Disturb is active");
+    } finally {
+      useNotificationSettingsStore.setState({ osDndActive: undefined });
+    }
+  });
+
   it("renders a session-mute pill with formatted end time and a Resume button", () => {
     const until = Date.now() + 60 * 60 * 1000;
     useNotificationSettingsStore.setState({ quietUntil: until });
@@ -582,6 +597,10 @@ describe("NotificationCenter muted pill", () => {
       });
 
       render(<NotificationCenter open onClose={() => {}} />);
+      // Before Resume, the strip already says the schedule outlasts the mute.
+      expect(screen.getByTestId("notification-muted-pill").textContent).toContain(
+        "Quiet hours continue until"
+      );
       const resume = screen.getByLabelText("Resume notifications");
 
       act(() => {
@@ -595,6 +614,7 @@ describe("NotificationCenter muted pill", () => {
       expect(vi.mocked(notifyLib.setSessionQuietUntil)).toHaveBeenCalledWith(0);
       const pill = screen.getByTestId("notification-muted-pill");
       expect(pill.textContent).toContain("Quiet hours");
+      expect(pill.textContent).not.toContain("continue until");
       expect(screen.queryByLabelText("Resume notifications")).toBeNull();
       expect(useNotificationSettingsStore.getState().quietHoursEnabled).toBe(true);
     } finally {

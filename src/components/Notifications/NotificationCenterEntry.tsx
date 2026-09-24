@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type Ref } from "react";
+import { Fragment, useEffect, useRef, useState, type Ref } from "react";
 import {
   CheckCircle2,
   XCircle,
@@ -15,6 +15,7 @@ import {
   MailOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { actionService } from "@/services/ActionService";
@@ -415,9 +416,8 @@ export function NotificationCenterEntry({
             {entry.actions.map((action, index) => {
               const manifest = actionService.get(action.actionId as ActionId);
               const isAvailable = manifest !== null && manifest.enabled;
-              return (
+              const button = (
                 <button
-                  key={`${action.actionId}-${index}`}
                   type="button"
                   // Handle for the `forced-colors: active` block in index.css.
                   // Primary is marked by its status-info fill and border, and
@@ -429,9 +429,6 @@ export function NotificationCenterEntry({
                     action.variant === "secondary" ? "secondary" : "primary"
                   }
                   aria-disabled={!isAvailable || undefined}
-                  title={
-                    !isAvailable ? (manifest?.disabledReason ?? "Action unavailable") : undefined
-                  }
                   onClick={
                     isAvailable
                       ? () =>
@@ -462,6 +459,20 @@ export function NotificationCenterEntry({
                 >
                   {action.label}
                 </button>
+              );
+              const key = `${action.actionId}-${index}`;
+              // Why it can't run, on the button itself: it stays focusable
+              // through aria-disabled, so this costs no extra Tab stop, and a
+              // native title never showed on focus at all.
+              return isAvailable ? (
+                <Fragment key={key}>{button}</Fragment>
+              ) : (
+                <Tooltip key={key}>
+                  <TooltipTrigger asChild>{button}</TooltipTrigger>
+                  <TooltipContent side="top">
+                    {manifest?.disabledReason ?? "Action unavailable"}
+                  </TooltipContent>
+                </Tooltip>
               );
             })}
           </div>

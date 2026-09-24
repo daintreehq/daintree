@@ -1,11 +1,18 @@
 // @vitest-environment jsdom
-import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
+import { render as rtlRender, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { NotificationCenterEntry, formatSnoozeWake } from "../NotificationCenterEntry";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUIStore } from "@/store/uiStore";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+// An unavailable row action explains itself through a real tooltip, which the
+// app mounts under App.tsx's provider.
+function render(ui: React.ReactElement) {
+  return rtlRender(ui, { wrapper: TooltipProvider });
+}
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 const getMock = vi.hoisted(() => vi.fn());
@@ -1004,5 +1011,27 @@ describe("NotificationCenterEntry silence refresh", () => {
     } finally {
       load.mockRestore();
     }
+  });
+});
+
+describe("NotificationCenterEntry — unavailable row action", () => {
+  it("says why it can't run when focused, without a native title", async () => {
+    getMock.mockReturnValue({ enabled: false, disabledReason: "No worktree selected" });
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({ actions: [{ label: "Close them", actionId: "terminal.kill" }] })}
+      />
+    );
+    const button = screen.getByRole("button", { name: "Close them" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.getAttribute("title")).toBeNull();
+
+    await act(async () => {
+      button.focus();
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("No worktree selected").length).toBeGreaterThan(0);
+    });
   });
 });

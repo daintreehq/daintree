@@ -1004,7 +1004,18 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const osDndOnly = isOsDndActive && notificationsEnabled && !isSessionMuted && !isScheduledMuted;
   // A line per clause. Run together with " · " they broke wherever the width
   // fell, so "Off:" and the kind it named landed on different lines.
+  // The lead names one cause; the others that are on at the same time get a
+  // clause of their own, or Resume reads as the end of a quiet it doesn't end.
+  const concurrentCauses = [
+    isSessionMuted && isScheduledMuted
+      ? `Quiet hours continue until ${timeFormatter.format(new Date(nextOccurrenceTimestamp(quietHoursEndMin)))}`
+      : "",
+    (isSessionMuted || isScheduledMuted) && isOsDndActive
+      ? (osDndDisplayNote(osDndActive) ?? "")
+      : "",
+  ];
   const quietDetail = [
+    ...concurrentCauses,
     pillLabel ? (osDndOnly ? "Daintree's own alerts still show" : summaryHeroLine) : "",
     pillLabel ? offLabel : silencedLabel,
     projectOffLabel,
@@ -1306,7 +1317,6 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               type="button"
               onClick={handleResumeNotifications}
               aria-label="Resume notifications"
-              title="Resume notifications"
               // A border, because without one this was bare text sitting at the
               // end of a line of bare text. It only read as a control under
               // `forced-colors: active`, where the UA supplies the border this
