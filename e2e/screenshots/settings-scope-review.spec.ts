@@ -197,6 +197,35 @@ async function closeSettings(page: Page): Promise<void> {
  * Open (or re-target) the dialog through the deep-link event. `scopeForTab` derives the
  * scope from the tab id, so this drives scope without touching the scope control.
  */
+/**
+ * Rest the pointer on `selector` and prove the browser agrees it is hovered before the
+ * shot is taken. Hovering can itself re-render the target (the scope trigger swaps its
+ * pre-Radix stand-in for the Radix trigger on pointer-enter), and a freshly mounted node
+ * under a still pointer is not `:hover` until the pointer moves again, so the harness
+ * nudges it and checks rather than writing a rest-state PNG under a hover name.
+ */
+async function hoverVerified(page: Page, selector: string): Promise<void> {
+  const target = page.locator(selector).first();
+  await target.hover();
+  await page.waitForTimeout(300);
+  const box = await target.boundingBox();
+  if (!box) throw new Error(`hover target ${selector} has no box`);
+  await page.mouse.move(box.x + box.width / 2 + 1, box.y + box.height / 2);
+  await expect
+    .poll(
+      () =>
+        page
+          .locator(selector)
+          .first()
+          .evaluate((el) => el.matches(":hover")),
+      {
+        timeout: 3000,
+        message: `${selector} never reported :hover`,
+      }
+    )
+    .toBe(true);
+}
+
 async function openSettingsAt(
   page: Page,
   target: { tab: string; subtab?: string; sectionId?: string }
@@ -433,7 +462,7 @@ const STATES: ScopeState[] = [
         const landed = await page.evaluate(() => {
           const el = document.activeElement as HTMLElement | null;
           if (!el) return null;
-          const inScopeControl = !!el.closest('[aria-label="Settings scope"]');
+          const inScopeControl = !!el.closest("[data-settings-scope-trigger]");
           return inScopeControl ? { visible: el.matches(":focus-visible") } : null;
         });
         if (landed) {
@@ -443,6 +472,32 @@ const STATES: ScopeState[] = [
         await page.keyboard.press("Shift+Tab");
       }
       throw new Error("could not reach the scope control by keyboard from the search input");
+    },
+  },
+  {
+    // The scope menu open from the keyboard, in the project scope: both scopes listed,
+    // the checked one marked, the project named under its entry.
+    slug: "31-scope-menu-open",
+    target: { tab: "project:general" },
+    sweep: true,
+    arrange: async (page) => {
+      await page.locator(SEARCH).click();
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Enter");
+      await page.locator('[role="menuitemradio"]').first().waitFor({ state: "visible" });
+    },
+    restore: async (page) => {
+      await page.keyboard.press("Escape");
+    },
+  },
+  {
+    // Pointer on the scope heading: the only thing telling a mouse user the heading
+    // is a control besides its chevron.
+    slug: "32-scope-hover",
+    target: { tab: "general" },
+    extraCrop: "sidebar",
+    arrange: async (page) => {
+      await hoverVerified(page, "[data-settings-scope-trigger]");
     },
   },
   {
@@ -482,7 +537,7 @@ const STATES: ScopeState[] = [
     extraCrop: "sidebar",
     sweep: true,
     arrange: async (page) => {
-      await page.locator(navItem("notifications")).hover();
+      await hoverVerified(page, navItem("notifications"));
     },
   },
   {
@@ -711,7 +766,7 @@ test("settings dialog scope review — global, project, search, deep link and tr
         await openSettingsAt(welcome, { tab: "general" });
         await settle(welcome, 600);
         await expect(
-          welcome.locator(`${SIDEBAR} [aria-label="Settings scope"]`),
+          welcome.locator(`${SIDEBAR} [data-settings-scope-trigger]`),
           "01-no-project: a scope control rendered with no project open"
         ).toHaveCount(0, { timeout: 5000 });
         await snap(welcome, "01-no-project--dialog", CARD);

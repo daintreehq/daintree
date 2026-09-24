@@ -377,11 +377,8 @@ test.describe.serial("Core: Shell & Settings", () => {
         const heading = window.locator('h2:has-text("Settings")');
         await expect(heading).toBeVisible({ timeout: T_MEDIUM });
 
-        // Verify project scope is selected
-        // The radiogroup renders both labels, so containText would pass either way.
-        // Assert the Project segment is the checked one.
-        const projectSegment = window.locator(SEL.settings.scopeOption("Project"));
-        await expect(projectSegment).toHaveAttribute("aria-checked", "true", {
+        // The scope heading names the scope it is showing.
+        await expect(window.locator(SEL.settings.scopeControl)).toHaveText("Project settings", {
           timeout: T_SHORT,
         });
       });

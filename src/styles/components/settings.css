@@ -67,11 +67,16 @@
   box-shadow: var(--settings-nav-active-shadow, none);
 }
 
-/* The scope switcher's selected segment is the surface seven light themes authored
-   --settings-scope-bg for — it was the old scope Select's fill. Re-homing the key
-   onto the thumb keeps those themes meaningful instead of orphaning the token. */
-.settings-scope-control [data-slot="segmented-thumb"] {
-  background: var(--settings-scope-bg, var(--theme-surface-panel-elevated));
+/* The scope heading is a menu button that reads as a heading: no surface at rest, the
+   nav's own hover wash under the pointer, and a lift while its menu is open. Seven light
+   themes authored --settings-scope-bg as the switcher's raised fill (first the scope
+   Select's, then the segmented thumb's), so it is the open state's surface here. */
+.settings-scope-trigger:hover {
+  background: var(--settings-nav-hover-bg, var(--theme-overlay-hover));
+}
+
+.settings-scope-trigger[data-state="open"] {
+  background: var(--settings-scope-bg, var(--theme-overlay-raised));
 }
 
 /* Deliberately NOT merged with the `prefers-contrast: more` block below: macOS fires
@@ -93,9 +98,9 @@
     outline-offset: -2px;
   }
 
-  .settings-scope-control [data-slot="segmented-thumb"] {
-    background: Canvas;
-    border: 2px solid Highlight;
+  .settings-scope-trigger[data-state="open"] {
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
   }
 }
 
@@ -105,21 +110,14 @@
 }
 
 @media (prefers-contrast: more) {
-  /* The scope switch and the active nav row are the two selection signals in this
-     shell, and both were carried by a low-delta neutral fill — in the mode whose whole
-     point is stronger state contrast they read exactly as faintly as they do by
-     default, while every row around them gains a border. Give both an explicit
-     boundary. Kept separate from the forced-colors block above by house rule. */
-  /* On the checked radio, not the thumb: this mode also boxes every button, and the
-     radios paint above the thumb, so its strengthened border survived only as two
-     bright slivers down the sides. An inset outline sits above the radio's own box. */
-  .settings-scope-control [role="radio"][aria-checked="true"] {
+  /* The active nav row is carried by a low-delta neutral fill, which in the mode whose
+     whole point is stronger state contrast reads exactly as faintly as it does by
+     default. An inset outline, not a border: a border took 2px of layout and pushed the
+     selected row's icon out of the column every other row keeps. Kept separate from the
+     forced-colors block above by house rule. */
+  .settings-nav-item[data-active="true"] {
     outline: 2px solid var(--theme-text-primary);
     outline-offset: -2px;
-  }
-
-  .settings-nav-item[data-active="true"] {
-    border: 2px solid var(--theme-text-primary);
   }
 }
 
