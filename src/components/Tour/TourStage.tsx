@@ -50,7 +50,7 @@ export function TourCaption() {
 }
 
 /** How long a finished chapter waits before moving on by itself. */
-export const TOUR_AUTO_ADVANCE_MS = 5000;
+export const TOUR_AUTO_ADVANCE_MS = 3000;
 
 export interface TourEndCard {
   /** Title of the chapter Next leads to; null on the last chapter. */
@@ -74,7 +74,7 @@ const RING_STYLE = {
 
 /**
  * What the stage becomes when a chapter has played out: one large, obvious way
- * on, with a ring that drains over five seconds and then moves on by itself —
+ * on, with a ring that drains over three seconds and then moves on by itself —
  * the tour keeps its pace without waiting to be pushed. The last chapter
  * doesn't advance on its own; finishing is the user's call.
  */
@@ -101,7 +101,7 @@ function EndCard({ nextTitle, held, onHold, onNext, onReplay }: TourEndCard) {
       </span>
       {!nextTitle && (
         <span className="-mt-1.5 text-xs text-text-secondary">
-          Finish opens the Getting Started checklist for your first task
+          Finish opens the Getting Started checklist to run your first agents
         </span>
       )}
       <button

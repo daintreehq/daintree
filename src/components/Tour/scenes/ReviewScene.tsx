@@ -1,4 +1,4 @@
-import { Check, FileCode, GitCommitHorizontal } from "lucide-react";
+import { Check, FileCode, GitBranch, GitCommitHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GRID_RECT, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
@@ -11,7 +11,7 @@ import {
   type CursorStep,
 } from "../mockup/TourMock";
 import { useCue, useTimelineIndex, type TimelinePoint } from "../useTourPlayer";
-import { MockSpotlight } from "./sceneParts";
+import { MockSpotlight, MockTooltip } from "./sceneParts";
 
 const FILES = [
   { name: "Header.tsx", added: 24, removed: 3 },
@@ -41,18 +41,22 @@ const DIFF_ROW: Record<DiffKind, string> = {
   delete: "bg-diff-delete-background",
 };
 
-// The card's Review & Commit button, and the commit button inside the review.
-// The card is the third in the sidebar; measured from the render.
-const REVIEW_BUTTON = { x: 84, y: 248 };
+// The card's review icon, and the commit button inside the review. The card is
+// the third in the sidebar; measured from the render.
+const REVIEW_BUTTON = { x: 141, y: 224 };
+const PANE_INPUT = { x: GRID_RECT.x + 80, y: GRID_RECT.y + GRID_RECT.height - 11 };
 const COMMIT_BUTTON = {
   x: GRID_RECT.x + GRID_RECT.width - 44,
   y: GRID_RECT.y + GRID_RECT.height - 16,
 };
 // The message is written before the pointer reaches Commit & Push.
 const COMMIT_TYPED = { cue: "commit", offset: 1.6 } as const;
+const FILES_CUE = { cue: "files", offset: -0.3 } as const;
 
 const CURSOR: readonly CursorStep[] = [
-  { cue: "open", at: REVIEW_BUTTON },
+  { cue: "ask", offset: -0.4, at: PANE_INPUT },
+  { cue: "ask", at: PANE_INPUT, click: true },
+  { cue: "open", offset: -0.6, at: REVIEW_BUTTON },
   { cue: "open", offset: 0.55, at: REVIEW_BUTTON, click: true },
   { cue: "commit", offset: 1.6, at: COMMIT_BUTTON },
   { cue: "commit", offset: 2.3, at: COMMIT_BUTTON, click: true },
@@ -83,12 +87,26 @@ function ReviewSurface({
       }}
     >
       <div className="flex h-7 shrink-0 items-center gap-1.5 border-b border-border-subtle px-3">
-        <span className="text-2xs font-semibold text-text-primary">Review</span>
-        <span className="text-3xs text-text-secondary">add-search</span>
+        <span className="text-2xs font-semibold text-text-primary">Review &amp; commit</span>
+        <span className="flex items-center gap-1 rounded-sm bg-overlay-subtle px-1 font-mono text-3xs text-text-secondary">
+          <GitBranch className="size-2.5" aria-hidden="true" />
+          add-search
+        </span>
       </div>
-      <div className="flex min-h-0 flex-1">
+      {/* Once pushed nothing is left to commit, so the list and the commit bar
+          give way to the clean state, as the real surface does. */}
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 items-center justify-center gap-1.5 text-2xs text-text-secondary",
+          pushed ? "flex" : "hidden"
+        )}
+      >
+        <Check className="size-3" aria-hidden="true" />
+        Working tree clean
+      </div>
+      <div className={cn("min-h-0 flex-1", pushed ? "hidden" : "flex")}>
         <div className="flex w-[150px] shrink-0 flex-col gap-0.5 border-r border-border-subtle p-1.5">
-          <span className="px-1.5 pb-0.5 text-3xs font-semibold text-text-secondary">Changes</span>
+          <span className="px-1.5 pb-0.5 text-3xs font-semibold text-text-secondary">Staged</span>
           {FILES.map((file, i) => (
             <div
               key={file.name}
@@ -129,7 +147,12 @@ function ReviewSurface({
           ))}
         </div>
       </div>
-      <div className="flex shrink-0 items-center gap-2 border-t border-border-subtle p-2">
+      <div
+        className={cn(
+          "shrink-0 items-center gap-2 border-t border-border-subtle p-2",
+          pushed ? "hidden" : "flex"
+        )}
+      >
         <div className="flex h-6 min-w-0 flex-1 items-center rounded-md border border-border-input bg-surface-input px-2 text-3xs">
           <MockTyping
             cue="commit"
@@ -139,27 +162,22 @@ function ReviewSurface({
           />
           {!typing && <span className="text-text-placeholder">Commit message…</span>}
         </div>
-        {pushed ? (
-          <span className="flex h-6 items-center gap-1 rounded-md border border-border-strong px-2.5 text-3xs font-medium text-text-primary">
-            <Check className="size-3" aria-hidden="true" />
-            Pushed to origin/add-search
-          </span>
-        ) : (
-          <span className="flex h-6 items-center gap-1 rounded-md bg-text-primary px-2.5 text-3xs font-medium text-text-inverse">
-            Commit &amp; Push
-          </span>
-        )}
+        <span className="flex h-6 items-center gap-1 rounded-md bg-text-primary px-2.5 text-3xs font-medium text-text-inverse">
+          Commit &amp; Push
+        </span>
       </div>
     </div>
   );
 }
 
 export function ReviewScene() {
+  const asking = useCue("ask", 0.2);
   const changes = useCue("files");
+  const hovering = useCue("open");
   const opened = useCue("open", 0.65);
   const diffStep = useTimelineIndex(DIFF_STEPS);
   const typing = useCue("commit", 0.2);
-  const pushed = useCue("commit", 2.4);
+  const pushed = useCue("commit", 2.6);
   const cursor = useMockCursor({ x: 420, y: 300 }, CURSOR);
 
   return (
@@ -175,23 +193,37 @@ export function ReviewScene() {
             branch="add-search"
             selected
             states={["completed"]}
-            changes={pushed ? undefined : "+94 −4"}
-          >
-            <span
-              className={cn(
-                "mt-0.5 flex items-center justify-center gap-1 rounded-sm border border-border-strong bg-surface-panel py-0.5 text-3xs font-medium text-text-primary",
-                pushed && "opacity-0"
-              )}
-            >
-              <GitCommitHorizontal className="size-2.5" aria-hidden="true" />
-              Review &amp; Commit
-            </span>
-          </MockWorktreeCard>
+            changes={pushed ? undefined : "3 files +94/−4"}
+            action={
+              pushed ? undefined : (
+                <span
+                  data-tour-anchor="review-commit"
+                  className="flex shrink-0 items-center text-[var(--color-state-active)]"
+                >
+                  <GitCommitHorizontal className="size-3" aria-hidden="true" />
+                </span>
+              )
+            }
+          />
         </>
       }
       grid={
         <MockGrid columns={1}>
-          <MockPane agent="claude" state="completed">
+          <MockPane
+            agent="claude"
+            state="completed"
+            focused={!changes}
+            input={
+              asking && !changes ? (
+                <MockTyping
+                  cue="ask"
+                  text="Commit and push this"
+                  delay={0.2}
+                  finishBy={FILES_CUE}
+                />
+              ) : null
+            }
+          >
             <MockLines widths={[82, 60, 90, 54, 72, 64]} />
           </MockPane>
         </MockGrid>
@@ -201,7 +233,16 @@ export function ReviewScene() {
       }
     >
       {/* "Its worktree in the sidebar shows what changed" — the card and its button. */}
-      <MockSpotlight targets={["worktree-add-search"]} visible={changes && !opened} />
+      <MockSpotlight
+        targets={hovering ? ["review-commit"] : ["worktree-add-search"]}
+        visible={changes && !opened}
+      />
+      <MockTooltip
+        visible={hovering && !opened}
+        x={REVIEW_BUTTON.x}
+        y={REVIEW_BUTTON.y + 12}
+        title="Review & commit"
+      />
       <MockCursor {...cursor} />
     </MockApp>
   );

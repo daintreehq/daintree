@@ -1,16 +1,13 @@
-import { Pause } from "lucide-react";
+import { CirclePause } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AgentState } from "@/types";
 import { MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
   MockAgentIcon,
-  MockCursor,
   MockLines,
   MockPane,
   MockStateGlyph,
   reveal,
-  useMockCursor,
-  type CursorStep,
   type MockAgentId,
 } from "../mockup/TourMock";
 import { useCue } from "../useTourPlayer";
@@ -21,73 +18,45 @@ const PALETTE = { x: 150, y: 44, width: 340 } as const;
 interface Run {
   agent: MockAgentId;
   title: string;
-  where: string;
   state: AgentState;
   age: string;
 }
 
-const PROJECTS: ReadonlyArray<{ name: string; runs: readonly Run[] }> = [
+const PROJECTS: ReadonlyArray<{ name: string; current?: boolean; runs: readonly Run[] }> = [
   {
     name: "shop-app",
+    current: true,
     runs: [
-      {
-        agent: "codex",
-        title: "Fix login redirect",
-        where: "fix-login-redirect",
-        state: "waiting",
-        age: "2m",
-      },
-      {
-        agent: "claude",
-        title: "Add search to the header",
-        where: "add-search",
-        state: "working",
-        age: "6m",
-      },
+      { agent: "codex", title: "Fix login redirect", state: "waiting", age: "2m" },
+      { agent: "claude", title: "Add search to the header", state: "working", age: "6m" },
     ],
   },
   {
     name: "api-server",
     runs: [
-      {
-        agent: "antigravity",
-        title: "Rate limit the public API",
-        where: "feat/rate-limits",
-        state: "waiting",
-        age: "11m",
-      },
-      {
-        agent: "claude",
-        title: "Migrate billing tables",
-        where: "feat/billing",
-        state: "completed",
-        age: "40m",
-      },
+      { agent: "antigravity", title: "Rate limit the public API", state: "waiting", age: "11m" },
+      { agent: "claude", title: "Migrate billing tables", state: "completed", age: "40m" },
     ],
   },
 ];
 
-// Rows are 18px under a 64px header (title, search, filters, group label).
-const rowY = (group: number, i: number) => PALETTE.y + 64 + group * 58 + i * 18;
-// Parking is for something asking for you that can wait: the waiting run.
-const PARK_ROW = { group: 1, i: 0 };
+// Parking is for something asking for you that can wait: api-server's waiting run.
+const PARK = { group: 1, title: "Rate limit the public API" };
 
-const CURSOR: readonly CursorStep[] = [
-  { cue: "park", at: { x: PALETTE.x + 160, y: rowY(PARK_ROW.group, PARK_ROW.i) + 9 } },
-  {
-    cue: "park",
-    offset: 0.5,
-    at: { x: PALETTE.x + 160, y: rowY(PARK_ROW.group, PARK_ROW.i) + 9 },
-    click: true,
-  },
-];
+/** A group's rows in display order: a parked run ranks below everything else. */
+function ordered(runs: readonly Run[], parkedTitle: string | null): readonly Run[] {
+  if (!parkedTitle) return runs;
+  const parked = runs.filter((run) => run.title === parkedTitle);
+  return [...runs.filter((run) => run.title !== parkedTitle), ...parked];
+}
 
 export function PilotScene() {
   const keys = useCue("open");
-  const open = useCue("open", 0.8);
+  const open = useCue("open", 1.8);
   const sort = useCue("sort");
-  const parked = useCue("park", 0.9);
-  const cursor = useMockCursor({ x: 420, y: 300 }, CURSOR);
+  const parkCue = useCue("park");
+  const parkKeys = useCue("park", 1.2);
+  const parked = useCue("park", 1.8);
 
   return (
     <MockApp
@@ -126,48 +95,40 @@ export function PilotScene() {
         <MockSearchField>
           <span className="text-text-placeholder">Search agents…</span>
         </MockSearchField>
-        <div className="mb-1 flex items-center gap-1 px-0.5 text-3xs">
-          {["All", "Attention", "Working", "Finished", "Parked"].map((filter, i) => (
-            <span
-              key={filter}
-              className={cn(
-                "rounded-sm px-1.5 py-px",
-                i === 0 ? "bg-overlay-selected text-text-primary" : "text-text-secondary"
-              )}
-            >
-              {filter}
-            </span>
-          ))}
-        </div>
         {PROJECTS.map((project, g) => (
           <div key={project.name} className="flex flex-col">
-            <span className="px-1 py-0.5 text-3xs font-semibold text-text-secondary">
+            <span className="flex items-center gap-1.5 px-1 py-0.5 text-3xs font-semibold text-text-secondary">
               {project.name}
+              {project.current && <span className="font-normal">· Current</span>}
             </span>
-            {project.runs.map((run, i) => {
-              const isParked = parked && g === PARK_ROW.group && i === PARK_ROW.i;
+            {ordered(project.runs, parked && g === PARK.group ? PARK.title : null).map((run, i) => {
+              const isTarget = g === PARK.group && run.title === PARK.title;
+              const isParked = parked && isTarget;
               return (
                 <div
                   key={run.title}
                   data-tour-anchor={`pilot-row-${g}-${i}`}
                   className={cn(
-                    "flex h-[18px] items-center gap-1.5 rounded-md px-1.5 transition-opacity duration-200 ease-out",
-                    isParked ? "opacity-45" : "opacity-100"
+                    "flex h-[18px] items-center gap-1.5 rounded-md px-1.5 transition-colors duration-150 ease-out",
+                    isTarget && parkCue && !parked ? "bg-overlay-selected" : "bg-transparent"
                   )}
                 >
+                  <span className="flex size-3 shrink-0 items-center justify-center">
+                    {isParked ? (
+                      <CirclePause className="size-2.5 text-text-secondary" aria-hidden="true" />
+                    ) : (
+                      <MockStateGlyph state={run.state} />
+                    )}
+                  </span>
                   <MockAgentIcon agent={run.agent} className="size-3" />
-                  <span className="min-w-0 flex-1 truncate text-3xs text-text-primary">
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate text-3xs",
+                      isParked ? "text-text-secondary" : "text-text-primary"
+                    )}
+                  >
                     {run.title}
                   </span>
-                  <span className="truncate text-3xs text-text-secondary">{run.where}</span>
-                  {isParked ? (
-                    <span className="flex items-center gap-0.5 text-3xs text-text-secondary">
-                      <Pause className="size-2.5" aria-hidden="true" />
-                      Parked
-                    </span>
-                  ) : (
-                    <MockStateGlyph state={run.state} />
-                  )}
                   <span className="w-5 text-right text-3xs tabular-nums text-text-secondary">
                     {run.age}
                   </span>
@@ -176,10 +137,21 @@ export function PilotScene() {
             })}
           </div>
         ))}
+        <div className="mt-1.5 flex items-center gap-3 border-t border-border-subtle px-1 pt-1.5 text-3xs text-text-secondary">
+          <span>
+            <span className="text-text-primary">↵</span> Open
+          </span>
+          <span data-tour-anchor="pilot-park">
+            <span className="text-text-primary">⌥↵</span> Park
+          </span>
+        </div>
       </div>
-      {/* "Whatever is blocked or waiting on you comes first" — the top of each group. */}
-      <MockSpotlight targets={["pilot-row-0-0", "pilot-row-1-0"]} visible={sort && !parked} />
-      <MockCursor {...cursor} />
+      <MockKeys keys={["⌥", "↵"]} x={320} y={300} visible={parkCue && !parkKeys} />
+      {/* "Whatever is waiting on you" — the top of each group, then the Park hint. */}
+      <MockSpotlight
+        targets={parkCue ? ["pilot-park"] : ["pilot-row-0-0", "pilot-row-1-0"]}
+        visible={(sort && !parkCue) || (parkCue && !parked)}
+      />
     </MockApp>
   );
 }

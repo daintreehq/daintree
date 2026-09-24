@@ -58,18 +58,18 @@ function measureAnchors(from: Element, targets: readonly string[]): Hole[] {
   if (!canvas || canvas.offsetWidth === 0) return [];
   const box = canvas.getBoundingClientRect();
   const scale = box.width / canvas.offsetWidth;
+  const maxX = canvas.offsetWidth - 1;
+  const maxY = canvas.offsetHeight - 1;
   return targets.flatMap((target) => {
     const el = canvas.querySelector(`[data-tour-anchor="${target}"]`);
     if (!el) return [];
     const r = el.getBoundingClientRect();
-    return [
-      {
-        x: (r.left - box.left) / scale - SPOTLIGHT_PAD,
-        y: (r.top - box.top) / scale - SPOTLIGHT_PAD,
-        width: r.width / scale + SPOTLIGHT_PAD * 2,
-        height: r.height / scale + SPOTLIGHT_PAD * 2,
-      },
-    ];
+    // Clamped to the canvas so a ring on an edge-hugging element draws whole.
+    const x = Math.max(1, (r.left - box.left) / scale - SPOTLIGHT_PAD);
+    const y = Math.max(1, (r.top - box.top) / scale - SPOTLIGHT_PAD);
+    const right = Math.min(maxX, (r.right - box.left) / scale + SPOTLIGHT_PAD);
+    const bottom = Math.min(maxY, (r.bottom - box.top) / scale + SPOTLIGHT_PAD);
+    return [{ x, y, width: right - x, height: bottom - y }];
   });
 }
 
@@ -106,7 +106,9 @@ export function MockSpotlight({
       ref={ref}
       aria-hidden="true"
       className={cn(
-        "pointer-events-none absolute inset-0 z-[15] size-full transition-opacity duration-200 ease-out",
+        // Above menus and dialogs (z-20), so a highlight inside one still reads;
+        // only the pointer (z-40) sits higher.
+        "pointer-events-none absolute inset-0 z-30 size-full transition-opacity duration-200 ease-out",
         visible && holes.length > 0 ? "opacity-100" : "opacity-0"
       )}
     >
@@ -247,6 +249,12 @@ export interface MockMenuItem {
   icon?: React.ReactNode;
   label: string;
   hint?: string;
+  /** A second, quieter line under the label (the action palette's summary). */
+  detail?: string;
+  /** Dimmed row: present but not the one being pointed at. */
+  muted?: boolean;
+  /** A rule above this row. */
+  separator?: boolean;
 }
 
 /** A dropdown or palette list; `active` marks the row the pointer or keyboard is on. */
@@ -278,16 +286,22 @@ export function MockMenu({
     >
       {header}
       {items.map((item, i) => (
-        <div
-          key={item.label}
-          className={cn(
-            "flex items-center gap-2 rounded-md px-2 py-1 text-3xs transition-colors duration-150 ease-out [&_svg]:size-3",
-            i === active ? "bg-overlay-selected text-text-primary" : "text-text-secondary"
-          )}
-        >
-          {item.icon}
-          <span className="min-w-0 flex-1 truncate">{item.label}</span>
-          {item.hint && <span className="shrink-0 text-text-secondary">{item.hint}</span>}
+        <div key={item.label} data-tour-anchor={`menu-${i}`}>
+          {item.separator && <div className="mx-1 my-1 h-px bg-border-subtle" />}
+          <div
+            className={cn(
+              "flex items-center gap-2 rounded-md px-2 py-1 text-3xs transition-colors duration-150 ease-out [&_svg]:size-3",
+              i === active ? "bg-overlay-selected text-text-primary" : "text-text-secondary",
+              item.muted && "opacity-60"
+            )}
+          >
+            {item.icon}
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate">{item.label}</span>
+              {item.detail && <span className="truncate text-text-secondary">{item.detail}</span>}
+            </span>
+            {item.hint && <span className="shrink-0 text-text-secondary">{item.hint}</span>}
+          </div>
         </div>
       ))}
     </div>
@@ -301,5 +315,38 @@ export function MockSearchField({ children }: { children: React.ReactNode }) {
       <Search className="size-2.5 shrink-0 text-text-secondary" aria-hidden="true" />
       <span className="min-w-0 truncate">{children}</span>
     </div>
+  );
+}
+
+/** A tooltip as the app draws one: a title, and optionally a quieter second line. */
+export function MockTooltip({
+  x,
+  y,
+  visible,
+  title,
+  detail,
+  align = "center",
+}: {
+  x: number;
+  y: number;
+  visible: boolean;
+  title: string;
+  detail?: string;
+  /** Which edge of the tooltip sits on `x`. */
+  align?: "center" | "right";
+}) {
+  return (
+    <span
+      className={cn(
+        "absolute z-20 flex flex-col gap-0.5 whitespace-nowrap rounded-md border border-border-strong bg-surface-panel-elevated px-2 py-1 shadow-[var(--theme-shadow-ambient)]",
+        align === "center" ? "-translate-x-1/2" : "-translate-x-full",
+        "transition-opacity duration-150 ease-out",
+        visible ? "opacity-100" : "opacity-0"
+      )}
+      style={{ left: x, top: y }}
+    >
+      <span className="text-3xs font-medium text-text-primary">{title}</span>
+      {detail && <span className="text-3xs text-text-secondary">{detail}</span>}
+    </span>
   );
 }

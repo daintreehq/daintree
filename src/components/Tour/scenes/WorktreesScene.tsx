@@ -33,7 +33,9 @@ const CURSOR: readonly CursorStep[] = [
 ];
 
 export function WorktreesScene() {
+  const project = useCue("project");
   const list = useCue("list");
+  const branchCue = useCue("branch");
   const dialogOpen = useCue("plus", 0.7);
   const created = useCue("create", 0.7);
   const cursor = useMockCursor({ x: 420, y: 300 }, CURSOR);
@@ -93,7 +95,7 @@ export function WorktreesScene() {
             </div>
           </div>
           <div className="mb-3 flex flex-col gap-1">
-            <span className="text-3xs font-medium text-text-secondary">Branch name</span>
+            <span className="text-3xs font-medium text-text-secondary">Name</span>
             <div className="flex h-5 items-center rounded-md border border-border-interactive bg-surface-input px-2 text-3xs text-text-primary">
               <MockTyping
                 cue="name"
@@ -113,7 +115,17 @@ export function WorktreesScene() {
       }
     >
       {/* "Its worktrees sit down the left" — the whole list, not one card. */}
-      <MockSpotlight targets={["worktree-list"]} visible={list && !dialogOpen} />
+      {/* Project, then the list, then one worktree's branch — each as it's named. */}
+      <MockSpotlight
+        targets={
+          branchCue
+            ? ["worktree-fix-login-redirect-branch"]
+            : list
+              ? ["worktree-list"]
+              : ["project"]
+        }
+        visible={project && !dialogOpen}
+      />
       <MockCursor {...cursor} />
     </MockApp>
   );

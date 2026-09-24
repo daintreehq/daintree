@@ -1,4 +1,4 @@
-import { CircleDot, GitPullRequest } from "lucide-react";
+import { CircleDot, CornerDownRight, GitPullRequest } from "lucide-react";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import type { CIStatus } from "@shared/types/forge";
 import { cn } from "@/lib/utils";
@@ -18,11 +18,18 @@ const ISSUES = ANCHOR["forge-issues"];
 const LIST = { x: 300, y: ISSUES.y + 14, width: 200 };
 const ISSUE_ROW = { x: LIST.x + 90, y: LIST.y + 38 };
 
+// Picking an issue opens the new worktree form with its branch already named.
+const DIALOG = { x: 230, y: 90, width: 250 };
+const CREATE_BUTTON = { x: DIALOG.x + 200, y: DIALOG.y + 84 };
+const BRANCH = "feature/issue-51-dark-mode-for-settings";
+
 const CURSOR: readonly CursorStep[] = [
   { cue: "list", at: ISSUES },
   { cue: "list", offset: 0.5, at: ISSUES, click: true },
   { cue: "pick", at: ISSUE_ROW },
   { cue: "pick", offset: 0.5, at: ISSUE_ROW, click: true },
+  { cue: "create", at: CREATE_BUTTON },
+  { cue: "create", offset: 0.6, at: CREATE_BUTTON, click: true },
 ];
 
 /**
@@ -59,35 +66,38 @@ function CIGlyph({ passed }: { passed: boolean }) {
 export function GitHubScene() {
   const pill = useCue("pill");
   const listOpen = useCue("list", 0.6);
-  const created = useCue("pick", 0.6);
+  const dialog = useCue("pick", 0.6);
+  const created = useCue("create", 0.7);
   const badge = useCue("badge");
   const checksPassed = useCue("badge", 1.8);
   const cursor = useMockCursor({ x: 420, y: 200 }, CURSOR);
 
   return (
     <MockApp
-      branch={created ? "issue-51-dark-mode" : "main"}
+      branch={created ? BRANCH : "main"}
       focus={created ? ["sidebar"] : ["toolbar"]}
       worktrees={
         <>
           <MockWorktreeCard name="shop-app" branch="main" selected={!created} />
           <MockWorktreeCard name="add-search" branch="add-search" states={["completed"]} />
           <MockWorktreeCard
-            name="issue-51-dark-mode"
-            branch="issue-51-dark-mode"
+            name="issue-51"
+            issueTitle="Dark mode for settings"
+            branch={BRANCH}
             selected={created}
             className={reveal(created, "left")}
           >
-            <span className="flex items-center gap-1.5 pl-[18px] text-3xs text-text-secondary [&_svg]:size-2.5">
-              <span className="flex items-center gap-0.5">
-                <CircleDot aria-hidden="true" />
-                #51
-              </span>
-              <span className={cn("flex items-center gap-1", reveal(badge, "none"))}>
-                <GitPullRequest aria-hidden="true" />
-                #57
-                <CIGlyph passed={checksPassed} />
-              </span>
+            {/* The pull request sits under the issue, as the real card nests it. */}
+            <span
+              className={cn(
+                "flex items-center gap-1 pl-[18px] text-3xs text-text-secondary [&_svg]:size-2.5",
+                reveal(badge, "none")
+              )}
+            >
+              <CornerDownRight aria-hidden="true" />
+              <GitPullRequest aria-hidden="true" />
+              #57
+              <CIGlyph passed={checksPassed} />
             </span>
           </MockWorktreeCard>
         </>
@@ -101,11 +111,11 @@ export function GitHubScene() {
       }
     >
       <MockSpotlight
-        targets={badge ? ["worktree-issue-51-dark-mode"] : ["forge"]}
+        targets={badge ? ["worktree-issue-51"] : ["forge"]}
         visible={(pill && !listOpen) || badge}
       />
       <MockMenu
-        visible={listOpen && !created}
+        visible={listOpen && !dialog}
         active={1}
         x={LIST.x}
         y={LIST.y}
@@ -122,6 +132,26 @@ export function GitHubScene() {
           { icon: <CircleDot />, label: "#45 Add order history", hint: "5d" },
         ]}
       />
+      <div
+        className={cn(
+          "absolute z-20 rounded-lg border border-border-strong bg-surface-dialog p-3 shadow-[var(--theme-shadow-ambient)]",
+          reveal(dialog && !created)
+        )}
+        style={{ left: DIALOG.x, top: DIALOG.y, width: DIALOG.width }}
+      >
+        <div className="mb-2 text-xs font-semibold text-text-primary">Create worktree</div>
+        <div className="mb-3 flex flex-col gap-1">
+          <span className="text-3xs font-medium text-text-secondary">Name</span>
+          <div className="flex h-5 items-center truncate rounded-md border border-border-input bg-surface-input px-2 text-3xs text-text-primary">
+            {BRANCH}
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <span className="rounded-md bg-text-primary px-2.5 py-1 text-3xs font-medium text-text-inverse">
+            Create worktree
+          </span>
+        </div>
+      </div>
       <MockCursor {...cursor} visible={cursor.visible && !created} />
     </MockApp>
   );

@@ -5,6 +5,7 @@ import {
   FolderTree,
   Folders,
   GitBranch,
+  GitCommitHorizontal,
   GitPullRequest,
   MessageSquareMore,
   PanelLeft,
@@ -39,7 +40,7 @@ export const APP_LAYOUT = {
   rightPanelWidth: 176,
 } as const;
 
-/** The grid's content box on the canvas (inside its 8px padding). */
+/** The grid's content box on the canvas (inside its 8px padding), with no side panel open. */
 export const GRID_RECT = {
   x: APP_LAYOUT.sidebarWidth + 8,
   y: APP_LAYOUT.toolbarHeight + 8,
@@ -63,15 +64,15 @@ export const ANCHOR = {
   "agent-antigravity": { x: 128, y: 14 },
   terminal: { x: 161, y: 14 },
   "file-browser": { x: 183, y: 14 },
-  forge: { x: 455, y: 14 },
-  "forge-issues": { x: 443, y: 14 },
+  forge: { x: 440, y: 14 },
+  "forge-issues": { x: 412, y: 14 },
   "copy-context": { x: 523, y: 14 },
   palette: { x: 545, y: 14 },
   assistant: { x: 600, y: 14 },
   portal: { x: 622, y: 14 },
   "sidebar-arm": { x: 119, y: 46 },
   "sidebar-plus": { x: 139, y: 46 },
-  "dock-launcher": { x: 18, y: 347 },
+  "dock-launcher": { x: 174, y: 347 },
 } as const satisfies Record<string, { x: number; y: number }>;
 
 export function toolbarAgentPoint(agent: MockAgentId) {
@@ -120,22 +121,28 @@ function ToolbarButton({
 
 export interface MockWorktree {
   name: string;
+  /** For an issue worktree the real card leads with the issue's title, not the folder name. */
+  issueTitle?: string;
   branch: string;
   selected?: boolean;
   /** Agent states, as the real card's session row of glyphs. */
   states?: readonly AgentState[];
   /** Change counts, e.g. "+94 −4". */
   changes?: string;
+  /** A trailing control on the changes row, as the real card's review button. */
+  action?: ReactNode;
   className?: string;
   children?: ReactNode;
 }
 
 export function MockWorktreeCard({
   name,
+  issueTitle,
   branch,
   selected,
   states,
   changes,
+  action,
   className,
   children,
 }: MockWorktree) {
@@ -154,11 +161,22 @@ export function MockWorktreeCard({
       )}
     >
       <div className="flex min-w-0 items-center gap-1.5">
-        <GitBranch className="size-3 shrink-0 text-text-secondary" aria-hidden="true" />
-        <span className="truncate text-2xs font-medium text-text-primary">{name}</span>
+        {issueTitle ? (
+          <CircleDot className="size-3 shrink-0 text-text-secondary" aria-hidden="true" />
+        ) : (
+          <GitBranch className="size-3 shrink-0 text-text-secondary" aria-hidden="true" />
+        )}
+        <span className="truncate text-2xs font-medium text-text-primary">
+          {issueTitle ?? name}
+        </span>
       </div>
       <div className="flex min-w-0 items-center gap-1.5 pl-[18px]">
-        <span className="truncate text-3xs text-text-secondary">{branch}</span>
+        <span
+          data-tour-anchor={`worktree-${name}-branch`}
+          className="truncate text-3xs text-text-secondary"
+        >
+          {branch}
+        </span>
         <span className="flex-1" />
         {changes && (
           <span className="shrink-0 text-3xs tabular-nums text-text-secondary">{changes}</span>
@@ -168,6 +186,7 @@ export function MockWorktreeCard({
             <MockStateGlyph state={shown} />
           </span>
         )}
+        {action}
       </div>
       {children}
     </div>
@@ -249,7 +268,10 @@ export function MockApp({
           <FolderTree aria-hidden="true" />
         </ToolbarButton>
         <span className="flex-1" />
-        <span className="flex items-center gap-1.5 rounded-md border border-border-subtle bg-surface-panel px-2 py-0.5">
+        <span
+          data-tour-anchor="project"
+          className="flex items-center gap-1.5 rounded-md border border-border-subtle bg-surface-panel px-2 py-0.5"
+        >
           <span className="text-3xs">🌿</span>
           <span className="text-3xs font-medium text-text-primary">shop-app</span>
           <span className="flex items-center gap-0.5 text-3xs text-text-secondary">
@@ -268,6 +290,10 @@ export function MockApp({
           </span>
           <span data-tour-anchor="forge-prs" className="flex items-center gap-0.5">
             <GitPullRequest aria-hidden="true" />3
+          </span>
+          <span className="flex items-center gap-0.5">
+            <GitCommitHorizontal aria-hidden="true" />
+            24
           </span>
         </span>
         <ToolbarButton anchor="notifications">
@@ -315,8 +341,25 @@ export function MockApp({
           </div>
         </div>
 
-        <div className={cn("relative min-w-0 flex-1 bg-surface-grid p-2", recede("grid", focus))}>
-          {grid}
+        {/* The dock belongs to the grid column: it runs from the sidebar's edge
+            to the side panel, never under either. */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className={cn("relative min-h-0 flex-1 bg-surface-grid p-2", recede("grid", focus))}>
+            {grid}
+          </div>
+          <div
+            className={cn(
+              "flex shrink-0 items-center gap-2 border-t border-border-subtle bg-surface-toolbar px-2",
+              recede("dock", focus)
+            )}
+            style={{ height: APP_LAYOUT.dockHeight }}
+          >
+            <ToolbarButton anchor="dock-launcher">
+              <Plus aria-hidden="true" />
+            </ToolbarButton>
+            <span className="flex-1" />
+            {dock}
+          </div>
         </div>
 
         {rightPanel && (
@@ -330,20 +373,6 @@ export function MockApp({
             {rightPanel}
           </div>
         )}
-      </div>
-
-      <div
-        className={cn(
-          "flex shrink-0 items-center gap-2 border-t border-border-subtle bg-surface-toolbar px-2",
-          recede("dock", focus)
-        )}
-        style={{ height: APP_LAYOUT.dockHeight }}
-      >
-        <ToolbarButton anchor="dock-launcher">
-          <Plus aria-hidden="true" />
-        </ToolbarButton>
-        <span className="flex-1" />
-        {dock}
       </div>
 
       {overlay}

@@ -95,6 +95,9 @@ describe("resolveChapterTiming", () => {
   it("falls back to an estimate, without audio, when the narration has changed", () => {
     const timing = resolveChapterTiming(chapter, manifestWith("00000000"));
     expect(timing.audioUrl).toBeNull();
-    expect(Object.keys(timing.cues).sort()).toEqual(["first", "grid"]);
+    expect(Object.keys(timing.cues).sort()).toEqual(
+      Object.keys(parseNarration(chapter.narration).cueWordIndex).sort()
+    );
+    expect(timing.cues).not.toEqual({ first: 1, grid: 2 });
   });
 });

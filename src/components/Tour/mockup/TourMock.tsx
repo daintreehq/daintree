@@ -121,6 +121,8 @@ interface MockPaneProps {
   /** Text shown in the input bar; the placeholder is used when empty. */
   input?: ReactNode;
   inputAddon?: ReactNode;
+  /** Something is being dragged over the prompt bar: the real bar's drop highlight. */
+  dragOver?: boolean;
   children?: ReactNode;
   className?: string;
   title?: string;
@@ -134,6 +136,7 @@ export function MockPane({
   focused = false,
   input,
   inputAddon,
+  dragOver = false,
   children,
   className,
   title,
@@ -167,11 +170,19 @@ export function MockPane({
           <MockStateGlyph state={state} />
         </span>
       </div>
-      <div className="min-h-0 flex-1 overflow-hidden px-2.5 py-2">{children}</div>
+      <div
+        data-tour-anchor={`${anchor}-body`}
+        className="min-h-0 flex-1 overflow-hidden px-2.5 py-2"
+      >
+        {children}
+      </div>
       <div className="shrink-0 px-1.5 pb-1.5">
         <div
           data-tour-anchor={`${anchor}-input`}
-          className="flex h-5 items-center gap-2 rounded-md border border-border-subtle bg-surface-input px-2"
+          className={cn(
+            "flex h-5 items-center gap-2 rounded-md border bg-surface-input px-2 transition-[border-color] duration-150 ease-out",
+            dragOver ? "border-border-strong bg-overlay-subtle" : "border-border-subtle"
+          )}
         >
           {input ? (
             <span className="truncate text-2xs text-text-primary">{input}</span>
@@ -296,7 +307,7 @@ export function MockCursor({
     <div
       aria-hidden="true"
       className={cn(
-        "pointer-events-none absolute left-0 top-0 z-20",
+        "pointer-events-none absolute left-0 top-0 z-40",
         "transition-[translate,opacity] duration-[600ms] ease-[cubic-bezier(0.45,0,0.2,1)] reduce-motion:transition-[opacity]",
         visible ? "opacity-100" : "opacity-0"
       )}

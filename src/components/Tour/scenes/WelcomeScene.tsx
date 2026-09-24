@@ -14,8 +14,11 @@ const PANES: ReadonlyArray<{ agent: MockAgentId; state: AgentState; lines: numbe
 
 export function WelcomeScene() {
   const first = useCue("first");
+  const second = useCue("second");
   const grid = useCue("grid");
-  const shown = grid ? PANES : first ? PANES.slice(0, 1) : [];
+  const watch = useCue("watch");
+  // Each agent arrives as it's named, as a new column; "side by side" fills the grid.
+  const shown = grid ? PANES : second ? PANES.slice(0, 2) : first ? PANES.slice(0, 1) : [];
 
   return (
     <MockApp
@@ -34,7 +37,7 @@ export function WelcomeScene() {
         shown.length === 0 ? (
           <MockEmptyGrid label="shop-app" />
         ) : (
-          <MockGrid columns={grid ? 2 : 1} rows={grid ? 2 : 1}>
+          <MockGrid columns={grid ? 2 : shown.length} rows={grid ? 2 : 1}>
             {shown.map((pane, i) => (
               <div
                 key={i}
@@ -49,7 +52,7 @@ export function WelcomeScene() {
           </MockGrid>
         )
       }
-      dock={<MockWaitingPill count={1} className={reveal(grid, "none")} />}
+      dock={<MockWaitingPill count={1} className={reveal(watch, "none")} />}
     />
   );
 }

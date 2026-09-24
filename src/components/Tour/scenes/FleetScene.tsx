@@ -1,5 +1,4 @@
-import { RadioTower } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { ChevronDown, RadioTower, X } from "lucide-react";
 import {
   GRID_RECT,
   MockApp,
@@ -7,83 +6,97 @@ import {
   MockWorktreeCard,
   SIDEBAR_ARM_POINT,
 } from "../mockup/MockApp";
-import { MockSpotlight } from "./sceneParts";
 import {
   MockCursor,
   MockPane,
   MockStreamingLines,
   MockTyping,
-  reveal,
   useMockCursor,
   type CursorStep,
   type MockAgentId,
 } from "../mockup/TourMock";
 import { useCue } from "../useTourPlayer";
+import { MockSpotlight } from "./sceneParts";
 
 const PANES: readonly MockAgentId[] = ["claude", "codex", "antigravity"];
 const PROMPT = "Run the tests and fix failures";
 const SEND = { cue: "send" } as const;
-const RIBBON_HEIGHT = 22;
+const SHIFT = "⇧ Shift";
 
 const GAP = 6;
 const PANE_WIDTH = (GRID_RECT.width - GAP * 2) / 3;
-/** Where pane i's title bar is clicked. */
-const headerAt = (i: number) => ({
+/** Where pane i's title bar is clicked — shift-click only counts on the title bar. */
+const titleBarAt = (i: number) => ({
   x: GRID_RECT.x + i * (PANE_WIDTH + GAP) + 64,
-  y: GRID_RECT.y + RIBBON_HEIGHT + GAP + 12,
+  y: GRID_RECT.y + 12,
 });
 const FIRST_INPUT = { x: GRID_RECT.x + 60, y: GRID_RECT.y + GRID_RECT.height - 11 };
-const SHIFT = "⇧ Shift";
 
 const CURSOR: readonly CursorStep[] = [
-  { cue: "pick", at: headerAt(0), modifier: SHIFT },
-  { cue: "pick", offset: 0.5, at: headerAt(0), click: true, modifier: SHIFT },
-  { cue: "pick", offset: 0.9, at: headerAt(1), modifier: SHIFT },
-  { cue: "pick", offset: 1.4, at: headerAt(1), click: true, modifier: SHIFT },
-  { cue: "pick", offset: 1.8, at: headerAt(2), modifier: SHIFT },
-  { cue: "pick", offset: 2.3, at: headerAt(2), click: true, modifier: SHIFT },
+  // Claude is the focused panel; the first shift-click arms it along with Codex.
+  { cue: "pick", at: titleBarAt(1), modifier: SHIFT },
+  { cue: "pick", offset: 0.5, at: titleBarAt(1), click: true, modifier: SHIFT },
+  { cue: "pick", offset: 1.0, at: titleBarAt(2), modifier: SHIFT },
+  { cue: "pick", offset: 1.5, at: titleBarAt(2), click: true, modifier: SHIFT },
+  { cue: "out", offset: 0.1, at: titleBarAt(2), click: true, modifier: SHIFT },
+  { cue: "out", offset: 1.0, at: titleBarAt(2), click: true, modifier: SHIFT },
   { cue: "bolt", at: SIDEBAR_ARM_POINT },
   { cue: "type", at: FIRST_INPUT },
-  { cue: "type", offset: 0.6, at: FIRST_INPUT, click: true },
+  { cue: "type", offset: 0.5, at: FIRST_INPUT, click: true },
+  { cue: "exit", at: titleBarAt(0) },
+  { cue: "exit", offset: 0.5, at: titleBarAt(0), click: true },
 ];
 
+/** The fleet ribbon as the app draws it: amber tint, a left stripe, the count, and Exit. */
+function FleetRibbon({ count }: { count: number }) {
+  return (
+    <div className="relative mb-1.5 flex h-6 shrink-0 items-center gap-2 rounded-sm border-b border-border-default bg-category-amber-subtle px-2 text-3xs text-text-primary before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-category-amber-text">
+      <X className="size-2.5 text-text-secondary" aria-hidden="true" />
+      <span className="flex items-center gap-0.5 font-medium tabular-nums">
+        {count} in fleet
+        <ChevronDown className="size-2.5 text-text-secondary" aria-hidden="true" />
+      </span>
+      <span className="flex-1" />
+      <span className="rounded-sm bg-overlay-subtle px-1.5 py-px text-text-secondary">
+        Exit ⌘Esc
+      </span>
+    </div>
+  );
+}
+
 export function FleetScene() {
-  // Each shift-click lands a beat after the pointer arrives.
-  const armed = [useCue("pick", 0.55), useCue("pick", 1.45), useCue("pick", 2.35)];
-  const armedCount = armed.filter(Boolean).length;
-  const bolt = useCue("bolt");
+  const firstPair = useCue("pick", 0.55);
+  const third = useCue("pick", 1.55);
+  const outAgain = useCue("out", 0.15);
+  const backIn = useCue("out", 1.05);
   const markers = useCue("armed");
+  const bolt = useCue("bolt");
+  const typeCue = useCue("type");
+  const typing = useCue("type", 0.5);
   const sent = useCue("send");
-  const typing = useCue("type", 0.55);
-  const typingStarted = useCue("type");
-  const cursor = useMockCursor({ x: 420, y: 340 }, CURSOR);
+  const left = useCue("exit", 0.55);
+  const cursor = useMockCursor({ x: 420, y: 300 }, CURSOR);
+
+  const antigravityIn = third && (!outAgain || backIn);
+  const armed = [firstPair && !left, firstPair && !left, antigravityIn && !left];
+  const count = armed.filter(Boolean).length;
 
   return (
     <MockApp
-      focus={bolt && !markers ? ["grid", "sidebar"] : ["grid"]}
+      focus={bolt && !typeCue ? ["grid", "sidebar"] : ["grid"]}
       worktrees={
         <MockWorktreeCard
           name="shop-app"
           branch="main"
           selected
-          states={sent ? ["working", "working", "working"] : ["waiting", "waiting", "waiting"]}
+          states={[sent ? "working" : "waiting"]}
         />
       }
       grid={
-        <div className="flex size-full flex-col gap-1.5">
-          <div className="flex shrink-0 items-center" style={{ height: RIBBON_HEIGHT }}>
-            <span
-              className={cn(
-                "flex items-center gap-1.5 rounded-full border border-border-strong bg-surface-panel px-2 py-0.5",
-                reveal(armedCount > 0, "above")
-              )}
-            >
-              <RadioTower className="size-3 text-category-amber-text" aria-hidden="true" />
-              <span className="text-3xs font-medium tabular-nums text-text-primary">
-                {armedCount} in fleet
-              </span>
-            </span>
-          </div>
+        // No reserved space: the ribbon appears only once two panels are armed,
+        // and the panels give up the room it takes.
+        <div className="flex size-full flex-col">
+          {count >= 2 && <FleetRibbon count={count} />}
           <MockGrid columns={3} className="min-h-0 flex-1">
             {PANES.map((agent, i) => {
               const mirrored = typing && !sent && i > 0 && armed[i];
@@ -93,16 +106,16 @@ export function FleetScene() {
                   agent={agent}
                   armed={armed[i]}
                   state={sent ? "working" : "waiting"}
-                  focused={i === 0 && armed[0]}
+                  focused={i === 0}
                   input={
                     !typing || sent ? null : i === 0 ? (
-                      <MockTyping cue="type" text={PROMPT} delay={0.5} finishBy={SEND} />
+                      <MockTyping cue="type" text={PROMPT} delay={0.3} finishBy={SEND} />
                     ) : mirrored ? (
                       <span className="text-text-secondary">
                         <MockTyping
                           cue="type"
                           text={PROMPT}
-                          delay={0.5}
+                          delay={0.3}
                           finishBy={SEND}
                           caret={false}
                         />
@@ -116,6 +129,15 @@ export function FleetScene() {
                     widths={[86, 64, 92, 58, 76, 70]}
                     perSecond={3}
                   />
+                  {i === 0 && typing && !sent && (
+                    <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-category-amber-subtle px-1.5 py-0.5 text-3xs text-text-primary">
+                      <RadioTower
+                        className="size-2.5 text-category-amber-text"
+                        aria-hidden="true"
+                      />
+                      Mirroring to 2 peers
+                    </span>
+                  )}
                 </MockPane>
               );
             })}
@@ -123,12 +145,12 @@ export function FleetScene() {
         </div>
       }
     >
-      {/* The bolt while it's named, then every radio tower as it's named. */}
+      {/* The towers as they're named, then the bolt while it's named. */}
       <MockSpotlight
-        targets={markers ? ["claude-armed", "codex-armed", "antigravity-armed"] : ["sidebar-arm"]}
-        visible={(bolt && !markers) || (markers && !typingStarted)}
+        targets={bolt ? ["sidebar-arm"] : ["claude-armed", "codex-armed", "antigravity-armed"]}
+        visible={markers && !typeCue}
       />
-      <MockCursor {...cursor} />
+      <MockCursor {...cursor} visible={cursor.visible && !left} />
     </MockApp>
   );
 }

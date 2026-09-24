@@ -4,14 +4,15 @@ import { cn } from "@/lib/utils";
 import { reveal } from "../mockup/TourMock";
 import { useCue, useTimelineIndex, type TimelinePoint } from "../useTourPlayer";
 
+// Each idea lands as it's spoken.
 const WHY = [
-  { icon: LayoutGrid, label: "Agents side by side" },
-  { icon: GitBranch, label: "A worktree per task" },
-  { icon: Eye, label: "See who needs you" },
-  { icon: GitCommitHorizontal, label: "Review and ship" },
+  { icon: LayoutGrid, label: "Agents side by side", cue: "side" },
+  { icon: GitBranch, label: "A worktree per task", cue: "task" },
+  { icon: Eye, label: "See who needs you", cue: "see" },
+  { icon: GitCommitHorizontal, label: "Review and ship", cue: "ship" },
 ] as const;
 
-const WHY_STEPS: readonly TimelinePoint[] = WHY.map((_, i) => ({ cue: "why", offset: i * 0.35 }));
+const WHY_STEPS: readonly TimelinePoint[] = WHY.map(({ cue }) => ({ cue }));
 
 /** The close: the mark, the four ideas the tour covered, and where to go next. */
 export function OutroScene() {
@@ -40,7 +41,7 @@ export function OutroScene() {
         ))}
       </div>
       <span className={cn("text-2xs text-text-secondary", reveal(next, "none"))}>
-        Next: the Getting Started checklist · Replay any time from Help › Daintree Tour
+        Replay any time from Help › Daintree Tour
       </span>
     </div>
   );

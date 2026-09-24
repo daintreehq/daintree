@@ -2,35 +2,47 @@ import {
   ArrowLeft,
   ArrowRight,
   FolderTree,
+  Globe,
   MonitorPlay,
+  Play,
   RotateCw,
   Search,
   SquareTerminal,
 } from "lucide-react";
-import { ClaudeIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
-import { ANCHOR, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
+import { ANCHOR, GRID_RECT, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
   MockCursor,
   MockPane,
-  MockStreamingLines,
   MockStateGlyph,
+  MockStreamingLines,
   reveal,
   useMockCursor,
   type CursorStep,
 } from "../mockup/TourMock";
 import { useCue } from "../useTourPlayer";
-import { MockMenu, MockPanel, MockSearchField } from "./sceneParts";
+import { MockMenu, MockPanel, MockSearchField, MockSpotlight } from "./sceneParts";
 
 const LAUNCHER = ANCHOR.launcher;
 const MENU = { x: LAUNCHER.x - 8, y: LAUNCHER.y + 14, width: 150 };
-const DEV_PREVIEW_ITEM = { x: MENU.x + 60, y: MENU.y + 88 };
+// Search field, then 18px rows: Terminal, Browse files, Browser, Dev preview.
+const DEV_PREVIEW_ITEM = { x: MENU.x + 60, y: MENU.y + 91 };
+
+// Two equal columns once the preview opens; the preview is the right one.
+const COLUMN = (GRID_RECT.width - 6) / 2;
+const PREVIEW_X = GRID_RECT.x + COLUMN + 6;
+const RUN_BUTTON = { x: PREVIEW_X + COLUMN / 2, y: GRID_RECT.y + 150 };
+const CONSOLE_TOGGLE = { x: GRID_RECT.x + GRID_RECT.width - 12, y: GRID_RECT.y + 36 };
 
 const CURSOR: readonly CursorStep[] = [
   { cue: "launch", at: LAUNCHER },
   { cue: "launch", offset: 0.5, at: LAUNCHER, click: true },
-  { cue: "launch", offset: 1.0, at: DEV_PREVIEW_ITEM },
-  { cue: "launch", offset: 1.5, at: DEV_PREVIEW_ITEM, click: true },
+  { cue: "pickpreview", offset: -0.4, at: DEV_PREVIEW_ITEM },
+  { cue: "pickpreview", offset: 0.1, at: DEV_PREVIEW_ITEM, click: true },
+  { cue: "start", at: RUN_BUTTON },
+  { cue: "start", offset: 0.4, at: RUN_BUTTON, click: true },
+  { cue: "console", at: CONSOLE_TOGGLE },
+  { cue: "console", offset: 0.4, at: CONSOLE_TOGGLE, click: true },
 ];
 
 /** The shop's storefront as the dev server renders it — a page, not UI chrome. */
@@ -52,13 +64,12 @@ function MockPage({ withSearch }: { withSearch: boolean }) {
           <span className="h-1 w-10 rounded-full bg-overlay-strong" />
         </span>
         <span className="h-1.5 w-6 rounded-full bg-overlay-strong" />
-        <span className="h-1.5 w-6 rounded-full bg-overlay-strong" />
       </div>
       <div className="flex flex-1 flex-col gap-2 p-3">
-        <span className="h-3 w-32 rounded-full bg-overlay-strong" />
-        <span className="h-1.5 w-44 rounded-full bg-overlay-medium" />
-        <div className="mt-1 grid flex-1 grid-cols-3 gap-2">
-          {[0, 1, 2].map((i) => (
+        <span className="h-3 w-24 rounded-full bg-overlay-strong" />
+        <span className="h-1.5 w-32 rounded-full bg-overlay-medium" />
+        <div className="mt-1 grid flex-1 grid-cols-2 gap-2">
+          {[0, 1].map((i) => (
             <span key={i} className="rounded-md bg-overlay-medium" />
           ))}
         </div>
@@ -67,17 +78,58 @@ function MockPage({ withSearch }: { withSearch: boolean }) {
   );
 }
 
+/** First run: Daintree found a dev script and asks before running it. */
+function StartPrompt({ starting }: { starting: boolean }) {
+  if (starting) {
+    return (
+      <div className="flex size-full flex-col items-center justify-center gap-1.5">
+        <MockStateGlyph state="working" />
+        <span className="text-3xs font-medium text-text-primary">Starting dev server</span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex size-full flex-col items-center justify-center gap-1.5 px-3 text-center">
+      <span className="text-2xs font-semibold text-text-primary">Start the dev server</span>
+      <span className="flex items-center gap-1 text-3xs text-text-secondary">
+        Auto-detected
+        <span className="rounded-sm bg-surface-input px-1 font-mono text-text-primary">
+          npm run dev
+        </span>
+      </span>
+      <span
+        data-tour-anchor="dev-run"
+        className="mt-1 inline-flex items-center gap-1 rounded-md bg-text-primary px-2 py-1 text-3xs font-medium text-text-inverse"
+      >
+        <Play className="size-2.5" aria-hidden="true" />
+        Run npm run dev
+      </span>
+    </div>
+  );
+}
+
 export function PreviewScene() {
+  const launchCue = useCue("launch");
   const menu = useCue("launch", 0.6);
-  const opened = useCue("launch", 1.6);
-  const running = useCue("start", 1.2);
+  const opened = useCue("pickpreview", 0.3);
+  const starting = useCue("start", 0.5);
+  const running = useCue("start", 1.8);
   const live = useCue("live", 0.6);
-  const drawer = useCue("console");
+  const consoleCue = useCue("console");
+  const drawer = useCue("console", 0.5);
   const cursor = useMockCursor({ x: 420, y: 200 }, CURSOR);
+
+  const spot = consoleCue
+    ? ["dev-console"]
+    : opened
+      ? ["dev-run"]
+      : menu
+        ? ["menu-3"]
+        : ["launcher"];
 
   return (
     <MockApp
-      branch={"add-search"}
+      branch="add-search"
       focus={opened ? ["grid"] : ["toolbar", "grid"]}
       worktrees={
         <>
@@ -93,7 +145,7 @@ export function PreviewScene() {
           {opened && (
             <MockPanel
               icon={<MonitorPlay />}
-              title="Dev preview"
+              title="Dev Server"
               focused
               className="size-full"
               toolbar={
@@ -101,45 +153,35 @@ export function PreviewScene() {
                   <ArrowLeft aria-hidden="true" />
                   <ArrowRight aria-hidden="true" />
                   <RotateCw aria-hidden="true" />
-                  <span className="flex h-4 flex-1 items-center rounded-sm bg-surface-input px-1.5 text-3xs text-text-secondary">
+                  <span className="flex h-4 min-w-0 flex-1 items-center truncate rounded-sm bg-surface-input px-1.5 text-3xs text-text-secondary">
                     localhost:5173
                   </span>
-                  <SquareTerminal aria-hidden="true" />
+                  <span data-tour-anchor="dev-console" className="inline-flex">
+                    <SquareTerminal aria-hidden="true" />
+                  </span>
                 </div>
               }
             >
-              {running ? (
-                <MockPage withSearch={live} />
-              ) : (
-                <div className="flex size-full flex-col items-center justify-center gap-1.5">
-                  <MockStateGlyph state="working" />
-                  <span className="text-3xs font-medium text-text-primary">
-                    Starting dev server
-                  </span>
-                  <span className="rounded-sm bg-surface-input px-1.5 py-px font-mono text-3xs text-text-secondary">
-                    npm run dev
-                  </span>
-                </div>
-              )}
+              {running ? <MockPage withSearch={live} /> : <StartPrompt starting={starting} />}
               <div
                 className={cn(
-                  "absolute inset-x-0 bottom-0 flex h-[74px] flex-col border-t border-border-default bg-surface-panel",
+                  "absolute inset-x-0 bottom-0 flex h-[64px] flex-col border-t border-border-default bg-surface-panel",
                   reveal(drawer)
                 )}
               >
-                <div className="flex h-5 items-center gap-3 border-b border-border-subtle px-2 text-3xs">
+                <div className="flex h-5 min-w-0 items-center gap-2 border-b border-border-subtle px-2 text-3xs">
                   <span className="font-medium text-text-primary">Output</span>
                   <span className="text-text-secondary">Console</span>
-                  <span className="text-text-secondary">Diagnostics</span>
+                  <span className="truncate text-text-secondary">Diagnostics</span>
                   <span className="flex-1" />
-                  <span className="rounded-full border border-border-strong px-1.5 text-text-secondary">
+                  <span className="shrink-0 rounded-full border border-border-strong px-1.5 text-text-secondary">
                     Running
                   </span>
                 </div>
-                <div className="flex flex-col gap-0.5 p-1.5 font-mono text-3xs text-text-secondary">
-                  <span>VITE v8 ready in 312 ms</span>
-                  <span>➜ Local: http://localhost:5173/</span>
-                  <span>page reload src/components/Header.tsx</span>
+                <div className="flex min-w-0 flex-col gap-0.5 p-1.5 font-mono text-3xs text-text-secondary [&>span]:truncate">
+                  <span>VITE ready in 312 ms</span>
+                  <span>➜ Local: localhost:5173</span>
+                  <span>hmr update /Header.tsx</span>
                 </div>
               </div>
             </MockPanel>
@@ -159,13 +201,14 @@ export function PreviewScene() {
           </MockSearchField>
         }
         items={[
-          { icon: <ClaudeIcon />, label: "Claude" },
           { icon: <SquareTerminal />, label: "Terminal" },
           { icon: <FolderTree />, label: "Browse files" },
+          { icon: <Globe />, label: "Browser" },
           { icon: <MonitorPlay />, label: "Dev preview" },
         ]}
       />
-      <MockCursor {...cursor} visible={cursor.visible && !opened} />
+      <MockSpotlight targets={spot} visible={launchCue && !(starting && !consoleCue) && !drawer} />
+      <MockCursor {...cursor} />
     </MockApp>
   );
 }

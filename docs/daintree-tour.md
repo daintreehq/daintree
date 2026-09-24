@@ -20,7 +20,7 @@ Scenes never use wall-clock literals for anything the narration talks about: the
 Edit the words in `tourChapters.ts`, then:
 
 ```bash
-npm run tour:audio                 # voices only the chapters whose text changed (Inworld voice "Reed", led by an `[informative]` delivery tag)
+npm run tour:audio                 # voices only the chapters whose text changed (Inworld voice "Simon")
 npm run tour:audio -- --force      # re-voice everything
 npm run tour:audio -- --no-upload  # dry run: timings only, nothing published
 ```

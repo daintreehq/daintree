@@ -1,4 +1,4 @@
-import { ArrowUp, Folders } from "lucide-react";
+import { ArrowUp, Folders, History, Settings2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ANCHOR, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
@@ -10,19 +10,24 @@ import {
   type CursorStep,
 } from "../mockup/TourMock";
 import { useCue } from "../useTourPlayer";
-import { MockSpotlight } from "./sceneParts";
+import { MockMenu, MockSpotlight, MockTooltip } from "./sceneParts";
 
 const COPY = ANCHOR["copy-context"];
 const PORTAL = ANCHOR.portal;
+// Copy context is a menu; its first item copies the whole worktree.
+const MENU = { width: 150, x: COPY.x - 140, y: COPY.y + 14 };
+const COPY_FULL = { x: MENU.x + 60, y: MENU.y + 13 };
 
 const CURSOR: readonly CursorStep[] = [
   { cue: "copy", at: COPY },
   { cue: "copy", offset: 0.5, at: COPY, click: true },
-  { cue: "paste", at: PORTAL },
-  { cue: "paste", offset: 0.5, at: PORTAL, click: true },
+  { cue: "copy", offset: 1.0, at: COPY_FULL },
+  { cue: "copy", offset: 1.4, at: COPY_FULL, click: true },
+  { cue: "portal", at: PORTAL },
+  { cue: "portal", offset: 0.5, at: PORTAL, click: true },
 ];
 
-/** The Portal: web chats in a side panel, here with the snapshot pasted in. */
+/** The Portal: web chats in a side panel, the pasted worktree waiting as an attachment. */
 function PortalPanel({ pasted }: { pasted: boolean }) {
   return (
     <div className="flex size-full flex-col">
@@ -39,24 +44,28 @@ function PortalPanel({ pasted }: { pasted: boolean }) {
           </span>
         ))}
       </div>
-      <div className="flex min-h-0 flex-1 flex-col justify-end gap-2 p-2">
-        <div
-          className={cn(
-            "self-end rounded-md border border-border-subtle bg-surface-inset p-1.5",
-            reveal(pasted)
-          )}
-        >
-          <div className="mb-1 flex items-center gap-1 text-3xs">
-            <Folders className="size-2.5 text-text-secondary" aria-hidden="true" />
-            <span className="font-medium text-text-primary">shop-app · 42 files</span>
-          </div>
-          <MockLines widths={[90, 70, 84, 60]} className="w-28" />
-        </div>
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 p-2">
+        <span className="h-2 w-20 rounded-full bg-overlay-strong" />
+        <span className="h-1.5 w-28 rounded-full bg-overlay-medium" />
       </div>
       <div className="shrink-0 p-1.5">
-        <div className="flex h-6 items-center justify-between rounded-md border border-border-subtle bg-surface-input px-2 text-3xs text-text-placeholder">
-          How should I restructure checkout?
-          <ArrowUp className="size-2.5 text-text-secondary" aria-hidden="true" />
+        <div
+          data-tour-anchor="portal-composer"
+          className="flex flex-col gap-1.5 rounded-md border border-border-subtle bg-surface-input p-1.5"
+        >
+          <span
+            className={cn(
+              "inline-flex w-fit items-center gap-1 rounded-sm bg-overlay-subtle px-1.5 py-0.5 text-3xs text-text-primary",
+              reveal(pasted, "none")
+            )}
+          >
+            <Folders className="size-2.5 text-text-secondary" aria-hidden="true" />
+            add-search · 42 files
+          </span>
+          <span className="flex items-center justify-between text-3xs text-text-placeholder">
+            Ask anything
+            <ArrowUp className="size-2.5 text-text-secondary" aria-hidden="true" />
+          </span>
         </div>
       </div>
     </div>
@@ -65,9 +74,11 @@ function PortalPanel({ pasted }: { pasted: boolean }) {
 
 export function ContextScene() {
   const copyCue = useCue("copy");
-  const copied = useCue("copy", 0.6);
-  const portalOpen = useCue("paste", 0.6);
-  const pasted = useCue("portal");
+  const menuOpen = useCue("copy", 0.6);
+  const copied = useCue("copy", 1.5);
+  const portalCue = useCue("portal");
+  const portalOpen = useCue("portal", 0.6);
+  const pasted = useCue("paste", 0.3);
   const cursor = useMockCursor({ x: 420, y: 200 }, CURSOR);
 
   return (
@@ -89,17 +100,31 @@ export function ContextScene() {
       }
       rightPanel={portalOpen ? <PortalPanel pasted={pasted} /> : undefined}
     >
-      <MockSpotlight targets={["copy-context"]} visible={copyCue && !copied} />
-      <span
-        className={cn(
-          "absolute z-20 -translate-x-1/2 whitespace-nowrap rounded-md border border-border-strong bg-surface-panel-elevated px-2 py-1 text-3xs font-medium text-text-primary shadow-[var(--theme-shadow-ambient)]",
-          reveal(copied && !portalOpen, "above")
-        )}
-        style={{ left: COPY.x - 30, top: COPY.y + 16 }}
-      >
-        Copied to clipboard · 42 files
-      </span>
-      <MockCursor {...cursor} visible={cursor.visible && !pasted} />
+      <MockMenu
+        visible={menuOpen && !copied}
+        active={0}
+        x={MENU.x}
+        y={MENU.y}
+        width={MENU.width}
+        items={[
+          { icon: <Folders />, label: "Copy full context", hint: "⌘⇧C" },
+          { icon: <History />, label: "Recent", muted: true },
+          { icon: <Settings2 />, label: "Context settings", muted: true, separator: true },
+        ]}
+      />
+      <MockTooltip
+        visible={copied && !portalCue}
+        x={COPY.x + 10}
+        y={COPY.y + 14}
+        align="right"
+        title="Context copied"
+        detail="Copied 42 files (186 KB) to clipboard"
+      />
+      <MockSpotlight
+        targets={pasted ? ["portal-composer"] : portalCue ? ["portal"] : ["copy-context"]}
+        visible={(copyCue && !copied) || (portalCue && !portalOpen) || pasted}
+      />
+      <MockCursor {...cursor} visible={cursor.visible && !portalOpen} />
     </MockApp>
   );
 }

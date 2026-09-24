@@ -1,11 +1,12 @@
-import { cn } from "@/lib/utils";
 import {
-  GRID_RECT,
-  MockApp,
-  MockGrid,
-  MockWorktreeCard,
-  toolbarAgentPoint,
-} from "../mockup/MockApp";
+  ClaudeIcon,
+  CodexIcon,
+  AntigravityIcon,
+  CursorIcon,
+  OpenCodeIcon,
+} from "@/components/icons";
+import { cn } from "@/lib/utils";
+import { ANCHOR, GRID_RECT, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
   MockCursor,
   MockPane,
@@ -16,33 +17,59 @@ import {
   type CursorStep,
 } from "../mockup/TourMock";
 import { useCue } from "../useTourPlayer";
-import { MockEmptyGrid, MockSpotlight } from "./sceneParts";
+import { MockEmptyGrid, MockMenu, MockSearchField, MockSpotlight } from "./sceneParts";
 
-const CLAUDE_BUTTON = toolbarAgentPoint("claude");
+const LAUNCHER = ANCHOR.launcher;
+const MENU = { x: LAUNCHER.x - 8, y: LAUNCHER.y + 14, width: 150 };
+// The launcher's first agent row, under its search field.
+const CLAUDE_ROW = { x: MENU.x + 50, y: MENU.y + 36 };
 const INPUT_BAR = { x: GRID_RECT.x + 120, y: GRID_RECT.y + GRID_RECT.height - 12 };
+const TERMINAL = { x: GRID_RECT.x + 160, y: GRID_RECT.y + 120 };
 const PROMPT = "Add a search box to the header";
 const SEND = { cue: "send" } as const;
 
 const CURSOR: readonly CursorStep[] = [
-  { cue: "pick", offset: 0.8, at: CLAUDE_BUTTON },
-  { cue: "click", offset: 0.15, at: CLAUDE_BUTTON, click: true },
+  // The pointer rests on the pinned agents as they're named.
+  { cue: "pick", at: ANCHOR["agent-codex"] },
+  { cue: "launcher", at: LAUNCHER },
+  { cue: "launcher", offset: 0.5, at: LAUNCHER, click: true },
+  { cue: "click", at: CLAUDE_ROW },
+  { cue: "click", offset: 0.5, at: CLAUDE_ROW, click: true },
   { cue: "type", at: INPUT_BAR },
   { cue: "type", offset: 0.6, at: INPUT_BAR, click: true },
+  { cue: "term", at: TERMINAL },
+  { cue: "term", offset: 0.6, at: TERMINAL, click: true },
 ];
 
 export function AgentsScene() {
-  const pick = useCue("pick");
+  const agents = useCue("agents");
+  const launcher = useCue("launcher");
+  const menuOpen = useCue("launcher", 0.6);
+  const clicked = useCue("click", 0.6);
   const open = useCue("open");
+  const typing = useCue("type", 0.75);
   const sent = useCue("send");
   const enterFaded = useCue("send", 0.9);
   const enterFlash = sent && !enterFaded;
-  // The placeholder holds until the first character, so the bar never reads blank.
-  const typing = useCue("type", 0.75);
+  const term = useCue("term");
+  const termFocused = useCue("term", 0.7);
   const cursor = useMockCursor({ x: 420, y: 220 }, CURSOR);
+
+  // One thing at a time: the pinned agents, then the launcher, then the prompt bar,
+  // then the terminal itself.
+  const spot = term
+    ? ["claude-body"]
+    : open
+      ? typing && !sent
+        ? ["claude-input"]
+        : []
+      : launcher
+        ? ["launcher"]
+        : ["toolbar-agents"];
 
   return (
     <MockApp
-      branch={"add-search"}
+      branch="add-search"
       focus={["toolbar", "grid"]}
       worktrees={
         <>
@@ -84,9 +111,19 @@ export function AgentsScene() {
               <MockStreamingLines
                 cue="send"
                 delay={0.5}
-                widths={[88, 72, 94, 60, 80, 66, 90]}
+                widths={[88, 72, 94, 60, 80]}
                 perSecond={3}
               />
+              {/* Typing straight into the terminal: a fresh prompt line with a caret. */}
+              <div
+                className={cn(
+                  "mt-2 flex items-center gap-1 font-mono text-2xs text-text-primary",
+                  reveal(termFocused, "none")
+                )}
+              >
+                ›
+                <span className="inline-block h-3 w-1.5 bg-text-primary motion-safe:animate-pulse" />
+              </div>
             </MockPane>
           </MockGrid>
         ) : (
@@ -94,8 +131,26 @@ export function AgentsScene() {
         )
       }
     >
-      {/* "Each one gets a button in the toolbar" — every installed agent, not just one. */}
-      <MockSpotlight targets={["toolbar-agents"]} visible={pick && !open} />
+      <MockMenu
+        visible={menuOpen && !clicked}
+        active={0}
+        x={MENU.x}
+        y={MENU.y}
+        width={MENU.width}
+        header={
+          <MockSearchField>
+            <span className="text-text-placeholder">Search agents, panels…</span>
+          </MockSearchField>
+        }
+        items={[
+          { icon: <ClaudeIcon />, label: "Claude" },
+          { icon: <CodexIcon />, label: "Codex" },
+          { icon: <AntigravityIcon />, label: "Antigravity" },
+          { icon: <CursorIcon />, label: "Cursor" },
+          { icon: <OpenCodeIcon />, label: "OpenCode" },
+        ]}
+      />
+      <MockSpotlight targets={spot} visible={agents && spot.length > 0} />
       <MockCursor {...cursor} />
     </MockApp>
   );
