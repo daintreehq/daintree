@@ -304,6 +304,7 @@ export class WorktreeMonitor {
   private _lastFetchedAt: number | null = null;
   private _fetchAuthFailed: boolean = false;
   private _fetchNetworkFailed: boolean = false;
+  private _hasRemote: boolean | undefined;
   private _remoteFetchUrl: string | undefined;
   private _matchedForgeProviderId: string | null = null;
 
@@ -686,6 +687,9 @@ export class WorktreeMonitor {
       get fetchNetworkFailed() {
         return monitor._fetchNetworkFailed;
       },
+      get hasRemote() {
+        return monitor._hasRemote;
+      },
       get isFetchInFlight() {
         return monitor.fetchScheduler.isFetchInFlight;
       },
@@ -977,7 +981,8 @@ export class WorktreeMonitor {
   setFetchState(
     lastFetchedAt: number | null,
     authFailed: boolean,
-    networkFailed: boolean = false
+    networkFailed: boolean = false,
+    hasRemote?: boolean
   ): void {
     // Guard against ghost emits after stop(): the coordinator's fan-out call
     // may resolve after the monitor has been torn down (project switch,
@@ -995,6 +1000,12 @@ export class WorktreeMonitor {
     }
     if (this._fetchNetworkFailed !== networkFailed) {
       this._fetchNetworkFailed = networkFailed;
+      changed = true;
+    }
+    // Unknown leaves the last known answer standing: a call that did not read
+    // the remotes says nothing about whether they changed.
+    if (hasRemote !== undefined && this._hasRemote !== hasRemote) {
+      this._hasRemote = hasRemote;
       changed = true;
     }
     if (changed && this._hasInitialStatus) {

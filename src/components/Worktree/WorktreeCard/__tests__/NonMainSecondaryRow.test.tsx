@@ -371,9 +371,9 @@ describe("NonMainSecondaryRow — a fetch mounts the sync line even with nothing
   it.each([
     ["an unreachable remote", { fetchNetworkFailed: true }],
     ["an auth failure with no reconnect to offer", { fetchAuthFailed: true }],
-    // The badge ages its own counts on the clock, so it has to be there to do
-    // it — a card with no base and no drift still goes stale.
-    ["a completed fetch, which can go stale", { lastFetchedAt: 1 }],
+    // The badge decides for itself whether a completed fetch leaves it
+    // anything to say (no upstream, say), so the row lets it try.
+    ["a completed fetch", { lastFetchedAt: 1 }],
   ])("mounts for %s", (_label, failure) => {
     renderRow({ worktree: { ...baseWorktree, baseBranchName: null, ...failure } as WorktreeState });
     expect(upstreamBadgeProps).not.toHaveLength(0);

@@ -371,8 +371,8 @@ export interface WorktreeViewState {
    * poll — including polls where nothing user-visible changed — so comparing
    * it in `snapshotsEqual` forced a new `worktrees` Map identity per poll and
    * fanned every quiet tick out to every whole-map subscriber. Freshness
-   * consumers (the WorktreeHeader pill, WorktreeCard's revalidate gate) read
-   * this map per-id instead. The `lastGitStatusCheckedAt` field still present
+   * consumers (WorktreeCard's hover-revalidate gate) read this map per-id
+   * instead. The `lastGitStatusCheckedAt` field still present
    * on stored snapshots reflects the last content change, not the last poll —
    * always read freshness from here.
    */
@@ -2197,6 +2197,7 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.lastFetchedAt === b.lastFetchedAt &&
     a.fetchAuthFailed === b.fetchAuthFailed &&
     a.fetchNetworkFailed === b.fetchNetworkFailed &&
+    a.hasRemote === b.hasRemote &&
     a.isFetchInFlight === b.isFetchInFlight &&
     a.matchedForgeProviderId === b.matchedForgeProviderId &&
     a.worktreeMode === b.worktreeMode &&

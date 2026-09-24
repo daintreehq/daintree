@@ -30,6 +30,8 @@ function describeUnsuccessfulFetch(result: WorkspaceFetchResult): string {
       return "Fetch skipped — could not resolve this worktree's repository.";
     case "stale-generation":
       return "Fetch cancelled before it ran.";
+    case "no-remotes":
+      return "Nothing to fetch — this repository has no remote configured.";
     default:
       return "Fetch skipped — a recent attempt on this repository failed.";
   }

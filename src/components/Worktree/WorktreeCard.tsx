@@ -221,7 +221,7 @@ export function WorktreeCard({
     if (!canCollapse) return;
     // Interactive children stop `click` propagation but `click` and `dblclick`
     // are separate events, so a double-click on a control (More actions,
-    // Delete, the git-status Refresh button, the drag handle, issue/PR badges,
+    // Delete, the drag handle, issue/PR badges,
     // the lifecycle "Show details" <summary>) still bubbles here and would
     // toggle collapse. Only collapse when the double-click originates on the
     // inert card body — the full-card select overlay or non-interactive
@@ -1039,7 +1039,7 @@ export function WorktreeCard({
 
               Two things a dot could not do. A 4px vertical is a different
               aspect ratio from everything else on the card, so it never has to
-              be told apart from the pins, freshness pills, session pips and git
+              be told apart from the pins, session pips and git
               marks that already crowd the title row's trailing cluster — a dot
               among dots is a serial hunt, a bar among dots is not; and the
               corner is outside the content grid entirely, which is what keeps
@@ -1370,8 +1370,6 @@ export function WorktreeCard({
                   resourceEndpoint={worktree.resourceStatus?.endpoint}
                   resourceLastCheckedAt={worktree.resourceStatus?.lastCheckedAt}
                   devServerSession={devServerSession}
-                  lastGitStatusCheckedAt={lastGitStatusCheckedAt}
-                  onRevalidateGitStatus={handleRevalidate}
                   onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
                   onCleanupWorktree={
                     chipState === "cleanup" && !isMainWorktree

@@ -388,6 +388,13 @@ export interface Worktree {
    */
   fetchNetworkFailed?: boolean;
 
+  /**
+   * `false` when `git remote` lists nothing: a local-only repo, which has
+   * nothing to fetch and nothing wrong with it. `true` when it lists any;
+   * absent until a fetch attempt has read the list.
+   */
+  hasRemote?: boolean;
+
   /** True while a background `git fetch` is in-flight for this worktree's repo. */
   isFetchInFlight?: boolean;
 

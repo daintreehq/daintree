@@ -106,7 +106,7 @@ Every host-independent per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`sh
 | `processTreePollInterval` (ms) | 2000 | 2500 | 5000 | ProcessTreeCache |
 | `projectStatsPollInterval` (ms) | 5000 | 5000 | 25000 | ProjectStatsService |
 | `agentScrollbackMaxLines` | 10000 | 10000 | 4000 | Renderer agent scrollback policy (`scrollbackConfig.ts`) |
-| `fetchIntervalActiveMs` / `fetchIntervalBackgroundMs` | 20 s / 3 min | 30 s / 5 min | 45 s / 10 min | Renderer FetchScheduler |
+| `fetchIntervalActiveMs` / `fetchIntervalBackgroundMs` | 20 s / 3 min | 30 s / 5 min | 45 s / 10 min | workspace-host `FetchScheduler` |
 | `portBatchThroughputDelayMs` (ms) | 16 | 16 | 40 | pty-host PortBatcher throughput flush window |
 | `memoryPressureInactiveMs` | 60 min | 30 min | 15 min | HibernationService |
 | `paintGateTimeoutMs` / `paintGateHardTimeoutMs` (ms) | 1500 / 4000 | 1500 / 4000 | 2500 / 6000 | ProjectViewManager cold paint gate |
@@ -201,10 +201,10 @@ Two consumers: `DiagnosticsCollector`'s `workerGovernance` section (support bund
 
 On every `applyProfile`, the service broadcasts `resource:profile-changed` with `{ profile, config }` (`ResourceProfileService.ts`). In the renderer:
 
-- `useResourceProfile()` (`src/hooks/useResourceProfile.ts`) subscribes via `window.electron.system.onResourceProfileChanged`, mounted once in `App.tsx`. It applies the resolved WebGL thresholds (`setWebglThresholds` + `terminalInstanceService.refreshWebGLMode()`), re-applies the agent scrollback ceiling to foreground terminals, and writes the profile + fetch intervals into the store.
-- `useResourceProfileStore` (`src/store/resourceProfileStore.ts`) holds `profile`, `fetchIntervalActiveMs`, `fetchIntervalBackgroundMs`. Worktree cards (`MainWorktreeSecondaryRow`, `NonMainSecondaryRow`) read the fetch intervals to scale per-card git-status fetch cadence by focus.
+- `useResourceProfile()` (`src/hooks/useResourceProfile.ts`) subscribes via `window.electron.system.onResourceProfileChanged`, mounted once in `App.tsx`. It applies the resolved WebGL thresholds (`setWebglThresholds` + `terminalInstanceService.refreshWebGLMode()`), re-applies the agent scrollback ceiling to foreground terminals, and writes the profile into the store.
+- `useResourceProfileStore` (`src/store/resourceProfileStore.ts`) holds `profile`, which `usePowerSavingMotion` reads. The fetch intervals are applied host-side only; the worktree cards no longer judge freshness against them, because fetching also pauses whenever no window has focus.
 
-What each profile actually changes in the renderer: **WebGL DOM/GPU mode thresholds** (efficiency flips terminals to DOM-mode renderer sooner, where each WebGL context is comparatively more expensive on constrained hardware, staying below Chromium's per-renderer context cap), the **agent scrollback ceiling**, and **FetchScheduler intervals**. The `config` payload also carries the main-process knobs, but those are applied main-side.
+What each profile actually changes in the renderer: **WebGL DOM/GPU mode thresholds** (efficiency flips terminals to DOM-mode renderer sooner, where each WebGL context is comparatively more expensive on constrained hardware, staying below Chromium's per-renderer context cap), and the **agent scrollback ceiling**. The `config` payload also carries the main-process and workspace-host knobs (including the fetch intervals), but those are applied outside the renderer.
 
 ## Relationship to the Tier-1 ambient-signal model
 

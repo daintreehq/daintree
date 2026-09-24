@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { AgentState, WorktreeState } from "@/types";
 import type { WorktreeMenuActions } from "../WorktreeMenuItems";
 import type { GitStateIndicator } from "./hooks/useWorktreeStatus";
@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { summarizeSessionStates } from "../terminalStateConfig";
 import { BranchLabel } from "../BranchLabel";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { Sprout, Pin, BellOff, RefreshCw } from "lucide-react";
+import { Sprout, Pin, BellOff } from "lucide-react";
 import { FolderOutput } from "@/components/icons";
 import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 import { IssueBadge } from "./IssueBadge";
@@ -22,7 +22,6 @@ import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import { WorktreeActionsToolbar } from "./WorktreeActionsToolbar";
 import { MainWorktreeSecondaryRow } from "./MainWorktreeSecondaryRow";
 import { NonMainSecondaryRow } from "./NonMainSecondaryRow";
-import { scheduleFlip } from "@/utils/flipScheduler";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { computeAlarmTier, formatAlarmDetail } from "@/lib/worktreeAlarmTier";
 import { PathSegments } from "@/components/ui/PathSegments";
@@ -54,8 +53,6 @@ export interface WorktreeHeaderProps {
   resourceEndpoint?: string;
   resourceLastCheckedAt?: number;
   devServerSession?: DevPreviewSessionState;
-  lastGitStatusCheckedAt?: number;
-  onRevalidateGitStatus?: () => void;
   onCheckResourceStatus?: () => void | Promise<unknown>;
   onCleanupWorktree?: () => void;
   badges: {
@@ -67,98 +64,6 @@ export interface WorktreeHeaderProps {
   gitStateIndicator: GitStateIndicator | null;
 
   menu: WorktreeMenuActions;
-}
-
-function formatGitAge(ageMs: number): string {
-  const seconds = Math.floor(ageMs / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  return `${Math.floor(minutes / 60)}h`;
-}
-
-function formatGitAgeLong(ageMs: number): string {
-  const seconds = Math.floor(ageMs / 1000);
-  if (seconds < 60) return `${seconds} seconds ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} minute${minutes !== 1 ? "s" : ""} ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} hour${hours !== 1 ? "s" : ""} ago`;
-  return `${Math.floor(hours / 24)} day${hours >= 48 ? "s" : ""} ago`;
-}
-
-function msUntilAgeBoundary(ageMs: number): number {
-  if (ageMs < 30_000) return 30_000 - ageMs;
-  if (ageMs < 60_000) return 60_000 - ageMs;
-  if (ageMs < 5 * 60_000) return 60_000 - (ageMs % 60_000);
-  return 3_600_000;
-}
-
-function GitStatusFreshnessPill({
-  lastGitStatusCheckedAt,
-  onRefresh,
-}: {
-  lastGitStatusCheckedAt?: number;
-  onRefresh?: () => void;
-}) {
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    if (
-      lastGitStatusCheckedAt == null ||
-      !Number.isFinite(lastGitStatusCheckedAt) ||
-      lastGitStatusCheckedAt === 0
-    )
-      return;
-    const age = Date.now() - lastGitStatusCheckedAt;
-    const delay = msUntilAgeBoundary(age);
-    return scheduleFlip(delay, () => setTick((n) => n + 1));
-  }, [lastGitStatusCheckedAt, tick]);
-
-  if (
-    lastGitStatusCheckedAt == null ||
-    !Number.isFinite(lastGitStatusCheckedAt) ||
-    lastGitStatusCheckedAt === 0
-  )
-    return null;
-
-  void tick;
-  const age = Date.now() - lastGitStatusCheckedAt;
-  if (age < 30_000) return null;
-
-  if (age >= 5 * 60_000) {
-    return (
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onRefresh?.();
-        }}
-        className="flex items-center gap-1 text-xs text-text-muted hover:text-text-secondary transition-colors duration-150 shrink-0"
-      >
-        <RefreshCw className="w-3 h-3" />
-        <span>Refresh</span>
-      </button>
-    );
-  }
-
-  const isWarning = age >= 60_000;
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className={cn(
-            "text-xs tabular-nums shrink-0 transition-colors duration-150",
-            isWarning ? "text-text-secondary" : "text-text-muted"
-          )}
-        >
-          {formatGitAge(age)}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">Git status checked {formatGitAgeLong(age)}</TooltipContent>
-    </Tooltip>
-  );
 }
 
 export function WorktreeHeader({
@@ -187,8 +92,6 @@ export function WorktreeHeader({
   resourceEndpoint,
   resourceLastCheckedAt,
   devServerSession,
-  lastGitStatusCheckedAt,
-  onRevalidateGitStatus,
   onCheckResourceStatus,
   onCleanupWorktree,
   badges,
@@ -206,7 +109,6 @@ export function WorktreeHeader({
   const displayTitle =
     headline.kind === "pr" || headline.kind === "issue" ? headline.title : undefined;
   const hasPlanFile = Boolean(worktree.hasPlanFile);
-  const hasFreshnessPill = !!(lastGitStatusCheckedAt && lastGitStatusCheckedAt > 0);
   const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
   const underlineOnHover = variant !== "sidebar" || isActive;
   // `hasBaseName` is the whole mount rule for the base line: the workspace-host
@@ -230,7 +132,7 @@ export function WorktreeHeader({
   // via `hasUpstreamDelta`.
   const hasBaseRelationship = hasBaseName && !worktree.isDetached;
   // The sync line has something to say beyond counts and a base — a failed
-  // fetch, an age the clock can outgrow, a missing upstream — once a fetch or
+  // fetch, a missing upstream — once a fetch or
   // a status pass has run. Whether it actually says anything is the badge's
   // call; the row collapses when nothing in it renders.
   const hasSyncFacts =
@@ -395,8 +297,7 @@ export function WorktreeHeader({
           resourceStatusLabel ||
           isLifecycleRunning ||
           onCheckResourceStatus ||
-          hasDevServerSignal ||
-          hasFreshnessPill) && (
+          hasDevServerSignal) && (
           <div className="flex items-center gap-2 shrink-0">
             {isPinned && !isMainWorktree && (
               <Pin
@@ -443,10 +344,6 @@ export function WorktreeHeader({
                 aria-label="Notifications muted for this project"
               />
             )}
-            <GitStatusFreshnessPill
-              lastGitStatusCheckedAt={lastGitStatusCheckedAt}
-              onRefresh={onRevalidateGitStatus}
-            />
             {((worktree.worktreeMode && worktree.worktreeMode !== "local") ||
               resourceStatusLabel ||
               isLifecycleRunning ||
