@@ -943,6 +943,10 @@ describe("GridNotificationBar presentation invariants", () => {
     expect(getByRole("button", { name: "Enable" }).className).not.toBe(
       getByRole("button", { name: "Not now" }).className
     );
+    // Forced colours flatten both treatments; only the primary may carry the
+    // hook that gives it back a heavier border there.
+    expect(getByRole("button", { name: "Enable" }).dataset.notificationAction).toBe("primary");
+    expect(getByRole("button", { name: "Not now" }).dataset.notificationAction).not.toBe("primary");
   });
 
   it("only lets the controls drop beneath the text when there are actions to drop", () => {

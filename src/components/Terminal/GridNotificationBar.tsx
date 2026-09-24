@@ -358,6 +358,9 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
                 key={`${action.label}-${index}`}
                 variant={action.variant === "secondary" ? "ghost" : "outline"}
                 size="sm"
+                // Forced colours flatten outline and ghost to the same border;
+                // this hook restores the primary's heavier one (src/index.css).
+                data-notification-action={action.variant ?? "primary"}
                 onClick={() => {
                   void action.onClick();
                 }}
