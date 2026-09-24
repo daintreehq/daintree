@@ -61,4 +61,35 @@ describe("PortalToolbar tab strip — one way in", () => {
     expect(onTabClick).toHaveBeenLastCalledWith("c");
     expect(document.activeElement).toBe(screen.getByRole("tab", { name: "New Tab" }));
   });
+
+  it("hands focus to the following tab when the focused tab is deleted", async () => {
+    const onTabClose = vi.fn();
+    render(
+      <TooltipProvider>
+        <PortalToolbar
+          tabs={TABS}
+          activeTabId="a"
+          onTabClick={vi.fn()}
+          onTabClose={onTabClose}
+          onNewTab={vi.fn()}
+          defaultNewTabUrl={null}
+          onClose={vi.fn()}
+          enabledLinks={[]}
+        />
+      </TooltipProvider>
+    );
+    const first = screen.getByRole("tab", { name: "Claude" });
+    first.focus();
+    fireEvent.keyDown(first, { key: "Delete" });
+    expect(onTabClose).toHaveBeenCalledWith("a");
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "ChatGPT" }));
+  });
+
+  it("announces tabs as tabs, not as sortable items", () => {
+    renderToolbar("a");
+    for (const tab of screen.getAllByRole("tab")) {
+      expect(tab.getAttribute("aria-roledescription")).toBeNull();
+    }
+  });
 });

@@ -96,12 +96,19 @@ describe("DevServerDashboard", () => {
     expect(screen.getByText("feature-foo")).toBeTruthy();
   });
 
-  it("renders worktree label, port and last output", () => {
+  it("renders a running server's label and port, keeping routine output to the tooltip", () => {
     mockSessions([session({ url: "http://localhost:4321", lastOutput: "ready in 200ms" })]);
-    render(<DevServerDashboard />);
+    const { container } = render(<DevServerDashboard />);
     expect(screen.getByText("feature-foo")).toBeTruthy();
     expect(screen.getByText(":4321")).toBeTruthy();
-    expect(screen.getByText("ready in 200ms")).toBeTruthy();
+    expect(screen.queryByText("ready in 200ms")).toBeNull();
+    expect(container.querySelector("li")?.getAttribute("title")).toBe("ready in 200ms");
+  });
+
+  it("shows progress output while a server is starting", () => {
+    mockSessions([session({ status: "starting", lastOutput: "> app@1.0.0 dev" })]);
+    render(<DevServerDashboard />);
+    expect(screen.getByText("> app@1.0.0 dev")).toBeTruthy();
   });
 
   it("uses predictedUrl for the port when url is null", () => {

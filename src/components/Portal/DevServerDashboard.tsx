@@ -35,6 +35,11 @@ const STOPPABLE_STATUSES: ReadonlySet<DevPreviewSessionStatus> = new Set([
   "running",
   "error",
 ]);
+const PROGRESS_STATUSES: ReadonlySet<DevPreviewSessionStatus> = new Set([
+  "starting",
+  "installing",
+  "stopping",
+]);
 const STOPPED_STATUSES: ReadonlySet<DevPreviewSessionStatus> = new Set([
   "stopped",
   "restored-stopped",
@@ -66,8 +71,14 @@ function DevServerRow({
   const isError = session.status === "error";
   const isStopped = STOPPED_STATUSES.has(session.status);
   const canStop = worktreeId !== undefined && STOPPABLE_STATUSES.has(session.status);
-  // An errored row surfaces why it failed; a live one shows its latest output.
-  const detail = isError ? (session.error?.message ?? session.lastOutput) : session.lastOutput;
+  // The second line answers "is it up, and where": an error names its reason,
+  // a server still coming up shows its progress, and a running one stops at
+  // its port — routine log lines stay in the row's tooltip.
+  const detail = isError
+    ? (session.error?.message ?? session.lastOutput)
+    : PROGRESS_STATUSES.has(session.status)
+      ? session.lastOutput
+      : undefined;
 
   const handleRestart = () => {
     if (!worktreeId) return;
@@ -88,7 +99,10 @@ function DevServerRow({
   const stopLabel = isError ? "Dismiss error" : "Stop";
 
   return (
-    <li className="group flex items-center gap-2.5 pl-3 pr-2 py-1.5 hover:bg-overlay-subtle transition-colors duration-150">
+    <li
+      title={session.lastOutput}
+      className="group flex items-center gap-2.5 pl-3 pr-2 py-1.5 hover:bg-overlay-subtle transition-colors duration-150"
+    >
       <span
         className={cn("status-mark flex-shrink-0 w-2 h-2 rounded-full", presentation.dotClass)}
         aria-hidden="true"
@@ -214,24 +228,19 @@ export function DevServerDashboard({ onHide }: { onHide?: () => void }) {
           </button>
         )}
       </header>
-      {!hydrated ? (
-        showSkeleton ? (
-          <Skeleton
-            label="Loading dev servers"
-            className="flex flex-col gap-3 pl-3 pr-2 pt-1.5 pb-3"
-          >
-            {[0, 1].map((i) => (
-              <div key={i} className="flex items-center gap-2.5">
-                <SkeletonBone className="w-2 h-2 rounded-full" />
-                <div className="flex flex-col gap-1.5 flex-1">
-                  <SkeletonBone className="h-2.5 w-1/3" />
-                  <SkeletonBone className="h-2.5 w-2/3" />
-                </div>
+      {showSkeleton ? (
+        <Skeleton label="Loading dev servers" className="flex flex-col gap-3 pl-3 pr-2 pt-1.5 pb-3">
+          {[0, 1].map((i) => (
+            <div key={i} className="flex items-center gap-2.5">
+              <SkeletonBone className="w-2 h-2 rounded-full" />
+              <div className="flex flex-col gap-1.5 flex-1">
+                <SkeletonBone className="h-2.5 w-1/3" />
+                <SkeletonBone className="h-2.5 w-2/3" />
               </div>
-            ))}
-          </Skeleton>
-        ) : null
-      ) : visibleSessions.length === 0 ? (
+            </div>
+          ))}
+        </Skeleton>
+      ) : !hydrated ? null : visibleSessions.length === 0 ? (
         <p className="px-3 pb-3 text-xs text-text-secondary">
           {fetchError
             ? "Couldn't load dev servers"

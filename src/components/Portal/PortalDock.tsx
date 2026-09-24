@@ -544,19 +544,19 @@ export function PortalDock() {
         </aside>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuActionItem actionId="portal.newTab">New Tab</ContextMenuActionItem>
+        <ContextMenuActionItem actionId="portal.newTab">New tab</ContextMenuActionItem>
         <ContextMenuSeparator />
         <ContextMenuActionItem actionId="portal.closeTab" disabled={activeTabId === null}>
-          Close Tab
+          Close tab
         </ContextMenuActionItem>
         <ContextMenuActionItem actionId="portal.closeAllTabs" disabled={tabs.length === 0}>
-          Close All Tabs
+          Close all tabs
         </ContextMenuActionItem>
         <ContextMenuSeparator />
-        <ContextMenuActionItem actionId="portal.resetWidth">Reset Width</ContextMenuActionItem>
+        <ContextMenuActionItem actionId="portal.resetWidth">Reset width</ContextMenuActionItem>
         <ContextMenuSeparator />
         <ContextMenuSub>
-          <ContextMenuSubTrigger>Default New Tab</ContextMenuSubTrigger>
+          <ContextMenuSubTrigger>Default new tab</ContextMenuSubTrigger>
           <ContextMenuSubContent>
             <MenuActionSourceContext.Consumer>
               {(source) => (
@@ -600,7 +600,7 @@ export function PortalDock() {
         </ContextMenuSub>
         <ContextMenuSeparator />
         <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "portal" }}>
-          Portal Settings...
+          Portal settings…
         </ContextMenuActionItem>
       </ContextMenuContent>
     </ContextMenu>

@@ -13,19 +13,13 @@ import {
 import {
   DndContext,
   closestCorners,
-  KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
   type UniqueIdentifier,
 } from "@dnd-kit/core";
-import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  horizontalListSortingStrategy,
-} from "@dnd-kit/sortable";
+import { SortableContext, useSortable, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import type { PortalTab, PortalLink } from "@shared/types";
@@ -72,6 +66,8 @@ function SortableTab({
   onCopyUrl,
   onOpenExternal,
   onReload,
+  onMove,
+  onKeyboardClose,
   tabCount,
   tabIndex,
   isTabStop,
@@ -87,10 +83,12 @@ function SortableTab({
   onCopyUrl: (id: string) => void;
   onOpenExternal: (id: string) => void;
   onReload: (id: string) => void;
+  onMove: (id: string, delta: -1 | 1) => void;
+  onKeyboardClose: (id: string) => void;
   tabCount: number;
   tabIndex: number;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: tab.id,
     transition: {
       duration: 150,
@@ -114,7 +112,6 @@ function SortableTab({
         <div
           ref={setNodeRef}
           style={style}
-          {...attributes}
           {...listeners}
           id={tabDomId(tab.id)}
           role="tab"
@@ -128,7 +125,7 @@ function SortableTab({
               onClick(tab.id);
             } else if (e.key === "Delete" || e.key === "Backspace") {
               e.preventDefault();
-              onClose(tab.id);
+              onKeyboardClose(tab.id);
             }
           }}
           className={cn(
@@ -177,15 +174,22 @@ function SortableTab({
           Copy URL
         </ContextMenuItem>
         <ContextMenuItem disabled={!hasUrl} onSelect={() => onOpenExternal(tab.id)}>
-          Open in Browser
+          Open in browser
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem disabled={tabIndex === 0} onSelect={() => onMove(tab.id, -1)}>
+          Move left
+        </ContextMenuItem>
+        <ContextMenuItem disabled={!hasTabsToRight} onSelect={() => onMove(tab.id, 1)}>
+          Move right
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => onClose(tab.id)}>Close</ContextMenuItem>
         <ContextMenuItem disabled={!hasOtherTabs} onSelect={() => onCloseOthers(tab.id)}>
-          Close Others
+          Close others
         </ContextMenuItem>
         <ContextMenuItem disabled={!hasTabsToRight} onSelect={() => onCloseToRight(tab.id)}>
-          Close to Right
+          Close tabs to the right
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -252,10 +256,30 @@ export function PortalToolbar({
   const openTabExternal = onOpenTabExternal ?? noopTabAction;
   const reloadTab = onReloadTab ?? noopTabAction;
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
-  );
+  // Pointer-only drag: Space and Enter belong to tab activation, so keyboard
+  // reordering goes through the tab's Move left / Move right menu items.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+
+  const moveTab = (tabId: string, delta: -1 | 1) => {
+    const from = tabs.findIndex((t) => t.id === tabId);
+    const to = from + delta;
+    if (from === -1 || to < 0 || to >= tabs.length) return;
+    reorderTabs(from, to);
+  };
+
+  // Deleting the focused tab hands focus to its neighbour — the following tab,
+  // else the preceding one — or, with no tabs left, to the launchpad.
+  const closeFromKeyboard = (tabId: string) => {
+    const index = tabs.findIndex((t) => t.id === tabId);
+    const next = tabs[index + 1] ?? tabs[index - 1];
+    onTabClose(tabId);
+    requestAnimationFrame(() => {
+      const target = next
+        ? document.getElementById(tabDomId(next.id))
+        : document.querySelector<HTMLElement>("#portal-placeholder button");
+      target?.focus();
+    });
+  };
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -503,6 +527,8 @@ export function PortalToolbar({
                     onCopyUrl={copyTabUrl}
                     onOpenExternal={openTabExternal}
                     onReload={reloadTab}
+                    onMove={moveTab}
+                    onKeyboardClose={closeFromKeyboard}
                     tabCount={tabs.length}
                     tabIndex={index}
                   />
