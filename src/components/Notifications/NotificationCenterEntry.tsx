@@ -545,6 +545,7 @@ export function NotificationCenterEntry({
             isRead={!isNew}
             onArchive={onArchive}
             onToggleRead={onToggleRead}
+            source={entry.context?.projectId || entry.context?.worktreeId ? source : undefined}
           />
           {onDismiss && (
             <button
@@ -689,6 +690,8 @@ interface RowOptionsMenuProps {
   isRead: boolean;
   onArchive?: () => void;
   onToggleRead?: () => void;
+  /** Where the row came from, in full — the row's own line truncates it. */
+  source?: string;
 }
 
 function RowOptionsMenu({
@@ -704,6 +707,7 @@ function RowOptionsMenu({
   isRead,
   onArchive,
   onToggleRead,
+  source,
 }: RowOptionsMenuProps) {
   const eventKind = entry.context?.eventKind;
   const hasContextActions = isNotificationEventKind(eventKind) || !!entry.context?.projectId;
@@ -860,6 +864,17 @@ function RowOptionsMenu({
           </>
         ) : (
           <>
+            {/* The full project and worktree, which the row truncates and a
+                grouped row omits. Here it costs no Tab stop, and a keyboard
+                user reaches it with the menu they already open for triage. */}
+            {source && (
+              <>
+                <DropdownMenuLabel className="break-words font-medium normal-case tracking-normal">
+                  {source}
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+              </>
+            )}
             {/* Triage first — the same verbs, and the same keys, as the list:
                 without these a pointer user could only read or archive one
                 notification by learning `u` and `e`, or by doing it to all. */}

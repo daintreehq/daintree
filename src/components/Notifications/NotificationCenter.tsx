@@ -1310,7 +1310,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           <div className="min-w-0 flex-1 flex flex-col gap-0.5">
             <span className="font-medium text-text-primary">{quietCause}</span>
             {quietDetail.map((clause) => (
-              <span key={clause} className="text-pretty text-text-secondary">
+              <span key={clause} className="text-text-secondary">
                 {clause}
               </span>
             ))}

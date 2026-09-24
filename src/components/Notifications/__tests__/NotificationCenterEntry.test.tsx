@@ -7,6 +7,7 @@ import { NotificationCenterEntry, formatSnoozeWake } from "../NotificationCenter
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUIStore } from "@/store/uiStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
 
 // An unavailable row action explains itself through a real tooltip, which the
 // app mounts under App.tsx's provider.
@@ -1033,5 +1034,38 @@ describe("NotificationCenterEntry — unavailable row action", () => {
     await waitFor(() => {
       expect(screen.getAllByText("No worktree selected").length).toBeGreaterThan(0);
     });
+  });
+});
+
+describe("NotificationCenterEntry — row menu names the full source", () => {
+  async function openMenu() {
+    const trigger = screen.getByLabelText(/^Options for /);
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+  }
+
+  it("heads the menu with the row's project and worktree, which the row itself truncates", async () => {
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          correlationId: "c-src",
+          context: { worktreeId: "/repo/worktrees/feature-a-very-long-branch-name-that-truncates" },
+        })}
+        showSource={false}
+      />
+    );
+    await openMenu();
+    const menu = screen.getByRole("menu");
+    expect(menu.textContent).toContain("feature-a-very-long-branch-name-that-truncates");
+  });
+
+  it("adds no heading for a row with no place of origin", async () => {
+    render(<NotificationCenterEntry entry={makeEntry({ correlationId: "c-none" })} />);
+    await openMenu();
+    // The app-level fallback name is not a place the row came from.
+    expect(screen.getByRole("menu").textContent).not.toContain(APP_SOURCE_LABEL);
   });
 });
