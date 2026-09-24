@@ -34,6 +34,13 @@
  *     npx playwright test --project=screenshots readiness-rail-review
  *   done
  *
+ * The push-failure banner that stacks under the rail is captured here too (states 20+),
+ * because the two share one band of the hub and are only judgeable together. Those
+ * states make a real local commit so the clean hub offers Push, confirm the real D2
+ * dialog, and answer `git:push` with the same `GitOperationError` envelope the main
+ * process sends — so the preload decode, `readGitErrorFields` and
+ * `getPushBannerConfig` all run for real. Nothing is ever pushed.
+ *
  * Output: artifacts/readiness-rail-shots/<slug>--<theme>[-tag].png (gitignored).
  */
 
@@ -104,6 +111,13 @@ function createFixtureRepo(): { dir: string; cleanup: () => void } {
   git("add -A", dir);
   git('commit -m "initial commit"', dir);
 
+  // A real upstream, in sync, so the push states below can put the branch ahead of
+  // it with one commit. The rail states before them see ahead = 0 and are unchanged.
+  const remote = path.join(path.dirname(dir), path.basename(dir) + "-remote.git");
+  execSync(`git init --bare -b main "${remote}"`, { stdio: "ignore" });
+  git(`remote add origin "${remote}"`, dir);
+  git("push -u origin main", dir);
+
   // Real dirt so the file sections below the rail are populated.
   writeFileSync(
     path.join(dir, "src", "index.ts"),
@@ -120,6 +134,7 @@ function createFixtureRepo(): { dir: string; cleanup: () => void } {
     dir,
     cleanup: () => {
       if (existsSync(wtRoot)) rmSync(wtRoot, { recursive: true, force: true });
+      rmSync(dir + "-remote.git", { recursive: true, force: true });
       rmSync(dir, { recursive: true, force: true });
     },
   };
@@ -164,8 +179,13 @@ interface RailState {
   slug: string;
   /** `"pending"` never resolves, which is how the hub's real "status unknown" looks. */
   status: StagingStatus | "pending";
-  /** `null` asserts the rail is absent. */
-  level: "ready" | "needs-review" | "blocked" | null;
+  /** `null` asserts the rail is absent; `"any"` leaves it unasserted (push states). */
+  level: "ready" | "needs-review" | "blocked" | "any" | null;
+  /**
+   * Push failure to provoke. The state then pushes from the clean hub and the
+   * shot is only written once the banner has rendered with these CTAs.
+   */
+  push?: PushFault;
   items?: string[];
   overflow?: boolean;
   /** Included in the per-theme sweep. */
@@ -191,6 +211,218 @@ async function setWindowSize(
     win?.setSize(s.width, s.height);
   }, size);
 }
+
+interface PushFault {
+  gitReason: string;
+  message: string;
+  leaseSha?: string;
+  branchName?: string;
+  /** `data-cta-kind` of the primary and secondary banner actions, when expected. */
+  cta?: string;
+  secondaryCta?: string;
+  /** The raw output sits behind a disclosure. */
+  details?: boolean;
+}
+
+const PUSH_CHANNEL = "git:push";
+const BANNER = '[data-testid="review-hub-push-error"]';
+
+const REJECTED_OUTDATED =
+  "To github.com:helios/dashboard.git\n ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs to 'github.com:helios/dashboard.git'\nhint: Updates were rejected because the remote contains work that you do not\nhint: have locally.";
+const HOOK_OUTPUT =
+  "remote: error: GH013: Repository rule violations found for refs/heads/main.\nremote: Review all repository rules at https://github.com/helios/dashboard/rules?ref=refs%2Fheads%2Fmain\nremote:\nremote: - Changes must be made through a pull request.\nremote:\nremote: - 2 of 2 required status checks are expected.\nremote:\nTo github.com:helios/dashboard.git\n ! [remote rejected] main -> main (push declined due to repository rule violations)\nerror: failed to push some refs to 'github.com:helios/dashboard.git'";
+
+const OUTDATED: PushFault = {
+  gitReason: "push-rejected-outdated",
+  message: REJECTED_OUTDATED,
+  leaseSha: "4f1c9a2e8b7d6c5a4f3e2d1c0b9a8f7e6d5c4b3a",
+  branchName: "main",
+  cta: "pull-rebase",
+  secondaryCta: "force-push",
+};
+
+const HOOK: PushFault = {
+  gitReason: "hook-rejected",
+  message: HOOK_OUTPUT,
+  details: true,
+};
+
+const PUSH_STATUS = status({ currentBranch: "main" });
+
+/**
+ * Replace the push handler with one that throws the way the real one does. The
+ * handler must THROW, not return an envelope: `electron/setup/security.ts` wraps
+ * every `ipcMain.handle` listener and serializes a thrown `GitOperationError` into
+ * the envelope itself, so a returned envelope arrives double-wrapped and reads as
+ * a successful push.
+ */
+async function stubPushFailure(app: ElectronApplication, fault: PushFault): Promise<void> {
+  await app.evaluate(
+    ({ ipcMain }, { channel, fault }) => {
+      ipcMain.removeHandler(channel);
+      ipcMain.handle(channel, async () => {
+        const err = new Error(fault.message) as Error & Record<string, unknown>;
+        err.name = "GitOperationError";
+        err.gitReason = fault.gitReason;
+        if (fault.leaseSha) err.leaseSha = fault.leaseSha;
+        if (fault.branchName) err.branchName = fault.branchName;
+        throw err;
+      });
+    },
+    { channel: PUSH_CHANNEL, fault }
+  );
+}
+
+/** Push from the clean hub, confirm the real D2 dialog, wait for the banner. */
+async function provokePushFailure(page: Page, app: ElectronApplication, fault: PushFault) {
+  await stubPushFailure(app, fault);
+  const push = page.locator('[data-testid="review-hub-clean-push"]');
+  await push.waitFor({ state: "visible", timeout: 20_000 });
+  await push.click();
+  const confirm = page.locator(SEL.confirmDialog.confirm).last();
+  await confirm.waitFor({ state: "visible", timeout: 15_000 });
+  await expect(confirm).toBeEnabled({ timeout: 15_000 });
+  await confirm.click();
+  await page.locator(BANNER).waitFor({ state: "visible", timeout: 15_000 });
+}
+
+async function tabOnto(page: Page, selector: string): Promise<void> {
+  const target = page.locator(selector).first();
+  await target.focus();
+  await page.keyboard.press("Shift+Tab");
+  for (let i = 0; i < 8; i++) {
+    await page.keyboard.press("Tab");
+    const hit = await page.evaluate(
+      (sel) => document.activeElement?.matches(sel) ?? false,
+      selector
+    );
+    if (!hit) continue;
+    const state = await page.evaluate(() => {
+      const el = document.activeElement as HTMLElement;
+      const cs = getComputedStyle(el);
+      return {
+        visible: el.matches(":focus-visible"),
+        outline: [cs.outlineStyle, cs.outlineWidth, cs.outlineColor].join("|"),
+        shadow: cs.boxShadow,
+      };
+    });
+    console.log(`[readiness-shots] focus on ${selector}: ${JSON.stringify(state)}`);
+    if (!state.visible) throw new Error(`${selector} focused but :focus-visible did not match`);
+    if (state.outline.startsWith("none") && (!state.shadow || state.shadow === "none")) {
+      throw new Error(`focus indicator resolves to nothing: ${JSON.stringify(state)}`);
+    }
+    return;
+  }
+  throw new Error(`could not Tab onto ${selector}`);
+}
+
+const PUSH_STATES: RailState[] = [
+  {
+    // The common rejection, with a captured lease: the safe fix and the destructive one.
+    slug: "20-push-outdated",
+    status: PUSH_STATUS,
+    level: "any",
+    push: OUTDATED,
+    sweep: true,
+  },
+  {
+    // No lease captured, so no force push — one recovery only.
+    slug: "21-push-outdated-nolease",
+    status: PUSH_STATUS,
+    level: "any",
+    push: { ...OUTDATED, leaseSha: undefined, branchName: undefined, secondaryCta: undefined },
+  },
+  {
+    slug: "22-push-network",
+    status: PUSH_STATUS,
+    level: "any",
+    push: {
+      gitReason: "network-unavailable",
+      message: "ssh: Could not resolve hostname github.com: nodename nor servname provided",
+      cta: "retry",
+    },
+  },
+  {
+    // A failure with no action the app can take.
+    slug: "23-push-auth",
+    status: PUSH_STATUS,
+    level: "any",
+    push: {
+      gitReason: "auth-failed",
+      message: "git@github.com: Permission denied (publickey).",
+    },
+  },
+  {
+    slug: "24-push-hook",
+    status: PUSH_STATUS,
+    level: "any",
+    push: HOOK,
+    sweep: true,
+  },
+  {
+    // The server's own words are the only actionable signal here — shown expanded.
+    slug: "25-push-hook-details",
+    status: PUSH_STATUS,
+    level: "any",
+    push: HOOK,
+    arrange: async (page) => {
+      await page.locator('[data-testid="review-hub-push-error-toggle"]').click();
+      await page
+        .locator('[data-testid="review-hub-push-error-details"]')
+        .waitFor({ state: "visible", timeout: 5000 });
+    },
+  },
+  {
+    slug: "26-push-unknown",
+    status: PUSH_STATUS,
+    level: "any",
+    push: {
+      gitReason: "unknown",
+      message:
+        "error: RPC failed; HTTP 413 curl 22 The requested URL returned error: 413\nsend-pack: unexpected disconnect while reading sideband packet\nfatal: the remote end hung up unexpectedly",
+      details: true,
+    },
+  },
+  {
+    slug: "27-push-focus",
+    status: PUSH_STATUS,
+    level: "any",
+    push: OUTDATED,
+    arrange: async (page) => tabOnto(page, '[data-testid="review-hub-push-error-cta"]'),
+  },
+  {
+    slug: "28-push-narrow",
+    status: PUSH_STATUS,
+    level: "any",
+    push: HOOK,
+    arrange: async (_page, app) => setWindowSize(app, NARROW),
+    restore: async (_page, app) => setWindowSize(app, WIDE),
+  },
+  {
+    slug: "29-push-forced-colors",
+    status: PUSH_STATUS,
+    level: "any",
+    push: OUTDATED,
+    arrange: async (page) => {
+      await page.emulateMedia({ forcedColors: "active" });
+    },
+    restore: async (page) => {
+      await page.emulateMedia({ forcedColors: "none" });
+    },
+  },
+  {
+    slug: "30-push-contrast-more",
+    status: PUSH_STATUS,
+    level: "any",
+    push: OUTDATED,
+    arrange: async (page) => {
+      await page.emulateMedia({ contrast: "more" });
+    },
+    restore: async (page) => {
+      await page.emulateMedia({ contrast: "no-preference" });
+    },
+  },
+];
 
 const STATES: RailState[] = [
   {
@@ -394,6 +626,7 @@ const STATES: RailState[] = [
     arrange: async (_page, app) => setWindowSize(app, NARROW),
     restore: async (_page, app) => setWindowSize(app, WIDE),
   },
+  ...PUSH_STATES,
 ];
 
 async function settle(page: Page, ms = 350): Promise<void> {
@@ -459,6 +692,36 @@ async function verify(page: Page, state: RailState): Promise<void> {
     page.locator(SEL.reviewHub.container),
     `${state.slug}: review hub did not open`
   ).toBeVisible({ timeout: 10_000 });
+
+  if (state.push) {
+    const banner = page.locator(BANNER);
+    await expect(banner, `${state.slug}: push banner missing`).toBeVisible({ timeout: 8000 });
+    await expect(banner).toHaveAttribute("data-reason", state.push.gitReason);
+    const primary = banner.locator('[data-testid="review-hub-push-error-cta"]');
+    const secondary = banner.locator('[data-testid="review-hub-push-error-secondary-cta"]');
+    if (state.push.cta) {
+      await expect(primary, `${state.slug}: primary CTA`).toHaveAttribute(
+        "data-cta-kind",
+        state.push.cta
+      );
+    } else {
+      await expect(primary, `${state.slug}: expected no primary CTA`).toHaveCount(0);
+    }
+    if (state.push.secondaryCta) {
+      await expect(secondary, `${state.slug}: secondary CTA`).toHaveAttribute(
+        "data-cta-kind",
+        state.push.secondaryCta
+      );
+    } else {
+      await expect(secondary, `${state.slug}: expected no secondary CTA`).toHaveCount(0);
+    }
+    await expect(
+      banner.locator('[data-testid="review-hub-push-error-toggle"]'),
+      `${state.slug}: details disclosure`
+    ).toHaveCount(state.push.details ? 1 : 0);
+  }
+
+  if (state.level === "any") return;
 
   if (state.level === null) {
     await expect(
@@ -538,13 +801,25 @@ test("readiness rail review — ready, attention and blocked states", async () =
     await page.addStyleTag({ content: POLISH_CSS });
     await settle(page, 600);
 
+    let madeAheadCommit = false;
     for (const state of planned) {
       const app = ctx.app;
       try {
+        if (state.push && !madeAheadCommit) {
+          // One real local commit so the worktree reports ahead = 1 and the clean
+          // hub offers Push. Made once, before the first push state.
+          git('commit --allow-empty -m "retry checkout on 409"', repo.dir);
+          madeAheadCommit = true;
+          await settle(page, 2500);
+        }
         await closeHub(page);
         await stubStagingStatus(app, state.status);
         await openHub(page);
         await settle(page, 700);
+        if (state.push) {
+          await provokePushFailure(page, app, state.push);
+          await settle(page, 500);
+        }
         if (state.arrange) await state.arrange(page, app);
         await settle(page, 450);
 
@@ -556,7 +831,10 @@ test("readiness rail review — ready, attention and blocked states", async () =
         } else {
           await snap(page, `${state.slug}--hub`, SEL.reviewHub.container);
           captured++;
-          if (state.level !== null) {
+          if (state.push) {
+            await snap(page, `${state.slug}--banner`, BANNER);
+            captured++;
+          } else if (state.level !== null) {
             await snap(page, `${state.slug}--rail`, RAIL);
             captured++;
           }
