@@ -228,10 +228,9 @@ export function registerWorktreeSessionActions(
         );
       if (targets.length === 0) return;
       if (confirmed !== true) {
-        // Classification leads wiring (CLAUDE.md hard rule 2): the action
-        // body must gate even though `useWorktreeActions.handleCloseAll`
-        // already wires a call-site dialog. Without this guard, action-palette
-        // and keybinding dispatches would silently fire `bulkTrashByWorktree`.
+        // Classification leads wiring (CLAUDE.md hard rule 2): this gate is
+        // the confirm for every entry point, the worktree card menu included —
+        // it dispatches unconfirmed and relies on this to stage the dialog.
         useTerminalPendingDestructiveActionStore.getState().request({
           kind: "worktreeTrashAll",
           dispatchSource: ctx.dispatchSource,
