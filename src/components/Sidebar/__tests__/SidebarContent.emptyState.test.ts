@@ -510,8 +510,11 @@ describe("SidebarContent workspace error banner — issue #8394", () => {
     expect(source).toContain('ariaLive="polite"');
   });
 
-  it("wires the error text as contextLine and a Restart Service action", () => {
-    expect(source).toMatch(/contextLine=\{error\}/);
+  it("wires the sanitized error text as a wrapping description and a Restart Service action", () => {
+    // Not `contextLine`: that clips to one line, and at sidebar width the
+    // reason was cut to its first few words with the rest behind a hover.
+    expect(source).toMatch(/description=\{boundedErrorText\(error\)\}/);
+    expect(source).not.toMatch(/contextLine=\{error\}/);
     expect(source).toContain('"Restart Service"');
     expect(source).toContain('id: "restart-workspace-service"');
   });

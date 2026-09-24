@@ -21,6 +21,7 @@ import {
 import { FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { boundedErrorText } from "@/utils/errorText";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { ScrollIndicator } from "@/components/Worktree/ScrollIndicator";
 import {
@@ -1602,7 +1603,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     error !== null && (!bannerDismissed || !canDismissErrorBanner) ? (
       <InlineStatusBanner
         title="Workspace service unavailable"
-        contextLine={error}
+        // A wrapping description, not the one-line mono context line: the
+        // reason is the part worth reading, and at sidebar width the context
+        // line clipped it to "Workspace host exit…" with the rest on hover only.
+        description={boundedErrorText(error)}
         severity="warning"
         role="status"
         ariaLive="polite"
