@@ -417,7 +417,7 @@ export function InlineStatusBanner({
   const closeButtonEl = onClose ? (
     <Button
       variant="ghost"
-      size="icon-sm"
+      size={isInline ? "icon-xs" : "icon-sm"}
       onClick={handleClose}
       disabled={closeDisabled}
       aria-label={closeAriaLabel}
@@ -451,12 +451,13 @@ export function InlineStatusBanner({
       className={cn(
         "flex items-center shrink-0",
         stacked ? "gap-2 ml-6" : "gap-1",
-        // Inline controls overhang the text line into the padding rather than
-        // setting its height, so the row stays one text line tall and the
-        // glyph lines up with the title whether or not the controls wrap.
-        // The group wraps within itself too: three actions and a × are wider
-        // than the narrowest pane a grid can leave.
-        isInline && "-my-1 shrink min-w-0 flex-wrap gap-y-1",
+        // Inline controls are 24px and overhang the 20px text line by 2px each
+        // side rather than setting its height, so the glyph lines up with the
+        // title whether or not the controls wrap, and each control keeps 6px
+        // of the row's padding clear above and below instead of touching the
+        // band's edges. The group wraps within itself too: three actions and
+        // a × are wider than the narrowest pane a grid can leave.
+        isInline && "-my-0.5 shrink min-w-0 flex-wrap gap-y-1",
         // Beneath the text, the controls line up with it, past the glyph.
         // 52rem leaves the text column a real measure just above the
         // break: three actions and a dismiss run to ~400px, and a column
@@ -485,10 +486,15 @@ export function InlineStatusBanner({
           <Button
             key={action.id}
             variant={variant}
-            size={action.iconOnly ? "icon-sm" : "sm"}
+            size={action.iconOnly ? (isInline ? "icon-xs" : "icon-sm") : "sm"}
             // A raised, shadowed button reads louder than a routine one-line
-            // notice should; the ring alone marks it as a control.
-            className={cn(isInline && "shadow-none inset-shadow-none")}
+            // notice should; the ring alone marks it as a control. `sm` type
+            // on the `xs` height: the `xs` size's 10px label is too small to
+            // be the one thing on the row the user acts on.
+            className={cn(
+              isInline && "shadow-none inset-shadow-none",
+              isInline && !action.iconOnly && "h-6 px-2.5"
+            )}
             disabled={action.disabled}
             loading={action.loading}
             onClick={(e) => {
@@ -526,7 +532,7 @@ export function InlineStatusBanner({
         stacked
           ? "flex flex-col gap-2 px-3 py-2 shrink-0"
           : isInline
-            ? "flex items-start px-3 py-1.5 shrink-0 border-b border-divider"
+            ? "flex items-start px-3 py-2 shrink-0 border-b border-divider"
             : "flex items-center justify-between gap-3 px-3 py-2 shrink-0",
         // The strip wraps its controls beneath the text once the container is
         // narrower than a two-line sentence plus three actions can share.
