@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, onTestFinished } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import { useRef } from "react";
 import {
@@ -93,6 +93,9 @@ function Harness({
       {worktreeIds.map((id) => (
         <div key={id} role="gridcell" id={getWorktreeOverviewCellId(id)} data-testid={`cell-${id}`}>
           <button data-testid={`btn-${id}`}>inner-{id}</button>
+          <button tabIndex={-1} data-testid={`btn2-${id}`}>
+            second-{id}
+          </button>
         </div>
       ))}
     </div>
@@ -233,6 +236,32 @@ describe("useWorktreeOverviewKeyboard — single-column list", () => {
     expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId(IDS[4]!));
     fireEvent.keyDown(grid, { key: "PageUp" });
     expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId(IDS[0]!));
+  });
+
+  it("after F2, Up and Down walk the row's own controls and Escape returns to the list", () => {
+    // jsdom has no layout, so every offsetParent is null and the visibility
+    // filter would hide every control; give them the parent a browser would.
+    const offsetParent = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetParent");
+    Object.defineProperty(HTMLElement.prototype, "offsetParent", {
+      configurable: true,
+      get() {
+        return (this as HTMLElement).parentElement;
+      },
+    });
+    onTestFinished(() => {
+      if (offsetParent) Object.defineProperty(HTMLElement.prototype, "offsetParent", offsetParent);
+    });
+    const { getByTestId } = render(<Harness worktreeIds={IDS} />);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "F2" });
+    expect(document.activeElement).toBe(getByTestId("btn-a"));
+    fireEvent.keyDown(getByTestId("btn-a"), { key: "ArrowDown" });
+    expect(document.activeElement).toBe(getByTestId("btn2-a"));
+    fireEvent.keyDown(getByTestId("btn2-a"), { key: "ArrowUp" });
+    expect(document.activeElement).toBe(getByTestId("btn-a"));
+    fireEvent.keyDown(getByTestId("btn-a"), { key: "Escape" });
+    expect(document.activeElement).toBe(grid);
   });
 
   it("Home and End reach the ends of the list, not of a visual row", () => {

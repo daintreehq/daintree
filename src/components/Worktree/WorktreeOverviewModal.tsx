@@ -884,6 +884,7 @@ export function WorktreeOverviewModal({
                 hints={[
                   { keys: ["↑", "↓"], label: "navigate" },
                   { keys: ["Space"], label: "select" },
+                  { keys: ["F2"], label: "sessions" },
                   { keys: ["⇧", "F10"], label: "actions" },
                   { keys: ["Esc"], label: "close" },
                 ]}

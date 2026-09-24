@@ -160,6 +160,8 @@ function SessionLine({ mark, onBeforeOpen }: { mark: SessionMark; onBeforeOpen: 
     <TruncatedTooltip content={text}>
       <button
         type="button"
+        // Out of the tab order: the list is one tab stop, and F2 enters a row.
+        tabIndex={-1}
         onClick={(e) => {
           e.stopPropagation();
           onBeforeOpen();
@@ -490,6 +492,7 @@ export function WorktreeOverviewRow({
                 <div className="rounded-[var(--radius-lg)] border border-border-default bg-overlay-soft">
                   <button
                     type="button"
+                    tabIndex={-1}
                     aria-expanded={sessionsExpanded}
                     aria-label={`${marks.length} active sessions${sessionSummary.breakdown ? `: ${sessionSummary.breakdown}` : ""}`}
                     onClick={(e) => {

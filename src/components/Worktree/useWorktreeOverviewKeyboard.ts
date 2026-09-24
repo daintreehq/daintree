@@ -405,6 +405,20 @@ export function useWorktreeOverviewKeyboard({
           e.preventDefault();
           e.stopPropagation();
           gridEl.focus();
+          return;
+        }
+        // Inside a row after F2: Up/Down walk that row's own controls and stay
+        // in it. The controls carry tabindex -1, so Tab never wanders in here.
+        if ((e.key === "ArrowDown" || e.key === "ArrowUp") && target instanceof Element) {
+          const cell = target.closest('[role="gridcell"]');
+          if (cell) {
+            const controls = tabbablesWithin(cell);
+            const at = controls.indexOf(target as HTMLElement);
+            const next = controls[at + (e.key === "ArrowDown" ? 1 : -1)];
+            e.preventDefault();
+            e.stopPropagation();
+            next?.focus();
+          }
         }
         return;
       }
