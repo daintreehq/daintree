@@ -161,6 +161,31 @@ test("Worktree overview — fleets, states and themes", async ({ page }) => {
     written.push(await shoot(page, `selection-${theme}.png`));
   }
 
+  // The row menu from the keyboard: Shift+F10 on the cursor row, which lists
+  // the row's sessions in full above its actions.
+  {
+    const modal = await open(page, { theme });
+    await modal.getByRole("grid").focus();
+    for (let i = 0; i < 6; i++) await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Shift+F10");
+    const menu = page.getByRole("menu");
+    await expect(menu).toBeVisible();
+    await expect(menu.getByText("Sessions")).toBeVisible();
+    await page.waitForTimeout(200);
+    written.push(await shoot(page, `menu-${theme}.png`));
+    await page.keyboard.press("Escape");
+  }
+
+  // A filter that matches nothing, with no query typed.
+  {
+    const modal = await open(page, { theme, fleet: "few" });
+    await modal.getByRole("button", { name: /^Attention/ }).click();
+    await expect(modal.getByText("No worktrees match these filters")).toBeVisible();
+    await expect(modal.getByRole("button", { name: "Clear all filters" })).toBeVisible();
+    await page.waitForTimeout(200);
+    written.push(await shoot(page, `filter-empty-${theme}.png`));
+  }
+
   // Pointer over a row: whatever the row reveals on hover.
   {
     const modal = await open(page, { theme });

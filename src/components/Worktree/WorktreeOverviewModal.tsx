@@ -560,6 +560,37 @@ export function WorktreeOverviewModal({
     onClose();
   }, [hasSelection, clearSelection, onClose]);
 
+  /**
+   * The row menu for the keyboard. The list keeps DOM focus while the cursor is
+   * an `aria-activedescendant`, so Shift+F10 and the Menu key land here rather
+   * than on a row: forward them as a contextmenu event on the cursor row, at the
+   * row's own position, which is what opens its menu for a pointer.
+   */
+  const handleListKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      const isMenuKey = e.key === "ContextMenu" || (e.shiftKey && e.key === "F10");
+      if (isMenuKey && e.target === e.currentTarget && activeDescendantId) {
+        const row = document.getElementById(activeDescendantId);
+        if (row && gridRef.current?.contains(row)) {
+          e.preventDefault();
+          e.stopPropagation();
+          const box = row.getBoundingClientRect();
+          row.dispatchEvent(
+            new MouseEvent("contextmenu", {
+              bubbles: true,
+              cancelable: true,
+              clientX: box.left + 32,
+              clientY: box.top + box.height / 2,
+            })
+          );
+          return;
+        }
+      }
+      handleGridKeyDown(e);
+    },
+    [activeDescendantId, handleGridKeyDown]
+  );
+
   const handleSearchEscape = useCallback(() => {
     if (!hasSelection) return false;
     clearSelection();
@@ -654,7 +685,10 @@ export function WorktreeOverviewModal({
                 query={liveQuery}
                 {...(liveQuery.trim()
                   ? {}
-                  : { noMatchMessage: "No worktrees match these filters" })}
+                  : // `filterLabel` is what puts the empty state in its narrowed
+                    // branch; without it a filter-only miss read "No items
+                    // available" and lost its recovery button.
+                    { filterLabel: "filters", noMatchMessage: "No worktrees match these filters" })}
                 noMatchContent={
                   <Button variant="subtle" size="sm" onClick={clearAllFilters}>
                     Clear all filters
@@ -670,7 +704,7 @@ export function WorktreeOverviewModal({
                 tabIndex={0}
                 aria-multiselectable="true"
                 aria-activedescendant={activeDescendantId}
-                onKeyDown={handleGridKeyDown}
+                onKeyDown={handleListKeyDown}
                 onFocus={handleGridFocus}
                 className={cn(
                   "group/overview-grid grid grid-cols-1",
@@ -752,6 +786,7 @@ export function WorktreeOverviewModal({
                 hints={[
                   { keys: ["↑", "↓"], label: "navigate" },
                   { keys: ["Space"], label: "select" },
+                  { keys: ["⇧", "F10"], label: "actions" },
                   { keys: ["Esc"], label: "close" },
                 ]}
               />

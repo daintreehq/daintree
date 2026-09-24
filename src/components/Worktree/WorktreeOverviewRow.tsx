@@ -14,6 +14,7 @@ import {
   ContextMenu,
   ContextMenuActionItem,
   ContextMenuContent,
+  ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
@@ -398,7 +399,31 @@ export function WorktreeOverviewRow({
             </div>
           </div>
         </ContextMenuTrigger>
-        <ContextMenuContent>
+        <ContextMenuContent className="max-w-[360px]">
+          {/* The sessions, in full, each a way straight into its terminal. This is
+              also where a keyboard user reads what the row's tooltip shows on
+              hover: Shift+F10 on the cursor row opens this menu. */}
+          {sessionLines.length > 0 && (
+            <>
+              <ContextMenuLabel>Sessions</ContextMenuLabel>
+              {sessionLines.map((line) => (
+                <ContextMenuActionItem
+                  key={line.id}
+                  actionId="panel.focus"
+                  args={{ panelId: line.id }}
+                  onSelect={onBeforeMenuAction}
+                >
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate">{line.name}</span>
+                    {line.detail && line.detail !== line.name && (
+                      <span className="truncate text-2xs text-text-secondary">{line.detail}</span>
+                    )}
+                  </span>
+                </ContextMenuActionItem>
+              ))}
+              <ContextMenuSeparator />
+            </>
+          )}
           <ContextMenuActionItem
             actionId="worktree.openEditor"
             args={menuArgs}
