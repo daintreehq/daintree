@@ -55,6 +55,38 @@ export interface SettingsShortcutCaptureProps {
    * leave it undefined where there is no single current binding to show.
    */
   currentCombo?: string;
+  /**
+   * Finish on the first non-modifier key instead of waiting out the chord window.
+   * For bindings that cannot be chords, where the wait only delays the result and
+   * a quick Enter or Tab afterwards would be recorded as a second step.
+   */
+  singleStroke?: boolean;
+  /**
+   * What the armed field asks for, in place of "Press a key combination". A binding
+   * with a required shape says so here, before the first attempt rather than only
+   * in the rejection after it.
+   */
+  recordingHint?: React.ReactNode;
+  /**
+   * Keep Save disabled while the combo is still bound to another action. Two
+   * bindings of equal priority on one combo leave one of them silently dead, so a
+   * caller that cannot tolerate that asks for Unbind first.
+   */
+  blockConflicts?: boolean;
+}
+
+const MODIFIER_KEYS = ["Meta", "Control", "Alt", "Shift"];
+
+/** The modifiers an event reports as down, in the same order a captured combo uses. */
+function heldModifiers(e: KeyboardEvent, mac: boolean): string[] {
+  const parts: string[] = [];
+  if (mac && e.metaKey) parts.push("Cmd");
+  // Control is its own modifier on macOS; elsewhere it is the primary one.
+  if (mac && e.ctrlKey) parts.push("Ctrl");
+  if (!mac && e.ctrlKey) parts.push("Cmd");
+  if (e.shiftKey) parts.push("Shift");
+  if (e.altKey) parts.push("Alt");
+  return parts;
 }
 
 function sameChord(a: string, b: string): boolean {
@@ -72,6 +104,9 @@ export function SettingsShortcutCapture({
   compact = false,
   autoStart = compact,
   currentCombo,
+  singleStroke = false,
+  recordingHint,
+  blockConflicts = false,
 }: SettingsShortcutCaptureProps) {
   // A consumer that mounts this in response to an explicit click (the compact
   // tray, the settings list's Edit) has no reason to ask for a second "Click to
@@ -84,7 +119,15 @@ export function SettingsShortcutCapture({
   const chordTokenRef = useRef(0);
   const [conflictRefreshKey, setConflictRefreshKey] = useState(0);
   const [isUnbinding, setIsUnbinding] = useState(false);
+  // Modifiers down right now, so the field shows the recorder hearing ⌘⌥ before
+  // the letter lands.
+  const [held, setHeld] = useState<string[]>([]);
+  // A combo the validator refused. The recorder stays armed with it on show, so the
+  // next press is the retry, with no separate step to start recording again.
+  const [rejected, setRejected] = useState<string | null>(null);
   const saveRef = useRef<HTMLButtonElement>(null);
+  const recordAgainRef = useRef<HTMLButtonElement>(null);
+  const unbindRef = useRef<HTMLButtonElement>(null);
   const recorderRef = useRef<HTMLDivElement>(null);
   // What was captured before "Record again", so Escape can put it back rather
   // than throwing away a combo the user already had.
@@ -95,9 +138,10 @@ export function SettingsShortcutCapture({
   const capturedCombo = capturedCombos.length > 0 ? capturedCombos.join(" ") : null;
 
   const validationError = useMemo(() => {
-    if (!capturedCombo || !validateCombo) return null;
-    return validateCombo(capturedCombo);
-  }, [capturedCombo, validateCombo]);
+    const combo = rejected ?? capturedCombo;
+    if (!combo || !validateCombo) return null;
+    return validateCombo(combo);
+  }, [rejected, capturedCombo, validateCombo]);
 
   const conflicts = useMemo(() => {
     // conflictRefreshKey forces the memo to re-evaluate after a successful
@@ -107,6 +151,16 @@ export function SettingsShortcutCapture({
     if (!capturedCombo) return [];
     return keybindingService.findConflicts(capturedCombo, excludeActionId, scope);
   }, [capturedCombo, excludeActionId, scope, conflictRefreshKey]);
+
+  const isChord = capturedCombos.length > 1;
+  // Recording the binding that is already in force changes nothing; saving it
+  // would still pin an override and mark the row modified.
+  const isUnchanged = !!capturedCombo && !!currentCombo && sameChord(capturedCombo, currentCombo);
+  const hasDraft = !recording && capturedCombo !== null;
+  const hasConflicts = !validationError && conflicts.length > 0;
+  const blockingConflict =
+    blockConflicts && hasConflicts && conflicts.some((conflict) => conflict.kind !== "shadowed");
+  const canSave = !!capturedCombo && !validationError && !isUnchanged && !blockingConflict;
 
   const clearChordTimeout = useCallback(() => {
     if (chordTimeoutRef.current) {
@@ -118,11 +172,20 @@ export function SettingsShortcutCapture({
   const finishRecording = useCallback(
     (combos: string[]) => {
       clearChordTimeout();
+      setHeld([]);
+      const combo = combos.join(" ");
+      if (validateCombo?.(combo)) {
+        setRejected(combo);
+        setCapturedCombos([]);
+        setChordStep("first");
+        return;
+      }
+      setRejected(null);
       setCapturedCombos(combos);
       setRecording(false);
       setChordStep("complete");
     },
-    [clearChordTimeout]
+    [clearChordTimeout, validateCombo]
   );
 
   useEffect(() => {
@@ -149,6 +212,8 @@ export function SettingsShortcutCapture({
         chordTokenRef.current += 1;
         setRecording(false);
         setChordStep("first");
+        setHeld([]);
+        setRejected(null);
         if (previousDraftRef.current.length > 0) {
           setCapturedCombos(previousDraftRef.current);
           // The recorder that held focus is gone; the restored combo's Save is next.
@@ -160,43 +225,50 @@ export function SettingsShortcutCapture({
         return;
       }
 
-      const parts: string[] = [];
-      const mac = isMac();
-
-      if (mac && e.metaKey) parts.push("Cmd");
-      // Control is its own modifier on macOS; elsewhere it is the primary one.
-      if (mac && e.ctrlKey) parts.push("Ctrl");
-      if (!mac && e.ctrlKey) parts.push("Cmd");
-      if (e.shiftKey) parts.push("Shift");
-      if (e.altKey) parts.push("Alt");
+      const parts = heldModifiers(e, isMac());
 
       // Use normalizeKeyForBinding to handle physical key codes correctly
       // This fixes issues where Option+/ records as ÷ instead of /
       const key = normalizeKeyForBinding(e);
-      if (!["Meta", "Control", "Alt", "Shift"].includes(key)) {
-        parts.push(key);
-        const combo = parts.join("+");
-
-        setCapturedCombos((prev) => {
-          const newCombos = [...prev, combo];
-
-          if (prev.length === 0) {
-            setChordStep("waiting");
-            clearChordTimeout();
-            chordTokenRef.current += 1;
-            const token = chordTokenRef.current;
-            chordTimeoutRef.current = setTimeout(() => {
-              if (chordTokenRef.current !== token) return;
-              finishRecording(newCombos);
-            }, CHORD_TIMEOUT_MS);
-          } else {
-            chordTokenRef.current += 1;
-            finishRecording(newCombos);
-          }
-
-          return newCombos;
-        });
+      if (MODIFIER_KEYS.includes(key)) {
+        setHeld(parts);
+        return;
       }
+
+      parts.push(key);
+      const combo = parts.join("+");
+      setRejected(null);
+
+      if (singleStroke) {
+        chordTokenRef.current += 1;
+        finishRecording([combo]);
+        return;
+      }
+
+      setCapturedCombos((prev) => {
+        const newCombos = [...prev, combo];
+
+        if (prev.length === 0) {
+          setChordStep("waiting");
+          clearChordTimeout();
+          chordTokenRef.current += 1;
+          const token = chordTokenRef.current;
+          chordTimeoutRef.current = setTimeout(() => {
+            if (chordTokenRef.current !== token) return;
+            finishRecording(newCombos);
+          }, CHORD_TIMEOUT_MS);
+        } else {
+          chordTokenRef.current += 1;
+          finishRecording(newCombos);
+        }
+
+        return newCombos;
+      });
+    };
+
+    // A released modifier arrives as keyup, and the event's flags already exclude it.
+    const handleKeyUp = (e: KeyboardEvent) => {
+      setHeld(heldModifiers(e, isMac()));
     };
 
     const handleBlur = () => {
@@ -210,42 +282,55 @@ export function SettingsShortcutCapture({
       setRecording(false);
       setCapturedCombos([]);
       setChordStep("first");
+      setHeld([]);
+      setRejected(null);
       onCancel();
     };
 
     window.addEventListener("keydown", handler, { capture: true });
+    window.addEventListener("keyup", handleKeyUp, { capture: true });
     window.addEventListener("blur", handleBlur);
     return () => {
       window.removeEventListener("keydown", handler, { capture: true });
+      window.removeEventListener("keyup", handleKeyUp, { capture: true });
       window.removeEventListener("blur", handleBlur);
       clearChordTimeout();
       releaseCapture();
     };
-  }, [recording, clearChordTimeout, finishRecording, onCancel]);
+  }, [recording, singleStroke, clearChordTimeout, finishRecording, onCancel]);
 
   // Land on Save once a combo is in, so Enter commits it; a combo that fails
   // validation has no Save to land on and keeps focus where it was.
+  // A capture that cannot be saved as it stands (unchanged, or still bound elsewhere)
+  // lands on the control that moves it forward instead of on a disabled Save.
   useEffect(() => {
-    if (chordStep !== "complete" || recording || compact) return;
-    saveRef.current?.focus();
-  }, [chordStep, recording, compact]);
+    if (chordStep !== "complete" || recording) return;
+    const target = canSave
+      ? saveRef.current
+      : blockingConflict
+        ? unbindRef.current
+        : recordAgainRef.current;
+    target?.focus();
+  }, [chordStep, recording, canSave, blockingConflict]);
 
   // The Edit button that opened the recorder unmounts with it, so focus moves to
   // the recorder itself rather than falling to the page.
   useEffect(() => {
-    if (!recording || compact) return;
+    if (!recording) return;
     recorderRef.current?.focus({ preventScroll: true });
-  }, [recording, compact]);
+  }, [recording]);
 
   const handleStartRecording = () => {
     previousDraftRef.current = capturedCombos;
     setCapturedCombos([]);
     setChordStep("first");
+    setHeld([]);
+    setRejected(null);
     setRecording(true);
   };
 
   const handleSave = () => {
-    if (capturedCombo && !validationError) {
+    if (canSave && capturedCombo) {
       clearChordTimeout();
       setRecording(false);
       onCapture(capturedCombo);
@@ -401,12 +486,8 @@ export function SettingsShortcutCapture({
     }
   };
 
-  const isChord = capturedCombos.length > 1;
-  // Recording the binding that is already in force changes nothing; saving it
-  // would still pin an override and mark the row modified.
-  const isUnchanged = !!capturedCombo && !!currentCombo && sameChord(capturedCombo, currentCombo);
-  const hasDraft = !recording && capturedCombo !== null;
-  const hasConflicts = !validationError && conflicts.length > 0;
+  const conflictNames = conflicts.map((conflict) => conflict.description || conflict.actionId);
+  const firstUnbindable = conflicts.find((conflict) => conflict.kind !== "shadowed");
   const describedBy =
     [validationError ? validationId : null, hasConflicts ? conflictsId : null]
       .filter(Boolean)
@@ -457,9 +538,21 @@ export function SettingsShortcutCapture({
                   <KbdChord shortcut={capturedCombos[0]} />
                   <span className="text-text-secondary">Press second key or wait to finish</span>
                 </span>
+              ) : held.length > 0 ? (
+                <span className="inline-flex items-center gap-2">
+                  <KbdChord shortcut={held.join("+")} foreground="primary" />
+                  <span className="text-text-secondary">Now press a key</span>
+                </span>
+              ) : rejected ? (
+                // The refused combo stays in view beside the reason below, and the
+                // recorder stays armed: the next press is the retry.
+                <span className="inline-flex items-center gap-2">
+                  <KbdChord shortcut={rejected} />
+                  <span className="text-text-secondary">Try again · Esc to cancel</span>
+                </span>
               ) : (
                 <span>
-                  Press a key combination
+                  {recordingHint ?? "Press a key combination"}
                   <span className="text-text-secondary"> · Esc to cancel</span>
                 </span>
               )}
@@ -475,6 +568,12 @@ export function SettingsShortcutCapture({
                 <span className="text-xs text-text-secondary">Already the current shortcut</span>
               ) : (
                 isChord && <span className="text-xs text-text-secondary">Two-step shortcut</span>
+              )}
+              {hasConflicts && (
+                <span className="sr-only">
+                  {blockingConflict ? "Already used by" : "Conflicts with"}{" "}
+                  {conflictNames.join(", ")}
+                </span>
               )}
             </div>
           ) : (
@@ -492,7 +591,13 @@ export function SettingsShortcutCapture({
           )}
         </div>
         {hasDraft && !compact && (
-          <Button type="button" variant="outline" size="sm" onClick={handleStartRecording}>
+          <Button
+            ref={recordAgainRef}
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleStartRecording}
+          >
             Record again
           </Button>
         )}
@@ -517,11 +622,11 @@ export function SettingsShortcutCapture({
               className="w-3.5 h-3.5 shrink-0 text-status-warning"
               aria-hidden="true"
             />
-            <span>Conflicts with</span>
+            <span>{blockingConflict ? "Already used by" : "Conflicts with"}</span>
           </p>
           <ul className="grid gap-1 pl-5">
-            {conflicts.map((conflict) => {
-              const name = conflict.description || conflict.actionId;
+            {conflicts.map((conflict, index) => {
+              const name = conflictNames[index]!;
               return (
                 <li key={conflict.actionId} className="flex items-center gap-2 min-h-7 text-sm">
                   <span className="min-w-0 truncate text-text-primary">{name}</span>
@@ -546,6 +651,7 @@ export function SettingsShortcutCapture({
                     </span>
                   ) : (
                     <Button
+                      ref={conflict === firstUnbindable ? unbindRef : undefined}
                       type="button"
                       variant="outline"
                       size="xs"
@@ -561,16 +667,35 @@ export function SettingsShortcutCapture({
               );
             })}
           </ul>
+          {blockingConflict && (
+            <p className="pl-5 text-xs text-text-secondary">
+              {conflicts.length > 1 ? "Unbind them" : "Unbind it"} to use this shortcut here
+            </p>
+          )}
         </div>
       )}
 
       <div className={cn("flex items-center justify-end", compact ? "gap-3" : "gap-2")}>
+        {hasDraft && compact && (
+          <Button
+            ref={recordAgainRef}
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="mr-auto"
+            onClick={handleStartRecording}
+          >
+            Record again
+          </Button>
+        )}
         <Button type="button" variant="ghost" size={compact ? "xs" : "sm"} onClick={handleCancel}>
           Cancel
         </Button>
-        {(compact || currentCombo !== "") && (
+        {/* Removes the binding in force, never just the draft, so it is only offered
+            when there is one to remove and says so in both hosts. */}
+        {currentCombo !== "" && (
           <Button type="button" variant="ghost" size={compact ? "xs" : "sm"} onClick={handleClear}>
-            {compact ? "Clear" : "Remove shortcut"}
+            {compact ? "Remove" : "Remove shortcut"}
           </Button>
         )}
         {capturedCombo && (
@@ -580,7 +705,7 @@ export function SettingsShortcutCapture({
             variant="contrast"
             size={compact ? "xs" : "sm"}
             onClick={handleSave}
-            disabled={Boolean(validationError) || isUnchanged}
+            disabled={!canSave}
             aria-describedby={describedBy}
           >
             Save

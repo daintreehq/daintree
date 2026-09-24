@@ -1223,6 +1223,7 @@ function shouldShowBandLabel(rows: ReadonlyArray<DockLaunchRow>, index: number):
 function DockLaunchCaptureRow({ row, onDone }: { row: DockLaunchRow; onDone: () => void }) {
   const item = row.kind === "item" ? row.item : undefined;
   const agent = item?.category === "agent" ? item.agent : undefined;
+  const currentCombo = useEffectiveCombo(agent ? `agent.${agent.id}` : "") ?? "";
 
   const handleShortcutSave = useCallback(
     async (combo: string) => {
@@ -1271,10 +1272,19 @@ function DockLaunchCaptureRow({ row, onDone }: { row: DockLaunchRow; onDone: () 
             <SquareTerminal className="h-3.5 w-3.5" />
           )}
         </span>
-        <span>Set shortcut for {agent.name}</span>
+        <span className="min-w-0 truncate">Set shortcut for {agent.name}</span>
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          <span>Current</span>
+          {currentCombo ? (
+            <KbdChord shortcut={currentCombo} density="bare" foreground="primary" />
+          ) : (
+            <span>Not set</span>
+          )}
+        </span>
       </div>
       <AgentShortcutCapture
         agentId={agentId}
+        currentCombo={currentCombo}
         onCapture={(combo) => void handleShortcutSave(combo)}
         onCancel={onDone}
         compact

@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState, useCallback } from "react";
-import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { useEffectiveCombo, useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { useTabLoad } from "@/hooks";
 import { getAgentIds, getAgentConfig, getMergedPresets, type AgentPreset } from "@/config/agents";
 import { useAgentSettingsStore, useCliAvailabilityStore, useAgentPreferencesStore } from "@/store";
@@ -33,6 +33,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AgentInventorySection } from "./AgentInventorySection";
 import { isAgentLaunchable, isAgentReady } from "../../../shared/utils/agentAvailability";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
+import { KbdChord } from "@/components/ui/Kbd";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
 import type { DefaultAgentId } from "@/store/agentPreferencesStore";
@@ -43,9 +44,24 @@ const NO_DEFAULT_AGENT = "__none__";
 
 function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; agentName: string }) {
   const actionId = `agent.${agentId}`;
-  const displayCombo = useKeybindingDisplay(actionId);
+  const currentCombo = useEffectiveCombo(actionId) ?? "";
   const [isEditing, setIsEditing] = useState(false);
   const [isOverridden, setIsOverridden] = useState(() => keybindingService.hasOverride(actionId));
+  const editRef = useRef<HTMLButtonElement>(null);
+  // The Change button unmounted with the row's rest state; closing the recorder
+  // hands focus back to it rather than letting it fall to the dialog.
+  const restoreFocusRef = useRef(false);
+
+  const closeEditor = useCallback(() => {
+    restoreFocusRef.current = true;
+    setIsEditing(false);
+  }, []);
+
+  useEffect(() => {
+    if (isEditing || !restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    editRef.current?.focus();
+  }, [isEditing]);
 
   useEffect(() => {
     const update = () => setIsOverridden(keybindingService.hasOverride(actionId));
@@ -75,9 +91,9 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
         });
         return;
       }
-      setIsEditing(false);
+      closeEditor();
     },
-    [actionId]
+    [actionId, closeEditor]
   );
 
   const handleReset = useCallback(async () => {
@@ -113,28 +129,27 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
         isEditing ? (
           <AgentShortcutCapture
             agentId={agentId}
+            currentCombo={currentCombo}
             onCapture={(combo) => void handleSave(combo)}
-            onCancel={() => setIsEditing(false)}
+            onCancel={closeEditor}
           />
         ) : (
-          <div className="flex items-center gap-2" data-testid={`agent-shortcut-row-${agentId}`}>
-            {displayCombo ? (
-              <span
-                data-testid={`agent-shortcut-pill-${agentId}`}
-                className="px-2 py-0.5 text-xs font-mono rounded-[var(--radius-sm)] bg-overlay-subtle border border-border-default text-text-primary"
-              >
-                {displayCombo}
+          <div className="flex items-center gap-3" data-testid={`agent-shortcut-row-${agentId}`}>
+            {currentCombo ? (
+              <span data-testid={`agent-shortcut-pill-${agentId}`}>
+                <KbdChord shortcut={currentCombo} density="bare" foreground="primary" />
               </span>
             ) : (
               <span className="text-xs text-text-secondary">Not set</span>
             )}
             <Button
+              ref={editRef}
               size="sm"
               variant="outline"
               onClick={() => setIsEditing(true)}
               data-testid={`agent-shortcut-edit-${agentId}`}
             >
-              {displayCombo ? "Change" : "Assign"}
+              {currentCombo ? "Change" : "Assign"}
             </Button>
           </div>
         )
