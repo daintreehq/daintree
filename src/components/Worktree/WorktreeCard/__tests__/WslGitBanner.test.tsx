@@ -76,6 +76,20 @@ describe("WslGitBanner", () => {
     }
   );
 
+  it("keeps a press on a loading or disabled button from reaching the card", async () => {
+    client.setWslGit.mockReturnValue(new Promise(() => {}));
+    const onCardClick = vi.fn();
+    render(<Host eligibility="eligible" onCardClick={onCardClick} />);
+    const [enable, dismiss] = banner().querySelectorAll("button");
+    fireEvent.click(enable!);
+    await flush();
+    expect(onCardClick).not.toHaveBeenCalled();
+    // Both are now pointer-events-none, so a real pointer lands on their row.
+    fireEvent.click(enable!.parentElement!);
+    fireEvent.click(dismiss!);
+    expect(onCardClick).not.toHaveBeenCalled();
+  });
+
   it("is not itself a live region, so a notice present at mount is not announced", () => {
     render(<Host eligibility="eligible" />);
     expect(banner().getAttribute("role")).toBeNull();
@@ -161,5 +175,38 @@ describe("WslGitBanner", () => {
     await flush();
     await flush();
     expect(liveRegion()?.textContent).not.toBe("");
+  });
+
+  it("keeps the held answer through a slow re-check instead of collapsing to a skeleton", async () => {
+    vi.useFakeTimers();
+    const { rerender } = render(<Host eligibility="ineligible" />);
+    fireEvent.click(screen.getByRole("button", { name: "Re-check" }));
+    await flush();
+    rerender(<Host eligibility="unprobed" />);
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(banner().getAttribute("data-state")).toBe("ineligible");
+    expect(screen.getByRole("button", { name: "Re-check" })).toBeTruthy();
+  });
+
+  it("retires a no-answer result once a late answer arrives", async () => {
+    vi.useFakeTimers();
+    const { rerender } = render(<Host eligibility="unprobed" />);
+    await act(async () => {
+      vi.advanceTimersByTime(6000);
+    });
+    fireEvent.click(banner().querySelector("button")!);
+    await flush();
+    await act(async () => {
+      vi.advanceTimersByTime(WSL_RECHECK_WINDOW_MS);
+    });
+    expect(liveRegion()?.textContent).not.toBe("");
+    rerender(<Host eligibility="ineligible" />);
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(banner().getAttribute("data-state")).toBe("ineligible");
+    expect(liveRegion()?.textContent).toBe("");
   });
 });

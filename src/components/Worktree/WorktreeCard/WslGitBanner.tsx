@@ -29,7 +29,8 @@ export const WSL_RECHECK_WINDOW_MS = 6500;
 type RecheckState =
   | { phase: "idle" }
   | { phase: "running"; from: WslGitEligibility; sawPending: boolean }
-  | { phase: "done"; outcome: "unchanged" | "no-answer" | "failed" };
+  // `at` is the eligibility the outcome describes; a later snapshot retires it.
+  | { phase: "done"; outcome: "unchanged" | "no-answer" | "failed"; at: WslGitEligibility };
 
 type ActionError = "enable" | "dismiss" | null;
 
@@ -71,10 +72,16 @@ export const WslGitBanner = React.memo(function WslGitBanner({
   const probePending = eligibility === "unprobed";
   const probeStuck = useDeferredLoading(probePending, WSL_PROBE_STUCK_MS);
   const showStuck = shown === "unprobed" && (probeStuck || recheck.phase !== "idle");
-  const skeletonGate = useDeferredLoading(probePending && !showStuck, UI_DOHERTY_THRESHOLD);
+  const skeletonGate = useDeferredLoading(shown === "unprobed" && !showStuck, UI_DOHERTY_THRESHOLD);
+  // The floor can outlive the gate by a few hundred ms after an answer lands;
+  // the skeleton holds the render for that long rather than tearing down.
   const showSkeleton = useSkeletonDisplayFloor(skeletonGate) && !showStuck;
 
   useEffect(() => {
+    if (recheck.phase === "done") {
+      if (eligibility !== recheck.at) setRecheck({ phase: "idle" });
+      return;
+    }
     if (recheck.phase !== "running") return;
     if (eligibility === "unprobed") {
       if (!recheck.sawPending) setRecheck({ ...recheck, sawPending: true });
@@ -83,7 +90,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
     if (eligibility !== recheck.from) {
       setRecheck({ phase: "idle" });
     } else if (recheck.sawPending) {
-      setRecheck({ phase: "done", outcome: "unchanged" });
+      setRecheck({ phase: "done", outcome: "unchanged", at: eligibility });
     }
   }, [eligibility, recheck]);
 
@@ -91,7 +98,11 @@ export const WslGitBanner = React.memo(function WslGitBanner({
     if (!rechecking) return;
     const timer = setTimeout(() => {
       setRecheck((prev) =>
-        prev.phase === "running" ? { phase: "done", outcome: "no-answer" } : prev
+        // Had the snapshot moved anywhere but `unprobed`, the run would already
+        // have ended, so this is the value the banner is showing right now.
+        prev.phase === "running"
+          ? { phase: "done", outcome: "no-answer", at: prev.sawPending ? "unprobed" : prev.from }
+          : prev
       );
     }, WSL_RECHECK_WINDOW_MS);
     return () => clearTimeout(timer);
@@ -112,71 +123,57 @@ export const WslGitBanner = React.memo(function WslGitBanner({
     };
   }, [root]);
 
-  // The card selects its worktree on any click that reaches it, so every
-  // control here stops propagation (card convention, #10319 / #12087).
   // Promise-method cleanup instead of try/finally: statement-level finally
   // clauses bail React Compiler memoization for the whole component.
-  const handleEnable = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      if (busy) return;
-      setBusy("enable");
-      setActionError(null);
-      worktreeConfigClient
-        .setWslGit(worktreeId, true)
-        .catch((err) => {
-          logError("Failed to enable WSL git for worktree", err, { worktreeId });
-          setActionError("enable");
-        })
-        .finally(() => {
-          setBusy(null);
-        });
-    },
-    [worktreeId, busy]
-  );
-
-  const handleDismiss = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      if (busy) return;
-      setBusy("dismiss");
-      setActionError(null);
-      worktreeConfigClient
-        .dismissWslBanner(worktreeId)
-        .catch((err) => {
-          logError("Failed to dismiss WSL git banner", err, { worktreeId });
-          setActionError("dismiss");
-        })
-        .finally(() => {
-          setBusy(null);
-        });
-    },
-    [worktreeId, busy]
-  );
-
-  const handleRecheck = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      if (rechecking) return;
-      setActionError(null);
-      setRecheck({ phase: "running", from: eligibility, sawPending: false });
-      worktreeConfigClient.reprobeWsl(worktreeId).catch((err) => {
-        logError("Failed to re-check WSL distro for worktree", err, { worktreeId });
-        setRecheck({ phase: "done", outcome: "failed" });
+  const handleEnable = useCallback(() => {
+    if (busy) return;
+    setBusy("enable");
+    setActionError(null);
+    worktreeConfigClient
+      .setWslGit(worktreeId, true)
+      .catch((err) => {
+        logError("Failed to enable WSL git for worktree", err, { worktreeId });
+        setActionError("enable");
+      })
+      .finally(() => {
+        setBusy(null);
       });
-    },
-    [worktreeId, rechecking, eligibility]
-  );
+  }, [worktreeId, busy]);
+
+  const handleDismiss = useCallback(() => {
+    if (busy) return;
+    setBusy("dismiss");
+    setActionError(null);
+    worktreeConfigClient
+      .dismissWslBanner(worktreeId)
+      .catch((err) => {
+        logError("Failed to dismiss WSL git banner", err, { worktreeId });
+        setActionError("dismiss");
+      })
+      .finally(() => {
+        setBusy(null);
+      });
+  }, [worktreeId, busy]);
+
+  const handleRecheck = useCallback(() => {
+    if (rechecking) return;
+    setActionError(null);
+    setRecheck({ phase: "running", from: eligibility, sawPending: false });
+    worktreeConfigClient.reprobeWsl(worktreeId).catch((err) => {
+      logError("Failed to re-check WSL distro for worktree", err, { worktreeId });
+      setRecheck({ phase: "done", outcome: "failed", at: eligibility });
+    });
+  }, [worktreeId, rechecking, eligibility]);
 
   if (shown === "unprobed" && !showStuck && !showSkeleton) return null;
 
-  const view = shown === "unprobed" ? (showStuck ? "stuck" : "probing") : shown;
+  const view = showSkeleton ? "probing" : shown === "unprobed" ? "stuck" : shown;
 
   let result: string | null = null;
-  if (actionError === "enable") result = "Couldn't enable WSL git. Try again.";
-  else if (actionError === "dismiss") result = "Couldn't hide this. Try again.";
-  else if (recheck.phase === "done" && view !== "eligible") {
-    if (recheck.outcome === "failed") result = "Couldn't re-check. Try again.";
+  if (actionError === "enable") result = "Couldn't enable WSL git.";
+  else if (actionError === "dismiss") result = "Couldn't hide this.";
+  else if (recheck.phase === "done" && recheck.at === eligibility) {
+    if (recheck.outcome === "failed") result = "Couldn't re-check.";
     else if (recheck.outcome === "no-answer") result = "WSL didn't answer.";
     else if (view === "ineligible") result = "Checked. Still not the default distro.";
   }
@@ -192,14 +189,22 @@ export const WslGitBanner = React.memo(function WslGitBanner({
       className="mb-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-border-default bg-overlay-subtle p-3 text-xs"
     >
       {view === "probing" ? (
-        <Skeleton label="Checking WSL distro" className="flex min-w-0 flex-1 flex-col gap-2">
-          <div className="flex flex-col gap-1.5">
-            <SkeletonBone className="h-3.5 w-1/2" />
-            <SkeletonBone className="h-3 w-full" />
-            <SkeletonBone className="h-3 w-3/4" />
-          </div>
-          <SkeletonBone className="h-7 w-24" />
-        </Skeleton>
+        // Inert: every WSL card probes at once, and a status region per card
+        // would announce the same wait once for each of them.
+        <>
+          <span className="sr-only">Checking WSL distro</span>
+          <Skeleton inert className="flex min-w-0 flex-1 gap-2">
+            <SkeletonBone className="my-px h-3.5 w-3.5 shrink-0" />
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <div className="flex flex-col gap-0.5">
+                <SkeletonBone className="my-0.5 h-3 w-1/2" />
+                <SkeletonBone className="my-0.5 h-3 w-full" />
+                <SkeletonBone className="my-0.5 h-3 w-2/3" />
+              </div>
+              <SkeletonBone className="h-7 w-28" />
+            </div>
+          </Skeleton>
+        </>
       ) : (
         <>
           {view === "eligible" ? (
@@ -219,24 +224,29 @@ export const WslGitBanner = React.memo(function WslGitBanner({
               <span className="text-text-secondary">
                 {view === "eligible" ? (
                   <>
-                    It lives in WSL, so git is slow when it runs from Windows. Running it inside{" "}
-                    {distro ?? "WSL"} makes status checks{" "}
-                    <span className="whitespace-nowrap">5–10×</span> faster.
+                    Git runs from Windows here. Running it inside {distro ?? "WSL"} instead makes
+                    status checks <span className="whitespace-nowrap">5–10×</span> faster.
                   </>
                 ) : view === "ineligible" ? (
                   <>
                     {distro ?? "This worktree's distro"} isn't your default WSL distro, so git can't
-                    run inside it and status checks may be slower.
+                    run inside it.
                   </>
                 ) : (
                   "Git runs from Windows for now, which may be slower."
                 )}
               </span>
             </div>
-            <p role="status" aria-live="polite" className="text-text-secondary empty:hidden">
-              {result}
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
+            {result && (
+              <p aria-hidden="true" className="text-text-secondary">
+                {result}
+              </p>
+            )}
+            {/* The card selects its worktree on any click that reaches it
+                (#10319 / #12087). Guarding the row rather than each handler
+                also covers a press on a loading or disabled button, which is
+                pointer-events-none and lets the click land here instead. */}
+            <div className="flex flex-wrap items-center gap-2" onClick={(e) => e.stopPropagation()}>
               {view === "eligible" ? (
                 <Button
                   size="sm"
@@ -265,6 +275,11 @@ export const WslGitBanner = React.memo(function WslGitBanner({
           </div>
         </>
       )}
+      {/* Always mounted and never display:none, so it is in the accessibility
+          tree before a result is written into it. */}
+      <span role="status" aria-live="polite" className="sr-only">
+        {result}
+      </span>
     </div>
   );
 });
