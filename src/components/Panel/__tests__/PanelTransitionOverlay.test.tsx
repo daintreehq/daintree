@@ -23,9 +23,13 @@ const sourceRect: TransitionRect = { x: 100, y: 100, width: 400, height: 300 };
 const targetRect: TransitionRect = { x: 50, y: 500, width: 80, height: 40 };
 
 class FakeEffect {
+  progress = 0;
   constructor(public keyframes: Keyframe[]) {}
   setKeyframes(keyframes: Keyframe[]) {
     this.keyframes = keyframes;
+  }
+  getComputedTiming() {
+    return { progress: this.progress };
   }
 }
 
@@ -88,6 +92,16 @@ function boxOf(keyframe: Keyframe) {
     width: keyframe.width,
     height: keyframe.height,
   };
+}
+
+/** Where a two-keyframe box animation puts the ghost at eased `progress`. */
+function boxAt(keyframes: Keyframe[], progress: number) {
+  const a = keyframes[0]!;
+  const b = keyframes[keyframes.length - 1]!;
+  const at = (key: "left" | "top" | "width" | "height") =>
+    parseFloat(String(a[key])) +
+    (parseFloat(String(b[key])) - parseFloat(String(a[key]))) * progress;
+  return { left: at("left"), top: at("top"), width: at("width"), height: at("height") };
 }
 
 function fire(direction: TransitionDirection, target: TransitionTarget) {
@@ -256,9 +270,23 @@ describe("PanelTransitionOverlay", () => {
     current = { ...targetRect, x: targetRect.x + 240 };
     runFrames(1);
     const keyframes = flight.effect.keyframes;
-    expect(boxOf(keyframes[0]!)).toEqual(box(sourceRect));
     expect(boxOf(keyframes[keyframes.length - 1]!)).toEqual(box(current));
     expect(animations.filter(isGeometry)).toHaveLength(1);
+  });
+
+  it("re-aims from where the ghost is, so a moving destination never makes it jump", () => {
+    render(<PanelTransitionOverlay />);
+    let current = targetRect;
+    fire("minimize", () => current);
+    const flight = geometry();
+    flight.effect.progress = 0.6;
+    const before = boxAt(flight.effect.keyframes, 0.6);
+    current = { ...targetRect, x: targetRect.x + 240 };
+    runFrames(1);
+    const after = boxAt(flight.effect.keyframes, 0.6);
+    for (const key of ["left", "top", "width", "height"] as const) {
+      expect(after[key]).toBeCloseTo(before[key], 6);
+    }
   });
 
   it("calls a flight off when its destination disappears mid-flight", async () => {
@@ -276,17 +304,35 @@ describe("PanelTransitionOverlay", () => {
     expect(onComplete).not.toHaveBeenCalled();
   });
 
-  it("marks the chip that receives a minimized pane, adding to its own shadow", () => {
-    render(<PanelTransitionOverlay />);
-    const chip = elementAt(targetRect);
-    fire("minimize", () => chip);
-    const cue = animations.find((a) => a.target === chip);
-    expect(cue).toBeDefined();
-    expect(cue!.options.composite).toBe("add");
-    const shadows = cue!.effect.keyframes.map((k) => String(k.boxShadow));
-    expect(shadows[0]).toContain("transparent");
-    expect(shadows[shadows.length - 1]).toContain("transparent");
-    expect(shadows.some((s) => !s.includes("transparent"))).toBe(true);
+  it("draws a receiving cue on the chip a minimized pane became, as a real border", () => {
+    const { container } = render(<PanelTransitionOverlay />);
+    fire("minimize", targetRect);
+    const cue = container.querySelector<HTMLElement>("[data-panel-transition-cue]")!;
+    expect(cue).not.toBeNull();
+    expect({
+      left: cue.style.left,
+      top: cue.style.top,
+      width: cue.style.width,
+      height: cue.style.height,
+    }).toEqual(box(targetRect));
+    // Forced colors drops box-shadow; a border is what survives there.
+    expect(cue.className.split(/\s+/)).toContain("border");
+    const stops = opacityTrack(cue);
+    expect(stops[0]!.opacity).toBe(0);
+    expect(stops[stops.length - 1]!.opacity).toBe(0);
+    expect(Math.max(...stops.map((s) => s.opacity))).toBe(1);
+    const track = animations.find((a) => a.target === cue)!;
+    expect(track.effect.keyframes.some((k) => k.boxShadow !== undefined)).toBe(false);
+  });
+
+  it("keeps the receiving cue on the chip if the chip moves", () => {
+    const { container } = render(<PanelTransitionOverlay />);
+    let current = targetRect;
+    fire("minimize", () => current);
+    current = { ...targetRect, x: targetRect.x + 240 };
+    runFrames(1);
+    const cue = container.querySelector<HTMLElement>("[data-panel-transition-cue]")!;
+    expect(cue.style.left).toBe(px(current.x));
   });
 
   it("lands with the destination's own corner radius", () => {
@@ -299,10 +345,9 @@ describe("PanelTransitionOverlay", () => {
   });
 
   it("does not mark the grid pane a restore lands on", () => {
-    render(<PanelTransitionOverlay />);
-    const pane = elementAt(targetRect);
-    fire("restore", () => pane);
-    expect(animations.some((a) => a.target === pane)).toBe(false);
+    const { container } = render(<PanelTransitionOverlay />);
+    fire("restore", targetRect);
+    expect(container.querySelector("[data-panel-transition-cue]")).toBeNull();
   });
 
   it("stays on screen for the whole flight and completes from the animation itself", async () => {
@@ -318,6 +363,12 @@ describe("PanelTransitionOverlay", () => {
     await act(async () => {
       geometry().finish();
       await geometry().finished;
+    });
+    // The receiving cue outlives the ghost's flight; the overlay waits for it.
+    expect(onComplete).not.toHaveBeenCalled();
+    await act(async () => {
+      for (const animation of animations) animation.finish();
+      await Promise.all(animations.map((a) => a.finished));
     });
     expect(ghost(container)).toBeNull();
     expect(onComplete).toHaveBeenCalledWith("panel-1");

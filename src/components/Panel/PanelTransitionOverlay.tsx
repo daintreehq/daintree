@@ -86,10 +86,17 @@ const TITLE_OPACITY: Partial<Record<TransitionDirection, Stops>> = {
   ],
 };
 
-// Inset, so the hairline follows the chip's own radius and cannot be clipped by
-// the rail it sits in.
-const RECEIVING_CUE_SHADOW = "inset 0 0 0 1px var(--color-border-strong)";
-const NO_CUE_SHADOW = "inset 0 0 0 1px transparent";
+/**
+ * The receiving cue's opacity across the flight plus one state-change tier: it
+ * rises while the ghost is still on its way, holds through the arrival, and
+ * fades once the ghost has gone. Offsets are fractions of the flight, rescaled
+ * onto the cue's longer clock when it is armed.
+ */
+const CUE_STOPS_IN_FLIGHT: Stops = [
+  [0, 0],
+  [0.5, 1],
+  [1, 1],
+];
 
 type TransitionListener = (transition: TransitionState) => void;
 const listeners = new Set<TransitionListener>();
@@ -188,7 +195,6 @@ function toBox(rect: TransitionRect) {
 
 interface Resolved {
   rect: TransitionRect;
-  element: Element | null;
   /** The destination's own corner radius, so the ghost lands with its shape. */
   radius: string | null;
 }
@@ -200,15 +206,38 @@ function resolveTarget(target: TransitionTarget): Resolved | null {
     const { x, y, width, height } = value.getBoundingClientRect();
     const rect = { x, y, width, height };
     const radius = getComputedStyle(value).borderTopLeftRadius || null;
-    return hasArea(rect) ? { rect, element: value, radius } : null;
+    return hasArea(rect) ? { rect, radius } : null;
   }
-  return hasArea(value) ? { rect: value, element: null, radius: null } : null;
+  return hasArea(value) ? { rect: value, radius: null } : null;
 }
 
-function landing(resolved: Resolved) {
-  return resolved.radius
-    ? { ...toBox(resolved.rect), borderRadius: resolved.radius }
-    : toBox(resolved.rect);
+function withRadius(rect: TransitionRect, radius: string | null) {
+  return radius ? { ...toBox(rect), borderRadius: radius } : toBox(rect);
+}
+
+/**
+ * The start box that puts a straight [start, end] flight at `current` when
+ * `progress` of the way there. Re-aiming with it keeps the ghost where it is on
+ * screen and bends the rest of its path to the new end, on the same curve and
+ * the same deadline.
+ */
+function reanchor(current: TransitionRect, end: TransitionRect, progress: number): TransitionRect {
+  const solve = (c: number, e: number) => (c - e * progress) / (1 - progress);
+  return {
+    x: solve(current.x, end.x),
+    y: solve(current.y, end.y),
+    width: solve(current.width, end.width),
+    height: solve(current.height, end.height),
+  };
+}
+
+function lerpRect(a: TransitionRect, b: TransitionRect, t: number): TransitionRect {
+  return {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    width: a.width + (b.width - a.width) * t,
+    height: a.height + (b.height - a.height) * t,
+  };
 }
 
 function sameRect(a: TransitionRect, b: TransitionRect): boolean {
@@ -224,6 +253,7 @@ function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
   const { key, id, direction, sourceRect, target, title } = transition;
   const elementRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLDivElement>(null);
+  const cueRef = useRef<HTMLDivElement>(null);
 
   // Layout effect, not a passive one: the flight is armed before the first
   // paint, so the ghost is never seen at a size it was not meant to have.
@@ -235,57 +265,56 @@ function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
     const easing = direction === "minimize" ? PANEL_MINIMIZE_EASING : PANEL_RESTORE_EASING;
     // The ghost starts with its own (the pane's) radius; spelled out so a
     // landing radius has something to interpolate from.
-    const from = {
-      ...toBox(sourceRect),
-      borderRadius: getComputedStyle(element).borderTopLeftRadius,
-    };
+    const startRadius = getComputedStyle(element).borderTopLeftRadius;
+    let start = sourceRect;
+    let end = sourceRect;
+    let endRadius: string | null = null;
     let frame = 0;
     let fallback: ReturnType<typeof setTimeout> | undefined;
-    let flight: Animation[] = [];
+    let animations: Animation[] = [];
     let geometry: Animation | null = null;
-    let cue: Animation | null = null;
     let settled = false;
 
     const settle = (landed: boolean) => {
       if (settled) return;
       settled = true;
       cancelAnimationFrame(frame);
-      if (!landed) cue?.cancel();
       onDone(key, id, landed);
     };
 
-    const markReceiver = (receiver: Element) => {
-      // The chip snaps in before the ghost gets there; a neutral hairline around
-      // it through the arrival names the exact destination before the ghost is
-      // gone. Added to whatever shadow the chip already has, never replacing it.
-      const total = duration + UI_ANIMATION_DURATION;
-      cue = receiver.animate(
-        [
-          { offset: 0, boxShadow: NO_CUE_SHADOW },
-          { offset: (duration * 0.5) / total, boxShadow: RECEIVING_CUE_SHADOW },
-          { offset: duration / total, boxShadow: RECEIVING_CUE_SHADOW },
-          { offset: 1, boxShadow: NO_CUE_SHADOW },
-        ],
-        { duration: total, easing: "linear", composite: "add" }
-      );
-      cue.id = PANEL_TRANSITION_ANIMATION_ID;
+    const placeCue = (rect: TransitionRect, radius: string | null) => {
+      const cue = cueRef.current;
+      if (!cue) return;
+      Object.assign(cue.style, toBox(rect), radius ? { borderRadius: radius } : {});
     };
 
-    const track = (last: TransitionRect) => {
+    const track = () => {
       frame = requestAnimationFrame(() => {
         if (settled || !geometry) return;
         const next = resolveTarget(target);
         if (!next) {
-          flight.forEach((animation) => animation.cancel());
+          animations.forEach((animation) => animation.cancel());
           return;
         }
+        placeCue(next.rect, next.radius);
         const effect = geometry.effect;
-        if (!sameRect(next.rect, last) && effect instanceof KeyframeEffect) {
-          // Re-aim without restarting the clock; the ghost bends toward the new
-          // spot instead of snapping back to the start.
-          effect.setKeyframes([from, landing(next)]);
+        const progress = effect?.getComputedTiming().progress;
+        if (
+          !sameRect(next.rect, end) &&
+          effect instanceof KeyframeEffect &&
+          typeof progress === "number" &&
+          progress < 1
+        ) {
+          // Re-aim without restarting the clock or moving the ghost: solve for
+          // the start that puts the new path through where it is right now.
+          start = reanchor(lerpRect(start, end, progress), next.rect, progress);
+          end = next.rect;
+          effect.setKeyframes([
+            withRadius(start, startRadius),
+            withRadius(end, next.radius ?? endRadius),
+          ]);
         }
-        track(next.rect);
+        track();
       });
     };
 
@@ -300,57 +329,93 @@ function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
         }
         return;
       }
+      end = resolved.rect;
+      endRadius = resolved.radius;
       const timing = { duration, fill: "both" as const };
-      geometry = element.animate([from, landing(resolved)], { ...timing, easing });
-      flight = [
+      geometry = element.animate([withRadius(start, startRadius), withRadius(end, endRadius)], {
+        ...timing,
+        easing,
+      });
+      animations = [
         geometry,
         element.animate(toStops(CONTAINER_OPACITY[direction]), { ...timing, easing: "linear" }),
       ];
       const titleStops = TITLE_OPACITY[direction];
       if (titleStops && titleRef.current) {
-        flight.push(titleRef.current.animate(toStops(titleStops), { ...timing, easing: "linear" }));
+        animations.push(
+          titleRef.current.animate(toStops(titleStops), { ...timing, easing: "linear" })
+        );
       }
-      for (const animation of flight) animation.id = PANEL_TRANSITION_ANIMATION_ID;
-      if (direction === "minimize" && resolved.element) markReceiver(resolved.element);
+      // A minimized pane becomes a chip the ghost only reaches as it dissolves,
+      // so a hairline on the chip names the exact destination before the ghost
+      // is gone. It is drawn here rather than on the chip, as a real border, so
+      // it survives forced colors and never touches the chip's own styling.
+      let total = duration;
+      if (direction === "minimize" && cueRef.current) {
+        total = duration + UI_ANIMATION_DURATION;
+        placeCue(end, endRadius);
+        animations.push(
+          cueRef.current.animate(
+            [
+              ...CUE_STOPS_IN_FLIGHT.map(([offset, opacity]) => ({
+                offset: (offset * duration) / total,
+                opacity,
+              })),
+              { offset: 1, opacity: 0 },
+            ],
+            { duration: total, easing: "linear", fill: "both" }
+          )
+        );
+      }
+      for (const animation of animations) animation.id = PANEL_TRANSITION_ANIMATION_ID;
 
-      geometry.finished.then(
+      geometry.finished.catch(() => settle(false));
+      Promise.all(animations.map((animation) => animation.finished)).then(
         () => settle(true),
         () => settle(false)
       );
       // Belt and braces: a finished promise that never settles (a detached
       // element, a throttled background window) must not strand the ghost.
-      fallback = setTimeout(() => settle(true), duration * 2);
-      track(resolved.rect);
+      fallback = setTimeout(() => settle(true), total * 2);
+      track();
     };
     launch();
 
     return () => {
       // Torn down, not finished: whoever re-runs or unmounts this effect owns
       // what happens next, so the cancellations below must not report back.
-      const interrupted = !settled;
       settled = true;
       cancelAnimationFrame(frame);
       if (fallback) clearTimeout(fallback);
-      flight.forEach((animation) => animation.cancel());
-      if (interrupted) cue?.cancel();
+      animations.forEach((animation) => animation.cancel());
     };
   }, [key, id, direction, sourceRect, target, onDone]);
 
   return (
-    <div
-      ref={elementRef}
-      data-panel-transition-ghost={direction}
-      className="absolute flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-border-strong bg-surface-panel shadow-overlay"
-      // Parked at the source and invisible until the flight is armed, so a
-      // flight that never finds its target is never seen at all.
-      style={{ ...toBox(sourceRect), opacity: 0 }}
-    >
+    <>
       <div
-        ref={titleRef}
-        className="flex h-full max-h-8 shrink-0 items-center border-b border-divider px-3"
+        ref={elementRef}
+        data-panel-transition-ghost={direction}
+        className="absolute flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-border-strong bg-surface-panel shadow-overlay"
+        // Parked at the source and invisible until the flight is armed, so a
+        // flight that never finds its target is never seen at all.
+        style={{ ...toBox(sourceRect), opacity: 0 }}
       >
-        <span className="truncate text-xs text-text-secondary">{title}</span>
+        <div
+          ref={titleRef}
+          className="flex h-full max-h-8 shrink-0 items-center border-b border-divider px-3"
+        >
+          <span className="truncate text-xs text-text-secondary">{title}</span>
+        </div>
       </div>
-    </div>
+      {direction === "minimize" && (
+        <div
+          ref={cueRef}
+          data-panel-transition-cue
+          className="absolute rounded-[var(--radius-md)] border border-text-secondary"
+          style={{ opacity: 0 }}
+        />
+      )}
+    </>
   );
 }

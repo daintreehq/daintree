@@ -156,11 +156,9 @@ function freeze(progress: number): number {
   const animations = document
     .getAnimations()
     .filter((a) => a.id === PANEL_TRANSITION_ANIMATION_ID && a.effect);
-  const flight = Math.max(
-    0,
-    ...animations
-      .filter((a) => a.effect?.getComputedTiming().fill === "both")
-      .map((a) => Number(a.effect?.getComputedTiming().endTime ?? 0))
+  // The flight is the shortest clock; the receiving cue runs past it.
+  const flight = Math.min(
+    ...animations.map((a) => Number(a.effect?.getComputedTiming().endTime ?? Infinity))
   );
   for (const a of animations) {
     a.pause();

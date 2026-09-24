@@ -26,7 +26,8 @@
  *
  * Output: `<fixture>-<theme>-<frame>.png`, where frame is `before`, `t30`, `t60`,
  * `t90` (percent of the flight) or `after` (the dock at rest once the flight ends);
- * plus `restore-<theme>-<frame>.png` for a dock chip flying back into the grid.
+ * plus `restore-<theme>-<frame>.png` for a dock chip flying back into the grid, and one
+ * forced-colors minimize frame.
  * Never writes a PNG it has not verified, and counts the files itself.
  */
 
@@ -248,6 +249,17 @@ test("panel transition — minimize flight, every theme", async ({ context }) =>
     );
   };
 
+  // Forced colors drops box-shadow and remaps colours; the ghost and the chip's
+  // receiving cue must both still read there.
+  written.push(
+    await withPage(context, "few forced-colors t90", async (page) => {
+      await page.emulateMedia({ forcedColors: "active" });
+      await load(page, "few", THEMES[0]!);
+      await flyTo(page, 0.9);
+      return snap(page.locator("body"), `few-${THEMES[0]!}-t90-forced.png`);
+    })
+  );
+
   for (const theme of THEMES) await shoot("few", theme);
   await shoot("busy", THEMES[0]!);
   for (const theme of RESTORE_THEMES.filter((t) => THEMES.includes(t))) await shootRestore(theme);
@@ -256,7 +268,7 @@ test("panel transition — minimize flight, every theme", async ({ context }) =>
   expect(onDisk.length).toBe(written.length);
   const restoreThemes = RESTORE_THEMES.filter((t) => THEMES.includes(t)).length;
   expect(onDisk.length).toBe(
-    (THEMES.length + 1) * (FRAMES.length + 2) + restoreThemes * (FRAMES.length + 1)
+    (THEMES.length + 1) * (FRAMES.length + 2) + restoreThemes * (FRAMES.length + 1) + 1
   );
   console.log(`[transition-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });
