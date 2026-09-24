@@ -479,18 +479,21 @@ export async function openSettings(page: Page, timeout = 10000): Promise<void> {
   await page.keyboard.press(`${mod}+,`);
   try {
     await heading.waitFor({ state: "visible", timeout: Math.min(timeout, shortcutTimeout) });
-    return;
   } catch {
-    // Shortcut may not have registered — try clicking the toolbar button
+    // Shortcut may not have registered — try clicking the toolbar button.
+    if (!(await heading.isVisible({ timeout: 1000 }).catch(() => false))) {
+      await clickToolbarButton(page, SEL.toolbar.openSettings);
+      await heading.waitFor({ state: "visible", timeout });
+    }
   }
 
-  if (await heading.isVisible({ timeout: 1000 }).catch(() => false)) {
-    return;
+  // Untargeted opens reset to Global scope in a React transition. The dialog
+  // can first paint its previous Project scope, then swap after this heading
+  // becomes visible; wait for that state before callers select a new scope.
+  const scopeTrigger = page.locator(SEL.settings.scopeControl);
+  if (await scopeTrigger.count()) {
+    await expect(scopeTrigger).toHaveText("Global settings", { timeout });
   }
-
-  // Fall back to clicking the settings button (handles overflow via menu)
-  await clickToolbarButton(page, SEL.toolbar.openSettings);
-  await heading.waitFor({ state: "visible", timeout });
 }
 
 /**

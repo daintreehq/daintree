@@ -384,9 +384,7 @@ test.describe.serial("Core: Settings Pages Load", () => {
     });
 
     await test.step("Open Worktree Setup tab and verify Resource Environments", async () => {
-      await window
-        .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
-        .click();
+      await window.locator(SEL.settings.projectAutomationTab).click();
 
       // The Resource Environments heading should appear (scoped to the automation panel)
       const automationPanel = window.locator("#settings-panel-project\\:automation");

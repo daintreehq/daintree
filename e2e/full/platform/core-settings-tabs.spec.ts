@@ -471,9 +471,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await window.waitForTimeout(T_SETTLE);
 
     // Navigate to Resources tab — scope everything to this panel
-    await window
-      .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
-      .click();
+    await window.locator(SEL.settings.projectAutomationTab).click();
     const panel = window.locator("#settings-panel-project\\:automation");
     await expect(panel.locator("h4", { hasText: "Resource environments" })).toBeVisible({
       timeout: T_SHORT,
@@ -557,9 +555,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
-    await window
-      .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
-      .click();
+    await window.locator(SEL.settings.projectAutomationTab).click();
     const panel = window.locator("#settings-panel-project\\:automation");
     await expect(panel.locator("h4", { hasText: "Resource environments" })).toBeVisible({
       timeout: T_MEDIUM,
@@ -586,9 +582,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
-    await window
-      .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
-      .click();
+    await window.locator(SEL.settings.projectAutomationTab).click();
     const panel = window.locator("#settings-panel-project\\:automation");
     await expect(panel.locator("h4", { hasText: "Resource environments" })).toBeVisible({
       timeout: T_SHORT,
@@ -653,9 +647,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
-    await window
-      .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
-      .click();
+    await window.locator(SEL.settings.projectAutomationTab).click();
     const panel = window.locator("#settings-panel-project\\:automation");
     await expect(panel.locator("h4", { hasText: "Resource environments" })).toBeVisible({
       timeout: T_SHORT,

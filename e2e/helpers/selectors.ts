@@ -31,6 +31,7 @@ export const SEL = {
     heading: 'h2:has-text("Settings")',
     closeButton: '[aria-label="Close settings"]',
     navSidebar: ".settings-sidebar",
+    projectAutomationTab: '.settings-sidebar [data-tab="project:automation"]',
     projectPulseToggle: '[aria-label="Project Pulse Toggle"]',
     performanceModeToggle: '[aria-label="Performance Mode Toggle"]',
     fontFamilySelect: '[role="radiogroup"][aria-label="Terminal font family"]',

@@ -235,7 +235,9 @@ test.describe.serial("Core: Focus Management", () => {
     });
 
     await test.step("Second Escape closes settings and restores terminal focus", async () => {
-      await window.locator(SEL.settings.heading).click({ force: true });
+      // Focus a dialog control without activating it. The scope heading is now a menu trigger,
+      // so clicking it would add another overlay for Escape to dismiss first.
+      await window.locator(SEL.settings.closeButton).focus();
       await window.keyboard.press("Escape");
       await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
 

@@ -91,7 +91,7 @@ async function navigateToResourcesTab(
 ): Promise<void> {
   await selectSettingsScope(window, "Project");
 
-  await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" }).click();
+  await window.locator(SEL.settings.projectAutomationTab).click();
   const panel = window.locator("#settings-panel-project\\:automation");
   await expect(panel.locator("h4", { hasText: "Resource environments" })).toBeVisible({
     timeout: T_MEDIUM,
