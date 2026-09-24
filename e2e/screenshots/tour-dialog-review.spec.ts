@@ -208,6 +208,35 @@ test("Daintree Tour — states and themes", async ({ page }) => {
   expect(await tour(page).eval((t) => t.getState().chapterIndex)).toBe(1);
   await shot(page, `10-end-card-held-${theme}.png`, written);
 
+  // Focus follows the stage onto the end card, and off it again, in a real
+  // browser where `inert` is enforced.
+  await open(page, { theme, chapter: "worktrees", t: 0 });
+  await page.getByTestId("tour-stage-toggle").focus();
+  await tour(page).eval((t) => {
+    t.seek(t.timing.duration - 0.1);
+    t.play();
+  });
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label")))
+    .toMatch(/^Next: /);
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.getAttribute("data-testid")), {
+      timeout: 5000,
+    })
+    .toBe("tour-stage-toggle");
+
+  // A focused scrubber keeps focus as the chapter it belongs to moves on.
+  await open(page, { theme, chapter: "worktrees", t: 0 });
+  await page.getByRole("slider").focus();
+  await tour(page).eval((t) => {
+    t.seek(t.timing.duration - 0.1);
+    t.play();
+  });
+  await expect(page.getByTestId("tour-chapter-count")).toHaveText(/^Chapter 3 of/, {
+    timeout: 6000,
+  });
+  expect(await page.evaluate(() => document.activeElement?.getAttribute("role"))).toBe("slider");
+
   expect(pageErrors, `page errors: ${pageErrors.join(" | ")}`).toEqual([]);
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);

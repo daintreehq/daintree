@@ -85,6 +85,27 @@ const RING_STYLE = {
   "--tour-countdown": `${TOUR_AUTO_ADVANCE_MS}ms`,
 };
 
+const COUNTDOWN_TICK_MS = 250;
+
+/** Whole seconds left on a running countdown, for the visible readout. */
+function useCountdown(running: boolean): number {
+  const total = Math.round(TOUR_AUTO_ADVANCE_MS / 1000);
+  const [left, setLeft] = useState(total);
+  useEffect(() => {
+    if (!running) return;
+    const started = performance.now();
+    const timer = window.setInterval(() => {
+      const elapsed = Math.floor((performance.now() - started) / 1000);
+      setLeft(Math.max(1, total - elapsed));
+    }, COUNTDOWN_TICK_MS);
+    return () => {
+      window.clearInterval(timer);
+      setLeft(total);
+    };
+  }, [running, total]);
+  return left;
+}
+
 /**
  * What the stage becomes when a chapter has played out: one large, obvious way
  * on, with a ring that drains over three seconds and then moves on by itself —
@@ -101,6 +122,7 @@ function EndCard({
   onUnmountWithFocus,
 }: TourEndCard & { onUnmountWithFocus: () => void }) {
   const autoAdvance = nextTitle !== null && !held;
+  const secondsLeft = useCountdown(autoAdvance);
   const ref = useRef<HTMLDivElement>(null);
   const nextRef = useRef<HTMLButtonElement>(null);
   const onNextRef = useRef(onNext);
@@ -117,7 +139,8 @@ function EndCard({
   }, [autoAdvance]);
 
   // Whatever takes the card away (the countdown, Replay, a click on the track),
-  // focus inside it would otherwise fall to <body> and out of the dialog.
+  // focus inside it would otherwise fall to <body> and out of the dialog. The
+  // stage takes it back once it is out from under the card.
   useLayoutEffect(() => {
     const node = ref.current;
     return () => {
@@ -136,6 +159,19 @@ function EndCard({
       <span className="mt-1.5 text-xl font-semibold tracking-tight text-text-primary">
         {nextTitle ?? "Try it for real"}
       </span>
+      {nextTitle && (
+        <>
+          <span aria-hidden="true" className="mt-1 text-xs tabular-nums text-text-secondary">
+            {autoAdvance ? `Starts in ${secondsLeft}s` : "Auto-advance paused"}
+          </span>
+          {/* Announced once per state, never per tick. */}
+          <span className="sr-only" role="status">
+            {autoAdvance
+              ? `Chapter ${nextNumber}, ${nextTitle}, starts in ${TOUR_AUTO_ADVANCE_MS / 1000} seconds. Press K to stay here.`
+              : "Auto-advance paused"}
+          </span>
+        </>
+      )}
       {!nextTitle && (
         <span className="mt-1 text-xs text-text-secondary">
           Finish opens the Getting Started checklist to run your first agents
@@ -145,9 +181,10 @@ function EndCard({
         <button
           ref={nextRef}
           type="button"
+          data-tour-end-primary=""
           onClick={onNext}
           aria-label={`Next: ${nextTitle}`}
-          className="relative mt-5 flex size-[76px] items-center justify-center rounded-full outline-hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-border-interactive"
+          className="relative mt-5 flex size-[76px] items-center justify-center rounded-full outline-hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-accent-primary"
         >
           {autoAdvance && (
             <svg className="absolute inset-0 -rotate-90" viewBox="0 0 76 76" aria-hidden="true">
@@ -176,7 +213,13 @@ function EndCard({
           </span>
         </button>
       ) : (
-        <Button ref={nextRef} variant="contrast" className="mt-5" onClick={onNext}>
+        <Button
+          ref={nextRef}
+          variant="contrast"
+          className="mt-5"
+          data-tour-end-primary=""
+          onClick={onNext}
+        >
           <Check aria-hidden="true" />
           Finish tour
         </Button>
@@ -232,7 +275,7 @@ function PlaySurface({
         data-testid="tour-stage-toggle"
         inert={covered}
         onClick={() => player.toggle()}
-        className="group/stage absolute inset-0 z-10 cursor-pointer outline-hidden focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-solid focus-visible:outline-border-interactive"
+        className="group/stage absolute inset-0 z-10 cursor-pointer outline-hidden focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-solid focus-visible:outline-accent-primary"
       />
       <span
         aria-hidden="true"
@@ -266,7 +309,23 @@ export function TourStage({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const playRef = useRef<HTMLButtonElement>(null);
+  const restoreToStageRef = useRef(false);
   const [scale, setScale] = useState(1);
+  const covered = endCard !== null;
+
+  // Focus follows the stage's controls as the end card comes and goes. Both
+  // moves run here, after the commit, so the destination is mounted and no
+  // longer inert when it is focused.
+  useLayoutEffect(() => {
+    if (covered) {
+      if (document.activeElement === playRef.current) {
+        ref.current?.querySelector<HTMLElement>("[data-tour-end-primary]")?.focus();
+      }
+    } else if (restoreToStageRef.current) {
+      restoreToStageRef.current = false;
+      playRef.current?.focus();
+    }
+  }, [covered]);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -296,7 +355,14 @@ export function TourStage({
         {Scene && <Scene />}
       </div>
       <PlaySurface buttonRef={playRef} covered={endCard !== null} />
-      {endCard && <EndCard {...endCard} onUnmountWithFocus={() => playRef.current?.focus()} />}
+      {endCard && (
+        <EndCard
+          {...endCard}
+          onUnmountWithFocus={() => {
+            restoreToStageRef.current = true;
+          }}
+        />
+      )}
     </div>
   );
 }

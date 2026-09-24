@@ -40,6 +40,19 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
+/** Position in the tour, beside the title like a wizard's step count. */
+function ChapterCount({ player }: { player: TourPlayer }) {
+  const { chapterIndex } = useTourPlayerState(player);
+  return (
+    <span
+      className="shrink-0 text-sm tabular-nums text-text-secondary"
+      data-testid="tour-chapter-count"
+    >
+      Chapter {chapterIndex + 1} of {TOUR_CHAPTERS.length}
+    </span>
+  );
+}
+
 function TourBody({
   player,
   onClose,
@@ -148,7 +161,6 @@ function TourBody({
         </div>
       </div>
       <AppDialog.Footer
-        hint={`Chapter ${state.chapterIndex + 1} of ${TOUR_CHAPTERS.length}`}
         secondaryAction={
           state.chapterIndex > 0 ? { label: "Back", onClick: () => player.previous() } : undefined
         }
@@ -205,9 +217,14 @@ export function TourDialog({
       data-testid="daintree-tour"
     >
       <AppDialog.Header>
-        <AppDialog.Title icon={<DaintreeIcon size={20} className="shrink-0 text-text-primary" />}>
-          Daintree Tour
-        </AppDialog.Title>
+        <div className="flex min-w-0 items-center gap-3">
+          <AppDialog.Title
+            icon={<DaintreeIcon size={20} className="shrink-0 text-text-secondary" />}
+          >
+            Daintree Tour
+          </AppDialog.Title>
+          {player && <ChapterCount player={player} />}
+        </div>
         <AppDialog.CloseButton aria-label="Close tour" />
       </AppDialog.Header>
       {player && (

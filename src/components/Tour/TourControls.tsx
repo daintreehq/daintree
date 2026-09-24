@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from "react";
 import { Pause, Play, RotateCcw, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -18,25 +19,56 @@ function segmentBar(played: boolean) {
   );
 }
 
+/**
+ * A segment swaps between a jump button and the slider whenever the chapter
+ * changes, which unmounts whichever one had focus. The one leaving flags it; the
+ * slider that mounts in the same commit takes it.
+ */
+interface TrackFocus {
+  /** The segment leaving had focus. */
+  leave: () => void;
+  /** Consumes the flag: true when focus is waiting to be taken. */
+  take: () => boolean;
+}
+
+function useCarryTrackFocus(
+  ref: React.RefObject<HTMLElement | null>,
+  track: TrackFocus,
+  receive: boolean
+) {
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (receive && track.take()) node?.focus();
+    return () => {
+      if (node?.contains(document.activeElement)) track.leave();
+    };
+  }, [ref, track, receive]);
+}
+
 /** Another chapter's segment: a jump to the start of that chapter. */
 function ChapterSegment({
   player,
   index,
   title,
   played,
+  carryFocus,
 }: {
   player: TourPlayer;
   index: number;
   title: string;
   played: boolean;
+  carryFocus: TrackFocus;
 }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  useCarryTrackFocus(ref, carryFocus, false);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <button
+          ref={ref}
           type="button"
           aria-label={`Chapter ${index + 1}: ${title}`}
-          className="group flex h-6 min-w-0 flex-1 cursor-pointer items-center rounded-sm outline-hidden transition-[flex-grow] duration-150 ease-out focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-border-interactive"
+          className="group flex h-6 min-w-0 flex-1 cursor-pointer items-center rounded-sm outline-hidden transition-[flex-grow] duration-150 ease-out focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
           onClick={() => player.goTo(index, { autoplay: true })}
         >
           <span className={segmentBar(played)} />
@@ -59,7 +91,17 @@ function spokenTime(seconds: number): string {
  * precision: a slider over the chapter's own timeline. Arrow keys seek through
  * the dialog's player keys; Home and End are its own.
  */
-function CurrentSegment({ player, ended }: { player: TourPlayer; ended: boolean }) {
+function CurrentSegment({
+  player,
+  ended,
+  carryFocus,
+}: {
+  player: TourPlayer;
+  ended: boolean;
+  carryFocus: TrackFocus;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useCarryTrackFocus(ref, carryFocus, true);
   const time = useTourTime();
   const duration = player.timing.duration;
   const progress = Math.min(1, time / duration);
@@ -74,6 +116,7 @@ function CurrentSegment({ player, ended }: { player: TourPlayer; ended: boolean 
 
   return (
     <div
+      ref={ref}
       role="slider"
       tabIndex={0}
       aria-label="Chapter position"
@@ -81,7 +124,7 @@ function CurrentSegment({ player, ended }: { player: TourPlayer; ended: boolean 
       aria-valuemax={Math.floor(duration)}
       aria-valuenow={Math.floor(time)}
       aria-valuetext={`${spokenTime(time)} of ${spokenTime(duration)}`}
-      className="group flex h-6 min-w-0 flex-[5] cursor-pointer touch-none items-center rounded-sm outline-hidden transition-[flex-grow] duration-150 ease-out focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-border-interactive"
+      className="group flex h-6 min-w-0 flex-[5] cursor-pointer touch-none items-center rounded-sm outline-hidden transition-[flex-grow] duration-150 ease-out focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
         seekTo(event);
@@ -165,6 +208,17 @@ export function TourControls({
   const playing = state.status === "playing";
   const ended = state.status === "ended";
   const chapter = TOUR_CHAPTERS[state.chapterIndex]!;
+  const carried = useRef(false);
+  const [carryFocus] = useState<TrackFocus>(() => ({
+    leave: () => {
+      carried.current = true;
+    },
+    take: () => {
+      const waiting = carried.current;
+      carried.current = false;
+      return waiting;
+    },
+  }));
 
   return (
     <div className="border-t border-border-subtle bg-surface-panel px-3 pb-2 pt-1">
@@ -177,9 +231,15 @@ export function TourControls({
               index={i}
               title={c.title}
               played={i < state.chapterIndex}
+              carryFocus={carryFocus}
             />
           ) : (
-            <CurrentSegment key={c.id} player={player} ended={state.status === "ended"} />
+            <CurrentSegment
+              key={c.id}
+              player={player}
+              ended={state.status === "ended"}
+              carryFocus={carryFocus}
+            />
           );
         })}
       </div>

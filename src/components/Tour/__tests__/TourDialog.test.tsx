@@ -101,7 +101,9 @@ describe("TourDialog", () => {
   it("resumes on the chapter it was opened at", () => {
     renderDialog({ initialChapter: 3 });
     expect(screen.getByRole("heading", { level: 3 }).textContent).toBe(TOUR_CHAPTERS[3]!.title);
-    expect(screen.getByTestId("hint").textContent).toBe(`Chapter 4 of ${TOUR_CHAPTERS.length}`);
+    expect(screen.getByTestId("tour-chapter-count").textContent).toBe(
+      `Chapter 4 of ${TOUR_CHAPTERS.length}`
+    );
   });
 
   it("finishes from the last chapter: completes, closes, and hands over to Getting Started", () => {
@@ -182,6 +184,34 @@ describe("TourDialog", () => {
       expect(document.activeElement).toBe(screen.getByTestId("tour-stage-toggle"));
     });
 
+    it("moves focus from a covered stage onto the end card", () => {
+      const { end } = renderAt(1);
+      screen.getByTestId("tour-stage-toggle").focus();
+      end();
+      expect(document.activeElement?.getAttribute("aria-label")).toBe(
+        `Next: ${TOUR_CHAPTERS[2]!.title}`
+      );
+    });
+
+    it("says the next chapter starts on its own, and that it stopped once held", () => {
+      const { end } = renderAt(1);
+      end();
+      expect(screen.getByRole("status").textContent).toMatch(/starts in 3 seconds/);
+      fireEvent.click(screen.getByRole("button", { name: "Stay here" }));
+      expect(screen.getByRole("status").textContent).toBe("Auto-advance paused");
+    });
+
+    it("keeps focus on the track when a focused slider's chapter advances", () => {
+      const { end } = renderAt(1);
+      screen.getByRole("slider").focus();
+      end();
+      act(() => {
+        vi.advanceTimersByTime(3100);
+      });
+      expect(screen.getByTestId("tour-chapter-count").textContent).toMatch(/^Chapter 3 of/);
+      expect(document.activeElement).toBe(screen.getByRole("slider"));
+    });
+
     it("counts down afresh after a held chapter plays again", () => {
       const { end, player } = renderAt(1);
       end();
@@ -204,6 +234,14 @@ describe("TourDialog", () => {
     fireEvent.click(segment, { detail: 1, clientX: 80 });
     expect(player!.getState().chapterIndex).toBe(2);
     expect(player!.getTime()).toBe(0);
+  });
+
+  it("keeps keyboard focus on the track when a chapter is chosen from it", () => {
+    renderDialog();
+    const segment = screen.getByRole("button", { name: `Chapter 3: ${TOUR_CHAPTERS[2]!.title}` });
+    segment.focus();
+    fireEvent.click(segment, { detail: 0 });
+    expect(document.activeElement).toBe(screen.getByRole("slider"));
   });
 
   it("exposes the playing chapter as a slider with spoken time", () => {
