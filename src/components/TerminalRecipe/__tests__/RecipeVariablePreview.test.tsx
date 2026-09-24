@@ -137,6 +137,12 @@ describe("RecipeVariablePreview", () => {
     expect(segments(container, "unknown")).toEqual(["{{isue_number}}"]);
   });
 
+  it("previews a spaced or hyphenated variable so the typo is visible", () => {
+    const { container } = renderPreview("Use {{ issue_number }} or {{issue-number}}", undefined);
+
+    expect(segments(container, "unknown")).toEqual(["{{ issue_number }}", "{{issue-number}}"]);
+  });
+
   it("resolves {{number}} to issueNumber when set", () => {
     mockSnapshot = { path: "/tmp/test", issueNumber: 7 };
 

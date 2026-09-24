@@ -118,7 +118,9 @@ export function segmentRecipePrompt(
 ): RecipePromptSegment[] {
   const source = text.trim();
   const segments: RecipePromptSegment[] = [];
-  const pattern = new RegExp(VARIABLE_PATTERN.source, VARIABLE_PATTERN.flags);
+  // Wider than launch's own pattern on purpose: `{{ issue_number }}` or
+  // `{{issue-number}}` is sent as typed, so it has to show up as unknown.
+  const pattern = /\{\{([^{}\n]+?)\}\}/g;
   const knownNames = new Set<string>(KNOWN_VARIABLE_NAMES);
   let lastIndex = 0;
   let match: RegExpExecArray | null;

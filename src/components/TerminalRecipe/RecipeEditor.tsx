@@ -471,7 +471,7 @@ export function RecipeEditor({
                             htmlFor={`terminal-exit-behavior-${index}`}
                             className="block text-xs font-medium text-text-primary mb-1"
                           >
-                            After Exit
+                            After exit
                           </label>
                           <select
                             id={`terminal-exit-behavior-${index}`}
@@ -530,7 +530,7 @@ export function RecipeEditor({
                             htmlFor={`terminal-initial-prompt-${index}`}
                             className="block text-xs font-medium text-text-primary mb-1"
                           >
-                            Initial Prompt (optional)
+                            Initial prompt (optional)
                           </label>
                           <textarea
                             id={`terminal-initial-prompt-${index}`}
@@ -541,7 +541,7 @@ export function RecipeEditor({
                             placeholder="e.g., Review the latest changes and suggest improvements"
                             rows={2}
                             aria-describedby={`terminal-initial-prompt-help-${index}`}
-                            className="w-full px-2 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary resize-y min-h-[60px] field-sizing-content max-h-60"
+                            className="w-full px-2 py-1.5 bg-surface-sidebar border border-border-default rounded-lg text-sm text-text-primary resize-y min-h-[60px] field-sizing-content max-h-60"
                           />
                           <RecipeVariablePreview
                             initialPrompt={terminal.initialPrompt || ""}
@@ -564,7 +564,7 @@ export function RecipeEditor({
                             htmlFor={`terminal-agent-exit-behavior-${index}`}
                             className="block text-xs font-medium text-text-primary mb-1"
                           >
-                            After Exit
+                            After exit
                           </label>
                           <select
                             id={`terminal-agent-exit-behavior-${index}`}
@@ -600,7 +600,7 @@ export function RecipeEditor({
                             htmlFor={`terminal-dev-command-${index}`}
                             className="block text-xs font-medium text-text-primary mb-1"
                           >
-                            Dev Command (optional)
+                            Dev command (optional)
                           </label>
                           <input
                             id={`terminal-dev-command-${index}`}
@@ -625,7 +625,7 @@ export function RecipeEditor({
                             htmlFor={`terminal-dev-exit-behavior-${index}`}
                             className="block text-xs font-medium text-text-primary mb-1"
                           >
-                            After Exit
+                            After exit
                           </label>
                           <select
                             id={`terminal-dev-exit-behavior-${index}`}

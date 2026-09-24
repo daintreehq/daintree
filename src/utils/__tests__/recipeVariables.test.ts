@@ -178,6 +178,7 @@ describe("segmentRecipePrompt", () => {
       "  Fix {{issue_number}} on {{branch_name}} at {{WORKTREE_PATH}}  ",
       "{{foo}} {{number}}\n{{pr_number}}",
       "no variables",
+      "{{ issue_number }} and {{issue-number}} and {{{branch_name}}}",
     ];
     for (const prompt of prompts) {
       expect(joined(prompt, context)).toBe(replaceRecipeVariables(prompt.trim(), context));
@@ -198,5 +199,12 @@ describe("segmentRecipePrompt", () => {
       .filter((s) => s.kind !== "text")
       .map((s) => s.kind);
     expect(kinds).toEqual(["variable", "unknown"]);
+  });
+
+  it("reports malformed spellings as unknown rather than dropping them", () => {
+    const unknown = segmentRecipePrompt("{{ issue_number }} {{issue-number}}", {})
+      .filter((s) => s.kind === "unknown")
+      .map((s) => s.text);
+    expect(unknown).toEqual(["{{ issue_number }}", "{{issue-number}}"]);
   });
 });

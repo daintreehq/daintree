@@ -12,11 +12,8 @@ interface RecipeVariablePreviewProps {
 // Outlines survive forced-colors, where the fill disappears, and dashed vs
 // solid keeps "filled" and "empty" apart without relying on hue.
 const TOKEN = "rounded-sm px-0.5 box-decoration-clone outline -outline-offset-1";
-const FILLED = cn(
-  TOKEN,
-  "bg-category-amber-subtle text-category-amber-text outline-category-amber-border"
-);
-const EMPTY = cn(TOKEN, "outline-dashed text-category-rose-text outline-category-rose-border");
+const FILLED = cn(TOKEN, "bg-category-amber-subtle text-category-amber-text outline-current");
+const EMPTY = cn(TOKEN, "outline-dashed text-category-rose-text outline-current");
 
 function formatList(names: string[]): string {
   const tokens = names.map((n) => `{{${n}}}`);
