@@ -30,7 +30,7 @@ installPreviewShims();
  *   ?scene=terminal-overflow     one scene on its own (default: every scene)
  *
  * The pane chrome, terminal lines and card header are harness decoration. The
- * strip wrapper around the terminal list mirrors `TerminalPane`'s own.
+ * class names passed to the list mirror `TerminalPane`'s and `WorktreeDetails`'.
  */
 
 const params = new URLSearchParams(window.location.search);
@@ -48,9 +48,10 @@ for (const el of [document.documentElement, document.body]) {
 
 const noop = () => undefined;
 
-function List({ scene }: { scene: ErrorBannerScene }) {
+function List({ scene, className }: { scene: ErrorBannerScene; className?: string }) {
   return (
     <CompactErrorList
+      className={className}
       errors={scene.errors}
       maxInline={scene.maxInline}
       onDismiss={noop}
@@ -74,11 +75,8 @@ function TerminalHost({ scene }: { scene: ErrorBannerScene }) {
         <span className="h-3 w-3 rounded-full bg-overlay-medium" />
         <span className="truncate font-medium text-text-primary">Claude — tighten auth retries</span>
       </div>
-      <div
-        data-banner-slot
-        className="px-2 py-1 border-b border-border-default bg-[color-mix(in_oklab,var(--color-status-error)_5%,transparent)] shrink-0"
-      >
-        <List scene={scene} />
+      <div data-banner-slot>
+        <List scene={scene} className="shrink-0" />
       </div>
       <div
         data-harness-decoration
@@ -108,7 +106,7 @@ function CardHost({ scene }: { scene: ErrorBannerScene }) {
         <span className="text-text-secondary">3 files changed · 2 ahead</span>
       </div>
       <div data-banner-slot className="px-3 pb-2.5 space-y-4">
-        <List scene={scene} />
+        <List scene={scene} className="rounded-[var(--radius-md)]" />
         <div
           data-harness-decoration
           aria-hidden="true"

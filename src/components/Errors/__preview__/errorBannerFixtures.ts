@@ -136,10 +136,10 @@ export const ERROR_BANNER_SCENES: ErrorBannerScene[] = [
   },
   {
     name: "card-stack",
-    what: "worktree card: four errors, three inline",
+    what: "worktree card: four errors, two inline",
     host: "card",
     width: 320,
-    maxInline: 3,
+    maxInline: 2,
     errors: [PUSH_REJECTED, FETCH_OFFLINE, SPAWN_LONG, CONFIG],
   },
   {
@@ -147,7 +147,7 @@ export const ERROR_BANNER_SCENES: ErrorBannerScene[] = [
     what: "worktree card: one recoverable error",
     host: "card",
     width: 320,
-    maxInline: 3,
+    maxInline: 2,
     errors: [PUSH_REJECTED],
   },
 ];

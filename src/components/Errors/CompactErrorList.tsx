@@ -1,17 +1,10 @@
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ErrorBanner } from "./ErrorBanner";
 import type { ErrorRecord, RetryAction } from "@/store/errorStore";
-
-/* Restated under the variant on purpose: Tailwind v4 compiles the
-   outline-suppressing utility to an unconditional `--tw-outline-style: none`,
-   which cancels `focus-visible:outline-2` unless the style is set again there.
-   Same string `ReadinessRail` uses — the accent appears only as a focus ring,
-   which is the one place the accent-restraint rule permits it. */
-const FOCUS_RING =
-  "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 
 interface ErrorListHandlers {
   onDismiss: (id: string) => void;
@@ -53,9 +46,11 @@ export function CompactErrorList({
   const hidden = errors.slice(maxInline);
 
   return (
-    <div className={cn("space-y-1", className)}>
+    // One column of bands, the way every inline banner family stacks. The host
+    // decides the outer shape: flush to a pane's edges, or rounded in a card.
+    <div className={cn("flex flex-col overflow-hidden", className)}>
       {inline.map((error) => (
-        <ErrorBanner key={error.id} error={error} compact {...handlers} />
+        <ErrorBanner key={error.id} error={error} {...handlers} />
       ))}
       {hidden.length > 0 && <ErrorOverflow errors={hidden} {...handlers} />}
     </div>
@@ -75,45 +70,48 @@ function ErrorOverflow({ errors, ...handlers }: ErrorListHandlers & { errors: Er
   const label = `Show ${errors.length} more ${errors.length === 1 ? "error" : "errors"}`;
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        type="button"
-        data-testid="compact-error-overflow"
-        aria-label={label}
-        // These banners render inside a click-to-select worktree card, whose
-        // root handler would select the card and — from the overview modal —
-        // unmount it mid-open, so the disclosure would never appear. Same
-        // boundary the card's own overlay controls draw.
-        onClick={(e) => e.stopPropagation()}
-        className={cn(
-          "flex w-fit mx-auto items-center gap-0.5 px-1.5 py-0.5 rounded text-3xs transition-colors",
-          "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]",
-          FOCUS_RING
-        )}
-      >
-        {errors.length} more {errors.length === 1 ? "error" : "errors"}
-        <ChevronDown className="w-3 h-3 shrink-0" aria-hidden="true" />
-      </PopoverTrigger>
-      <PopoverContent
-        align="center"
-        sideOffset={8}
-        aria-label="More errors"
-        // A portal moves the DOM but not the React tree, so a row's Retry would
-        // still bubble into the card behind it.
-        onClick={(e) => e.stopPropagation()}
-        // Bounded against Radix's own available height rather than a fixed
-        // pixel cap, so a long tail scrolls inside the popover instead of
-        // running past the viewport edge.
-        className="p-1 min-w-72 max-w-sm max-h-[var(--radix-popover-content-available-height)] overflow-y-auto"
-      >
-        <ul className="flex flex-col gap-1">
+    <div className="flex border-b border-divider px-3 py-1">
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="xs"
+            data-testid="compact-error-overflow"
+            aria-label={label}
+            // These banners render inside a click-to-select worktree card, whose
+            // root handler would select the card and — from the overview modal —
+            // unmount it mid-open, so the disclosure would never appear. Same
+            // boundary the card's own overlay controls draw.
+            onClick={(e) => e.stopPropagation()}
+            // Past the glyph column, so the count reads as part of the list above.
+            className="ml-3.5 text-xs"
+          >
+            {errors.length} more {errors.length === 1 ? "error" : "errors"}
+            <ChevronDown
+              aria-hidden="true"
+              className={cn("transition-transform duration-150", open && "rotate-180")}
+            />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          sideOffset={4}
+          collisionPadding={8}
+          aria-label="More errors"
+          // A portal moves the DOM but not the React tree, so a row's Retry would
+          // still bubble into the card behind it.
+          onClick={(e) => e.stopPropagation()}
+          // Bounded against Radix's own available height rather than a fixed
+          // pixel cap, so a long tail scrolls inside the popover instead of
+          // running past the viewport edge. The width is a reading measure, not
+          // the trigger's, and never wider than the window can hold.
+          className="flex w-96 max-w-[calc(100vw-16px)] flex-col max-h-[var(--radix-popover-content-available-height)] overflow-y-auto"
+        >
           {errors.map((error) => (
-            <li key={error.id}>
-              <ErrorBanner error={error} compact {...handlers} />
-            </li>
+            <ErrorBanner key={error.id} error={error} animated={false} {...handlers} />
           ))}
-        </ul>
-      </PopoverContent>
-    </Popover>
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }

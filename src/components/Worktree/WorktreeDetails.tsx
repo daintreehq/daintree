@@ -165,8 +165,11 @@ export function WorktreeDetails({
           {/* Errors (if any) */}
           {worktreeErrors.length > 0 && (
             <CompactErrorList
+              className="rounded-[var(--radius-md)]"
               errors={worktreeErrors}
-              maxInline={3}
+              // Rows wrap their message rather than clip it, so two is what the
+              // details area's 208px holds before the rest move to the disclosure.
+              maxInline={2}
               onDismiss={onDismissError}
               onRetry={onRetryError}
               onCancelRetry={onCancelRetry}
