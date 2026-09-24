@@ -206,6 +206,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // `runInstallJob` clears it) or main refused because the install already
   // committed — in which case there is nothing left to cancel either way.
   const [cancelRequested, setCancelRequested] = useState(false);
+  // Main refused the cancel: the install raced past its commit point before the
+  // request landed. Cancel stays unavailable from here, even in the moment
+  // before main's next event says so itself.
+  const [cancelRefused, setCancelRefused] = useState(false);
   // What the in-flight job is installing, as the caller knew it before main's
   // first event. Main's events carry the authoritative label; this covers the
   // gap before the first one.
@@ -243,6 +247,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     installJobIdRef.current = jobId;
     setInstallProgress(null);
     setCancelRequested(false);
+    setCancelRefused(false);
     setPendingInstallSource(source === undefined ? null : describePluginInstallSource(source));
     setHasActiveInstallJob(source !== undefined);
     try {
@@ -252,6 +257,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
         installJobIdRef.current = null;
         setInstallProgress(null);
         setCancelRequested(false);
+        setCancelRefused(false);
         setPendingInstallSource(null);
         setHasActiveInstallJob(false);
       }
@@ -262,16 +268,21 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
    * Ask main to abort the in-flight install. Deliberately does NOT clear the
    * install state: the original install promise is still pending and owns the
    * teardown, and main may refuse (the install has passed its commit point) —
-   * in which case the banner should keep showing the real state rather than a
-   * cancel that didn't happen.
+   * in which case the banner goes back to the real phase, with Cancel held
+   * unavailable, rather than reporting a cancel that isn't happening.
    */
   const cancelActiveInstall = () => {
     const jobId = installJobIdRef.current;
-    if (!jobId || cancelRequested) return;
+    if (!jobId || cancelRequested || cancelRefused) return;
     setCancelRequested(true);
-    safeFireAndForget(window.electron.plugin.cancelInstall(jobId), {
-      context: "usePluginManager.cancelActiveInstall",
-    });
+    safeFireAndForget(
+      window.electron.plugin.cancelInstall(jobId).then((accepted) => {
+        if (accepted || installJobIdRef.current !== jobId) return;
+        setCancelRefused(true);
+        setCancelRequested(false);
+      }),
+      { context: "usePluginManager.cancelActiveInstall" }
+    );
   };
 
   // Clear the "Already up to date" auto-dismiss timer on unmount.
@@ -966,6 +977,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     installProgress,
     installSource: installProgress?.source ?? pendingInstallSource,
     cancelRequested,
+    cancelRefused,
     cancelActiveInstall,
     handleInstallFromFile,
     handleInstallFromUrl,

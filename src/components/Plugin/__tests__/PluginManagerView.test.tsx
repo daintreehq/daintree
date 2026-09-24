@@ -953,12 +953,52 @@ describe("PluginManagerView", () => {
     await new Promise((resolve) => setTimeout(resolve, UI_DOHERTY_THRESHOLD + 150));
     expect(screen.queryByRole("button", { name: "Cancel install" })).toBeNull();
 
-    const jobId = vi.mocked(window.electron.plugin.installFromFile).mock.calls[0]![0] as string;
+    const jobId = String(vi.mocked(window.electron.plugin.installFromFile).mock.calls[0]![0]);
     act(() => emit!({ jobId, phase: "extracting", cancellable: true, source: "acme.dntr" }));
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Cancel install" })).toBeTruthy()
     );
     expect(screen.getByText("acme.dntr")).toBeTruthy();
+
+    await act(async () => settleInstall!({ status: "cancelled" }));
+  });
+
+  it("drops a refused cancel and holds Cancel unavailable for the rest of the job", async () => {
+    let emit: ((event: PluginInstallProgressEvent) => void) | undefined;
+    vi.mocked(window.electron.plugin.onInstallProgress).mockImplementation((cb) => {
+      emit = cb;
+      return () => {};
+    });
+    let settleInstall: ((result: PluginInstallResult) => void) | undefined;
+    vi.mocked(window.electron.plugin.installFromUrl).mockImplementation(
+      () => new Promise((resolve) => (settleInstall = resolve))
+    );
+    // The install raced past its commit point before the request landed.
+    vi.mocked(window.electron.plugin.cancelInstall).mockResolvedValue(false);
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalled());
+    const jobId = String(vi.mocked(window.electron.plugin.installFromUrl).mock.calls[0]![1]);
+    act(() => emit!({ jobId, phase: "validating", cancellable: true }));
+
+    const cancel = await screen.findByRole(
+      "button",
+      { name: "Cancel install" },
+      { timeout: UI_DOHERTY_THRESHOLD + 1000 }
+    );
+    fireEvent.click(cancel);
+    expect(window.electron.plugin.cancelInstall).toHaveBeenCalledWith(jobId);
+
+    await waitFor(() => expect(screen.queryAllByText("Cancelling the install")).toHaveLength(0));
+    expect(screen.getAllByText("Checking the plugin").length).toBeGreaterThan(0);
+    expect(cancel.getAttribute("aria-disabled")).toBe("true");
 
     await act(async () => settleInstall!({ status: "cancelled" }));
   });

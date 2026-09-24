@@ -178,6 +178,7 @@ function Shell() {
           progress={fixture!.progress}
           source={fixture!.progress?.source ?? fixture!.pendingSource ?? null}
           cancelRequested={fixture!.cancelRequested ?? false}
+          cancelRefused={false}
           onCancel={() => {}}
         />
       </div>

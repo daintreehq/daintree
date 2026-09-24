@@ -730,6 +730,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         progress={pm.installProgress}
         source={pm.installSource}
         cancelRequested={pm.cancelRequested}
+        cancelRefused={pm.cancelRefused}
         onCancel={pm.cancelActiveInstall}
       />
 

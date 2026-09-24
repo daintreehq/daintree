@@ -25,6 +25,8 @@ interface PluginInstallProgressBannerProps {
   source: string | null;
   /** True once the user has asked to cancel and main hasn't finished unwinding. */
   cancelRequested: boolean;
+  /** True once main has refused a cancel because the install already committed. */
+  cancelRefused: boolean;
   onCancel: () => void;
 }
 
@@ -48,15 +50,17 @@ interface PluginInstallProgressBannerProps {
  * Neutral severity, no accent: this is ambient progress, not a focus anchor or a
  * problem. `aria-live` is off on the banner itself — `InlineStatusBanner`
  * announces atomically, so a polite banner would re-read the whole thing every
- * time the archive entry changes (~150ms). Step changes are announced through a
- * separate region that carries the title alone; the outcome of the install is
- * still surfaced by the error/notice region the Plugin Manager already owns.
+ * time the archive entry changes (~150ms). Step changes and notes are announced
+ * through a separate region that never carries the entry; the outcome of the
+ * install is still surfaced by the error/notice region the Plugin Manager
+ * already owns.
  */
 export function PluginInstallProgressBanner({
   isInstalling,
   progress,
   source,
   cancelRequested,
+  cancelRefused,
   onCancel,
 }: PluginInstallProgressBannerProps) {
   const show = useDeferredLoading(isInstalling, UI_DOHERTY_THRESHOLD);
@@ -81,23 +85,26 @@ export function PluginInstallProgressBanner({
     : phase
       ? PHASE_TITLES[phase]
       : "Installing the plugin";
-  // `cancellable` is authoritative and false past the commit point. Absent an
-  // event we assume cancellable — the install can't have committed yet, and main
-  // rejects a cancel it can't honour anyway.
-  const cancellable = progress?.cancellable ?? true;
+  // `cancellable` is authoritative and false past the commit point, as is a
+  // refused cancel. Absent an event we assume cancellable — the install can't
+  // have committed yet, and main rejects a cancel it can't honour anyway.
+  const cancellable = !cancelRefused && (progress?.cancellable ?? true);
   const canCancel = cancellable && !cancelRequested;
-  // The entry belongs to the phase that wrote it: once the user cancels, a
-  // filename still ticking over would read as the unpack carrying on.
-  const detail =
-    phase === "extracting" && progress?.entry && !cancelRequested
-      ? progress.entry
-      : (source ?? undefined);
-  // "Cancelling the install" already explains an inert Cancel; past the commit
-  // point nothing else would.
+  // While unpacking, the entry is written as a path inside the archive, so the
+  // archive keeps naming the install even as the entry ticks over. Once the
+  // user cancels, a filename still ticking over would read as the unpack
+  // carrying on, so the line goes back to the archive alone.
+  const archive = source?.slice(source.lastIndexOf("/") + 1);
+  const entry = phase === "extracting" && !cancelRequested ? progress?.entry : undefined;
+  const detail = entry ? (archive ? `${archive} › ${entry}` : entry) : (source ?? undefined);
   const note = cancelRequested
-    ? null
+    ? longWait
+      ? "Still cancelling…"
+      : null // the title already explains an inert Cancel
     : !cancellable
-      ? "Can't be cancelled now"
+      ? longWait
+        ? "Still working, can't be cancelled now"
+        : "Can't be cancelled now"
       : longWait
         ? "Still working…"
         : null;
@@ -105,7 +112,7 @@ export function PluginInstallProgressBanner({
   return (
     <>
       <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
-        {show ? title : ""}
+        {show ? (note ? `${title}. ${note}` : title) : ""}
       </p>
       {show && (
         <InlineStatusBanner
@@ -122,9 +129,14 @@ export function PluginInstallProgressBanner({
           trailingSlot={
             <>
               {note && (
-                <span id={noteId} className="px-1 text-xs whitespace-nowrap text-text-secondary">
-                  {note}
-                </span>
+                <>
+                  <span id={noteId} className="px-1 text-xs whitespace-nowrap text-text-secondary">
+                    {note}
+                  </span>
+                  {/* Note and Cancel share a size and a colour; the rule keeps
+                      them from reading as one run-on phrase. */}
+                  <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-divider" />
+                </>
               )}
               {/* `aria-disabled`, not `disabled`: a native disabled button drops
                   keyboard focus to <body> the moment the install passes its

@@ -26,6 +26,7 @@ function props(over: Partial<BannerProps> = {}): BannerProps {
     progress: progress(),
     source: SOURCE,
     cancelRequested: false,
+    cancelRefused: false,
     onCancel: vi.fn(),
     ...over,
   };
@@ -131,11 +132,14 @@ describe("PluginInstallProgressBanner (#11302)", () => {
     settle();
     expect(banner()!.textContent).toContain("acme.dntr");
 
+    // The entry is shown inside the archive it comes from, so the install keeps
+    // its name while the unpack ticks over.
     rerender(
       <PluginInstallProgressBanner {...props({ progress: progress({ entry: "dist/index.js" }) })} />
     );
     expect(banner()!.textContent).toContain("index.js");
-    expect(banner()!.textContent).not.toContain("acme.dntr");
+    expect(banner()!.textContent).toContain("acme.dntr");
+    expect(banner()!.textContent).not.toContain("plugins.example.com");
 
     // An entry left over from extraction must not trail into a later phase.
     rerender(
@@ -155,7 +159,7 @@ describe("PluginInstallProgressBanner (#11302)", () => {
     settle();
     // Clipping is CSS's job at render time; nothing is thrown away up front, so
     // the full path stays recoverable from the hover title.
-    expect(banner()!.querySelector(`[title="${entry}"]`)).not.toBeNull();
+    expect(banner()!.querySelector(`[title$="${entry}"]`)).not.toBeNull();
     expect(banner()!.textContent).not.toContain("…");
   });
 
@@ -322,13 +326,54 @@ describe("PluginInstallProgressBanner long waits and cancel state (#11302)", () 
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  it("suppresses the long-wait note while a cancel is unwinding", () => {
+  it("acknowledges a slow unwind in the cancel's own terms", () => {
     render(<PluginInstallProgressBanner {...props({ cancelRequested: true })} />, { wrapper });
     settle();
+    expect(banner()!.querySelector("[data-banner-controls]")!.textContent).toBe("Cancel install");
     act(() => {
       vi.advanceTimersByTime(5000);
     });
-    // "Still working…" alongside "Cancelling the install" would contradict itself.
+    // "Still working…" beside "Cancelling the install" would contradict itself,
+    // but a cancel that is taking its time still owes the reassurance.
     expect(screen.queryByText("Still working…")).toBeNull();
+    expect(inBanner("Still cancelling…")).toBeTruthy();
+  });
+
+  it("keeps the long-wait reassurance past the commit point, and announces it", () => {
+    render(
+      <PluginInstallProgressBanner
+        {...props({ progress: progress({ phase: "activating", cancellable: false }) })}
+      />,
+      { wrapper }
+    );
+    settle();
+    const before = announcer().textContent;
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    const note = document.getElementById(cancelButton().getAttribute("aria-describedby") ?? "");
+    expect(note?.textContent).toMatch(/still working/i);
+    // The reason Cancel is inert survives the reassurance being added to it.
+    expect(note?.textContent).toMatch(/can't be cancelled/i);
+    expect(announcer().textContent).not.toBe(before);
+    expect(announcer().textContent).toContain(note!.textContent!);
+  });
+
+  it("goes back to the real step when main refuses the cancel", () => {
+    const onCancel = vi.fn();
+    render(
+      <PluginInstallProgressBanner
+        {...props({ progress: progress({ phase: "validating" }), cancelRefused: true, onCancel })}
+      />,
+      { wrapper }
+    );
+    settle();
+    // The install raced past its commit point: it is finishing, not cancelling.
+    expect(inBanner("Checking the plugin")).toBeTruthy();
+    expect(screen.queryByText("Cancelling the install")).toBeNull();
+    expect(cancelButton().getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(cancelButton());
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(cancelButton().getAttribute("aria-describedby")).toBeTruthy();
   });
 });
