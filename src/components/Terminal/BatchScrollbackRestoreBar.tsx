@@ -1,6 +1,6 @@
-import { useCallback, type CSSProperties } from "react";
-import { History, Loader2, RotateCcw } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { useCallback } from "react";
+import { History, RotateCcw } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, type PanelGridState } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
@@ -8,16 +8,6 @@ import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useScrollbackRestoreAggregate } from "@/hooks/useScrollbackRestoreAggregate";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { retryFailedScrollbackRestoreBatch } from "@/utils/stateHydration/scrollbackRestoreScheduler";
-
-function SpinnerIcon({ className, style }: { className?: string; style?: CSSProperties }) {
-  return (
-    <Loader2
-      className={cn("animate-spin motion-reduce:animate-none", className)}
-      style={style}
-      aria-hidden="true"
-    />
-  );
-}
 
 // Panels whose last scrollback restore failed. The per-panel banner inside each
 // TerminalPane handles individual dismissal/reset; this batch banner aggregates
@@ -82,7 +72,7 @@ export function BatchScrollbackRestoreBar({ className }: { className?: string })
     const doneCount = Math.max(0, totalCount - pendingCount - inProgressCount);
     return (
       <InlineStatusBanner
-        icon={SpinnerIcon}
+        icon={Spinner}
         title={`Restoring ${doneCount} of ${totalCount}`}
         severity="info"
         animated={false}

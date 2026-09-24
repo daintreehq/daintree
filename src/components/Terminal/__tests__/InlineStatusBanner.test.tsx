@@ -542,6 +542,7 @@ describe("InlineStatusBanner", () => {
     });
 
     it("keeps a disabled dismiss in the row rather than unmounting it", () => {
+      const onClose = vi.fn();
       render(
         <InlineStatusBanner
           icon={Info}
@@ -551,12 +552,40 @@ describe("InlineStatusBanner", () => {
           severity="neutral"
           animated={false}
           actions={[]}
-          onClose={() => {}}
+          onClose={onClose}
           closeDisabled
         />
       );
       const dismiss = screen.getByRole("button", { name: "Dismiss" });
-      expect(dismiss.hasAttribute("disabled")).toBe(true);
+      expect(dismiss.getAttribute("aria-disabled")).toBe("true");
+      expect(dismiss.matches(":disabled")).toBe(false);
+      fireEvent.click(dismiss);
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("keeps an action focusable and inert when it turns unavailable under the keyboard", () => {
+      const onClick = vi.fn();
+      const banner = (disabled: boolean) => (
+        <InlineStatusBanner
+          icon={Info}
+          title="Service stopped"
+          severity="warning"
+          animated={false}
+          actions={[{ id: "restart", label: "Restart", onClick, disabled }]}
+        />
+      );
+      const { rerender } = render(banner(false));
+      const restart = screen.getByRole("button", { name: "Restart" });
+      restart.focus();
+
+      // Restart → Restarting… is the usual shape: the action goes unavailable
+      // while the banner, and the user's focus on it, stay put.
+      rerender(banner(true));
+      expect(restart.matches(":disabled")).toBe(false);
+      expect(restart.getAttribute("aria-disabled")).toBe("true");
+      expect(document.activeElement).toBe(restart);
+      fireEvent.click(restart);
+      expect(onClick).not.toHaveBeenCalled();
     });
 
     it("renders dismiss in title row with descriptionExtras and no description prop", () => {

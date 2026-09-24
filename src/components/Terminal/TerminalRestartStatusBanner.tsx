@@ -1,6 +1,6 @@
-import type { CSSProperties, ReactNode } from "react";
-import { XCircle, Loader2, RotateCcw, AlertTriangle } from "lucide-react";
-import { cn } from "@/lib/utils";
+import type { ReactNode } from "react";
+import { XCircle, RotateCcw, AlertTriangle } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import type { RestartBannerVariant } from "./restartStatus";
 import { RESTART_BANNER_COPY } from "./restartBannerCopy";
@@ -24,16 +24,6 @@ export interface TerminalRestartStatusBannerProps {
   findSessionSlot?: ReactNode;
 }
 
-function SpinnerIcon({ className, style }: { className?: string; style?: CSSProperties }) {
-  return (
-    <Loader2
-      className={cn("animate-spin motion-reduce:animate-none", className)}
-      style={style}
-      aria-hidden="true"
-    />
-  );
-}
-
 export function TerminalRestartStatusBanner({
   variant,
   onRestart,
@@ -48,7 +38,7 @@ export function TerminalRestartStatusBanner({
     case "auto-restarting":
       return (
         <InlineStatusBanner
-          icon={SpinnerIcon}
+          icon={Spinner}
           title={RESTART_BANNER_COPY["auto-restarting"].title}
           severity="info"
           animated={false}
@@ -61,7 +51,7 @@ export function TerminalRestartStatusBanner({
     case "restarting":
       return (
         <InlineStatusBanner
-          icon={SpinnerIcon}
+          icon={Spinner}
           title={RESTART_BANNER_COPY["restarting"].title}
           severity="info"
           animated={false}

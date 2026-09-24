@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -16,6 +17,11 @@ type SpinnerSize = keyof typeof SIZE_CLASSES;
 interface SpinnerProps {
   size?: SpinnerSize;
   className?: string;
+  /**
+   * Lands on the rotating wrapper, and the glyph takes its colour from it —
+   * which is how `InlineStatusBanner` tints an `icon` to the band's severity.
+   */
+  style?: CSSProperties;
 }
 
 /**
@@ -25,7 +31,7 @@ interface SpinnerProps {
  * visible (#12584). Size, placement and colour classes land on the wrapper,
  * which is block-level like the svg it replaces; the glyph fills it.
  */
-export function Spinner({ size = "md", className }: SpinnerProps) {
+export function Spinner({ size = "md", className, style }: SpinnerProps) {
   return (
     <span
       className={cn(
@@ -33,6 +39,7 @@ export function Spinner({ size = "md", className }: SpinnerProps) {
         SIZE_CLASSES[size],
         className
       )}
+      style={style}
       aria-hidden="true"
     >
       <Loader2 className="size-full" />

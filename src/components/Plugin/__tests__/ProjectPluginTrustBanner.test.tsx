@@ -219,7 +219,7 @@ describe("ProjectPluginTrustBanner", () => {
     // Decide later stays in the row — inert, so the controls beside it do not
     // shift — and it cannot hide a decision that is still being saved.
     const later = screen.getByRole("button", { name: "Decide later" });
-    expect(later.hasAttribute("disabled")).toBe(true);
+    expect(later.getAttribute("aria-disabled")).toBe("true");
     act(() => later.click());
     expect(useProjectPluginStore.getState().prompt).not.toBeNull();
     act(() => button("Keep disabled").click());
