@@ -25,9 +25,33 @@
   border-radius: var(--radius-md);
   color: var(--theme-text-primary);
   cursor: text;
-  transition:
-    border-color var(--duration-150) ease-out,
-    background-image var(--duration-150) ease-out;
+  position: relative;
+  /* Keeps the wash layer below the contents but above the field's own fill. */
+  isolation: isolate;
+  /* The focus lift. Dark lifts with a white-ink wash; light lifts toward the
+     brightest plane instead, since an ink wash over a pale well reads as grime
+     rather than as the field coming forward. */
+  --_search-field-wash: var(--theme-overlay-hover);
+  transition: border-color var(--duration-150) ease-out;
+}
+
+:where(.light, [data-color-mode="light"]) .search-field {
+  --_search-field-wash: color-mix(in srgb, var(--theme-surface-panel-elevated) 70%, transparent);
+}
+
+/* A layer rather than a background-image: the wash fades in on the same 150ms
+   as the edge, which a gradient switching on from `none` cannot do. It sits over
+   the resting fill, so a theme's own field colour still reads as itself. */
+.search-field::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: calc(var(--radius-md) - 1px);
+  background: var(--_search-field-wash);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-150) ease-out;
 }
 
 .search-field[data-size="compact"] {
@@ -44,11 +68,12 @@
   font-size: var(--text-sm);
 }
 
-/* Composited over the resting fill rather than replacing it, so a theme's own
-   field colour still reads as itself when focused. */
 .search-field:has(.search-field-input:focus-visible) {
-  background-image: linear-gradient(var(--theme-overlay-hover), var(--theme-overlay-hover));
   border-color: var(--theme-selection-outline);
+}
+
+.search-field:has(.search-field-input:focus-visible)::before {
+  opacity: 1;
 }
 
 .search-field:has(.search-field-input:disabled) {
@@ -116,7 +141,7 @@
   transition: color var(--duration-150) ease-out;
 }
 
-.search-field-clear:hover {
+.search-field-clear:hover:not(:disabled) {
   color: var(--theme-text-primary);
 }
 
@@ -127,28 +152,9 @@
 
 @variant reduce-motion {
   .search-field,
+  .search-field::before,
   .search-field-clear {
     transition: none;
-  }
-}
-
-/* Deliberately NOT merged with the `prefers-contrast: more` block below: macOS
-   fires only prefers-contrast, Windows swaps in system colours, and only this
-   path discards backgrounds outright. Same rationale as src/index.css. */
-@media (forced-colors: active) {
-  .search-field {
-    border-color: CanvasText;
-  }
-
-  .search-field:has(.search-field-input:focus-visible) {
-    outline: 2px solid Highlight;
-    outline-offset: -1px;
-  }
-
-  /* The global `*:focus-visible` rule would draw a second box around the
-     text run; the field's outline above is the one indicator. */
-  .search-field-input:focus-visible {
-    outline: none !important;
   }
 }
 
@@ -167,5 +173,26 @@
     border-color: var(--theme-text-primary);
     outline: 1px solid var(--theme-text-primary);
     outline-offset: 0;
+  }
+}
+
+/* Deliberately NOT merged with the `prefers-contrast: more` block above: macOS
+   fires only prefers-contrast, Windows swaps in system colours, and only this
+   path discards backgrounds outright. Same rationale as src/index.css. Last on
+   purpose: when both queries match, the system-colour indicator must win. */
+@media (forced-colors: active) {
+  .search-field {
+    border-color: CanvasText;
+  }
+
+  .search-field:has(.search-field-input:focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: -1px;
+  }
+
+  /* The global `*:focus-visible` rule would draw a second box around the
+     text run; the field's outline above is the one indicator. */
+  .search-field-input:focus-visible {
+    outline: none !important;
   }
 }

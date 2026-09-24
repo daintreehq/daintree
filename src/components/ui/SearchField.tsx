@@ -98,6 +98,7 @@ export function SearchField({
           type="button"
           className="search-field-clear"
           aria-label={clearLabel}
+          disabled={inputProps.disabled}
           onClick={() => {
             onClear();
             localRef.current?.focus();

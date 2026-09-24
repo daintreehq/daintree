@@ -64,6 +64,23 @@ describe("SearchField", () => {
   });
 });
 
+describe("SearchField disabled", () => {
+  it("does not offer to clear a field that cannot be edited", () => {
+    render(
+      <SearchField
+        aria-label="Search things"
+        value="abc"
+        disabled
+        onChange={() => {}}
+        onClear={() => {}}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Clear search" }).hasAttribute("disabled")).toBe(
+      true
+    );
+  });
+});
+
 describe("search field styling contract", () => {
   it("never spends accent on the field, its focus state or its clear control", () => {
     // Palette inputs are focused whenever their palette is open; accent here
@@ -79,10 +96,13 @@ describe("search field styling contract", () => {
   it("changes the fill on focus without discarding the theme's resting fill", () => {
     const rest = rulesFor(/^\s*\.search-field\s*$/);
     const focus = rulesFor(/^\s*\.search-field:has\(\.search-field-input:focus-visible\)\s*$/);
+    const focusLayer = rulesFor(
+      /^\s*\.search-field:has\(\.search-field-input:focus-visible\)::before\s*$/
+    );
     expect(rest).toMatch(/background-color:\s*var\(--search-field-bg/);
-    // A wash layered as an image sits over whatever the resting colour is.
-    expect(focus).toMatch(/background-image:/);
-    expect(focus).not.toMatch(/background-color:/);
+    // The lift is a layer over whatever the resting colour is, never a swap of it.
+    expect(focus).not.toMatch(/background/);
+    expect(focusLayer).toMatch(/opacity:\s*1/);
   });
 
   it("rests on a quieter edge than the form-field boundary", () => {
@@ -94,5 +114,9 @@ describe("search field styling contract", () => {
     const queries = [...BARE.matchAll(/@media([^{]*)\{/g)].map((m) => m[1]!.trim());
     expect(queries).toContain("(forced-colors: active)");
     expect(queries).toContain("(prefers-contrast: more)");
+    // Both can match at once; the system-colour indicator has to win the cascade.
+    expect(queries.lastIndexOf("(forced-colors: active)")).toBeGreaterThan(
+      queries.lastIndexOf("(prefers-contrast: more)")
+    );
   });
 });
