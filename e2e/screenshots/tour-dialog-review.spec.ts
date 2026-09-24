@@ -60,7 +60,12 @@ interface TourHandle {
 
 async function open(
   page: Page,
-  { theme, chapter, t, size = { width: 1440, height: 900 } }: {
+  {
+    theme,
+    chapter,
+    t,
+    size = { width: 1440, height: 900 },
+  }: {
     theme: string;
     chapter: string;
     t: number;
@@ -166,7 +171,7 @@ test("Daintree Tour — states and themes", async ({ page }) => {
 
   // Keyboard focus on the stage.
   await open(page, { theme, chapter: "agents", t: 5 });
-  await page.getByRole("button", { name: "Play or pause the tour" }).focus();
+  await page.getByTestId("tour-stage-toggle").focus();
   await page.keyboard.press("Shift+Tab");
   await page.keyboard.press("Tab");
   await page.waitForTimeout(200);
@@ -178,12 +183,33 @@ test("Daintree Tour — states and themes", async ({ page }) => {
   await page.waitForTimeout(90);
   await shot(page, `08-transition-${theme}.png`, written);
 
-  // A short laptop window: the stage gives up space first.
+  // A short laptop window: the stage gives up space first, and nothing clips.
   await open(page, { theme, chapter: "fleet", t: 9, size: { width: 1280, height: 720 } });
+  const card = await page
+    .getByTestId("daintree-tour")
+    .locator("[tabindex='-1']")
+    .first()
+    .boundingBox();
+  const next = await page.getByRole("button", { name: "Next", exact: true }).boundingBox();
+  expect(card && next && next.y + next.height + 8 <= card.y + card.height).toBe(true);
   await shot(page, `09-short-window-${theme}.png`, written);
+
+  // End card after "Stay here": no countdown, focus kept on the card.
+  await open(page, { theme, chapter: "worktrees", t: 0 });
+  await tour(page).eval((t) => {
+    t.seek(t.timing.duration - 0.1);
+    t.play();
+  });
+  await expect
+    .poll(() => tour(page).eval((t) => t.getState().status), { timeout: 3000 })
+    .toBe("ended");
+  await page.getByRole("button", { name: "Stay here" }).click();
+  await page.waitForTimeout(3500);
+  expect(await tour(page).eval((t) => t.getState().chapterIndex)).toBe(1);
+  await shot(page, `10-end-card-held-${theme}.png`, written);
 
   expect(pageErrors, `page errors: ${pageErrors.join(" | ")}`).toEqual([]);
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(written.length).toBe(THEMES.length * 5 + 4);
+  expect(written.length).toBe(THEMES.length * 5 + 5);
 });

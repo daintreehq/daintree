@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { TourControls } from "./TourControls";
 import { TourPlayer, type TourAudio } from "./TourPlayer";
@@ -54,6 +55,12 @@ function TourBody({
   const held = state.status === "ended" && heldAt === state.chapterIndex;
   const chapter = TOUR_CHAPTERS[state.chapterIndex]!;
   const isLast = state.chapterIndex === TOUR_CHAPTERS.length - 1;
+
+  // "Stay here" holds one ending: once the chapter plays again, from any
+  // control, its next ending counts down afresh.
+  useEffect(() => {
+    if (state.status === "playing") setHeldAt(null);
+  }, [state.status]);
 
   const reachedRef = useRef(onChapterReached);
   const completedRef = useRef(onCompleted);
@@ -112,33 +119,36 @@ function TourBody({
     // Player keys mirror common video players and cover the footer too, where
     // focus starts. `contents` keeps the dialog's own column layout intact.
     <div className="contents" onKeyDown={onKeyDown}>
-      <div className="flex flex-col gap-4 px-6 pb-5 pt-5">
-        <TourStage
-          chapterId={chapter.id}
-          endCard={
-            state.status === "ended"
-              ? {
-                  nextTitle: TOUR_CHAPTERS[state.chapterIndex + 1]?.title ?? null,
-                  held,
-                  onHold: () => setHeldAt(state.chapterIndex),
-                  onNext: advance,
-                  onReplay: () => player.play(),
-                }
-              : null
-          }
-        />
-        <TourCaption />
-        <TourControls player={player} onMutedChange={onMutedChange} />
-        <div className="flex min-h-[3.75rem] flex-col gap-1">
-          <h3 className="text-base font-semibold text-text-primary">{chapter.title}</h3>
-          <p className="text-sm text-text-secondary">{chapter.summary}</p>
+      <div className="px-6 py-5">
+        {/* One player: stage, caption band and bar share a frame, like a video.
+            The stage is the only part of the dialog that can give up space, so
+            on a short window the player's width follows the height left after
+            the chrome (header, caption band, bar, footer, padding — 21rem). */}
+        <div className="mx-auto w-full max-w-[calc((92vh-21rem)*16/9)] overflow-hidden rounded-lg border border-border-subtle">
+          <TourStage
+            chapterId={chapter.id}
+            endCard={
+              state.status === "ended"
+                ? {
+                    nextTitle: TOUR_CHAPTERS[state.chapterIndex + 1]?.title ?? null,
+                    nextNumber: isLast ? null : state.chapterIndex + 2,
+                    held,
+                    onHold: () => setHeldAt(state.chapterIndex),
+                    onNext: advance,
+                    onReplay: () => player.play(),
+                  }
+                : null
+            }
+          />
+          <TourCaption />
+          <TourControls player={player} onMutedChange={onMutedChange} />
         </div>
         <div className="sr-only" aria-live="polite" aria-atomic="true">
           {`Chapter ${state.chapterIndex + 1} of ${TOUR_CHAPTERS.length}: ${chapter.title}. ${chapter.summary}`}
         </div>
       </div>
       <AppDialog.Footer
-        hint={`${state.chapterIndex + 1} of ${TOUR_CHAPTERS.length}`}
+        hint={`Chapter ${state.chapterIndex + 1} of ${TOUR_CHAPTERS.length}`}
         secondaryAction={
           state.chapterIndex > 0 ? { label: "Back", onClick: () => player.previous() } : undefined
         }
@@ -195,7 +205,9 @@ export function TourDialog({
       data-testid="daintree-tour"
     >
       <AppDialog.Header>
-        <AppDialog.Title>Daintree Tour</AppDialog.Title>
+        <AppDialog.Title icon={<DaintreeIcon size={20} className="shrink-0 text-text-primary" />}>
+          Daintree Tour
+        </AppDialog.Title>
         <AppDialog.CloseButton aria-label="Close tour" />
       </AppDialog.Header>
       {player && (

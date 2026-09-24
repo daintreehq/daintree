@@ -7,7 +7,7 @@
 export interface TourChapter {
   id: string;
   title: string;
-  /** One or two sentences shown beside the player — readable without audio. */
+  /** One or two sentences announced with the chapter; the captions carry it on screen. */
   summary: string;
   narration: string;
 }

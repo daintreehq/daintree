@@ -37,15 +37,26 @@ export const TOUR_SCENES: Record<string, ComponentType> = {
 };
 
 /**
- * The narration line, always shown, under the stage rather than over it so it
- * can never hide the part of the mockup being talked about.
+ * The narration line, in a band of its own under the stage rather than over
+ * it, so it can never hide the part of the mockup being talked about. The band
+ * is always two lines tall: a one-line cue, a two-line cue, and the silence
+ * between them all leave everything around it exactly where it was.
  */
 export function TourCaption() {
   const player = useTourPlayer();
   const time = useTourTime();
   const caption = player.timing.captions.find((c) => time >= c.start && time < c.end);
   return (
-    <p className="min-h-[2.5rem] text-center text-sm text-text-primary">{caption?.text ?? ""}</p>
+    <div className="flex h-16 items-center justify-center border-t border-border-subtle bg-surface-panel px-8">
+      {caption && (
+        <p
+          key={caption.start}
+          className="max-w-[60ch] text-balance text-center text-sm leading-snug text-text-primary motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-150)]"
+        >
+          {caption.text}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -55,6 +66,8 @@ export const TOUR_AUTO_ADVANCE_MS = 3000;
 export interface TourEndCard {
   /** Title of the chapter Next leads to; null on the last chapter. */
   nextTitle: string | null;
+  /** One-based number of that chapter; null on the last chapter. */
+  nextNumber: number | null;
   /** The user asked to stay: no countdown, no auto-advance. */
   held: boolean;
   onHold: () => void;
@@ -78,12 +91,24 @@ const RING_STYLE = {
  * the tour keeps its pace without waiting to be pushed. The last chapter
  * doesn't advance on its own; finishing is the user's call.
  */
-function EndCard({ nextTitle, held, onHold, onNext, onReplay }: TourEndCard) {
+function EndCard({
+  nextTitle,
+  nextNumber,
+  held,
+  onHold,
+  onNext,
+  onReplay,
+  onUnmountWithFocus,
+}: TourEndCard & { onUnmountWithFocus: () => void }) {
   const autoAdvance = nextTitle !== null && !held;
+  const ref = useRef<HTMLDivElement>(null);
+  const nextRef = useRef<HTMLButtonElement>(null);
   const onNextRef = useRef(onNext);
+  const handoffRef = useRef(onUnmountWithFocus);
   useEffect(() => {
     onNextRef.current = onNext;
-  }, [onNext]);
+    handoffRef.current = onUnmountWithFocus;
+  }, [onNext, onUnmountWithFocus]);
 
   useEffect(() => {
     if (!autoAdvance) return;
@@ -91,63 +116,87 @@ function EndCard({ nextTitle, held, onHold, onNext, onReplay }: TourEndCard) {
     return () => window.clearTimeout(timer);
   }, [autoAdvance]);
 
+  // Whatever takes the card away (the countdown, Replay, a click on the track),
+  // focus inside it would otherwise fall to <body> and out of the dialog.
+  useLayoutEffect(() => {
+    const node = ref.current;
+    return () => {
+      if (node?.contains(document.activeElement)) handoffRef.current();
+    };
+  }, []);
+
   return (
-    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-surface-canvas/85 backdrop-blur-[2px] motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]">
+    <div
+      ref={ref}
+      className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-surface-canvas/90 backdrop-blur-md motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]"
+    >
       <span className="text-xs font-medium text-text-secondary">
-        {nextTitle ? "Up next" : "That's the tour"}
+        {nextTitle ? `Up next · Chapter ${nextNumber}` : "That's the tour"}
       </span>
-      <span className="text-xl font-semibold tracking-tight text-text-primary">
+      <span className="mt-1.5 text-xl font-semibold tracking-tight text-text-primary">
         {nextTitle ?? "Try it for real"}
       </span>
       {!nextTitle && (
-        <span className="-mt-1.5 text-xs text-text-secondary">
+        <span className="mt-1 text-xs text-text-secondary">
           Finish opens the Getting Started checklist to run your first agents
         </span>
       )}
-      <button
-        type="button"
-        onClick={onNext}
-        aria-label={nextTitle ? `Next: ${nextTitle}` : "Finish tour and open Getting Started"}
-        className="relative mt-1 flex size-[76px] items-center justify-center rounded-full outline-hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-border-interactive"
-      >
-        {autoAdvance && (
-          <svg className="absolute inset-0 -rotate-90" viewBox="0 0 76 76" aria-hidden="true">
-            <circle
-              cx="38"
-              cy="38"
-              r={RING_RADIUS}
-              fill="none"
-              strokeWidth="3"
-              className="stroke-overlay-strong"
-            />
-            <circle
-              cx="38"
-              cy="38"
-              r={RING_RADIUS}
-              fill="none"
-              strokeWidth="3"
-              strokeLinecap="round"
-              className="tour-countdown-ring stroke-text-primary"
-              style={RING_STYLE}
-            />
-          </svg>
-        )}
-        <span className="flex size-14 items-center justify-center rounded-full bg-text-primary text-text-inverse shadow-[var(--theme-shadow-ambient)] transition-[background-color] duration-150 ease-out">
-          {nextTitle ? (
-            <ArrowRight className="size-6" aria-hidden="true" />
-          ) : (
-            <Check className="size-6" aria-hidden="true" />
+      {nextTitle ? (
+        <button
+          ref={nextRef}
+          type="button"
+          onClick={onNext}
+          aria-label={`Next: ${nextTitle}`}
+          className="relative mt-5 flex size-[76px] items-center justify-center rounded-full outline-hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-border-interactive"
+        >
+          {autoAdvance && (
+            <svg className="absolute inset-0 -rotate-90" viewBox="0 0 76 76" aria-hidden="true">
+              <circle
+                cx="38"
+                cy="38"
+                r={RING_RADIUS}
+                fill="none"
+                strokeWidth="3"
+                className="stroke-overlay-strong"
+              />
+              <circle
+                cx="38"
+                cy="38"
+                r={RING_RADIUS}
+                fill="none"
+                strokeWidth="3"
+                strokeLinecap="round"
+                className="tour-countdown-ring stroke-text-primary"
+                style={RING_STYLE}
+              />
+            </svg>
           )}
-        </span>
-      </button>
-      <div className="flex items-center gap-1">
+          <span className="flex size-14 items-center justify-center rounded-full bg-text-primary text-text-inverse shadow-[var(--theme-shadow-ambient)]">
+            <ArrowRight className="size-6" aria-hidden="true" />
+          </span>
+        </button>
+      ) : (
+        <Button ref={nextRef} variant="contrast" className="mt-5" onClick={onNext}>
+          <Check aria-hidden="true" />
+          Finish tour
+        </Button>
+      )}
+      <div className="mt-4 flex items-center gap-1">
         <Button variant="ghost" size="sm" onClick={onReplay}>
           <RotateCcw aria-hidden="true" />
           Replay
         </Button>
         {autoAdvance && (
-          <Button variant="ghost" size="sm" onClick={onHold}>
-            <Pause aria-hidden="true" />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              // The button goes with the countdown; keep focus on the card.
+              nextRef.current?.focus();
+              onHold();
+            }}
+          >
+            <Pause className="fill-current" aria-hidden="true" />
             Stay here
           </Button>
         )}
@@ -159,28 +208,42 @@ function EndCard({ nextTitle, held, onHold, onNext, onReplay }: TourEndCard) {
 /**
  * The whole stage is a play/pause surface, like a video. A real button under
  * the scene so it takes focus and keyboard activation; the end card sits above
- * it with its own controls.
+ * it with its own controls. Paused, the scene dims a step and a large play
+ * mark sits over it, so a stopped tour never reads as a frozen one.
  */
-function PlaySurface() {
+function PlaySurface({
+  buttonRef,
+  covered,
+}: {
+  buttonRef: React.RefObject<HTMLButtonElement | null>;
+  /** The end card is over the stage: it owns the stage's controls until it goes. */
+  covered: boolean;
+}) {
   const player = useTourPlayer();
   const state = useTourPlayerState(player);
   const paused = state.status === "paused" || state.status === "idle";
   return (
     <>
       <button
+        ref={buttonRef}
         type="button"
-        aria-label="Play or pause the tour"
+        aria-label="Play"
+        aria-pressed={state.status === "playing"}
+        data-testid="tour-stage-toggle"
+        inert={covered}
         onClick={() => player.toggle()}
-        className="absolute inset-0 z-10 cursor-pointer outline-hidden focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-solid focus-visible:outline-border-interactive"
+        className="group/stage absolute inset-0 z-10 cursor-pointer outline-hidden focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-solid focus-visible:outline-border-interactive"
       />
       <span
         aria-hidden="true"
         className={cn(
-          "pointer-events-none absolute left-1/2 top-1/2 z-10 flex size-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-surface-panel-elevated text-text-primary shadow-[var(--theme-shadow-ambient)] transition-opacity duration-150 ease-out",
+          "pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-surface-canvas/40 transition-opacity duration-150 ease-out",
           paused ? "opacity-100" : "opacity-0"
         )}
       >
-        <Play className="ml-0.5 size-6" />
+        <span className="flex size-16 items-center justify-center rounded-full border border-border-default bg-surface-panel-elevated text-text-primary shadow-[var(--theme-shadow-ambient)]">
+          <Play className="ml-1 size-7 fill-current" />
+        </span>
       </span>
     </>
   );
@@ -190,7 +253,8 @@ function PlaySurface() {
  * The scene viewport. Scenes are authored on a fixed canvas and scaled to the
  * stage's width, so every mockup keeps its proportions at any dialog size.
  * The scene inherits the live theme — it is built from the same tokens as the
- * real UI, not a picture of it.
+ * real UI, not a picture of it. A new chapter fades up from the canvas rather
+ * than cutting, so the change of scene reads as a change of chapter.
  */
 export function TourStage({
   chapterId,
@@ -201,6 +265,7 @@ export function TourStage({
   endCard: TourEndCard | null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const playRef = useRef<HTMLButtonElement>(null);
   const [scale, setScale] = useState(1);
 
   useLayoutEffect(() => {
@@ -216,26 +281,22 @@ export function TourStage({
   const Scene = TOUR_SCENES[chapterId];
 
   return (
-    // The stage is the only part of the dialog that can give up space, so on a
-    // short window its width follows the height left after the dialog's chrome
-    // (header, controls, chapter text, footer — about 20rem).
     <div
       ref={ref}
-      className={cn(
-        "relative mx-auto aspect-video w-full max-w-[calc((92vh-20rem)*16/9)] select-none overflow-hidden rounded-lg border border-border-subtle bg-surface-canvas"
-      )}
+      className="relative aspect-video w-full select-none overflow-hidden bg-surface-canvas"
     >
-      {/* The mockup is illustration; the chapter text and captions carry the content. */}
+      {/* The mockup is illustration; the chapter title and captions carry the content. */}
       <div
+        key={chapterId}
         aria-hidden="true"
         data-tour-canvas=""
-        className="absolute left-0 top-0 origin-top-left"
+        className="absolute left-0 top-0 origin-top-left motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]"
         style={{ width: TOUR_CANVAS.width, height: TOUR_CANVAS.height, scale: String(scale) }}
       >
-        {Scene && <Scene key={chapterId} />}
+        {Scene && <Scene />}
       </div>
-      <PlaySurface />
-      {endCard && <EndCard {...endCard} />}
+      <PlaySurface buttonRef={playRef} covered={endCard !== null} />
+      {endCard && <EndCard {...endCard} onUnmountWithFocus={() => playRef.current?.focus()} />}
     </div>
   );
 }

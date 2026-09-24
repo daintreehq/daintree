@@ -53,6 +53,7 @@ class SilentAudio {
 
 import { TOUR_CHAPTERS } from "../tourChapters";
 import { TourDialog, type TourDialogProps } from "../TourDialog";
+import type { TourPlayer } from "../TourPlayer";
 
 function renderDialog(overrides: Partial<TourDialogProps> = {}) {
   const props: TourDialogProps = {
@@ -100,7 +101,7 @@ describe("TourDialog", () => {
   it("resumes on the chapter it was opened at", () => {
     renderDialog({ initialChapter: 3 });
     expect(screen.getByRole("heading", { level: 3 }).textContent).toBe(TOUR_CHAPTERS[3]!.title);
-    expect(screen.getByTestId("hint").textContent).toBe(`4 of ${TOUR_CHAPTERS.length}`);
+    expect(screen.getByTestId("hint").textContent).toBe(`Chapter 4 of ${TOUR_CHAPTERS.length}`);
   });
 
   it("finishes from the last chapter: completes, closes, and hands over to Getting Started", () => {
@@ -142,5 +143,78 @@ describe("TourDialog", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     // Every chapter's narration was preloaded on open; each is released.
     expect(pause).toHaveBeenCalled();
+  });
+
+  describe("chapter endings", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function renderAt(chapter: number) {
+      let player: TourPlayer | null = null;
+      const view = renderDialog({ initialChapter: chapter, onPlayer: (p) => (player = p) });
+      const end = () => {
+        act(() => {
+          player!.seek(player!.timing.duration - 0.05);
+          // Past the narration hold, then far enough for the timeline to finish.
+          vi.advanceTimersByTime(2000);
+        });
+        expect(player!.getState().status).toBe("ended");
+      };
+      return { ...view, player: () => player!, end };
+    }
+
+    it("hands focus back to the stage when the end card leaves", () => {
+      const { end, player } = renderAt(1);
+      end();
+      // The card's own Replay, not the player bar's.
+      const replay = screen
+        .getAllByRole("button", { name: "Replay" })
+        .find((b) => b.textContent === "Replay")!;
+      replay.focus();
+      act(() => {
+        fireEvent.click(replay);
+      });
+      expect(player().getState().status).toBe("playing");
+      expect(document.activeElement).toBe(screen.getByTestId("tour-stage-toggle"));
+    });
+
+    it("counts down afresh after a held chapter plays again", () => {
+      const { end, player } = renderAt(1);
+      end();
+      fireEvent.click(screen.getByRole("button", { name: "Stay here" }));
+      expect(screen.queryByRole("button", { name: "Stay here" })).toBeNull();
+
+      act(() => {
+        player().play();
+      });
+      end();
+      expect(screen.queryByRole("button", { name: "Stay here" })).not.toBeNull();
+    });
+  });
+
+  it("starts another chapter from its beginning, wherever its segment is clicked", () => {
+    let player: TourPlayer | null = null;
+    renderDialog({ onPlayer: (p) => (player = p) });
+    const segment = screen.getByRole("button", { name: `Chapter 3: ${TOUR_CHAPTERS[2]!.title}` });
+    segment.getBoundingClientRect = () => new DOMRect(0, 0, 100, 24);
+    fireEvent.click(segment, { detail: 1, clientX: 80 });
+    expect(player!.getState().chapterIndex).toBe(2);
+    expect(player!.getTime()).toBe(0);
+  });
+
+  it("exposes the playing chapter as a slider with spoken time", () => {
+    let player: TourPlayer | null = null;
+    renderDialog({ onPlayer: (p) => (player = p) });
+    act(() => {
+      player!.pause();
+      player!.seek(7);
+    });
+    const slider = screen.getByRole("slider", { name: "Chapter position" });
+    expect(slider.getAttribute("aria-valuenow")).toBe("7");
+    expect(slider.getAttribute("aria-valuetext")).toMatch(/^7 seconds of \d+ seconds$/);
   });
 });
