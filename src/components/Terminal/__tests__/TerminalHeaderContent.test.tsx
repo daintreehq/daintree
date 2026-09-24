@@ -51,7 +51,9 @@ vi.mock("@/store/resourceMonitoringStore", () => ({
 }));
 
 vi.mock("../TerminalResourceSparkline", () => ({
-  TerminalResourceSparkline: () => <span data-testid="resource-sparkline" />,
+  TerminalResourceSparkline: ({ className }: { className?: string }) => (
+    <span data-testid="resource-sparkline" className={className} />
+  ),
 }));
 
 // The real chip only renders once a provider reports children over IPC.
@@ -164,13 +166,11 @@ describe("TerminalHeaderContent — settled-agent trace", () => {
 });
 
 describe("TerminalHeaderContent — resource severity hysteresis", () => {
-  // Muted severity is pinned by the absence of both escalated tones rather than
-  // by its own colour class. Which colour "muted" paints in is an implementation
-  // value — it moved off `text-daintree-text/40` in #12003 — while the ladder
-  // position these hysteresis tests exist to prove is what stays true.
-  function expectMutedSeverity(className: string | null) {
-    expect(className).not.toContain("text-status-warning");
-    expect(className).not.toContain("text-status-error");
+  // The band is read off `data-severity`, not a colour class: which tone each
+  // band paints in is an implementation value, while the ladder position these
+  // hysteresis tests exist to prove is what stays true.
+  function expectMutedSeverity(severity: string | null) {
+    expect(severity).toBe("muted");
   }
 
   function makeResourceState(cpuPercent: number, memoryKb = 200_000) {
@@ -182,16 +182,13 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     };
   }
 
-  it("renders resource wrapper with transition-colors and not transition-all", () => {
+  it("tints the CPU line with a narrow colour transition, never transition-all", () => {
     mockResourceEnabled = true;
     mockResourceState = makeResourceState(10);
 
-    const { container } = render(<TerminalHeaderContent id="t1" kind="terminal" />);
-    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
-    expect(wrapper).toBeTruthy();
-    const cls = wrapper!.getAttribute("class")!;
+    render(<TerminalHeaderContent id="t1" kind="terminal" />);
+    const cls = screen.getByTestId("resource-sparkline").getAttribute("class")!;
     expect(cls).toContain("transition-colors");
-    expect(cls).toContain("duration-150");
     expect(cls).not.toMatch(/\btransition-all\b/);
   });
 
@@ -200,8 +197,8 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     mockResourceState = makeResourceState(10);
 
     const { container } = render(<TerminalHeaderContent id="t1" kind="terminal" />);
-    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
-    expectMutedSeverity(wrapper!.getAttribute("class"));
+    const wrapper = container.querySelector('[data-testid="terminal-resource-badge"]');
+    expectMutedSeverity(wrapper!.getAttribute("data-severity"));
   });
 
   // Vary `queueCount` between renders so React.memo doesn't skip the re-render
@@ -226,8 +223,8 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 60, 1);
     pollResource(rerender, 60, 2);
 
-    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
-    expectMutedSeverity(wrapper!.getAttribute("class"));
+    const wrapper = container.querySelector('[data-testid="terminal-resource-badge"]');
+    expectMutedSeverity(wrapper!.getAttribute("data-severity"));
   });
 
   it("commits to amber after 3 consecutive polls above the threshold", () => {
@@ -242,8 +239,8 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 60, 2);
     pollResource(rerender, 60, 3);
 
-    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
-    expect(wrapper!.getAttribute("class")).toContain("text-status-warning");
+    const wrapper = container.querySelector('[data-testid="terminal-resource-badge"]');
+    expect(wrapper!.getAttribute("data-severity")).toBe("amber");
   });
 
   it("commits red, amber, then muted on a sustained downward sequence", () => {
@@ -253,13 +250,13 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     const { rerender, container } = render(
       <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
     );
-    const wrapperFor = () => container.querySelector(".inline-flex.items-center.gap-1.text-2xs")!;
+    const wrapperFor = () => container.querySelector('[data-testid="terminal-resource-badge"]')!;
 
     // Escalation reacts in 3 polls.
     pollResource(rerender, 90, 1);
     pollResource(rerender, 90, 2);
     pollResource(rerender, 90, 3);
-    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
+    expect(wrapperFor().getAttribute("data-severity")).toBe("red");
 
     // De-escalation lingers — requires 5 polls per downward step.
     pollResource(rerender, 60, 4);
@@ -267,15 +264,15 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 60, 6);
     pollResource(rerender, 60, 7);
     pollResource(rerender, 60, 8);
-    expect(wrapperFor().getAttribute("class")).toContain("text-status-warning");
-    expect(wrapperFor().getAttribute("class")).not.toContain("text-status-error");
+    expect(wrapperFor().getAttribute("data-severity")).toBe("amber");
+    expect(wrapperFor().getAttribute("data-severity")).not.toBe("red");
 
     pollResource(rerender, 10, 9);
     pollResource(rerender, 10, 10);
     pollResource(rerender, 10, 11);
     pollResource(rerender, 10, 12);
     pollResource(rerender, 10, 13);
-    expectMutedSeverity(wrapperFor().getAttribute("class"));
+    expectMutedSeverity(wrapperFor().getAttribute("data-severity"));
   });
 
   it("does not de-escalate after only 4 polls below the threshold", () => {
@@ -285,19 +282,19 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     const { rerender, container } = render(
       <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
     );
-    const wrapperFor = () => container.querySelector(".inline-flex.items-center.gap-1.text-2xs")!;
+    const wrapperFor = () => container.querySelector('[data-testid="terminal-resource-badge"]')!;
 
     pollResource(rerender, 90, 1);
     pollResource(rerender, 90, 2);
     pollResource(rerender, 90, 3);
-    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
+    expect(wrapperFor().getAttribute("data-severity")).toBe("red");
 
     pollResource(rerender, 60, 4);
     pollResource(rerender, 60, 5);
     pollResource(rerender, 60, 6);
     pollResource(rerender, 60, 7);
-    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
-    expect(wrapperFor().getAttribute("class")).not.toContain("text-status-warning");
+    expect(wrapperFor().getAttribute("data-severity")).toBe("red");
+    expect(wrapperFor().getAttribute("data-severity")).not.toBe("amber");
   });
 
   it("de-escalates on exactly the 5th poll below the threshold", () => {
@@ -307,20 +304,20 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     const { rerender, container } = render(
       <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
     );
-    const wrapperFor = () => container.querySelector(".inline-flex.items-center.gap-1.text-2xs")!;
+    const wrapperFor = () => container.querySelector('[data-testid="terminal-resource-badge"]')!;
 
     pollResource(rerender, 90, 1);
     pollResource(rerender, 90, 2);
     pollResource(rerender, 90, 3);
-    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
+    expect(wrapperFor().getAttribute("data-severity")).toBe("red");
 
     pollResource(rerender, 60, 4);
     pollResource(rerender, 60, 5);
     pollResource(rerender, 60, 6);
     pollResource(rerender, 60, 7);
     pollResource(rerender, 60, 8);
-    expect(wrapperFor().getAttribute("class")).toContain("text-status-warning");
-    expect(wrapperFor().getAttribute("class")).not.toContain("text-status-error");
+    expect(wrapperFor().getAttribute("data-severity")).toBe("amber");
+    expect(wrapperFor().getAttribute("data-severity")).not.toBe("red");
   });
 
   it("keeps the hotter band when severity oscillates within the 3-5 de-escalation gap", () => {
@@ -330,19 +327,19 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     const { rerender, container } = render(
       <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
     );
-    const wrapperFor = () => container.querySelector(".inline-flex.items-center.gap-1.text-2xs")!;
+    const wrapperFor = () => container.querySelector('[data-testid="terminal-resource-badge"]')!;
 
     pollResource(rerender, 90, 1);
     pollResource(rerender, 90, 2);
     pollResource(rerender, 90, 3);
-    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
+    expect(wrapperFor().getAttribute("data-severity")).toBe("red");
 
     // 4 cool polls — one short of the 5-poll de-escalation commit.
     pollResource(rerender, 60, 4);
     pollResource(rerender, 60, 5);
     pollResource(rerender, 60, 6);
     pollResource(rerender, 60, 7);
-    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
+    expect(wrapperFor().getAttribute("data-severity")).toBe("red");
 
     // A single hot poll matches the displayed band and resets the pending counter.
     pollResource(rerender, 90, 8);
@@ -352,8 +349,8 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 60, 10);
     pollResource(rerender, 60, 11);
     pollResource(rerender, 60, 12);
-    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
-    expect(wrapperFor().getAttribute("class")).not.toContain("text-status-warning");
+    expect(wrapperFor().getAttribute("data-severity")).toBe("red");
+    expect(wrapperFor().getAttribute("data-severity")).not.toBe("amber");
   });
 
   it("de-escalates red straight to muted without stepping through amber", () => {
@@ -363,19 +360,19 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     const { rerender, container } = render(
       <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
     );
-    const wrapperFor = () => container.querySelector(".inline-flex.items-center.gap-1.text-2xs")!;
+    const wrapperFor = () => container.querySelector('[data-testid="terminal-resource-badge"]')!;
 
     pollResource(rerender, 90, 1);
     pollResource(rerender, 90, 2);
     pollResource(rerender, 90, 3);
-    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
+    expect(wrapperFor().getAttribute("data-severity")).toBe("red");
 
     pollResource(rerender, 10, 4);
     pollResource(rerender, 10, 5);
     pollResource(rerender, 10, 6);
     pollResource(rerender, 10, 7);
     pollResource(rerender, 10, 8);
-    expectMutedSeverity(wrapperFor().getAttribute("class"));
+    expectMutedSeverity(wrapperFor().getAttribute("data-severity"));
   });
 
   it("commits to red via the memory threshold alone", () => {
@@ -395,8 +392,41 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollMemory(2_500_000, 2);
     pollMemory(2_500_000, 3);
 
-    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
-    expect(wrapper!.getAttribute("class")).toContain("text-status-error");
+    const wrapper = container.querySelector('[data-testid="terminal-resource-badge"]');
+    expect(wrapper!.getAttribute("data-severity")).toBe("red");
+    // The band belongs to memory: the CPU reading and its line stay calm.
+    expect(wrapper!.getAttribute("data-memory-severity")).toBe("red");
+    expect(wrapper!.getAttribute("data-cpu-severity")).toBe("muted");
+  });
+
+  it("marks each escalated reading with a shape that differs by band", () => {
+    mockResourceEnabled = true;
+    mockResourceState = makeResourceState(10, 200_000);
+    const { rerender, container } = render(
+      <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
+    );
+    const marks = () =>
+      Array.from(container.querySelectorAll("[data-severity-mark]")).map((el) => ({
+        band: el.getAttribute("data-severity-mark"),
+        shape: el
+          .getAttribute("class")
+          ?.match(/lucide-[\w-]+/g)
+          ?.join(" "),
+      }));
+
+    expect(marks()).toEqual([]);
+
+    // CPU amber, memory red: one mark per escalated reading.
+    for (let i = 1; i <= 3; i++) {
+      mockResourceState = makeResourceState(60, 2_500_000);
+      rerender(<TerminalHeaderContent id="t1" kind="terminal" queueCount={i} />);
+    }
+    const [cpuMark, memoryMark] = marks();
+    expect(cpuMark!.band).toBe("amber");
+    expect(memoryMark!.band).toBe("red");
+    // Forced colours and colour-blind readers get the band from the outline.
+    expect(cpuMark!.shape).toBeTruthy();
+    expect(cpuMark!.shape).not.toBe(memoryMark!.shape);
   });
 
   it("resets sticky severity to muted when monitoring is disabled and re-enabled", () => {
@@ -410,8 +440,8 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 60, 1);
     pollResource(rerender, 60, 2);
     pollResource(rerender, 60, 3);
-    let wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
-    expect(wrapper!.getAttribute("class")).toContain("text-status-warning");
+    let wrapper = container.querySelector('[data-testid="terminal-resource-badge"]');
+    expect(wrapper!.getAttribute("data-severity")).toBe("amber");
 
     mockResourceEnabled = false;
     mockResourceState = null;
@@ -421,8 +451,8 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     mockResourceState = makeResourceState(10);
     rerender(<TerminalHeaderContent id="t1" kind="terminal" queueCount={5} />);
 
-    wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
-    expectMutedSeverity(wrapper!.getAttribute("class"));
+    wrapper = container.querySelector('[data-testid="terminal-resource-badge"]');
+    expectMutedSeverity(wrapper!.getAttribute("data-severity"));
   });
 
   it("resets candidate counter when severity oscillates back during the run", () => {
@@ -439,8 +469,55 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 60, 4);
     pollResource(rerender, 60, 5);
 
-    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
-    expectMutedSeverity(wrapper!.getAttribute("class"));
+    const wrapper = container.querySelector('[data-testid="terminal-resource-badge"]');
+    expectMutedSeverity(wrapper!.getAttribute("data-severity"));
+  });
+});
+
+describe("TerminalHeaderContent — resource breakdown", () => {
+  const breakdown = [
+    { pid: 11, comm: "cargo", cpuPercent: 212.6, memoryKb: 1_320_000 },
+    { pid: 12, comm: "rustc", cpuPercent: 96.3, memoryKb: 940_000 },
+  ];
+
+  it("says the rows are a subset when the tree holds more processes than it lists", () => {
+    mockResourceEnabled = true;
+    mockResourceState = {
+      cpuPercent: 40,
+      memoryKb: 2_500_000,
+      cpuHistory: [1, 2],
+      breakdown,
+      processCount: 14,
+    };
+    render(<TerminalHeaderContent id="t1" kind="terminal" />);
+    const tip = screen.getByTestId("tooltip-content").textContent ?? "";
+    expect(tip).toContain(`${breakdown.length} of 14`);
+  });
+
+  it("adds no subset note when every process is listed", () => {
+    mockResourceEnabled = true;
+    mockResourceState = {
+      cpuPercent: 40,
+      memoryKb: 2_500_000,
+      cpuHistory: [1, 2],
+      breakdown,
+      processCount: breakdown.length,
+    };
+    render(<TerminalHeaderContent id="t1" kind="terminal" />);
+    expect(screen.getByTestId("tooltip-content").textContent).not.toMatch(/ of \d+ processes/);
+  });
+
+  it("explains a reading above one core, and only then", () => {
+    mockResourceEnabled = true;
+    mockResourceState = { cpuPercent: 308.9, memoryKb: 2_500_000, cpuHistory: [1, 2], breakdown };
+    const { unmount } = render(<TerminalHeaderContent id="t1" kind="terminal" />);
+    const note = /every core/;
+    expect(screen.getByTestId("tooltip-content").textContent).toMatch(note);
+    unmount();
+
+    mockResourceState = { cpuPercent: 99.5, memoryKb: 2_500_000, cpuHistory: [1, 2], breakdown };
+    render(<TerminalHeaderContent id="t1" kind="terminal" />);
+    expect(screen.getByTestId("tooltip-content").textContent).not.toMatch(note);
   });
 });
 
@@ -474,8 +551,27 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
     expect(badge.getAttribute("role")).toBe("status");
   });
 
+  it("resource badge stays silent but is reachable and named for keyboard users", () => {
+    mockResourceEnabled = true;
+    mockResourceState = {
+      cpuPercent: 12.4,
+      memoryKb: 290_000,
+      cpuHistory: [1, 2, 3],
+      breakdown: [],
+    };
+    render(<TerminalHeaderContent id="t1" kind="terminal" />);
+    const badge = screen.getByTestId("terminal-resource-badge");
+    expect(badge.getAttribute("aria-live")).toBe("off");
+    expect(badge.tabIndex).toBe(0);
+    const name = badge.getAttribute("aria-label") ?? "";
+    expect(name).toMatch(/CPU 12%/);
+    expect(name).toMatch(/memory 283M/);
+  });
+
   it("no badge declares aria-live='polite'", () => {
     mockTerminal = { id: "t1" };
+    mockResourceEnabled = true;
+    mockResourceState = { cpuPercent: 12, memoryKb: 2048, cpuHistory: [1, 2], breakdown: [] };
     const { container } = render(
       <TerminalHeaderContent
         id="t1"
@@ -486,6 +582,7 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
       />
     );
     expect(container.querySelectorAll('[aria-live="polite"]').length).toBe(0);
+    expect(container.querySelectorAll('[role="status"]:not([aria-live="off"])').length).toBe(0);
   });
 });
 

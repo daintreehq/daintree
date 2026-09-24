@@ -186,6 +186,57 @@ describe("getTreeResourceSummary", () => {
   });
 });
 
+describe("getTreeResourceSummary breakdown cap", () => {
+  // Root 100 with 13 children: twelve busy small processes and one idle giant.
+  function createWideTree(): ProcessTreeCache {
+    const processTree = new ProcessTreeCache();
+    const internals = processTree as unknown as {
+      cache: Map<number, ProcessInfo>;
+      childrenMap: Map<number, number[]>;
+    };
+    const children = Array.from({ length: 12 }, (_, i) => 101 + i);
+    const entries: Array<[number, ProcessInfo]> = [
+      [100, { pid: 100, ppid: 1, comm: "zsh", command: "zsh", cpuPercent: 0, rssKb: 4000 }],
+      ...children.map((pid, i): [number, ProcessInfo] => [
+        pid,
+        { pid, ppid: 100, comm: "worker", command: "worker", cpuPercent: 20 - i, rssKb: 10_000 },
+      ]),
+      [
+        200,
+        {
+          pid: 200,
+          ppid: 100,
+          comm: "tsserver",
+          command: "tsserver",
+          cpuPercent: 0,
+          rssKb: 2_000_000,
+        },
+      ],
+    ];
+    internals.cache = new Map(entries);
+    internals.childrenMap = new Map([[100, [...children, 200]]]);
+    return processTree;
+  }
+
+  it("keeps the largest resident process even when its CPU ranks it out", () => {
+    const summary = createWideTree().getTreeResourceSummary(100)!;
+    expect(summary.breakdown.length).toBeLessThan(summary.processCount);
+    expect(summary.breakdown.map((p) => p.pid)).toContain(200);
+  });
+
+  it("reports how many processes the capped breakdown was drawn from", () => {
+    const summary = createWideTree().getTreeResourceSummary(100)!;
+    expect(summary.processCount).toBe(14);
+  });
+
+  it("still lists the busiest processes first", () => {
+    const { breakdown } = createWideTree().getTreeResourceSummary(100)!;
+    const cpu = breakdown.filter((p) => p.pid !== 200).map((p) => p.cpuPercent);
+    expect(cpu).toEqual([...cpu].sort((a, b) => b - a));
+    expect(cpu[0]).toBe(20);
+  });
+});
+
 describe("aggregateSubtreeMemory", () => {
   // Seeded tree: 1 -> [2, 3], 2 -> [4]; rss 2=50000, 3=30000, 4=20000.
   it("sums root + descendants per key and sorts top processes by memory", () => {
