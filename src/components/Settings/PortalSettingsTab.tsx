@@ -429,7 +429,9 @@ export function PortalSettingsTab() {
         resetAriaLabel={`Reset ${shipped?.title ?? link.title} to its default`}
         label={
           <span className="flex items-center gap-2">
-            {allowDelete ? <FaviconIcon url={link.url} /> : <ServiceIcon name={link.icon} />}
+            <span className="flex shrink-0">
+              {allowDelete ? <FaviconIcon url={link.url} /> : <ServiceIcon name={link.icon} />}
+            </span>
             {link.title}
           </span>
         }
