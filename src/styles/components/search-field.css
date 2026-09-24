@@ -199,7 +199,7 @@
     /* One control, one border: the generic "border on every native form control"
        rule would give the inner input a square box inside the rounded field. */
     .search-field-input {
-      border: none;
+      border: none !important;
     }
 
     .search-field {
@@ -233,6 +233,13 @@
        text run; the field's outline above is the one indicator. */
     .search-field-input:focus-visible {
       outline: none !important;
+    }
+
+    /* !important because this file is layered and index.css's forced-colors
+       `input { border: 1px solid FieldText }` is not: a layered normal rule
+       loses to it, and the field would grow a square box inside itself. */
+    .search-field-input {
+      border: none !important;
     }
   }
 }

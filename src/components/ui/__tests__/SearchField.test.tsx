@@ -110,6 +110,17 @@ describe("search field styling contract", () => {
     expect(rest).not.toMatch(/border-input/);
   });
 
+  it("keeps the inner input borderless even against index.css's unlayered contrast-mode borders", () => {
+    // This file sits in @layer components; a normal declaration there loses to
+    // the unlayered `input { border: … }` the contrast modes set, and the field
+    // grows a square box inside itself. Only !important reverses that.
+    for (const query of ["forced-colors: active", "prefers-contrast: more"]) {
+      const at = BARE.indexOf(`@media (${query})`);
+      const block = BARE.slice(at, BARE.indexOf("\n  }\n", at));
+      expect(block, query).toMatch(/\.search-field-input\s*\{\s*border:\s*none\s*!important/);
+    }
+  });
+
   it("keeps forced-colors and increased-contrast handling in separate blocks", () => {
     const queries = [...BARE.matchAll(/@media([^{]*)\{/g)].map((m) => m[1]!.trim());
     expect(queries).toContain("(forced-colors: active)");

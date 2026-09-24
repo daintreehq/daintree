@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useId } from "react";
 import { X, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -311,6 +311,8 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     return "Found";
   })();
 
+  const regexErrorId = useId();
+
   const atHighlightLimit =
     searchStatus === "found" &&
     matchResults !== null &&
@@ -342,6 +344,11 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               placeholder="Find in terminal"
               aria-label="Find in terminal"
               invalid={searchStatus === "invalidRegex"}
+              // Radix describes the wrapper it anchors to, not this input, so
+              // the reason travels to the input explicitly.
+              aria-describedby={
+                searchStatus === "invalidRegex" && regexError ? regexErrorId : undefined
+              }
               data-terminal-search-input
             />
           </div>
@@ -350,6 +357,9 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
           {regexError}
         </TooltipContent>
       </Tooltip>
+      <span id={regexErrorId} className="sr-only">
+        {regexError}
+      </span>
 
       <Tooltip>
         <TooltipTrigger asChild>

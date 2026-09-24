@@ -389,7 +389,7 @@ export function DiffFileSidebar({
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
           onClear={() => setFilter("")}
-          clearLabel="Clear filter"
+          clearLabel="Clear file filter"
           onKeyDown={(event) => {
             // Escape clears an active filter instead of bubbling to the
             // dialog's escape stack and closing the whole workspace.
