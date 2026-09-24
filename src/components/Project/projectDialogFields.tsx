@@ -134,7 +134,8 @@ export function BrowseSlotButton({
           <FolderOpen className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       </TooltipTrigger>
-      <TooltipContent side="left">
+      {/* Above, not beside: to the left it lands on the field and hides the path. */}
+      <TooltipContent side="top">
         <p>Browse for a folder</p>
       </TooltipContent>
     </Tooltip>
