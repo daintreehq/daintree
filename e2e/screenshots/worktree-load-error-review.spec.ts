@@ -47,15 +47,17 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
  * can't be imported here. `expect` is the text the frame must carry before it
  * is written, so a fixture that fell through to the wrong branch fails loudly.
  */
-const FIXTURES: ReadonlyArray<{ name: string; expect: RegExp[] }> = [
+const FIXTURES: ReadonlyArray<{ name: string; expect: RegExp[]; absent?: RegExp[] }> = [
   { name: "loading", expect: [/Couldn.t load worktrees/] },
   { name: "empty", expect: [/Couldn.t load worktrees/] },
   { name: "populated", expect: [/Couldn.t load worktrees/, /issue-12488-handback/] },
   { name: "long-error", expect: [/Couldn.t load worktrees/] },
   { name: "disconnected", expect: [/isn.t connected/] },
+  // Retry cannot bring back a crashed host, so the load banner yields here.
   {
     name: "with-service-error",
-    expect: [/Couldn.t load worktrees/, /Workspace service unavailable/],
+    expect: [/Workspace service unavailable/],
+    absent: [/Couldn.t load worktrees/],
   },
   { name: "disconnected-service-error", expect: [/Workspace service unavailable/] },
 ];
@@ -94,9 +96,15 @@ async function open(page: Page, fixture: string, theme: string, width = DEFAULT_
   await page.waitForTimeout(900);
 }
 
-async function snap(target: Locator, file: string, expects: RegExp[]): Promise<string> {
+async function snap(
+  target: Locator,
+  file: string,
+  expects: RegExp[],
+  absent: RegExp[] = []
+): Promise<string> {
   await expect(target).toBeVisible();
   for (const text of expects) await expect(target).toContainText(text);
+  for (const text of absent) await expect(target).not.toContainText(text);
   const box = await target.boundingBox();
   if (!box || box.width < 8 || box.height < 8) {
     throw new Error(`${file}: target has no real box (${JSON.stringify(box)}) — refusing to write`);
@@ -124,7 +132,9 @@ test("Worktree load error — states, widths and themes", async ({ page }) => {
   for (const theme of THEMES) {
     for (const fixture of FIXTURES) {
       await open(page, fixture.name, theme);
-      written.push(await snap(shell(page), `${fixture.name}-${theme}.png`, fixture.expect));
+      written.push(
+        await snap(shell(page), `${fixture.name}-${theme}.png`, fixture.expect, fixture.absent)
+      );
     }
   }
 
@@ -132,7 +142,9 @@ test("Worktree load error — states, widths and themes", async ({ page }) => {
   for (const name of NARROW_FIXTURES) {
     const fixture = FIXTURES.find((f) => f.name === name)!;
     await open(page, name, theme, NARROW_WIDTH);
-    written.push(await snap(shell(page), `${name}-${theme}-narrow.png`, fixture.expect));
+    written.push(
+      await snap(shell(page), `${name}-${theme}-narrow.png`, fixture.expect, fixture.absent)
+    );
   }
 
   // Keyboard focus on the recovery action, reached the way a keyboard user does.
