@@ -1629,15 +1629,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // when a switch's worktree load throws, the store stays empty so every
   // other branch would otherwise show no trace of the failure. An open project
   // with no snapshot once loading has settled is a connection failure (#12576)
-  // and takes the same banner. It yields to the service banner: a crashed host
-  // needs Restart, and Retry beside it offers a fix that cannot work.
+  // and takes the same banner. It yields to any service error, shown or
+  // dismissed: a crashed host needs Restart, and Retry offers a fix that
+  // cannot work.
   const loadFailure =
     worktreeLoadError ??
     (isProjectDisconnected && !isLoading && error === null ? WORKTREE_DISCONNECTED_MESSAGE : null);
   const worktreeLoadErrorBanner =
-    loadFailure !== null && errorBanner === null ? (
-      <WorktreeLoadErrorBanner error={loadFailure} />
-    ) : null;
+    loadFailure !== null && error === null ? <WorktreeLoadErrorBanner error={loadFailure} /> : null;
 
   // Mounted in both the zero-worktree early return and the main return path so
   // the errorBanner's "Restart Service" action stays reachable when

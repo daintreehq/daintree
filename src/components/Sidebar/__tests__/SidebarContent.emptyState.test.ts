@@ -644,13 +644,10 @@ describe("SidebarContent disconnected project — issue #12576", () => {
   });
 
   it("offers Retry only when Restart is not the fix", () => {
-    // Retry cannot bring back a crashed host, so while the service banner is up
-    // it is the only recovery on screen; dismissing it hands the slot back.
+    // Retry cannot bring back a crashed host, so any service error — its
+    // banner shown or dismissed — keeps Retry off screen.
     expect(source).toMatch(
-      /const worktreeLoadErrorBanner =\s*loadFailure !== null && errorBanner === null \?/
-    );
-    expect(source.indexOf("const errorBanner =")).toBeLessThan(
-      source.indexOf("const worktreeLoadErrorBanner =")
+      /const worktreeLoadErrorBanner =\s*loadFailure !== null && error === null \?/
     );
   });
 
