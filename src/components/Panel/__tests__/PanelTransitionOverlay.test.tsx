@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act } from "@testing-library/react";
 import { PanelTransitionOverlay, triggerPanelTransition } from "../PanelTransitionOverlay";
@@ -214,6 +215,24 @@ describe("PanelTransitionOverlay", () => {
       vi.advanceTimersByTime(getPanelTransitionDuration("restore") * 2);
     });
     expect(ghost(container)).toBeNull();
+  });
+
+  it("survives its effect being torn down and re-run, as StrictMode does on mount", async () => {
+    const onComplete = vi.fn();
+    const { container } = render(
+      <StrictMode>
+        <PanelTransitionOverlay onTransitionComplete={onComplete} />
+      </StrictMode>
+    );
+    fire("minimize", targetRect);
+    await act(async () => {
+      await Promise.allSettled(
+        animations.filter((a) => a.cancel.mock.calls.length > 0).map((a) => a.finished)
+      );
+    });
+    expect(animations.some((a) => a.cancel.mock.calls.length > 0)).toBe(true);
+    expect(ghost(container)).not.toBeNull();
+    expect(onComplete).not.toHaveBeenCalled();
   });
 
   it("replaces an in-flight ghost for the same pane rather than stacking a second", () => {

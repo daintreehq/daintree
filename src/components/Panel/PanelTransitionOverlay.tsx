@@ -205,6 +205,9 @@ function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
     launch();
 
     return () => {
+      // Torn down, not finished: whoever re-runs or unmounts this effect owns
+      // what happens next, so the cancellation below must not report back.
+      settled = true;
       cancelAnimationFrame(frame);
       if (fallback) clearTimeout(fallback);
       animation?.cancel();
