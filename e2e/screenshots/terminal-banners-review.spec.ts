@@ -150,6 +150,45 @@ async function openSheet(
   return shell;
 }
 
+/**
+ * The worktree move notice is seen on every agent move, so it has to stay one
+ * row wherever a pane has room for one, and clearing it must never mean a trip
+ * to the far edge of a wide pane: the × follows whatever precedes it.
+ */
+async function expectMoveNoticeClustered(page: Page, width: number) {
+  const notices = await page.locator("[data-banner-slot] > [role]").evaluateAll((els) =>
+    els.map((el) => {
+      const box = el.getBoundingClientRect();
+      const controls = el.querySelector("[data-banner-controls]")!.getBoundingClientRect();
+      const dismiss = el
+        .querySelector('[aria-label="Dismiss worktree move notice"]')!
+        .getBoundingClientRect();
+      // Text spans measure the words, not the column they sit in.
+      const text = [...el.querySelectorAll("span")]
+        .filter((span) => !span.closest("[data-banner-controls]") && span.textContent)
+        .map((span) => span.getBoundingClientRect());
+      const textRight = Math.max(...text.map((r) => r.right));
+      const textBottom = Math.max(...text.map((r) => r.bottom));
+      return {
+        height: box.height,
+        wrapped: controls.top >= textBottom - 1,
+        textToControls: controls.left - textRight,
+        controlsToDismiss: dismiss.left - controls.left,
+        controlsWidth: controls.width,
+      };
+    })
+  );
+  for (const notice of notices) {
+    if (!notice.wrapped) {
+      expect(notice.textToControls, "controls follow the text").toBeLessThanOrEqual(16);
+    }
+    expect(notice.controlsToDismiss, "the × ends the control group").toBeLessThanOrEqual(
+      notice.controlsWidth
+    );
+    if (width >= 560) expect(notice.height, "one row on a pane with room").toBeLessThanOrEqual(40);
+  }
+}
+
 test("terminal banner family — every state, three pane widths, every theme", async ({
   context,
 }) => {
@@ -167,12 +206,16 @@ test("terminal banner family — every state, three pane widths, every theme", a
     for (const width of WIDTHS) {
       for (const group of GROUPS) {
         written.push(
-          await withPage(context, `${group.name} ${width} ${theme}`, async (page) =>
-            snap(
-              await openSheet(page, `theme=${theme}&group=${group.name}`, width, group.count),
-              `${group.name}-${width}-${theme}.png`
-            )
-          )
+          await withPage(context, `${group.name} ${width} ${theme}`, async (page) => {
+            const sheet = await openSheet(
+              page,
+              `theme=${theme}&group=${group.name}`,
+              width,
+              group.count
+            );
+            if (group.name === "move") await expectMoveNoticeClustered(page, width);
+            return snap(sheet, `${group.name}-${width}-${theme}.png`);
+          })
         );
       }
     }
