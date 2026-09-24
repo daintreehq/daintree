@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useState, useRef } from "react";
-import { Filter, X, ChevronDown } from "lucide-react";
+import { Filter, ChevronDown } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { SearchField } from "@/components/ui/SearchField";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import type { ChipCounts } from "@/lib/worktreeFilters";
 import {
@@ -571,37 +572,20 @@ export function WorktreeFilterPopover({
         {/* Search */}
         {!hideSearchInput && (
           <div className="shrink-0 border-b border-border-default p-3">
-            <div className="relative">
-              <input
-                type="text"
-                value={localQuery}
-                onChange={(e) => handleQueryChange(e.target.value)}
-                placeholder="Search worktrees..."
-                aria-label="Search worktrees"
-                className={cn(
-                  "w-full rounded-[var(--radius-md)] px-2.5 py-1.5 text-xs",
-                  "border border-border-default bg-surface-canvas",
-                  "text-text-primary placeholder:text-text-secondary",
-                  "focus:outline-hidden focus:border-border-strong"
-                )}
-              />
-              {localQuery && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (debounceRef.current) {
-                      clearTimeout(debounceRef.current);
-                    }
-                    setLocalQuery("");
-                    setQuery("");
-                  }}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text-primary"
-                  aria-label="Clear search"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
-            </div>
+            <SearchField
+              size="compact"
+              value={localQuery}
+              onChange={(e) => handleQueryChange(e.target.value)}
+              onClear={() => {
+                if (debounceRef.current) {
+                  clearTimeout(debounceRef.current);
+                }
+                setLocalQuery("");
+                setQuery("");
+              }}
+              placeholder="Search worktrees..."
+              aria-label="Search worktrees"
+            />
           </div>
         )}
 

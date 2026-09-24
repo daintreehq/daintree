@@ -52,7 +52,7 @@
     position: absolute;
     inset: 0;
     z-index: -1;
-    border-radius: calc(var(--radius-md) - 1px);
+    border-radius: inherit;
     background: var(--_search-field-wash);
     opacity: 0;
     pointer-events: none;

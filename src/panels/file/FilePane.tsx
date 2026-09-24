@@ -6,7 +6,6 @@ import {
   FileText,
   Globe,
   RefreshCw,
-  Search,
   WrapText,
   XCircle,
 } from "lucide-react";
@@ -73,6 +72,7 @@ import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDiffContent } from "@/panels/diff/useDiffContent";
 import type { DiffSubject } from "@/panels/diff/diffContentCache";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SearchField } from "@/components/ui/SearchField";
 import { Skeleton, SkeletonBone, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { toFileReadErrorCode } from "@/components/FileViewer/fileReadErrors";
@@ -1473,17 +1473,15 @@ export function FilePane({
             />
             {pickerRoot && (
               <div className="w-full max-w-md flex flex-col gap-1 min-h-0">
-                <div className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-border-default bg-surface-sidebar focus-within:border-selection-outline focus-within:ring-1 focus-within:ring-selection-outline/50">
-                  <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                  <input
-                    value={pickerQuery}
-                    onChange={(e) => setPickerQuery(e.target.value)}
-                    placeholder="Search files"
-                    aria-label="Search files"
-                    className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
-                    data-testid="file-pane-search"
-                  />
-                </div>
+                <SearchField
+                  size="palette"
+                  value={pickerQuery}
+                  onChange={(e) => setPickerQuery(e.target.value)}
+                  onClear={() => setPickerQuery("")}
+                  placeholder="Search files"
+                  aria-label="Search files"
+                  data-testid="file-pane-search"
+                />
                 <div className="max-h-56 overflow-y-auto flex flex-col" role="listbox">
                   {pickerResults.map((result) => (
                     <button

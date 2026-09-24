@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { X, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { SearchField } from "@/components/ui/SearchField";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { SEARCH_HIGHLIGHT_LIMIT } from "@/services/terminal/TerminalAddonManager";
 import { useTerminalSearchHistoryStore } from "@/store/terminalSearchHistoryStore";
@@ -328,30 +329,22 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     >
       <Tooltip open={searchStatus === "invalidRegex" && !!regexError}>
         <TooltipTrigger asChild>
-          <input
-            ref={inputRef}
-            type="text"
-            value={searchTerm}
-            onChange={handleInputChange}
-            placeholder="Find in terminal"
-            aria-label="Find in terminal"
-            aria-invalid={searchStatus === "invalidRegex" || undefined}
-            data-terminal-search-input
-            className={cn(
-              // Theme radius, not a bare `rounded` — that resolves to the
-              // rounded-lg value rather than the scale this control belongs to.
-              "w-44 px-2 py-1 text-sm rounded-[var(--radius-sm)] transition-colors",
-              "bg-surface-canvas border",
-              "text-text-primary placeholder:text-text-placeholder",
-              // The ring is component-owned — only its transition is global —
-              // so this is the shared `Input` treatment rather than nothing.
-              // The previous ring was a `focus:ring-*` box-shadow in a status
-              // colour: forced-colors discards box-shadow entirely, and the
-              // colour was a second vocabulary. An `outline` survives there.
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-              searchStatus === "invalidRegex" ? "border-status-error" : "border-border-default"
-            )}
-          />
+          {/* The trigger wraps the field rather than being it: SearchField has
+              no ref of its own to hand Radix, and the tooltip anchors to the
+              whole field, which is also the edge that turns red. */}
+          <div className="flex">
+            <SearchField
+              size="compact"
+              fieldClassName="w-44"
+              inputRef={inputRef}
+              value={searchTerm}
+              onChange={handleInputChange}
+              placeholder="Find in terminal"
+              aria-label="Find in terminal"
+              invalid={searchStatus === "invalidRegex"}
+              data-terminal-search-input
+            />
+          </div>
         </TooltipTrigger>
         <TooltipContent side="bottom" align="start">
           {regexError}

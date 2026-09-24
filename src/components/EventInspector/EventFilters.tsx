@@ -1,8 +1,9 @@
 import { useState, useMemo, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { SearchField } from "@/components/ui/SearchField";
 import { PRESSED_TOGGLE } from "@/components/Diagnostics/toggleStyles";
-import { Check, ListFilter, Search, X } from "lucide-react";
+import { Check, ListFilter } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { EventRecord, EventFilterOptions, EventCategory } from "@/store/eventStore";
 import { EVENT_CATEGORY_STYLES } from "@/config/categoryColors";
@@ -170,37 +171,17 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
         className
       )}
     >
-      <div className="relative min-w-[150px] max-w-[260px] flex-1">
-        <Search
-          aria-hidden="true"
-          className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-text-secondary"
-        />
-        <input
-          type="search"
-          value={searchInput}
-          onChange={(e) => handleSearchChange(e.target.value)}
-          placeholder="Search events"
-          aria-label="Search events"
-          className={cn(
-            "h-6 w-full rounded-[var(--radius-md)] pl-6 pr-7 text-xs",
-            "border border-border-default bg-surface-canvas text-text-primary",
-            "placeholder:text-text-placeholder",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-            "[&::-webkit-search-cancel-button]:hidden"
-          )}
-        />
-        {searchInput && (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={clearSearch}
-            className="absolute right-0.5 top-1/2 h-5 w-5 -translate-y-1/2"
-            aria-label="Clear search"
-          >
-            <X />
-          </Button>
-        )}
-      </div>
+      <SearchField
+        size="compact"
+        // h-6 keeps the field level with the xs category chips beside it.
+        fieldClassName="h-6 min-w-[150px] max-w-[260px] flex-1"
+        type="search"
+        value={searchInput}
+        onChange={(e) => handleSearchChange(e.target.value)}
+        onClear={clearSearch}
+        placeholder="Search events"
+        aria-label="Search events"
+      />
 
       <div
         className="flex flex-wrap items-center gap-1"
@@ -256,32 +237,16 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
               Trace ID
             </label>
             <p className="text-2xs text-text-secondary">Shows every event from one operation</p>
-            <div className="relative">
-              <input
-                id="event-trace-filter"
-                type="text"
-                value={traceIdInput}
-                onChange={(e) => handleTraceIdChange(e.target.value)}
-                placeholder="Filter by trace ID..."
-                className={cn(
-                  "h-7 w-full rounded-[var(--radius-md)] pl-2 pr-7 font-mono text-xs",
-                  "border border-border-default bg-surface-canvas text-text-primary",
-                  "placeholder:font-sans placeholder:text-text-placeholder",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                )}
-              />
-              {traceIdInput && (
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  onClick={clearTraceId}
-                  className="absolute right-0.5 top-1/2 h-5 w-5 -translate-y-1/2"
-                  aria-label="Clear trace ID filter"
-                >
-                  <X />
-                </Button>
-              )}
-            </div>
+            <SearchField
+              size="compact"
+              id="event-trace-filter"
+              value={traceIdInput}
+              onChange={(e) => handleTraceIdChange(e.target.value)}
+              onClear={clearTraceId}
+              clearLabel="Clear trace ID filter"
+              placeholder="Filter by trace ID..."
+              className="font-mono placeholder:font-sans"
+            />
           </div>
           <div className="flex shrink-0 items-center justify-between px-3 pb-1 pt-2">
             <span className="text-xs font-medium text-text-primary">Event types</span>

@@ -25,6 +25,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { SearchField } from "@/components/ui/SearchField";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
@@ -738,29 +739,16 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         {/* Master: find and filter, then the installed list. */}
         <div className="w-80 shrink-0 border-r border-border-default flex flex-col overflow-hidden">
           <div className="p-3 border-b border-border-default shrink-0 space-y-2">
-            <div className="relative">
-              <input
-                ref={searchInputRef}
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search plugins"
-                aria-label="Search plugins"
-                className="w-full pl-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-interactive text-text-primary placeholder:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary [&::-webkit-search-cancel-button]:hidden"
-              />
-              {/* The native cancel glyph is a UA bitmap — heavier and brighter
-                  than every icon around it, and untouched by the theme. */}
-              {query.length > 0 && (
-                <button
-                  type="button"
-                  onClick={clearSearch}
-                  aria-label="Clear search"
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded-sm text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                >
-                  <X className="w-3.5 h-3.5" aria-hidden="true" />
-                </button>
-              )}
-            </div>
+            <SearchField
+              size="compact"
+              inputRef={searchInputRef}
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onClear={clearSearch}
+              placeholder="Search plugins"
+              aria-label="Search plugins"
+            />
             <div role="group" aria-label="Filter plugins" className="flex flex-wrap gap-1">
               {PLUGIN_FILTER_CHIPS.map(({ token, label }) => {
                 const active = queryTokens.includes(token.toLowerCase());

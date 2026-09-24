@@ -15,12 +15,11 @@ import {
   GitBranch,
   MoreHorizontal,
   Pin,
-  Search,
 } from "lucide-react";
 import { Plug, Workflow } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { SearchField } from "@/components/ui/SearchField";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -587,21 +586,16 @@ export function RecipeManager({
                   to the top. The negative margin reclaims the body's top
                   padding so nothing scrolls visibly above it. */}
               <div className="sticky -top-6 z-10 -mt-6 mb-4 flex items-center gap-2 bg-surface-dialog pb-2 pt-6">
-                <div className="relative min-w-0 flex-1">
-                  <Search
-                    className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-secondary"
-                    aria-hidden
-                  />
-                  <Input
-                    type="search"
-                    density="compact"
-                    value={filter}
-                    onChange={(e) => handleFilterChange(e.target.value)}
-                    placeholder="Filter recipes…"
-                    aria-label="Filter recipes"
-                    className="h-7 pl-8"
-                  />
-                </div>
+                <SearchField
+                  size="compact"
+                  fieldClassName="flex-1"
+                  type="search"
+                  value={filter}
+                  onChange={(e) => handleFilterChange(e.target.value)}
+                  onClear={() => handleFilterChange("")}
+                  placeholder="Filter recipes…"
+                  aria-label="Filter recipes"
+                />
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" size="sm" className="shrink-0">

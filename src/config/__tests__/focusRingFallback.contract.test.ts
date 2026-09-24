@@ -452,12 +452,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "The field is the popover's whole top strip, so its indicator is painted once on the wrapping label via focus-within — it has to span the panel's full width and take its rounded top corners, which a ring on the bare input cannot do (that ring is precisely what this component replaced)",
   },
   {
-    file: "src/components/Worktree/ReviewHub/FileSection.tsx",
-    fragment: "w-[104px] min-w-0 bg-transparent text-2xs",
-    reason:
-      "Section filter is a strip: the wrapper carries the border, focus-within and the forced-colors outline, so the bare input must not paint a second box inside it (that nested rectangle is exactly what #11984 removed)",
-  },
-  {
     file: "src/components/HelpPanel/HelpPanel.tsx",
     fragment: "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
     reason:
@@ -565,20 +559,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Parent shows focus: the diff search bar wrapper has `focus-within:border-accent-primary focus-within:ring-1`",
   },
   {
-    file: "src/components/FileViewer/DiffFileSidebar.tsx",
-    fragment:
-      "w-full bg-transparent text-xs text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
-    reason:
-      "Parent shows focus: the sidebar filter wrapper has `focus-within:border-accent-primary focus-within:ring-1`",
-  },
-  {
-    file: "src/panels/file/FilePane.tsx",
-    fragment:
-      "w-full bg-transparent text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
-    reason:
-      "Parent shows focus: the markdown file-picker wrapper has `focus-within:border-accent-primary focus-within:ring-1`",
-  },
-  {
     file: "src/components/Project/QuickRun.tsx",
     fragment: "focus:outline-hidden min-w-0",
     reason:
@@ -590,45 +570,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     reason:
       "Parent shows focus: the output well wrapper carries `has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent-primary`; the scroller has no vertical padding of its own, so a ring on it would sit inside the wrapper's border.",
   },
-  {
-    file: "src/components/Settings/ColorSchemePicker.tsx",
-    fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
-    reason: "Parent shows focus: wrapper at line 172 has `focus-within:border-accent-primary`",
-  },
-  {
-    file: "src/components/ThemeBrowser/ThemeBrowser.tsx",
-    fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
-    reason: "Parent shows focus: wrapper at line 477 has `focus-within:border-accent-primary`",
-  },
-  {
-    file: "src/components/Layout/LocalCommitsDropdown.tsx",
-    fragment:
-      "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden",
-    reason:
-      "Parent shows focus: the search shell carries full-strength `focus-within:border-accent-primary`, the one accent this region is allowed — same shape as GitHubResourceList.",
-  },
 
   // ── Pre-existing focus-ring gaps surfaced by #8940 ───────────────────
   // The new contract surfaced these standalone interactive elements that
   // suppress the default focus outline with no replacement. Documented
   // here for follow-up; each is a real keyboard-accessibility gap that
   // should be addressed in a separate cleanup PR.
-  {
-    file: "src/components/Settings/AgentSelectorDropdown.tsx",
-    fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
-    reason:
-      "PRE-EXISTING #8940: autoFocus filter input inside popover lacks a focus indicator — follow-up",
-  },
-  {
-    file: "src/components/Settings/ForgeProviderSelectorDropdown.tsx",
-    fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
-    reason:
-      "PRE-EXISTING #8940: autoFocus filter input inside popover lacks a focus indicator — follow-up",
-  },
   {
     file: "src/components/Settings/AgentScopeEditor/CustomPresetChrome.tsx",
     fragment:
