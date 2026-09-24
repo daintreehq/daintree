@@ -30,9 +30,10 @@ export type TerminalStatusSource = "renderer" | "pty";
  * answer cannot — a surface listing nothing is not the same as a surface that
  * saw everything. The renderer reads `lastOutputChangeAt` only when the call
  * asked for output (#12495), so it drops out of this list for those calls.
+ * `lastTypedInputAt` rides the same read (#12718) and drops out with it.
  */
 export type TerminalStatusUnavailableField =
-  "armed" | "lastCheckResult" | "exitCode" | "hasPty" | "lastOutputChangeAt";
+  "armed" | "lastCheckResult" | "exitCode" | "hasPty" | "lastOutputChangeAt" | "lastTypedInputAt";
 
 /**
  * Model-facing description of `lastOutputChangeAt`, shared by the status and
@@ -40,6 +41,10 @@ export type TerminalStatusUnavailableField =
  */
 export const LAST_OUTPUT_CHANGE_AT_DESCRIPTION =
   "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.";
+
+/** Model-facing description of `lastTypedInputAt`. */
+export const LAST_TYPED_INPUT_AT_DESCRIPTION =
+  "Epoch ms Daintree last wrote raw input (typing, paste, broadcast) to the PTY; submits excluded. Earlier than `lastTransitionAt` means none since. Not proof of authorship.";
 
 /** One terminal's status, in the shape `TerminalStatusEntrySchema` publishes. */
 export interface TerminalStatusEntry {
@@ -56,6 +61,17 @@ export interface TerminalStatusEntry {
    * call asked for output (#12495).
    */
   lastOutputChangeAt?: number;
+  /**
+   * When Daintree last wrote raw input to this PTY that could have put text in
+   * the composer (#12718) — typing, pasting, staging, broadcast — excluding the
+   * submit lane and the reports xterm sends on its own. A CLI can pre-fill its
+   * own suggested prompt, which no write here accounts for, so a caller can
+   * compare this against `lastTransitionAt` to see whether anything was typed
+   * since the terminal settled. An observation of writes, never a verdict on
+   * who authored what the screen shows. Read in the pty-host, so the
+   * `renderer` answer reports it only when the call asked for output.
+   */
+  lastTypedInputAt?: number;
   exitCode?: number | null;
   spawnedAt?: number;
   /**
@@ -114,7 +130,8 @@ export interface TerminalStatusEntry {
  * changed.
  */
 export type TerminalOutputActivityLookup =
-  { status: "read"; lastOutputChangeAt?: number } | { status: "unreadable" };
+  | { status: "read"; lastOutputChangeAt?: number; lastTypedInputAt?: number }
+  | { status: "unreadable" };
 
 export interface TerminalStatusResult {
   terminals: TerminalStatusEntry[];

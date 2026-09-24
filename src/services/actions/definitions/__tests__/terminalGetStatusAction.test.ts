@@ -100,7 +100,7 @@ describe("terminal.getStatus", () => {
     const result = await callGetStatus(setupActions());
 
     expect(result.source).toBe("renderer");
-    expect(result.unavailableFields).toEqual(["hasPty", "lastOutputChangeAt"]);
+    expect(result.unavailableFields).toEqual(["hasPty", "lastOutputChangeAt", "lastTypedInputAt"]);
     expect(result.terminals[0]?.armed).toBe(false);
   });
 
@@ -141,7 +141,7 @@ describe("terminal.getStatus", () => {
     for (const entry of result.terminals) expect(entry.error).toBeUndefined();
     // The non-PTY panel resolves with null agent identity rather than erroring.
     expect(result.terminals[2]).toMatchObject({ agentId: null, agentState: null });
-    expect(result.unavailableFields).toEqual(["hasPty", "lastOutputChangeAt"]);
+    expect(result.unavailableFields).toEqual(["hasPty", "lastOutputChangeAt", "lastTypedInputAt"]);
   });
 
   it("emits no lastOutputChangeAt, even from a panel that carries one (#12428)", async () => {
@@ -1090,7 +1090,11 @@ describe("terminal.getStatus output activity (#12495)", () => {
     // The default poll is the hot path; it must stay free of pty-host hops.
     expect(terminalClientMock.getOutputActivity).not.toHaveBeenCalled();
     for (const result of [plain, tokened]) {
-      expect(result.unavailableFields).toEqual(["hasPty", "lastOutputChangeAt"]);
+      expect(result.unavailableFields).toEqual([
+        "hasPty",
+        "lastOutputChangeAt",
+        "lastTypedInputAt",
+      ]);
       expect(JSON.parse(JSON.stringify(result.terminals[0]))).not.toHaveProperty(
         "lastOutputChangeAt"
       );
@@ -1243,6 +1247,27 @@ describe("terminal.getStatus output activity (#12495)", () => {
     expect(result.terminals[0]).toMatchObject({ recentOutput: "alpha", lastOutputChangeAt: 3 });
   });
 
+  it("fills the host's typed-input time alongside the output time (#12718)", async () => {
+    panels(
+      { id: "t1", kind: "terminal", location: "grid", agentState: "waiting" },
+      { id: "t2", kind: "terminal", location: "grid", agentState: "waiting" }
+    );
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: "alpha", t2: "beta" }));
+    terminalClientMock.getOutputActivity.mockResolvedValue({
+      // Typed with no screen change yet must still surface.
+      t1: { status: "read", lastTypedInputAt: 8_000 },
+      t2: { status: "read", lastOutputChangeAt: 6_000 },
+    });
+
+    const result = await callGetStatus(setupActions(), { includeOutput: {} });
+
+    const parsed = TerminalStatusResultSchema.parse(result);
+    expect(parsed.terminals[0]?.lastTypedInputAt).toBe(8_000);
+    expect(parsed.terminals[0]).not.toHaveProperty("lastOutputChangeAt");
+    expect(parsed.terminals[1]).not.toHaveProperty("lastTypedInputAt");
+    expect(parsed.unavailableFields).toEqual(["hasPty"]);
+  });
+
   it("keeps the tail when the activity read fails, and says the field went unobserved", async () => {
     panels({ id: "t1", kind: "terminal", location: "grid", agentState: "working" });
     getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: "alpha" }));
@@ -1253,7 +1278,7 @@ describe("terminal.getStatus output activity (#12495)", () => {
     expect(result.terminals[0]?.recentOutput).toBe("alpha");
     expect(result.terminals[0]?.error).toContain("activity died");
     expect(result.terminals[0]).not.toHaveProperty("lastOutputChangeAt");
-    expect(result.unavailableFields).toEqual(["hasPty", "lastOutputChangeAt"]);
+    expect(result.unavailableFields).toEqual(["hasPty", "lastOutputChangeAt", "lastTypedInputAt"]);
   });
 
   it("contains a bridge that throws synchronously to its own field", async () => {
