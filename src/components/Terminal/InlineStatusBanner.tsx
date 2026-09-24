@@ -461,7 +461,9 @@ export function InlineStatusBanner({
       data-banner-controls
       className={cn(
         "flex items-center shrink-0",
-        stacked ? "gap-2 ml-6" : "gap-1",
+        // Stacked controls wrap within their own row: two labelled actions and
+        // an overflow trigger are wider than the narrowest pane a grid leaves.
+        stacked ? "gap-2 ml-6 flex-wrap gap-y-1" : "gap-1",
         // Inline controls are 24px and overhang the 20px text line by 2px each
         // side rather than setting its height, so the glyph lines up with the
         // title whether or not the controls wrap, and each control keeps 6px
