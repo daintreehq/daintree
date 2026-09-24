@@ -345,12 +345,14 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "domain",
       signature: "text-status-success",
+      anchor: "deltaToMain!.ahead",
       expectedOccurrences: 1,
       rationale: "Ahead-arrow count against the base branch",
     },
     {
       category: "domain",
-      signature: "text-status-success/80",
+      signature: "text-status-success",
+      anchor: "deltaToMain!.insertions",
       expectedOccurrences: 1,
       rationale: "Diff insertion count against the base branch",
     },

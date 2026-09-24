@@ -181,9 +181,9 @@ export const theme: BuiltInThemeSource = {
     "pulse-empty-bg": "#F1F0F7",
     // Lamp-amber heat (lavender would alias the accent): ≥ 3:1 on the white
     // card; the low stop must stay ≥ JND above the empty cell.
-    "pulse-heat-high-opacity": "0.9",
-    "pulse-heat-low-opacity": "0.35",
-    "pulse-heat-medium-opacity": "0.6",
+    "pulse-heat-high-opacity": "0.74",
+    "pulse-heat-low-opacity": "0.30",
+    "pulse-heat-medium-opacity": "0.52",
     "pulse-heat-color": "#A97416",
     "pulse-range-bg": "#F1F0F7",
     "pulse-ring-offset": "#FFFFFF",

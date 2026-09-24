@@ -147,12 +147,10 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
           )}
 
           {(pulse.deltaToMain!.insertions ?? 0) > 0 && (
-            <span className="font-mono text-status-success/80">
-              +{pulse.deltaToMain!.insertions}
-            </span>
+            <span className="font-mono text-status-success">+{pulse.deltaToMain!.insertions}</span>
           )}
           {(pulse.deltaToMain!.deletions ?? 0) > 0 && (
-            <span className="font-mono text-status-error/80">-{pulse.deltaToMain!.deletions}</span>
+            <span className="font-mono text-status-error">-{pulse.deltaToMain!.deletions}</span>
           )}
         </div>
       )}

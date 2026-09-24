@@ -38,6 +38,16 @@ const MINI_GAP_PX = 2;
  * border token carries at a size where a fill cannot, and the track becomes
  * legible without the ribbon getting louder than the launcher above it.
  */
+// The heat stops are tuned against the card's empty cell, but the ribbon sits
+// straight on the canvas-home background — where a level-1 fill can land on
+// the background's own colour (serengeti's straw, bondi's sand) and an active
+// day vanishes into a gap that reads as a quiet one. At 6px the ribbon's job is
+// active-versus-quiet first and volume second, so active days start at level 2.
+function ribbonLevel(level: HeatCell["level"]): 2 | 3 | 4 {
+  if (level >= 4) return 4;
+  return level === 3 ? 3 : 2;
+}
+
 function MiniRibbon({ cells }: { cells: HeatCell[] }) {
   return (
     <div
@@ -61,11 +71,11 @@ function MiniRibbon({ cells }: { cells: HeatCell[] }) {
               "pulse-heat-cell relative overflow-hidden rounded-[1px] shrink-0",
               !active && "border border-border-strong bg-transparent"
             )}
-            data-heat-level={active ? Math.min(4, cell.level) : undefined}
+            data-heat-level={active ? ribbonLevel(cell.level) : undefined}
             style={{
               width: MINI_CELL_PX,
               height: MINI_CELL_PX,
-              background: active ? getPulseHeatLevelBackground(cell.level) : undefined,
+              background: active ? getPulseHeatLevelBackground(ribbonLevel(cell.level)) : undefined,
             }}
           >
             {active && <span aria-hidden="true" className="pulse-heat-cell-shape" />}
@@ -183,9 +193,9 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
   // speech-input user can say what they read — and "Show project activity"
   // shares no phrase with the "Project pulse" printed on the button.
   const activityLabel = pulse
-    ? `Project pulse — ${pulse.activeDays} active day${
-        pulse.activeDays !== 1 ? "s" : ""
-      }${hasStreak ? `, ${pulse.currentStreakDays} day streak` : ""}, show activity`
+    ? `Project pulse — ${pulse.activeDays} of ${pulse.projectAgeDays} active days${
+        hasStreak ? `, ${pulse.currentStreakDays} day streak` : ""
+      }, show activity`
     : "Project pulse — show activity";
 
   return (
@@ -213,12 +223,16 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
         {pulse ? (
           <>
             <span className="font-mono text-xs text-text-secondary">
-              {pulse.activeDays} active day{pulse.activeDays !== 1 ? "s" : ""}
+              {/* Scoped to its window, the same "47/60 active days" the card's
+                  summary prints — a bare "47 active days" beside an 18-day
+                  ribbon and a 250-day streak left the reader to guess which
+                  span it counted. */}
+              {pulse.activeDays}/{pulse.projectAgeDays} active days
             </span>
             {hasStreak && (
               <span className="flex items-center gap-1 font-mono text-xs text-text-secondary">
                 <StreakFlame streakDays={pulse.currentStreakDays!} size={12} />
-                {pulse.currentStreakDays}
+                {pulse.currentStreakDays} day streak
               </span>
             )}
           </>

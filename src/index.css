@@ -2914,12 +2914,14 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
      a border would shift the segment's contents by its width. ButtonText, not
      Highlight, for the same reason as the chips above. */
   [data-quick-state-segment][aria-pressed="true"],
-  [data-quick-state-segment][aria-checked="true"] {
+  [data-quick-state-segment][aria-checked="true"],
+  .pulse-range [role="radio"][aria-checked="true"] {
     position: relative;
   }
 
   [data-quick-state-segment][aria-pressed="true"]::after,
-  [data-quick-state-segment][aria-checked="true"]::after {
+  [data-quick-state-segment][aria-checked="true"]::after,
+  .pulse-range [role="radio"][aria-checked="true"]::after {
     content: "";
     position: absolute;
     inset-inline: 0;
@@ -3083,8 +3085,16 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
      on Canvas — invisible. Grid empty cells stay visible because they're
      <button>s with the border; give the legend's empty swatch an equivalent
      CanvasText border so "Less" remains a visible box. */
-  [data-testid="pulse-heatmap-legend"] .pulse-heat-cell:not([data-heat-level]) {
+  [data-testid="pulse-heatmap-legend"] .pulse-heat-cell {
     border: 1px solid CanvasText;
+  }
+
+  /* The latest-active ring is a box-shadow, which forced colors drops. Redraw
+     it as a dotted outline — distinct from the solid Highlight focus outline
+     above, so "last active" and "focused here" never read as one mark. */
+  .pulse-heat-cell[data-latest-active] {
+    outline: 1px dotted CanvasText;
+    outline-offset: 1px;
   }
 
   /* The canvas-home's collapsed pulse ribbon (ProjectPulseStrip.MiniRibbon).
@@ -3100,6 +3110,14 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   [data-testid="pulse-mini-ribbon"] .pulse-heat-cell[data-heat-level] .pulse-heat-cell-shape {
     width: 100%;
     height: 100%;
+  }
+
+  /* The streak flame's tier colour is an inline author style, and SVG keeps
+     its parent's colour under forced colors, so it stayed orange on a system
+     Canvas. The day count beside it carries the meaning; the glyph follows the
+     text it sits with. */
+  .pulse-streak-flame {
+    color: CanvasText !important;
   }
 
   /* Diff-viewer forced-colors rules live in src/components/Worktree/DiffViewer.css
