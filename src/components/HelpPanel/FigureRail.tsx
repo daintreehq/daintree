@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { ImageOff, RotateCw } from "lucide-react";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { useHorizontalScrollControls } from "@/hooks/useHorizontalScrollControls";
 import { cn } from "@/lib/utils";
 import type { HelpFigure, HelpFigureRequest } from "@/store/helpPanelStore";
 import { FigureLightbox } from "./FigureLightbox";
@@ -39,7 +40,11 @@ export function FigureRail({
   const [selectedFigureNumber, setSelectedFigureNumber] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastViewedRef = useRef<number | null>(null);
-  const [edges, setEdges] = useState({ start: false, end: false });
+  // Fade whichever end has figures scrolled out of view — the scrollbar is
+  // hidden to keep the rail at its fixed height, so this is the only sign.
+  // `scroll-px-6` on the scroller matches the fade width, so a thumbnail
+  // revealed by focus or by a reference lands clear of it.
+  const { canScrollLeft, canScrollRight } = useHorizontalScrollControls(scrollRef);
   const figureCount = figures.length;
 
   const newestFigureNumber = figures.reduce((max, f) => Math.max(max, f.figureNumber), -Infinity);
@@ -68,10 +73,10 @@ export function FigureRail({
 
   // Act on an `[image #N]` click: bring its thumbnail into view, and open it
   // when the click asked for that. Cleared once handled so switching lanes
-  // can't replay it.
-  // The scroll is idempotent and runs on every pass while the request is
-  // pending, so it still wins when the scroll-to-newest effect above re-runs
-  // after it (StrictMode's remount does exactly that); opening is once only.
+  // can't replay it. The scroll is idempotent and runs on every pass while the
+  // request is pending, so it still wins when the scroll-to-newest effect above
+  // re-runs after it (StrictMode's remount does exactly that); opening happens
+  // once per request.
   const handledRequestRef = useRef<HelpFigureRequest | null>(null);
   useEffect(() => {
     if (!figureRequest) return;
@@ -90,43 +95,6 @@ export function FigureRail({
     }
     onFigureRequestHandled?.();
   }, [figureRequest, figures, onFigureRequestHandled]);
-
-  // Fade whichever end has figures scrolled out of view — the scrollbar is
-  // hidden to keep the rail at its fixed height, so this is the only sign.
-  // `scroll-px-6` on the scroller matches the fade width, so a thumbnail
-  // revealed by focus or by a reference lands clear of it.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const measure = () => {
-      const start = el.scrollLeft > 1;
-      const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
-      setEdges((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
-    };
-    measure();
-    el.addEventListener("scroll", measure, { passive: true });
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => {
-      el.removeEventListener("scroll", measure);
-      observer.disconnect();
-    };
-  }, [figureCount]);
-
-  // A plain mouse wheel only scrolls vertically, which this rail can't do —
-  // map it onto the horizontal axis so mouse users can reach older figures.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
-      if (el.scrollWidth <= el.clientWidth) return;
-      e.preventDefault();
-      el.scrollLeft += e.deltaY;
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [figureCount]);
 
   if (figureCount === 0) return null;
 
@@ -159,7 +127,7 @@ export function FigureRail({
         role="list"
         aria-label="Figures"
         className="flex flex-row items-center gap-2 h-full overflow-x-auto overflow-y-hidden px-2 scroll-px-6 scrollbar-none"
-        style={edgeMask(edges)}
+        style={edgeMask(canScrollLeft, canScrollRight)}
         // Chromium leaves a partly visible element where it is on focus, which
         // here means half under an edge fade; bring a focused thumbnail fully
         // in, clear of the fade (`scroll-px-6`).
@@ -194,10 +162,10 @@ export function FigureRail({
 
 const EDGE_FADE = "24px";
 
-function edgeMask(edges: { start: boolean; end: boolean }): CSSProperties | undefined {
-  if (!edges.start && !edges.end) return undefined;
-  const start = edges.start ? `transparent 0, black ${EDGE_FADE}` : "black 0";
-  const end = edges.end ? `black calc(100% - ${EDGE_FADE}), transparent 100%` : "black 100%";
+function edgeMask(fadeStart: boolean, fadeEnd: boolean): CSSProperties | undefined {
+  if (!fadeStart && !fadeEnd) return undefined;
+  const start = fadeStart ? `transparent 0, black ${EDGE_FADE}` : "black 0";
+  const end = fadeEnd ? `black calc(100% - ${EDGE_FADE}), transparent 100%` : "black 100%";
   const mask = `linear-gradient(to right, ${start}, ${end})`;
   return { maskImage: mask, WebkitMaskImage: mask };
 }
