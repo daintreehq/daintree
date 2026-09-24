@@ -44,7 +44,7 @@ export const LAST_OUTPUT_CHANGE_AT_DESCRIPTION =
 
 /** Model-facing description of `lastTypedInputAt`. */
 export const LAST_TYPED_INPUT_AT_DESCRIPTION =
-  "Epoch ms Daintree last wrote raw input (typing, paste, broadcast) to the PTY; submits excluded. Earlier than `lastTransitionAt` means none since. Not proof of authorship.";
+  "Epoch ms of the last raw input Daintree recorded for the PTY (keys, paste, broadcast; not submit-lane writes). Before `lastTransitionAt` = none since. Not proof of delivery or authorship.";
 
 /** One terminal's status, in the shape `TerminalStatusEntrySchema` publishes. */
 export interface TerminalStatusEntry {
@@ -62,14 +62,15 @@ export interface TerminalStatusEntry {
    */
   lastOutputChangeAt?: number;
   /**
-   * When Daintree last wrote raw input to this PTY that could have put text in
-   * the composer (#12718) — typing, pasting, staging, broadcast — excluding the
-   * submit lane and the reports xterm sends on its own. A CLI can pre-fill its
-   * own suggested prompt, which no write here accounts for, so a caller can
-   * compare this against `lastTransitionAt` to see whether anything was typed
-   * since the terminal settled. An observation of writes, never a verdict on
-   * who authored what the screen shows. Read in the pty-host, so the
-   * `renderer` answer reports it only when the call asked for output.
+   * When Daintree last recorded raw input for this PTY (#12718) — keystrokes
+   * including control keys, pastes, staging, broadcast — excluding the submit
+   * lane's own writes and the reports xterm sends by itself. Stamped as the
+   * write is attempted, so it proves neither delivery nor what the composer
+   * holds. A CLI can pre-fill its own suggested prompt, which nothing here
+   * records, so a caller can compare this against `lastTransitionAt` to see
+   * whether any input came through since the terminal settled — never a
+   * verdict on who authored what the screen shows. Read in the pty-host, so
+   * the `renderer` answer reports it only when the call asked for output.
    */
   lastTypedInputAt?: number;
   exitCode?: number | null;

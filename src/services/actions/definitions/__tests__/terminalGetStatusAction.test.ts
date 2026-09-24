@@ -1256,7 +1256,7 @@ describe("terminal.getStatus output activity (#12495)", () => {
     terminalClientMock.getOutputActivity.mockResolvedValue({
       // Typed with no screen change yet must still surface.
       t1: { status: "read", lastTypedInputAt: 8_000 },
-      t2: { status: "read", lastOutputChangeAt: 6_000 },
+      t2: { status: "read", lastOutputChangeAt: 6_000, lastTypedInputAt: 4_000 },
     });
 
     const result = await callGetStatus(setupActions(), { includeOutput: {} });
@@ -1264,7 +1264,10 @@ describe("terminal.getStatus output activity (#12495)", () => {
     const parsed = TerminalStatusResultSchema.parse(result);
     expect(parsed.terminals[0]?.lastTypedInputAt).toBe(8_000);
     expect(parsed.terminals[0]).not.toHaveProperty("lastOutputChangeAt");
-    expect(parsed.terminals[1]).not.toHaveProperty("lastTypedInputAt");
+    expect(parsed.terminals[1]).toMatchObject({
+      lastOutputChangeAt: 6_000,
+      lastTypedInputAt: 4_000,
+    });
     expect(parsed.unavailableFields).toEqual(["hasPty"]);
   });
 
@@ -1278,6 +1281,7 @@ describe("terminal.getStatus output activity (#12495)", () => {
     expect(result.terminals[0]?.recentOutput).toBe("alpha");
     expect(result.terminals[0]?.error).toContain("activity died");
     expect(result.terminals[0]).not.toHaveProperty("lastOutputChangeAt");
+    expect(result.terminals[0]).not.toHaveProperty("lastTypedInputAt");
     expect(result.unavailableFields).toEqual(["hasPty", "lastOutputChangeAt", "lastTypedInputAt"]);
   });
 

@@ -1458,7 +1458,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               lastTypedInputAt: {
                 description:
-                  "Epoch ms Daintree last wrote raw input (typing, paste, broadcast) to the PTY; submits excluded. Earlier than `lastTransitionAt` means none since. Not proof of authorship.",
+                  "Epoch ms of the last raw input Daintree recorded for the PTY (keys, paste, broadcast; not submit-lane writes). Before `lastTransitionAt` = none since. Not proof of delivery or authorship.",
                 type: "number",
               },
               exitCode: {

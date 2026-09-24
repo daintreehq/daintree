@@ -364,14 +364,17 @@ describe("buildViewlessTerminalStatus results", () => {
       deps([
         record({ id: "typed", lastStateChange: 1000, lastTypedInputAt: 2000 }),
         record({ id: "untouched", lastStateChange: 1000 }),
+        // Reported raw: an input before the settle is not dropped or reinterpreted.
+        record({ id: "earlier", lastStateChange: 1000, lastTypedInputAt: 500 }),
       ]),
       WORKSPACE,
-      { terminalIds: ["typed", "untouched"] }
+      { terminalIds: ["typed", "untouched", "earlier"], includeOutput: {} }
     );
 
     expect(result.terminals[0]).toMatchObject({ lastTransitionAt: 1000, lastTypedInputAt: 2000 });
     // No write observed is absent, not a time.
     expect(result.terminals[1]).not.toHaveProperty("lastTypedInputAt");
+    expect(result.terminals[2]?.lastTypedInputAt).toBe(500);
     expect(result.unavailableFields).not.toContain("lastTypedInputAt");
   });
 
