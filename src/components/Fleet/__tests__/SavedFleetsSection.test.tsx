@@ -73,6 +73,7 @@ vi.mock("@/services/actions/definitions/fleetActions", () => ({
 }));
 
 import { actionService } from "@/services/ActionService";
+import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetActions";
 import { SavedFleetsSection } from "../SavedFleetsSection";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -413,6 +414,34 @@ describe("SavedFleetsSection", () => {
     }
   });
 
+  it("a live rule matching nothing right now is listed but inert", () => {
+    const onDelete = vi.fn();
+    setSavedScopes([PREDICATE_FINISHED_CURRENT]);
+    const count = vi.mocked(computeSavedScopePaneCount);
+    const defaultCount = count.getMockImplementation();
+    count.mockReturnValue(0);
+    try {
+      render(
+        <SavedFleetsSection
+          onRequestDelete={onDelete}
+          onRequestSave={vi.fn()}
+          onRequestManage={vi.fn()}
+        />
+      );
+      const row = screen.getByTestId("fleet-saved-row");
+      expect(row.getAttribute("aria-disabled")).toBe("true");
+      expect(row.getAttribute("aria-keyshortcuts")).toBeNull();
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+      row.dispatchEvent(click);
+      fireEvent.keyDown(row, { key: "Delete" });
+      expect(click.defaultPrevented).toBe(true);
+      expect(actionService.dispatch).not.toHaveBeenCalled();
+      expect(onDelete).not.toHaveBeenCalled();
+    } finally {
+      if (defaultCount) count.mockImplementation(defaultCount);
+    }
+  });
+
   it("renders Snapshots group before Smart-Sets group in DOM order", () => {
     setSavedScopes([SNAPSHOT_A, PREDICATE_FINISHED_CURRENT]);
     render(
@@ -500,25 +529,42 @@ describe("SavedFleetsSection ranking", () => {
     expect(seps.length).toBeGreaterThan(0);
   });
 
-  it("places a freshly-saved (no usageHistory) snapshot at the bottom of usable", () => {
+  it("ranks a never-recalled snapshot by when it was saved", () => {
+    // Saving is a use: a fresh save outranks a fleet last recalled weeks ago,
+    // and an old never-recalled save still yields to a recent recall.
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
-    const recalled: FleetSavedScope = {
+    const recalledLongAgo: FleetSavedScope = {
       kind: "snapshot",
-      id: "recalled",
-      name: "recalled",
+      id: "old-recall",
+      name: "old-recall",
+      terminalIds: ["t1"],
+      createdAt: 0,
+      usageHistory: [NOW - 14 * DAY],
+    };
+    const recalledNow: FleetSavedScope = {
+      kind: "snapshot",
+      id: "new-recall",
+      name: "new-recall",
       terminalIds: ["t1"],
       createdAt: 0,
       usageHistory: [NOW],
     };
-    const fresh: FleetSavedScope = {
+    const freshSave: FleetSavedScope = {
       kind: "snapshot",
       id: "fresh",
       name: "fresh",
       terminalIds: ["t1"],
-      createdAt: NOW, // brand-new, never recalled
+      createdAt: NOW - 60_000,
     };
-    setSavedScopes([fresh, recalled]);
+    const oldSave: FleetSavedScope = {
+      kind: "snapshot",
+      id: "old-save",
+      name: "old-save",
+      terminalIds: ["t1"],
+      createdAt: NOW - 30 * DAY,
+    };
+    setSavedScopes([oldSave, recalledLongAgo, freshSave, recalledNow]);
     render(
       <SavedFleetsSection
         onRequestDelete={vi.fn()}
@@ -527,7 +573,9 @@ describe("SavedFleetsSection ranking", () => {
       />
     );
     const [snapGroup] = screen.getAllByTestId("dropdown-group") as [HTMLElement];
-    expect(rowNames(snapGroup)).toEqual(["recalled", "fresh"]);
+    const order = rowNames(snapGroup);
+    expect(order.indexOf("fresh")).toBeLessThan(order.indexOf("old-recall"));
+    expect(order.indexOf("new-recall")).toBeLessThan(order.indexOf("old-save"));
   });
 
   it("ranks live rules by frecency desc", () => {

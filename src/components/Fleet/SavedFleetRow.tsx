@@ -20,6 +20,10 @@ export function SavedFleetRow({
   count,
   isStale,
 }: SavedFleetRowProps): ReactElement {
+  // A live rule matching nothing right now would recall an empty fleet. It
+  // stays listed and focusable but inert, like any disabled menu row — the
+  // rule may match again later, and the manage dialog can still delete it.
+  const isEmptyRule = scope.kind === "predicate" && count === 0;
   return (
     <DropdownMenuItem
       aria-label={
@@ -27,12 +31,17 @@ export function SavedFleetRow({
           ? `${savedFleetAccessibleName(scope, count)}, select to delete`
           : savedFleetAccessibleName(scope, count)
       }
+      aria-disabled={isEmptyRule || undefined}
       // One action per menu row, like every other menu in the app: recall.
       // Delete/Backspace is the accelerator to the same confirm the manage
-      // dialog offers as a button.
-      aria-keyshortcuts="Delete"
+      // dialog offers as a button — not advertised on an inert row.
+      aria-keyshortcuts={isEmptyRule ? undefined : "Delete"}
       title={scope.name}
-      onSelect={() => {
+      onSelect={(e) => {
+        if (isEmptyRule) {
+          e.preventDefault();
+          return;
+        }
         // A stale snapshot can't be recalled, and deleting it is the one thing
         // it's still for — so selecting it opens the delete confirm rather than
         // sitting there disabled.
@@ -43,6 +52,7 @@ export function SavedFleetRow({
         void actionService.dispatch("fleet.recallNamedFleet", { id: scope.id }, { source: "user" });
       }}
       onKeyDown={(e) => {
+        if (isEmptyRule) return;
         if (e.key === "Delete" || e.key === "Backspace") {
           e.preventDefault();
           onRequestDelete(scope.id);
@@ -55,7 +65,7 @@ export function SavedFleetRow({
       <span
         className={cn(
           "min-w-0 flex-1 truncate",
-          isStale ? "text-text-secondary" : "text-text-primary"
+          isStale || isEmptyRule ? "text-text-secondary" : "text-text-primary"
         )}
       >
         {scope.name}
@@ -67,6 +77,8 @@ export function SavedFleetRow({
         <span className="text-2xs tabular-nums text-text-secondary">
           {formatSavedFleetCount(scope, count)}
         </span>
+        {/* Says out loud what selecting this row now does. */}
+        {isStale && <span className="text-2xs text-text-secondary">Delete…</span>}
       </span>
     </DropdownMenuItem>
   );

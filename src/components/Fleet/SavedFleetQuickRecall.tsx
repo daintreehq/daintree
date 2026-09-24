@@ -39,9 +39,9 @@ export function SavedFleetQuickRecall({
 
   const offers = [...snapshotUsable, ...rules]
     .map((scope) => {
-      if (mode !== "append") return { scope, count: countById[scope.id] ?? 0, adds: [] };
+      if (mode !== "append") return { scope, count: countById[scope.id] ?? 0 };
       const adds = resolveSavedScopeIds(scope).filter((id) => !armedIds.has(id));
-      return { scope, count: adds.length, adds };
+      return { scope, count: adds.length };
     })
     .filter((o) => o.count > 0);
 
@@ -55,7 +55,7 @@ export function SavedFleetQuickRecall({
       <span aria-hidden="true" className="pr-0.5 text-2xs text-text-secondary">
         {mode === "append" ? "Add a saved fleet" : "Arm a saved fleet"}
       </span>
-      {offers.map(({ scope, count, adds }) => (
+      {offers.map(({ scope, count }) => (
         <button
           key={scope.id}
           type="button"
@@ -67,7 +67,10 @@ export function SavedFleetQuickRecall({
           title={scope.name}
           onClick={() => {
             if (mode === "append") {
-              useFleetArmingStore.getState().addToFleet(adds);
+              // Resolved at the click, not from the render: a live rule
+              // re-evaluates on recall, and the armed set may have moved.
+              const { armedIds: armedNow, addToFleet } = useFleetArmingStore.getState();
+              addToFleet(resolveSavedScopeIds(scope).filter((id) => !armedNow.has(id)));
             } else {
               void actionService.dispatch(
                 "fleet.recallNamedFleet",
