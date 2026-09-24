@@ -46,6 +46,7 @@ vi.mock("@/store/projectStore", () => ({
     selector({ currentProject: { path: PROJECT_ROOT } }),
 }));
 
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { UpdateCwdDialog } from "../UpdateCwdDialog";
 
 const MISSING = "/repos/proj-worktrees/gone";
@@ -160,7 +161,38 @@ describe("UpdateCwdDialog", () => {
     expect(document.activeElement).toBe(restart);
 
     await waitFor(() => expect(field().getAttribute("aria-invalid")).toBe("true"));
-    expect(document.activeElement).toBe(field());
+    // Focus follows the committed error, a frame later, so arriving reads it.
+    await waitFor(() => expect(document.activeElement).toBe(field()));
+  });
+
+  it("speaks a rejection once when Enter in the field leaves focus where it is", async () => {
+    const announce = vi.spyOn(useAnnouncerStore.getState(), "announce");
+    renderDialog();
+    await waitFor(() => expect(document.activeElement).toBe(field()));
+
+    submit("/repos/gone-typo");
+    await waitFor(() => expect(field().getAttribute("aria-invalid")).toBe("true"));
+
+    expect(announce).toHaveBeenCalledTimes(1);
+    const describedBy = field().getAttribute("aria-describedby");
+    expect(announce.mock.calls[0]![0]).toBe(
+      describedBy && document.getElementById(describedBy)?.textContent
+    );
+    announce.mockRestore();
+  });
+
+  it("doesn't also announce a rejection that moves focus to the field", async () => {
+    const announce = vi.spyOn(useAnnouncerStore.getState(), "announce");
+    renderDialog();
+    await waitFor(() => expect(document.activeElement).toBe(field()));
+    fireEvent.change(field(), { target: { value: "/repos/gone-typo" } });
+    const restart = screen.getByRole("button", { name: "Restart terminal" });
+    restart.focus();
+    fireEvent.click(restart);
+
+    await waitFor(() => expect(document.activeElement).toBe(field()));
+    expect(announce).not.toHaveBeenCalled();
+    announce.mockRestore();
   });
 
   it("marks the field invalid for a folder that doesn't exist, and keeps what was typed", async () => {

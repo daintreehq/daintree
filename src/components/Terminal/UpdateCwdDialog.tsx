@@ -15,6 +15,7 @@ import { systemClient } from "@/clients/systemClient";
 import { projectClient } from "@/clients/projectClient";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 interface UpdateCwdDialogProps {
   isOpen: boolean;
@@ -109,13 +110,18 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
   }, []);
 
   /**
-   * A field error lands focus on the field it describes, so the described-by
-   * message is what gets read — a submit from the footer would otherwise leave
-   * focus on a button that says nothing about what went wrong.
+   * A field error is spoken exactly once. From the footer, focus moves to the
+   * field it describes — on the next frame, once the invalid state and the
+   * described-by message are committed — so arriving there reads it. From the
+   * field itself focus doesn't move, so nothing would be read: announce it.
    */
   const failField = useCallback((message: string) => {
     setFieldError(message);
-    inputRef.current?.focus();
+    if (inputRef.current && document.activeElement === inputRef.current) {
+      useAnnouncerStore.getState().announce(message, "assertive");
+    } else {
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
   }, []);
 
   const choosePath = useCallback(
@@ -243,12 +249,12 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
         )}
 
         <AppDialog.Description>
-          This terminal&apos;s folder was moved or deleted. Choose where to restart it.
+          This terminal couldn&apos;t start in its folder. Choose where to restart it.
         </AppDialog.Description>
 
         <FormGrid>
           {/* Top-aligned: a long path wraps, and the label belongs to its first line. */}
-          <FormRow label="Missing folder" labelClassName="self-start">
+          <FormRow label="Old folder" labelClassName="self-start">
             {/* Inset to the field's text, so the old and new paths share a column. */}
             <p
               className="min-w-0 px-2.5 font-mono text-xs text-text-secondary select-text"
