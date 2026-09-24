@@ -1,5 +1,13 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, Check, ChevronRight, Sprout } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  ChevronRight,
+  CircleDot,
+  GitBranch,
+  SquareTerminal,
+  Sprout,
+} from "lucide-react";
 import type { AgentState, WorktreeState } from "@/types";
 import type { PtyPanelData } from "@shared/types/panel";
 import { cn } from "@/lib/utils";
@@ -20,9 +28,12 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
+import { actionService } from "@/services/ActionService";
+import { getAgentConfig } from "@/config/agents";
 import type { ChipState } from "./utils/computeChipState";
-import { getBranchTypeIcon } from "./BranchLabel";
+import { BranchLabel } from "./BranchLabel";
 import { LiveTimeAgo } from "./LiveTimeAgo";
+import { SECTION_ROW } from "./WorktreeCard/sectionChrome";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
 import {
   STATE_COLORS,
@@ -129,6 +140,66 @@ function leadLine(mark: SessionMark | undefined): { text: string; mono: boolean 
   return command ? { text: command, mono: true } : { text: terminal.title, mono: false };
 }
 
+/**
+ * One session, as the sidebar's session row draws it: its icon, what it is on,
+ * and its state. A button — clicking a session goes straight to it, not to the
+ * worktree — and F2 reaches it from the list. Idle and exited agents name their
+ * state in words; they have no glyph in the shared vocabulary.
+ */
+function SessionLine({ mark, onBeforeOpen }: { mark: SessionMark; onBeforeOpen: () => void }) {
+  const line = leadLine(mark);
+  const text = line?.text ?? mark.chrome.label;
+  const Glyph =
+    mark.state && mark.state !== "idle" && mark.state !== "exited" ? STATE_ICONS[mark.state] : null;
+  const quietState = mark.chrome.hasExited
+    ? "exited"
+    : mark.chrome.isAgent && (mark.state === "idle" || mark.state === undefined)
+      ? "idle"
+      : null;
+  return (
+    <TruncatedTooltip content={text}>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onBeforeOpen();
+          void actionService.dispatch(
+            "panel.focus",
+            { panelId: mark.terminal.id },
+            { source: "user" }
+          );
+        }}
+        aria-label={`${mark.chrome.label}${mark.state ? `, ${STATE_LABELS[mark.state]}` : ""}: ${text}`}
+        className={cn(
+          "flex h-5 w-full min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] text-left",
+          "text-text-secondary hover:text-text-primary transition-colors",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+        )}
+      >
+        <TerminalIcon kind={mark.terminal.kind} chrome={mark.chrome} className="h-3 w-3 shrink-0" />
+        <span className={cn("min-w-0 flex-1 truncate text-xs", line?.mono && "font-mono text-2xs")}>
+          {text}
+        </span>
+        {Glyph && mark.state && (
+          <Glyph
+            className={cn(
+              "h-3 w-3 shrink-0",
+              STATE_COLORS[mark.state],
+              mark.state === "working" && "animate-spin-slow motion-reduce:animate-none"
+            )}
+            aria-hidden="true"
+          />
+        )}
+        {quietState && (
+          <span className="shrink-0 text-3xs text-text-secondary" aria-hidden="true">
+            {quietState}
+          </span>
+        )}
+      </button>
+    </TruncatedTooltip>
+  );
+}
+
 export interface WorktreeOverviewRowProps {
   worktree: WorktreeState;
   cellId: string;
@@ -167,7 +238,26 @@ export function WorktreeOverviewRow({
       : worktree.isMainWorktree
         ? worktree.name
         : (branchLabel.split("/").pop() ?? branchLabel);
-  const TypeIcon = worktree.isMainWorktree ? Sprout : getBranchTypeIcon(branchLabel);
+  // The sidebar card's headline glyph: the sprout for main, the issue mark for
+  // an issue's worktree, the PR glyph for one made from a PR, and the branch
+  // for a bare branch — whose name then IS the title, set in mono as the
+  // sidebar sets it. The branch's own type mark rides with the branch line.
+  const isBranchTitled =
+    !worktree.isMainWorktree && headline.kind !== "issue" && headline.kind !== "pr";
+  const headlinePr = headline.kind === "pr" ? worktree.linked?.pr : undefined;
+  const TypeIcon = worktree.isMainWorktree
+    ? Sprout
+    : headline.kind === "issue"
+      ? CircleDot
+      : headline.kind === "pr"
+        ? getPrStateGlyph(headlinePr?.state)
+        : GitBranch;
+  const typeIconColor =
+    headline.kind === "issue"
+      ? "text-pr-open"
+      : headline.kind === "pr"
+        ? getPrStateColor(headlinePr?.state)
+        : "text-text-secondary";
 
   const pr = worktree.linked?.pr;
   const showPr = !!pr && pr.state !== "closed" && pr.state !== "declined";
@@ -182,7 +272,6 @@ export function WorktreeOverviewRow({
   const ahead = worktree.aheadCount ?? 0;
   const behind = worktree.behindCount ?? 0;
 
-  const leadMark = marks[0];
   const [sessionsExpanded, setSessionsExpanded] = useState(false);
   // Counted from the same raw states the listed rows draw, so the trigger's
   // pips and the rows it expands to can never disagree.
@@ -197,6 +286,19 @@ export function WorktreeOverviewRow({
     };
     for (const mark of marks) if (mark.state) byState[mark.state] += 1;
     return summarizeSessionStates(byState, marks.length);
+  }, [marks]);
+
+  // The strip's glyph is the sidebar's: the agent's own mark when every
+  // session is the same agent, a terminal otherwise.
+  const SummaryIcon = useMemo(() => {
+    let commonId: string | null = null;
+    for (const mark of marks) {
+      const id = mark.chrome.agentId;
+      if (!id) return SquareTerminal;
+      if (commonId === null) commonId = id;
+      else if (id !== commonId) return SquareTerminal;
+    }
+    return (commonId && getAgentConfig(commonId)?.icon) || SquareTerminal;
   }, [marks]);
 
   // The one exception the row leads with, beside the title: the things that
@@ -271,7 +373,8 @@ export function WorktreeOverviewRow({
                   {TypeIcon && (
                     <TypeIcon
                       className={cn(
-                        "h-3.5 w-3.5 text-text-secondary",
+                        "h-3.5 w-3.5",
+                        typeIconColor,
                         isSelecting || isSelected
                           ? "hidden"
                           : cn(
@@ -279,7 +382,7 @@ export function WorktreeOverviewRow({
                               isCursor && "group-focus/overview-grid:hidden"
                             )
                       )}
-                      strokeWidth={worktree.isMainWorktree ? 2 : 2.5}
+                      strokeWidth={2}
                       aria-hidden="true"
                     />
                   )}
@@ -309,8 +412,9 @@ export function WorktreeOverviewRow({
                 <TruncatedTooltip content={title}>
                   <span
                     className={cn(
-                      "truncate text-sm",
-                      isCurrent ? "font-medium text-text-primary" : "text-text-primary"
+                      "truncate text-text-primary",
+                      isBranchTitled ? "font-mono text-xs" : "text-sm",
+                      isCurrent && "font-medium"
                     )}
                   >
                     {title}
@@ -329,7 +433,16 @@ export function WorktreeOverviewRow({
                 )}
               </div>
               <div className="mt-1 flex items-center gap-2 min-w-0 pl-6 text-2xs text-text-secondary">
-                <span className="truncate font-mono">{branchLabel}</span>
+                {!isBranchTitled && (
+                  <BranchLabel
+                    label={branchLabel}
+                    isActive={isCurrent}
+                    // The row's headline already is the main worktree's name; its
+                    // branch sits on the detail line at detail size.
+                    isMainWorktree={false}
+                    className="min-w-0"
+                  />
+                )}
                 {showPr && PrIcon && (
                   <span
                     className="flex shrink-0 items-center gap-1"
@@ -339,7 +452,9 @@ export function WorktreeOverviewRow({
                       className={cn("h-3 w-3", getPrStateColor(pr.state))}
                       aria-hidden="true"
                     />
-                    <span className="font-mono tabular-nums">#{pr.ref.number}</span>
+                    <span className={cn("font-mono tabular-nums", getPrStateColor(pr.state))}>
+                      #{pr.ref.number}
+                    </span>
                     {ci?.kind === "icon" && (
                       <ci.Icon className={cn("h-3 w-3", ci.colorClass)} aria-hidden="true" />
                     )}
@@ -355,95 +470,73 @@ export function WorktreeOverviewRow({
             </div>
 
             {/* Sessions, as the sidebar draws them. Up to three are listed in
-                full — icon, what it is on, state — like the sidebar's expanded
+                full — icon, what it is on, state — like the sidebar's session
                 rows; past that the row collapses to the sidebar's own
-                "N active" trigger with its state counts, and expands in place. */}
+                "N active" strip with its state counts, and expands in place. */}
             <div className="min-w-0" role="group" aria-label={sessionsLabel || "No sessions"}>
               {marks.length === 0 ? (
                 <span className="text-xs leading-5 text-text-secondary" aria-hidden="true">
                   —
                 </span>
+              ) : marks.length <= MAX_INLINE_SESSIONS ? (
+                marks.map((mark) => (
+                  <SessionLine
+                    key={mark.terminal.id}
+                    mark={mark}
+                    onBeforeOpen={onBeforeMenuAction}
+                  />
+                ))
               ) : (
-                <>
-                  {marks.length > MAX_INLINE_SESSIONS && (
-                    <button
-                      type="button"
-                      tabIndex={-1}
-                      aria-expanded={sessionsExpanded}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSessionsExpanded((v) => !v);
-                      }}
-                      className="flex h-5 w-full items-center justify-between gap-2 rounded-[var(--radius-sm)] text-2xs text-text-secondary hover:text-text-primary"
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <ChevronRight
-                          className={cn(
-                            "h-3 w-3 shrink-0 transition-transform duration-150",
-                            sessionsExpanded && "rotate-90"
-                          )}
-                          aria-hidden="true"
-                        />
-                        {leadMark && (
-                          <TerminalIcon
-                            kind={leadMark.terminal.kind}
-                            chrome={leadMark.chrome}
-                            className="h-3 w-3 shrink-0"
-                          />
+                <div className="rounded-[var(--radius-lg)] border border-border-default bg-overlay-soft">
+                  <button
+                    type="button"
+                    aria-expanded={sessionsExpanded}
+                    aria-label={`${marks.length} active sessions${sessionSummary.breakdown ? `: ${sessionSummary.breakdown}` : ""}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSessionsExpanded((v) => !v);
+                    }}
+                    className={cn(
+                      "justify-between gap-2 transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+                      SECTION_ROW
+                    )}
+                  >
+                    <span className="flex items-center gap-1.5 text-2xs text-text-secondary">
+                      <ChevronRight
+                        className={cn(
+                          "h-3 w-3 shrink-0 transition-transform duration-150",
+                          sessionsExpanded && "rotate-90"
                         )}
-                        <span className="inline-flex items-center gap-1">
-                          <span className="font-mono tabular-nums">{marks.length}</span>
-                          <span>active</span>
-                        </span>
+                        aria-hidden="true"
+                      />
+                      <SummaryIcon className="h-3 w-3 shrink-0" aria-hidden="true" />
+                      <span className="inline-flex items-center gap-1">
+                        <span className="font-mono tabular-nums">{marks.length}</span>
+                        <span>active</span>
                       </span>
-                      {sessionSummary.visibleStates.length > 0 && (
-                        <CollapsedSessionIndicators
-                          visibleStates={sessionSummary.visibleStates}
-                          sessionAriaLabel={sessionSummary.label}
-                        />
-                      )}
-                    </button>
-                  )}
-                  {(marks.length <= MAX_INLINE_SESSIONS || sessionsExpanded) &&
-                    marks.map((mark) => {
-                      const line = leadLine(mark);
-                      const Glyph =
-                        mark.state && mark.state !== "idle" && mark.state !== "exited"
-                          ? STATE_ICONS[mark.state]
-                          : null;
-                      return (
-                        <div
+                    </span>
+                    {sessionSummary.visibleStates.length > 0 && (
+                      <CollapsedSessionIndicators
+                        visibleStates={sessionSummary.visibleStates}
+                        sessionAriaLabel={sessionSummary.label}
+                      />
+                    )}
+                  </button>
+                  {sessionsExpanded && (
+                    // Children indent under the strip's own icon, as the
+                    // sidebar's expanded rows sit under its trigger.
+                    <div className="pb-1 pl-[22px] pr-2.5">
+                      {marks.map((mark) => (
+                        <SessionLine
                           key={mark.terminal.id}
-                          className="flex h-5 items-center gap-1.5 min-w-0"
-                          aria-hidden="true"
-                        >
-                          <TerminalIcon
-                            kind={mark.terminal.kind}
-                            chrome={mark.chrome}
-                            className="h-3 w-3 shrink-0"
-                          />
-                          <span
-                            className={cn(
-                              "min-w-0 flex-1 truncate text-xs text-text-secondary",
-                              line?.mono && "font-mono text-2xs"
-                            )}
-                          >
-                            {line?.text ?? mark.chrome.label}
-                          </span>
-                          {Glyph && mark.state && (
-                            <Glyph
-                              className={cn(
-                                "h-3 w-3 shrink-0",
-                                STATE_COLORS[mark.state],
-                                mark.state === "working" &&
-                                  "animate-spin-slow motion-reduce:animate-none"
-                              )}
-                            />
-                          )}
-                        </div>
-                      );
-                    })}
-                </>
+                          mark={mark}
+                          onBeforeOpen={onBeforeMenuAction}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
 
@@ -476,9 +569,17 @@ export function WorktreeOverviewRow({
                   )}
                   {(ahead > 0 || behind > 0) && (
                     <span className="font-mono">
-                      {ahead > 0 && <span aria-label={`${ahead} ahead`}>↑{ahead}</span>}
+                      {ahead > 0 && (
+                        <span className="text-status-success" aria-label={`${ahead} ahead`}>
+                          ↑{ahead}
+                        </span>
+                      )}
                       {ahead > 0 && behind > 0 && " "}
-                      {behind > 0 && <span aria-label={`${behind} behind`}>↓{behind}</span>}
+                      {behind > 0 && (
+                        <span className="text-status-warning" aria-label={`${behind} behind`}>
+                          ↓{behind}
+                        </span>
+                      )}
                     </span>
                   )}
                 </div>
