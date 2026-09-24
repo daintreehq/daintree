@@ -36,6 +36,17 @@ const BRANCH_TYPE_ICONS: Record<string, LucideIcon> = {
   other: GitBranch,
 };
 
+/**
+ * The glyph `BranchLabel` leads with for a branch, for surfaces that show the
+ * type mark apart from the name. Null for a branch with no type prefix.
+ */
+export function getBranchTypeIcon(label: string): LucideIcon | null {
+  const [prefix, ...tail] = label.split("/");
+  if (!prefix || tail.length === 0) return null;
+  const typeId = BRANCH_PREFIX_MAP[prefix.toLowerCase()]?.id ?? DEFAULT_BRANCH_TYPE.id;
+  return BRANCH_TYPE_ICONS[typeId] ?? GitBranch;
+}
+
 interface BranchLabelProps {
   label: string;
   isActive: boolean;

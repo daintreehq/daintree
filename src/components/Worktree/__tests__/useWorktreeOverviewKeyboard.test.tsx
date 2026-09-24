@@ -13,12 +13,13 @@ import {
 // the column count from its `gridTemplateColumns` track string. Three tracks
 // keeps the 2D arithmetic obvious in the assertions.
 const originalGetComputedStyle = window.getComputedStyle;
+let gridTracks = "100px 100px 100px";
 beforeAll(() => {
   window.getComputedStyle = ((el: Element) => {
     const real = originalGetComputedStyle(el);
     return new Proxy(real, {
       get(target, prop) {
-        if (prop === "gridTemplateColumns") return "100px 100px 100px";
+        if (prop === "gridTemplateColumns") return gridTracks;
         return Reflect.get(target, prop);
       },
     });
@@ -184,6 +185,49 @@ describe("useWorktreeOverviewKeyboard — 2D arrow movement", () => {
     expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("h"));
     fireEvent.keyDown(grid, { key: "Home", ctrlKey: true });
     expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("a"));
+  });
+});
+
+describe("useWorktreeOverviewKeyboard — single-column list", () => {
+  beforeAll(() => {
+    gridTracks = "600px";
+  });
+  afterAll(() => {
+    gridTracks = "100px 100px 100px";
+  });
+
+  it("Left and Right have no neighbour to move to", () => {
+    const { getByTestId } = render(<Harness worktreeIds={IDS} />);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    const before = grid.getAttribute("aria-activedescendant");
+    fireEvent.keyDown(grid, { key: "ArrowRight" });
+    fireEvent.keyDown(grid, { key: "ArrowLeft" });
+    fireEvent.keyDown(grid, { key: "ArrowLeft" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(before);
+  });
+
+  it("ArrowDown moves one row at a time", () => {
+    const { getByTestId } = render(<Harness worktreeIds={IDS} />);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId(IDS[2]!));
+  });
+
+  it("Home and End reach the ends of the list, not of a visual row", () => {
+    const { getByTestId } = render(<Harness worktreeIds={IDS} />);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    fireEvent.keyDown(grid, { key: "End" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(
+      getWorktreeOverviewCellId(IDS[IDS.length - 1]!)
+    );
+    fireEvent.keyDown(grid, { key: "Home" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId(IDS[0]!));
   });
 });
 

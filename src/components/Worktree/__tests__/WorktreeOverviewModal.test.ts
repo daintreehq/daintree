@@ -4,12 +4,15 @@ import fs from "fs/promises";
 import path from "path";
 
 const MODAL_PATH = path.resolve(__dirname, "../WorktreeOverviewModal.tsx");
+const ROW_PATH = path.resolve(__dirname, "../WorktreeOverviewRow.tsx");
 
 describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
   let source: string;
+  let rowSource: string;
 
   beforeEach(async () => {
     source = await fs.readFile(MODAL_PATH, "utf-8");
+    rowSource = await fs.readFile(ROW_PATH, "utf-8");
   });
 
   describe("imports", () => {
@@ -38,223 +41,25 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     it("includes quickStateFilter in the useMemo dep array", () => {
       // Find the dep array that closes the filteredWorktrees useMemo
       const depArrayMatch = source.match(
-        /const\s*\{\s*filteredWorktrees,\s*groupedSections\s*\}\s*=\s*useMemo[\s\S]*?\]\s*\);/
+        /const\s*\{\s*filteredWorktrees,\s*groupedSections[^}]*\}\s*=\s*useMemo[\s\S]*?\]\s*\);/
       );
       expect(depArrayMatch).not.toBeNull();
       expect(depArrayMatch![0]).toContain("quickStateFilter");
     });
 
-    it("gates alwaysShowActive bypass on quickStateFilter === 'all'", () => {
+    it("lets the always-show bypasses fire only when nothing is narrowing the list", () => {
       expect(source).toMatch(
-        /alwaysShowActive\s*&&\s*isActive\s*&&\s*!hasActiveQuery\s*&&\s*quickStateFilter\s*===\s*"all"/
+        /bypassesNarrowing\s*=\s*!hasActiveQuery\s*&&\s*quickStateFilter\s*===\s*"all"\s*&&\s*!hasFacetFiltersActive/
+      );
+      expect(source).toMatch(/alwaysShowActive\s*&&\s*isActive\s*&&\s*bypassesNarrowing/);
+      expect(source).toMatch(
+        /alwaysShowWaiting\s*&&\s*derived\.hasWaitingAgent\s*&&\s*bypassesNarrowing/
       );
     });
 
-    it("gates alwaysShowWaiting bypass on quickStateFilter === 'all'", () => {
-      expect(source).toMatch(
-        /alwaysShowWaiting\s*&&\s*derived\.hasWaitingAgent\s*&&\s*!hasActiveQuery\s*&&\s*quickStateFilter\s*===\s*"all"/
-      );
-    });
-  });
-
-  describe("aggregate stats chips", () => {
-    // Slice from the aggregate stats section to isolate assertions
-    function statsSlice(src: string): string {
-      const start = src.indexOf("Aggregate activity statistics");
-      // Find the closing of that div
-      let depth = 0;
-      let i = start;
-      let found = false;
-      for (; i < src.length; i++) {
-        if (src.slice(i, i + 4) === "<div") {
-          depth++;
-        } else if (src.slice(i, i + 6) === "</div>") {
-          depth--;
-          if (depth === 0 && found) break;
-        }
-        if (depth > 0 && !found) found = true;
-      }
-      return src.slice(start, i + 6);
-    }
-
-    it("uses button elements instead of span elements for the stat chips", () => {
-      const stats = statsSlice(source);
-      // The chips are now <button> elements
-      const buttonCount = (stats.match(/<button/g) ?? []).length;
-      expect(buttonCount).toBeGreaterThanOrEqual(1);
-      // No <span> elements wrapping the chip content (pulse dot spans are fine)
-      const spanOpenTags = stats.match(/<span/g) ?? [];
-      // There should be span elements for the dot and text, but not the chip wrapper
-      expect(spanOpenTags.length).toBeGreaterThan(0);
-    });
-
-    it("sets aria-pressed based on quickStateFilter for working chip", () => {
-      expect(source).toMatch(/aria-pressed=\{quickStateFilter\s*===\s*"working"\}/);
-    });
-
-    it("sets aria-pressed based on quickStateFilter for waiting chip", () => {
-      expect(source).toMatch(/aria-pressed=\{quickStateFilter\s*===\s*"waiting"\}/);
-    });
-
-    it("working chip onClick toggles between 'working' and 'all'", () => {
-      expect(source).toMatch(
-        /setQuickStateFilter\(quickStateFilter\s*===\s*"working"\s*\?\s*"all"\s*:\s*"working"\)/
-      );
-    });
-
-    it("waiting chip onClick toggles between 'waiting' and 'all'", () => {
-      expect(source).toMatch(
-        /setQuickStateFilter\(quickStateFilter\s*===\s*"waiting"\s*\?\s*"all"\s*:\s*"waiting"\)/
-      );
-    });
-
-    it("uses transition-colors on chip buttons (not transition-all)", () => {
-      const stats = statsSlice(source);
-      expect(stats).toContain("transition-colors");
-      expect(stats).not.toContain("transition-all");
-    });
-
-    it("applies active styling with bg-overlay-subtle when chip is active", () => {
-      expect(source).toContain("bg-overlay-subtle");
-      expect(source).toContain("shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]");
-    });
-
-    it("applies hover background on inactive chips, from the named overlay ladder", () => {
-      // The rule is that the hover fill is a NAMED step, not that it is a
-      // particular one. `bg-tint/[0.04]` was an arbitrary alpha on an unnamed
-      // tint: invisible to the theme system, so it could not follow a palette
-      // that retints its overlays, and unreviewable against the ladder every
-      // other hover in the app uses.
-      const stats = statsSlice(source);
-      expect(stats).toMatch(/hover:bg-overlay-(subtle|soft|medium)\b/);
-      expect(stats).not.toContain("bg-tint/");
-    });
-
-    it("paints keyboard focus with an outline, never a suppressed outline plus a ring", () => {
-      // This pairing was the exact thing the component contract bans, and for
-      // a reason that only shows up in one mode: a Tailwind `ring` is a
-      // box-shadow, forced-colors removes box-shadows outright, and
-      // `outline-hidden` drops the transparent outline that would otherwise
-      // have been repainted — so the chips had no focus indicator at all
-      // under Windows High Contrast.
-      const stats = statsSlice(source);
-      expect(stats).toMatch(/focus-visible:outline\b/);
-      expect(stats).toContain("focus-visible:outline-accent-primary");
-      expect(stats).not.toContain("focus-visible:outline-hidden");
-      expect(stats).not.toMatch(/focus-visible:ring-/);
-    });
-
-    it("wrapper uses role='group' instead of role='status'", () => {
-      // The wrapper div now contains interactive controls; role="group" is appropriate
-      const stats = statsSlice(source);
-      expect(stats).toContain('role="group"');
-      expect(stats).not.toContain('role="status"');
-    });
-
-    it("wrapper aria-label describes filter action", () => {
-      expect(source).toContain("Filter by agent state");
-    });
-
-    it("keeps pulse dot and count text in working chip", () => {
-      expect(source).toContain("motion-safe:animate-pulse");
-      expect(source).toMatch(/\baggregateStats\.workingCount\b/);
-    });
-
-    it("keeps count text in waiting chip", () => {
-      expect(source).toMatch(/\baggregateStats\.waitingCount\b/);
-    });
-  });
-
-  describe("aggregateStats computation (unchanged)", () => {
-    it("still computes workingCount and waitingCount from raw worktrees", () => {
-      expect(source).toMatch(/workingCount\+\+/);
-      expect(source).toMatch(/waitingCount\+\+/);
-    });
-
-    it("still respects hideMainWorktree", () => {
-      expect(source).toMatch(/hideMainWorktree\s*&&\s*worktree\.isMainWorktree/);
-    });
-  });
-
-  describe("finished chip (#9607)", () => {
-    it("computes finishedCount in the aggregateStats loop", () => {
-      expect(source).toMatch(/finishedCount\+\+/);
-      expect(source).toMatch(/return\s*\{\s*workingCount,\s*waitingCount,\s*finishedCount\s*\}/);
-    });
-
-    it("derives finishedCount from chipState (mirrors matchesQuickStateFilter), not terminal flags", () => {
-      // Must match the filter's source of truth so the count and filter stay in sync.
-      expect(source).toMatch(
-        /derived\.chipState\s*===\s*"complete"\s*\|\|\s*derived\.chipState\s*===\s*"cleanup"\)\s*finishedCount\+\+/
-      );
-    });
-
-    it("includes finishedCount in the chip-row visibility gate", () => {
-      expect(source).toMatch(/aggregateStats\.finishedCount\s*>\s*0/);
-    });
-
-    it("sets aria-pressed based on quickStateFilter for finished chip", () => {
-      expect(source).toMatch(/aria-pressed=\{quickStateFilter\s*===\s*"finished"\}/);
-    });
-
-    it("finished chip onClick toggles between 'finished' and 'all'", () => {
-      expect(source).toMatch(
-        /setQuickStateFilter\(quickStateFilter\s*===\s*"finished"\s*\?\s*"all"\s*:\s*"finished"\)/
-      );
-    });
-
-    // Slice tightly around the finished chip's button so assertions can't be
-    // satisfied by the working/waiting buttons that share the same group div.
-    function finishedChipSlice(src: string): string {
-      const start = src.indexOf('aria-pressed={quickStateFilter === "finished"}');
-      return src.slice(start, src.indexOf("} finished", start));
-    }
-
-    it("reuses the shared neutral selected styling (bg-overlay-subtle underline) on the finished chip", () => {
-      const chip = finishedChipSlice(source);
-      expect(chip).toContain("bg-overlay-subtle");
-      expect(chip).toContain("shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]");
-    });
-
-    it("uses a semantic category-blue dot for finished, matching the WorktreeCard complete chip", () => {
-      const chip = finishedChipSlice(source);
-      expect(chip).toContain("bg-category-blue");
-    });
-
-    it("uses neutral (non-state-colored) text on the finished chip label", () => {
-      const chip = finishedChipSlice(source);
-      // Label text is neutral; only the dot carries semantic color.
-      expect(chip).toMatch(/quickStateFilter === "finished"\s*\?\s*"text-text-primary"/);
-      expect(chip).not.toContain("text-status-warning");
-      expect(chip).not.toContain("text-[var(--color-state-working)]");
-      expect(chip).not.toContain("text-accent-primary");
-    });
-
-    it("renders the finished count text", () => {
-      expect(source).toMatch(/\baggregateStats\.finishedCount\b/);
-    });
-  });
-
-  describe("neutral chip labels (#9607)", () => {
-    // The working/waiting chips previously wrapped their whole label in a
-    // per-state color, a one-off treatment. Labels are now neutral; only the
-    // dot keeps semantic color (mirrors the sidebar QuickStateFilterBar).
-    it("working chip label is neutral, not state-colored", () => {
-      const start = source.indexOf('aria-pressed={quickStateFilter === "working"}');
-      const chip = source.slice(start, source.indexOf("} working", start));
-      expect(chip).toMatch(/quickStateFilter === "working"\s*\?\s*"text-text-primary"/);
-      expect(chip).not.toContain("text-[var(--color-state-working)]");
-      // The dot keeps its semantic state color.
-      expect(chip).toContain("bg-[var(--color-state-working)]");
-    });
-
-    it("waiting chip label is neutral, not state-colored", () => {
-      const start = source.indexOf('aria-pressed={quickStateFilter === "waiting"}');
-      const chip = source.slice(start, source.indexOf("} waiting", start));
-      expect(chip).toMatch(/quickStateFilter === "waiting"\s*\?\s*"text-text-primary"/);
-      expect(chip).not.toContain("text-status-warning");
-      // The dot keeps its semantic color.
-      expect(chip).toContain("bg-status-warning");
+    it("filters on the field's live query, not the debounced persisted one", () => {
+      expect(source).toMatch(/liveQuery:\s*state\.liveQuery/);
+      expect(source).not.toMatch(/\bquery:\s*state\.query\b/);
     });
   });
 
@@ -287,9 +92,10 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(source).toContain("aria-activedescendant={activeDescendantId}");
     });
 
-    it("renders cells with role='gridcell' and aria-selected", () => {
-      expect(source).toContain('role="gridcell"');
-      expect(source).toMatch(/aria-selected=\{isSelected\}/);
+    it("renders each worktree as a row owning a gridcell that carries aria-selected", () => {
+      expect(rowSource).toContain('role="row"');
+      expect(rowSource).toContain('role="gridcell"');
+      expect(rowSource).toMatch(/aria-selected=\{isSelected\}/);
     });
 
     it("passes isSelected as boolean (not the Set) to each cell", () => {
@@ -298,24 +104,14 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(source).toMatch(/isSelected=\{selectedIds\.has\(worktree\.id\)\}/);
     });
 
-    it("marks membership with a neutral fill plus a contrast-gated neutral edge", () => {
-      // The rule, not the geometry: membership is NEUTRAL (accent belongs to
-      // the cursor alone in this arrow-key domain), and because the fill step
-      // between a selected and an unselected cell is a couple of percent —
-      // nowhere near SC 1.4.11's 3:1 — the edge has to be the actual non-text
-      // indicator. `selection-outline` is the one ink
-      // `getThemeContrastWarnings` gates at 3:1 on every theme, which is why
-      // it and not a border token.
-      const treatments = Array.from(source.matchAll(/isSelected\s*&&\s*\n?\s*"([^"]+)"/g)).map(
-        (m) => m[1] ?? ""
-      );
-      expect(treatments.length, "no isSelected treatment found on the grid cell").toBeGreaterThan(
-        0
-      );
-      const all = treatments.join(" ");
-      expect(all).toMatch(/\bbg-overlay-\w+/);
-      expect(all).toContain("selection-outline");
-      expect(all).not.toMatch(/accent/);
+    it("marks membership neutrally — a raised fill and a checked box, never accent", () => {
+      // Accent belongs to the cursor alone in this arrow-key domain. The fill
+      // step is far below SC 1.4.11's 3:1, so the checked box is the actual
+      // non-text indicator and must show whenever the row is selected.
+      const fill = rowSource.match(/isSelected\s*\?\s*"([^"]+)"/)?.[1] ?? "";
+      expect(fill).toMatch(/\bbg-overlay-\w+/);
+      expect(fill).not.toMatch(/accent/);
+      expect(rowSource).toMatch(/isSelecting\s*\|\|\s*isSelected[^\n]*"flex"/);
     });
 
     it("does not introduce any forbidden accent token for selection treatment", () => {
@@ -367,10 +163,6 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
 
     it("section headers render with role='presentation' inside the grid", () => {
       expect(source).toContain('role="presentation"');
-    });
-
-    it("section headers span the full grid width via col-[1/-1]", () => {
-      expect(source).toContain("col-[1/-1]");
     });
 
     it("resets the anchor on window blur to avoid stuck Shift from Cmd+Tab (#4591)", () => {

@@ -17,10 +17,11 @@ interface WorktreeSidebarSearchBarProps {
   /**
    * Where the bar is mounted. The sidebar variant carries the optional
    * `--worktree-filter-bar-bg` theme surface (a recessed strip at the top of
-   * the rail); the modal variant stays transparent so the strip doesn't leak
-   * onto the elevated overview dialog.
+   * the rail). The palette variant is the overview's: it sits inside
+   * `AppPaletteDialog.Header`, which owns the padding and the rule, so it
+   * paints no strip of its own and uses the palette family's field.
    */
-  variant?: "sidebar" | "modal";
+  variant?: "sidebar" | "palette";
   /**
    * Controls rendered on the trailing edge of the field row, after the facet
    * button. For callers whose view-scope controls belong with the filters
@@ -226,29 +227,26 @@ export function WorktreeSidebarSearchBar({
         // control zone sits on one 12px inset instead of three (#11991).
         // No top padding in the sidebar: the header's py-3 already sets the
         // 12px above the field. pb-3 matches it below, so the rule under the
-        // rail lands on the same rhythm the title sits on. The modal's header
-        // has no such trailing padding — it ends on its own border — so that
-        // variant supplies the inset itself rather than sitting flush against
-        // the rule above it.
+        // rail lands on the same rhythm the title sits on.
         "px-3 pb-3 border-b border-divider shrink-0",
-        // In the dialog the horizontal neighbours are different too: the header,
-        // the footer and the rows below all sit on AppDialog's 24px column, so
-        // the bar carries that one instead of the rail's 12px. Plain `px-6`:
-        // the body absorbs whatever the platform reserves for a scrollbar out
-        // of its own padding, so nothing out here compensates for it (#12101).
-        variant === "modal" && "pt-3 px-6",
-        variant === "sidebar" && "worktree-filter-bar"
+        variant === "sidebar" && "worktree-filter-bar",
+        // The palette header it sits in owns the inset and the rule.
+        variant === "palette" && "px-0 pb-0 border-b-0"
       )}
     >
-      <div className="flex items-stretch gap-1.5">
+      <div className={cn("flex gap-1.5", variant === "palette" ? "items-center" : "items-stretch")}>
         <SearchField
-          size="compact"
+          size={variant === "palette" ? "palette" : "compact"}
           fieldProps={{ role: "search" }}
           // h-7 via the compact size: 28px is the app's compact control height
           // and the desktop-IDE norm; the field used to be 34px, which gave the
           // rail more visual mass than the title above it. The theme's raised
           // field colour, where it sets one, stays the resting well.
-          fieldClassName="flex-1 [--search-field-bg:var(--worktree-search-input-bg,var(--theme-surface-canvas))]"
+          fieldClassName={cn(
+            "flex-1",
+            variant === "sidebar" &&
+              "[--search-field-bg:var(--worktree-search-input-bg,var(--theme-surface-canvas))]"
+          )}
           inputRef={setRefs}
           value={liveQuery}
           onChange={(e) => handleQueryChange(e.target.value)}
@@ -258,14 +256,14 @@ export function WorktreeSidebarSearchBar({
           // to "Search worktree", which reads as a typo rather than as
           // truncation. The noun is already the heading directly above, and
           // the full phrase stays the accessible name.
-          placeholder="Search…"
+          placeholder={variant === "palette" ? "Search worktrees…" : "Search…"}
           aria-label="Search worktrees"
         />
         {/* Filter/sort lives as its own adjacent control, not buried inside the
             field — matching the app's other search rails (Logs, Keyboard
             Shortcuts, Command Overrides). */}
         <WorktreeFilterPopover
-          appearance="field"
+          appearance={variant === "palette" ? "ghost" : "field"}
           hideSearchInput
           chipCounts={chipCounts}
           open={isPopoverOpen}

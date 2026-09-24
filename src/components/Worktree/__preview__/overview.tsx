@@ -371,10 +371,7 @@ function OverviewScene() {
         onClose={noop}
         worktrees={snapshots.map(toState)}
         activeWorktreeId={ACTIVE_ID}
-        focusedWorktreeId={null}
         onSelectWorktree={noop}
-        onOpenEditor={noop}
-        onLaunchAgent={noop}
       />
     </div>
   );

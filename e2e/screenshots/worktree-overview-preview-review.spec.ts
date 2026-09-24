@@ -180,7 +180,7 @@ test("Worktree overview — fleets, states and themes", async ({ page }) => {
     );
     const modal = page.locator(MODAL);
     await expect(modal).toBeVisible();
-    await expect(modal.getByText("No worktrees yet")).toBeVisible();
+    await expect(modal.getByText(/No worktrees yet|Create a worktree/).first()).toBeVisible();
     await page.addStyleTag({ content: FREEZE_CSS });
     await page.waitForTimeout(300);
     written.push(await shoot(page, `empty-${theme}.png`));

@@ -51,6 +51,8 @@ interface QuickStateFilterBarProps {
    * as an opaque slot so this stays a pure presentational component.
    */
   trailing?: React.ReactNode;
+  /** Placement classes from the host — the palette header draws its own rule. */
+  className?: string;
 }
 
 export function QuickStateFilterBar({
@@ -58,6 +60,7 @@ export function QuickStateFilterBar({
   onChange,
   counts,
   trailing,
+  className,
 }: QuickStateFilterBarProps) {
   const workingActive = counts !== undefined && counts.working > 0;
   // This row already claimed `role="toolbar"` without implementing any of it,
@@ -70,7 +73,7 @@ export function QuickStateFilterBar({
     <div
       ref={toolbarRef}
       onKeyDown={handleToolbarKeyDown}
-      className="flex border-b border-border-default"
+      className={cn("flex border-b border-border-default", className)}
       role="toolbar"
       aria-label="Quick state filter"
     >

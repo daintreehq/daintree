@@ -469,11 +469,17 @@ export function useWorktreeOverviewKeyboard({
       const total = ids.length;
       let targetIndex: number | null = null;
 
+      // A single-column layout is a list: Left/Right have no neighbour to move
+      // to, and a row's own extremes are the list's.
+      const isList = columnCount <= 1;
+
       switch (e.key) {
         case "ArrowRight":
+          if (isList) return;
           targetIndex = Math.min(total - 1, currentIndex + 1);
           break;
         case "ArrowLeft":
+          if (isList) return;
           targetIndex = Math.max(0, currentIndex - 1);
           break;
         case "ArrowDown":
@@ -507,14 +513,16 @@ export function useWorktreeOverviewKeyboard({
           break;
         }
         case "Home":
-          targetIndex = isCmdOrCtrl
-            ? 0
-            : computeRowExtreme(currentIndex, -1, columnCount, total, sectionSizesRef.current);
+          targetIndex =
+            isCmdOrCtrl || isList
+              ? 0
+              : computeRowExtreme(currentIndex, -1, columnCount, total, sectionSizesRef.current);
           break;
         case "End":
-          targetIndex = isCmdOrCtrl
-            ? total - 1
-            : computeRowExtreme(currentIndex, 1, columnCount, total, sectionSizesRef.current);
+          targetIndex =
+            isCmdOrCtrl || isList
+              ? total - 1
+              : computeRowExtreme(currentIndex, 1, columnCount, total, sectionSizesRef.current);
           break;
         case "PageDown": {
           const stride = Math.max(1, columnCount * 3);
