@@ -200,6 +200,18 @@ test("Worktree overview — fleets, states and themes", async ({ page }) => {
     written.push(await shoot(page, `filter-empty-${theme}.png`));
   }
 
+  // A row with more sessions than it lists inline, expanded from its
+  // "N active" trigger.
+  {
+    const modal = await open(page, { theme });
+    const trigger = modal.getByRole("button", { name: /4\s*active/ });
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(200);
+    written.push(await shoot(page, `sessions-expanded-${theme}.png`));
+  }
+
   // Pointer over a row: whatever the row reveals on hover.
   {
     const modal = await open(page, { theme });

@@ -102,6 +102,8 @@ const BUSY: WorktreeSeed[] = [
     aiNote: "Wiring the marker into AgentStateService; tests next",
     sessions: [
       { agentId: "claude", state: "working", title: "Wire the handback marker into the FSM" },
+      { agentId: "codex", state: "waiting", title: "Review the marker parser for edge cases" },
+      { agentId: "gemini", state: "completed", title: "Draft the handback docs" },
       { title: "npm test -- handback", location: "dock" },
     ],
   },

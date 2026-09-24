@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { AlertTriangle, Check, Sprout } from "lucide-react";
+import { useMemo, useState } from "react";
+import { AlertTriangle, Check, ChevronRight, Sprout } from "lucide-react";
 import type { AgentState, WorktreeState } from "@/types";
 import type { PtyPanelData } from "@shared/types/panel";
 import { cn } from "@/lib/utils";
@@ -24,7 +24,14 @@ import type { ChipState } from "./utils/computeChipState";
 import { getBranchTypeIcon } from "./BranchLabel";
 import { LiveTimeAgo } from "./LiveTimeAgo";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
-import { STATE_COLORS, STATE_ICONS, STATE_LABELS } from "./terminalStateConfig";
+import {
+  STATE_COLORS,
+  STATE_ICONS,
+  STATE_LABELS,
+  summarizeSessionStates,
+} from "./terminalStateConfig";
+import { ActivityLight } from "./ActivityLight";
+import { CollapsedSessionIndicators } from "./WorktreeCard/CollapsedSessionIndicators";
 
 /**
  * Column tracks shared by the header and every row, so each section sits on
@@ -54,15 +61,19 @@ export function WorktreeOverviewColumnHeaders() {
       )}
     >
       <span className="pl-6">Worktree</span>
-      <span>Agents</span>
+      <span>Sessions</span>
       <span className="text-right">Changes</span>
       <span className="text-right">Active</span>
     </div>
   );
 }
 
-/** Beyond the lead session, at most this many compact marks before "+N". */
-const MAX_SECONDARY_MARKS = 2;
+/**
+ * Sessions listed in full before the row collapses them to the sidebar's
+ * "N active" trigger. Three keeps a busy row to the height of three session
+ * lines, which is the tallest a row gets without a click.
+ */
+const MAX_INLINE_SESSIONS = 3;
 
 /**
  * Which session speaks for the row on its second line. The one that needs the
@@ -172,13 +183,21 @@ export function WorktreeOverviewRow({
   const behind = worktree.behindCount ?? 0;
 
   const leadMark = marks[0];
-  const lead = leadLine(leadMark);
-  const LeadStateIcon =
-    leadMark?.state && leadMark.state !== "idle" && leadMark.state !== "exited"
-      ? STATE_ICONS[leadMark.state]
-      : null;
-  const secondaryMarks = marks.slice(1, 1 + MAX_SECONDARY_MARKS);
-  const overflowCount = marks.length - 1 - secondaryMarks.length;
+  const [sessionsExpanded, setSessionsExpanded] = useState(false);
+  // Counted from the same raw states the listed rows draw, so the trigger's
+  // pips and the rows it expands to can never disagree.
+  const sessionSummary = useMemo(() => {
+    const byState: Record<AgentState, number> = {
+      working: 0,
+      waiting: 0,
+      directing: 0,
+      idle: 0,
+      completed: 0,
+      exited: 0,
+    };
+    for (const mark of marks) if (mark.state) byState[mark.state] += 1;
+    return summarizeSessionStates(byState, marks.length);
+  }, [marks]);
 
   // The one exception the row leads with, beside the title: the things that
   // need a human, which a 12px mark inside another section let slide past.
@@ -335,138 +354,122 @@ export function WorktreeOverviewRow({
               </div>
             </div>
 
-            {/* Agents: who is in there, in what state, and what the one that needs you is on. */}
-            {marks.length > 0 ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="min-w-0">
-                    {/* The session that needs you most, in words: who, and what state.
-                        A cluster of bare glyphs asked the reader to decode every
-                        row; the rest of the sessions are a count and a hover away. */}
-                    <div
-                      className="flex h-5 items-center gap-1.5 min-w-0 text-xs"
-                      role="img"
-                      aria-label={sessionsLabel}
+            {/* Sessions, as the sidebar draws them. Up to three are listed in
+                full — icon, what it is on, state — like the sidebar's expanded
+                rows; past that the row collapses to the sidebar's own
+                "N active" trigger with its state counts, and expands in place. */}
+            <div className="min-w-0" role="group" aria-label={sessionsLabel || "No sessions"}>
+              {marks.length === 0 ? (
+                <span className="text-xs leading-5 text-text-secondary" aria-hidden="true">
+                  —
+                </span>
+              ) : (
+                <>
+                  {marks.length > MAX_INLINE_SESSIONS && (
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      aria-expanded={sessionsExpanded}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSessionsExpanded((v) => !v);
+                      }}
+                      className="flex h-5 w-full items-center justify-between gap-2 rounded-[var(--radius-sm)] text-2xs text-text-secondary hover:text-text-primary"
                     >
-                      {leadMark && (
-                        <TerminalIcon
-                          kind={leadMark.terminal.kind}
-                          chrome={leadMark.chrome}
-                          className="h-3.5 w-3.5 shrink-0"
+                      <span className="flex items-center gap-1.5">
+                        <ChevronRight
+                          className={cn(
+                            "h-3 w-3 shrink-0 transition-transform duration-150",
+                            sessionsExpanded && "rotate-90"
+                          )}
+                          aria-hidden="true"
+                        />
+                        {leadMark && (
+                          <TerminalIcon
+                            kind={leadMark.terminal.kind}
+                            chrome={leadMark.chrome}
+                            className="h-3 w-3 shrink-0"
+                          />
+                        )}
+                        <span className="inline-flex items-center gap-1">
+                          <span className="font-mono tabular-nums">{marks.length}</span>
+                          <span>active</span>
+                        </span>
+                      </span>
+                      {sessionSummary.visibleStates.length > 0 && (
+                        <CollapsedSessionIndicators
+                          visibleStates={sessionSummary.visibleStates}
+                          sessionAriaLabel={sessionSummary.label}
                         />
                       )}
-                      <span className="truncate text-text-primary" aria-hidden="true">
-                        {leadMark?.chrome.label}
-                      </span>
-                      {leadMark?.state && (
-                        <span
-                          className="flex shrink-0 items-center gap-1 text-text-secondary"
+                    </button>
+                  )}
+                  {(marks.length <= MAX_INLINE_SESSIONS || sessionsExpanded) &&
+                    marks.map((mark) => {
+                      const line = leadLine(mark);
+                      const Glyph =
+                        mark.state && mark.state !== "idle" && mark.state !== "exited"
+                          ? STATE_ICONS[mark.state]
+                          : null;
+                      return (
+                        <div
+                          key={mark.terminal.id}
+                          className="flex h-5 items-center gap-1.5 min-w-0"
                           aria-hidden="true"
                         >
-                          {LeadStateIcon && (
-                            <LeadStateIcon
+                          <TerminalIcon
+                            kind={mark.terminal.kind}
+                            chrome={mark.chrome}
+                            className="h-3 w-3 shrink-0"
+                          />
+                          <span
+                            className={cn(
+                              "min-w-0 flex-1 truncate text-xs text-text-secondary",
+                              line?.mono && "font-mono text-2xs"
+                            )}
+                          >
+                            {line?.text ?? mark.chrome.label}
+                          </span>
+                          {Glyph && mark.state && (
+                            <Glyph
                               className={cn(
-                                "h-3 w-3",
-                                STATE_COLORS[leadMark.state],
-                                leadMark.state === "working" &&
+                                "h-3 w-3 shrink-0",
+                                STATE_COLORS[mark.state],
+                                mark.state === "working" &&
                                   "animate-spin-slow motion-reduce:animate-none"
                               )}
                             />
                           )}
-                          {STATE_LABELS[leadMark.state]}
-                        </span>
-                      )}
-                      {/* The others, as the sidebar draws them: who, and in
-                          what state — so "+1" never hides whether the second
-                          session is an agent at work or a plain shell. */}
-                      {secondaryMarks.length > 0 && (
-                        <span
-                          className="ml-1 flex shrink-0 items-center gap-2 border-l border-divider pl-2"
-                          aria-hidden="true"
-                        >
-                          {secondaryMarks.map(({ terminal, chrome, state }) => {
-                            const Glyph =
-                              state && state !== "idle" && state !== "exited"
-                                ? STATE_ICONS[state]
-                                : null;
-                            return (
-                              <span key={terminal.id} className="flex items-center gap-0.5">
-                                <TerminalIcon
-                                  kind={terminal.kind}
-                                  chrome={chrome}
-                                  className="h-3 w-3 shrink-0"
-                                />
-                                {Glyph && state && (
-                                  <Glyph
-                                    className={cn(
-                                      "h-3 w-3",
-                                      STATE_COLORS[state],
-                                      state === "working" &&
-                                        "animate-spin-slow motion-reduce:animate-none"
-                                    )}
-                                  />
-                                )}
-                              </span>
-                            );
-                          })}
-                        </span>
-                      )}
-                      {overflowCount > 0 && (
-                        <span
-                          className="shrink-0 tabular-nums text-text-secondary"
-                          aria-hidden="true"
-                        >
-                          +{overflowCount}
-                        </span>
-                      )}
-                    </div>
-                    {lead && (
-                      <div
-                        className={cn(
-                          "mt-1 truncate pl-5 text-2xs text-text-secondary",
-                          lead.mono && "font-mono"
-                        )}
-                      >
-                        {lead.text}
-                      </div>
-                    )}
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" align="start" className="max-w-[360px] text-xs">
-                  <ul className="flex flex-col gap-1">
-                    {sessionLines.map((line) => (
-                      <li key={line.id}>
-                        <span className="text-text-primary">{line.name}</span>
-                        {line.detail && line.detail !== line.name && (
-                          <span className="block text-text-secondary">{line.detail}</span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </TooltipContent>
-              </Tooltip>
-            ) : (
-              <span className="text-xs text-text-secondary" aria-label="No sessions">
-                —
-              </span>
-            )}
+                        </div>
+                      );
+                    })}
+                </>
+              )}
+            </div>
 
-            {/* Changes: size of the diff, then its file count and drift from upstream. */}
+            {/* Changes, in the sidebar's own words and colours: +added/-removed
+                in the success and error inks, then the file count and drift. */}
             <div className="min-w-0 text-right tabular-nums">
               <div className="text-xs leading-5 text-text-secondary">
                 {changes === null ? (
                   "—"
+                ) : fileCount > 0 && (insertions > 0 || deletions > 0) ? (
+                  <span className="inline-flex items-center gap-0.5">
+                    {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
+                    {insertions > 0 && deletions > 0 && <span className="text-text-muted">/</span>}
+                    {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
+                  </span>
                 ) : fileCount > 0 ? (
-                  <>
-                    <span className="text-text-primary">+{insertions}</span> −{deletions}
-                  </>
+                  `${fileCount} file${fileCount === 1 ? "" : "s"}`
                 ) : (
                   "Clean"
                 )}
               </div>
-              {(fileCount > 0 || ahead > 0 || behind > 0) && (
+              {((fileCount > 0 && (insertions > 0 || deletions > 0)) ||
+                ahead > 0 ||
+                behind > 0) && (
                 <div className="mt-1 flex items-center justify-end gap-1.5 text-2xs text-text-secondary">
-                  {fileCount > 0 && (
+                  {fileCount > 0 && (insertions > 0 || deletions > 0) && (
                     <span>
                       {fileCount} file{fileCount === 1 ? "" : "s"}
                     </span>
@@ -482,10 +485,16 @@ export function WorktreeOverviewRow({
               )}
             </div>
 
-            {/* Age of the last activity, the sidebar's own clock. */}
-            <div className="text-right text-xs leading-5 tabular-nums text-text-secondary">
+            {/* Age of the last activity, with the sidebar's recency light. */}
+            <div className="flex h-5 items-center justify-end gap-1.5 text-xs tabular-nums text-text-secondary">
               {worktree.lastActivityTimestamp ? (
-                <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
+                <>
+                  <ActivityLight
+                    lastActivityTimestamp={worktree.lastActivityTimestamp}
+                    className="h-1.5 w-1.5 shrink-0"
+                  />
+                  <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
+                </>
               ) : null}
             </div>
           </div>
