@@ -339,6 +339,21 @@ describe("PluginInstallProgressBanner long waits and cancel state (#11302)", () 
     expect(inBanner("Still cancelling…")).toBeTruthy();
   });
 
+  it("times a slow unwind from the cancel, not from the start of the install", () => {
+    const { rerender } = render(<PluginInstallProgressBanner {...props()} />, { wrapper });
+    settle();
+    act(() => {
+      vi.advanceTimersByTime(8000);
+    });
+    rerender(<PluginInstallProgressBanner {...props({ cancelRequested: true })} />);
+    // The cancel has only just been asked for.
+    expect(screen.queryByText("Still cancelling…")).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(inBanner("Still cancelling…")).toBeTruthy();
+  });
+
   it("keeps the long-wait reassurance past the commit point, and announces it", () => {
     render(
       <PluginInstallProgressBanner

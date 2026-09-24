@@ -65,6 +65,7 @@ export function PluginInstallProgressBanner({
 }: PluginInstallProgressBannerProps) {
   const show = useDeferredLoading(isInstalling, UI_DOHERTY_THRESHOLD);
   const [longWait, setLongWait] = useState(false);
+  const [longCancel, setLongCancel] = useState(false);
   const noteId = useId();
 
   useEffect(() => {
@@ -75,6 +76,17 @@ export function PluginInstallProgressBanner({
     const timer = setTimeout(() => setLongWait(true), LONG_WAIT_MS);
     return () => clearTimeout(timer);
   }, [isInstalling]);
+
+  // A cancel's own clock: one requested eight seconds into an install has only
+  // just started unwinding, whatever the install's age.
+  useEffect(() => {
+    if (!cancelRequested) {
+      setLongCancel(false);
+      return;
+    }
+    const timer = setTimeout(() => setLongCancel(true), LONG_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [cancelRequested]);
 
   // No event yet: the install has been dispatched but main hasn't reached its
   // first phase. Name the step that is actually happening rather than inventing
@@ -98,7 +110,7 @@ export function PluginInstallProgressBanner({
   const entry = phase === "extracting" && !cancelRequested ? progress?.entry : undefined;
   const detail = entry ? (archive ? `${archive} › ${entry}` : entry) : (source ?? undefined);
   const note = cancelRequested
-    ? longWait
+    ? longCancel
       ? "Still cancelling…"
       : null // the title already explains an inert Cancel
     : !cancellable
