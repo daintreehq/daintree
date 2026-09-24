@@ -11,6 +11,9 @@ import { appCustomSchemesWriteSchema } from "../schemas/customSchemes.js";
 import { sanitizeNotificationSettingsPatch } from "../utils/notificationSettingsPatch.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { UserAgentConfigSchema } from "../../shared/types/index.js";
+import { getEffectiveAgentConfig } from "../../shared/config/agentRegistry.js";
+import { buildDefaultKeybindings } from "../../shared/config/defaultKeybindings.js";
+import { BUILT_IN_APP_SCHEMES } from "../../shared/theme/themes.js";
 import type { TerminalRecipe, UserAgentConfig } from "../../shared/types/index.js";
 import {
   validatePathPattern,
@@ -18,6 +21,8 @@ import {
 } from "../../shared/utils/pathPattern.js";
 import {
   CONFIG_BUNDLE_SECTION_IDS,
+  CONFIG_BUNDLE_SECTION_LABELS,
+  type ConfigBundlePreviewChange,
   type ConfigBundlePreviewSection,
   type ConfigBundleSectionId,
   type ConfigImportLeafResult,
@@ -122,6 +127,166 @@ function skippedLeaf(key: string, reason: string): ConfigImportLeafResult {
   return { key, status: "skipped", reason };
 }
 
+/** "Keyboard shortcuts" → "keyboard shortcuts", for use mid-sentence. */
+function sectionName(id: ConfigBundleSectionId): string {
+  return CONFIG_BUNDLE_SECTION_LABELS[id].toLowerCase();
+}
+
+/** Settings-page wording, so the preview names a setting the way Settings does. */
+const THEME_FIELD_LABELS: Record<string, string> = {
+  colorSchemeId: "Color scheme",
+  followSystem: "Match system appearance",
+  preferredDarkSchemeId: "Dark theme",
+  preferredLightSchemeId: "Light theme",
+  colorVisionMode: "Color vision",
+  accentColorOverride: "Accent color",
+};
+
+const NOTIFICATION_FIELD_LABELS: Record<string, string> = {
+  enabled: "Notifications",
+  completedEnabled: "Completed alerts",
+  waitingEnabled: "Waiting alerts",
+  soundEnabled: "Sounds",
+  completedSoundFile: "Completed sound",
+  waitingSoundFile: "Waiting sound",
+  escalationSoundFile: "Escalation sound",
+  waitingEscalationEnabled: "Waiting escalation",
+  waitingEscalationDelayMs: "Escalation delay",
+  workingPulseEnabled: "Working pulse",
+  workingPulseSoundFile: "Working pulse sound",
+  uiFeedbackSoundEnabled: "Interface sounds",
+  flashEnabled: "All-clear flash",
+  quietHoursEnabled: "Quiet hours",
+  quietHoursStartMin: "Quiet hours start",
+  quietHoursEndMin: "Quiet hours end",
+  quietHoursWeekdays: "Quiet hours days",
+  groupByContext: "Group by context",
+};
+
+/** "someNewSetting" → "Some new setting" — the fallback for keys no table names. */
+function humanizeKey(key: string): string {
+  const words = key
+    .replace(/[._-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .trim()
+    .toLowerCase();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : key;
+}
+
+/** A scalar as a person would read it, or undefined when it isn't one worth showing. */
+function displayScalar(value: unknown): string | undefined {
+  if (typeof value === "boolean") return value ? "On" : "Off";
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "string" && value.trim() !== "" && value.length <= 60) return value;
+  return undefined;
+}
+
+let defaultShortcutDescriptions: Map<string, string> | undefined;
+function shortcutLabel(actionId: string): string {
+  defaultShortcutDescriptions ??= new Map(
+    buildDefaultKeybindings(process.platform === "win32")
+      .filter((b) => typeof b.description === "string" && b.description !== "")
+      .map((b) => [b.actionId, b.description as string])
+  );
+  return defaultShortcutDescriptions.get(actionId) ?? actionId;
+}
+
+function schemeName(id: unknown, ...schemeLists: unknown[]): string | undefined {
+  if (typeof id !== "string") return undefined;
+  for (const list of schemeLists) {
+    if (!Array.isArray(list)) continue;
+    const match = list.find((s) => isRecord(s) && s.id === id);
+    if (isRecord(match) && typeof match.name === "string") return match.name;
+  }
+  return BUILT_IN_APP_SCHEMES.find((s) => s.id === id)?.name ?? id;
+}
+
+function recordName(record: unknown, key: string): string | undefined {
+  const entry = isRecord(record) ? record[key] : undefined;
+  return isRecord(entry) && typeof entry.name === "string" && entry.name.trim() !== ""
+    ? entry.name
+    : undefined;
+}
+
+/**
+ * Name each leaf the diff reported, so the confirmation can list what the
+ * import replaces. Labels fall back to the raw key rather than dropping an
+ * entry — an unnamed row is still better than a count that hides it.
+ */
+function describeChanges(
+  id: ConfigBundleSectionId,
+  diff: SectionDiff,
+  incoming: unknown,
+  current: unknown
+): ConfigBundlePreviewChange[] {
+  const incomingRecord = isRecord(incoming) ? incoming : {};
+  const currentRecord = isRecord(current) ? current : {};
+
+  const describe = (key: string, kind: "add" | "update"): ConfigBundlePreviewChange => {
+    switch (id) {
+      case "userAgentRegistry":
+        return {
+          key,
+          kind,
+          label: recordName(incomingRecord, key) ?? recordName(currentRecord, key) ?? key,
+        };
+      case "agentSettings":
+        return { key, kind, label: getEffectiveAgentConfig(key)?.name ?? key };
+      case "keybindingOverrides":
+        return { key, kind, label: shortcutLabel(key) };
+      case "appTheme": {
+        if (key.startsWith("theme:")) {
+          const schemeId = key.slice("theme:".length);
+          const label =
+            schemeName(schemeId, incomingRecord.customSchemes, currentRecord.customSchemes) ??
+            schemeId;
+          return { key, kind, label: `${label} (custom theme)` };
+        }
+        const isScheme = key.endsWith("SchemeId");
+        const show = (value: unknown) =>
+          isScheme
+            ? schemeName(value, incomingRecord.customSchemes, currentRecord.customSchemes)
+            : displayScalar(value);
+        return {
+          key,
+          kind,
+          label: THEME_FIELD_LABELS[key] ?? humanizeKey(key),
+          from: kind === "update" ? show(currentRecord[key]) : undefined,
+          to: show(incomingRecord[key]),
+        };
+      }
+      case "notificationSettings":
+        return {
+          key,
+          kind,
+          label: NOTIFICATION_FIELD_LABELS[key] ?? humanizeKey(key),
+          from: kind === "update" ? displayScalar(currentRecord[key]) : undefined,
+          to: displayScalar(incomingRecord[key]),
+        };
+      case "worktreeConfig":
+        return {
+          key,
+          kind,
+          label: "Path pattern",
+          from: kind === "update" ? displayScalar(currentRecord[key]) : undefined,
+          to: displayScalar(incomingRecord[key]),
+        };
+      case "globalRecipes": {
+        const find = (list: unknown) =>
+          Array.isArray(list) ? list.find((r) => isRecord(r) && String(r.id) === key) : undefined;
+        const recipe = find(incoming) ?? find(current);
+        const name = isRecord(recipe) && typeof recipe.name === "string" ? recipe.name : "";
+        return { key, kind, label: name.trim() || key };
+      }
+    }
+  };
+
+  return [
+    ...diff.update.map((key) => describe(key, "update")),
+    ...diff.add.map((key) => describe(key, "add")),
+  ];
+}
+
 export class ConfigBundleService {
   private readonly handlers: SectionHandler[];
 
@@ -150,7 +315,7 @@ export class ConfigBundleService {
     return sections;
   }
 
-  /** Per-section add/update/unchanged counts for the pre-import confirmation. */
+  /** Per-section counts, and the named leaves behind them, for the pre-import confirmation. */
   async preview(
     incoming: Partial<Record<ConfigBundleSectionId, unknown>>
   ): Promise<ConfigBundlePreviewSection[]> {
@@ -167,6 +332,7 @@ export class ConfigBundleService {
         add: diff.add.length,
         update: diff.update.length,
         unchanged: diff.unchanged.length,
+        changes: describeChanges(id, diff, payload, current),
       });
     }
     return previews;
@@ -234,16 +400,19 @@ export class ConfigBundleService {
         const failedRestores = await this.rollback(restorable);
         rolledBack = restorable.length > 0 && failedRestores.length === 0;
 
+        // These reach the import dialog verbatim, so sections are named the
+        // way the dialog's own rows name them rather than by store key.
+        const failure = `Couldn't import ${sectionName(id)}: ${reason}.`;
         if (failedRestores.length > 0) {
           // Saying "no changes were kept" here would be a claim we just watched
           // fail. Name the sections that are now in an unknown state instead.
           errors.push(
-            `${id}: ${reason}. Undoing the earlier sections also failed, so ${failedRestores.join(", ")} may be partly changed.`
+            `${failure} Undoing the earlier sections also failed, so ${failedRestores.map(sectionName).join(", ")} may be partly changed.`
           );
         } else if (restorable.length > 0) {
-          errors.push(`${id}: ${reason}. No changes were kept.`);
+          errors.push(`${failure} No changes were kept.`);
         } else {
-          errors.push(`${id}: ${reason}. Nothing was changed.`);
+          errors.push(`${failure} Nothing was changed.`);
         }
 
         // Leaves recorded before the failure describe writes that have since

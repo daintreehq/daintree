@@ -6,7 +6,7 @@
  * against real rendered pixels:
  *
  *   dialog — a busy bundle touching every section, a single-section bundle,
- *            unsupported sections, a long file name, the apply in flight, a
+ *            an adds-only bundle, the backup exported, unsupported sections, a long file name, the apply in flight, a
  *            rolled-back apply, and a thrown apply.
  *   toasts — the file was rejected, the bundle already matches, the import
  *            landed, and the import landed with skipped leaves.
@@ -72,13 +72,20 @@ const POLISH_CSS = `
   }
 `;
 
+interface PreviewChange {
+  key: string;
+  label: string;
+  kind: "add" | "update";
+  from?: string;
+  to?: string;
+}
+
 interface PreviewSection {
   section: string;
   add: number;
   update: number;
   unchanged: number;
-  addedKeys?: string[];
-  updatedKeys?: string[];
+  changes: PreviewChange[];
 }
 
 interface ImportScript {
@@ -91,83 +98,82 @@ interface ImportScript {
   applyError: string;
 }
 
+const upd = (key: string, label: string, from?: string, to?: string): PreviewChange => ({
+  key,
+  label,
+  kind: "update",
+  ...(from !== undefined ? { from, to } : {}),
+});
+const add = (key: string, label: string, to?: string): PreviewChange => ({
+  key,
+  label,
+  kind: "add",
+  ...(to !== undefined ? { to } : {}),
+});
+
+/** Built from its changes, so the counts can never disagree with the names. */
+function section(id: string, unchanged: number, changes: PreviewChange[]): PreviewSection {
+  return {
+    section: id,
+    add: changes.filter((c) => c.kind === "add").length,
+    update: changes.filter((c) => c.kind === "update").length,
+    unchanged,
+    changes,
+  };
+}
+
 /** Every section, a realistic spread of adds and replaces. */
 const BUSY: PreviewSection[] = [
-  {
-    section: "userAgentRegistry",
-    add: 2,
-    update: 0,
-    unchanged: 1,
-    addedKeys: ["claude-reviewer", "local-llama"],
-    updatedKeys: [],
-  },
-  {
-    section: "agentSettings",
-    add: 0,
-    update: 3,
-    unchanged: 4,
-    addedKeys: [],
-    updatedKeys: ["claude", "codex", "gemini"],
-  },
-  {
-    section: "keybindingOverrides",
-    add: 4,
-    update: 2,
-    unchanged: 9,
-    addedKeys: ["terminal.split", "worktree.next", "worktree.previous", "palette.recipes"],
-    updatedKeys: ["panel.close", "terminal.new"],
-  },
-  {
-    section: "appTheme",
-    add: 0,
-    update: 1,
-    unchanged: 0,
-    addedKeys: [],
-    updatedKeys: ["colorScheme"],
-  },
-  {
-    section: "notificationSettings",
-    add: 0,
-    update: 2,
-    unchanged: 5,
-    addedKeys: [],
-    updatedKeys: ["soundEnabled", "waitingNudge"],
-  },
-  {
-    section: "worktreeConfig",
-    add: 0,
-    update: 1,
-    unchanged: 0,
-    addedKeys: [],
-    updatedKeys: ["pathPattern"],
-  },
-  {
-    section: "globalRecipes",
-    add: 3,
-    update: 1,
-    unchanged: 2,
-    addedKeys: ["Full review fleet", "Nightly triage", "Release checklist"],
-    updatedKeys: ["Bug bash"],
-  },
+  section("userAgentRegistry", 1, [
+    add("claude-reviewer", "Claude Reviewer"),
+    add("local-llama", "Local Llama"),
+  ]),
+  section("agentSettings", 4, [
+    upd("claude", "Claude Code"),
+    upd("codex", "Codex"),
+    upd("gemini", "Gemini CLI"),
+  ]),
+  section("keybindingOverrides", 9, [
+    upd("terminal.close", "Close focused terminal"),
+    upd("terminal.new", "New terminal"),
+    add("terminal.split", "Split terminal"),
+    add("worktree.next", "Next worktree"),
+    add("worktree.previous", "Previous worktree"),
+    add("palette.recipes", "Open recipes"),
+  ]),
+  section("appTheme", 0, [upd("colorSchemeId", "Color scheme", "Daintree", "Bondi")]),
+  section("notificationSettings", 5, [
+    upd("soundEnabled", "Sounds", "On", "Off"),
+    upd("quietHoursEnabled", "Quiet hours", "Off", "On"),
+  ]),
+  section("worktreeConfig", 0, [
+    upd(
+      "pathPattern",
+      "Path pattern",
+      "{parent-dir}/{base-folder}-worktrees/{branch-slug}",
+      "~/trees/{branch-slug}"
+    ),
+  ]),
+  section("globalRecipes", 2, [
+    upd("r-bug-bash", "Bug bash"),
+    add("r-fleet", "Full review fleet"),
+    add("r-triage", "Nightly triage"),
+    add("r-release", "Release checklist"),
+  ]),
 ];
 
 const THEME_ONLY: PreviewSection[] = [
-  {
-    section: "appTheme",
-    add: 0,
-    update: 1,
-    unchanged: 0,
-    addedKeys: [],
-    updatedKeys: ["colorScheme"],
-  },
-  {
-    section: "keybindingOverrides",
-    add: 0,
-    update: 0,
-    unchanged: 12,
-    addedKeys: [],
-    updatedKeys: [],
-  },
+  section("appTheme", 0, [upd("colorSchemeId", "Color scheme", "Daintree", "Bondi")]),
+  section("keybindingOverrides", 12, []),
+];
+
+/** Nothing replaced — every change is new, so nothing on this machine is lost. */
+const ADDS_ONLY: PreviewSection[] = [
+  section("userAgentRegistry", 0, [add("claude-reviewer", "Claude Reviewer")]),
+  section("globalRecipes", 0, [
+    add("r-fleet", "Full review fleet"),
+    add("r-triage", "Nightly triage"),
+  ]),
 ];
 
 function git(cmd: string, cwd: string): void {
@@ -219,8 +225,7 @@ async function installImportStub(app: ElectronApplication): Promise<void> {
               add: 0,
               update: 0,
               unchanged: x.unchanged + x.add + x.update,
-              addedKeys: [],
-              updatedKeys: [],
+              changes: [],
             }))
           : s.sections;
       return {
@@ -234,6 +239,15 @@ async function installImportStub(app: ElectronApplication): Promise<void> {
         errors: [],
       };
     });
+
+    // Export is the dialog's backup route; answer as if the save dialog wrote a file.
+    ipcMain.removeHandler("config-bundle:export");
+    ipcMain.handle("config-bundle:export", async () => ({
+      outcome: "written",
+      filePath: "/Users/you/Desktop/daintree-config-backup.json",
+      sections: [],
+      omittedSecretPaths: [],
+    }));
 
     ipcMain.removeHandler("config-bundle:apply-import");
     ipcMain.handle("config-bundle:apply-import", async () => {
@@ -423,6 +437,36 @@ async function captureTheme(page: Page, app: ElectronApplication): Promise<void>
     await closeDialog(page);
   });
 
+  // 2b. Only additions — nothing on this machine is replaced.
+  await step("adds-only", async () => {
+    await setScript(app, {
+      previewMode: "ready",
+      fileName: "team-recipes.json",
+      sections: ADDS_ONLY,
+      unknownSections: [],
+    });
+    await openDialog(page);
+    await snap(page, "17-adds-only", PANEL);
+    await closeDialog(page);
+  });
+
+  // 2c. The backup route taken — current values exported before importing.
+  await step("exported", async () => {
+    await setScript(app, {
+      previewMode: "ready",
+      fileName: "daintree-config-2026-09-20.json",
+      sections: BUSY,
+      unknownSections: [],
+    });
+    await openDialog(page);
+    await modal(page)
+      .getByRole("button", { name: /Export a backup/ })
+      .click();
+    await settle(page, 600);
+    await snap(page, "18-backup-exported", PANEL);
+    await closeDialog(page);
+  });
+
   // 3. A bundle from a newer build carrying sections this one doesn't know.
   await step("unknown", async () => {
     await setScript(app, {
@@ -476,7 +520,7 @@ async function captureTheme(page: Page, app: ElectronApplication): Promise<void>
       unknownSections: [],
       applyMode: "rolled-back",
       applyError:
-        "Keyboard shortcuts couldn't be written — the settings file is read-only. Nothing was changed",
+        "Couldn't import keyboard shortcuts: the settings file is read-only. Nothing was changed.",
     });
     await openDialog(page);
     await confirm(page);

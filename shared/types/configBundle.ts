@@ -108,6 +108,25 @@ export interface ConfigImportReport {
   rolledBack: boolean;
 }
 
+/**
+ * One leaf the import would write, named for a person rather than a store key,
+ * so the confirmation can say what gets replaced instead of only how many.
+ */
+export interface ConfigBundlePreviewChange {
+  /** Identifier within the section, exactly as the diff keys it. */
+  key: string;
+  /** Display name — the agent, shortcut, recipe, theme or setting. */
+  label: string;
+  kind: "add" | "update";
+  /**
+   * Display values before and after, for scalar settings only (theme fields,
+   * notification settings, the worktree path pattern). Absent for structured
+   * entries, where a value would be a JSON blob rather than something to read.
+   */
+  from?: string;
+  to?: string;
+}
+
 export interface ConfigBundlePreviewSection {
   section: ConfigBundleSectionId;
   /** Leaves present in the bundle but absent on this machine. */
@@ -116,6 +135,8 @@ export interface ConfigBundlePreviewSection {
   update: number;
   /** Leaves already identical — a re-import of the same bundle is all-unchanged. */
   unchanged: number;
+  /** Every added and replaced leaf, replacements first. */
+  changes: ConfigBundlePreviewChange[];
 }
 
 /** `ready` carries a bundle to confirm; `rejected` carries the reason in `errors`. */

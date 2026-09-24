@@ -400,7 +400,7 @@ describe("ConfigBundleService.apply", () => {
 
     expect(report.outcome).toBe("rolled-back");
     expect(report.rolledBack).toBe(false);
-    expect(report.errors[0]).toContain("worktreeConfig");
+    expect(report.errors[0]).toContain("so worktree path pattern may be partly changed");
   });
 
   it("restores a recipe exactly, dropping fields the import added", async () => {
@@ -500,6 +500,65 @@ describe("ConfigBundleService.preview", () => {
 
     const keys = preview.find((p) => p.section === "keybindingOverrides");
     expect(keys).toMatchObject({ add: 0, update: 0, unchanged: 1 });
+  });
+
+  it("names every leaf it counts, replacements first, in words rather than store keys", async () => {
+    mockStore.set("userAgentRegistry", { shared: agent("shared", { name: "Local" }) });
+    mockStore.set("keybindingOverrides.overrides", { "terminal.new": ["Cmd+T"] });
+    mockStore.set("appTheme", { colorSchemeId: "daintree" });
+    mockStore.set("notificationSettings", { soundEnabled: true });
+    mockStore.set("worktreeConfig", { pathPattern: "old/{branch-slug}" });
+    mockProjectStore.recipes = [{ id: "r1", name: "Old fleet", terminals: [], createdAt: 1 }];
+    const { service } = makeService();
+
+    const preview = await service.preview({
+      userAgentRegistry: {
+        shared: agent("shared", { name: "Imported" }),
+        brandNew: agent("brandNew", { name: "Brand New Agent" }),
+      },
+      agentSettings: { claude: { customFlags: "--verbose" } },
+      keybindingOverrides: { "terminal.new": ["Cmd+Shift+T"], "not.a.real.action": ["Cmd+J"] },
+      appTheme: { colorSchemeId: "bondi" },
+      notificationSettings: { soundEnabled: false },
+      worktreeConfig: { pathPattern: "trees/{branch-slug}" },
+      globalRecipes: [
+        { id: "r1", name: "Renamed fleet", terminals: [] },
+        { id: "r2", name: "Nightly triage", terminals: [] },
+      ],
+    });
+
+    expect(preview).toHaveLength(7);
+    for (const section of preview) {
+      // The list the dialog renders and the counts it prints can never disagree.
+      expect(section.changes).toHaveLength(section.add + section.update);
+      const kinds = section.changes.map((c) => c.kind);
+      expect(kinds).toEqual([
+        ...Array(section.update).fill("update"),
+        ...Array(section.add).fill("add"),
+      ]);
+      for (const change of section.changes) expect(change.label.trim()).not.toBe("");
+    }
+
+    const byKey = new Map(
+      preview.flatMap((s) => s.changes.map((c) => [`${s.section}/${c.key}`, c] as const))
+    );
+    // Wherever the bundle or the app has a name, the store key never reaches the user.
+    for (const [key, change] of byKey) {
+      if (key === "keybindingOverrides/not.a.real.action") continue;
+      expect(change.label).not.toBe(key.split("/")[1]);
+    }
+    // A key nothing can name still appears, as itself, rather than vanishing.
+    expect(byKey.get("keybindingOverrides/not.a.real.action")?.label).toBe("not.a.real.action");
+    // Scalars say what they move between; structured entries don't pretend to.
+    const scheme = byKey.get("appTheme/colorSchemeId");
+    expect(scheme?.from).toBeDefined();
+    expect(scheme?.to).toBeDefined();
+    expect(scheme?.from).not.toBe(scheme?.to);
+    expect(byKey.get("worktreeConfig/pathPattern")).toMatchObject({
+      from: "old/{branch-slug}",
+      to: "trees/{branch-slug}",
+    });
+    expect(byKey.get("agentSettings/claude")?.from).toBeUndefined();
   });
 
   it("omits sections the bundle doesn't carry", async () => {

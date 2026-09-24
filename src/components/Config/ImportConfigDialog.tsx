@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Button } from "@/components/ui/button";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   CONFIG_BUNDLE_SECTION_LABELS,
   type ConfigBundlePreview,
+  type ConfigBundlePreviewChange,
   type ConfigBundlePreviewSection,
   type ConfigImportReport,
 } from "@shared/types/configBundle";
@@ -14,6 +17,9 @@ import { IMPORT_CONFIG_EVENT } from "./importConfigEvent";
 
 /** Groups this dialog's notifications so a repeat import replaces the last report. */
 const IMPORT_CONFIG_ACTION_ID = "app.importConfig";
+
+/** Names shown per line before the rest collapse into "and N more". */
+const MAX_NAMED = 3;
 
 /**
  * Re-enter the flow from a toast action by firing the same event the menu item
@@ -36,34 +42,92 @@ function describeSection(section: ConfigBundlePreviewSection): string {
   return parts.join(", ");
 }
 
-function summarizeReport(report: ConfigImportReport): string {
-  const totals = report.sections.reduce(
-    (acc, section) => ({
-      applied: acc.applied + section.applied,
-      unchanged: acc.unchanged + section.unchanged,
-      skipped: acc.skipped + section.skipped,
-    }),
-    { applied: 0, unchanged: 0, skipped: 0 }
-  );
-
-  const parts = [`${totals.applied} applied`];
-  if (totals.unchanged > 0) parts.push(`${totals.unchanged} already matched`);
-  if (totals.skipped > 0) parts.push(`${totals.skipped} skipped`);
-  return parts.join(", ");
+/** "a", "a and b", "a, b and c", "a, b, c and 2 more". */
+function listNames(names: string[], max = MAX_NAMED): string {
+  if (names.length <= 1) return names.join("");
+  if (names.length <= max) return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return `${names.slice(0, max).join(", ")} and ${names.length - max} more`;
 }
 
-/** The first few reasons, so a skip is explained rather than just counted. */
-function skippedReasons(report: ConfigImportReport): string[] {
+/** A scalar shows the value it moves between; everything else is just its name. */
+function nameChange(change: ConfigBundlePreviewChange): string {
+  if (change.kind === "update" && change.from !== undefined && change.to !== undefined) {
+    return `${change.label} (${change.from} → ${change.to})`;
+  }
+  if (change.kind === "add" && change.to !== undefined) return `${change.label} (${change.to})`;
+  return change.label;
+}
+
+function countLabel(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** Appended to an outcome toast, so sections the import dropped aren't lost from its record. */
+function unsupportedNote(unknownSections: string[]): string {
+  if (unknownSections.length === 0) return "";
+  return `. ${countLabel(unknownSections.length, "unsupported section was", "unsupported sections were")} left out`;
+}
+
+/**
+ * The skipped leaves, named the way the confirmation named them — a leaf's key
+ * is a store identifier, and the preview already resolved it to a label.
+ */
+function skippedReasons(report: ConfigImportReport, preview: ConfigBundlePreview): string[] {
   const reasons: string[] = [];
   for (const section of report.sections) {
+    const labels = new Map(
+      preview.sections
+        .find((s) => s.section === section.section)
+        ?.changes.map((c) => [c.key, c.label] as const) ?? []
+    );
     for (const leaf of section.leaves) {
       if (leaf.status !== "skipped" || !leaf.reason) continue;
-      reasons.push(
-        `${CONFIG_BUNDLE_SECTION_LABELS[section.section]} — ${leaf.key}: ${leaf.reason}`
-      );
+      const name = labels.get(leaf.key) ?? leaf.key;
+      const where = CONFIG_BUNDLE_SECTION_LABELS[section.section].toLowerCase();
+      reasons.push(`${name} (${where}): ${leaf.reason}`);
     }
   }
   return reasons;
+}
+
+function outcomeMessage(report: ConfigImportReport, preview: ConfigBundlePreview): string {
+  const applied = report.sections.reduce((sum, section) => sum + section.applied, 0);
+  const reasons = skippedReasons(report, preview);
+  const tail = unsupportedNote(preview.unknownSections);
+  if (reasons.length === 0) {
+    return `Configuration imported — ${countLabel(applied, "setting", "settings")} changed${tail}`;
+  }
+  const more = reasons.length > 1 ? `, plus ${reasons.length - 1} more` : "";
+  return `Configuration imported with ${reasons.length} skipped — ${reasons[0]}${more}${tail}`;
+}
+
+interface ApplyFailure {
+  description: string;
+  /** The raw error, when the description had to translate it. */
+  detail?: string;
+}
+
+function SectionRow({ section }: { section: ConfigBundlePreviewSection }) {
+  const replaced = section.changes.filter((c) => c.kind === "update").map(nameChange);
+  const added = section.changes.filter((c) => c.kind === "add").map(nameChange);
+  return (
+    <li className="py-2 first:pt-0 last:pb-0">
+      <div className="flex items-baseline justify-between gap-4">
+        <span className="text-sm text-text-primary">
+          {CONFIG_BUNDLE_SECTION_LABELS[section.section]}
+        </span>
+        <span className="shrink-0 text-xs text-text-secondary tabular-nums">
+          {describeSection(section)}
+        </span>
+      </div>
+      {replaced.length > 0 && (
+        <p className="mt-0.5 text-xs text-text-secondary">Replaces {listNames(replaced)}</p>
+      )}
+      {added.length > 0 && (
+        <p className="mt-0.5 text-xs text-text-secondary">Adds {listNames(added)}</p>
+      )}
+    </li>
+  );
 }
 
 /**
@@ -80,7 +144,9 @@ function skippedReasons(report: ConfigImportReport): string[] {
 export function ImportConfigDialog() {
   const [preview, setPreview] = useState<ConfigBundlePreview | null>(null);
   const [isApplying, setIsApplying] = useState(false);
-  const [applyError, setApplyError] = useState<string | null>(null);
+  const [applyFailure, setApplyFailure] = useState<ApplyFailure | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportNote, setExportNote] = useState<{ text: string; failed: boolean } | null>(null);
   /**
    * Synchronous single-flight gate. `isApplying` is state and settles a render
    * later, so two activations in the same tick would both pass a state check —
@@ -90,7 +156,8 @@ export function ImportConfigDialog() {
 
   const close = useCallback(() => {
     setPreview(null);
-    setApplyError(null);
+    setApplyFailure(null);
+    setExportNote(null);
   }, []);
 
   const beginImport = useCallback(async () => {
@@ -137,14 +204,15 @@ export function ImportConfigDialog() {
           type: "info",
           priority: "high",
           transient: true,
-          message: "Configuration already matches that bundle — nothing to import",
+          message: `Configuration already matches that bundle — nothing to import${unsupportedNote(result.unknownSections)}`,
           supersedeKey: IMPORT_CONFIG_ACTION_ID,
           context: { eventKind: "settings" },
         });
         return;
       }
 
-      setApplyError(null);
+      setApplyFailure(null);
+      setExportNote(null);
       setPreview(result);
     } finally {
       inFlight.current = false;
@@ -168,55 +236,110 @@ export function ImportConfigDialog() {
     });
   }, []);
 
+  /**
+   * The one recovery the confirmation can offer for an import with no undo:
+   * write the current values out first. It never gates the import.
+   */
+  const handleExport = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setIsExporting(true);
+    try {
+      const result = await window.electron.configBundle.export();
+      if (result.outcome === "canceled" || !result.filePath) return;
+      const name = result.filePath.split(/[\\/]/).pop() ?? result.filePath;
+      const omitted = result.omittedSecretPaths.length;
+      setExportNote({
+        failed: false,
+        text:
+          omitted > 0
+            ? `Current values saved to '${name}', without ${countLabel(omitted, "value that looked like a secret", "values that looked like secrets")}`
+            : `Current values saved to '${name}'`,
+      });
+    } catch (error) {
+      logError("[importConfig] Failed to export current configuration", error);
+      setExportNote({
+        failed: true,
+        text: `Couldn't save the current values — ${formatErrorMessage(error, "the file wasn't written")}`,
+      });
+    } finally {
+      inFlight.current = false;
+      setIsExporting(false);
+    }
+  }, []);
+
   const handleConfirm = useCallback(async () => {
     if (!preview?.bundleJson || inFlight.current) return;
     inFlight.current = true;
     setIsApplying(true);
-    setApplyError(null);
-    let succeeded = false;
+    setApplyFailure(null);
+    let report: ConfigImportReport;
     try {
-      const report = await window.electron.configBundle.applyImport({
+      report = await window.electron.configBundle.applyImport({
         bundleJson: preview.bundleJson,
-      });
-
-      if (report.outcome === "rolled-back") {
-        // Kept open rather than dismissed: the dialog is the only surface that
-        // still holds what the user was importing, so closing it would take the
-        // retry away along with the explanation.
-        setApplyError(report.errors[0] ?? "The bundle couldn't be applied");
-        return;
-      }
-
-      // Main has written; this view's own mirrors still hold the old values.
-      // Other views are covered by the main-process broadcast.
-      await refreshImportedConfig();
-      succeeded = true;
-
-      const reasons = skippedReasons(report);
-      notify({
-        type: reasons.length > 0 ? "warning" : "success",
-        priority: "high",
-        transient: true,
-        context: { eventKind: "settings" },
-        message:
-          reasons.length > 0
-            ? `Configuration imported — ${summarizeReport(report)}. ${reasons[0]}`
-            : `Configuration imported — ${summarizeReport(report)}`,
-        supersedeKey: IMPORT_CONFIG_ACTION_ID,
       });
     } catch (error) {
       logError("[importConfig] Failed to apply configuration bundle", error);
-      setApplyError(formatErrorMessage(error, "The bundle couldn't be applied"));
-    } finally {
+      // A throw means the apply never reported back, so what was written is
+      // unknown — say that rather than guess in either direction.
+      setApplyFailure({
+        description:
+          "Daintree couldn't confirm what was written. Check the settings listed below before trying again.",
+        detail: formatErrorMessage(error, ""),
+      });
       inFlight.current = false;
       setIsApplying(false);
-      if (succeeded) close();
+      return;
     }
+
+    inFlight.current = false;
+    setIsApplying(false);
+
+    if (report.outcome === "rolled-back") {
+      // Kept open rather than dismissed: the dialog is the only surface that
+      // still holds what the user was importing, so closing it would take the
+      // retry away along with the explanation.
+      setApplyFailure({
+        description: report.errors[0] ?? "The bundle couldn't be applied. Nothing was changed.",
+      });
+      return;
+    }
+
+    close();
+
+    // Main has written; this view's own mirrors still hold the old values.
+    // Other views are covered by the main-process broadcast. A failure here is
+    // a stale window, not a failed import — retrying the apply would be wrong.
+    try {
+      await refreshImportedConfig();
+    } catch (error) {
+      logError("[importConfig] Imported, but refreshing this window failed", error);
+      notify({
+        type: "warning",
+        priority: "high",
+        context: { eventKind: "settings" },
+        message: "Configuration imported, but this window is still showing the previous settings",
+        supersedeKey: IMPORT_CONFIG_ACTION_ID,
+        action: { label: "Refresh settings", onClick: () => void refreshImportedConfig() },
+      });
+      return;
+    }
+
+    notify({
+      type: skippedReasons(report, preview).length > 0 ? "warning" : "success",
+      priority: "high",
+      transient: true,
+      context: { eventKind: "settings" },
+      message: outcomeMessage(report, preview),
+      supersedeKey: IMPORT_CONFIG_ACTION_ID,
+    });
   }, [preview, close]);
 
   if (!preview) return null;
 
   const changed = preview.sections.filter((section) => changeCount(section) > 0);
+  const replacesAny = changed.some((section) => section.update > 0);
+  const unknown = preview.unknownSections;
 
   return (
     <ConfirmDialog
@@ -227,34 +350,67 @@ export function ImportConfigDialog() {
           ? `Import configuration from '${preview.fileName}'?`
           : "Import configuration?"
       }
-      description="These settings will be replaced with the values in the bundle. Anything not listed stays as it is. Daintree keeps no copy of the current values, so restoring them means importing a bundle that has them."
-      confirmLabel={applyError ? "Try again" : "Import configuration"}
+      description={
+        replacesAny
+          ? "Adds or replaces each setting below with the value in this file. Everything else stays as it is."
+          : "Adds each setting below from this file. Everything else stays as it is."
+      }
+      confirmLabel={applyFailure ? "Try again" : "Import configuration"}
       variant="destructive"
       isConfirmLoading={isApplying}
       onConfirm={handleConfirm}
+      hint={
+        isApplying
+          ? "Importing configuration…"
+          : applyFailure
+            ? "Import stopped — details above"
+            : undefined
+      }
       hasPreview
     >
-      <ul className="flex flex-col gap-1 text-sm">
+      {applyFailure && (
+        <InlineStatusBanner
+          severity="error"
+          title="Import stopped"
+          description={applyFailure.description}
+          {...(applyFailure.detail ? { contextLine: applyFailure.detail } : {})}
+          className="rounded-[var(--radius-md)]"
+        />
+      )}
+      <ul className="divide-y divide-border-subtle">
         {changed.map((section) => (
-          <li key={section.section} className="flex items-baseline justify-between gap-4">
-            <span className="text-text-primary">
-              {CONFIG_BUNDLE_SECTION_LABELS[section.section]}
-            </span>
-            <span className="text-text-secondary tabular-nums">{describeSection(section)}</span>
-          </li>
+          <SectionRow key={section.section} section={section} />
         ))}
       </ul>
-      {preview.unknownSections.length > 0 && (
-        <p className="mt-2 text-xs text-text-secondary">
-          {preview.unknownSections.length === 1
-            ? "1 section in this bundle isn't supported by this version and will be ignored"
-            : `${preview.unknownSections.length} sections in this bundle aren't supported by this version and will be ignored`}
+      {unknown.length > 0 && (
+        <p className="text-xs text-text-secondary">
+          Left out, because this version of Daintree doesn&apos;t support{" "}
+          {unknown.length === 1 ? "it" : "them"}: {listNames(unknown, 4)}
         </p>
       )}
-      {applyError && (
-        <p className="mt-3 text-sm text-status-error" role="alert">
-          {applyError}
-        </p>
+      {replacesAny && (
+        <div className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2">
+          <p
+            className={
+              exportNote?.failed ? "text-xs text-status-error" : "text-xs text-text-secondary"
+            }
+            role="status"
+          >
+            {exportNote?.text ?? "Daintree doesn't keep a copy of the values this replaces"}
+          </p>
+          {(!exportNote || exportNote.failed) && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="shrink-0"
+              loading={isExporting}
+              disabled={isApplying}
+              onClick={() => void handleExport()}
+            >
+              Export a backup…
+            </Button>
+          )}
+        </div>
       )}
     </ConfirmDialog>
   );
