@@ -66,8 +66,11 @@ const SurfaceHeaderTitle = React.forwardRef<HTMLHeadingElement, SurfaceHeaderTit
       // or file name) still overhangs the shrunk box and paints through the
       // close button. `overflow-wrap: break-word` only ever acts on a word that
       // cannot fit on a line by itself, so a title that fits is untouched.
+      //
+      // The glyph is pinned at its size: as a flex item it would otherwise give
+      // up width to a title that wraps, shrinking only on long names.
       className={cn(
-        "text-lg font-semibold text-text-primary flex items-center gap-2 min-w-0 break-words",
+        "text-lg font-semibold text-text-primary flex items-center gap-2 min-w-0 break-words [&>svg]:shrink-0",
         className
       )}
       {...props}
