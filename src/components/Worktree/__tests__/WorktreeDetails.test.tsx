@@ -294,21 +294,23 @@ describe("WorktreeDetails error overflow", () => {
       dismissed: false,
     }));
 
+  // Two rows: each wraps its message rather than clipping it, and the details
+  // area scrolls at 208px.
   it("shows every error inline while the stack fits", () => {
-    renderDetails({ worktreeErrors: errors(3) });
-    expect(screen.getByText("Worktree failure 2")).toBeDefined();
+    renderDetails({ worktreeErrors: errors(2) });
+    expect(screen.getByText("Worktree failure 1")).toBeDefined();
     expect(screen.queryByTestId("compact-error-overflow")).toBeNull();
   });
 
-  it("moves the fourth error onwards behind a real disclosure (#12001)", () => {
+  it("moves the third error onwards behind a real disclosure (#12001)", () => {
     // It used to be "+N more errors" as static text, next to retry and dismiss
     // handlers the hidden rows never got to use.
     renderDetails({ worktreeErrors: errors(6) });
-    expect(screen.getByText("Worktree failure 2")).toBeDefined();
-    expect(screen.queryByText("Worktree failure 3")).toBeNull();
+    expect(screen.getByText("Worktree failure 1")).toBeDefined();
+    expect(screen.queryByText("Worktree failure 2")).toBeNull();
 
     const trigger = screen.getByTestId("compact-error-overflow");
-    expect(trigger.textContent).toContain("3");
+    expect(trigger.textContent).toContain("4");
 
     fireEvent.click(trigger);
     expect(screen.getByText("Worktree failure 5")).toBeDefined();
