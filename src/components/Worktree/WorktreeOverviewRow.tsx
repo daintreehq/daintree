@@ -23,12 +23,16 @@ import {
   ContextMenu,
   ContextMenuActionItem,
   ContextMenuContent,
+  ContextMenuItem,
   ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { actionService } from "@/services/ActionService";
+import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
+import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
+import { FocusHandoffGuard } from "./FocusHandoffGuard";
 import { getAgentConfig } from "@/config/agents";
 import type { ChipState } from "./utils/computeChipState";
 import { BranchLabel } from "./BranchLabel";
@@ -141,6 +145,19 @@ function leadLine(mark: SessionMark | undefined): { text: string; mono: boolean 
 }
 
 /**
+ * Go straight to a session, then get the overview out of the way. Closes only
+ * once the focus landed, so a session that has gone leaves the overview up, and
+ * tells the palette not to hand focus back to whatever opened it — that
+ * restore would take the keyboard away from the terminal just focused.
+ */
+async function openSession(panelId: string, onOpened: () => void): Promise<void> {
+  const result = await actionService.dispatch("panel.focus", { panelId }, { source: "user" });
+  if (!result.ok) return;
+  suppressPaletteFocusRestore();
+  onOpened();
+}
+
+/**
  * One session, as the sidebar's session row draws it: its icon, what it is on,
  * and its state. A button — clicking a session goes straight to it, not to the
  * worktree — and F2 reaches it from the list. Idle and exited agents name their
@@ -164,12 +181,7 @@ function SessionLine({ mark, onBeforeOpen }: { mark: SessionMark; onBeforeOpen: 
         tabIndex={-1}
         onClick={(e) => {
           e.stopPropagation();
-          onBeforeOpen();
-          void actionService.dispatch(
-            "panel.focus",
-            { panelId: mark.terminal.id },
-            { source: "user" }
-          );
+          void openSession(mark.terminal.id, onBeforeOpen);
         }}
         aria-label={`${mark.chrome.label}${mark.state ? `, ${STATE_LABELS[mark.state]}` : ""}: ${text}`}
         className={cn(
@@ -216,6 +228,8 @@ export interface WorktreeOverviewRowProps {
   onToggleSelect: (worktreeId: string, event: React.MouseEvent) => void;
   /** Called as a context-menu action starts, so the overview gets out of its way. */
   onBeforeMenuAction: () => void;
+  /** Where focus goes when a focused session control is replaced under it. */
+  onFocusLost: () => void;
 }
 
 export function WorktreeOverviewRow({
@@ -230,6 +244,7 @@ export function WorktreeOverviewRow({
   onActivate,
   onToggleSelect,
   onBeforeMenuAction,
+  onFocusLost,
 }: WorktreeOverviewRowProps) {
   const marks = useSessionMarks(worktree.id);
   const headline = getWorktreeHeadline(worktree);
@@ -239,7 +254,11 @@ export function WorktreeOverviewRow({
       ? (headline.title ?? branchLabel)
       : worktree.isMainWorktree
         ? worktree.name
-        : (branchLabel.split("/").pop() ?? branchLabel);
+        : // Everything after the type prefix, not just the last segment:
+          // feature/ui/login and feature/api/login must not both read "login".
+          branchLabel.includes("/")
+          ? branchLabel.slice(branchLabel.indexOf("/") + 1)
+          : branchLabel;
   // The sidebar card's headline glyph: the sprout for main, the issue mark for
   // an issue's worktree, the PR glyph for one made from a PR, and the branch
   // for a bare branch — whose name then IS the title, set in mono as the
@@ -306,12 +325,18 @@ export function WorktreeOverviewRow({
   // The one exception the row leads with, beside the title: the things that
   // need a human, which a 12px mark inside another section let slide past.
   const ciFailed = showPr && pr.ciStatus?.state === "failure";
+  const lifecycleState = worktree.lifecycleStatus?.state;
+  const setupFailed = lifecycleState === "failed" || lifecycleState === "timed-out";
   const exception =
     conflictCount > 0
       ? `${conflictCount} conflict${conflictCount === 1 ? "" : "s"}`
-      : ciFailed
-        ? "CI failed"
-        : null;
+      : setupFailed
+        ? worktree.lifecycleStatus?.phase === "setup"
+          ? "Setup failed"
+          : "Command failed"
+        : ciFailed
+          ? "CI failed"
+          : null;
 
   const sessionLines = marks.map((m) => ({
     id: m.terminal.id,
@@ -411,7 +436,7 @@ export function WorktreeOverviewRow({
                     <Check className="h-3 w-3" strokeWidth={3} />
                   </span>
                 </span>
-                <TruncatedTooltip content={title}>
+                <TruncatedTooltip content={isBranchTitled ? branchLabel : title}>
                   <span
                     className={cn(
                       "truncate text-text-primary",
@@ -462,7 +487,7 @@ export function WorktreeOverviewRow({
                     )}
                     {ci?.kind === "dot" && (
                       <span
-                        className={cn("h-1.5 w-1.5 rounded-full", ci.colorClass)}
+                        className={cn("status-mark h-1.5 w-1.5 rounded-full", ci.colorClass)}
                         aria-hidden="true"
                       />
                     )}
@@ -481,68 +506,74 @@ export function WorktreeOverviewRow({
                   —
                 </span>
               ) : marks.length <= MAX_INLINE_SESSIONS ? (
-                marks.map((mark) => (
-                  <SessionLine
-                    key={mark.terminal.id}
-                    mark={mark}
-                    onBeforeOpen={onBeforeMenuAction}
-                  />
-                ))
+                // A session arriving or leaving swaps these lines for the strip
+                // (or back); the guard keeps a focused line's keyboard alive.
+                <FocusHandoffGuard key="inline" onFocusLeaving={onFocusLost}>
+                  {marks.map((mark) => (
+                    <SessionLine
+                      key={mark.terminal.id}
+                      mark={mark}
+                      onBeforeOpen={onBeforeMenuAction}
+                    />
+                  ))}
+                </FocusHandoffGuard>
               ) : (
-                // The strip is 28px against the 20px headline line every other
-                // section starts with; lifting it by half the difference puts
-                // "N active" on the same centre line as the title beside it.
-                <div className="-mt-1 rounded-[var(--radius-lg)] border border-border-default bg-overlay-soft">
-                  <button
-                    type="button"
-                    tabIndex={-1}
-                    aria-expanded={sessionsExpanded}
-                    aria-label={`${marks.length} active sessions${sessionSummary.breakdown ? `: ${sessionSummary.breakdown}` : ""}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSessionsExpanded((v) => !v);
-                    }}
-                    className={cn(
-                      "justify-between gap-2 transition-colors",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-                      SECTION_ROW
-                    )}
-                  >
-                    <span className="flex items-center gap-1.5 text-2xs text-text-secondary">
-                      <ChevronRight
-                        className={cn(
-                          "h-3 w-3 shrink-0 transition-transform duration-150",
-                          sessionsExpanded && "rotate-90"
-                        )}
-                        aria-hidden="true"
-                      />
-                      <SummaryIcon className="h-3 w-3 shrink-0" aria-hidden="true" />
-                      <span className="inline-flex items-center gap-1">
-                        <span className="font-mono tabular-nums">{marks.length}</span>
-                        <span>active</span>
-                      </span>
-                    </span>
-                    {sessionSummary.visibleStates.length > 0 && (
-                      <CollapsedSessionIndicators
-                        visibleStates={sessionSummary.visibleStates}
-                        sessionAriaLabel={sessionSummary.label}
-                      />
-                    )}
-                  </button>
-                  {sessionsExpanded && (
-                    // Children indent under the strip's own icon, as the
-                    // sidebar's expanded rows sit under its trigger.
-                    <div className="pb-1 pl-[22px] pr-2.5">
-                      {marks.map((mark) => (
-                        <SessionLine
-                          key={mark.terminal.id}
-                          mark={mark}
-                          onBeforeOpen={onBeforeMenuAction}
+                <FocusHandoffGuard key="strip" onFocusLeaving={onFocusLost}>
+                  // The strip is 28px against the 20px headline line every other // section starts
+                  with; lifting it by half the difference puts // "N active" on the same centre line
+                  as the title beside it.
+                  <div className="-mt-1 rounded-[var(--radius-lg)] border border-border-default bg-overlay-soft">
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      aria-expanded={sessionsExpanded}
+                      aria-label={`${marks.length} active sessions${sessionSummary.breakdown ? `: ${sessionSummary.breakdown}` : ""}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSessionsExpanded((v) => !v);
+                      }}
+                      className={cn(
+                        "justify-between gap-2 transition-colors",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+                        SECTION_ROW
+                      )}
+                    >
+                      <span className="flex items-center gap-1.5 text-2xs text-text-secondary">
+                        <ChevronRight
+                          className={cn(
+                            "h-3 w-3 shrink-0 transition-transform duration-150",
+                            sessionsExpanded && "rotate-90"
+                          )}
+                          aria-hidden="true"
                         />
-                      ))}
-                    </div>
-                  )}
-                </div>
+                        <SummaryIcon className="h-3 w-3 shrink-0" aria-hidden="true" />
+                        <span className="inline-flex items-center gap-1">
+                          <span className="font-mono tabular-nums">{marks.length}</span>
+                          <span>active</span>
+                        </span>
+                      </span>
+                      {sessionSummary.visibleStates.length > 0 && (
+                        <CollapsedSessionIndicators
+                          visibleStates={sessionSummary.visibleStates}
+                          sessionAriaLabel={sessionSummary.label}
+                        />
+                      )}
+                    </button>
+                    {sessionsExpanded && (
+                      // Children indent under the strip's own icon, as the
+                      // sidebar's expanded rows sit under its trigger.
+                      <div className="pb-1 pl-[22px] pr-2.5">
+                        {marks.map((mark) => (
+                          <SessionLine
+                            key={mark.terminal.id}
+                            mark={mark}
+                            onBeforeOpen={onBeforeMenuAction}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </FocusHandoffGuard>
               )}
             </div>
 
@@ -614,11 +645,9 @@ export function WorktreeOverviewRow({
             <>
               <ContextMenuLabel>Sessions</ContextMenuLabel>
               {sessionLines.map((line) => (
-                <ContextMenuActionItem
+                <ContextMenuItem
                   key={line.id}
-                  actionId="panel.focus"
-                  args={{ panelId: line.id }}
-                  onSelect={onBeforeMenuAction}
+                  onSelect={() => void openSession(line.id, onBeforeMenuAction)}
                 >
                   <span className="flex min-w-0 flex-col">
                     <span className="whitespace-normal break-words">{line.name}</span>
@@ -628,7 +657,7 @@ export function WorktreeOverviewRow({
                       </span>
                     )}
                   </span>
-                </ContextMenuActionItem>
+                </ContextMenuItem>
               ))}
               <ContextMenuSeparator />
             </>
@@ -674,9 +703,15 @@ export function WorktreeOverviewRow({
             </ContextMenuActionItem>
           )}
           <ContextMenuSeparator />
-          <ContextMenuActionItem actionId="worktree.copyContext" args={menuArgs}>
+          {/* Through the card's own helper, not a bare dispatch: it shows the
+              progress, the result and a failure, which the action alone does not. */}
+          <ContextMenuItem
+            onSelect={() =>
+              void copyContextWithFeedback(worktree.id, "context-menu", undefined, "worktree-card")
+            }
+          >
             Copy context
-          </ContextMenuActionItem>
+          </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
     </div>

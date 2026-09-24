@@ -224,6 +224,12 @@ function TargetBody({ target }: { target: BulkRemoveTarget }) {
 
 export interface WorktreeBulkRemoveDialogProps {
   bulkRemove: UseWorktreeBulkRemoveReturn;
+  /**
+   * Where focus lands when the confirm closes. The button that opened it
+   * belongs to a bulk bar that leaves with the selection, so the default
+   * restore would find nothing and fall back behind the overview.
+   */
+  restoreFocusTo?: React.ComponentProps<typeof ConfirmDialog>["restoreFocusTo"];
 }
 
 /**
@@ -234,7 +240,10 @@ export interface WorktreeBulkRemoveDialogProps {
  * target, which is a DOM suite's worth of behaviour and does not belong inside
  * a 1,500-line modal.
  */
-export function WorktreeBulkRemoveDialog({ bulkRemove }: WorktreeBulkRemoveDialogProps) {
+export function WorktreeBulkRemoveDialog({
+  bulkRemove,
+  restoreFocusTo,
+}: WorktreeBulkRemoveDialogProps) {
   const {
     targets,
     excludedMainCount,
@@ -298,6 +307,7 @@ export function WorktreeBulkRemoveDialog({ bulkRemove }: WorktreeBulkRemoveDialo
   return (
     <ConfirmDialog
       isOpen={bulkRemove.isConfirmOpen}
+      restoreFocusTo={restoreFocusTo}
       onClose={bulkRemove.handleCancel}
       title={title}
       description={description}

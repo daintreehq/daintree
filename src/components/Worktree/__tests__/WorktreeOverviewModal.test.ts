@@ -138,18 +138,16 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
 
     it("Escape with selection clears it instead of closing the modal", () => {
       expect(source).toMatch(
-        /escapeDismissRef\.current\s*&&\s*hasSelection\)\s*\{[\s\S]*?clearSelection\(\)/
+        /reason\s*===\s*"escape"\s*&&\s*hasSelection\)\s*\{[\s\S]*?clearSelection\(\)/
       );
     });
 
-    it("scopes the two-stage clear-then-close guard to Escape", () => {
-      // AppDialog routes the close button and a scrim click through
-      // `onBeforeClose` as well, and both have to dismiss in one click with a
-      // selection active — so the guard reads a flag set only by an Escape
-      // keypress, recorded in capture phase ahead of the bubble-phase escape
-      // stack.
-      expect(source).toMatch(/"keydown",\s*markEscapeDismissal,\s*true\)/);
-      expect(source).toMatch(/e\.key\s*!==\s*"Escape"/);
+    it("scopes the two-stage clear-then-close guard to Escape by the palette's reason", () => {
+      // A scrim click has to dismiss in one click with a selection active, so
+      // the guard reads the reason the palette gives, never a key flag timed
+      // against the dismissal (the flag's clearing raced the backstop).
+      expect(source).toMatch(/\(reason\?:\s*PaletteCloseReason\)/);
+      expect(source).not.toMatch(/markEscapeDismissal/);
     });
 
     it("Cmd/Ctrl+A triggers selectAllVisible", () => {
@@ -246,7 +244,7 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(modalSource).toMatch(
         /import\s*\{[^}]*\bWorktreeBulkRemoveDialog\b[^}]*\}\s*from\s*"\.\/WorktreeBulkRemoveDialog"/
       );
-      expect(modalSource).toMatch(/<WorktreeBulkRemoveDialog\s+bulkRemove=\{bulkRemove\}\s*\/>/);
+      expect(modalSource).toMatch(/<WorktreeBulkRemoveDialog\s+bulkRemove=\{bulkRemove\}/);
     });
 
     it("keeps the D3 typed-count gate wired in the extracted dialog", async () => {

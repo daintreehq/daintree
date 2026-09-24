@@ -407,13 +407,23 @@ export function useWorktreeOverviewKeyboard({
           gridEl.focus();
           return;
         }
+        // Tab from a row's control leaves the list the way Tab from the list
+        // does. The controls are tabindex -1, so the dialog's own trap does not
+        // count them, and an unhandled Tab from one walked out of the dialog.
+        if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          if (focusPastGrid(gridEl, e.shiftKey)) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+          return;
+        }
         // Inside a row after F2: Up/Down walk that row's own controls and stay
         // in it. The controls carry tabindex -1, so Tab never wanders in here.
-        if ((e.key === "ArrowDown" || e.key === "ArrowUp") && target instanceof Element) {
+        if ((e.key === "ArrowDown" || e.key === "ArrowUp") && target instanceof HTMLElement) {
           const cell = target.closest('[role="gridcell"]');
           if (cell) {
             const controls = tabbablesWithin(cell);
-            const at = controls.indexOf(target as HTMLElement);
+            const at = controls.indexOf(target);
             const next = controls[at + (e.key === "ArrowDown" ? 1 : -1)];
             e.preventDefault();
             e.stopPropagation();

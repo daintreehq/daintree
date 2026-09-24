@@ -1,14 +1,11 @@
-import React, {
-  useCallback,
-  useEffect,
-  useEffectEvent,
-  useLayoutEffect,
-  useRef,
-  useMemo,
-  useState,
-} from "react";
+import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo, useState } from "react";
 import { Trash2 } from "lucide-react";
-import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
+import {
+  AppPaletteDialog,
+  PaletteFooterHints,
+  type PaletteCloseReason,
+} from "@/components/ui/AppPaletteDialog";
+import { FocusHandoffGuard } from "./FocusHandoffGuard";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { cn } from "@/lib/utils";
@@ -52,6 +49,8 @@ import { computeChipState } from "@/components/Worktree/utils/computeChipState";
 
 const LIST_ID = "worktree-overview-list";
 
+const noop = () => {};
+
 const EMPTY_META: DerivedWorktreeMeta = {
   terminalCount: 0,
   hasWorkingAgent: false,
@@ -61,41 +60,6 @@ const EMPTY_META: DerivedWorktreeMeta = {
   hasMergeConflict: false,
   chipState: null,
 };
-
-/**
- * The bulk bar's focus guard. The bar unmounts whenever the selection empties
- * — Clear, Escape, a filter pruning the last selected row, a bulk remove
- * finishing — and a focused control that unmounts strands the keyboard on the
- * document. A layout-effect cleanup runs before the bar's DOM is detached, so
- * it can still see whether focus was inside and hand it on once it is gone.
- */
-function SelectionBarFocusGuard({
-  onFocusLeaving,
-  children,
-}: {
-  onFocusLeaving: () => void;
-  children: React.ReactNode;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const onFocusLeavingRef = useRef(onFocusLeaving);
-  useLayoutEffect(() => {
-    onFocusLeavingRef.current = onFocusLeaving;
-  });
-  useLayoutEffect(() => {
-    const el = ref.current;
-    return () => {
-      if (el?.contains(document.activeElement)) {
-        const handOff = onFocusLeavingRef.current;
-        queueMicrotask(handOff);
-      }
-    };
-  }, []);
-  return (
-    <div ref={ref} className="contents">
-      {children}
-    </div>
-  );
-}
 
 export interface WorktreeOverviewModalProps {
   isOpen: boolean;
@@ -450,9 +414,6 @@ export function WorktreeOverviewModal({
     }
     closeSessionsIdsRef.current = [];
     setIsCloseSessionsConfirmOpen(false);
-    // The confirm hands focus back to the button that opened it, which leaves
-    // with the selection; give it to the list instead.
-    gridRef.current?.focus({ preventScroll: true });
     clearSelection();
     useAnnouncerStore
       .getState()
@@ -488,7 +449,6 @@ export function WorktreeOverviewModal({
     setter?.call(input, input.value + char);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }, []);
-  const closeModal = useCallback(() => onClose(), [onClose]);
 
   // Section sizes drive section-aware navigation across the header breaks.
   const sectionSizes = useMemo<readonly number[] | undefined>(
@@ -510,7 +470,9 @@ export function WorktreeOverviewModal({
       onSelectRange: selectRangeBetween,
       onSelectAll: selectAllVisible,
       onClearSelection: clearSelection,
-      onEscapeWithoutSelection: closeModal,
+      // Left to the palette's layer-aware backstop, which yields to an open
+      // tooltip or menu; closing from here would bypass it.
+      onEscapeWithoutSelection: noop,
       onReturnToSearch: handleReturnToSearch,
       hasSelection,
     });
@@ -579,43 +541,34 @@ export function WorktreeOverviewModal({
   }, [isOpen]);
 
   // Escape's first press clears a selection; the second closes. The palette
-  // routes Escape and a scrim click through the same `onClose`, and only the
-  // key is two-stage — a scrim click leaves in one — so record whether the
-  // dismissal being resolved came from Escape. Capture phase, because the
-  // escape stack dispatches on bubble. Cleared on the next task, not a
-  // microtask: the browser drains microtasks between listeners of one native
-  // event, so a microtask cleared the flag before the bubble-phase backstop
-  // read it, and Escape from a bulk-bar button closed the whole overview
-  // instead of clearing the selection. A pointer dismissal is its own task,
-  // so it still cannot inherit the flag.
-  const escapeDismissRef = useRef(false);
-  useEffect(() => {
-    if (!isOpen) return;
-    const markEscapeDismissal = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      escapeDismissRef.current = true;
-      setTimeout(() => {
-        escapeDismissRef.current = false;
-      }, 0);
-    };
-    document.addEventListener("keydown", markEscapeDismissal, true);
-    return () => document.removeEventListener("keydown", markEscapeDismissal, true);
-  }, [isOpen]);
-
-  /** Where focus goes when the bulk bar leaves: the list, or the field if the list went too. */
-  const handOffFocusFromSelectionBar = useCallback(() => {
+  // routes Escape and a scrim click through the same `onClose` and says which,
+  // and only the key is two-stage — a scrim click leaves in one.
+  /**
+   * Where focus goes when the control holding it leaves — the bulk bar, a
+   * row's sessions changing shape, a confirmation closing: the list, or the
+   * field if the list went too.
+   */
+  const handOffFocusToList = useCallback(() => {
     const grid = gridRef.current;
     if (grid?.isConnected) grid.focus({ preventScroll: true });
     else searchInputRef.current?.focus();
   }, []);
 
-  const handleDismiss = useCallback(() => {
-    if (escapeDismissRef.current && hasSelection) {
-      clearSelection();
-      return;
-    }
-    onClose();
-  }, [hasSelection, clearSelection, onClose]);
+  const handleDismiss = useCallback(
+    (reason?: PaletteCloseReason) => {
+      if (reason === "escape" && hasSelection) {
+        clearSelection();
+        return;
+      }
+      onClose();
+    },
+    [hasSelection, clearSelection, onClose]
+  );
+
+  const resolveListFocusTarget = useCallback(
+    () => (gridRef.current?.isConnected ? gridRef.current : searchInputRef.current),
+    []
+  );
 
   /**
    * The row menu for the keyboard. The list keeps DOM focus while the cursor is
@@ -706,6 +659,7 @@ export function WorktreeOverviewModal({
       onActivate={activateWorktree}
       onToggleSelect={handleRowToggleSelect}
       onBeforeMenuAction={onClose}
+      onFocusLost={handOffFocusToList}
     />
   );
 
@@ -799,6 +753,10 @@ export function WorktreeOverviewModal({
                 aria-label="Worktrees"
                 tabIndex={0}
                 aria-multiselectable="true"
+                // Shift+F10 and the Menu key open the cursor row's own menu; the
+                // marker tells the global handler not to take them for the
+                // focused terminal first.
+                data-row-menu=""
                 aria-activedescendant={activeDescendantId}
                 onKeyDown={handleListKeyDown}
                 onFocus={handleGridFocus}
@@ -838,7 +796,7 @@ export function WorktreeOverviewModal({
               apply to. */}
           {hasSelection ? (
             <AppPaletteDialog.Footer className="shrink-0 justify-between">
-              <SelectionBarFocusGuard onFocusLeaving={handOffFocusFromSelectionBar}>
+              <FocusHandoffGuard onFocusLeaving={handOffFocusToList}>
                 <div className="flex items-center gap-3 min-w-0">
                   <span className="text-text-primary font-medium tabular-nums">
                     {selectedIds.size} selected
@@ -875,7 +833,7 @@ export function WorktreeOverviewModal({
                     Remove worktrees
                   </Button>
                 </div>
-              </SelectionBarFocusGuard>
+              </FocusHandoffGuard>
             </AppPaletteDialog.Footer>
           ) : filteredWorktrees.length > 0 ? (
             <AppPaletteDialog.Footer className="shrink-0">
@@ -896,6 +854,7 @@ export function WorktreeOverviewModal({
 
       <ConfirmDialog
         isOpen={isCloseSessionsConfirmOpen}
+        restoreFocusTo={resolveListFocusTarget}
         onClose={handleCloseSessionsCancel}
         title={
           closeSessionsCount === 1
@@ -912,7 +871,7 @@ export function WorktreeOverviewModal({
 
       {/* Bulk remove: typed-name gate and a fresh per-target delete preview
           (#12416), so the confirmation shows the files it is about to discard. */}
-      <WorktreeBulkRemoveDialog bulkRemove={bulkRemove} />
+      <WorktreeBulkRemoveDialog bulkRemove={bulkRemove} restoreFocusTo={resolveListFocusTarget} />
     </>
   );
 }
