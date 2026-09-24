@@ -275,7 +275,7 @@ describe("ReadinessRail", () => {
   });
 
   it("announces a change of condition even when the verdict stays the same", () => {
-    const announce = (id: string, label: string) => {
+    const announce = (id: ReviewReadinessItem["id"], label: string) => {
       render(
         <ReadinessRail
           summary={makeSummary({
