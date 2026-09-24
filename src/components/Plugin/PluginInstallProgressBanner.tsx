@@ -135,7 +135,7 @@ export function PluginInstallProgressBanner({
                   </span>
                   {/* Note and Cancel share a size and a colour; the rule keeps
                       them from reading as one run-on phrase. */}
-                  <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-divider" />
+                  <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-border-divider" />
                 </>
               )}
               {/* `aria-disabled`, not `disabled`: a native disabled button drops
