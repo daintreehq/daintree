@@ -48,6 +48,10 @@ export function PushErrorBanner({
   const config = getPushBannerConfig(pushError, behindCount, forgeProviderId);
   const canCollapse = config.detailPolicy === "collapse" && pushError.rawMessage.length > 0;
   const outputLabel = SERVER_OUTPUT_REASONS.has(pushError.reason) ? "Server output" : "Git output";
+  // Announced once per failure. It reads only from the failure itself: a later
+  // `behindCount` or provider resolution restates the visible copy, and must not
+  // interrupt a second time as though the push had failed again.
+  const announcement = `Push failed. ${getPushBannerConfig(pushError).message}`;
 
   const dispatchCta = (cta: PushBannerCta) => {
     switch (cta.kind) {
@@ -143,11 +147,8 @@ export function PushErrorBanner({
         {outputLabel}
       </button>
       {showPushDetails && (
-        // `aria-live="off"`: the banner is an alert, and expanding the output must
-        // not have a screen reader read the whole log aloud as if it were new.
         <pre
           id={detailsId}
-          aria-live="off"
           tabIndex={0}
           aria-label={outputLabel}
           data-testid="review-hub-push-error-details"
@@ -166,9 +167,16 @@ export function PushErrorBanner({
 
   return (
     <div data-testid="review-hub-push-error" data-reason={pushError.reason}>
+      <span role="alert" className="sr-only" data-testid="review-hub-push-error-announcement">
+        {announcement}
+      </span>
+      {/* The visible banner is a plain region, not a live one: its controls, its
+          changing copy and the expanded output are read on arrival, never
+          pushed into the announcement. */}
       <InlineStatusBanner
         severity="error"
-        role="alert"
+        role="status"
+        ariaLive="off"
         className="px-4"
         title="Push failed"
         description={config.message}

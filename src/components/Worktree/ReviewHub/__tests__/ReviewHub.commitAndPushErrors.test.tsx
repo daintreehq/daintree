@@ -1014,9 +1014,11 @@ describe("ReviewHub", () => {
 
       const banner = await screen.findByTestId("review-hub-push-error");
       expect(banner.getAttribute("data-reason")).toBe("network-unavailable");
-      // "Push failed" appears exactly once — the title prepends it, so the
-      // unknown message must not repeat it.
-      expect(banner.textContent?.match(/Push failed/gi) ?? []).toHaveLength(1);
+      // "Push failed" appears exactly once in what is painted — the title
+      // prepends it, so the message must not repeat it. The sr-only alert that
+      // announces the failure is excluded: it is not part of the visible copy.
+      const visible = banner.querySelector('[role="status"]');
+      expect(visible?.textContent?.match(/Push failed/gi) ?? []).toHaveLength(1);
       expect(banner.textContent).toMatch(/internet connection/i);
       expect(screen.queryByTestId("review-hub-push-error-details")).toBeNull();
       expect(screen.queryByTestId("review-hub-push-error-toggle")).toBeNull();

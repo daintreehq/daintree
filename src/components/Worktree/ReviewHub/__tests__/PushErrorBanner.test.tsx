@@ -115,10 +115,64 @@ describe("PushErrorBanner", () => {
     }
   });
 
+  it("announces a failure once, not again when its supporting copy updates", () => {
+    const props = (behind?: number) => (
+      <TooltipProvider>
+        <PushErrorBanner
+          pushError={{ reason: "push-rejected-outdated", rawMessage: "rejected" }}
+          behindCount={behind}
+          forgeProviderId={null}
+          showPushDetails={false}
+          onToggleDetails={vi.fn()}
+          pullRebasing={false}
+          onOpenForgeSettings={vi.fn()}
+          onRetryPush={vi.fn()}
+          onPullRebase={vi.fn()}
+          onForcePush={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+    const { rerender } = rtlRender(props(undefined));
+    const banner = screen.getByTestId("review-hub-push-error");
+    const announced = () =>
+      Array.from(
+        banner.querySelectorAll(
+          '[role="alert"], [aria-live="polite"], [aria-live="assertive"], [role="status"]:not([aria-live="off"])'
+        )
+      )
+        .map((el) => el.textContent)
+        .join("|");
+    const before = announced();
+    const visibleBefore = banner.textContent;
+    rerender(props(3));
+    // The visible copy did change — the count is useful — but nothing live did.
+    expect(banner.textContent).not.toBe(visibleBefore);
+    expect(announced()).toBe(before);
+    expect(before).toMatch(/Push failed/);
+  });
+
+  it("keeps controls and output out of the live announcement", () => {
+    renderBanner("hook-rejected", { lease: true });
+    const banner = screen.getByTestId("review-hub-push-error");
+    const live = Array.from(
+      banner.querySelectorAll<HTMLElement>(
+        '[role="alert"], [aria-live="polite"], [aria-live="assertive"], [role="status"]:not([aria-live="off"])'
+      )
+    );
+    expect(live.length).toBeGreaterThan(0);
+    for (const region of live) {
+      expect(region.querySelector("button, pre, [tabindex]")).toBeNull();
+    }
+  });
+
   it("titles every failure without terminal punctuation", () => {
     for (const reason of REASONS) {
       renderBanner(reason);
-      const title = screen.getByText(/^Push failed/);
+      const visible = screen.getByTestId("review-hub-push-error").querySelector('[role="status"]');
+      const title = Array.from(visible!.querySelectorAll("span")).find((el) =>
+        /^Push failed/.test(el.textContent ?? "")
+      )!;
       expect(title.textContent, reason).not.toMatch(/[.!]$/);
       cleanup();
     }
