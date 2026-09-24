@@ -467,15 +467,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "CLI-now-available banner; the gate stops rendering once it is seen",
     },
   ],
-  "src/components/Tour/scenes/ReviewScene.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: "+{file.added}",
-      expectedOccurrences: 1,
-      rationale: "Diff insertion count in the tour's mockup of the review file list",
-    },
-  ],
   "src/components/Worktree/CrossWorktreeDiff.tsx": [
     {
       category: "domain",
@@ -769,5 +760,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 89;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 93;
+export const EXPECTED_STATUS_SUCCESS_SITES = 88;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 92;

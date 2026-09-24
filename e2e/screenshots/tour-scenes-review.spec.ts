@@ -196,7 +196,8 @@ test("Daintree Tour — scene frames", async ({ page }) => {
         // Reveals are 200ms and the pointer glides for 600ms; the spotlight re-measures at 260ms.
         await page.waitForTimeout(950);
         const status = await page.evaluate(
-          () => (Reflect.get(window, "__tour") as { getState(): { status: string } }).getState().status
+          () =>
+            (Reflect.get(window, "__tour") as { getState(): { status: string } }).getState().status
         );
         expect(status, `${chapter}/${moment.name} must be a frozen frame`).toBe("paused");
         const stage = page.locator("[data-tour-canvas]").locator("..");
