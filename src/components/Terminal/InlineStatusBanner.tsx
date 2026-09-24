@@ -454,7 +454,9 @@ export function InlineStatusBanner({
         // Inline controls overhang the text line into the padding rather than
         // setting its height, so the row stays one text line tall and the
         // glyph lines up with the title whether or not the controls wrap.
-        isInline && "-my-1",
+        // The group wraps within itself too: three actions and a × are wider
+        // than the narrowest pane a grid can leave.
+        isInline && "-my-1 shrink min-w-0 flex-wrap gap-y-1",
         // Beneath the text, the controls line up with it, past the glyph.
         // 52rem leaves the text column a real measure just above the
         // break: three actions and a dismiss run to ~400px, and a column
