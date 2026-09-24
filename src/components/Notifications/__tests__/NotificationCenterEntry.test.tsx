@@ -1,10 +1,19 @@
 // @vitest-environment jsdom
-import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
+import { render as rtlRender, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { NotificationCenterEntry, formatSnoozeWake } from "../NotificationCenterEntry";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { useUIStore } from "@/store/uiStore";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
+
+// An unavailable row action explains itself through a real tooltip, which the
+// app mounts under App.tsx's provider.
+function render(ui: React.ReactElement) {
+  return rtlRender(ui, { wrapper: TooltipProvider });
+}
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 const getMock = vi.hoisted(() => vi.fn());
@@ -811,6 +820,28 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
     expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "pane-42" });
   });
 
+  it("closes the inbox when Report on GitHub hands off to the browser", async () => {
+    useUIStore.setState({ notificationCenterOpen: true });
+    render(
+      <NotificationCenterEntry entry={makeEntry({ type: "error", correlationId: "corr-close" })} />
+    );
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Report on GitHub"));
+    });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+  });
+
+  it("closes the inbox when Go to source takes you to the panel", async () => {
+    useUIStore.setState({ notificationCenterOpen: true });
+    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />);
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Go to source"));
+    });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+  });
+
   it("swallows the panel.focus rejection when the source panel is gone", async () => {
     dispatchMock.mockRejectedValueOnce(new Error("Terminal panel no longer exists"));
     render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "stale-pane" } })} />);
@@ -981,5 +1012,60 @@ describe("NotificationCenterEntry silence refresh", () => {
     } finally {
       load.mockRestore();
     }
+  });
+});
+
+describe("NotificationCenterEntry — unavailable row action", () => {
+  it("says why it can't run when focused, without a native title", async () => {
+    getMock.mockReturnValue({ enabled: false, disabledReason: "No worktree selected" });
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({ actions: [{ label: "Close them", actionId: "terminal.kill" }] })}
+      />
+    );
+    const button = screen.getByRole("button", { name: "Close them" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.getAttribute("title")).toBeNull();
+
+    await act(async () => {
+      button.focus();
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("No worktree selected").length).toBeGreaterThan(0);
+    });
+  });
+});
+
+describe("NotificationCenterEntry — row menu names the full source", () => {
+  async function openMenu() {
+    const trigger = screen.getByLabelText(/^Options for /);
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+  }
+
+  it("heads the menu with the row's project and worktree, which the row itself truncates", async () => {
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          correlationId: "c-src",
+          context: { worktreeId: "/repo/worktrees/feature-a-very-long-branch-name-that-truncates" },
+        })}
+        showSource={false}
+      />
+    );
+    await openMenu();
+    const menu = screen.getByRole("menu");
+    expect(menu.textContent).toContain("feature-a-very-long-branch-name-that-truncates");
+  });
+
+  it("adds no heading for a row with no place of origin", async () => {
+    render(<NotificationCenterEntry entry={makeEntry({ correlationId: "c-none" })} />);
+    await openMenu();
+    // The app-level fallback name is not a place the row came from.
+    expect(screen.getByRole("menu").textContent).not.toContain(APP_SOURCE_LABEL);
   });
 });

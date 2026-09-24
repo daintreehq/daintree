@@ -23,6 +23,9 @@
  * Steps (each also the DAINTREE_SHOT_ONLY filter name):
  *
  *   rest       the populated list at rest, popover + whole window
+ *   header     every header control hovered for its tooltip, and every
+ *              header menu open — the controls a pointer user has to decode
+ *   rowmenu    the first row's options menu, open
  *   scroll     scrolled to the very bottom, and the assertion that the
  *              scrollport is bounded by the panel rather than by its content
  *   actions    an action-carrying row parked at the bottom fold
@@ -46,6 +49,8 @@
  *   DAINTREE_SHOT_THEME        optional theme id (default: the app default)
  *   DAINTREE_SHOT_TAG          optional suffix so rounds sit side by side
  *   DAINTREE_SHOT_ONLY         comma-separated step filter (see step names above)
+ *   DESIGN_CAPTURE_DIR         optional output dir (default below), so review
+ *                              rounds can write outside the working tree
  *
  * Output: artifacts/notification-center-shots/<NN-slug>[-tag].png (gitignored).
  */
@@ -59,7 +64,11 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { openAndOnboardProject } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { setAppTheme } from "../helpers/theme";
-import { seedNotificationHistory, type SeedHistoryEntry } from "../helpers/notifications";
+import {
+  seedNotificationHistory,
+  type SeedHistoryEntry,
+  toggleNotificationGrouping,
+} from "../helpers/notifications";
 import { SEL } from "../helpers/selectors";
 import { T_LONG } from "../helpers/timeouts";
 
@@ -67,7 +76,9 @@ const ENABLED = !!process.env.DAINTREE_SHOT_NOTIFCENTER;
 const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
 const TAG = process.env.DAINTREE_SHOT_TAG ? `-${process.env.DAINTREE_SHOT_TAG}` : "";
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
-const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "notification-center-shots");
+const OUTPUT_DIR = process.env.DESIGN_CAPTURE_DIR
+  ? path.resolve(process.env.DESIGN_CAPTURE_DIR)
+  : path.resolve(process.cwd(), "artifacts", "notification-center-shots");
 
 /** The popover card, so a shot is the panel rather than the whole app window. */
 const POPOVER = SEL.notifications.center;
@@ -113,7 +124,10 @@ function createFixtureRepo(): { dir: string; cleanup: () => void } {
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
-const PROJECT = "helios-dashboard";
+// Replaced with the onboarded project's real id before seeding. A made-up id
+// names no registered project, so every row's source read "Another project"
+// and the shots showed a label no real inbox prints for its own project.
+let PROJECT = "helios-dashboard";
 
 /**
  * A list long enough for the scrollport to be the subject.
@@ -678,6 +692,12 @@ test("notification center review — scrollport, rhythm, and chrome", async () =
     await settle(page, 1500);
     await dismissBlockingPalette(page);
 
+    const currentId = await page.evaluate(async () => {
+      const current = await window.electron.project.getCurrent();
+      return current?.id ?? null;
+    });
+    if (currentId) PROJECT = currentId;
+
     const now = Date.now();
     await seedNotificationHistory(page, buildFixture(now));
     await reopenCenter(page);
@@ -691,6 +711,64 @@ test("notification center review — scrollport, rhythm, and chrome", async () =
       await measure(page, "rest");
       await snap(page, "10-rest-popover", POPOVER);
       await snap(page, "11-rest-window");
+    });
+
+    // 1b. The header's controls, as a pointer user meets them: each one hovered
+    //     long enough for its tooltip, and each menu open. An icon whose
+    //     meaning only arrives through a slow native `title` — or not at all —
+    //     is invisible in a rest shot, so the hover is the evidence.
+    await step(page, "header", async () => {
+      const popover = page.locator(POPOVER);
+      // The header is the panel's first band; matched structurally so the step
+      // works against a build that predates any header test id.
+      const header = popover.locator(":scope > div").first().locator(":scope > div").first();
+      const headerButtons = header.locator("button");
+      const count = await headerButtons.count();
+      if (count === 0) throw new Error("no header buttons found");
+      for (let i = 0; i < count; i++) {
+        const button = headerButtons.nth(i);
+        const name =
+          (await button.getAttribute("aria-label")) ?? (await button.textContent()) ?? `${i}`;
+        const slug = name
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-|-$/g, "");
+        await button.hover();
+        await page.waitForTimeout(1200);
+        await snap(page, `12-header-hover-${i}-${slug}-window`);
+        await page.mouse.move(5, 5);
+        await settle(page, 300);
+      }
+      const menuTriggers = header.locator('button[aria-haspopup="menu"]');
+      const menus = await menuTriggers.count();
+      for (let i = 0; i < menus; i++) {
+        const trigger = menuTriggers.nth(i);
+        const name = ((await trigger.getAttribute("aria-label")) ?? `${i}`)
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-");
+        await trigger.click();
+        await page.locator('[role="menu"]').first().waitFor({ state: "visible", timeout: 4000 });
+        await settle(page, 400);
+        await snap(page, `13-header-menu-${i}-${name}-window`);
+        await page.keyboard.press("Escape");
+        await settle(page, 300);
+        // Escape can close the popover along with the menu; the next trigger
+        // has to be looked up in a panel that is actually open.
+        await reopenCenter(page);
+      }
+    });
+
+    // 1c. A row's own menu, open — the pointer's route to read, archive and
+    //     snooze a single notification.
+    await step(page, "rowmenu", async () => {
+      const row = page.locator(POPOVER).locator(SEL.notifications.centerRow).first();
+      await row.getByLabel(/^Options for /).click();
+      await page.locator('[role="menu"]').first().waitFor({ state: "visible", timeout: 4000 });
+      await settle(page, 400);
+      await snap(page, "14-row-menu-window");
+      await page.keyboard.press("Escape");
+      await settle(page, 300);
     });
 
     // 2. Scrolled to the bottom. The issue's primary claim lives here: whether
@@ -772,11 +850,11 @@ test("notification center review — scrollport, rhythm, and chrome", async () =
     // 5. Group by context — adds another band of chrome to the left edge, so
     //    it is where an inconsistent inset shows up most clearly.
     await step(page, "grouped", async () => {
-      await page.locator('button[aria-label="Group by project or worktree"]').first().click();
+      await toggleNotificationGrouping(page);
       await settle(page, 500);
       await measure(page, "grouped");
       await snap(page, "50-grouped-popover", POPOVER);
-      await page.locator('button[aria-label="Group by project or worktree"]').first().click();
+      await toggleNotificationGrouping(page);
       await settle(page, 300);
     });
 

@@ -56,6 +56,7 @@ import {
   seedNotificationHistory,
   waitForNotificationsBackdoor,
   type SeedHistoryEntry,
+  toggleNotificationGrouping,
 } from "../helpers/notifications";
 import { SEL } from "../helpers/selectors";
 import { T_LONG } from "../helpers/timeouts";
@@ -691,14 +692,14 @@ test("notification center at fleet volume", async () => {
 
     await step(page, "grouped", async () => {
       await seedAndOpen(page, fleet);
-      await page.locator('button[aria-label="Group by project or worktree"]').first().click();
+      await toggleNotificationGrouping(page);
       await settle(page, 500);
       await measure(page, "fleet-grouped", 20);
       await snap(page, "05-fleet-grouped-popover", POPOVER);
       await scrollList(page, 0.45);
       await snap(page, "06-fleet-grouped-mid-popover", POPOVER);
       await scrollList(page, "top");
-      await page.locator('button[aria-label="Group by project or worktree"]').first().click();
+      await toggleNotificationGrouping(page);
       await settle(page, 300);
     });
 
@@ -796,10 +797,10 @@ test("notification center at fleet volume", async () => {
       await seedAndOpen(page, fleet);
       await measure(page, "light", 20);
       await snap(page, "15-fleet-light-popover", POPOVER);
-      await page.locator('button[aria-label="Group by project or worktree"]').first().click();
+      await toggleNotificationGrouping(page);
       await settle(page, 400);
       await snap(page, "16-fleet-light-grouped-popover", POPOVER);
-      await page.locator('button[aria-label="Group by project or worktree"]').first().click();
+      await toggleNotificationGrouping(page);
     });
     // Last: the silence persists in project settings, and no earlier state
     // should be captured with it. Runs on the light palette as a result.

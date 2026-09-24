@@ -1,15 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import {
-  Archive,
-  ArrowDown,
-  Bell,
-  CheckCheck,
-  Clock,
-  Ellipsis,
-  Layers,
-  Moon,
-  Trash2,
-} from "lucide-react";
+import { Archive, ArrowDown, Bell, CheckCheck, Clock, Ellipsis, Moon, Trash2 } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import {
   useNotificationHistoryStore,
@@ -24,11 +14,14 @@ import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { actionService } from "@/services/ActionService";
 import type { ActionId } from "@shared/types/actions";
 import {
@@ -774,17 +767,16 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           return;
         }
         case "e": {
-          e.preventDefault();
+          if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+          // Nothing in the Archived tab. `e` is learned as archive, and it used
+          // to turn into a permanent delete here, so the same key that filed
+          // something away destroyed it one tab over. The row's × is the
+          // deliberate delete.
+          if (filter === "archived") return;
           const row = flatRows[activeIndex];
           if (!row) return;
-          // In the Archived tab, 'e' permanently deletes the visible (head)
-          // entry. Do NOT route threads through dismissByCorrelationId — a
-          // live entry sharing the same correlationId would also be destroyed.
-          if (filter === "archived") {
-            dismissEntry(row.entryId);
-          } else {
-            archiveRow(row);
-          }
+          e.preventDefault();
+          archiveRow(row);
           return;
         }
         case "u": {
@@ -792,6 +784,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           // unread. Lowercase only — uppercase `U` is reserved for a future
           // bulk action and would conflict with Shift-modified navigation.
           if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+          // Archived rows are filed; the store won't unread them, so the key
+          // would do nothing while looking like it should.
+          if (filter === "archived") return;
           e.preventDefault();
           const row = flatRows[activeIndex];
           if (!row) return;
@@ -821,16 +816,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           return;
       }
     },
-    [
-      rowCount,
-      flatRows,
-      moveFocusTo,
-      dismissEntry,
-      archiveRow,
-      dispatchPrimaryAction,
-      filter,
-      toggleReadForRow,
-    ]
+    [rowCount, flatRows, moveFocusTo, archiveRow, dispatchPrimaryAction, filter, toggleReadForRow]
   );
 
   // Take focus into the panel when it opens. The bell keeps `aria-haspopup` and
@@ -1015,14 +1001,29 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     silencedLabel !== "" || projectOffLabel !== "" || otherProjectsOffLabel !== "";
   const showQuietStrip = showMutedPill || hasSilences;
   const quietCause = pillLabel || (hasSilences ? "Some notifications are off" : summaryHeroLine);
+  // OS Do Not Disturb silences the OS's banners, not Daintree's, so under it
+  // alone the breakthrough list named every kind the app has — six or seven
+  // names that all said "nothing changed in here". One clause says that.
+  const osDndOnly = isOsDndActive && notificationsEnabled && !isSessionMuted && !isScheduledMuted;
+  // A line per clause. Run together with " · " they broke wherever the width
+  // fell, so "Off:" and the kind it named landed on different lines.
+  // The lead names one cause; the others that are on at the same time get a
+  // clause of their own, or Resume reads as the end of a quiet it doesn't end.
+  const concurrentCauses = [
+    isSessionMuted && isScheduledMuted
+      ? `Quiet hours continue until ${timeFormatter.format(new Date(nextOccurrenceTimestamp(quietHoursEndMin)))}`
+      : "",
+    (isSessionMuted || isScheduledMuted) && isOsDndActive
+      ? (osDndDisplayNote(osDndActive) ?? "")
+      : "",
+  ];
   const quietDetail = [
-    pillLabel ? summaryHeroLine : "",
+    ...concurrentCauses,
+    pillLabel ? (osDndOnly ? "Daintree's own alerts still show" : summaryHeroLine) : "",
     pillLabel ? offLabel : silencedLabel,
     projectOffLabel,
     otherProjectsOffLabel,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  ].filter(Boolean);
   // What "Clear all" actually costs, named in the confirm. The count is the
   // preview; the archived and snoozed breakdown is the part a user standing on
   // the Archived tab would not otherwise expect, since the store call ignores
@@ -1142,18 +1143,6 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           {/* gap-1.5, not gap-1: four controls at 4px apart, one of them a text
               button, read as a single crowded clump jammed into the corner. */}
           <div className="flex items-center gap-1.5 shrink-0">
-            {showGroupToggle && (
-              <button
-                type="button"
-                aria-label="Group by project or worktree"
-                aria-pressed={groupByContext}
-                title="Group by project or worktree"
-                onClick={() => setGroupByContext(!groupByContext)}
-                className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-text-secondary"
-              >
-                <Layers className="w-3 h-3" aria-hidden="true" />
-              </button>
-            )}
             {unreadCount > 0 && (
               <button
                 type="button"
@@ -1164,66 +1153,96 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 Mark all read
               </button>
             )}
+            {/* Two icon controls, each named by a real tooltip. The native
+                `title` they carried arrived late or not at all, so the moon read
+                as a theme switch and nothing said otherwise. Group-by and
+                settings live in the overflow menu with Clear all, which used to
+                open onto that one item alone. */}
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  aria-label="Pause notifications"
-                  title="Pause notifications"
-                  className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-text-secondary"
-                >
-                  <Moon className="w-3 h-3" aria-hidden="true" />
-                </button>
-              </DropdownMenuTrigger>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="Pause notifications"
+                      className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-text-secondary"
+                    >
+                      <Moon className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Pause notifications</TooltipContent>
+              </Tooltip>
               <DropdownMenuContent align="end" className="min-w-[180px]">
+                <DropdownMenuLabel>Pause notifications</DropdownMenuLabel>
                 <DropdownMenuItem onSelect={() => handleMuteFor(60 * 60 * 1000)}>
                   For 1 hour
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={handleMuteUntilMorning}>
                   {morningLabel}
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={openNotificationSettings}>Custom…</DropdownMenuItem>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={openNotificationSettings}>
+                  Schedule quiet hours…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-text-secondary"
+                      aria-label="More notification actions"
+                    >
+                      <Ellipsis className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">More actions</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" className="min-w-[200px]">
+                {showGroupToggle && (
+                  <>
+                    <DropdownMenuCheckboxItem
+                      checked={groupByContext}
+                      onCheckedChange={(checked) => setGroupByContext(checked === true)}
+                    >
+                      Group by project or worktree
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 <DropdownMenuItem
                   aria-label="Notification settings"
                   onSelect={openNotificationSettings}
                 >
                   Notification settings…
                 </DropdownMenuItem>
+                {entries.length > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      destructive
+                      // Confirm first. `clearAll` empties the whole store —
+                      // active, archived AND snoozed — regardless of which tab
+                      // you are looking at, and the emptied state is persisted,
+                      // so a mis-click on the Archived tab silently destroys the
+                      // record of a whole fleet run with no undo. That is a D1
+                      // local-irreversible action under
+                      // docs/architecture/destructive-action-safeguards.md, which
+                      // requires a ConfirmDialog and a verb-noun button; the
+                      // in-repo precedent is `logs.clear`.
+                      onSelect={() => setClearAllConfirmOpen(true)}
+                    >
+                      <Trash2 data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Clear all…
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
-            {entries.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-text-secondary"
-                    aria-label="More notification actions"
-                    title="More notification actions"
-                  >
-                    <Ellipsis className="w-3 h-3" aria-hidden="true" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="min-w-[160px]">
-                  <DropdownMenuItem
-                    destructive
-                    // Confirm first. `clearAll` empties the whole store —
-                    // active, archived AND snoozed — regardless of which tab
-                    // you are looking at, and the emptied state is persisted,
-                    // so a mis-click on the Archived tab silently destroys the
-                    // record of a whole fleet run with no undo. That is a D1
-                    // local-irreversible action under
-                    // docs/architecture/destructive-action-safeguards.md, which
-                    // requires a ConfirmDialog and a verb-noun button; the
-                    // in-repo precedent is `logs.clear`.
-                    onSelect={() => setClearAllConfirmOpen(true)}
-                  >
-                    <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                    Clear all
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
           </div>
         </div>
         {entries.length > 0 && (
@@ -1290,14 +1309,17 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         >
           <div className="min-w-0 flex-1 flex flex-col gap-0.5">
             <span className="font-medium text-text-primary">{quietCause}</span>
-            {quietDetail && <span className="text-text-secondary">{quietDetail}</span>}
+            {quietDetail.map((clause) => (
+              <span key={clause} className="text-text-secondary">
+                {clause}
+              </span>
+            ))}
           </div>
           {isSessionMuted && (
             <button
               type="button"
               onClick={handleResumeNotifications}
               aria-label="Resume notifications"
-              title="Resume notifications"
               // A border, because without one this was bare text sitting at the
               // end of a line of bare text. It only read as a control under
               // `forced-colors: active`, where the UA supplies the border this
@@ -1308,7 +1330,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               Resume
             </button>
           )}
-          {!isSessionMuted && hasSilences && (
+          {/* Quiet hours too: they explained the silence and then left the way
+              to change them two menus away. */}
+          {!isSessionMuted && (hasSilences || isScheduledMuted) && (
             <button type="button" onClick={openNotificationSettings} className={SMALL_BUTTON_CLASS}>
               Manage
             </button>
@@ -1411,6 +1435,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     onConsumeSnoozePending={consumeSnoozePending}
                     onSnoozeRow={handleSnoozeForRow}
                     onUnsnoozeRow={handleUnsnoozeForRow}
+                    onArchiveRow={filter === "archived" ? undefined : archiveRow}
+                    onToggleReadRow={filter === "archived" ? undefined : toggleReadForRow}
                   />
                 )}
                 {chronoSections.map((section, sectionIdx) => (
@@ -1439,6 +1465,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     onConsumeSnoozePending={consumeSnoozePending}
                     onSnoozeRow={handleSnoozeForRow}
                     onUnsnoozeRow={handleUnsnoozeForRow}
+                    onArchiveRow={filter === "archived" ? undefined : archiveRow}
+                    onToggleReadRow={filter === "archived" ? undefined : toggleReadForRow}
                   />
                 ))}
               </>
@@ -1573,6 +1601,8 @@ function NeedsAttentionSection({
   onConsumeSnoozePending,
   onSnoozeRow,
   onUnsnoozeRow,
+  onArchiveRow,
+  onToggleReadRow,
 }: {
   groups: ThreadGroup[];
   /** Severe unread threads beyond the pinned cap — they remain in the chronological list below. */
@@ -1585,6 +1615,8 @@ function NeedsAttentionSection({
   onConsumeSnoozePending: () => void;
   onSnoozeRow: (row: FlatRow, option: SnoozeDurationOption) => void;
   onUnsnoozeRow: (row: FlatRow) => void;
+  onArchiveRow: ((row: FlatRow) => void) | undefined;
+  onToggleReadRow: ((row: FlatRow) => void) | undefined;
 } & RovingSectionProps) {
   return (
     <div data-testid="needs-attention-section" className="border-b border-divider">
@@ -1617,6 +1649,8 @@ function NeedsAttentionSection({
                 onConsumeSnoozePending,
                 onSnooze: onSnoozeRow,
                 onUnsnooze: onUnsnoozeRow,
+                onArchive: onArchiveRow,
+                onToggleRead: onToggleReadRow,
               }
             )
           );
@@ -1654,6 +1688,8 @@ function ChronoSection({
   onConsumeSnoozePending,
   onSnoozeRow,
   onUnsnoozeRow,
+  onArchiveRow,
+  onToggleReadRow,
   hasPinnedAbove,
 }: {
   section: ContextSection;
@@ -1670,6 +1706,8 @@ function ChronoSection({
   onConsumeSnoozePending: () => void;
   onSnoozeRow: (row: FlatRow, option: SnoozeDurationOption) => void;
   onUnsnoozeRow: (row: FlatRow) => void;
+  onArchiveRow: ((row: FlatRow) => void) | undefined;
+  onToggleReadRow: ((row: FlatRow) => void) | undefined;
   /**
    * Whether the "Needs attention" rail is rendering above this list. That rail
    * is a preview, not a filter — a pinned entry still appears here — so with
@@ -1794,6 +1832,8 @@ function ChronoSection({
                     onConsumeSnoozePending,
                     onSnooze: onSnoozeRow,
                     onUnsnooze: onUnsnoozeRow,
+                    onArchive: onArchiveRow,
+                    onToggleRead: onToggleReadRow,
                   }
                 )
               )}
@@ -1822,6 +1862,9 @@ interface SnoozeRowProps {
   onConsumeSnoozePending: () => void;
   onSnooze: (option: SnoozeDurationOption) => void;
   onUnsnooze: () => void;
+  /** The pointer's route to what `e` and `u` do from the keyboard. */
+  onArchive: (() => void) | undefined;
+  onToggleRead: (() => void) | undefined;
 }
 
 function renderGroup(
@@ -1852,6 +1895,8 @@ function renderGroup(
         onConsumeSnoozePending={snooze.onConsumeSnoozePending}
         onSnooze={snooze.onSnooze}
         onUnsnooze={snooze.onUnsnooze}
+        onArchive={snooze.onArchive}
+        onToggleRead={snooze.onToggleRead}
         compact={roving.compact}
         showSource={roving.showSource}
       />
@@ -1875,6 +1920,8 @@ function renderGroup(
       onConsumeSnoozePending={snooze.onConsumeSnoozePending}
       onSnooze={snooze.onSnooze}
       onUnsnooze={snooze.onUnsnooze}
+      onArchive={snooze.onArchive}
+      onToggleRead={snooze.onToggleRead}
       compact={roving.compact}
       showSource={roving.showSource}
     />
@@ -1887,11 +1934,7 @@ function buildSnoozeProps(
   snoozePendingIndex: number | null,
   snoozedThreads: Record<string, number>,
   now: number,
-  handlers: {
-    onConsumeSnoozePending: () => void;
-    onSnooze: (row: FlatRow, option: SnoozeDurationOption) => void;
-    onUnsnooze: (row: FlatRow) => void;
-  }
+  handlers: RowMenuHandlers
 ): SnoozeRowProps {
   const row = buildFlatRow(group);
   const snoozedUntil = group.correlationId ? snoozedThreads[group.correlationId] : undefined;
@@ -1904,7 +1947,19 @@ function buildSnoozeProps(
     onConsumeSnoozePending: handlers.onConsumeSnoozePending,
     onSnooze: (option) => handlers.onSnooze(row, option),
     onUnsnooze: () => handlers.onUnsnooze(row),
+    onArchive: handlers.onArchive ? () => handlers.onArchive?.(row) : undefined,
+    onToggleRead: handlers.onToggleRead ? () => handlers.onToggleRead?.(row) : undefined,
   };
+}
+
+interface RowMenuHandlers {
+  onConsumeSnoozePending: () => void;
+  onSnooze: (row: FlatRow, option: SnoozeDurationOption) => void;
+  onUnsnooze: (row: FlatRow) => void;
+  /** Absent in the Archived tab, where there is nothing further to archive to. */
+  onArchive: ((row: FlatRow) => void) | undefined;
+  /** Absent in the Archived tab too: read state doesn't apply to filed rows. */
+  onToggleRead: ((row: FlatRow) => void) | undefined;
 }
 
 function ContextSectionHeader({
@@ -2059,6 +2114,8 @@ function NotificationThread({
   onConsumeSnoozePending,
   onSnooze,
   onUnsnooze,
+  onArchive,
+  onToggleRead,
   compact = false,
   showSource = true,
 }: {
@@ -2076,6 +2133,8 @@ function NotificationThread({
   onConsumeSnoozePending?: () => void;
   onSnooze?: (option: SnoozeDurationOption) => void;
   onUnsnooze?: () => void;
+  onArchive?: () => void;
+  onToggleRead?: () => void;
 }) {
   const latest = group.entries[0];
   const isNew = group.entries.some((e) => !e.seenAsToast);
@@ -2136,6 +2195,8 @@ function NotificationThread({
         onConsumeSnoozePending={onConsumeSnoozePending}
         onSnooze={onSnooze}
         onUnsnooze={onUnsnooze}
+        onArchive={onArchive}
+        onToggleRead={onToggleRead}
         compact={compact}
         showSource={showSource}
       />

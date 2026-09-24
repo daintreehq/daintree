@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type Ref } from "react";
+import { Fragment, useEffect, useRef, useState, type Ref } from "react";
 import {
   CheckCircle2,
   XCircle,
@@ -10,8 +10,12 @@ import {
   Copy,
   Bug,
   ArrowRight,
+  Archive,
+  Mail,
+  MailOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { actionService } from "@/services/ActionService";
@@ -30,6 +34,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -43,6 +48,7 @@ import {
 } from "@shared/utils/snoozeTimestamps";
 import { useNotificationSource } from "./notificationSource";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { useUIStore } from "@/store/uiStore";
 
 const snoozedUntilFormatter = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
@@ -166,6 +172,9 @@ interface NotificationCenterEntryProps {
   onConsumeSnoozePending?: () => void;
   onSnooze?: (option: SnoozeDurationOption) => void;
   onUnsnooze?: () => void;
+  /** Row-menu twins of the list's `e` and `u` keys; absent, the item is too. */
+  onArchive?: () => void;
+  onToggleRead?: () => void;
   /**
    * False where something above the row already names its project and
    * worktree — a grouped section header — so the row doesn't say it twice.
@@ -197,6 +206,8 @@ export function NotificationCenterEntry({
   onConsumeSnoozePending,
   onSnooze,
   onUnsnooze,
+  onArchive,
+  onToggleRead,
   showSource = true,
   compact = false,
 }: NotificationCenterEntryProps) {
@@ -237,7 +248,11 @@ export function NotificationCenterEntry({
       role={role}
       onFocus={onFocus}
       className={cn(
-        "group flex items-start gap-2 pl-4 pr-3 py-2.5 hover:bg-overlay-subtle transition-colors",
+        "group flex items-start gap-2 pl-4 pr-3 hover:bg-overlay-subtle transition-colors",
+        // The rail is a preview, so it is packed tighter than the list: at the
+        // list's rhythm three pinned rows took nearly half the panel before
+        // anything that had just arrived.
+        compact ? "py-1.5" : "py-2.5",
         // The shared palette-row focus treatment, not a bespoke ring: `outline`
         // survives Windows High Contrast where a box-shadow ring does not, and
         // the offset is negative because this row is full-bleed inside three
@@ -392,13 +407,17 @@ export function NotificationCenterEntry({
           </p>
         )}
         {entry.actions && entry.actions.length > 0 && (
-          <div className="col-span-2 row-start-5 mt-1.5 flex flex-wrap gap-1.5">
+          <div
+            className={cn(
+              "col-span-2 row-start-5 flex flex-wrap gap-1.5",
+              compact ? "mt-1" : "mt-1.5"
+            )}
+          >
             {entry.actions.map((action, index) => {
               const manifest = actionService.get(action.actionId as ActionId);
               const isAvailable = manifest !== null && manifest.enabled;
-              return (
+              const button = (
                 <button
-                  key={`${action.actionId}-${index}`}
                   type="button"
                   // Handle for the `forced-colors: active` block in index.css.
                   // Primary is marked by its status-info fill and border, and
@@ -410,9 +429,6 @@ export function NotificationCenterEntry({
                     action.variant === "secondary" ? "secondary" : "primary"
                   }
                   aria-disabled={!isAvailable || undefined}
-                  title={
-                    !isAvailable ? (manifest?.disabledReason ?? "Action unavailable") : undefined
-                  }
                   onClick={
                     isAvailable
                       ? () =>
@@ -443,6 +459,20 @@ export function NotificationCenterEntry({
                 >
                   {action.label}
                 </button>
+              );
+              const key = `${action.actionId}-${index}`;
+              // Why it can't run, on the button itself: it stays focusable
+              // through aria-disabled, so this costs no extra Tab stop, and a
+              // native title never showed on focus at all.
+              return isAvailable ? (
+                <Fragment key={key}>{button}</Fragment>
+              ) : (
+                <Tooltip key={key}>
+                  <TooltipTrigger asChild>{button}</TooltipTrigger>
+                  <TooltipContent side="top">
+                    {manifest?.disabledReason ?? "Action unavailable"}
+                  </TooltipContent>
+                </Tooltip>
               );
             })}
           </div>
@@ -512,6 +542,10 @@ export function NotificationCenterEntry({
             onConsumeSnoozePending={onConsumeSnoozePending}
             onSnooze={onSnooze}
             onUnsnooze={onUnsnooze}
+            isRead={!isNew}
+            onArchive={onArchive}
+            onToggleRead={onToggleRead}
+            source={entry.context?.projectId || entry.context?.worktreeId ? source : undefined}
           />
           {onDismiss && (
             <button
@@ -653,6 +687,11 @@ interface RowOptionsMenuProps {
   onConsumeSnoozePending?: () => void;
   onSnooze?: (option: SnoozeDurationOption) => void;
   onUnsnooze?: () => void;
+  isRead: boolean;
+  onArchive?: () => void;
+  onToggleRead?: () => void;
+  /** Where the row came from, in full — the row's own line truncates it. */
+  source?: string;
 }
 
 function RowOptionsMenu({
@@ -665,6 +704,10 @@ function RowOptionsMenu({
   onConsumeSnoozePending,
   onSnooze,
   onUnsnooze,
+  isRead,
+  onArchive,
+  onToggleRead,
+  source,
 }: RowOptionsMenuProps) {
   const eventKind = entry.context?.eventKind;
   const hasContextActions = isNotificationEventKind(eventKind) || !!entry.context?.projectId;
@@ -679,7 +722,9 @@ function RowOptionsMenu({
   const supportsGoToSource = !!entry.context?.panelId;
   const hasDiagnosticsActions =
     supportsCopyCorrelationId || supportsReportOnGitHub || supportsGoToSource;
-  const hasActions = hasContextActions || supportsSnooze || hasDiagnosticsActions;
+  const hasTriageActions = !!onToggleRead || !!onArchive;
+  const hasActions =
+    hasTriageActions || hasContextActions || supportsSnooze || hasDiagnosticsActions;
   const [open, setOpen] = useState(false);
   // `h` asks for the snooze durations, not the whole menu, so it opens a menu
   // of just those. A controlled submenu opened in the same frame as its parent
@@ -742,12 +787,17 @@ function RowOptionsMenu({
     // Swallow silently — the inbox keeps stale rows after the source goes
     // away and forcing a toast on every dead-link click would be noise.
     void actionService.dispatch("panel.focus", { panelId }).catch(() => undefined);
+    // The one row-menu item that takes you somewhere else. The inbox used to
+    // close under it only because any menu pick counted as a click outside.
+    useUIStore.getState().closeNotificationCenter();
   };
 
   const handleReportOnGitHub = () => {
     if (reportInFlight) return;
     if (!entry.correlationId) return;
     if (entry.type !== "error" && entry.type !== "warning") return;
+    // Leaves for the browser, so the inbox closes behind it like Go to source.
+    useUIStore.getState().closeNotificationCenter();
     setReportInFlight(true);
     void reportNotificationOnGitHub(entry, messageString).finally(() => {
       setReportInFlight(false);
@@ -814,6 +864,38 @@ function RowOptionsMenu({
           </>
         ) : (
           <>
+            {/* The full project and worktree, which the row truncates and a
+                grouped row omits. Here it costs no Tab stop, and a keyboard
+                user reaches it with the menu they already open for triage. */}
+            {source && (
+              <>
+                <DropdownMenuLabel className="break-words font-medium normal-case tracking-normal">
+                  {source}
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+              </>
+            )}
+            {/* Triage first — the same verbs, and the same keys, as the list:
+                without these a pointer user could only read or archive one
+                notification by learning `u` and `e`, or by doing it to all. */}
+            {onToggleRead && (
+              <DropdownMenuItem onSelect={onToggleRead}>
+                {isRead ? (
+                  <Mail data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <MailOpen data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                )}
+                {isRead ? "Mark as unread" : "Mark as read"}
+                <DropdownMenuShortcut aria-hidden="true">U</DropdownMenuShortcut>
+              </DropdownMenuItem>
+            )}
+            {onArchive && (
+              <DropdownMenuItem onSelect={onArchive}>
+                <Archive data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Archive
+                <DropdownMenuShortcut aria-hidden="true">E</DropdownMenuShortcut>
+              </DropdownMenuItem>
+            )}
             {supportsSnooze &&
               (isSnoozed ? (
                 <DropdownMenuItem
@@ -835,7 +917,8 @@ function RowOptionsMenu({
                   <DropdownMenuSubContent>{durationItems}</DropdownMenuSubContent>
                 </DropdownMenuSub>
               ))}
-            {supportsSnooze && hasDiagnosticsActions && <DropdownMenuSeparator />}
+            {(hasTriageActions || supportsSnooze) &&
+              (hasDiagnosticsActions || hasContextActions) && <DropdownMenuSeparator />}
             {supportsCopyCorrelationId && (
               <DropdownMenuItem onSelect={handleCopyCorrelationId}>
                 <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
@@ -860,9 +943,6 @@ function RowOptionsMenu({
               </DropdownMenuItem>
             )}
             {hasDiagnosticsActions && hasContextActions && <DropdownMenuSeparator />}
-            {!hasDiagnosticsActions && supportsSnooze && hasContextActions && (
-              <DropdownMenuSeparator />
-            )}
             {isNotificationEventKind(eventKind) && (
               <DropdownMenuItem
                 onSelect={() => {

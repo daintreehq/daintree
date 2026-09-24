@@ -303,3 +303,20 @@ export async function seedNotificationHistory(
     { entries, snoozedThreads }
   );
 }
+
+/**
+ * Flip the inbox's group-by-context preference through the header's overflow
+ * menu, where it lives as a checkbox item. The notification center must be
+ * open.
+ */
+export async function toggleNotificationGrouping(page: Page): Promise<void> {
+  await page.locator('button[aria-label="More notification actions"]').first().click();
+  const item = page.getByRole("menuitemcheckbox", { name: "Group by project or worktree" });
+  await item.waitFor({ state: "visible", timeout: 5000 });
+  await item.click();
+  await page
+    .locator('[role="menu"]')
+    .first()
+    .waitFor({ state: "hidden", timeout: 5000 })
+    .catch(() => {});
+}
