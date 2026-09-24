@@ -320,6 +320,28 @@ describe("ShortcutHint placement", () => {
     }
   });
 
+  it("re-measures an open hint whose card grows when the window widens", () => {
+    render(<ShortcutHint />);
+    const original = window.innerWidth;
+    try {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 500 });
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      activate("Cmd+Shift+P", "focus", { x: 480, y: 300 });
+      // The card was capped by the narrow window; widening lets it grow.
+      CARD.width = 700;
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 900 });
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      expect(parseFloat(card()!.style.left) + CARD.width).toBeLessThanOrEqual(900 - 8);
+    } finally {
+      CARD.width = 300;
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: original });
+    }
+  });
+
   it("never covers the pointer it was raised at", () => {
     render(<ShortcutHint />);
     for (const [x, y] of [

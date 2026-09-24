@@ -142,7 +142,9 @@ export function ShortcutHint() {
     const width = card.offsetWidth;
     const height = card.offsetHeight;
     if (width !== size.width || height !== size.height) setSize({ width, height });
-  }, [shouldRender, hint, size.width, size.height]);
+    // The viewport is a dependency: the card's max-width tracks it, so a resize
+    // can change the card's own size, not just where it may sit.
+  }, [shouldRender, hint, size.width, size.height, viewport.width, viewport.height]);
 
   // Live region must stay mounted at all times. If the node is created fresh on
   // each activation (as it was when the visual tooltip carried the aria-live
