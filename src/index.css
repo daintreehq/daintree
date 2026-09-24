@@ -2825,6 +2825,15 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     border: 2px solid ButtonText;
   }
 
+  /* The standard dialog primary has the same problem: its high-contrast fill is
+   * the only thing separating it from the outline and ghost actions beside it,
+   * and the UA flattens all three to one system pill. Same stroke-weight cue,
+   * which reads as the platform's own default-button border. A dialog carries a
+   * destructive or a contrast primary, never both, so the two never compete. */
+  button[data-variant="contrast"] {
+    border: 2px solid ButtonText;
+  }
+
   /* …and the weight has to be re-asserted on everything else, or the signal
    * above collapses. The `prefers-contrast: more` block later in this file sets
    * `border-width: 2px` on bare `button` to anchor click targets, and Chromium
@@ -2850,7 +2859,8 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
    *     control back to idle. */
   html
     :where(button, [role="button"], [type="button"], [type="submit"], [type="reset"]):not(
-      [data-variant="destructive"]
+      [data-variant="destructive"],
+      [data-variant="contrast"]
     ) {
     border-width: 1px;
   }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { FolderOpen } from "@/components/icons";
@@ -42,6 +42,8 @@ export function NonGitFolderDialog({
   onCancel,
 }: NonGitFolderDialogProps) {
   const [step, setStep] = useState<NonGitFolderStep>(initialStep);
+  const openConsequenceId = useId();
+  const initConsequenceId = useId();
 
   // Re-arm on close rather than on open: the dialog animates out while still
   // mounted, and resetting the step on the way in would swap the body back to
@@ -63,32 +65,72 @@ export function NonGitFolderDialog({
   }
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onCancel} size="md">
-      <AppDialog.Header>
-        <AppDialog.Title icon={<FolderOpen className="h-5 w-5 text-daintree-text/70" />}>
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onCancel}
+      size="md"
+      // Arrive on the answer that writes nothing, so a reflexive Enter opens the
+      // folder rather than dismissing the dialog from the header's close button.
+      initialFocus="confirm"
+      data-testid="non-git-folder-dialog"
+    >
+      <AppDialog.Header className="py-3">
+        <AppDialog.Title icon={<FolderOpen className="h-4 w-4 text-text-secondary" />}>
           {/* A root path ("/", "C:\") has no leaf — name it by the path itself. */}
           Open &lsquo;{basename(directoryPath) || directoryPath}&rsquo;?
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
-      <AppDialog.Body className="space-y-3">
-        <PathCaption path={directoryPath} />
-        <p className="text-sm text-text-secondary">
-          This folder isn&rsquo;t a git repository. Open it as-is and terminals, agents, recipes,
-          and the file browser all work — worktrees, review, and diffs stay unavailable until it
-          becomes a repository, and nothing in the folder is touched. Setting up a repository writes
-          into it: you&rsquo;ll see exactly what before it runs.
-        </p>
+      <AppDialog.Body className="space-y-5">
+        <div className="space-y-1.5">
+          <PathCaption path={directoryPath} />
+          <AppDialog.Description>This folder isn&rsquo;t a git repository.</AppDialog.Description>
+        </div>
+
+        {/* Each answer carries its own cost, labelled with the button that
+            chooses it and attached to that button as its description, so the
+            consequence is read — or announced — at the moment of choice. */}
+        <dl className="space-y-3 text-sm">
+          <div className="space-y-0.5">
+            <dt className="font-medium text-text-primary">Open without git</dt>
+            <dd id={openConsequenceId} className="text-text-secondary">
+              Opening won&rsquo;t change anything in this folder. Terminals, agents, recipes, and
+              the file browser work; worktrees, review, and diffs need git.
+            </dd>
+          </div>
+          <div className="space-y-0.5">
+            <dt className="font-medium text-text-primary">Initialize repository</dt>
+            <dd id={initConsequenceId} className="text-text-secondary">
+              Preview the repository setup next. Nothing changes until you confirm.
+            </dd>
+          </div>
+        </dl>
       </AppDialog.Body>
 
       <AppDialog.Footer>
-        <Button variant="outline" onClick={() => setStep("initialize")}>
-          Initialize repository
-        </Button>
-        <Button variant="contrast" onClick={onOpenWithoutGit}>
-          Open without git
-        </Button>
+        <div className="flex shrink-0 items-center gap-3">
+          <Button variant="ghost" size="sm" onClick={onCancel} data-confirm-role="cancel">
+            Cancel
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setStep("initialize")}
+            aria-describedby={initConsequenceId}
+          >
+            Initialize repository
+          </Button>
+          <Button
+            variant="contrast"
+            size="sm"
+            onClick={onOpenWithoutGit}
+            aria-describedby={openConsequenceId}
+            data-confirm-role="confirm"
+          >
+            Open without git
+          </Button>
+        </div>
       </AppDialog.Footer>
     </AppDialog>
   );

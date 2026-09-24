@@ -1,7 +1,7 @@
 {
   "generated": "2026-09-24",
-  "total": 145,
-  "files": 65,
+  "total": 144,
+  "files": 64,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -1069,21 +1069,6 @@
       "evidence": "<ChevronRight> is an icon — the colour is an affordance, not prose"
     },
     {
-      "file": "src/components/Project/NonGitFolderDialog.tsx",
-      "ordinal": 0,
-      "line": 68,
-      "start": 2349,
-      "end": 2370,
-      "token": "text-daintree-text/70",
-      "variants": "",
-      "step": 70,
-      "group": "src/components/Project/NonGitFolderDialog.tsx#2329",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<FolderOpen> is an icon — the colour is an affordance, not prose"
-    },
-    {
       "file": "src/components/Project/ProjectSwitcherPalette.tsx",
       "ordinal": 0,
       "line": 450,
@@ -1731,13 +1716,13 @@
     {
       "file": "src/components/ui/SurfaceHeader.tsx",
       "ordinal": 0,
-      "line": 96,
-      "start": 3867,
-      "end": 3888,
+      "line": 99,
+      "start": 4045,
+      "end": 4066,
       "token": "text-daintree-text/60",
       "variants": "",
       "step": 60,
-      "group": "src/components/ui/SurfaceHeader.tsx#3827",
+      "group": "src/components/ui/SurfaceHeader.tsx#4005",
       "branch": "",
       "decision": "keep",
       "category": "icon-affordance",
