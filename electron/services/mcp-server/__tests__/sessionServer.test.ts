@@ -643,6 +643,16 @@ describe("sessionServer prompt handler", () => {
     expect(text).toMatch(/includeOutput[^\n]*lastOutputChangeAt/);
     expect(text).toMatch(/lastOutputChangeAt[^\n]*absent when no change was observed/);
     expect(text).toMatch(/lastOutputChangeAt[^\n]*NOT a hang verdict/);
+    // Queue supervision: one wake owner, ready worktrees before launch, the
+    // PR field as a cached hint, and no acting on a CLI's suggested prompt.
+    const queue = text.slice(text.indexOf("**Queues pace with one owner.**"));
+    expect(text).toContain("**Queues pace with one owner.**");
+    expect(queue).toMatch(/never a second timer, background sleep or polling script/);
+    expect(queue).toMatch(
+      /finished setup \(`worktree\.waitUntilReady`[^\n]*\), then `agent\.launch`/
+    );
+    expect(queue).toMatch(/`prNumber`[^\n]*cached hint and null does not prove there is no PR/);
+    expect(queue).toMatch(/suggested next prompt[^\n]*never submit or act on it/);
   });
 
   it("does not dispatch worktree.getCurrent for triage_terminals (static prompt)", async () => {
