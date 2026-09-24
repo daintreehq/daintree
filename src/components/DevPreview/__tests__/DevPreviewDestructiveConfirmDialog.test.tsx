@@ -452,6 +452,7 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
         expect(screen.getByTestId("dev-preview-destructive-cache-none")).toBeTruthy();
       });
       expect(confirmButton().textContent).not.toMatch(DELETION_CLAIM);
+      expect(screen.getByRole("heading", { level: 2 }).textContent).not.toMatch(DELETION_CLAIM);
       const description = document.getElementById(
         document.querySelector('[role="dialog"]')!.getAttribute("aria-describedby")!
       );
@@ -581,5 +582,65 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
     );
     const cancel = document.querySelector('[data-confirm-role="cancel"]');
     expect(cancel?.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("never promises the install leaves the working tree alone", async () => {
+    for (const lockfileName of ["package-lock.json", null]) {
+      stubDevPreviewIpc({
+        getDestructivePreviewMeta: vi.fn().mockResolvedValue({ ...baseMeta, lockfileName }),
+        getDestructivePreviewSizes: vi.fn().mockResolvedValue(baseSizes),
+      });
+      render(
+        <DevPreviewDestructiveConfirmDialog
+          panelId="panel-1"
+          projectId="project-1"
+          tier="reinstallAndRestart"
+          isOpen={true}
+          onClose={() => {}}
+          onConfirm={() => {}}
+        />
+      );
+      await screen.findByTestId("dev-preview-destructive-install-cmd");
+      const description = document.getElementById(
+        document.querySelector('[role="dialog"]')!.getAttribute("aria-describedby")!
+      )!.textContent!;
+      expect(description).not.toMatch(/git state/i);
+      expect(description).toMatch(lockfileName ?? /lockfile/);
+      cleanup();
+    }
+  });
+
+  it("announces the preview once it settles, and says when sizes couldn't be measured", async () => {
+    const sizesDeferred = deferred<DevPreviewDestructivePreviewSizes>();
+    stubDevPreviewIpc({
+      getDestructivePreviewMeta: vi.fn().mockResolvedValue(baseMeta),
+      getDestructivePreviewSizes: vi.fn().mockReturnValue(sizesDeferred.promise),
+    });
+    render(
+      <DevPreviewDestructiveConfirmDialog
+        panelId="panel-1"
+        projectId="project-1"
+        tier="reinstallAndRestart"
+        isOpen={true}
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+    const status = screen.getByTestId("dev-preview-destructive-status");
+    expect(status.getAttribute("role")).toBe("status");
+    expect(status.textContent).toBe("");
+
+    await waitFor(() => expect(status.textContent).toMatch(/ready/i));
+    expect(
+      screen.getByTestId("dev-preview-destructive-reinstall-preview").getAttribute("aria-busy")
+    ).toBe("true");
+
+    await act(async () => {
+      sizesDeferred.reject(new Error("EACCES"));
+    });
+    await waitFor(() => expect(status.textContent).toMatch(/couldn't be measured/i));
+    expect(
+      screen.getByTestId("dev-preview-destructive-reinstall-preview").hasAttribute("aria-busy")
+    ).toBe(false);
   });
 });

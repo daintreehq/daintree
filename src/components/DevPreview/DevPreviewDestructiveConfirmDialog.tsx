@@ -144,6 +144,9 @@ export function DevPreviewDestructiveConfirmDialog({
             <NodeModulesPreview meta={meta} sizes={sizes} />
           ))}
       </PreviewFrame>
+      <p className="sr-only" role="status" data-testid="dev-preview-destructive-status">
+        {settledAnnouncement(tier, meta, sizes)}
+      </p>
     </ConfirmDialog>
   );
 }
@@ -165,7 +168,7 @@ function describe(tier: DevPreviewDestructiveTier, meta: DevPreviewDestructivePr
     const nothingToClear = meta !== null && !meta.cacheDirs.some((d) => d.exists);
     return nothingToClear
       ? {
-          title: "Clear cache and restart?",
+          title: "Restart dev server?",
           description:
             "There are no build caches to delete, so this only restarts the dev server. Source files and installed dependencies aren't touched.",
           confirmLabel: "Restart dev server",
@@ -179,10 +182,17 @@ function describe(tier: DevPreviewDestructiveTier, meta: DevPreviewDestructivePr
   }
 
   const pm = meta?.packageManager ?? "npm";
+  // Only node_modules is deleted, but the install itself writes to the working
+  // tree: it can rewrite the lockfile, or create one where there was none.
+  const untouched = !meta
+    ? "Source files aren't touched, though the install can update the lockfile."
+    : meta.lockfileName
+      ? `Source files aren't touched, though the install can update ${meta.lockfileName}.`
+      : "Source files aren't touched, though the install writes a new lockfile.";
   if (meta && !meta.nodeModules.exists) {
     return {
       title: "Install dependencies?",
-      description: `There's no node_modules to delete, so ${pm} installs every dependency, then the dev server restarts. This can take several minutes. Source files and git state aren't touched.`,
+      description: `There's no node_modules to delete, so ${pm} installs every dependency, then the dev server restarts. This can take several minutes. ${untouched}`,
       confirmLabel: "Install dependencies",
     } satisfies TierCopy;
   }
@@ -190,10 +200,38 @@ function describe(tier: DevPreviewDestructiveTier, meta: DevPreviewDestructivePr
     title: "Reinstall dependencies?",
     description:
       pm === "pnpm"
-        ? "node_modules is deleted and re-linked from the pnpm store, then the dev server restarts. Source files and git state aren't touched."
-        : "node_modules is deleted and every dependency reinstalled, then the dev server restarts. This can take several minutes. Source files and git state aren't touched.",
+        ? `node_modules is deleted and re-linked from the pnpm store, then the dev server restarts. ${untouched}`
+        : `node_modules is deleted and every dependency reinstalled, then the dev server restarts. This can take several minutes. ${untouched}`,
     confirmLabel: "Reinstall dependencies",
   } satisfies TierCopy;
+}
+
+/**
+ * What a screen reader hears once the preview settles. The loading skeleton is
+ * its own status region, but it unmounts when the metadata lands, so without a
+ * region that outlives it the preview arrives — and the primary unlocks — in
+ * silence. Metadata errors announce through the notice's own alert.
+ */
+function settledAnnouncement(
+  tier: DevPreviewDestructiveTier,
+  meta: DevPreviewDestructivePreviewMeta | null,
+  sizes: SizesState
+): string {
+  if (!meta) return "";
+  if (sizes === "pending") return "Preview ready. Measuring sizes.";
+  if (sizes === "failed") return "Preview ready. Sizes couldn't be measured.";
+  if (tier === "restartAndClearCache") {
+    const present = meta.cacheDirs.filter((d) => d.exists);
+    if (present.length === 0) return "Preview ready. No build caches found.";
+    const total = cacheTotal(present, sizes);
+    return typeof total === "number"
+      ? `Preview ready. ${present.length} ${present.length === 1 ? "cache" : "caches"}, ${formatBytes(total)} in all.`
+      : "Preview ready. Some sizes couldn't be measured.";
+  }
+  if (!meta.nodeModules.exists) return "Preview ready. node_modules isn't there.";
+  return typeof sizes.nodeModulesSizeBytes === "number"
+    ? `Preview ready. node_modules is ${formatBytes(sizes.nodeModulesSizeBytes)}.`
+    : "Preview ready. The size couldn't be measured.";
 }
 
 /**
@@ -350,7 +388,10 @@ function NodeModulesPreview({
   const bytes = sizes === "pending" || sizes === "failed" ? null : sizes.nodeModulesSizeBytes;
 
   return (
-    <PreviewSummary testId="dev-preview-destructive-reinstall-preview">
+    <PreviewSummary
+      testId="dev-preview-destructive-reinstall-preview"
+      busy={exists && sizes === "pending"}
+    >
       {exists ? (
         <SummaryRow label="Deletes">
           <PathValue
