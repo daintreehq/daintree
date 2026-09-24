@@ -391,10 +391,48 @@ async function closeDialog(page: Page): Promise<void> {
   throw new Error("dialog did not close — later steps would cascade");
 }
 
+/**
+ * `notify` holds every toast back for a startup quiet period after each
+ * hydration (`setStartupQuietPeriod` in `useAppHydration`), and a reload
+ * re-arms it. Toast steps wait it out.
+ */
+const STARTUP_QUIET_MS = 5_000;
+let hydratedAt = 0;
+
 async function polish(page: Page): Promise<void> {
+  hydratedAt = Date.now();
   await page.addStyleTag({ content: POLISH_CSS }).catch(() => {});
   await dismissBlockingPalette(page);
   await settle(page, 1200);
+}
+
+/**
+ * Non-transient toasts only render in a focused window — `notify` routes them
+ * to the inbox otherwise — and on a busy machine another app can hold OS focus.
+ * Take it back, let the startup quiet period lapse, and confirm, rather than
+ * photograph a toast that never appears.
+ */
+async function readyForToasts(app: ElectronApplication, page: Page): Promise<void> {
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      win.show();
+      win.focus();
+      for (const child of win.contentView?.children ?? []) {
+        const wc = (child as { webContents?: Electron.WebContents }).webContents;
+        if (wc && !wc.isDestroyed()) wc.focus();
+      }
+    }
+  });
+  await page.bringToFront();
+  const quietLeft = hydratedAt + STARTUP_QUIET_MS + 500 - Date.now();
+  if (quietLeft > 0) await page.waitForTimeout(quietLeft);
+  await expect
+    .poll(() => page.evaluate(() => document.hasFocus()), {
+      timeout: 5_000,
+      message: "window never regained focus — error toasts would route to the inbox",
+    })
+    .toBe(true);
 }
 
 /** A toast, photographed with the region around it so its placement reads. */
@@ -546,6 +584,7 @@ async function captureTheme(page: Page, app: ElectronApplication): Promise<void>
   // 8. Toasts — the rest of the flow's surface.
   await step("toast-rejected", async () => {
     await dismissToasts(page);
+    await readyForToasts(app, page);
     await setScript(app, {
       previewMode: "rejected",
       rejectReason: "that file isn't a Daintree configuration bundle",
