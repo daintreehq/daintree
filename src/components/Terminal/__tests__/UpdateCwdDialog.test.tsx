@@ -131,6 +131,38 @@ describe("UpdateCwdDialog", () => {
     expect(updateTerminalCwd).not.toHaveBeenCalled();
   });
 
+  it("lets a suggestion picked mid-check be submitted", async () => {
+    const check = deferred<boolean>();
+    checkDirectory.mockImplementation((path) =>
+      path === "/repos/slow" ? check.promise : Promise.resolve(!path.includes("gone"))
+    );
+    const { onClose } = renderDialog();
+    const root = await screen.findByRole("button", { name: `Use ${PROJECT_ROOT}` });
+
+    submit("/repos/slow");
+    fireEvent.click(root);
+    fireEvent.keyDown(field(), { key: "Enter" });
+
+    await waitFor(() => expect(updateTerminalCwd).toHaveBeenCalledWith("t1", PROJECT_ROOT));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    await act(async () => check.resolve(true));
+    expect(updateTerminalCwd).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves focus to the field when a submit from the footer is rejected", async () => {
+    renderDialog();
+    // The open-time focus lands on a later frame; let it, so it can't pass for the fix.
+    await waitFor(() => expect(document.activeElement).toBe(field()));
+    fireEvent.change(field(), { target: { value: "/repos/gone-typo" } });
+    const restart = screen.getByRole("button", { name: "Restart terminal" });
+    restart.focus();
+    fireEvent.click(restart);
+    expect(document.activeElement).toBe(restart);
+
+    await waitFor(() => expect(field().getAttribute("aria-invalid")).toBe("true"));
+    expect(document.activeElement).toBe(field());
+  });
+
   it("marks the field invalid for a folder that doesn't exist, and keeps what was typed", async () => {
     renderDialog();
     submit("/repos/gone-typo");

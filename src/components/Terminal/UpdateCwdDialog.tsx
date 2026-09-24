@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useId, useRef } from "react";
 import type { KeyboardEvent } from "react";
-import { FolderPen } from "lucide-react";
+import { CircleAlert, FolderPen } from "lucide-react";
 import { basename, dirname, normalize } from "@shared/utils/path";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
@@ -101,18 +101,38 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
     };
   }, [isOpen, projectRoot]);
 
-  const choosePath = useCallback((path: string) => {
+  /** Any change to the draft abandons whatever attempt was in flight for the old one. */
+  const abandonAttempt = useCallback(() => {
     attemptRef.current++;
-    setNewCwd(path);
-    setFieldError(undefined);
-    setRestartError(undefined);
-    requestAnimationFrame(() => {
-      const input = inputRef.current;
-      if (!input) return;
-      input.focus();
-      input.setSelectionRange(input.value.length, input.value.length);
-    });
+    busyRef.current = false;
+    setBusy(false);
   }, []);
+
+  /**
+   * A field error lands focus on the field it describes, so the described-by
+   * message is what gets read — a submit from the footer would otherwise leave
+   * focus on a button that says nothing about what went wrong.
+   */
+  const failField = useCallback((message: string) => {
+    setFieldError(message);
+    inputRef.current?.focus();
+  }, []);
+
+  const choosePath = useCallback(
+    (path: string) => {
+      abandonAttempt();
+      setNewCwd(path);
+      setFieldError(undefined);
+      setRestartError(undefined);
+      requestAnimationFrame(() => {
+        const input = inputRef.current;
+        if (!input) return;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      });
+    },
+    [abandonAttempt]
+  );
 
   const handleBrowse = useCallback(async () => {
     try {
@@ -120,16 +140,16 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
       if (picked) choosePath(picked);
       else inputRef.current?.focus();
     } catch (error) {
-      setFieldError("Couldn't open the folder picker. Type the path instead.");
+      failField("Couldn't open the folder picker. Type the path instead.");
       logError("Failed to open folder picker for terminal cwd", error);
     }
-  }, [choosePath]);
+  }, [choosePath, failField]);
 
   const handleUpdate = useCallback(async () => {
     if (busyRef.current) return;
     const path = newCwd.trim();
     if (!path) {
-      setFieldError("Enter a folder path");
+      failField("Enter a folder path");
       return;
     }
 
@@ -145,13 +165,13 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
       try {
         exists = await systemClient.checkDirectory(path);
       } catch (error) {
-        if (isCurrent()) setFieldError("Couldn't check this folder. Try again.");
+        if (isCurrent()) failField("Couldn't check this folder. Try again.");
         logError("Failed to check terminal cwd", error);
         return;
       }
       if (!isCurrent()) return;
       if (!exists) {
-        setFieldError("This folder doesn't exist. Check the path, or browse for one.");
+        failField("This folder doesn't exist. Check the path, or browse for one.");
         return;
       }
 
@@ -172,7 +192,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
         setBusy(false);
       }
     }
-  }, [terminalId, newCwd, updateTerminalCwd, restartTerminal, onClose]);
+  }, [terminalId, newCwd, updateTerminalCwd, restartTerminal, onClose, failField]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
@@ -227,7 +247,8 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
         </AppDialog.Description>
 
         <FormGrid>
-          <FormRow label="Missing folder">
+          {/* Top-aligned: a long path wraps, and the label belongs to its first line. */}
+          <FormRow label="Missing folder" labelClassName="self-start">
             {/* Inset to the field's text, so the old and new paths share a column. */}
             <p
               className="min-w-0 px-2.5 font-mono text-xs text-text-secondary select-text"
@@ -247,7 +268,8 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
                   {/* No live role: aria-invalid plus the described-by link
                       announce it when focus lands back on the field. */}
                   {fieldError && (
-                    <p id={errorId} className="text-xs text-status-error">
+                    <p id={errorId} className="flex items-start gap-1 text-xs text-status-error">
+                      <CircleAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                       {fieldError}
                     </p>
                   )}
@@ -278,9 +300,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
               id="new-cwd-input"
               value={newCwd}
               onChange={(e) => {
-                attemptRef.current++;
-                busyRef.current = false;
-                setBusy(false);
+                abandonAttempt();
                 setNewCwd(e.target.value);
                 setFieldError(undefined);
                 setRestartError(undefined);
