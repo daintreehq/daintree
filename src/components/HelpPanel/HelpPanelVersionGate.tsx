@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { RefreshCw, Settings2 } from "lucide-react";
 import { CircleArrowUp } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { getAgentConfig } from "@/config/agents";
 import { extractInspectUrl, isManualOnlyCommand } from "@/lib/agentInstall";
 import { isWindows } from "@/lib/platform";
 import { cn } from "@/lib/utils";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { VersionTooOld } from "@/controllers/HelpSessionController";
 
 interface HelpPanelVersionGateProps {
@@ -69,6 +70,17 @@ export function HelpPanelVersionGate({
     setCheckedWithoutChange(wasChecking && !isCheckingVersion);
   }
 
+  // The gate replaces a launch whose last word to AT was "Checking version…", so it
+  // has to say what stopped the launch. Once per block, through the app announcer,
+  // and without taking focus from wherever the user is.
+  useEffect(() => {
+    useAnnouncerStore
+      .getState()
+      .announce(
+        `Update ${agentName} to use Daintree Assistant. Version ${installedVersion} is installed; version ${requiredVersion} or later is required.`
+      );
+  }, [agentName, installedVersion, requiredVersion]);
+
   const instruction =
     methods.length === 0
       ? `Update ${agentName} the way you installed it, then check again.`
@@ -76,10 +88,12 @@ export function HelpPanelVersionGate({
         ? "Run this in a terminal, then check again."
         : "Run the one that matches how you installed it, then check again.";
 
+  // Says what the probe saw, not what it concluded: a still-blocked result means
+  // the detected version is still short, not that no newer release exists.
   const status = isCheckingVersion
     ? `Checking ${agentName} version…`
     : checkedWithoutChange
-      ? "No newer version found"
+      ? `Still on version ${installedVersion}`
       : "";
 
   return (
@@ -143,10 +157,7 @@ export function HelpPanelVersionGate({
           </Button>
         </div>
 
-        <p
-          role="status"
-          className={cn("text-xs text-text-secondary", !checkedWithoutChange && "sr-only")}
-        >
+        <p role="status" className={cn("text-xs text-text-secondary", !status && "sr-only")}>
           {status}
         </p>
       </div>

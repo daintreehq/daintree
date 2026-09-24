@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { getAgentConfig } from "@/config/agents";
 import type { VersionTooOld } from "@/controllers/HelpSessionController";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { HelpPanelVersionGate } from "../HelpPanelVersionGate";
 
 const CLAUDE: VersionTooOld = {
@@ -92,13 +93,36 @@ describe("HelpPanelVersionGate", () => {
     expect(onCheckAgain).toHaveBeenCalledTimes(1);
   });
 
-  it("reports a check that settles with the gate still up", () => {
+  it("shows a running check in words, not only in the spinner's motion", () => {
     const { setChecking } = renderGate(CLAUDE);
     const status = () => screen.getByRole("status");
     expect(status().textContent).toBe("");
     setChecking(true);
-    expect(status().textContent).toContain("Checking");
+    expect(status().textContent).toBe("Checking Claude version…");
+    // Visible, so reduced motion (which stills the spinner) still shows the check.
+    expect(status().classList.contains("sr-only")).toBe(false);
+  });
+
+  it("reports what a settled check saw, not a conclusion about releases", () => {
+    const { setChecking } = renderGate(CLAUDE);
+    setChecking(true);
     setChecking(false);
-    expect(status().textContent).toBe("No newer version found");
+    expect(screen.getByRole("status").textContent).toBe("Still on version 2.0.14");
+  });
+
+  it("announces the block once when the gate replaces the launch", () => {
+    const announce = vi.fn();
+    const original = useAnnouncerStore.getState().announce;
+    useAnnouncerStore.setState({ announce });
+    try {
+      const { setChecking } = renderGate(CLAUDE);
+      setChecking(true);
+      setChecking(false);
+      expect(announce).toHaveBeenCalledTimes(1);
+      expect(announce.mock.calls[0]![0]).toContain("Update Claude");
+      expect(announce.mock.calls[0]![0]).toContain("2.1.0");
+    } finally {
+      useAnnouncerStore.setState({ announce: original });
+    }
   });
 });

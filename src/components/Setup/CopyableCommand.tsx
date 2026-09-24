@@ -1,9 +1,22 @@
+import { Fragment } from "react";
 import { Check, Copy, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { systemClient } from "@/clients/systemClient";
 import { sanitizeForClipboard } from "@/lib/clipboardSanitize";
+
+// A break opportunity after every "/" so a wrapped URL or scoped package splits at a
+// path boundary rather than a single stranded letter. `<wbr>` adds no characters, so
+// the rendered text (and a manual selection of it) stays the exact command.
+function withPathBreaks(command: string) {
+  return command.split(/(?<=\/)/).map((part, i) => (
+    <Fragment key={i}>
+      {i > 0 && <wbr />}
+      {part}
+    </Fragment>
+  ));
+}
 
 export function CopyableCommand({
   command,
@@ -29,7 +42,7 @@ export function CopyableCommand({
           wrap ? "whitespace-normal break-words" : "truncate"
         )}
       >
-        {command}
+        {wrap ? withPathBreaks(command) : command}
       </span>
       {inspectUrl && (
         <Tooltip>
@@ -37,7 +50,7 @@ export function CopyableCommand({
             <button
               type="button"
               onClick={() => void systemClient.openExternal(inspectUrl)}
-              className="shrink-0 p-0.5 rounded hover:bg-overlay transition-colors duration-150 text-text-secondary hover:text-text-primary"
+              className="shrink-0 p-0.5 rounded-[var(--radius-sm)] hover:bg-overlay transition-colors duration-150 text-text-secondary hover:text-text-primary"
               aria-label="Inspect install script in browser"
             >
               <ExternalLink className="w-3.5 h-3.5" />
@@ -51,7 +64,7 @@ export function CopyableCommand({
           <button
             type="button"
             onClick={() => void copy(sanitizeForClipboard(command))}
-            className="shrink-0 p-0.5 rounded hover:bg-overlay transition-colors duration-150 text-text-secondary hover:text-text-primary"
+            className="shrink-0 p-0.5 rounded-[var(--radius-sm)] hover:bg-overlay transition-colors duration-150 text-text-secondary hover:text-text-primary"
             aria-label="Copy command to clipboard"
           >
             {copied ? (
