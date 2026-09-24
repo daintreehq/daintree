@@ -171,7 +171,7 @@ export function NotificationCenterToolbarButton({
 
   // Toggle a one-shot blip on the bell whenever a new notification lands in the
   // inbox while DND is inactive. Uses boolean class toggle with onAnimationEnd
-  // cleanup (matching AgentStatusIndicator) instead of key-based remounting, so
+  // cleanup instead of key-based remounting, so
   // no will-change layer hint lingers on the long-lived toolbar element.
   const prevEvictedRef = useRef(evictedToInboxCount);
   const lastBellBumpTimeRef = useRef(0);

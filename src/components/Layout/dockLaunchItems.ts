@@ -23,12 +23,8 @@ import { getRecipeScope } from "@/utils/recipeScope";
 import { logError } from "@/utils/logger";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { TOOLBAR_CUSTOMIZE_LABEL } from "./toolbarMenuStrings";
-import type {
-  ActionSource,
-  AgentAvailabilityState,
-  AgentState,
-  TerminalRecipe,
-} from "@shared/types";
+import type { ActionSource, AgentAvailabilityState, TerminalRecipe } from "@shared/types";
+import type { AttentionAgentState } from "@/components/Worktree/terminalStateConfig";
 import type { RecipeContext } from "@/utils/recipeVariables";
 
 export const AGENT_MRU_PREFIX = "agent.";
@@ -77,8 +73,8 @@ export interface DockLaunchAgent {
    * launch alongside the named ones.
    */
   presetChoices?: readonly DockLaunchPresetChoice[];
-  /** Drives the running pip. Null when nothing is running for this agent. */
-  dominantState?: AgentState | null;
+  /** Drives the pip. Null when no session of this agent is waiting or directing. */
+  attentionState?: AttentionAgentState | null;
   /** Newly detected on this machine and not yet acted on — drives the "New" cue. */
   isNew?: boolean;
 }

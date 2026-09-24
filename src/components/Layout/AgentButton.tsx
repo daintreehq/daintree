@@ -58,10 +58,10 @@ import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
 
 import { resolveEffectivePresetId } from "@shared/types";
 import {
-  getDominantAgentState,
   agentStateDotColor,
-} from "@/components/Worktree/AgentStatusIndicator";
-import { STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
+  getAttentionAgentState,
+  STATE_LABELS,
+} from "@/components/Worktree/terminalStateConfig";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 import { isPtyPanel } from "@shared/types/panel";
 
@@ -254,7 +254,7 @@ export function AgentButton({
         states.push(p.agentState);
       }
       if (!firstId) return null;
-      return { id: firstId, dominantState: getDominantAgentState(states) };
+      return { id: firstId, attentionState: getAttentionAgentState(states) };
     })
   );
 
@@ -262,7 +262,7 @@ export function AgentButton({
   if (!config) return null;
 
   const isSessionActive = activeSession !== null;
-  const dominantState = activeSession?.dominantState ?? null;
+  const attentionState = activeSession?.attentionState ?? null;
 
   const entry = agentSettings?.agents?.[type] ?? {};
   const presets = getMergedPresets(type, entry.customPresets, ccrPresets, projectPresets);
@@ -311,12 +311,11 @@ export function AgentButton({
   // because the CLI itself will prompt for sign-in on first run.
   const signInUnconfirmed = isAgentUnauthenticated(availability);
 
-  // Same gate the corner dot uses (issue #9823, #5900). When a dot renders,
-  // dominantState is one of {waiting, directing} — STATE_LABELS has a human
-  // word for every dot-bearing state, so the suffix is always meaningful.
-  // Moved above the tooltip/aria ternaries so they can consume it.
-  const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
-  const visibleStateSuffix = dotColor ? ` — ${STATE_LABELS[dominantState!]}` : "";
+  // Same gate the corner dot uses (issue #9823, #5900), so the tooltip and
+  // accessible name never say less than the dot. Moved above the tooltip/aria
+  // ternaries so they can consume it.
+  const dotColor = attentionState ? agentStateDotColor(attentionState) : null;
+  const visibleStateSuffix = attentionState && dotColor ? ` — ${STATE_LABELS[attentionState]}` : "";
   // The split's hover wash and inner partition only draw while the chevron is
   // usable — it blocks clicks when gated (issue #8131), so drawing it as a
   // second half would advertise a control that isn't there.
@@ -327,13 +326,15 @@ export function AgentButton({
   // recovery panel, not Settings — so both surfaces borrow the dock's hint
   // rather than naming an action this button no longer performs (#11760).
   const unavailableLabel = unavailableAgentHint(config.name, availability);
+  // The pip draws whether or not the CLI is launchable, so every branch
+  // carries its state — a waiting session outlives an availability re-probe.
   const tooltipLabel = isLoading
-    ? `Checking ${config.name} CLI…`
+    ? `Checking ${config.name} CLI…${visibleStateSuffix}`
     : isLaunchable
       ? signInUnconfirmed
         ? `Start ${config.name}${presetSegment}${visibleStateSuffix} — sign-in not detected`
         : `Start ${config.name}${presetSegment}${visibleStateSuffix}`
-      : unavailableLabel;
+      : `${unavailableLabel}${visibleStateSuffix}`;
   const tooltipShortcut = isLaunchable ? effectiveCombo : undefined;
   const chevronTooltip = isLoading
     ? `Checking ${config.name} CLI availability...`
@@ -348,10 +349,10 @@ export function AgentButton({
   const isChevronDisabled = isLoading || !isLaunchable;
 
   const ariaLabel = isLoading
-    ? `Checking ${config.name} CLI`
+    ? `Checking ${config.name} CLI${visibleStateSuffix}`
     : isLaunchable
       ? `Start ${config.name}${visibleStateSuffix}`
-      : unavailableLabel;
+      : `${unavailableLabel}${visibleStateSuffix}`;
 
   const handleClick = (e?: ReactMouseEvent<HTMLElement>) => {
     if (isLoading) return;

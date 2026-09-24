@@ -59,7 +59,7 @@ export function WorktreeActivityChip({
           aria-label="Last activity"
           tabIndex={0}
         >
-          <ActivityLight lastActivityTimestamp={activityTimestamp} className="h-1.5 w-1.5" />
+          <ActivityLight lastActivityTimestamp={activityTimestamp} />
           <LiveTimeAgo timestamp={activityTimestamp} noTooltip />
         </div>
       </TooltipTrigger>

@@ -319,7 +319,7 @@ describe("TrashContainer", () => {
 
     // Advance past the 250ms safety timeout (DURATION_200 + 50). In jsdom
     // `animationend` doesn't fire via dispatchEvent, so the safety timeout
-    // is the testable cleanup path — same as AgentStatusIndicator.
+    // is the testable cleanup path.
     act(() => {
       vi.advanceTimersByTime(300);
     });

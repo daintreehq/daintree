@@ -99,6 +99,7 @@ const config: KnipConfig = {
     "src/components/Worktree/__preview__/sessions.tsx",
     "src/components/Worktree/__preview__/alarmPill.tsx",
     "src/components/Worktree/__preview__/forgeBadges.tsx",
+    "src/components/Worktree/__preview__/activityLight.tsx",
     "src/components/Project/__preview__/preview.tsx",
     "src/components/Project/__preview__/projectIdentityEditor.tsx",
     "src/components/TerminalRecipe/__preview__/recipes.tsx",

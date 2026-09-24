@@ -315,9 +315,12 @@ describe("CommitInfoTooltip while open", () => {
       />
     );
     expect(screen.getByText(/^Last active just now ·/)).toBeDefined();
-    act(() => {
-      vi.advanceTimersByTime(3 * 60_000);
-    });
+    // One act() per minute, so each flip re-arms the next as it does live.
+    for (let minute = 0; minute < 3; minute++) {
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+    }
     expect(screen.getByText(/^Last active 3 minutes ago ·/)).toBeDefined();
   });
 

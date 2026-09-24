@@ -50,23 +50,41 @@ interface AgentPipDescriptor {
 }
 
 // Local mapping that includes "working" — broader than the shared
-// agentStateDotColor() in AgentStatusIndicator, which deliberately omits
-// passive states for the worktree tray. Here the toolbar button is the only
-// chrome surfacing assistant state when the panel is closed, so working and
-// directing both earn the green pip alongside the yellow waiting pip.
+// agentStateDotColor() in terminalStateConfig, which deliberately omits
+// passive states for the agent buttons. Here the toolbar button is the only
+// chrome surfacing assistant state when the panel is closed, so working earns
+// a pip too. Each state keeps the hue of its canonical glyph.
 const AGENT_PIP_BY_STATE = {
   working: { className: "bg-state-working", tooltip: "Assistant is working" },
-  directing: { className: "bg-state-working", tooltip: "Assistant is working" },
+  directing: { className: "bg-category-blue", tooltip: "You're directing the assistant" },
   waiting: { className: "bg-state-waiting", tooltip: "Assistant is waiting" },
 } as const satisfies Record<
   Extract<AgentState, "working" | "directing" | "waiting">,
   AgentPipDescriptor
 >;
 
+// Waiting is the only request for the user, so it outranks everything; a
+// state that earns a pip outranks one that does not, whichever lane it is in.
+const ASSISTANT_PIP_PRIORITY = [
+  "waiting",
+  "working",
+  "directing",
+] as const satisfies readonly AgentState[];
+
+function mostDemandingState(states: readonly (AgentState | null)[]): AgentState | null {
+  for (const candidate of ASSISTANT_PIP_PRIORITY) {
+    if (states.includes(candidate)) return candidate;
+  }
+  return states.find((state) => state !== null) ?? null;
+}
+
 function describeAgentPip(state: AgentState | null | undefined): AgentPipDescriptor | null {
   if (state == null) return null;
   return (AGENT_PIP_BY_STATE as Partial<Record<AgentState, AgentPipDescriptor>>)[state] ?? null;
 }
+
+const laneKey = (terminalId: string, state: AgentState | null) =>
+  `${terminalId}\u0000${state ?? ""}`;
 
 export function ToolbarAssistantButton({
   "data-toolbar-item": dataToolbarItem,
@@ -91,46 +109,46 @@ export function ToolbarAssistantButton({
   // waiting" is the whole point of the pip, and reporting only the active lane
   // would hide exactly the session the user has navigated away from.
   const assistantTerminalIds = useHelpPanelStore(useShallow(selectSlotTerminalIds));
-  const agentState = usePanelStore((s) => {
-    let best: AgentState | null = null;
-    for (const terminalId of assistantTerminalIds) {
-      const p = s.panelsById[terminalId];
-      if (!p || !isPtyPanel(p)) continue;
-      const state = p.agentState ?? null;
-      if (state === null) continue;
-      // "waiting" outranks everything: it is the only state that is a request
-      // for the user. Otherwise first live lane wins.
-      if (state === "waiting") return state;
-      best ??= state;
-    }
-    return best;
-  });
+  const laneStates = usePanelStore(
+    useShallow((s) =>
+      assistantTerminalIds.map((terminalId) => {
+        const p = s.panelsById[terminalId];
+        return p && isPtyPanel(p) ? (p.agentState ?? null) : null;
+      })
+    )
+  );
+  const agentState = mostDemandingState(laneStates);
   const mcp = useMcpReadiness();
   const shortcut = useEffectiveCombo("help.togglePanel");
   const ariaShortcut = useAriaKeyshortcuts("help.togglePanel");
   const hintHover = useShortcutHintHover("help.togglePanel");
 
-  // "Mark as read" semantics for the agent pip: track the (terminalId, state)
-  // tuple the user last saw while the panel was open so the pip only surfaces
-  // unread *changes* while the panel is closed. Scoping to terminalId means a
-  // respawned assistant landing on the same state value still reads as unread
-  // — a fresh session is always a new event. While the panel is open we keep
-  // the marker in lockstep with the live state, so closing freezes it at
-  // whatever the user just saw and closing without further change leaves the
-  // pip hidden.
-  const [lastSeenMarker, setLastSeenMarker] = useState<{
-    terminalKey: string;
-    state: AgentState | null;
-  } | null>(null);
-  // Identity is the whole set of lanes, not one id (#12108): opening or closing
-  // a session changes what the pip is reporting on, so a marker taken against
-  // the old set must stop counting as "already read".
-  const assistantTerminalKey = assistantTerminalIds.join("\u0000");
+  // "Mark as read" semantics for the agent pip: remember every (terminalId,
+  // state) pair the user saw while the panel was open, so the pip only surfaces
+  // unread *changes* while the panel is closed. Per lane, not per aggregate
+  // (#12108): with one lane already acknowledged as waiting, a second lane
+  // that starts waiting is a new request and must not hide behind the first.
+  // Scoping to terminalId means a respawned assistant landing on the same state
+  // value still reads as unread — a fresh session is always a new event. While
+  // the panel is open the set tracks the live lanes. While it is closed a lane
+  // keeps its acknowledgement only until its state moves: waiting, then
+  // working, then waiting again is a second request, not the one already read.
+  const laneKeys = assistantTerminalIds.map((terminalId, i) =>
+    laneKey(terminalId, laneStates[i] ?? null)
+  );
+  const laneKeysJoined = laneKeys.join("\u0001");
+  const [seenLaneKeys, setSeenLaneKeys] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => {
-    if (isVisible) {
-      setLastSeenMarker({ terminalKey: assistantTerminalKey, state: agentState });
-    }
-  }, [isVisible, assistantTerminalKey, agentState]);
+    const current = laneKeysJoined ? laneKeysJoined.split("\u0001") : [];
+    setSeenLaneKeys((seen) => {
+      if (isVisible) return new Set(current);
+      const stillSeen = current.filter((key) => seen.has(key));
+      return stillSeen.length === seen.size ? seen : new Set(stillSeen);
+    });
+  }, [isVisible, laneKeysJoined]);
+  const unreadState = mostDemandingState(
+    laneStates.filter((_, i) => !seenLaneKeys.has(laneKeys[i]!))
+  );
 
   const handleClick = useCallback(() => {
     suppressSidebarResizes();
@@ -147,17 +165,13 @@ export function ToolbarAssistantButton({
   }, [toggle, isOpen]);
 
   const pip = describePip(mcp);
-  const agentPip = describeAgentPip(agentState);
+  const agentPip = describeAgentPip(unreadState);
   // The MCP-health pip takes precedence — when it's showing, the agent pip
   // would compete for the same corner. The agent pip is suppressed while the
-  // panel is open (the in-panel header indicator already conveys state) and
-  // also when the live state matches what the user last saw — once read, it
-  // stays quiet until a real state change.
-  const isAcknowledged =
-    lastSeenMarker !== null &&
-    lastSeenMarker.terminalKey === assistantTerminalKey &&
-    lastSeenMarker.state === agentState;
-  const showAgentPip = !pip && agentPip !== null && !isVisible && !isAcknowledged;
+  // panel is open (the in-panel header indicator already conveys state), and
+  // it reports only lanes whose state the user has not yet seen — once read, a
+  // lane stays quiet until it really changes.
+  const showAgentPip = !pip && agentPip !== null && !isVisible;
   // Subject plus status, never "Open/Close … — status": joined to an action
   // verb, the status read as the reason to take it (#12509). aria-pressed
   // already carries open/closed, and toggle labels don't change with state.

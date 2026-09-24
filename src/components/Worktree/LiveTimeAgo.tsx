@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import { scheduleFlip } from "@/utils/flipScheduler";
+import { useWallClock } from "@/hooks/useWallClock";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isValidPastTimestamp } from "@/utils/timestamps";
@@ -111,27 +110,21 @@ export function msUntilNextFlip(diffMs: number, now: number): number {
   return Math.min(untilUnit(WEEK), 30 * DAY - diffMs);
 }
 
+function nextLabelDelay(timestamp: number | null | undefined, now: number): number | null {
+  if (!isValidPastTimestamp(timestamp, now)) return null;
+  const delay = msUntilNextFlip(now - timestamp, now);
+  return document.body.dataset.performanceMode === "true"
+    ? Math.max(delay, PERFORMANCE_MODE_FLOOR)
+    : delay;
+}
+
 export function LiveTimeAgo({ timestamp, className, noTooltip }: LiveTimeAgoProps) {
-  const [tick, setTick] = useState(0);
+  const now = useWallClock(timestamp, (at) => nextLabelDelay(timestamp, at));
 
-  useEffect(() => {
-    const now = Date.now();
-    if (!isValidPastTimestamp(timestamp, now)) return;
-
-    let delay = msUntilNextFlip(now - timestamp, now);
-    if (document.body.dataset.performanceMode === "true") {
-      delay = Math.max(delay, PERFORMANCE_MODE_FLOOR);
-    }
-
-    return scheduleFlip(delay, () => setTick((n) => n + 1));
-  }, [timestamp, tick]);
-
-  if (!isValidPastTimestamp(timestamp)) {
+  if (!isValidPastTimestamp(timestamp, now)) {
     return null;
   }
 
-  void tick;
-  const now = Date.now();
   const diffMs = now - timestamp;
   const { label, fullLabel, isAbsolute } = formatTimeAgo(diffMs);
   const isoDate = new Date(timestamp).toISOString();

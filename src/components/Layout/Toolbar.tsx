@@ -59,7 +59,7 @@ import {
   type PluginTrayGroup,
 } from "./PluginTrayButton";
 import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
-import { deriveAgentDominantStates } from "@/lib/agentDominantStates";
+import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
 import { DockLaunchButton } from "./DockLaunchButton";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useLauncherData } from "./useLauncherData";
@@ -117,9 +117,13 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useShallow } from "zustand/react/shallow";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
-import { agentStateDotColor } from "@/components/Worktree/AgentStatusIndicator";
+import {
+  agentStateDotColor,
+  STATE_LABELS,
+  type AttentionAgentState,
+} from "@/components/Worktree/terminalStateConfig";
 import { notify } from "@/lib/notify";
-import type { CliAvailability, AgentSettings, AgentState } from "@shared/types";
+import type { CliAvailability, AgentSettings } from "@shared/types";
 import { isGitBackedProject } from "@shared/types";
 import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
 import { isAgentPinned, isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
@@ -218,7 +222,7 @@ interface OverflowMenuProps {
   // Per-session agent states behind the badge, already worded — derived by
   // the same rule as `severity`, so the name never says less than the dot.
   agentObservations: readonly string[];
-  agentDominantStates: Map<string, AgentState | null>;
+  agentAttentionStates: Map<string, AttentionAgentState | null>;
   hasActiveWorktree: boolean;
   forgeStatsRef: React.RefObject<ForgeStatsHandle | null>;
   // Display name of the resolved forge provider, or null when none resolves
@@ -260,7 +264,7 @@ function OverflowMenu({
   errorCount,
   notificationUnreadCount,
   agentObservations,
-  agentDominantStates,
+  agentAttentionStates,
   hasActiveWorktree,
   forgeStatsRef,
   forgeProviderName,
@@ -493,15 +497,13 @@ function OverflowMenu({
             return [
               ...inlinedAgents.map((agentId) => {
                 const agentMeta = OVERFLOW_MENU_META[agentId]!;
-                const dominantState = agentDominantStates.get(agentId) ?? null;
-                const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
                 return (
                   <AgentOverflowItem
                     key={`launcher-${agentId}`}
                     id={agentId}
                     label={agentMeta.label}
                     Icon={agentMeta.icon}
-                    dotColor={dotColor}
+                    attentionState={agentAttentionStates.get(agentId) ?? null}
                     onSelect={() => overflowActions[agentId]?.()}
                   />
                 );
@@ -528,15 +530,13 @@ function OverflowMenu({
           const meta = OVERFLOW_MENU_META[id] ?? dynamicOverflowMeta[id];
           if (!meta) return [];
           if (isBuiltInAgentId(id)) {
-            const dominantState = agentDominantStates.get(id) ?? null;
-            const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
             return [
               <AgentOverflowItem
                 key={id}
                 id={id}
                 label={meta.label}
                 Icon={meta.icon}
-                dotColor={dotColor}
+                attentionState={agentAttentionStates.get(id) ?? null}
                 onSelect={() => overflowActions[id]?.()}
               />,
             ];
@@ -574,16 +574,17 @@ function AgentOverflowItem({
   id,
   label,
   Icon,
-  dotColor,
+  attentionState,
   onSelect,
 }: {
   id: string;
   label: string;
   Icon: React.ComponentType<{ className?: string }>;
-  dotColor: string | null;
+  attentionState: AttentionAgentState | null;
   onSelect: () => void;
 }) {
   const shortcut = useKeybindingDisplay(`agent.${id}`);
+  const dotColor = attentionState ? agentStateDotColor(attentionState) : null;
   return (
     <DropdownMenuItem onClick={onSelect}>
       <span className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center">
@@ -592,13 +593,20 @@ function AgentOverflowItem({
           <span
             aria-hidden="true"
             className={cn(
-              "status-mark absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-surface-canvas",
+              "toolbar-menu-pip status-mark absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-surface-canvas",
               dotColor
             )}
           />
         )}
       </span>
-      <span className="flex-1">{label}</span>
+      <span className="flex-1">
+        {label}
+        {/* The pip is aria-hidden; the row's name carries what it draws, in
+            the agent button's own "— waiting" form. */}
+        {attentionState && dotColor && (
+          <span className="sr-only">{` — ${STATE_LABELS[attentionState]}`}</span>
+        )}
+      </span>
       {shortcut && <DropdownMenuShortcut>{shortcut}</DropdownMenuShortcut>}
     </DropdownMenuItem>
   );
@@ -661,13 +669,13 @@ export function Toolbar({
   // AgentButton) rather than extending useOverflowBadgeSeverity to return a
   // composite map (would risk the selector-identity churn of lesson #3730).
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
-  // Per-agent dominant state across panels in the active worktree, used to draw
+  // Per-agent pip state across panels in the active worktree, used to draw
   // the agent-state dot on overflow menu items. Shares the launcher's
   // derivation so the overflow dot matches the visible agent button; computed
-  // inside useShallow so agent ticks that don't change a dominant state don't
+  // inside useShallow so agent ticks that don't change a pip state don't
   // re-render the whole toolbar (issue #7451 pattern).
-  const agentDominantStates = usePanelStore(
-    useShallow((s) => deriveAgentDominantStates(s.panelsById, s.panelIds, activeWorktreeId))
+  const agentAttentionStates = usePanelStore(
+    useShallow((s) => deriveAgentAttentionStates(s.panelsById, s.panelIds, activeWorktreeId))
   );
 
   useEffect(() => {
@@ -2150,7 +2158,7 @@ export function Toolbar({
       errorCount={errorCount}
       notificationUnreadCount={notificationUnreadCount}
       agentObservations={agentObservations}
-      agentDominantStates={agentDominantStates}
+      agentAttentionStates={agentAttentionStates}
       hasActiveWorktree={!!activeWorktree}
       forgeStatsRef={forgeStatsRef}
       forgeProviderName={forgeProviderName}

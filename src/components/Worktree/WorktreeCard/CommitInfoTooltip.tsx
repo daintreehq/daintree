@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
 import { ActivityLight } from "../ActivityLight";
 import { isValidPastTimestamp } from "@/utils/timestamps";
 import { parseCommitBody } from "@/utils/commitMessage";
-import { scheduleFlip } from "@/utils/flipScheduler";
+import { useWallClock } from "@/hooks/useWallClock";
 import { CommitAuthorAvatar, type CommitAuthor } from "./CommitAuthorAvatar";
 
 export interface CommitInfoTooltipProps {
@@ -130,18 +129,12 @@ export function CommitInfoTooltip({
 }: CommitInfoTooltipProps) {
   // The card can stay open for as long as it is hovered or focused, so its
   // phrases keep time rather than freezing at the moment it opened.
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const now = Date.now();
+  const now = useWallClock(`${lastCommitTimestampMs}:${lastActivityTimestamp}`, (at) => {
     const valid = [lastCommitTimestampMs, lastActivityTimestamp].filter((ts): ts is number =>
-      isValidPastTimestamp(ts, now)
+      isValidPastTimestamp(ts, at)
     );
-    if (valid.length === 0) return;
-    return scheduleFlip(msUntilCardChanges(valid, now), () => setTick((n) => n + 1));
-  }, [lastCommitTimestampMs, lastActivityTimestamp, tick]);
-
-  void tick;
-  const now = Date.now();
+    return valid.length === 0 ? null : msUntilCardChanges(valid, at);
+  });
   const hasCommit = isValidPastTimestamp(lastCommitTimestampMs, now);
   const hasActivity = isValidPastTimestamp(lastActivityTimestamp, now);
   if (!hasCommit && !hasActivity) return null;
@@ -224,7 +217,7 @@ export function CommitInfoTooltip({
       {showActivity && (
         <div className={hasCommit ? "mt-2.5 border-t border-border-divider pt-2.5" : undefined}>
           <div className="flex items-center gap-1.5 text-2xs text-text-secondary">
-            <ActivityLight lastActivityTimestamp={lastActivityTimestamp} className="h-1.5 w-1.5" />
+            <ActivityLight lastActivityTimestamp={lastActivityTimestamp} />
             <span>
               Last active {activityPhrase} ·{" "}
               <time

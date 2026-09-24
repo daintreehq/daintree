@@ -582,30 +582,6 @@ body,
   will-change: opacity, transform;
 }
 
-/* Agent status indicator flash — single-shot scale+opacity on state transition.
- * Previously infinite (1.5s loop), now a 150ms one-shot driven by the consumer
- * toggling the class on state change (see AgentStatusIndicator).
- */
-@keyframes agent-pulse {
-  0% {
-    opacity: 0.7;
-    transform: scale(0.92);
-  }
-  60% {
-    opacity: 1;
-    transform: scale(1.06);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.animate-agent-pulse {
-  animation: agent-pulse var(--duration-150) var(--ease-out-expo) 1 both;
-  will-change: opacity, transform;
-}
-
 @keyframes checkbox-check-in {
   from {
     opacity: 0;
@@ -618,7 +594,7 @@ body,
 }
 
 /* The indicator mounts with this class already on it and keeps it for the whole
- * checked lifetime — unlike .animate-agent-pulse, which is dropped on
+ * checked lifetime — unlike a one-shot flash, which is dropped on
  * animationend. Hence `backwards` rather than `both`: it still pins the opening
  * frame to `from` (no flash of an opaque checkmark before the animation runs),
  * but releases the element on completion instead of parking a permanent
@@ -820,25 +796,6 @@ body,
   opacity: 0;
   animation: hint-fade-in 500ms ease-out forwards;
   will-change: opacity;
-}
-
-/* Agent status working state - pulsing animation. Animates opacity, not
-   color: color keyframes tick style-recalc + paint on the main thread for
-   every visible working badge — the steady state of this app, often across
-   many worktree cards at once — while opacity runs on the compositor. */
-@keyframes status-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.7;
-  }
-}
-
-.status-working {
-  color: var(--color-state-working);
-  animation: status-pulse 2s ease-in-out infinite;
 }
 
 /* Badge bump animation - for count/state changes */
@@ -1320,7 +1277,6 @@ body,
  */
 @variant reduce-motion {
   .animate-activity-pulse,
-  .animate-agent-pulse,
   .animate-checkbox-check,
   .animate-breathe,
   .animate-spin,
@@ -1329,7 +1285,6 @@ body,
   .animate-pulse-immediate,
   .animate-skeleton-shimmer,
   .animate-hint-fade-in,
-  .status-working,
   .animate-badge-bump,
   .animate-action-row-bump,
   .animate-activity-blip,
@@ -1501,9 +1456,7 @@ body,
   }
 
   .animate-activity-pulse,
-  .animate-agent-pulse,
   .animate-breathe,
-  .status-working,
   .panel-state-compiling,
   .panel-state-working {
     transition: none;
@@ -2457,7 +2410,6 @@ body[data-power-saving="true"] .animate-activity-pulse,
 body[data-power-saving="true"] .animate-breathe,
 body[data-power-saving="true"] .animate-pulse,
 body[data-power-saving="true"] .motion-safe\:animate-pulse,
-body[data-power-saving="true"] .status-working,
 body[data-power-saving="true"] .forge-status-error {
   animation: none;
   will-change: auto;
@@ -2483,7 +2435,6 @@ body[data-motion-rate="reduced"] .animate-activity-pulse,
 body[data-motion-rate="reduced"] .animate-breathe,
 body[data-motion-rate="reduced"] .animate-pulse,
 body[data-motion-rate="reduced"] .motion-safe\:animate-pulse,
-body[data-motion-rate="reduced"] .status-working,
 body[data-motion-rate="reduced"] .forge-status-error {
   animation-timing-function: steps(2, end);
 }

@@ -4,6 +4,7 @@ import { render, act, fireEvent } from "@testing-library/react";
 import { ToolbarAssistantButton } from "../ToolbarAssistantButton";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store";
+import { STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import type { McpRuntimeSnapshot } from "@shared/types";
 
 const mcpReadiness: () => McpRuntimeSnapshot = vi.fn((): McpRuntimeSnapshot => ({
@@ -154,21 +155,20 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     expect(pip!.getAttribute("data-agent-state")).toBe("working");
   });
 
-  it("renders a green pip when the assistant terminal's agentState is directing", () => {
+  it("renders directing as directing, not as work the assistant is doing", () => {
     setHelpPanel({ isOpen: false, terminalId: "t-2d" });
     setPanel("t-2d", "directing");
 
     const { queryByTestId, container } = render(<ToolbarAssistantButton />);
     const pip = queryByTestId("assistant-working-pip");
     expect(pip?.getAttribute("data-visible")).toBe("true");
-    expect(pip!.className).toMatch(/bg-state-working/);
     expect(pip!.getAttribute("data-agent-state")).toBe("directing");
-    // Coarse-signal design: directing intentionally surfaces as "working" in
-    // the toolbar tooltip — both signal "something is in flight" without
-    // proliferating tooltip variants.
-    expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
-      "Daintree Assistant — Assistant is working"
-    );
+    // Directing is the user's own prompt in progress. Painting it in the
+    // working hue, or naming it as work, reports something nobody observed.
+    expect(pip!.className).toContain(STATE_COLORS.directing.replace(/^text-/, "bg-"));
+    const label = container.querySelector("button")?.getAttribute("aria-label") ?? "";
+    expect(label).not.toMatch(/working/i);
+    expect(label).toMatch(/directing/i);
   });
 
   it("renders a yellow pip when the assistant terminal's agentState is waiting", () => {
@@ -329,6 +329,82 @@ describe("ToolbarAssistantButton — agent state pip", () => {
       useHelpPanelStore.setState({ isOpen: false });
     });
     expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
+  });
+
+  describe("several assistant lanes (#12108)", () => {
+    function setLanes(isOpen: boolean, terminalIds: string[]): void {
+      useHelpPanelStore.setState({
+        isOpen,
+        sessions: Object.fromEntries(
+          terminalIds.map((terminalId, slot) => [slot, { ...emptyLane(), terminalId }])
+        ),
+        activeSlot: 0,
+      });
+    }
+
+    it.each([
+      ["idle", "working"],
+      ["working", "idle"],
+    ])("reports a working lane whatever order it sits in (%s, %s)", (first, second) => {
+      setLanes(false, ["lane-a", "lane-b"]);
+      setPanel("lane-a", first);
+      setPanel("lane-b", second);
+
+      const { queryByTestId } = render(<ToolbarAssistantButton />);
+      const pip = queryByTestId("assistant-working-pip");
+      expect(pip?.getAttribute("data-visible")).toBe("true");
+      expect(pip!.className).toMatch(/bg-state-working/);
+    });
+
+    it("surfaces a second lane that starts waiting after the first was acknowledged", () => {
+      setLanes(false, ["lane-a", "lane-b"]);
+      setPanel("lane-a", "waiting");
+      setPanel("lane-b", "working");
+
+      const { queryByTestId, container } = render(<ToolbarAssistantButton />);
+      act(() => useHelpPanelStore.setState({ isOpen: true }));
+      act(() => useHelpPanelStore.setState({ isOpen: false }));
+      expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
+
+      act(() => setPanel("lane-b", "waiting"));
+      const pip = queryByTestId("assistant-working-pip");
+      expect(pip?.getAttribute("data-visible")).toBe("true");
+      expect(pip!.className).toMatch(/bg-state-waiting/);
+      expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
+        "Daintree Assistant — Assistant is waiting"
+      );
+    });
+
+    it("surfaces a lane that waits again after working, though its first wait was read", () => {
+      setLanes(false, ["lane-a"]);
+      setPanel("lane-a", "waiting");
+
+      const { queryByTestId, container } = render(<ToolbarAssistantButton />);
+      act(() => useHelpPanelStore.setState({ isOpen: true }));
+      act(() => useHelpPanelStore.setState({ isOpen: false }));
+      expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
+
+      act(() => setPanel("lane-a", "working"));
+      act(() => setPanel("lane-a", "waiting"));
+      const pip = queryByTestId("assistant-working-pip");
+      expect(pip?.getAttribute("data-visible")).toBe("true");
+      expect(pip!.className).toMatch(/bg-state-waiting/);
+      expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
+        "Daintree Assistant — Assistant is waiting"
+      );
+    });
+
+    it("keeps an acknowledged lane quiet when another lane closes", () => {
+      setLanes(false, ["lane-a", "lane-b"]);
+      setPanel("lane-a", "working");
+      setPanel("lane-b", "idle");
+
+      const { queryByTestId } = render(<ToolbarAssistantButton />);
+      act(() => useHelpPanelStore.setState({ isOpen: true }));
+      act(() => useHelpPanelStore.setState({ isOpen: false }));
+      act(() => setLanes(false, ["lane-a"]));
+      expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
+    });
   });
 
   describe("gesture-hidden desync", () => {

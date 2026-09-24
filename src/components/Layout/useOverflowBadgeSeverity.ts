@@ -5,7 +5,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
-import { agentStateDotColor } from "@/components/Worktree/AgentStatusIndicator";
+import { agentStateDotColor } from "@/components/Worktree/terminalStateConfig";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 import { LAUNCHABLE_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentState, PanelInstance } from "@shared/types";
