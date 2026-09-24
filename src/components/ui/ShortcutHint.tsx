@@ -15,12 +15,24 @@ import { KbdChord } from "./Kbd";
 const AUTO_DISMISS_MS = 2500;
 const OFFSET_X = 12;
 const OFFSET_Y = 12;
+/** Space between a trigger's edge and the card beside it. */
+const TRIGGER_GAP = 6;
 /** Room kept between the card and every viewport edge. */
 const GUTTER = 8;
 /** Slack around the trigger and card before a hover hint counts as left. */
 const HOVER_SLOP = 4;
 /** Used for the first layout pass only; placement settles on the measured card. */
 const SIZE_ESTIMATE = { width: 200, height: 32 };
+
+/** The smallest rect covering both, so the path between them counts too. */
+function hull(a: ShortcutHintRect, b: ShortcutHintRect): ShortcutHintRect {
+  return {
+    left: Math.min(a.left, b.left),
+    top: Math.min(a.top, b.top),
+    right: Math.max(a.right, b.right),
+    bottom: Math.max(a.bottom, b.bottom),
+  };
+}
 
 function contains(rect: ShortcutHintRect, x: number, y: number): boolean {
   return (
@@ -37,6 +49,10 @@ export function ShortcutHint() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState(SIZE_ESTIMATE);
+  const [viewport, setViewport] = useState(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }));
   const skipMotion = useShouldSkipMotion();
   // Keep the last visible hint in state so we can keep rendering it while
   // the exit animation plays (after activeHint has cleared).
@@ -80,16 +96,16 @@ export function ShortcutHint() {
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [activeHint, hide]);
 
-  // A hover hint lives while the pointer is on its trigger or on the card
-  // itself. The card takes no pointer events, so this tracks coordinates
-  // rather than enter/leave on the card.
+  // A hover hint lives while the pointer is on its trigger, on the card, or
+  // crossing between the two. The card takes no pointer events, so this tracks
+  // coordinates rather than enter/leave on the card.
   useEffect(() => {
     if (!activeHint || activeHint.origin !== "hover") return;
     const trigger = activeHint.trigger;
     const onPointerMove = (e: PointerEvent) => {
       const card = cardRef.current?.getBoundingClientRect();
-      if (trigger && contains(trigger, e.clientX, e.clientY)) return;
-      if (card && contains(card, e.clientX, e.clientY)) return;
+      const region = trigger && card ? hull(trigger, card) : (trigger ?? card);
+      if (region && contains(region, e.clientX, e.clientY)) return;
       hide();
     };
     const onPointerDown = () => hide();
@@ -105,6 +121,16 @@ export function ShortcutHint() {
       document.removeEventListener("pointerout", onLeaveWindow, true);
     };
   }, [activeHint, hide]);
+
+  // A hover or focus hint can stay up indefinitely, so it has to follow the
+  // window rather than keep the position it was given at the old size.
+  useEffect(() => {
+    if (!shouldRender) return;
+    const onResize = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [shouldRender]);
 
   const hint = lastHint;
 
@@ -140,18 +166,15 @@ export function ShortcutHint() {
 
   const title = actionService.getTitle(hint.actionId as ActionId).trim();
 
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const maxLeft = Math.max(GUTTER, vw - size.width - GUTTER);
+  const maxLeft = Math.max(GUTTER, viewport.width - size.width - GUTTER);
   const left = Math.min(Math.max(hint.x + OFFSET_X, GUTTER), maxLeft);
-  // Above the pointer by default; below the trigger (or pointer) when the top
-  // edge would cut it off.
-  let top = hint.y - OFFSET_Y - size.height;
-  if (top < GUTTER) {
-    const below = hint.trigger ? hint.trigger.bottom : hint.y + OFFSET_Y;
-    top = below + OFFSET_Y / 2;
-  }
-  top = Math.max(GUTTER, Math.min(top, vh - size.height - GUTTER));
+  // Above the trigger when there is one, so the card never sits over the
+  // control it describes; above the pointer otherwise. Below either when the
+  // top edge would cut it off.
+  const trigger = hint.trigger;
+  let top = trigger ? trigger.top - TRIGGER_GAP - size.height : hint.y - OFFSET_Y - size.height;
+  if (top < GUTTER) top = trigger ? trigger.bottom + TRIGGER_GAP : hint.y + OFFSET_Y + TRIGGER_GAP;
+  top = Math.max(GUTTER, Math.min(top, viewport.height - size.height - GUTTER));
 
   return (
     <>
@@ -167,7 +190,7 @@ export function ShortcutHint() {
             "rounded-[var(--radius-md)] surface-overlay shadow-overlay",
             "text-xs text-text-primary",
             !skipMotion && "transition-[opacity,translate]",
-            !skipMotion && (isVisible ? "duration-150 ease-out" : "duration-100 ease-in"),
+            !skipMotion && (isVisible ? "duration-150 ease-out" : "duration-100 ease-out"),
             isVisible ? "opacity-100" : "opacity-0",
             !skipMotion && !isVisible && "translate-y-1"
           )}

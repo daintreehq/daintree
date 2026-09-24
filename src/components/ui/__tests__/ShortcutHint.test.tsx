@@ -223,6 +223,34 @@ describe("ShortcutHint lifetime", () => {
     move(400, 400);
     expect(shortcutHintStore.getState().activeHint).toBeNull();
   });
+
+  it("keeps a hover hint along the whole path from its trigger onto the card", () => {
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(200);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(30);
+    render(<ShortcutHint />);
+    const trigger = { left: 300, top: 300, right: 332, bottom: 332 };
+    activate("Cmd+K", "hover", { x: 310, y: 325, trigger });
+    const box = card()!.getBoundingClientRect();
+    // jsdom lays nothing out, so read the placement back from the style.
+    const cardTop = parseFloat(card()!.style.top);
+    const cardBottom = cardTop + 30;
+    vi.spyOn(card()!, "getBoundingClientRect").mockReturnValue({
+      ...box,
+      left: parseFloat(card()!.style.left),
+      right: parseFloat(card()!.style.left) + 200,
+      top: cardTop,
+      bottom: cardBottom,
+    });
+    expect(cardBottom).toBeLessThan(trigger.top);
+
+    for (let y = trigger.top + 10; y >= cardTop + 5; y -= 1) {
+      act(() => {
+        window.dispatchEvent(new PointerEvent("pointermove", { clientX: 316, clientY: y }));
+      });
+      expect(shortcutHintStore.getState().activeHint, `dropped at y=${y}`).not.toBeNull();
+    }
+    vi.restoreAllMocks();
+  });
 });
 
 describe("ShortcutHint placement", () => {
@@ -261,6 +289,35 @@ describe("ShortcutHint placement", () => {
     expect(top).toBeGreaterThanOrEqual(8);
     expect(left + CARD.width).toBeLessThanOrEqual(window.innerWidth - 8);
     expect(top + CARD.height).toBeLessThanOrEqual(window.innerHeight - 8);
+  });
+
+  it("never covers the trigger that raised it", () => {
+    render(<ShortcutHint />);
+    for (const trigger of [
+      { left: 200, top: 300, right: 232, bottom: 332 },
+      { left: 200, top: 2, right: 232, bottom: 34 },
+    ]) {
+      // Pointer entered near the bottom of the button.
+      activate("Cmd+Shift+P", "hover", { x: 210, y: trigger.bottom - 2, trigger });
+      const top = parseFloat(card()!.style.top);
+      const overlaps = top < trigger.bottom && top + CARD.height > trigger.top;
+      expect(overlaps).toBe(false);
+    }
+  });
+
+  it("re-clamps an open hint when the window narrows", () => {
+    render(<ShortcutHint />);
+    activate("Cmd+Shift+P", "focus", { x: window.innerWidth - 40, y: 300 });
+    const original = window.innerWidth;
+    try {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 500 });
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      expect(parseFloat(card()!.style.left) + CARD.width).toBeLessThanOrEqual(500 - 8);
+    } finally {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: original });
+    }
   });
 
   it("never covers the pointer it was raised at", () => {
