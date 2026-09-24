@@ -65,6 +65,7 @@ const onboarding: OnboardingState = {
     celebrationShown: false,
     items: checklistItems(),
   },
+  tour: { completed: false, launcherSessions: 0, muted: false, lastChapter: 0 },
 };
 
 const checklistListeners = new Set<(next: ChecklistState) => void>();
@@ -170,6 +171,9 @@ installPreviewShims({
       onboarding.checklist.items[item] = true;
       pushChecklist();
     },
+    markTourLauncherShown: async () => structuredClone(onboarding.tour),
+    setTourProgress: async () => structuredClone(onboarding.tour),
+    setTourMuted: async () => structuredClone(onboarding.tour),
     markAgentsSeen: async () => structuredClone(onboarding),
     recordAgentFirstSeen: async () => structuredClone(onboarding),
     onChecklistPush: (callback: (next: ChecklistState) => void) => {

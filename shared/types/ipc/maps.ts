@@ -173,6 +173,20 @@ export interface ChecklistState {
   items: ChecklistItems;
 }
 
+export interface TourOnboardingState {
+  completed: boolean;
+  /** App sessions in which the empty-grid tour launcher has been shown. */
+  launcherSessions: number;
+  muted: boolean;
+  /** Chapter the user last reached, so a reopened tour resumes there. */
+  lastChapter: number;
+}
+
+export interface TourProgressUpdate {
+  completed?: boolean;
+  lastChapter?: number;
+}
+
 export interface OnboardingState {
   schemaVersion: number;
   completed: boolean;
@@ -186,6 +200,7 @@ export interface OnboardingState {
   welcomeCardDismissed: boolean;
   setupBannerDismissed: boolean;
   checklist: ChecklistState;
+  tour: TourOnboardingState;
 }
 
 /**

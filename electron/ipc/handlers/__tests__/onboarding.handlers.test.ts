@@ -51,7 +51,7 @@ vi.mock("../../../services/TelemetryService.js", () => ({
   setOnboardingCompleteTag: setOnboardingCompleteTagMock,
 }));
 
-import { registerOnboardingHandlers } from "../onboarding.js";
+import { registerOnboardingHandlers, resetTourLauncherSessionForTests } from "../onboarding.js";
 
 function getHandler(channel: string) {
   return ipcMainMock.handle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
@@ -250,5 +250,70 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
     setOnboardingCompleteTagMock.mockClear();
     complete(null);
     expect(setOnboardingCompleteTagMock).toHaveBeenCalledWith(true);
+  });
+
+  describe("tour", () => {
+    beforeEach(() => {
+      resetTourLauncherSessionForTests();
+    });
+
+    it("defaults tour state for stores written before the tour existed", () => {
+      registerOnboardingHandlers();
+      seedOnboarding();
+      const state = getHandler("onboarding:get")(null) as { tour: Record<string, unknown> };
+      expect(state.tour).toEqual({
+        completed: false,
+        launcherSessions: 0,
+        muted: false,
+        lastChapter: 0,
+      });
+    });
+
+    it("drops malformed persisted tour fields", () => {
+      registerOnboardingHandlers();
+      seedOnboarding({
+        tour: { completed: "yes", launcherSessions: -4, muted: 1, lastChapter: 2.7 },
+      });
+      const state = getHandler("onboarding:get")(null) as { tour: Record<string, unknown> };
+      expect(state.tour).toEqual({
+        completed: false,
+        launcherSessions: 0,
+        muted: false,
+        lastChapter: 2,
+      });
+    });
+
+    it("counts the launcher once per app session however many views show it", () => {
+      registerOnboardingHandlers();
+      seedOnboarding({
+        tour: { completed: false, launcherSessions: 1, muted: false, lastChapter: 0 },
+      });
+      const mark = getHandler("onboarding:tour-mark-launcher-shown");
+      expect((mark(null) as { launcherSessions: number }).launcherSessions).toBe(2);
+      expect((mark(null) as { launcherSessions: number }).launcherSessions).toBe(2);
+
+      resetTourLauncherSessionForTests();
+      expect((mark(null) as { launcherSessions: number }).launcherSessions).toBe(3);
+    });
+
+    it("keeps completion sticky while recording the last chapter", () => {
+      registerOnboardingHandlers();
+      seedOnboarding();
+      const progress = getHandler("onboarding:tour-set-progress");
+      progress(null, { completed: true, lastChapter: 5 });
+      const after = progress(null, { completed: false, lastChapter: 1 }) as {
+        completed: boolean;
+        lastChapter: number;
+      };
+      expect(after).toMatchObject({ completed: true, lastChapter: 1 });
+    });
+
+    it("persists the mute preference", () => {
+      registerOnboardingHandlers();
+      seedOnboarding();
+      getHandler("onboarding:tour-set-muted")(null, true);
+      const state = getHandler("onboarding:get")(null) as { tour: { muted: boolean } };
+      expect(state.tour.muted).toBe(true);
+    });
   });
 });

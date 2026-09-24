@@ -858,6 +858,9 @@ export const CHANNELS = {
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
   ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN: "onboarding:checklist-mark-celebration-shown",
   ONBOARDING_CHECKLIST_PUSH: "onboarding:checklist-push",
+  ONBOARDING_TOUR_MARK_LAUNCHER_SHOWN: "onboarding:tour-mark-launcher-shown",
+  ONBOARDING_TOUR_SET_PROGRESS: "onboarding:tour-set-progress",
+  ONBOARDING_TOUR_SET_MUTED: "onboarding:tour-set-muted",
 
   // Milestone channels
   MILESTONES_GET: "milestones:get",

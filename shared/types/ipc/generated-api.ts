@@ -491,6 +491,9 @@ export interface GeneratedElectronAPI {
     markToastSeen(
       ...args: IpcInvokeMap["onboarding:mark-toast-seen"]["args"]
     ): Promise<IpcInvokeMap["onboarding:mark-toast-seen"]["result"]>;
+    markTourLauncherShown(
+      ...args: IpcInvokeMap["onboarding:tour-mark-launcher-shown"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:tour-mark-launcher-shown"]["result"]>;
     markWaitingNudgeSeen(
       ...args: IpcInvokeMap["onboarding:mark-waiting-nudge-seen"]["args"]
     ): Promise<IpcInvokeMap["onboarding:mark-waiting-nudge-seen"]["result"]>;
@@ -500,6 +503,12 @@ export interface GeneratedElectronAPI {
     setStep(
       ...args: IpcInvokeMap["onboarding:set-step"]["args"]
     ): Promise<IpcInvokeMap["onboarding:set-step"]["result"]>;
+    setTourMuted(
+      ...args: IpcInvokeMap["onboarding:tour-set-muted"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:tour-set-muted"]["result"]>;
+    setTourProgress(
+      ...args: IpcInvokeMap["onboarding:tour-set-progress"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:tour-set-progress"]["result"]>;
   };
   osDnd: {
     getState(

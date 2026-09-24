@@ -8,6 +8,8 @@ import type {
   ChecklistItemId,
   ChecklistState,
   OnboardingState,
+  TourOnboardingState,
+  TourProgressUpdate,
 } from "../../../shared/types/ipc/maps.js";
 import { isE2ESkipFirstRunDialogs } from "../../setup/runtimeFlags.js";
 
@@ -24,7 +26,38 @@ const DEFAULT_CHECKLIST: ChecklistState = {
   },
 };
 
+const DEFAULT_TOUR: TourOnboardingState = {
+  completed: false,
+  launcherSessions: 0,
+  muted: false,
+  lastChapter: 0,
+};
+
 const SKIP_E2E = isE2ESkipFirstRunDialogs;
+
+// The empty-grid launcher counts app sessions, not renders or project views:
+// every project view mounts its own grid, and each would otherwise bump it.
+let tourLauncherCountedThisSession = false;
+
+/** Test seam — the session latch is module state. */
+export function resetTourLauncherSessionForTests(): void {
+  tourLauncherCountedThisSession = false;
+}
+
+function normalizeCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+function normalizeTour(raw: unknown): TourOnboardingState {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...DEFAULT_TOUR };
+  const tour = raw as Record<string, unknown>;
+  return {
+    completed: tour.completed === true,
+    launcherSessions: normalizeCount(tour.launcherSessions),
+    muted: tour.muted === true,
+    lastChapter: normalizeCount(tour.lastChapter),
+  };
+}
 
 function normalizeAvailabilityFirstSeen(raw: unknown): Record<string, number> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
@@ -61,6 +94,7 @@ function getOnboardingState(): OnboardingState {
           ranSecondParallelAgent: true,
         },
       },
+      tour: { ...DEFAULT_TOUR, completed: true },
     };
   }
   const raw = store.get("onboarding") as StoredOnboardingState | undefined;
@@ -78,6 +112,7 @@ function getOnboardingState(): OnboardingState {
       welcomeCardDismissed: false,
       setupBannerDismissed: false,
       checklist: DEFAULT_CHECKLIST,
+      tour: { ...DEFAULT_TOUR },
     };
   }
   const checklist = raw.checklist ?? DEFAULT_CHECKLIST;
@@ -104,6 +139,7 @@ function getOnboardingState(): OnboardingState {
         ranSecondParallelAgent: mergedItems.ranSecondParallelAgent ?? false,
       },
     },
+    tour: normalizeTour((raw as { tour?: unknown }).tour),
   };
 }
 
@@ -228,6 +264,42 @@ export const onboardingNamespace = defineIpcNamespace({
       ONBOARDING_METHOD_CHANNELS.markChecklistCelebrationShown,
       (): void => {
         store.set("onboarding.checklist.celebrationShown", true);
+      }
+    ),
+    markTourLauncherShown: op(
+      ONBOARDING_METHOD_CHANNELS.markTourLauncherShown,
+      (): TourOnboardingState => {
+        const tour = getOnboardingState().tour;
+        if (SKIP_E2E || tourLauncherCountedThisSession) return tour;
+        tourLauncherCountedThisSession = true;
+        const next = { ...tour, launcherSessions: tour.launcherSessions + 1 };
+        store.set("onboarding.tour", next);
+        return next;
+      }
+    ),
+    setTourProgress: op(
+      ONBOARDING_METHOD_CHANNELS.setTourProgress,
+      (update: TourProgressUpdate): TourOnboardingState => {
+        const tour = getOnboardingState().tour;
+        if (SKIP_E2E || !update || typeof update !== "object") return tour;
+        const next = { ...tour };
+        // Completion is sticky: replaying the tour later never un-completes it.
+        if (update.completed === true) next.completed = true;
+        if (typeof update.lastChapter === "number" && Number.isFinite(update.lastChapter)) {
+          next.lastChapter = normalizeCount(update.lastChapter);
+        }
+        store.set("onboarding.tour", next);
+        return next;
+      }
+    ),
+    setTourMuted: op(
+      ONBOARDING_METHOD_CHANNELS.setTourMuted,
+      (muted: boolean): TourOnboardingState => {
+        const tour = getOnboardingState().tour;
+        if (SKIP_E2E) return tour;
+        const next = { ...tour, muted: muted === true };
+        store.set("onboarding.tour", next);
+        return next;
       }
     ),
   },

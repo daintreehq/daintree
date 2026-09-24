@@ -404,6 +404,12 @@ export interface StoreSchema {
         ranSecondParallelAgent: boolean;
       };
     };
+    tour?: {
+      completed: boolean;
+      launcherSessions: number;
+      muted: boolean;
+      lastChapter: number;
+    };
   };
   orchestrationMilestones: Record<string, boolean>;
   shortcutHintCounts: Record<string, number>;
@@ -838,6 +844,12 @@ const storeOptions = {
           createdWorktree: false,
           ranSecondParallelAgent: false,
         },
+      },
+      tour: {
+        completed: false,
+        launcherSessions: 0,
+        muted: false,
+        lastChapter: 0,
       },
     },
     orchestrationMilestones: {},
