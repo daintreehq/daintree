@@ -2055,9 +2055,9 @@ describe("PilotView", () => {
       const workingCopy = help();
       fireEvent.click(exited!);
 
-      // Same title, so any difference is the exited caveat alone.
-      expect(help().startsWith(workingCopy)).toBe(true);
-      expect(help().length).toBeGreaterThan(workingCopy.length);
+      // Same title, so any difference is down to the exited run alone.
+      expect(help()).toContain("alpha");
+      expect(help()).not.toBe(workingCopy);
     });
 
     it("commits with Enter from the gate list, with the gate under the cursor", async () => {

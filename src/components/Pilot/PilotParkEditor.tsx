@@ -60,6 +60,24 @@ type PendingVerb = "park" | "unpark";
  * agent — which is the one selection mark that survives `forced-colors`. The
  * row fill it used to rely on alone measured about 1.04:1 against the list.
  */
+/**
+ * What will lift the park, for the choice as it stands — never gated parks in
+ * general, so the default cannot read as if something releases it by itself.
+ *
+ * An exited run is a legal gate (a restart keeps its terminal id, and the
+ * release waits for the next busy-to-ready edge), but its release is
+ * conditional on it running again, so the copy says "if" rather than "when".
+ * One clause either way: a two-sentence helper under a list reads as a
+ * warning, which this is not.
+ */
+function gateHelpText(gate: PilotGateCandidate | null, hasNote: boolean): string {
+  if (gate === null) return "Stays parked until you unpark it";
+  const withNote = hasNote ? " with your note" : "";
+  return gate.row.run.agentState === "exited"
+    ? `Returns to Waiting${withNote} if ${gate.row.title} runs again and finishes`
+    : `Returns to Waiting${withNote} when ${gate.row.title} next finishes working`;
+}
+
 export function PilotParkEditor({
   target,
   candidates,
@@ -411,14 +429,8 @@ export function PilotParkEditor({
         </ScrollShadow>
         {/* Describes the CURRENT choice, so the default never reads as if
             something will lift the park automatically. */}
-        <p id={gateHelpId} className="text-xs leading-snug text-text-secondary">
-          {chosenGate === null
-            ? "Stays parked until you unpark it"
-            : `Returns to Waiting${note.trim().length > 0 ? " with your note" : ""} when ${chosenGate.row.title} next finishes working`}
-          {/* An exited run only releases the park if it is started again, so
-              the choice is legal but the consequence is worth a clause. */}
-          {chosenGate?.row.run.agentState === "exited" &&
-            ". It has exited, so that only happens if it runs again"}
+        <p id={gateHelpId} className="text-xs leading-snug text-pretty text-text-secondary">
+          {gateHelpText(chosenGate, note.trim().length > 0)}
         </p>
         {gateLost && (
           <p
