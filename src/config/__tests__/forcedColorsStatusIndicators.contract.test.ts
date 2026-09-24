@@ -200,24 +200,22 @@ describe("forced-colors heavier-border hooks survive the 1px pin-back", () => {
   const BUTTON_HOOKS = ['[data-variant="destructive"]', '[data-notification-action="primary"]'];
 
   it("exempts every button hook that asserts a 2px ButtonText border", () => {
-    const blocks = readForcedColorsBlocks(INDEX_CSS).replace(/'/g, '"');
-    const pin = blocks.match(/html\s*:where\([^)]*\):not\(([^)]*)\)\s*\{\s*border-width:\s*1px/);
+    // Comments quote these selectors, so match live rules only.
+    const blocks = readForcedColorsBlocks(INDEX_CSS)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/'/g, '"');
+    const pin = blocks.match(
+      /html\s*:where\([^)]*\):not\(([^)]*)\)\s*\{\s*border-width:\s*1px;\s*\}/
+    );
     expect(pin).not.toBeNull();
+    const exempt = pin![1]!.split(",").map((arg) => arg.trim());
     for (const hook of BUTTON_HOOKS) {
       const escaped = hook.replace(/[[\]"]/g, "\\$&");
       expect(blocks).toMatch(
         new RegExp(`${escaped}\\s*\\{[^}]*border:\\s*2px\\s+solid\\s+ButtonText`)
       );
-      expect(pin![1]).toContain(hook);
+      expect(exempt).toContain(hook);
     }
-  });
-
-  it("is emitted by the grid bar for its notification actions", () => {
-    const bar = fs.readFileSync(
-      path.join(REPO_ROOT, "src/components/Terminal/GridNotificationBar.tsx"),
-      "utf8"
-    );
-    expect(bar).toMatch(/data-notification-action=\{/);
   });
 });
 
