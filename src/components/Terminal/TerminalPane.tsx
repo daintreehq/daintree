@@ -1355,15 +1355,17 @@ function TerminalPaneComponent({
       })()}
     >
       {terminalErrors.length > 0 && (
-        <div className="px-2 py-1 border-b border-border-default bg-[color-mix(in_oklab,var(--color-status-error)_5%,transparent)] shrink-0">
-          <CompactErrorList
-            errors={terminalErrors}
-            maxInline={2}
-            onDismiss={dismissError}
-            onRetry={handleErrorRetry}
-            onCancelRetry={handleCancelRetry}
-          />
-        </div>
+        // Flush to the pane's edges like every other banner in this slot; each
+        // row draws its own band and divider.
+        <CompactErrorList
+          variant="flush"
+          className="shrink-0"
+          errors={terminalErrors}
+          maxInline={2}
+          onDismiss={dismissError}
+          onRetry={handleErrorRetry}
+          onCancelRetry={handleCancelRetry}
+        />
       )}
 
       <BannerSlot visible={showRestartError}>
