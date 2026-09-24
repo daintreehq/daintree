@@ -1219,7 +1219,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           dismissible
         >
           <AppDialog.Header>
-            <AppDialog.Title>Expanded Editor</AppDialog.Title>
+            <AppDialog.Title>Expanded editor</AppDialog.Title>
             <AppDialog.CloseButton />
           </AppDialog.Header>
           {/* CodeMirror claims file drops to suppress its own text insertion

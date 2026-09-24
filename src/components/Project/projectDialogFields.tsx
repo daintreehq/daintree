@@ -105,39 +105,59 @@ export function DirectoryPickerField({
           value && "font-mono text-xs"
         )}
       />
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={onBrowse}
-            disabled={disabled}
-            aria-label={browseLabel}
-            className={cn(FIELD_SLOT_BUTTON, "border-l")}
-          >
-            <FolderOpen className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="left">
-          <p>Browse for a folder</p>
-        </TooltipContent>
-      </Tooltip>
+      <BrowseSlotButton onBrowse={onBrowse} disabled={disabled} label={browseLabel} />
     </div>
   );
 }
 
+/** The trailing folder button of a compound field: opens the native folder picker. */
+export function BrowseSlotButton({
+  onBrowse,
+  disabled,
+  label,
+}: {
+  onBrowse: () => void;
+  disabled?: boolean;
+  /** Accessible name — name what is being chosen. */
+  label: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onBrowse}
+          disabled={disabled}
+          aria-label={label}
+          className={cn(FIELD_SLOT_BUTTON, "border-l")}
+        >
+          <FolderOpen className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      </TooltipTrigger>
+      {/* Above, not beside: to the left it lands on the field and hides the path. */}
+      <TooltipContent side="top">
+        <p>Browse for a folder</p>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 /**
- * A text input with a leading slot inside the same box — the project emoji, so
- * the name and its glyph read as one identity rather than a swatch parked
- * beside a field.
+ * A text input with slots inside the same box — a leading project emoji, so the
+ * name and its glyph read as one identity rather than a swatch parked beside a
+ * field, or a trailing {@link BrowseSlotButton} for a path that can be typed as
+ * well as picked.
  */
 export function SlottedInputField({
   leading,
+  trailing,
   invalid,
   className,
   ref,
   ...inputProps
 }: InputHTMLAttributes<HTMLInputElement> & {
-  leading: ReactNode;
+  leading?: ReactNode;
+  trailing?: ReactNode;
   invalid?: boolean;
   ref?: Ref<HTMLInputElement>;
 }) {
@@ -159,6 +179,7 @@ export function SlottedInputField({
         aria-invalid={invalid || undefined}
         className={cn(COMPOUND_INPUT, className)}
       />
+      {trailing}
     </div>
   );
 }

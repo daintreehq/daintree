@@ -300,7 +300,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           icon={<GitCompare className="w-4 h-4 text-text-muted" />}
           className="text-sm font-semibold text-text-primary"
         >
-          Compare Worktrees
+          Compare worktrees
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>

@@ -265,7 +265,7 @@ export function RecipeEditor({
         dismissible={!isSaving}
       >
         <AppDialog.Header>
-          <AppDialog.Title>{recipe ? "Edit Recipe" : "Create Recipe"}</AppDialog.Title>
+          <AppDialog.Title>{recipe ? "Edit recipe" : "Create recipe"}</AppDialog.Title>
         </AppDialog.Header>
 
         <AppDialog.Body>
