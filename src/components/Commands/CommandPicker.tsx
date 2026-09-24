@@ -234,7 +234,7 @@ export function CommandPicker({
               aria-setsize={setSize}
               aria-labelledby={titleId}
               aria-describedby={reason ? `${summaryId} ${reasonId}` : summaryId}
-              aria-haspopup={cmd.hasBuilder ? "dialog" : undefined}
+              aria-haspopup={cmd.hasBuilder && cmd.enabled ? "dialog" : undefined}
               onPointerDown={(e) => e.preventDefault()}
               onPointerMove={() => onHoverIndex(index)}
               onClick={() => activate(cmd)}
@@ -257,7 +257,8 @@ export function CommandPicker({
                 >
                   /{cmd.id}
                 </span>
-                {cmd.hasBuilder && (
+                {/* Only where it is true: an unavailable row opens nothing. */}
+                {cmd.hasBuilder && cmd.enabled && (
                   <span
                     aria-hidden="true"
                     className="shrink-0 rounded-[var(--radius-sm)] bg-overlay-medium px-1.5 py-px text-3xs text-text-secondary"

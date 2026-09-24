@@ -275,3 +275,57 @@ describe("SearchablePalette filter-result live announcement", () => {
     expect(announceMock).toHaveBeenCalledWith("0 results", "polite");
   });
 });
+
+describe("SearchablePalette loading announcement", () => {
+  const base = {
+    isOpen: true,
+    query: "",
+    selectedIndex: 0,
+    onQueryChange: () => {},
+    onSelectPrevious: () => {},
+    onSelectNext: () => {},
+    onConfirm: () => {},
+    onClose: () => {},
+    getItemId: (item: Item) => item.id,
+    renderItem: (item: Item) => <div key={item.id}>{item.id}</div>,
+    label: "Test",
+    ariaLabel: "Test palette",
+    tier: "command" as const,
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    announceMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("says nothing for a load that lands inside the gate", () => {
+    const { rerender } = render(<SearchablePalette<Item> {...base} results={[]} isLoading />);
+    vi.advanceTimersByTime(200);
+    rerender(<SearchablePalette<Item> {...base} results={[{ id: "a" }]} isLoading={false} />);
+    vi.advanceTimersByTime(1000);
+    expect(announceMock).not.toHaveBeenCalled();
+  });
+
+  it("announces a slow load, then what it brought", () => {
+    const { rerender } = render(<SearchablePalette<Item> {...base} results={[]} isLoading />);
+    vi.advanceTimersByTime(400);
+    expect(announceMock).toHaveBeenCalledTimes(1);
+    rerender(
+      <SearchablePalette<Item> {...base} results={[{ id: "a" }, { id: "b" }]} isLoading={false} />
+    );
+    expect(announceMock).toHaveBeenCalledTimes(2);
+    expect(announceMock).toHaveBeenLastCalledWith("2 results", "polite");
+  });
+
+  it("leaves an empty landing to the empty state", () => {
+    const { rerender } = render(<SearchablePalette<Item> {...base} results={[]} isLoading />);
+    vi.advanceTimersByTime(400);
+    rerender(<SearchablePalette<Item> {...base} results={[]} isLoading={false} />);
+    vi.advanceTimersByTime(1000);
+    expect(announceMock).toHaveBeenCalledTimes(1);
+  });
+});

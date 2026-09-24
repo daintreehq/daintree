@@ -264,6 +264,32 @@ export function SearchablePalette<T>({
     return () => window.clearTimeout(timer);
   }, [isFiltering, query, results.length, isOpen, renderBody]);
 
+  // The header's loading sweep is aria-hidden, so a slow load needs words too
+  // (WCAG 4.1.3 counts busy indicators as status). Same Doherty gate as the
+  // sweep's own onset: a fast load says nothing. Once a load that was announced
+  // lands, say what it brought — unless that is nothing, which the empty state
+  // announces itself.
+  const loadAnnouncedRef = useRef(false);
+  useEffect(() => {
+    if (!isOpen) {
+      loadAnnouncedRef.current = false;
+      return undefined;
+    }
+    if (isLoading) {
+      const timer = window.setTimeout(() => {
+        loadAnnouncedRef.current = true;
+        useAnnouncerStore.getState().announce("Loading results", "polite");
+      }, UI_DOHERTY_THRESHOLD);
+      return () => window.clearTimeout(timer);
+    }
+    if (!loadAnnouncedRef.current) return undefined;
+    loadAnnouncedRef.current = false;
+    const count = results.length;
+    if (count === 0 && !renderBody) return undefined;
+    useAnnouncerStore.getState().announce(count === 1 ? "1 result" : `${count} results`, "polite");
+    return undefined;
+  }, [isOpen, isLoading, results.length, renderBody]);
+
   useEscapeStack(isOpen, () => {
     if (query !== "") {
       onQueryChange("");

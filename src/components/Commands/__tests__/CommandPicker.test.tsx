@@ -239,6 +239,15 @@ describe("CommandPicker unavailable commands", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("promises a form only on rows that can open one", () => {
+    const withBuilder = list.map((c) => ({ ...c, hasBuilder: true }));
+    renderPicker(vi.fn(), withBuilder);
+    for (const [index, cmd] of capturedProps!.results.entries()) {
+      const row = rowOf(cmd, index) as React.ReactElement<Record<string, unknown>>;
+      expect(row.props["aria-haspopup"] === "dialog").toBe(cmd.enabled);
+    }
+  });
+
   it("associates the reason with its row", () => {
     renderPicker(vi.fn(), list);
     for (const [index, cmd] of capturedProps!.results.entries()) {
