@@ -207,7 +207,7 @@ function Pane({
   return (
     <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[var(--radius-lg)] border border-border-default bg-surface-panel">
       <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border-subtle bg-overlay-subtle px-3 text-xs">
-        <span className="size-2 rounded-full bg-status-success" />
+        <span className="size-2 rounded-full bg-text-secondary" />
         <span className="truncate font-medium text-text-primary">{title}</span>
         <span className="truncate text-text-secondary">{meta}</span>
       </div>
