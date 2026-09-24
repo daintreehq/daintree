@@ -3,14 +3,13 @@ import type { KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { KBD_BARE_CLASS } from "@/components/ui/Kbd";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { PilotFooterHint } from "./PilotFooterHint";
 import { PilotRunState } from "./PilotRunState";
 import type { PilotProjectGroup, PilotRow } from "./pilotRows";
 import { MAX_PARK_NOTE_LENGTH, type RunParkRecord } from "@shared/types/ipc/fleet";
@@ -42,25 +41,6 @@ const GATE_GROUP_NAME = "pilot-park-gate";
 type PendingVerb = "park" | "unpark";
 
 /**
- * The in-palette parking form: one note, one optional gate, two keys.
- *
- * Deliberately a mode of the Pilot dialog rather than a second dialog — the
- * user is already inside a keyboard surface, and stacking a modal on a modal
- * would re-teach focus, Escape and dismissal semantics for one input and a
- * list. Escape pops back to the list because PilotView delegates the DIALOG's
- * own onClose here while the editor is open — the palette's Escape handling
- * runs at a document-level backstop that fires before any inner listener, so
- * intercepting the key locally can never win; redirecting what "close" means
- * can. Enter commits from anywhere except the buttons that mean something
- * else.
- *
- * The gate list is native radios, the house pattern for a keyboard-driven
- * single choice (`RadioChoice`): arrows move focus and selection together and
- * wrap, the group is one tab stop, and the checked dot is painted by the user
- * agent — which is the one selection mark that survives `forced-colors`. The
- * row fill it used to rely on alone measured about 1.04:1 against the list.
- */
-/**
  * What will lift the park, for the choice as it stands — never gated parks in
  * general, so the default cannot read as if something releases it by itself.
  *
@@ -78,6 +58,28 @@ function gateHelpText(gate: PilotGateCandidate | null, hasNote: boolean): string
     : `Returns to Waiting${withNote} when ${gate.row.title} next finishes working`;
 }
 
+/**
+ * The in-palette parking form: one note, one optional gate, two keys.
+ *
+ * Deliberately a mode of the Pilot dialog rather than a second dialog — the
+ * user is already inside a keyboard surface, and stacking a modal on a modal
+ * would re-teach focus, Escape and dismissal semantics for one input and a
+ * list. Escape pops back to the list because PilotView delegates the DIALOG's
+ * own onClose here while the editor is open — the palette's Escape handling
+ * runs at a document-level backstop that fires before any inner listener, so
+ * intercepting the key locally can never win; redirecting what "close" means
+ * can. Enter commits from anywhere except the buttons that mean something
+ * else.
+ *
+ * The gate list is native radios, the house pattern for a keyboard-driven
+ * single choice (`RadioChoice`): arrows move focus and selection together and
+ * wrap, the group is one tab stop, and the checked dot is painted by the user
+ * agent — which is the one selection mark that survives `forced-colors`. The
+ * row fill it used to rely on alone measured about 1.04:1 against the list.
+ *
+ * Its verbs live in the dialog footer in the footer's own key-hint grammar
+ * (`PilotFooterHint`), the same "↵ Open" / "⌥↵ Park" the list shows there.
+ */
 export function PilotParkEditor({
   target,
   candidates,
@@ -457,51 +459,37 @@ export function PilotParkEditor({
 
       {footerSlot !== null &&
         createPortal(
-          <div className="flex w-full items-center gap-2">
-            <Button
-              variant="contrast"
-              size="sm"
+          <div className="-ml-1 flex w-full items-center gap-2">
+            <PilotFooterHint
+              keys="↵"
+              label={primaryLabel}
               onClick={confirm}
               disabled={busy && pending !== "park"}
-              loading={showBusy && pending === "park"}
-              aria-describedby={error?.verb === "park" ? errorId : undefined}
-              data-testid="pilot-park-confirm"
-            >
-              {primaryLabel}
-              {/* Inherits the button's own ink rather than taking a chip: a
-              boxed keycap on the inverse fill reads as a second control. */}
-              <kbd aria-hidden="true" className={cn(KBD_BARE_CLASS, "text-current")}>
-                ↵
-              </kbd>
-            </Button>
+              busy={showBusy && pending === "park"}
+              describedBy={error?.verb === "park" ? errorId : undefined}
+              testId="pilot-park-confirm"
+            />
             {isReparking && (
-              <Button
-                variant="subtle"
-                size="sm"
+              <PilotFooterHint
+                label="Unpark"
                 onClick={unpark}
                 disabled={busy && pending !== "unpark"}
-                loading={showBusy && pending === "unpark"}
-                data-no-submit
-                aria-describedby={error?.verb === "unpark" ? errorId : undefined}
-                data-testid="pilot-park-unpark"
-              >
-                Unpark
-              </Button>
+                busy={showBusy && pending === "unpark"}
+                describedBy={error?.verb === "unpark" ? errorId : undefined}
+                noSubmit
+                testId="pilot-park-unpark"
+              />
             )}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => onClose(false)}
-              disabled={busy}
-              data-no-submit
-              data-testid="pilot-park-cancel"
-              className="ml-auto"
-            >
-              Cancel
-              <kbd aria-hidden="true" className={KBD_BARE_CLASS}>
-                esc
-              </kbd>
-            </Button>
+            <span className="ml-auto">
+              <PilotFooterHint
+                keys="esc"
+                label="Cancel"
+                onClick={() => onClose(false)}
+                disabled={busy}
+                noSubmit
+                testId="pilot-park-cancel"
+              />
+            </span>
           </div>,
           footerSlot
         )}
