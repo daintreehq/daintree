@@ -142,14 +142,14 @@ test.describe.serial("Core: Project Management Advanced", () => {
       ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PRIMARY_NAME);
       const { window } = ctx;
 
-      await window.keyboard.press(`${mod}+Shift+O`);
+      await window.keyboard.press(`${mod}+Alt+R`);
 
       const modal = window.locator(SEL.worktree.overviewModal);
       await expect(modal).toBeVisible({ timeout: T_LONG });
-      await expect(modal.locator("h2", { hasText: "Worktrees overview" })).toBeVisible();
+      await expect(window.getByRole("dialog", { name: "Worktrees" })).toBeVisible();
 
       // At least one worktree card should be visible (main + feature branch = 2)
-      const cards = modal.locator("[data-worktree-branch]");
+      const cards = modal.locator(SEL.worktree.overviewCell);
       await expect(cards.first()).toBeVisible({ timeout: T_LONG });
       await expect.poll(() => cards.count(), { timeout: T_MEDIUM }).toBeGreaterThanOrEqual(2);
     });
@@ -157,7 +157,7 @@ test.describe.serial("Core: Project Management Advanced", () => {
     test("search filtering narrows displayed worktrees", async () => {
       const { window } = ctx;
       const modal = window.locator(SEL.worktree.overviewModal);
-      const cards = modal.locator("[data-worktree-branch]");
+      const cards = modal.locator(SEL.worktree.overviewCell);
 
       // Capture initial card count
       const initialCount = await cards.count();
@@ -216,11 +216,11 @@ test.describe.serial("Core: Project Management Advanced", () => {
       await expect(popover).not.toBeVisible({ timeout: T_SHORT });
     });
 
-    test("modal closes via close button", async () => {
+    test("modal closes via Escape", async () => {
       const { window } = ctx;
 
       const modal = window.locator(SEL.worktree.overviewModal);
-      await modal.locator(SEL.worktree.overviewClose).click();
+      await window.keyboard.press("Escape");
       await expect(modal).not.toBeVisible({ timeout: T_MEDIUM });
 
       // Verify sidebar worktree card is still visible (main UI intact)

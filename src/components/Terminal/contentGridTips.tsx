@@ -176,7 +176,7 @@ export const TIPS: TipEntry[] = [
     id: "worktree-overview",
     message: (
       <>
-        Press <Kbd>⌘⇧O</Kbd> to open the worktrees overview and manage all your branches
+        Press <Kbd>⌘⌥R</Kbd> to open the worktrees overview and manage all your branches
       </>
     ),
     messageWithShortcut: (shortcut) => (
@@ -263,7 +263,7 @@ export function RotatingTip() {
     const counts = shortcutHintStore.getState().counts;
     // Use shortcutActionId when present (mirrors LiveTipMessage lookup) so a tip
     // whose kbd shortcut dispatches a different action than its label-click
-    // (e.g. worktree-overview: ⌘⇧O → "worktree.overview", click → ".open") still
+    // (e.g. worktree-overview: ⌘⌥R → "worktree.overview", click → ".open") still
     // counts toward "used" when the user invokes it via keyboard.
     const lookupKey = (tipEntry: TipEntry) => tipEntry.shortcutActionId ?? tipEntry.actionId ?? "";
     const prioritized = [...filteredTips]

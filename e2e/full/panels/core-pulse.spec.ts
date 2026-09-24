@@ -75,7 +75,7 @@ test.describe.serial("Core: Project Pulse", () => {
 
     await expect(window.locator(SEL.pulse.heatmap)).toHaveAttribute(
       "aria-label",
-      "Activity over the last 120 days",
+      "Activity over the last 120 days, one column per week",
       { timeout: T_MEDIUM }
     );
   });

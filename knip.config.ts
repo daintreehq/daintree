@@ -123,6 +123,7 @@ const config: KnipConfig = {
     "src/components/Project/__preview__/projectIdentityEditor.tsx",
     "src/components/Settings/__preview__/toolbarSettings.tsx",
     "src/components/TerminalRecipe/__preview__/recipes.tsx",
+    "src/components/Tour/__preview__/preview.tsx",
     "src/components/Panel/__preview__/preview.tsx",
     "src/components/DragDrop/__preview__/preview.tsx",
     "src/components/Recovery/__preview__/preview.tsx",
@@ -210,12 +211,15 @@ const config: KnipConfig = {
   ],
 
   ignoreBinaries: [
-    // The release workflow invokes CLI binaries from local npm workspaces,
-    // while the screenshot harness requires ffmpeg from the host OS.
+    // The release workflow invokes CLI binaries from local npm workspaces.
+    // Screenshot and tour tooling require ffmpeg, ffprobe, and wrangler from
+    // the host OS rather than npm dependencies in this package.
     "create-daintree-plugin",
     "daintree-plugin",
     "ffmpeg",
+    "ffprobe",
     "sqlite3",
+    "wrangler",
     // why: Host OS commands invoked directly by platform-specific runtime,
     // installer, and E2E paths. They are not npm-provided binaries and must
     // not be declared as package dependencies.

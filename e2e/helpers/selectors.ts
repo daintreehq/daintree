@@ -60,7 +60,7 @@ export const SEL = {
     accentColorReset: '[data-testid="accent-color-override-reset"]',
     accentContrastWarning: '[role="status"]:has-text("Low contrast")',
     randomThemeButton: 'button:has-text("Random theme")',
-    shortcutConflictWarning: "text=Conflicts with",
+    shortcutConflictWarning: '[data-testid="shortcut-capture-conflicts"]',
     mcpServerToggle: '[aria-label="Enable MCP server"]',
     mcpConnectionMarker: "text=The server binds to 127.0.0.1",
     scopeControl: "[data-settings-scope-trigger]",
@@ -149,7 +149,6 @@ export const SEL = {
     overviewCellFor: (id: string) => `[data-worktree-overview-cell="${id}"]`,
     bulkRemove: '[data-testid="worktree-bulk-remove"]',
     bulkCloseSessions: '[data-testid="worktree-bulk-close-sessions"]',
-    clearSelection: '[aria-label="Clear selection"]',
   },
   dock: {
     container: "#dock-container",

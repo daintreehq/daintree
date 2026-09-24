@@ -217,7 +217,11 @@ test.describe.serial("Core: Settings Advanced", () => {
         timeout: T_SHORT,
       });
       // The conflict names the action that owns Cmd+T.
-      await expect(window.locator("text=Duplicate focused panel")).toBeVisible({
+      await expect(
+        window
+          .locator(SEL.settings.shortcutConflictWarning)
+          .getByText("Duplicate focused panel", { exact: true })
+      ).toBeVisible({
         timeout: T_SHORT,
       });
 
