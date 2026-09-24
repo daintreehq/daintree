@@ -197,6 +197,35 @@ async function closeSettings(page: Page): Promise<void> {
  * Open (or re-target) the dialog through the deep-link event. `scopeForTab` derives the
  * scope from the tab id, so this drives scope without touching the scope control.
  */
+/**
+ * Rest the pointer on `selector` and prove the browser agrees it is hovered before the
+ * shot is taken. Hovering can itself re-render the target (the scope trigger swaps its
+ * pre-Radix stand-in for the Radix trigger on pointer-enter), and a freshly mounted node
+ * under a still pointer is not `:hover` until the pointer moves again, so the harness
+ * nudges it and checks rather than writing a rest-state PNG under a hover name.
+ */
+async function hoverVerified(page: Page, selector: string): Promise<void> {
+  const target = page.locator(selector).first();
+  await target.hover();
+  await page.waitForTimeout(300);
+  const box = await target.boundingBox();
+  if (!box) throw new Error(`hover target ${selector} has no box`);
+  await page.mouse.move(box.x + box.width / 2 + 1, box.y + box.height / 2);
+  await expect
+    .poll(
+      () =>
+        page
+          .locator(selector)
+          .first()
+          .evaluate((el) => el.matches(":hover")),
+      {
+        timeout: 3000,
+        message: `${selector} never reported :hover`,
+      }
+    )
+    .toBe(true);
+}
+
 async function openSettingsAt(
   page: Page,
   target: { tab: string; subtab?: string; sectionId?: string }
@@ -468,7 +497,7 @@ const STATES: ScopeState[] = [
     target: { tab: "general" },
     extraCrop: "sidebar",
     arrange: async (page) => {
-      await page.locator("[data-settings-scope-trigger]").hover();
+      await hoverVerified(page, "[data-settings-scope-trigger]");
     },
   },
   {
@@ -508,7 +537,7 @@ const STATES: ScopeState[] = [
     extraCrop: "sidebar",
     sweep: true,
     arrange: async (page) => {
-      await page.locator(navItem("notifications")).hover();
+      await hoverVerified(page, navItem("notifications"));
     },
   },
   {
