@@ -160,15 +160,16 @@ export function StackTrace({
   if (frames.length === 0) return null;
 
   return (
-    // mt-1 keeps this target 24px from an expandable object argument on the
-    // message line above (WCAG 2.5.8's spacing exception).
-    <div className="mt-1">
+    // A 24px-tall target: an expandable object argument can sit directly on
+    // the message line above, so the spacing exception can't be relied on
+    // (WCAG 2.5.8).
+    <div className="mt-0.5">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={isExpanded}
         aria-controls={listId}
-        className={TOGGLE_CLASS}
+        className={cn(TOGGLE_CLASS, "min-h-6")}
       >
         <DisclosureChevron expanded={isExpanded} />
         Stack trace
