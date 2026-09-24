@@ -52,7 +52,7 @@ import {
 const COPY_RESET_DELAY_MS = 2000;
 const CUSTOM_ARGS_DEBOUNCE_MS = 500;
 
-type SaveGroup = "agent" | "launch" | "behavior" | "security" | "privacy";
+type SaveGroup = "agent" | "launch" | "behavior" | "security" | "privacy" | "content";
 
 const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   modelId: "agent",
@@ -64,6 +64,7 @@ const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   tier: "security",
   bypassPermissions: "security",
   auditRetention: "privacy",
+  loadGlobalHooksAndServers: "content",
 };
 
 const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
@@ -76,6 +77,7 @@ const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
   "tier",
   "bypassPermissions",
   "auditRetention",
+  "loadGlobalHooksAndServers",
 ];
 
 function patchedKeys(patch: Partial<HelpAssistantSettings>): (keyof HelpAssistantSettings)[] {
@@ -105,6 +107,7 @@ const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   tier: "Capability tier",
   bypassPermissions: "Bypass",
   auditRetention: "Audit log retention",
+  loadGlobalHooksAndServers: "Load my MCP servers and hooks",
 };
 
 interface SaveFailure {
@@ -122,6 +125,7 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   customArgs: "",
   idleHibernateMinutes: 5,
   debugLogging: false,
+  loadGlobalHooksAndServers: false,
 };
 
 // Radix Select rejects an empty-string item value, so the "use the CLI default"
@@ -794,6 +798,10 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ debugLogging: !settings.debugLogging });
   };
 
+  const toggleLoadGlobalHooksAndServers = () => {
+    void persist({ loadGlobalHooksAndServers: !settings.loadGlobalHooksAndServers });
+  };
+
   const setRetention = (value: string) => {
     const parsed = Number(value);
     if (parsed !== 0 && parsed !== 7 && parsed !== 30) return;
@@ -1330,14 +1338,16 @@ export function DaintreeAssistantSettingsTab() {
       </SettingsSection>
 
       <SettingsSection title="Custom commands and skills">
+        {saveError("content")}
         <SettingsGroup>
           <SettingsRow
             label="Assistant folder"
             description={
               <>
-                Commands and skills in <code className="font-mono">~/.daintree/assistant</code> join
-                every new session. A project&apos;s own{" "}
-                <code className="font-mono">.daintree/assistant</code> takes precedence.
+                Commands, skills, instructions and reference files in{" "}
+                <code className="font-mono">~/.daintree/assistant</code> join every new session. A
+                project&apos;s own <code className="font-mono">.daintree/assistant</code> takes
+                precedence.
               </>
             }
             control={
@@ -1345,6 +1355,22 @@ export function DaintreeAssistantSettingsTab() {
                 <FolderOpen />
                 Open folder
               </Button>
+            }
+          />
+          <SettingsSwitchCard
+            title="Load my MCP servers and hooks"
+            subtitle="Starts the servers in mcp.json and runs the Claude hooks in hooks.json from ~/.daintree/assistant. A project's folder can never add these."
+            isEnabled={settings.loadGlobalHooksAndServers}
+            onChange={toggleLoadGlobalHooksAndServers}
+            ariaLabel="Load my MCP servers and hooks"
+            disabled={settingsUnavailable}
+            isModified={
+              settings.loadGlobalHooksAndServers !== DEFAULT_SETTINGS.loadGlobalHooksAndServers
+            }
+            onReset={() =>
+              void persist({
+                loadGlobalHooksAndServers: DEFAULT_SETTINGS.loadGlobalHooksAndServers,
+              })
             }
           />
         </SettingsGroup>

@@ -1,7 +1,9 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { dump as dumpYaml, load as parseYaml } from "js-yaml";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
+import { YAML_MERGE_SCHEMA } from "../utils/yamlMergeSchema.js";
 
 /**
  * Mirrors user-authored assistant commands and skills into the per-project
@@ -19,6 +21,13 @@ import { resilientAtomicWriteFile } from "../utils/fs.js";
  *   .claude/skills/     Claude-only skills (<name>/SKILL.md)
  *   .codex/skills/      Codex-only skills (<name>/SKILL.md)
  *   .agents/skills/     Shared skills (Agent Skills convention)
+ *   reference/          Any files the assistant should be able to read,
+ *                       mirrored to <session>/reference/ for every backend
+ *
+ * instructions.md, mcp.json and hooks.json are read by AssistantUserConfig,
+ * not mirrored. Nothing outside these lanes is copied: the session dir is the
+ * CLI's cwd, and files there (.claude/settings.json, .mcp.json, CLAUDE.md)
+ * are configuration that would run code or replace Daintree's own prompt.
  *
  * Per-agent mapping rationale (verified July 2026):
  *   - Claude Code treats a non-git cwd as the project root and loads
@@ -45,28 +54,54 @@ interface ContentMapping {
    * higher-precedence skill of the same name replaces the lower one wholesale
    * (never a per-file interleave of two different skills), and a directory is
    * only eligible when it contains a SKILL.md. `file`: each file stands alone
-   * (commands).
+   * (commands, reference files).
    */
   granularity: "file" | "skillDir";
+  /** `file` granularity only: mirror just `*.md` (commands are markdown). */
+  markdownOnly?: boolean;
+  /**
+   * In the project source, skip entries whose real path leaves the project.
+   * A repository could otherwise link `reference/key` at a private local file
+   * and have it land in the session as a regular file — which Claude's
+   * `@path` imports load into context without an external-import prompt.
+   */
+  containProjectSymlinks?: boolean;
 }
+
+// Reference files are plain reading material, so every cwd-reading backend
+// gets the same tree at the same path; the instructions block points at it.
+const REFERENCE_MAPPING: ContentMapping = {
+  sourceDir: "reference",
+  destDir: "reference",
+  granularity: "file",
+  containProjectSymlinks: true,
+};
 
 const AGENT_CONTENT_MAPPINGS: Record<string, readonly ContentMapping[]> = {
   // Order matters within a source: the translated shared tree goes first so
   // an explicit .claude/skills/<name> overrides .agents/skills/<name>.
   claude: [
     { sourceDir: ".agents/skills", destDir: ".claude/skills", granularity: "skillDir" },
-    { sourceDir: ".claude/commands", destDir: ".claude/commands", granularity: "file" },
+    {
+      sourceDir: ".claude/commands",
+      destDir: ".claude/commands",
+      granularity: "file",
+      markdownOnly: true,
+    },
     { sourceDir: ".claude/skills", destDir: ".claude/skills", granularity: "skillDir" },
+    REFERENCE_MAPPING,
   ],
   // Shared tree first so an explicit .codex/skills/<name> overrides
   // .agents/skills/<name>; both land in the session's .agents/skills.
   codex: [
     { sourceDir: ".agents/skills", destDir: ".agents/skills", granularity: "skillDir" },
     { sourceDir: ".codex/skills", destDir: ".agents/skills", granularity: "skillDir" },
+    REFERENCE_MAPPING,
   ],
   copilot: [
     { sourceDir: ".agents/skills", destDir: ".agents/skills", granularity: "skillDir" },
     { sourceDir: ".claude/skills", destDir: ".claude/skills", granularity: "skillDir" },
+    REFERENCE_MAPPING,
   ],
 };
 
@@ -77,7 +112,22 @@ const AGENT_CONTENT_MAPPINGS: Record<string, readonly ContentMapping[]> = {
 // claude to codex must clean up the claude-mirrored files. `.codex/skills` is
 // deliberately NOT here — it is a source authoring convention, never a
 // session destination, and must never become a permissible deletion root.
-const MIRROR_DEST_ROOTS = [".claude/commands", ".claude/skills", ".agents/skills"] as const;
+const MIRROR_DEST_ROOTS = [
+  ".claude/commands",
+  ".claude/skills",
+  ".agents/skills",
+  "reference",
+] as const;
+
+// Dest roots whose first path segment below the root is a skill directory.
+// Casefold collision handling is per skill directory, so it applies to these
+// only — a nested command or reference file is not a skill bundle.
+const SKILL_DEST_ROOTS: ReadonlySet<string> = new Set(
+  Object.values(AGENT_CONTENT_MAPPINGS)
+    .flat()
+    .filter((mapping) => mapping.granularity === "skillDir")
+    .map((mapping) => mapping.destDir)
+);
 
 // Roots scaffolded in the Daintree-owned AUTHORING folders (~/.daintree/
 // assistant and <project>/.daintree/assistant). Includes the .codex/skills
@@ -87,6 +137,7 @@ const SOURCE_SCAFFOLD_ROOTS = [
   ".claude/skills",
   ".codex/skills",
   ".agents/skills",
+  "reference",
 ] as const;
 
 // Manifest of relpaths written by the previous sync, stored inside the
@@ -101,6 +152,37 @@ const MAX_DEPTH = 12;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
 const ASSISTANT_CONTENT_DIR_SEGMENTS = [".daintree", "assistant"] as const;
+
+// Frontmatter keys through which a skill or command runs code or widens
+// permissions: Claude registers a skill's `hooks` while it is active, and
+// `allowed-tools` pre-approves tools without a prompt. A project folder is
+// written by whoever authored the repository, so these are stripped from its
+// skills and commands; the text of the skill still arrives.
+const EXECUTABLE_FRONTMATTER_KEYS = new Set(["hooks", "allowed-tools", "allowed_tools"]);
+const FRONTMATTER_PATTERN = /^(\uFEFF?---[ \t]*\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))/;
+
+/**
+ * Removes executable frontmatter keys. Returns the content unchanged when it
+ * has no frontmatter or none of those keys; throws when the frontmatter can't
+ * be parsed, since what the CLI would make of it can't be proven.
+ */
+export function stripExecutableFrontmatter(content: string): string {
+  const match = FRONTMATTER_PATTERN.exec(content);
+  if (!match) return content;
+  const parsed = parseYaml(match[2], { schema: YAML_MERGE_SCHEMA });
+  if (parsed === null || parsed === undefined) return content;
+  if (typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("frontmatter is not a mapping");
+  }
+  const record = parsed as Record<string, unknown>;
+  const stripped = Object.keys(record).filter((key) =>
+    EXECUTABLE_FRONTMATTER_KEYS.has(key.toLowerCase())
+  );
+  if (stripped.length === 0) return content;
+  for (const key of stripped) delete record[key];
+  const body = Object.keys(record).length > 0 ? dumpYaml(record, { lineWidth: -1 }) : "";
+  return `---\n${body}---\n${content.slice(match[0].length)}`;
+}
 
 export function getGlobalAssistantContentDir(): string {
   return path.join(os.homedir(), ...ASSISTANT_CONTENT_DIR_SEGMENTS);
@@ -141,6 +223,8 @@ export interface AssistantContentSyncResult {
   failedCopies: string[];
   /** Managed dest relpaths that are stale or unverifiable but still present. */
   staleFailures: string[];
+  /** Reference files mirrored into `<session>/reference/`. */
+  referenceFiles: number;
 }
 
 interface ManifestShape {
@@ -225,6 +309,10 @@ interface WalkState {
    * may still be defined.
    */
   unreadableDirs: string[];
+  /** Real path entries must stay under; symlinks resolving elsewhere are skipped. */
+  containRoot?: string;
+  /** Entries skipped because they resolve outside `containRoot`. */
+  escapedLinks: string[];
 }
 
 function isAbsentError(err: unknown): boolean {
@@ -238,15 +326,25 @@ function isAbsentError(err: unknown): boolean {
  * realpath visited-set so cycles terminate; dot-entries are skipped to match
  * how the CLIs' own scanners treat them.
  */
-async function collectSourceFiles(rootAbs: string): Promise<WalkState> {
+function isWithin(real: string, root: string): boolean {
+  return real === root || real.startsWith(root + path.sep);
+}
+
+async function collectSourceFiles(rootAbs: string, containRoot?: string): Promise<WalkState> {
   const state: WalkState = {
     files: new Map(),
     visitedDirs: new Set(),
     truncated: false,
     unreadableDirs: [],
+    containRoot,
+    escapedLinks: [],
   };
   try {
     const rootReal = await fs.realpath(rootAbs);
+    if (containRoot && !isWithin(rootReal, containRoot)) {
+      state.escapedLinks.push(rootAbs);
+      return state;
+    }
     state.visitedDirs.add(rootReal);
   } catch (err) {
     if (!isAbsentError(err)) state.unreadableDirs.push(rootAbs);
@@ -290,6 +388,10 @@ async function walkDir(
         const stat = await fs.stat(entryAbs);
         isDir = stat.isDirectory();
         isFile = stat.isFile();
+        if (state.containRoot && !isWithin(await fs.realpath(entryAbs), state.containRoot)) {
+          state.escapedLinks.push(entryAbs);
+          continue;
+        }
       } catch (err) {
         // Dangling symlink (ENOENT) and OS-level link loops are skippable;
         // anything else (EACCES, EIO) leaves the desired state unprovable.
@@ -419,11 +521,26 @@ export async function syncAssistantContent(
   // skill directory without a SKILL.md is invalid — it contributes nothing
   // and therefore never shadows a valid lower-precedence skill.
   const desired = new Map<string, string>();
+  // Project-scope skill manifests and commands, whose frontmatter is
+  // sanitized on copy instead of copied byte for byte.
+  const sanitizeRels = new Set<string>();
   const omittedSkills: string[] = [];
   let truncated = false;
+  let projectReal: string | undefined;
   for (const source of sources) {
     for (const mapping of mappings) {
-      const walk = await collectSourceFiles(path.join(source.root, mapping.sourceDir));
+      let containRoot: string | undefined;
+      if (source.scope === "project" && mapping.containProjectSymlinks) {
+        projectReal ??= await fs.realpath(input.projectPath).catch(() => input.projectPath);
+        containRoot = projectReal;
+      }
+      const walk = await collectSourceFiles(path.join(source.root, mapping.sourceDir), containRoot);
+      for (const escaped of walk.escapedLinks) {
+        console.warn(
+          "[AssistantContentMirror] Skipping a project link that leaves the project:",
+          escaped
+        );
+      }
       if (walk.unreadableDirs.length > 0) {
         throw new Error(
           `Unreadable assistant content directory: ${walk.unreadableDirs[0]} — cannot compute the desired skill state`
@@ -432,8 +549,11 @@ export async function syncAssistantContent(
       truncated ||= walk.truncated;
       if (mapping.granularity === "file") {
         for (const [rel, abs] of walk.files) {
-          if (!rel.endsWith(".md")) continue;
-          desired.set(`${mapping.destDir}/${rel}`, abs);
+          if (mapping.markdownOnly && !rel.endsWith(".md")) continue;
+          const destRel = `${mapping.destDir}/${rel}`;
+          desired.set(destRel, abs);
+          if (source.scope === "project" && mapping.markdownOnly) sanitizeRels.add(destRel);
+          else sanitizeRels.delete(destRel);
         }
         continue;
       }
@@ -475,11 +595,15 @@ export async function syncAssistantContent(
         }
         const prefix = `${mapping.destDir}/${skillName}/`;
         for (const key of desired.keys()) {
-          if (key.startsWith(prefix)) desired.delete(key);
+          if (key.startsWith(prefix)) {
+            desired.delete(key);
+            sanitizeRels.delete(key);
+          }
         }
         for (const [rel, abs] of group) {
           desired.set(`${mapping.destDir}/${rel}`, abs);
         }
+        if (source.scope === "project") sanitizeRels.add(`${prefix}SKILL.md`);
       }
     }
   }
@@ -508,19 +632,21 @@ export async function syncAssistantContent(
   // last-inserted (highest-precedence) spelling wins, other spellings are
   // omitted wholesale.
   const skillPrefixWinners = new Map<string, string>();
-  for (const destRel of desired.keys()) {
+  const skillPrefixOf = (destRel: string): string | null => {
     const segments = destRel.split("/");
-    if (segments.length < 4) continue; // skills sit at <root>/<skill>/<file…>; commands are per-file
-    skillPrefixWinners.set(
-      foldPath(segments.slice(0, 3).join("/")),
-      segments.slice(0, 3).join("/")
-    );
+    // Skills sit at <root>/<skill>/<file…> where <root> is two segments.
+    if (segments.length < 4 || !SKILL_DEST_ROOTS.has(segments.slice(0, 2).join("/"))) return null;
+    return segments.slice(0, 3).join("/");
+  };
+  for (const destRel of desired.keys()) {
+    const prefix = skillPrefixOf(destRel);
+    if (prefix === null) continue;
+    skillPrefixWinners.set(foldPath(prefix), prefix);
   }
   const reportedCollisions = new Set<string>();
   for (const destRel of [...desired.keys()]) {
-    const segments = destRel.split("/");
-    if (segments.length < 4) continue;
-    const prefix = segments.slice(0, 3).join("/");
+    const prefix = skillPrefixOf(destRel);
+    if (prefix === null) continue;
     const winner = skillPrefixWinners.get(foldPath(prefix));
     if (winner !== undefined && winner !== prefix) {
       if (!reportedCollisions.has(prefix)) {
@@ -620,7 +746,12 @@ export async function syncAssistantContent(
       } catch {
         // ENOENT — nothing at the destination yet
       }
-      await fs.copyFile(sourceAbs, destAbs);
+      if (sanitizeRels.has(destRel)) {
+        const original = await fs.readFile(sourceAbs, "utf-8");
+        await fs.writeFile(destAbs, stripExecutableFrontmatter(original), "utf-8");
+      } else {
+        await fs.copyFile(sourceAbs, destAbs);
+      }
       copied += 1;
     } catch (err) {
       console.warn("[AssistantContentMirror] Failed to mirror file:", sourceAbs, err);
@@ -678,7 +809,22 @@ export async function syncAssistantContent(
   // write fails it propagates (fail closed) while the superset stays valid.
   await writeManifest(input.sessionPath, [...desired.keys(), ...staleFailures]);
 
-  return { copied, removed, truncated, omittedSkills, failedCopies, staleFailures };
+  let referenceFiles = 0;
+  for (const destRel of desired.keys()) {
+    if (destRel.startsWith(`${REFERENCE_MAPPING.destDir}/`) && !copyFailedRels.has(destRel)) {
+      referenceFiles += 1;
+    }
+  }
+
+  return {
+    copied,
+    removed,
+    truncated,
+    omittedSkills,
+    failedCopies,
+    staleFailures,
+    referenceFiles,
+  };
 }
 
 /**
@@ -704,13 +850,14 @@ async function removeEmptyParents(fileAbs: string, sessionBase: string): Promise
   }
 }
 
-const CONTENT_README = `# Daintree Assistant — custom commands and skills
+const CONTENT_README = `# Daintree Assistant — your assistant folder
 
-Files in this folder are copied into the Daintree Assistant's working
-directory every time you open the assistant, so the agent you launch picks
-them up through its own native discovery.
+Everything here is added to each new Daintree Assistant session when it
+backs onto Claude Code, Codex or Copilot (the Daintree Assistant CLI doesn't
+read this folder yet). Hiding and showing the panel keeps the running
+session, so start a new session to pick up changes.
 
-Layout (agent-native hidden folders):
+Commands and skills (agent-native hidden folders):
 
 - .claude/commands/   Claude Code slash commands (*.md with YAML frontmatter)
 - .claude/skills/     Claude-only skills (<name>/SKILL.md)
@@ -723,11 +870,28 @@ A backend-specific skill overrides a shared skill of the same name, whole
 directory for whole directory. Every skill directory needs a SKILL.md file
 (conventionally with name and description frontmatter) or it is skipped.
 
-A per-project variant works the same way and takes precedence over this
-folder: <your project>/.daintree/assistant/
+Instructions and reference material:
+
+- instructions.md     Added to the assistant's instructions, after Daintree's
+                      own. It adds guidance; it can't change permissions.
+- reference/          Any files you want the assistant to be able to read.
+
+MCP servers and hooks (this folder only, never a project's):
+
+- mcp.json            { "mcpServers": { ... } } — extra MCP servers
+- hooks.json          { "hooks": { ... } } — Claude Code hooks
+
+These run programs, so they load only after you turn on
+Settings → Daintree Assistant → "Load my MCP servers and hooks".
+
+A per-project folder works the same way for commands, skills, instructions
+and reference files, and takes precedence over this one:
+<your project>/.daintree/assistant/
+It is committed with the repository, so it can never add MCP servers or hooks.
+
+Nothing else in this folder is copied.
 
 Notes:
-- Relaunch the assistant (or start a new session) to pick up changes.
 - Codex no longer supports prompt files; write skills instead.
 - On macOS, press Cmd+Shift+. in Finder to show the hidden folders.
 `;

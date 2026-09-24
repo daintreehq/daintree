@@ -2576,6 +2576,13 @@ export interface HelpAssistantSettings {
    * `~/.daintree/logs`); it is a no-op for other assistant agents. Defaults to false.
    */
   debugLogging: boolean;
+  /**
+   * Load `mcp.json` (MCP servers) and `hooks.json` (Claude hooks) from
+   * `~/.daintree/assistant` into new assistant sessions. Both run programs, so
+   * they are opt-in and never read from a project's `.daintree/assistant`.
+   * Defaults to false.
+   */
+  loadGlobalHooksAndServers: boolean;
 }
 
 /**
