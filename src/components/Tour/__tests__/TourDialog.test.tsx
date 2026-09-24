@@ -16,12 +16,17 @@ vi.mock("@/components/ui/AppDialog", () => {
   }: {
     hint?: ReactNode;
     primaryAction?: { label: string; onClick: () => void };
-    secondaryAction?: { label: string; onClick: () => void };
+    secondaryAction?: { label: string; onClick: () => void; disabled?: boolean };
   }) => (
     <div>
       <span data-testid="hint">{hint}</span>
       {secondaryAction && (
-        <button onClick={secondaryAction.onClick}>{secondaryAction.label}</button>
+        <button
+          aria-disabled={secondaryAction.disabled || undefined}
+          onClick={secondaryAction.disabled ? undefined : secondaryAction.onClick}
+        >
+          {secondaryAction.label}
+        </button>
       )}
       {primaryAction && <button onClick={primaryAction.onClick}>{primaryAction.label}</button>}
     </div>
@@ -88,14 +93,18 @@ describe("TourDialog", () => {
   it("steps forward and back through chapters and reports each one reached", () => {
     const { props } = renderDialog();
     expect(screen.getByRole("heading", { level: 3 }).textContent).toBe(TOUR_CHAPTERS[0]!.title);
-    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Back" }).getAttribute("aria-disabled")).toBe("true");
 
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByRole("heading", { level: 3 }).textContent).toBe(TOUR_CHAPTERS[1]!.title);
     expect(props.onChapterReached).toHaveBeenLastCalledWith(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    const back = screen.getByRole("button", { name: "Back" });
+    back.focus();
+    fireEvent.click(back);
     expect(screen.getByRole("heading", { level: 3 }).textContent).toBe(TOUR_CHAPTERS[0]!.title);
+    // Back is unavailable on the first chapter but still there, still focused.
+    expect(document.activeElement).toBe(back);
   });
 
   it("resumes on the chapter it was opened at", () => {

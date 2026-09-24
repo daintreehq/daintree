@@ -167,9 +167,13 @@ function TourBody({
         </div>
       </div>
       <AppDialog.Footer
-        secondaryAction={
-          state.chapterIndex > 0 ? { label: "Back", onClick: () => player.previous() } : undefined
-        }
+        // Back stays on the first chapter, unavailable rather than gone, so
+        // stepping back onto it never takes the focused button away.
+        secondaryAction={{
+          label: "Back",
+          disabled: state.chapterIndex === 0,
+          onClick: () => player.previous(),
+        }}
         primaryAction={{ label: isLast ? "Finish" : "Next", onClick: advance }}
       />
     </div>
