@@ -47,6 +47,7 @@ import {
 } from "@shared/utils/snoozeTimestamps";
 import { useNotificationSource } from "./notificationSource";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { useUIStore } from "@/store/uiStore";
 
 const snoozedUntilFormatter = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
@@ -771,6 +772,9 @@ function RowOptionsMenu({
     // Swallow silently — the inbox keeps stale rows after the source goes
     // away and forcing a toast on every dead-link click would be noise.
     void actionService.dispatch("panel.focus", { panelId }).catch(() => undefined);
+    // The one row-menu item that takes you somewhere else. The inbox used to
+    // close under it only because any menu pick counted as a click outside.
+    useUIStore.getState().closeNotificationCenter();
   };
 
   const handleReportOnGitHub = () => {

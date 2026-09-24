@@ -5,6 +5,7 @@ import type { NotificationHistoryEntry } from "@/store/slices/notificationHistor
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { NotificationCenterEntry, formatSnoozeWake } from "../NotificationCenterEntry";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { useUIStore } from "@/store/uiStore";
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 const getMock = vi.hoisted(() => vi.fn());
@@ -809,6 +810,16 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
       fireEvent.click(item);
     });
     expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "pane-42" });
+  });
+
+  it("closes the inbox when Go to source takes you to the panel", async () => {
+    useUIStore.setState({ notificationCenterOpen: true });
+    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />);
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Go to source"));
+    });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(false);
   });
 
   it("swallows the panel.focus rejection when the source panel is gone", async () => {
