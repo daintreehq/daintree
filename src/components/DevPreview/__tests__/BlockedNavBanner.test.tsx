@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
+import { useEffect, useReducer } from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -50,14 +51,17 @@ beforeAll(() => {
   });
 });
 
+const openExternal = vi.fn<(url: string) => Promise<void>>();
+
 beforeEach(() => {
+  openExternal.mockReset();
   (window as unknown as { electron: unknown }).electron = {
     webview: {
       onOAuthLoopbackStatus: vi.fn(() => () => {}),
       cancelOAuthLoopback: vi.fn().mockResolvedValue(undefined),
     },
     clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
-    system: { openExternal: vi.fn() },
+    system: { openExternal },
   };
 });
 
@@ -67,9 +71,9 @@ function renderPhase(phase: Phase, extra: Partial<Record<string, unknown>> = {})
     canOpenExternal: false,
     sessionStorageSnapshot: [],
     isOAuth: true,
-    registrableDomain: "example.com",
     phase,
-    errorMessage: phase === "oauth-error" ? "Sign-in failed" : null,
+    errorCause: phase === "oauth-error" ? "failed" : null,
+    errorMessage: null,
     ...extra,
   };
   return render(
@@ -95,9 +99,9 @@ describe("BlockedNavBanner action selection", () => {
     expect(screen.getByRole("button", { name: /open in external browser/i })).toBeTruthy();
   });
 
-  it("keeps 'Try again' as the primary action on an OAuth error, demoting Copy URL", () => {
+  it("keeps 'Retry' as the primary action on an OAuth error, demoting Copy URL", () => {
     renderPhase("oauth-error");
-    const tryAgain = screen.getByRole("button", { name: /try again/i });
+    const tryAgain = screen.getByRole("button", { name: /^retry$/i });
     const overflow = screen.getByTestId("overflow-content");
     // The recovery action is the inline primary; Copy URL is demoted.
     expect(overflow.contains(tryAgain)).toBe(false);
@@ -143,10 +147,327 @@ describe("blockedNavReducer phase coalescing", () => {
     expect(phaseAfterSecondBlock("oauth-error")).toBe("blocked");
   });
 
-  it("adopts the new URL either way", () => {
-    const state = reachPhase("oauth-started");
-    expect(blockedNavReducer(state, blocked("https://example.com/second"))?.url).toBe(
-      "https://example.com/second"
+  // Retry and the loopback act on the attempt's own URL and session snapshot,
+  // so an unrelated link blocked mid sign-in must not swap them out.
+  it("keeps the attempt's URL while a sign-in is in flight", () => {
+    for (const phase of ["oauth-started", "oauth-intercepting"] as const) {
+      const state = reachPhase(phase);
+      expect(blockedNavReducer(state, blocked("https://example.com/second"))).toBe(state);
+    }
+  });
+
+  it("adopts the new URL once the previous sign-in has settled", () => {
+    for (const phase of ["blocked", "oauth-completed", "oauth-timed-out", "oauth-error"] as const) {
+      const next = blockedNavReducer(reachPhase(phase), blocked("https://example.com/second"));
+      expect(next?.url).toBe("https://example.com/second");
+    }
+  });
+
+  it("lets a dropped-event fallback end an attempt but never rewrite how it ended", () => {
+    const fail = (phase: Phase, timedOut: boolean) => {
+      const state = reachPhase(phase);
+      if (!state) throw new Error("no state");
+      return blockedNavReducer(state, {
+        type: "OAUTH_RESULT_FAILED",
+        notice: state.notice,
+        timedOut,
+      })?.phase;
+    };
+    expect(fail("oauth-started", false)).toBe("oauth-error");
+    expect(fail("oauth-intercepting", true)).toBe("oauth-timed-out");
+    for (const phase of ["oauth-completed", "oauth-timed-out", "oauth-error"] as const) {
+      expect(fail(phase, false)).toBe(phase);
+    }
+  });
+});
+
+describe("blockedNavReducer stale results", () => {
+  const blocked = (url: string): BlockedNavAction => ({
+    type: "BLOCKED",
+    url,
+    canOpenExternal: true,
+    sessionStorageSnapshot: [],
+  });
+
+  function settled(url: string) {
+    const state = blockedNavReducer(null, blocked(url));
+    if (!state) throw new Error("no state");
+    return state;
+  }
+
+  // A result awaited under one notice must never land on another — not a
+  // different link, and not the same link blocked again after a dismiss.
+  it("drops every result that belongs to a notice the banner has moved on from", () => {
+    const first = settled("https://docs.example.com/a");
+    for (const newer of [
+      blockedNavReducer(first, blocked("https://b.example.com/")),
+      blockedNavReducer(first, blocked("https://docs.example.com/a")),
+      blockedNavReducer(null, blocked("https://docs.example.com/a")),
+    ]) {
+      if (!newer) throw new Error("no state");
+      const stale: BlockedNavAction[] = [
+        { type: "DISMISS_NOTICE", notice: first.notice },
+        { type: "OPEN_FAILED", notice: first.notice },
+        { type: "COPY_RESULT", notice: first.notice, result: "copy-failed" },
+      ];
+      for (const action of stale) expect(blockedNavReducer(newer, action)).toBe(newer);
+    }
+
+    const attempt = blockedNavReducer(settled("https://accounts.example.com/authorize"), {
+      type: "OAUTH_STARTED",
+    });
+    expect(
+      blockedNavReducer(attempt, {
+        type: "OAUTH_RESULT_FAILED",
+        notice: first.notice,
+        timedOut: false,
+      })
+    ).toBe(attempt);
+  });
+
+  it("settles the notice the result belongs to", () => {
+    const state = settled("https://docs.example.com/a");
+    expect(blockedNavReducer(state, { type: "DISMISS_NOTICE", notice: state.notice })).toBeNull();
+    expect(
+      blockedNavReducer(state, { type: "OPEN_FAILED", notice: state.notice })?.openFailed
+    ).toBe(true);
+  });
+
+  // Copying is what a refused open tells the user to do; doing it, and either
+  // outcome of it, must leave the failure — and its sole recovery — in place.
+  it("keeps a refused open standing through copy results", () => {
+    let state = settled("https://docs.example.com/a");
+    const { notice } = state;
+    for (const result of ["copy-failed", "copied", null] as const) {
+      state = blockedNavReducer(blockedNavReducer(state, { type: "OPEN_FAILED", notice }), {
+        type: "COPY_RESULT",
+        notice,
+        result,
+      })!;
+      expect(state.openFailed).toBe(true);
+    }
+  });
+});
+
+const ALL_PHASES: Phase[] = [
+  "blocked",
+  "oauth-started",
+  "oauth-intercepting",
+  "oauth-completed",
+  "oauth-timed-out",
+  "oauth-error",
+];
+
+function bannerRoot(container: HTMLElement): HTMLElement {
+  const root = container.querySelector<HTMLElement>('[role="status"], [role="alert"]');
+  if (!root) throw new Error("banner did not render a live region");
+  return root;
+}
+
+describe("BlockedNavBanner phase presentation", () => {
+  // An assertive interruption is for something that went wrong; progress and
+  // a finished sign-in wait for a pause (WCAG 4.1.3).
+  it("interrupts only for failures", () => {
+    for (const phase of ALL_PHASES) {
+      const { container, unmount } = renderPhase(phase);
+      const isFailure = phase === "oauth-timed-out" || phase === "oauth-error";
+      expect(bannerRoot(container).getAttribute("role")).toBe(isFailure ? "alert" : "status");
+      unmount();
+    }
+  });
+
+  // A phase the user cannot tell from its neighbour is a phase with no message.
+  it("gives every phase its own title", () => {
+    const titles = ALL_PHASES.map((phase) => {
+      const { container, unmount } = renderPhase(phase);
+      const title = bannerRoot(container).querySelector(".font-medium")?.textContent ?? "";
+      unmount();
+      return title;
+    });
+    expect(titles.every(Boolean)).toBe(true);
+    expect(new Set(titles).size).toBe(titles.length);
+  });
+
+  // A title must never repeat an action on the same banner: a state that reads
+  // like an instruction is how the old started phase looked like its own button.
+  it("never titles a phase with one of its own action labels", () => {
+    for (const phase of ALL_PHASES) {
+      const { container, unmount } = renderPhase(phase);
+      const root = bannerRoot(container);
+      const title = root.querySelector(".font-medium")?.textContent?.trim().toLowerCase();
+      const labels = Array.from(root.querySelectorAll("button")).map((b) =>
+        (b.getAttribute("aria-label") ?? b.textContent ?? "").trim().toLowerCase()
+      );
+      expect(labels).not.toContain(title);
+      unmount();
+    }
+  });
+});
+
+describe("BlockedNavBanner destination naming", () => {
+  function titleFor(url: string, isOAuth = false): string {
+    const { container, unmount } = renderPhase("blocked", {
+      url,
+      isOAuth,
+      canOpenExternal: true,
+    });
+    const title = bannerRoot(container).querySelector(".font-medium")?.textContent ?? "";
+    unmount();
+    return title;
+  }
+
+  it("names a web destination by its whole host, never a guessed suffix", () => {
+    for (const url of [
+      "https://shop.example.co.uk/basket",
+      "https://orchid.github.io/docs",
+      "https://accounts.google.com/o/oauth2/auth",
+    ]) {
+      expect(titleFor(url)).toContain(new URL(url).host);
+    }
+  });
+
+  it("names a custom-scheme destination by its scheme, not its first path word", () => {
+    const title = titleFor("slack://open?team=T1");
+    expect(title).toContain("slack:");
+  });
+});
+
+describe("BlockedNavBanner action feedback", () => {
+  const blocked = (url: string): BlockedNavAction => ({
+    type: "BLOCKED",
+    url,
+    canOpenExternal: true,
+    sessionStorageSnapshot: [],
+  });
+
+  function deferred() {
+    let reject!: (err: Error) => void;
+    const promise = new Promise<void>((_, r) => {
+      reject = r;
+    });
+    return { promise, reject };
+  }
+
+  /** The banner wired to its real reducer, as DevPreviewPane mounts it. */
+  function Mounted({
+    initial,
+    onDispatchReady,
+  }: {
+    initial: string;
+    onDispatchReady?: (dispatch: (action: BlockedNavAction) => void) => void;
+  }) {
+    const [state, dispatch] = useReducer(blockedNavReducer, null, () =>
+      blockedNavReducer(null, blocked(initial))
     );
+    useEffect(() => onDispatchReady?.(dispatch), [onDispatchReady, dispatch]);
+    return (
+      <BlockedNavBanner state={state} panelId="p-1" webviewElement={null} onDispatch={dispatch} />
+    );
+  }
+
+  // Asking for the system browser and not getting it is a failure of the
+  // user's own action: it interrupts, and copying is the one way left.
+  it("turns a refused open into an error whose recovery is copying", async () => {
+    const open = deferred();
+    openExternal.mockImplementation(() => open.promise);
+    const { container } = render(<Mounted initial="https://docs.example.com/a" />);
+    fireEvent.click(screen.getByRole("button", { name: /open in external browser/i }));
+    await act(async () => {
+      open.reject(new Error("no handler"));
+      await open.promise.catch(() => {});
+    });
+    const root = bannerRoot(container);
+    expect(root.getAttribute("role")).toBe("alert");
+    const labels = Array.from(root.querySelectorAll("button")).map((b) =>
+      (b.getAttribute("aria-label") ?? b.textContent ?? "").trim()
+    );
+    expect(labels.some((l) => /open in external browser/i.test(l))).toBe(false);
+    expect(labels.some((l) => /copy url/i.test(l))).toBe(true);
+  });
+
+  // A result awaited on one link must not describe the link that replaced it.
+  it("never shows a late result against a different link", async () => {
+    const open = deferred();
+    openExternal.mockImplementation(() => open.promise);
+    let dispatch: (action: BlockedNavAction) => void = () => {};
+    const { container } = render(
+      <Mounted initial="https://a.example.com/" onDispatchReady={(d) => (dispatch = d)} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /open in external browser/i }));
+    act(() => {
+      dispatch(blocked("https://b.example.com/"));
+    });
+    await act(async () => {
+      open.reject(new Error("no handler"));
+      await open.promise.catch(() => {});
+    });
+    expect(bannerRoot(container).getAttribute("role")).toBe("status");
+    expect(bannerRoot(container).textContent).toContain("b.example.com");
+  });
+});
+
+describe("BlockedNavBanner copy feedback lifetime", () => {
+  const blocked = (url: string): BlockedNavAction => ({
+    type: "BLOCKED",
+    url,
+    canOpenExternal: true,
+    sessionStorageSnapshot: [],
+  });
+
+  function timedOutWith(result: "copied" | "copy-failed") {
+    let state = blockedNavReducer(null, blocked("https://accounts.example.com/authorize"));
+    state = blockedNavReducer(state, { type: "OAUTH_STARTED" });
+    state = blockedNavReducer(state, { type: "OAUTH_TIMED_OUT" });
+    if (!state) throw new Error("no state");
+    return blockedNavReducer(state, { type: "COPY_RESULT", notice: state.notice, result });
+  }
+
+  // On an error the copy lives in the overflow menu, which closes before the
+  // copy settles: the outcome has to be readable on the band itself.
+  it("reports a demoted copy's outcome outside the closed menu", () => {
+    for (const result of ["copied", "copy-failed"] as const) {
+      const { container, unmount } = render(
+        <BlockedNavBanner
+          state={timedOutWith(result)}
+          panelId="p-1"
+          webviewElement={null}
+          onDispatch={vi.fn()}
+        />
+      );
+      const menu = screen.getByTestId("overflow-content");
+      const outside = Array.from(bannerRoot(container).querySelectorAll('[role="status"]')).filter(
+        (el) => !menu.contains(el)
+      );
+      expect(outside.map((el) => el.textContent).join(" ")).toMatch(/copied|couldn't copy/i);
+      unmount();
+    }
+  });
+
+  // Success fades; a failure stays until the user acts.
+  it("times out a successful copy but never a failed one", () => {
+    vi.useFakeTimers();
+    try {
+      for (const result of ["copied", "copy-failed"] as const) {
+        const onDispatch = vi.fn<(action: BlockedNavAction) => void>();
+        const { unmount } = render(
+          <BlockedNavBanner
+            state={timedOutWith(result)}
+            panelId="p-1"
+            webviewElement={null}
+            onDispatch={onDispatch}
+          />
+        );
+        act(() => {
+          vi.advanceTimersByTime(60_000);
+        });
+        const cleared = onDispatch.mock.calls.some(
+          ([a]) => a.type === "COPY_RESULT" && a.result === null
+        );
+        expect(cleared).toBe(result === "copied");
+        unmount();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -461,7 +461,9 @@ export function InlineStatusBanner({
       data-banner-controls
       className={cn(
         "flex items-center shrink-0",
-        stacked ? "gap-2 ml-6" : "gap-1",
+        // Stacked controls wrap within their own row: two labelled actions and
+        // an overflow trigger are wider than the narrowest pane a grid leaves.
+        stacked ? "gap-2 ml-6 flex-wrap gap-y-1" : "gap-1",
         // Inline controls are 24px and overhang the 20px text line by 2px each
         // side rather than setting its height, so the glyph lines up with the
         // title whether or not the controls wrap, and each control keeps 6px
@@ -605,7 +607,12 @@ export function InlineStatusBanner({
         ) : hasDescription ? (
           <div className="flex-1 min-w-0">
             <div className={cn("flex justify-between items-start gap-2", trailingClose && "pr-8")}>
-              <span className="text-sm font-medium text-text-primary">{title}</span>
+              {/* A title can carry an unbroken token — a hostname, a path — wider
+                  than the column. Let it shrink and break there rather than
+                  push the controls out of the band. */}
+              <span className="min-w-0 wrap-anywhere text-sm font-medium text-text-primary">
+                {title}
+              </span>
               {stacked && closeButton && !trailingClose && (
                 <div className="-mt-1 -mr-1">{closeButton}</div>
               )}
@@ -621,7 +628,9 @@ export function InlineStatusBanner({
             )}
           </div>
         ) : (
-          <span className="text-sm font-medium text-text-primary">{title}</span>
+          <span className="min-w-0 wrap-anywhere text-sm font-medium text-text-primary">
+            {title}
+          </span>
         )}
       </div>
 
