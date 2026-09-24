@@ -47,7 +47,7 @@ function FullSkeleton({
       </div>
 
       <SkeletonHint
-        className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto"
+        className="absolute bottom-8 inset-x-4 flex justify-center pointer-events-auto"
         message={phaseLabel}
         onCancel={onCancel}
       />
@@ -87,7 +87,7 @@ function OverlaySkeleton({
       </div>
 
       <SkeletonHint
-        className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto"
+        className="absolute bottom-8 inset-x-4 flex justify-center pointer-events-auto"
         message={phaseLabel}
         onCancel={onCancel}
       />

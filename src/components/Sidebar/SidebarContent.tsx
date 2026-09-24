@@ -1685,7 +1685,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               </div>
             ))}
           </Skeleton>
-          <SkeletonHint className="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-auto" />
+          <SkeletonHint className="absolute bottom-4 inset-x-4 flex justify-center pointer-events-auto" />
         </div>
       </div>
     );

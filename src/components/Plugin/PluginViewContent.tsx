@@ -1200,7 +1200,7 @@ export function makePluginViewContent(
                 // plugin's content shape is unknowable, so bones must not imply one.
                 <div className="relative h-full">
                   <Skeleton label={`Loading ${displayName}`} className="h-full bg-surface-canvas" />
-                  <SkeletonHint className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto" />
+                  <SkeletonHint className="absolute bottom-8 inset-x-4 flex justify-center pointer-events-auto" />
                 </div>
               }
             >
