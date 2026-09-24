@@ -86,6 +86,7 @@ export function PilotScene() {
 
   return (
     <MockApp
+      branch="add-search"
       focus={open ? [] : undefined}
       worktrees={
         <>

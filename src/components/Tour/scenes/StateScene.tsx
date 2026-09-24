@@ -70,6 +70,7 @@ export function StateScene() {
 
   return (
     <MockApp
+      branch="add-search"
       focus={pill ? ["grid", "dock"] : ["grid"]}
       worktrees={
         <>

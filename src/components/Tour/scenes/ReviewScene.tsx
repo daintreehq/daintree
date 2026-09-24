@@ -54,7 +54,7 @@ const COMMIT_TYPED = { cue: "commit", offset: 1.6 } as const;
 const FILES_CUE = { cue: "files", offset: -0.3 } as const;
 
 const CURSOR: readonly CursorStep[] = [
-  { cue: "ask", offset: -0.4, at: PANE_INPUT },
+  { cue: "ask", offset: -0.5, at: PANE_INPUT },
   { cue: "ask", at: PANE_INPUT, click: true },
   { cue: "open", offset: -0.6, at: REVIEW_BUTTON },
   { cue: "open", offset: 0.55, at: REVIEW_BUTTON, click: true },

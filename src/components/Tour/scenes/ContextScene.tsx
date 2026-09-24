@@ -22,7 +22,7 @@ const CURSOR: readonly CursorStep[] = [
   { cue: "copy", at: COPY },
   { cue: "copy", offset: 0.5, at: COPY, click: true },
   { cue: "copy", offset: 1.0, at: COPY_FULL },
-  { cue: "copy", offset: 1.4, at: COPY_FULL, click: true },
+  { cue: "copy", offset: 1.5, at: COPY_FULL, click: true },
   { cue: "portal", at: PORTAL },
   { cue: "portal", offset: 0.5, at: PORTAL, click: true },
 ];
@@ -75,7 +75,7 @@ function PortalPanel({ pasted }: { pasted: boolean }) {
 export function ContextScene() {
   const copyCue = useCue("copy");
   const menuOpen = useCue("copy", 0.6);
-  const copied = useCue("copy", 1.5);
+  const copied = useCue("copy", 1.6);
   const portalCue = useCue("portal");
   const portalOpen = useCue("portal", 0.6);
   const pasted = useCue("paste", 0.3);

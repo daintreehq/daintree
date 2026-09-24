@@ -43,7 +43,7 @@ const CURSOR: readonly CursorStep[] = [
   { cue: "ref", at: rowAt(PICKED) },
   { cue: "ref", offset: 0.3, at: rowAt(PICKED), modifier: DRAGGING },
   { cue: "ref", offset: 0.8, at: CLAUDE_BODY, modifier: DRAGGING },
-  { cue: "drop", offset: -0.4, at: CLAUDE_INPUT, modifier: DRAGGING },
+  { cue: "drop", offset: -0.5, at: CLAUDE_INPUT, modifier: DRAGGING },
   { cue: "drop", at: CLAUDE_INPUT, click: true },
 ];
 
@@ -98,7 +98,7 @@ export function FilesScene() {
   const opened = useCue("open", 0.6);
   const picked = useCue("pick", 0.6);
   const lifted = useCue("ref", 0.3);
-  const hovering = useCue("drop", -0.4);
+  const hovering = useCue("drop", -0.5);
   const dropped = useCue("drop");
   const cursor = useMockCursor({ x: 360, y: 200 }, CURSOR);
 

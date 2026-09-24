@@ -84,11 +84,20 @@ export const DOCK_WAITING_POINT = { x: APP_LAYOUT.width - 40, y: APP_LAYOUT.heig
 
 export type AppRegion = "toolbar" | "sidebar" | "grid" | "dock" | "right";
 
+function isReceded(region: AppRegion, focus: readonly AppRegion[] | undefined) {
+  return !!focus && !focus.includes(region);
+}
+
 function recede(region: AppRegion, focus: readonly AppRegion[] | undefined) {
   return cn(
     "transition-opacity duration-200 ease-out",
-    focus && !focus.includes(region) ? "opacity-35" : "opacity-100"
+    isReceded(region, focus) ? "opacity-35" : "opacity-100"
   );
+}
+
+/** Marks a dimmed region, so tests can hold spotlights out of one. */
+function recededAttr(region: AppRegion, focus: readonly AppRegion[] | undefined) {
+  return isReceded(region, focus) ? "" : undefined;
 }
 
 function Divider() {
@@ -151,6 +160,7 @@ export function MockWorktreeCard({
   return (
     <div
       data-tour-anchor={`worktree-${name}`}
+      data-tour-selected={selected ? "" : undefined}
       className={cn(
         "relative flex flex-col gap-1 rounded-md border px-2 py-1.5 transition-[background-color,border-color] duration-150 ease-out",
         selected
@@ -241,6 +251,7 @@ export function MockApp({
   return (
     <div className="absolute inset-0 flex flex-col bg-surface-canvas">
       <div
+        data-tour-receded={recededAttr("toolbar", focus)}
         className={cn(
           "flex shrink-0 items-center gap-0.5 border-b border-border-subtle bg-surface-toolbar px-2",
           recede("toolbar", focus)
@@ -317,6 +328,7 @@ export function MockApp({
 
       <div className="flex min-h-0 flex-1">
         <div
+          data-tour-receded={recededAttr("sidebar", focus)}
           className={cn(
             "flex shrink-0 flex-col gap-1.5 border-r border-border-subtle bg-surface-sidebar",
             recede("sidebar", focus)
@@ -342,10 +354,14 @@ export function MockApp({
         {/* The dock belongs to the grid column: it runs from the sidebar's edge
             to the side panel, never under either. */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className={cn("relative min-h-0 flex-1 bg-surface-grid p-2", recede("grid", focus))}>
+          <div
+            data-tour-receded={recededAttr("grid", focus)}
+            className={cn("relative min-h-0 flex-1 bg-surface-grid p-2", recede("grid", focus))}
+          >
             {grid}
           </div>
           <div
+            data-tour-receded={recededAttr("dock", focus)}
             className={cn(
               "flex shrink-0 items-center gap-2 border-t border-border-subtle bg-surface-toolbar px-2",
               recede("dock", focus)
@@ -362,6 +378,7 @@ export function MockApp({
 
         {rightPanel && (
           <div
+            data-tour-receded={recededAttr("right", focus)}
             className={cn(
               "flex shrink-0 flex-col border-l border-border-subtle bg-surface-sidebar",
               recede("right", focus)

@@ -105,6 +105,7 @@ export function MockSpotlight({
     <svg
       ref={ref}
       aria-hidden="true"
+      data-tour-spotlight={visible ? key : undefined}
       className={cn(
         // Above menus and dialogs (z-20), so a highlight inside one still reads;
         // only the pointer (z-40) sits higher.
@@ -155,7 +156,7 @@ export function MockLegend({
   return (
     <div
       className={cn(
-        "absolute inset-x-0 z-10 flex justify-center transition-opacity duration-200 ease-out",
+        "absolute inset-x-0 z-[35] flex justify-center transition-opacity duration-200 ease-out",
         visible ? "opacity-100" : "opacity-0"
       )}
       style={{ bottom }}
