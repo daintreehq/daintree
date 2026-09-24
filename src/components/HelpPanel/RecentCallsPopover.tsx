@@ -275,7 +275,7 @@ function RecentCallRow({ record, now }: { record: McpAuditRecord; now: number })
         <ChevronRight
           aria-hidden
           className={cn(
-            "mt-px w-3 h-3 shrink-0 text-daintree-text/40 transition-transform duration-150 ease-out",
+            "mt-px w-3 h-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
             expanded && "rotate-90"
           )}
         />
@@ -341,19 +341,18 @@ function Payload({ label, text }: { label: string; text: string }) {
     <div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-text-secondary">{label}</span>
-        <button
-          type="button"
+        {/* Labelled, like the other copy controls that sit beside a payload.
+            The name stays put; the hook announces the copy. */}
+        <Button
+          variant="ghost"
+          size="xs"
+          className="-my-1"
           onClick={() => void copy(text)}
           aria-label={`Copy ${label.toLowerCase()}`}
-          title={`Copy ${label.toLowerCase()}`}
-          className="-my-0.5 inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
         >
-          {copied ? (
-            <Check aria-hidden className="h-3 w-3" />
-          ) : (
-            <Copy aria-hidden className="h-3 w-3" />
-          )}
-        </button>
+          {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+          Copy
+        </Button>
       </div>
       <pre className={PAYLOAD_CLASS}>{text}</pre>
     </div>
