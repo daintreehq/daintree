@@ -648,6 +648,22 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Worktree diff insertion count",
     },
   ],
+  "src/components/Worktree/WorktreeOverviewRow.tsx": [
+    {
+      category: "domain",
+      signature: "text-status-success",
+      anchor: "+{insertions}",
+      expectedOccurrences: 1,
+      rationale: "Worktree diff insertion count, as the sidebar card paints it",
+    },
+    {
+      category: "domain",
+      signature: "text-status-success",
+      anchor: "↑{ahead}",
+      expectedOccurrences: 1,
+      rationale: "Ahead-arrow count against the upstream, as the sidebar card paints it",
+    },
+  ],
   "src/components/Worktree/WorktreeDetails.tsx": [
     {
       category: "transient",
@@ -749,5 +765,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 88;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 92;
+export const EXPECTED_STATUS_SUCCESS_SITES = 90;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 94;
