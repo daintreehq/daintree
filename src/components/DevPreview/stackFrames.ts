@@ -6,8 +6,10 @@ import type { CdpStackFrame } from "@shared/types/ipc/webviewConsole";
 const CACHE_BUST_PARAMS = new Set(["t", "v", "import", "direct"]);
 
 // Frames from dependencies and dev-server runtime rather than the user's own
-// source — what DevTools ignore-lists by default.
-const LIBRARY_PATTERNS = [/\/node_modules\//, /\/@vite\//, /\/@react-refresh/, /\/@fs\//];
+// source — what DevTools ignore-lists by default. Vite's `/@fs/` prefix is
+// deliberately absent: it serves any file outside the root, workspace
+// packages included, so it says nothing about who owns the code.
+const LIBRARY_PATTERNS = [/\/node_modules\//, /\/@vite\//, /\/@react-refresh/];
 
 // V8 appends its own rendering of the stack to an exception's description:
 // the message, then one `    at …` line per frame.

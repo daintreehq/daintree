@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CdpStackFrame } from "@shared/types/ipc/webviewConsole";
 import {
   frameFileName,
+  isLibraryFrame,
   framePath,
   primaryFrame,
   segmentFrames,
@@ -71,6 +72,17 @@ describe("primaryFrame", () => {
       f("http://localhost:5173/node_modules/x.js", "other"),
     ];
     expect(primaryFrame(frames)?.functionName).toBe("connect");
+  });
+});
+
+describe("isLibraryFrame", () => {
+  it("judges ownership by the path, not by how Vite happened to serve the file", () => {
+    expect(
+      isLibraryFrame(f("http://localhost:5173/@fs/Users/me/repo/packages/ui/Button.tsx"))
+    ).toBe(false);
+    expect(
+      isLibraryFrame(f("http://localhost:5173/@fs/Users/me/repo/node_modules/react/index.js"))
+    ).toBe(true);
   });
 });
 

@@ -1,4 +1,4 @@
-import { Fragment, useId, useState } from "react";
+import { Fragment, useId } from "react";
 import { ChevronRight } from "lucide-react";
 import type { CdpStackFrame, CdpStackTrace } from "@shared/types/ipc/webviewConsole";
 import { cn } from "@/lib/utils";
@@ -15,13 +15,17 @@ import {
 interface StackTraceProps {
   stackTrace: CdpStackTrace;
   expanded: boolean;
+  /** First-frame indexes of the library runs the user has opened. */
+  openRuns: readonly number[];
   onToggle: () => void;
+  onToggleRun: (start: number) => void;
 }
 
 const TOGGLE_CLASS =
   "inline-flex items-center gap-1 whitespace-nowrap rounded-[var(--radius-sm)] px-1 -mx-1 text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors duration-150 ease-out select-none";
 
-function Chevron({ expanded }: { expanded: boolean }) {
+/** The console's one disclosure glyph: stacks, library runs, groups, objects. */
+export function DisclosureChevron({ expanded }: { expanded: boolean }) {
   return (
     <ChevronRight
       data-animated-chevron
@@ -58,7 +62,12 @@ function FrameRow({ frame }: { frame: CdpStackFrame }) {
   const library = isLibraryFrame(frame);
   return (
     <li className="flex flex-wrap gap-x-2 min-w-0">
-      <span className={library ? "text-text-secondary" : "text-text-primary"}>
+      <span
+        className={cn(
+          "min-w-0 wrap-anywhere",
+          library ? "text-text-secondary" : "text-text-primary"
+        )}
+      >
         {frameName(frame)}
       </span>
       {path ? (
@@ -75,19 +84,26 @@ function FrameRow({ frame }: { frame: CdpStackFrame }) {
   );
 }
 
-function LibraryRun({ frames }: { frames: CdpStackFrame[] }) {
-  const [isOpen, setIsOpen] = useState(false);
+function LibraryRun({
+  frames,
+  isOpen,
+  onToggle,
+}: {
+  frames: CdpStackFrame[];
+  isOpen: boolean;
+  onToggle: () => void;
+}) {
   const listId = useId();
   return (
     <li>
       <button
         type="button"
-        onClick={() => setIsOpen((prev) => !prev)}
+        onClick={onToggle}
         aria-expanded={isOpen}
         aria-controls={listId}
         className={TOGGLE_CLASS}
       >
-        <Chevron expanded={isOpen} />
+        <DisclosureChevron expanded={isOpen} />
         {frames.length} library frames
       </button>
       <ol id={listId} hidden={!isOpen}>
@@ -107,23 +123,34 @@ export function StackLocation({ stackTrace }: { stackTrace: CdpStackTrace }) {
   const frame = primaryFrame(stackTrace.callFrames);
   if (!frame) return null;
   return (
+    // Only the filename gives way in a narrow pane; the line number is the
+    // part of the answer that can't be recovered from anywhere else.
     <span
-      className="ml-auto min-w-0 max-w-full truncate text-text-secondary select-none"
+      className="ml-auto flex min-w-0 max-w-full text-text-secondary select-none"
       title={frameFullLocation(frame)}
     >
-      {frameFileName(frame)}:{frame.lineNumber}
+      <span className="min-w-0 truncate">{frameFileName(frame)}</span>
+      <span className="shrink-0">:{frame.lineNumber}</span>
     </span>
   );
 }
 
-export function StackTrace({ stackTrace, expanded: isExpanded, onToggle }: StackTraceProps) {
+export function StackTrace({
+  stackTrace,
+  expanded: isExpanded,
+  openRuns,
+  onToggle,
+  onToggleRun,
+}: StackTraceProps) {
   const listId = useId();
   const frames = stackTrace.callFrames;
 
   if (frames.length === 0) return null;
 
   return (
-    <div className="mt-0.5">
+    // mt-1 keeps this target 24px from an expandable object argument on the
+    // message line above (WCAG 2.5.8's spacing exception).
+    <div className="mt-1">
       <button
         type="button"
         onClick={onToggle}
@@ -131,7 +158,7 @@ export function StackTrace({ stackTrace, expanded: isExpanded, onToggle }: Stack
         aria-controls={listId}
         className={TOGGLE_CLASS}
       >
-        <Chevron expanded={isExpanded} />
+        <DisclosureChevron expanded={isExpanded} />
         Stack trace
         <span className="text-text-secondary">
           <span aria-hidden="true">· </span>
@@ -149,7 +176,12 @@ export function StackTrace({ stackTrace, expanded: isExpanded, onToggle }: Stack
             segment.kind === "frame" ? (
               <FrameRow key={segment.index} frame={segment.frame} />
             ) : (
-              <LibraryRun key={segment.start} frames={segment.frames.map((x) => x.frame)} />
+              <LibraryRun
+                key={segment.start}
+                frames={segment.frames.map((x) => x.frame)}
+                isOpen={openRuns.includes(segment.start)}
+                onToggle={() => onToggleRun(segment.start)}
+              />
             )
           )}
       </ol>

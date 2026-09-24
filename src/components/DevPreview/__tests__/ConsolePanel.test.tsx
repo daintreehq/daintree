@@ -376,7 +376,7 @@ describe("stack traces", () => {
       useConsoleCaptureStore.setState({ messages: new Map(), counters: new Map() });
       seedConsoleRow({ level, cdpType, stackTrace: { callFrames } });
       const { unmount } = renderPanel();
-      expect(screen.getByText("loadOrders.ts:12")).toBeTruthy();
+      expect(screen.getByTitle(/loadOrders\.ts\?t=123:12:1$/).textContent).toBe("loadOrders.ts:12");
       offered[cdpType] = stackToggle() !== null;
       unmount();
     }
@@ -461,6 +461,12 @@ describe("stack traces", () => {
     expect(screen.getByText("beginWork").closest("[hidden]")).toBeTruthy();
 
     fireEvent.click(run);
+    expect(screen.getByText("beginWork").closest("[hidden]")).toBeNull();
+
+    // An opened run survives its row unmounting, like the outer disclosure.
+    const filter = screen.getByLabelText("Filter console messages");
+    fireEvent.change(filter, { target: { value: "no such row" } });
+    fireEvent.change(filter, { target: { value: "" } });
     expect(screen.getByText("beginWork").closest("[hidden]")).toBeNull();
   });
 });
