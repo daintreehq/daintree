@@ -189,6 +189,38 @@ describe("forced-colors shared status-mark contract (#12000)", () => {
   });
 });
 
+// A 2px ButtonText border is the forced-colours marker for "this is the one
+// that matters" (destructive, a notification's primary action). The block also
+// pins every other button back to 1px with a selector at (0,1,1), which outranks
+// a bare attribute hook at (0,1,0) — so any hook the pin-back does not exempt is
+// silently flattened to match its neighbours.
+describe("forced-colors heavier-border hooks survive the 1px pin-back", () => {
+  // The hooks that land on buttons. Hooks on non-button elements (the segmented
+  // thumb is a span) are out of the pin-back's reach and need no exemption.
+  const BUTTON_HOOKS = ['[data-variant="destructive"]', '[data-notification-action="primary"]'];
+
+  it("exempts every button hook that asserts a 2px ButtonText border", () => {
+    const blocks = readForcedColorsBlocks(INDEX_CSS).replace(/'/g, '"');
+    const pin = blocks.match(/html\s*:where\([^)]*\):not\(([^)]*)\)\s*\{\s*border-width:\s*1px/);
+    expect(pin).not.toBeNull();
+    for (const hook of BUTTON_HOOKS) {
+      const escaped = hook.replace(/[[\]"]/g, "\\$&");
+      expect(blocks).toMatch(
+        new RegExp(`${escaped}\\s*\\{[^}]*border:\\s*2px\\s+solid\\s+ButtonText`)
+      );
+      expect(pin![1]).toContain(hook);
+    }
+  });
+
+  it("is emitted by the grid bar for its notification actions", () => {
+    const bar = fs.readFileSync(
+      path.join(REPO_ROOT, "src/components/Terminal/GridNotificationBar.tsx"),
+      "utf8"
+    );
+    expect(bar).toMatch(/data-notification-action=\{/);
+  });
+});
+
 // #11981: a destructive button is distinguished from Cancel only by its fill,
 // and forced-colors replaces every fill with a system colour — so the two
 // render as identical pills and nothing marks which one destroys. The fallback
