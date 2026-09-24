@@ -111,7 +111,7 @@ export function SkeletonBone({
         // composite is the background at every frame. `--theme-tint` is white on dark
         // and black on light, so an alpha tint contrasts with whatever it is laid over
         // by construction and cannot collide with a surface again.
-        "bg-tint/[0.08] rounded",
+        "bg-tint/[0.08] rounded-[var(--radius-lg)]",
         pulseClass(immediate),
         shimmer && "animate-skeleton-shimmer",
         className
@@ -159,7 +159,7 @@ export function SkeletonText({
           key={i}
           className={cn(
             // Same surface collision as `SkeletonBone` — see the note there.
-            "bg-tint/[0.08] rounded",
+            "bg-tint/[0.08] rounded-[var(--radius-lg)]",
             lineHeightClassName,
             TEXT_LINE_WIDTHS[i % TEXT_LINE_WIDTHS.length],
             pulseClass(immediate),
