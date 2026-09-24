@@ -30,6 +30,7 @@ import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from "fs";
 import path from "path";
 import { startPreviewServer, stubViteHmrClient } from "../helpers/previewHarness";
 import {
+  FIXTURES,
   FIXTURE_NAMES,
   TOOLTIP_FIXTURES,
   type FixtureName,
@@ -121,9 +122,16 @@ async function open(page: Page, theme: string): Promise<void> {
   for (const name of FIXTURE_NAMES) {
     await expect(badge(page, name), `${name}: no resource badge rendered`).toBeAttached();
     await expect(
-      badge(page, name).locator("svg polyline, svg path").first(),
-      `${name}: badge has no sparkline`
+      badge(page, name).locator("svg").first(),
+      `${name}: badge has no sparkline box`
     ).toBeAttached();
+    // A history long enough to read as a line must draw one.
+    if (FIXTURES[name].cpu.length >= 4) {
+      await expect(
+        badge(page, name).locator("svg polyline").first(),
+        `${name}: badge drew no line`
+      ).toBeAttached();
+    }
     const expected = EXPECTED_SEVERITY[name];
     if (expected) {
       await expect(badge(page, name), `${name}: severity never settled`).toHaveAttribute(

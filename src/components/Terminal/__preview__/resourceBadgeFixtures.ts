@@ -71,7 +71,10 @@ export const FIXTURES = {
     agentState: "waiting",
     cpu: wobble(30, 1.2, 1, 7),
     memoryKb: 290_000,
-    breakdown: CLAUDE_BREAKDOWN,
+    breakdown: [
+      { pid: 51022, comm: "claude", cpuPercent: 1.1, memoryKb: 281_000 },
+      { pid: 51001, comm: "zsh", cpuPercent: 0.1, memoryKb: 4_100 },
+    ],
   },
   working: {
     what: "an agent thinking and calling tools — bursty, well under any threshold",
@@ -84,12 +87,17 @@ export const FIXTURES = {
       14, 24, 17,
     ],
     memoryKb: 312_000,
-    breakdown: CLAUDE_BREAKDOWN,
+    breakdown: [
+      { pid: 51022, comm: "claude", cpuPercent: 13.6, memoryKb: 294_000 },
+      { pid: 51040, comm: "rg", cpuPercent: 3.4, memoryKb: 12_800 },
+      { pid: 51001, comm: "zsh", cpuPercent: 0, memoryKb: 4_100 },
+    ],
   },
   warm: {
     what: "a test watcher sustained over 50% — the amber band, earned through hysteresis",
     title: "npm test -- --watch",
-    cpu: [...wobble(12, 18, 6, 3), ...wobble(18, 64, 7, 11)],
+    // The last sample is the breakdown's sum, as the pty-host would report it.
+    cpu: [...wobble(12, 18, 6, 3), ...wobble(17, 64, 7, 11), 69.7],
     memoryKb: 796_000,
     breakdown: NODE_BREAKDOWN,
   },
@@ -128,9 +136,12 @@ export const FIXTURES = {
   cooled: {
     what: "a spike that just ended — history shows it, the band has de-escalated",
     title: "npm run build",
-    cpu: [...wobble(8, 4, 2, 23), ...wobble(10, 92, 6, 29), ...wobble(12, 3, 2, 31)],
+    cpu: [...wobble(8, 4, 2, 23), ...wobble(10, 92, 6, 29), ...wobble(11, 3, 2, 31), 2.4],
     memoryKb: 402_000,
-    breakdown: NODE_BREAKDOWN,
+    breakdown: [
+      { pid: 52210, comm: "node", cpuPercent: 2.3, memoryKb: 380_000 },
+      { pid: 52190, comm: "zsh", cpuPercent: 0.1, memoryKb: 4_200 },
+    ],
   },
   "just-started": {
     what: "the second sample after enabling monitoring — the shortest line the badge draws",
@@ -139,6 +150,10 @@ export const FIXTURES = {
     agentState: "working",
     cpu: [0, 12],
     memoryKb: 96_000,
+    breakdown: [
+      { pid: 53301, comm: "gemini", cpuPercent: 12, memoryKb: 91_800 },
+      { pid: 53300, comm: "zsh", cpuPercent: 0, memoryKb: 4_200 },
+    ],
   },
   crowded: {
     what: "a 360px pane with a settled cost readout and a queue — telemetry clips first",

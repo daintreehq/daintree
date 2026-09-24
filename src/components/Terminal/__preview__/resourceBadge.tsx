@@ -53,8 +53,12 @@ function samplesOf(fixture: ResourceBadgeFixture, i: number) {
   const memory = Array.isArray(fixture.memoryKb)
     ? (fixture.memoryKb[i] ?? fixture.memoryKb[fixture.memoryKb.length - 1]!)
     : fixture.memoryKb;
+  // The final poll reports what its breakdown adds up to, as the pty-host's
+  // own sum would, so the tooltip's rows and headline agree.
+  const isLast = i === fixture.cpu.length - 1;
+  const sum = fixture.breakdown?.reduce((total, p) => total + p.cpuPercent, 0);
   return {
-    cpuPercent: fixture.cpu[i]!,
+    cpuPercent: isLast && sum !== undefined && !fixture.processCount ? sum : fixture.cpu[i]!,
     memoryKb: memory,
     breakdown: fixture.breakdown ?? [],
     processCount: fixture.processCount ?? fixture.breakdown?.length,
