@@ -196,7 +196,8 @@ test("Worktree card status tick — states, footprints, variants and themes", as
       await tick.hover();
       const tip = page.getByRole("tooltip");
       await expect(tip, `${row}: tooltip never opened`).toContainText(text);
-      await page.waitForTimeout(150);
+      // Past the tooltip's 150ms entry, so the frame is not a mid-fade ghost.
+      await page.waitForTimeout(400);
       const file = `tooltip-${row}-${theme}.png`;
       await page.screenshot({ path: path.join(OUT_DIR, file), clip: tipClip });
       written.push(file);

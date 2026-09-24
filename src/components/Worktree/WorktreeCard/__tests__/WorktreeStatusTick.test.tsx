@@ -203,15 +203,23 @@ describe("WorktreeStatusTick", () => {
     ).toBeGreaterThanOrEqual(2);
   });
 
-  it("sits flush in the corner of a card with no radius to clear", () => {
-    // The mark's whole job is to be outside the content, on the card's corner.
-    // Held off the edge it is a mark floating NEAR a corner, which is a
-    // different and weaker statement. The sidebar card is square and
-    // full-bleed, so there is nothing there to clear and nothing to spend an
-    // inset on.
-    const { tick } = renderTick("complete", "sidebar");
-    for (const axis of ["top-", "start-"] as const) {
-      expect(readInset(tick, axis), `${axis} is holding the mark off a square corner`).toBe(0);
+  it("holds the sidebar mark further off the gutter above it than its own pieces are apart", () => {
+    // The sidebar card has no radius, but its top edge is the PREVIOUS card's
+    // 2px gutter — as thick as the gaps between segments, and a solid rule
+    // under forced colors. At y=0 the first segment fused into it and the rule
+    // read as one more piece, so `cleanup` and `complete` stopped separating.
+    // More clearance than any internal gap is what keeps the rule outside the
+    // count. The leading edge has nothing to clear, so it stays flush.
+    for (const collapsed of [false, true]) {
+      const { tick } = renderTick("complete", "sidebar", collapsed);
+      expect(
+        readInset(tick, "top-"),
+        `collapsed=${collapsed}: the gutter above is no further off than the gaps inside`
+      ).toBeGreaterThan(readGap(tick, "y"));
+      expect(readInset(tick, "start-"), `collapsed=${collapsed}: held off the leading edge`).toBe(
+        0
+      );
+      cleanup();
     }
   });
 
@@ -236,11 +244,11 @@ describe("WorktreeStatusTick", () => {
     }
   });
 
-  it("spends that inset only on the card that has a radius", () => {
+  it("spends the leading-edge inset only on the card that has a radius", () => {
     // The two variants must not drift into the same number: if the grid's
-    // clearance is ever copied onto the sidebar, the flush corner is silently
-    // gone, and if the sidebar's flush corner is copied onto the grid, the
-    // clipping is silently back.
+    // clearance is ever copied onto the sidebar, the flush leading edge is
+    // silently gone, and if the sidebar's flush edge is copied onto the grid,
+    // the clipping is silently back.
     const grid = readInset(renderTick("complete", "grid").tick, "start-");
     cleanup();
     const sidebar = readInset(renderTick("complete", "sidebar").tick, "start-");
@@ -408,13 +416,6 @@ describe("WorktreeStatusTick — collapsed", () => {
     }
   });
 
-  it("stays flush in the sidebar corner", () => {
-    const { tick } = renderTick("complete", "sidebar", true);
-    for (const axis of ["top-", "start-"] as const) {
-      expect(readInset(tick, axis), `${axis} is holding the mark off a square corner`).toBe(0);
-    }
-  });
-
   it("still outranks the full-card overlays it shares an edge with", () => {
     const { tick } = renderTick("complete", "sidebar", true);
     const layer = [...tick.classList].find((c) => /^z-\d+$/.test(c));
@@ -440,6 +441,17 @@ describe("WorktreeStatusTick — the card's call site", () => {
     expect(call![0], `the tick is rendered without the row's collapsed state: ${call![0]}`).toMatch(
       /collapsed=\{effectiveIsCollapsed\}/
     );
+  });
+
+  it("opens the tooltip away from the title the mark describes", () => {
+    // The mark is on the card's leading top corner, so its right and its
+    // underside are the card's own header — a tooltip there covered the
+    // title while explaining the state of the card that title names.
+    const source = readFileSync(resolve(__dirname, "../../WorktreeCard.tsx"), "utf-8");
+    const content = source.match(/<WorktreeStatusTick[\s\S]*?<TooltipContent([^>]*)>/);
+    expect(content?.[1], "the tick's tooltip content was not found").toBeDefined();
+    const side = /side="(\w+)"/.exec(content![1]!)?.[1];
+    expect(side, `the tooltip opens ${side ?? "on Radix's default side"}`).toMatch(/^(top|left)$/);
   });
 });
 

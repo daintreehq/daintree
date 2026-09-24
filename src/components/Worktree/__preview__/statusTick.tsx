@@ -204,7 +204,7 @@ function Tick({
       <TooltipTrigger asChild>
         <WorktreeStatusTick state={state} variant={variant} collapsed={collapsed} />
       </TooltipTrigger>
-      <TooltipContent side="right" align="start" className="text-xs">
+      <TooltipContent side="top" align="start" className="text-xs">
         {CHIP_LABELS[state]}
       </TooltipContent>
     </Tooltip>
