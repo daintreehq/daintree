@@ -1,11 +1,15 @@
 import type { ReactElement } from "react";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
+import { resolveSavedScopeIds } from "@/services/actions/definitions/fleetActions";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useSavedFleets } from "./useSavedFleets";
 import { formatSavedFleetCount, savedFleetAccessibleName } from "./savedFleetMeta";
 
 interface SavedFleetQuickRecallProps {
-  /** Called after a recall is dispatched — the host closes itself. */
+  /** The picker's commit mode: a saved fleet replaces the armed set or joins it. */
+  mode: "replace" | "append";
+  /** Called after the fleet is armed — the host closes itself. */
   onRecalled: () => void;
 }
 
@@ -15,25 +19,27 @@ interface SavedFleetQuickRecallProps {
  * menu, but the ribbon only exists once two panes are armed, so without this
  * a user had to assemble a throwaway fleet to reach the one they had saved.
  *
- * Stale snapshots are left out: they would arm nothing, and cleaning them up
- * belongs with the rest of management in the menu.
+ * Only fleets that would arm something right now are offered — a stale
+ * snapshot or a rule with no matches would close the picker having done
+ * nothing. Cleaning those up belongs with the rest of management in the menu.
  */
 export function SavedFleetQuickRecall({
+  mode,
   onRecalled,
 }: SavedFleetQuickRecallProps): ReactElement | null {
   const { snapshotUsable, rules, countById } = useSavedFleets();
-  const recallable = [...snapshotUsable, ...rules];
+  const recallable = [...snapshotUsable, ...rules].filter((s) => (countById[s.id] ?? 0) > 0);
   if (recallable.length === 0) return null;
 
   return (
     <div
       role="group"
-      aria-label="Saved fleets"
+      aria-label="Arm a saved fleet"
       className="flex flex-wrap items-center gap-1.5 pt-2"
       data-testid="fleet-picker-saved-fleets"
     >
       <span aria-hidden="true" className="pr-0.5 text-2xs text-text-secondary">
-        Saved
+        Arm a saved fleet
       </span>
       {recallable.map((scope) => {
         const count = countById[scope.id] ?? 0;
@@ -41,20 +47,24 @@ export function SavedFleetQuickRecall({
           <button
             key={scope.id}
             type="button"
-            aria-label={`Recall ${savedFleetAccessibleName(scope, count)}`}
+            aria-label={`${mode === "append" ? "Add" : "Arm"} ${savedFleetAccessibleName(scope, count)}`}
             title={scope.name}
             onClick={() => {
-              void actionService.dispatch(
-                "fleet.recallNamedFleet",
-                { id: scope.id },
-                { source: "user" }
-              );
+              if (mode === "append") {
+                useFleetArmingStore.getState().addToFleet(resolveSavedScopeIds(scope));
+              } else {
+                void actionService.dispatch(
+                  "fleet.recallNamedFleet",
+                  { id: scope.id },
+                  { source: "user" }
+                );
+              }
               onRecalled();
             }}
             data-testid="fleet-picker-saved-fleet"
             className={cn(
               "inline-flex h-6 max-w-[14rem] items-center gap-1.5 rounded-[var(--radius-md)] bg-tint/[0.06] px-2 text-xs text-text-primary",
-              "hover:bg-tint/[0.12] transition-colors duration-150",
+              "hover:bg-tint/[0.12] transition-colors duration-150 ease-out",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             )}
           >

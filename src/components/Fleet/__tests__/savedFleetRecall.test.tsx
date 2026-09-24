@@ -6,9 +6,17 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn() },
 }));
 
+// Snapshots resolve to their non-"gone" ids; a rule matches two panes unless
+// it filters on "finished", which matches none.
+function resolveIds(scope: { terminalIds?: string[]; stateFilter?: string }): string[] {
+  if (scope.terminalIds) return scope.terminalIds.filter((id) => !id.startsWith("gone"));
+  return scope.stateFilter === "finished" ? [] : ["r1", "r2"];
+}
+
 vi.mock("@/services/actions/definitions/fleetActions", () => ({
-  computeSavedScopePaneCount: vi.fn((scope: { terminalIds?: string[] }) =>
-    scope.terminalIds ? scope.terminalIds.filter((id) => !id.startsWith("gone")).length : 2
+  resolveSavedScopeIds: vi.fn(resolveIds),
+  computeSavedScopePaneCount: vi.fn(
+    (scope: { terminalIds?: string[] }) => resolveIds(scope).length
   ),
 }));
 
@@ -80,7 +88,7 @@ describe("saved fleet counts", () => {
 });
 
 describe("SavedFleetQuickRecall", () => {
-  it("offers every recallable fleet and never a stale snapshot", () => {
+  it("offers exactly the fleets that would arm something now", () => {
     setSaved([
       snapshot("live", ["a"]),
       snapshot("dead", ["gone-1"]),
@@ -92,8 +100,16 @@ describe("SavedFleetQuickRecall", () => {
         stateFilter: "waiting",
         createdAt: 1,
       },
+      {
+        kind: "predicate",
+        id: "empty-rule",
+        name: "empty-rule",
+        scope: "all",
+        stateFilter: "finished",
+        createdAt: 1,
+      },
     ]);
-    render(<SavedFleetQuickRecall onRecalled={vi.fn()} />);
+    render(<SavedFleetQuickRecall mode="replace" onRecalled={vi.fn()} />);
     const names = screen
       .getAllByTestId("fleet-picker-saved-fleet")
       .map((b) => b.getAttribute("title"));
@@ -102,14 +118,14 @@ describe("SavedFleetQuickRecall", () => {
 
   it("renders nothing when nothing can be recalled", () => {
     setSaved([snapshot("dead", ["gone-1"])]);
-    const { container } = render(<SavedFleetQuickRecall onRecalled={vi.fn()} />);
+    const { container } = render(<SavedFleetQuickRecall mode="replace" onRecalled={vi.fn()} />);
     expect(container.innerHTML).toBe("");
   });
 
   it("recalls the clicked fleet and hands control back to the host", () => {
     const onRecalled = vi.fn();
     setSaved([snapshot("live", ["a"])]);
-    render(<SavedFleetQuickRecall onRecalled={onRecalled} />);
+    render(<SavedFleetQuickRecall mode="replace" onRecalled={onRecalled} />);
     fireEvent.click(screen.getByTestId("fleet-picker-saved-fleet"));
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "fleet.recallNamedFleet",
@@ -117,6 +133,26 @@ describe("SavedFleetQuickRecall", () => {
       { source: "user" }
     );
     expect(onRecalled).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("SavedFleetQuickRecall in Append mode", () => {
+  it("adds the fleet's panes to the armed set instead of replacing it", async () => {
+    const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
+    const addToFleet = vi.fn();
+    const original = useFleetArmingStore.getState().addToFleet;
+    useFleetArmingStore.setState({ addToFleet });
+    try {
+      const onRecalled = vi.fn();
+      setSaved([snapshot("live", ["a", "gone-1", "b"])]);
+      render(<SavedFleetQuickRecall mode="append" onRecalled={onRecalled} />);
+      fireEvent.click(screen.getByTestId("fleet-picker-saved-fleet"));
+      expect(addToFleet).toHaveBeenCalledWith(["a", "b"]);
+      expect(actionService.dispatch).not.toHaveBeenCalled();
+      expect(onRecalled).toHaveBeenCalledTimes(1);
+    } finally {
+      useFleetArmingStore.setState({ addToFleet: original });
+    }
   });
 });
 

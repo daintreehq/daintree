@@ -168,7 +168,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
 
   const selectionHelpers = (
     <>
-      <SavedFleetQuickRecall onRecalled={onClose} />
+      <SavedFleetQuickRecall mode={commitMode} onRecalled={onClose} />
       <div className="flex items-center justify-between gap-2 pt-2">
         <div role="group" aria-label="Selection helpers" className="flex items-center gap-1.5">
           <button

@@ -230,14 +230,14 @@ describe("SavedFleetsSection", () => {
     expect(screen.queryByText("Live rules")).toBeNull();
   });
 
-  it("renders stale snapshot with aria-disabled", () => {
+  it("marks a stale snapshot as stale, not disabled, and names what selecting it does", () => {
     setSavedScopes([SNAPSHOT_B]);
     render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
-    expect(screen.getByText("Stale snapshot")).toBeDefined();
-    const rows = screen.getAllByRole("menuitem");
-    const staleRow = rows.find((r) => r.textContent?.includes("Stale snapshot"));
-    expect(staleRow).toBeDefined();
-    expect(staleRow!.getAttribute("aria-disabled")).toBe("true");
+    const staleRow = screen.getByTestId("fleet-saved-row");
+    // Disabled semantics can't describe a row whose delete still works.
+    expect(staleRow.getAttribute("aria-disabled")).toBeNull();
+    expect(staleRow.getAttribute("data-stale")).toBe("true");
+    expect(staleRow.getAttribute("aria-label")).toMatch(/delete/i);
   });
 
   it("fires onRequestDelete when delete button clicked", () => {
@@ -280,14 +280,12 @@ describe("SavedFleetsSection", () => {
     expect(actionService.dispatch).not.toHaveBeenCalled();
   });
 
-  it("keeps the menu open when an unavailable snapshot is activated", () => {
+  it("selecting a stale snapshot opens its delete confirm instead of recalling", () => {
+    const onDelete = vi.fn();
     setSavedScopes([SNAPSHOT_B]);
-    render(<SavedFleetsSection onRequestDelete={vi.fn()} onRequestSave={vi.fn()} />);
-    const staleRow = screen.getAllByRole("menuitem").find((r) => r.textContent?.includes("Stale"));
-    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-    staleRow!.dispatchEvent(click);
-    // Radix closes the menu on select unless the select event is prevented.
-    expect(click.defaultPrevented).toBe(true);
+    render(<SavedFleetsSection onRequestDelete={onDelete} onRequestSave={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("fleet-saved-row"));
+    expect(onDelete).toHaveBeenCalledWith("snap-b");
     expect(actionService.dispatch).not.toHaveBeenCalled();
   });
 
@@ -504,7 +502,7 @@ describe("SavedFleetsSection integration (live pane counts)", () => {
     const [snapGroup] = screen.getAllByTestId("dropdown-group") as [HTMLElement];
     expect(rowNames(snapGroup)).toEqual(["Gone"]);
     const staleRow = within(snapGroup).getByRole("menuitem");
-    expect(staleRow.getAttribute("aria-disabled")).toBe("true");
+    expect(staleRow.getAttribute("data-stale")).toBe("true");
   });
 
   it("promotes a snapshot back to usable when its terminalIds become eligible", () => {

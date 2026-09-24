@@ -229,15 +229,13 @@ const SHOTS: Shot[] = [
           const el = document.activeElement;
           return (
             el?.getAttribute("data-testid") === "fleet-saved-row" &&
-            el.getAttribute("aria-disabled") === "true"
+            el.getAttribute("data-stale") === "true"
           );
         });
       }
       if (!reached) throw new Error("keyboard never reached the stale row — refusing to write");
-      // Activating an unavailable row must leave the menu open.
-      await page.keyboard.press("Enter");
       await page.waitForTimeout(250);
-      return page.locator('[data-testid="fleet-saved-row"][aria-disabled="true"]').first();
+      return page.locator('[data-testid="fleet-saved-row"][data-stale="true"]').first();
     },
   },
   {

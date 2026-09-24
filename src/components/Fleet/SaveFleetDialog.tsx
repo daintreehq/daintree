@@ -132,7 +132,6 @@ export function SaveFleetDialog({
                   void submit();
                 }
               }}
-              placeholder="Bugfix pair"
               autoComplete="off"
               spellCheck={false}
               className={FIELD_INPUT}
@@ -216,7 +215,13 @@ export function SaveFleetDialog({
       </AppDialog.Body>
 
       <AppDialog.Footer
-        hint={trimmed.length === 0 ? "Name the fleet to save it" : undefined}
+        hint={
+          kind === "snapshot" && armedCount === 0
+            ? "Arm panes to save a snapshot"
+            : trimmed.length === 0
+              ? "Name the fleet to save it"
+              : undefined
+        }
         secondaryAction={{ label: "Cancel", onClick: onClose }}
         primaryAction={{
           label: "Save fleet",

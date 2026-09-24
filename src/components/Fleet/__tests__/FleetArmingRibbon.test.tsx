@@ -1350,6 +1350,33 @@ describe("FleetArmingRibbon — fleet dialogs absorb bare Escape", () => {
   }
 });
 
+describe("FleetArmingRibbon — save dialog outlives the ribbon", () => {
+  beforeEach(() => {
+    resetStores();
+    useProjectSettingsStore.setState({
+      settings: { runCommands: [], fleetSavedScopes: [] } as ProjectSettings,
+    });
+  });
+
+  it("keeps the dialog and its typed name when the armed set drains below two", async () => {
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    render(<FleetArmingRibbon />);
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save as fleet…"));
+    });
+    fireEvent.change(screen.getByTestId("fleet-save-form-name"), {
+      target: { value: "Morning triage" },
+    });
+    await act(async () => {
+      useFleetArmingStore.getState().armIds(["a"]);
+    });
+    expect(screen.queryByTestId("fleet-selection-menu-trigger")).toBeNull();
+    expect(screen.getByDisplayValue("Morning triage")).toBe(
+      screen.getByTestId("fleet-save-form-name")
+    );
+  });
+});
+
 describe("supervised run status line (#10930)", () => {
   function makeRunTarget(
     terminalId: string,

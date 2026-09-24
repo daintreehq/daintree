@@ -24,17 +24,22 @@ export function SavedFleetRow({
 }: SavedFleetRowProps): ReactElement {
   return (
     <DropdownMenuItem
-      aria-disabled={isStale || undefined}
-      aria-label={savedFleetAccessibleName(scope, count)}
+      aria-label={
+        isStale
+          ? `${savedFleetAccessibleName(scope, count)}, select to delete`
+          : savedFleetAccessibleName(scope, count)
+      }
       // The trash button is pointer-only inside a menuitem, so the row itself
       // takes Delete/Backspace — the keyboard route to the same confirm.
       aria-keyshortcuts="Delete"
       title={scope.name}
-      onSelect={(e) => {
+      onSelect={() => {
+        // A stale snapshot can't be recalled, and deleting it is the one thing
+        // it's still for — so selecting it opens the same confirm as the trash.
+        // Marking it disabled instead left an inert row holding a live delete
+        // control, which disabled semantics can't describe.
         if (isStale) {
-          // An unavailable row stays focusable (APG) but activating it must
-          // neither recall nor close the menu, or it reads as a command that ran.
-          e.preventDefault();
+          onRequestDelete(scope.id);
           return;
         }
         void actionService.dispatch("fleet.recallNamedFleet", { id: scope.id }, { source: "user" });
@@ -59,7 +64,7 @@ export function SavedFleetRow({
       >
         {scope.name}
       </span>
-      <span aria-hidden="true" className="flex shrink-0 items-center gap-2">
+      <span aria-hidden="true" className="flex shrink-0 items-center gap-3">
         {scope.kind === "predicate" && (
           <span className="text-2xs text-text-secondary">{describeRule(scope)}</span>
         )}
