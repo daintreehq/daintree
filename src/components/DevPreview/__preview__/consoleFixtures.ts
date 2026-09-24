@@ -174,7 +174,7 @@ export interface ConsoleStackFixture {
    */
   expand?: number[];
   /** A pointer or keyboard drive the spec performs after expansion. */
-  drive?: "keyboard-focus" | "hover-toggle";
+  drive?: "keyboard-focus" | "hover-toggle" | "row-focus";
 }
 
 const SESSION: Row[] = [ROW_BOOT, ROW_LOG, ROW_WARN, ROW_FETCH, ROW_NETWORK, ROW_UNCAUGHT];
@@ -188,6 +188,7 @@ export const CONSOLE_FIXTURES = {
   "native-frames": { width: 900, height: 360, rows: [ROW_BOOT, ROW_NATIVE], expand: [1] },
   "narrow-long-urls": { width: 460, height: 520, rows: [ROW_LOG, ROW_LONG], expand: [1] },
   "keyboard-focus": { width: 900, height: 360, rows: SESSION, drive: "keyboard-focus" },
+  "row-focus": { width: 460, height: 360, rows: [ROW_LOG, ROW_LONG], drive: "row-focus" },
   "hover-toggle": { width: 900, height: 360, rows: SESSION, drive: "hover-toggle" },
 } satisfies Record<string, ConsoleStackFixture>;
 

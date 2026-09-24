@@ -376,7 +376,10 @@ describe("stack traces", () => {
       useConsoleCaptureStore.setState({ messages: new Map(), counters: new Map() });
       seedConsoleRow({ level, cdpType, stackTrace: { callFrames } });
       const { unmount } = renderPanel();
-      expect(screen.getByTitle(/loadOrders\.ts\?t=123:12:1$/).textContent).toBe("loadOrders.ts:12");
+      const location = screen.getByTitle(/loadOrders\.ts\?t=123:12:1$/);
+      // Short at rest; the full path for assistive tech and keyboard focus.
+      expect(location.textContent).toContain("loadOrders.ts:12");
+      expect(screen.getByText("Source: src/loadOrders.ts:12:1")).toBeTruthy();
       offered[cdpType] = stackToggle() !== null;
       unmount();
     }

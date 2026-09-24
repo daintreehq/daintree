@@ -160,6 +160,15 @@ async function drive(page: Page, fixture: ConsoleStackFixture): Promise<void> {
       await expect(target).toBeFocused();
       break;
     }
+    case "row-focus": {
+      // Keyboard focus on the row itself swaps the short source for the full path.
+      const row = rowFor(page, fixture, 1);
+      for (let i = 0; i < 20 && !(await row.evaluate((el) => el === document.activeElement)); i++) {
+        await page.keyboard.press("Tab");
+      }
+      await expect(row).toBeFocused();
+      break;
+    }
     case "hover-toggle": {
       // The warning row: a disclosure in every revision of the console.
       await toggleIn(rowFor(page, fixture, 2)).hover();

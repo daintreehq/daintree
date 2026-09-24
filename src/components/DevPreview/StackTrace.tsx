@@ -116,21 +116,33 @@ function LibraryRun({
 }
 
 /**
- * The top frame's file and line, for the message line itself — so where a
- * message came from reads without expanding anything.
+ * The source of a message, on its own line: filename and line at rest, the
+ * full path when the row has keyboard focus — the keyboard's equivalent of
+ * the hover title, without adding a tab stop. Assistive tech always gets the
+ * full location.
  */
 export function StackLocation({ stackTrace }: { stackTrace: CdpStackTrace }) {
   const frame = primaryFrame(stackTrace.callFrames);
   if (!frame) return null;
+  const full = `${framePath(frame)}:${frame.lineNumber}:${frame.columnNumber}`;
   return (
-    // Only the filename gives way in a narrow pane; the line number is the
-    // part of the answer that can't be recovered from anywhere else.
     <span
       className="ml-auto flex min-w-0 max-w-full text-text-secondary select-none"
       title={frameFullLocation(frame)}
     >
-      <span className="min-w-0 truncate">{frameFileName(frame)}</span>
-      <span className="shrink-0">:{frame.lineNumber}</span>
+      <span className="sr-only">Source: {full}</span>
+      {/* Only the filename gives way in a narrow pane; the line number is
+          the part of the answer that can't be recovered anywhere else. */}
+      <span aria-hidden="true" className="flex min-w-0 group-focus-visible/row:hidden">
+        <span className="min-w-0 truncate">{frameFileName(frame)}</span>
+        <span className="shrink-0">:{frame.lineNumber}</span>
+      </span>
+      <span
+        aria-hidden="true"
+        className="hidden min-w-0 wrap-break-word group-focus-visible/row:inline"
+      >
+        <BreakablePath path={framePath(frame)} />:{frame.lineNumber}:{frame.columnNumber}
+      </span>
     </span>
   );
 }
