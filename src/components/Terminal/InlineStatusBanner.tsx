@@ -605,7 +605,12 @@ export function InlineStatusBanner({
         ) : hasDescription ? (
           <div className="flex-1 min-w-0">
             <div className={cn("flex justify-between items-start gap-2", trailingClose && "pr-8")}>
-              <span className="text-sm font-medium text-text-primary">{title}</span>
+              {/* A title can carry an unbroken token — a hostname, a path — wider
+                  than the column. Let it shrink and break there rather than
+                  push the controls out of the band. */}
+              <span className="min-w-0 wrap-anywhere text-sm font-medium text-text-primary">
+                {title}
+              </span>
               {stacked && closeButton && !trailingClose && (
                 <div className="-mt-1 -mr-1">{closeButton}</div>
               )}
@@ -621,7 +626,9 @@ export function InlineStatusBanner({
             )}
           </div>
         ) : (
-          <span className="text-sm font-medium text-text-primary">{title}</span>
+          <span className="min-w-0 wrap-anywhere text-sm font-medium text-text-primary">
+            {title}
+          </span>
         )}
       </div>
 
