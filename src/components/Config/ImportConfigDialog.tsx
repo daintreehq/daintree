@@ -24,7 +24,7 @@ const IMPORT_CONFIG_ACTION_ID = "app.importConfig";
 const MAX_NAMED = 3;
 
 /**
- * Re-enter the flow from a toast action by firing the same event the menu item
+ * Re-enter the flow from a toast action by firing the same event the action
  * fires, rather than reaching back into the component — one entry point, and no
  * self-reference from inside the callback that defines it.
  */
@@ -462,6 +462,8 @@ export function ImportConfigDialog() {
       onConfirm={handleConfirm}
       bodyResetKey={failureCount}
       hasPreview
+      // Settings → Import & export opens this over the settings dialog.
+      zIndex="nested"
     >
       {applyFailure && (
         <InlineStatusBanner

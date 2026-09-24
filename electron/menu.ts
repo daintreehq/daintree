@@ -706,21 +706,11 @@ export function createApplicationMenu(
           click: (_item, browserWindow) =>
             sendAction("app.reloadConfig", getTargetBrowserWindow(browserWindow)),
         },
-        {
-          label: "Export Configuration…",
-          click: (_item, browserWindow) =>
-            sendAction("app.exportConfig", getTargetBrowserWindow(browserWindow)),
-        },
-        {
-          label: "Import Configuration…",
-          click: (_item, browserWindow) =>
-            sendAction("app.importConfig", getTargetBrowserWindow(browserWindow)),
-        },
         { type: "separator" },
         {
           label: "Learn More",
           click: async () => {
-            await openExternalUrl("https://github.com/daintreehq/daintree");
+            await openExternalUrl("https://daintree.org");
           },
         },
         ...(process.platform !== "darwin" && app.isPackaged && !isWindowsStoreBuild()

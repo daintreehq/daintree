@@ -80,6 +80,7 @@ test.describe.serial("Core: Shell & Settings", () => {
           "Portal",
           "MCP server",
           "Privacy & data",
+          "Import & export",
           "Environment",
           "Troubleshooting",
         ];

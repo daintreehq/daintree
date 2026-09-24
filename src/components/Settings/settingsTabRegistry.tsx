@@ -20,6 +20,7 @@ import {
   Bell,
   KeyRound,
   Shield,
+  ArrowDownUp,
 } from "lucide-react";
 import { DaintreeIcon, FolderGit2, Plug, McpServerIcon, Workflow } from "@/components/icons";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
@@ -127,6 +128,7 @@ const importPluginsTab = () => import("./PluginsTab");
 const importDaintreeAssistantSettingsTab = () => import("./DaintreeAssistantSettingsTab");
 const importEnvironmentSettingsTab = () => import("./EnvironmentSettingsTab");
 const importPrivacyDataTab = () => import("./PrivacyDataTab");
+const importImportExportSettingsTab = () => import("./ImportExportSettingsTab");
 const importProjectGeneralTab = () => import("@/components/Project/GeneralTab");
 const importProjectContextTab = () => import("@/components/Project/ContextTab");
 const importProjectVariablesTab = () => import("@/components/Project/EnvironmentVariablesEditor");
@@ -193,6 +195,9 @@ const LazyEnvironmentSettingsTab = lazy(() =>
 );
 const LazyPrivacyDataTab = lazy(() =>
   importPrivacyDataTab().then((m) => ({ default: m.PrivacyDataTab }))
+);
+const LazyImportExportSettingsTab = lazy(() =>
+  importImportExportSettingsTab().then((m) => ({ default: m.ImportExportSettingsTab }))
 );
 const LazyProjectGeneralTab = lazy(() =>
   importProjectGeneralTab().then((m) => ({ default: m.GeneralTab }))
@@ -690,6 +695,35 @@ export const SETTINGS_REGISTRY = [
         title: "Crash reporting",
         description: "Configure crash reporting and telemetry level in Privacy & Data settings",
         keywords: ["crash", "reporting", "telemetry", "error", "stack trace", "sentry"],
+      },
+    ],
+  } satisfies LazySettingsTabEntry,
+
+  {
+    id: "import-export",
+    scope: "global",
+    group: "General",
+    label: "Import & export",
+    icon: <ArrowDownUp className="w-4 h-4" />,
+    importKind: "lazy",
+    importer: importImportExportSettingsTab,
+    LazyComponent: LazyImportExportSettingsTab,
+    searchNavDescription: "Export your configuration to a file or import one from another machine",
+    searchNavKeywords: ["import", "export", "backup", "restore", "config", "configuration"],
+    sections: [
+      {
+        id: "import-export-config-export",
+        section: "Configuration file",
+        title: "Export configuration",
+        description: "Save your agents, shortcuts, theme, and other settings to a JSON file",
+        keywords: ["export", "backup", "config", "configuration", "save", "migrate", "transfer"],
+      },
+      {
+        id: "import-export-config-import",
+        section: "Configuration file",
+        title: "Import configuration",
+        description: "Replace matching settings with the values in an exported file",
+        keywords: ["import", "restore", "config", "configuration", "load", "migrate", "transfer"],
       },
     ],
   } satisfies LazySettingsTabEntry,
@@ -2137,6 +2171,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
   toolbar: <PanelTop className="w-5 h-5 text-text-secondary" />,
   notifications: <Bell className="w-5 h-5 text-text-secondary" />,
+  "import-export": <ArrowDownUp className="w-5 h-5 text-text-secondary" />,
   integrations: <Blocks className="w-5 h-5 text-text-secondary" />,
   voice: <Mic className="w-5 h-5 text-text-secondary" />,
   mcp: <McpServerIcon className="w-5 h-5 text-text-secondary" />,
