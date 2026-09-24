@@ -36,6 +36,7 @@ export {
   FolderOutput, // worktree living outside the project directory (external)
   FolderTree, // Daintree's own file browser panel (the worktree file tree)
   Folders, // copy tree / file hierarchy capture (two overlapping folders)
+  Gauge, // git that could run faster on this worktree — the suggestion to route a WSL checkout's git through WSL
   GitBranchPlus, // per-project worktree setup — creating branches, not browsing them
   GitPullRequest, // forge provider / code-host plugin category
   History, // resume closed session / session history

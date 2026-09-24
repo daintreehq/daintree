@@ -378,27 +378,43 @@ test("wsl git banner review — states and themes", async () => {
       await expect(banner, "stuck state never rendered").not.toHaveAttribute("aria-busy", "true", {
         timeout: 10_000,
       });
-      await snap(page, "31-probe-stuck", cardOf(await reveal(page, B.probing)), "Re-check");
+      await snap(page, "31-probe-stuck", cardOf(await reveal(page, B.probing)));
     });
 
+    // The primary action is the first button in every state; address it by
+    // position so the harness survives copy changes.
+    const primaryIn = async (branch: string) =>
+      bannerIn(await reveal(page, branch))
+        .getByRole("button")
+        .first();
+
     await step("reprobe", async () => {
+      const probing = bannerIn(await reveal(page, B.probing));
       await setReprobe(app, "hang");
-      const stuck = bannerIn(await reveal(page, B.probing));
-      await stuck.getByRole("button", { name: /re-check/i }).click();
+      await (await primaryIn(B.probing)).click();
       await page.mouse.move(1600, 1000);
-      await snap(page, "32-probe-rechecking", cardOf(await reveal(page, B.probing)), /Re-checking/);
+      await expect(probing, "re-check never went busy").toHaveAttribute("aria-busy", "true");
+      await snap(page, "32-probe-rechecking", cardOf(await reveal(page, B.probing)));
       await releaseReprobe(app);
-      await snap(
-        page,
-        "33-probe-recheck-failed",
-        cardOf(await reveal(page, B.probing)),
-        "Re-check"
+      await expect(probing, "failed re-check never settled").not.toHaveAttribute(
+        "aria-busy",
+        "true"
       );
+      await snap(page, "33-probe-recheck-failed", cardOf(await reveal(page, B.probing)));
+
+      // No host answer at all: off Windows the host ignores the request, which
+      // is exactly what a probe that fails silently looks like to the banner.
+      await setReprobe(app, "ok");
+      await (await primaryIn(B.probing)).click();
+      await expect(probing, "no-answer re-check never settled").not.toHaveAttribute(
+        "aria-busy",
+        "true",
+        { timeout: 12_000 }
+      );
+      await snap(page, "35-probe-no-answer", cardOf(await reveal(page, B.probing)));
 
       await setReprobe(app, "reject");
-      await bannerIn(await reveal(page, B.ineligible))
-        .getByRole("button", { name: /re-check/i })
-        .click();
+      await (await primaryIn(B.ineligible)).click();
       await page.mouse.move(1600, 1000);
       await snap(
         page,
@@ -406,7 +422,39 @@ test("wsl git banner review — states and themes", async () => {
         cardOf(await reveal(page, B.ineligible)),
         "Debian"
       );
+
+      // A re-check the host answers with the same verdict: it flips the
+      // monitor to unprobed while probing, then back.
       await setReprobe(app, "ok");
+      const longBanner = bannerIn(await reveal(page, B.longDistro));
+      await (await primaryIn(B.longDistro)).click();
+      await port.push({
+        ...port.byBranch(B.longDistro),
+        ...WSL_PATCH[B.longDistro],
+        wslGitEligible: "unprobed",
+      });
+      await expect(longBanner, "re-check hold never went busy").toHaveAttribute(
+        "aria-busy",
+        "true"
+      );
+      await page.mouse.move(1600, 1000);
+      await snap(
+        page,
+        "36-ineligible-rechecking",
+        cardOf(await reveal(page, B.longDistro)),
+        "Ubuntu"
+      );
+      await port.push({ ...port.byBranch(B.longDistro), ...WSL_PATCH[B.longDistro] });
+      await expect(longBanner, "unchanged re-check never settled").not.toHaveAttribute(
+        "aria-busy",
+        "true"
+      );
+      await snap(
+        page,
+        "37-ineligible-recheck-unchanged",
+        cardOf(await reveal(page, B.longDistro)),
+        "Ubuntu"
+      );
     });
 
     await step("interaction", async () => {
@@ -482,10 +530,14 @@ test("wsl git banner review — states and themes", async () => {
           cardOf(await reveal(page, B.ineligible)),
           "Debian"
         );
-        await expect(bannerIn(await reveal(page, B.probing))).toContainText("Re-check", {
-          timeout: 10_000,
-        });
-        await snap(page, `T-${theme}-stuck`, cardOf(await reveal(page, B.probing)), "Re-check");
+        await expect(bannerIn(await reveal(page, B.probing))).toHaveAttribute(
+          "data-state",
+          "stuck",
+          {
+            timeout: 10_000,
+          }
+        );
+        await snap(page, `T-${theme}-stuck`, cardOf(await reveal(page, B.probing)));
       }
       await setAppTheme(page, "daintree");
     });
