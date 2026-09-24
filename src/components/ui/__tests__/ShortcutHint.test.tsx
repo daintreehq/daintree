@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, cleanup } from "@testing-library/react";
 import { ShortcutHint } from "../ShortcutHint";
-import { shortcutHintStore } from "@/store/shortcutHintStore";
+import { shortcutHintStore, type ShortcutHintOrigin } from "@/store/shortcutHintStore";
 
 // Make presence deterministic: render + visibility track isOpen directly so we
 // don't depend on animation timers. shouldRender drives the visual tooltip only.
@@ -18,6 +18,12 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
   }),
 }));
 
+// Pin the platform: chip grammar and spoken key names both depend on it.
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platform")>()),
+  isMac: () => true,
+}));
+
 // The component resolves the action's title from the ActionService registry to
 // label the hint. Mock that lookup so we can drive titled vs. untitled behaviour
 // without registering real actions.
@@ -26,10 +32,18 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { getTitle: getTitleMock },
 }));
 
-function activate(combo: string) {
+function activate(
+  combo: string,
+  origin: ShortcutHintOrigin = "focus",
+  extra: Partial<{
+    x: number;
+    y: number;
+    trigger: { left: number; top: number; right: number; bottom: number };
+  }> = {}
+) {
   act(() => {
     shortcutHintStore.setState({
-      activeHint: { actionId: "test.action", displayCombo: combo, x: 100, y: 100 },
+      activeHint: { actionId: "test.action", combo, origin, x: 100, y: 100, ...extra },
     });
   });
 }
@@ -41,6 +55,8 @@ function deactivate() {
 }
 
 const liveRegion = () => document.querySelector('[role="status"]');
+const card = () => document.querySelector<HTMLElement>("[data-shortcut-hint-surface]");
+const keys = () => Array.from(card()?.querySelectorAll("kbd") ?? []).map((k) => k.textContent);
 
 describe("ShortcutHint live region — issue #8942", () => {
   beforeEach(() => {
@@ -67,80 +83,197 @@ describe("ShortcutHint live region — issue #8942", () => {
     const initial = liveRegion();
     expect(initial).not.toBeNull();
 
-    activate("⌘K");
+    activate("Cmd+K");
     expect(liveRegion()).toBe(initial);
-    expect(initial?.textContent).toContain("⌘K");
+    expect(initial?.textContent).toContain("Command K");
 
     deactivate();
     expect(liveRegion()).toBe(initial);
     expect(initial?.textContent).toBe("");
 
-    activate("⌘P");
+    activate("Cmd+P");
     expect(liveRegion()).toBe(initial);
-    expect(initial?.textContent).toContain("⌘P");
+    expect(initial?.textContent).toContain("Command P");
   });
 
   it("renders the visual tooltip only while a hint is active", () => {
     getTitleMock.mockReturnValue("Open command palette");
     render(<ShortcutHint />);
-    const tooltip = () => document.querySelector('[aria-hidden="true"]');
-    expect(tooltip()).toBeNull();
+    expect(card()).toBeNull();
 
-    activate("⌘K");
-    expect(tooltip()).not.toBeNull();
+    activate("Cmd+K");
+    expect(card()).not.toBeNull();
 
     deactivate();
-    expect(tooltip()).toBeNull();
+    expect(card()).toBeNull();
   });
 
   it("labels the visual tooltip with the resolved action title", () => {
     getTitleMock.mockReturnValue("Open command palette");
     render(<ShortcutHint />);
-    activate("⌘K");
-    const tooltip = document.querySelector('[aria-hidden="true"]');
-    expect(tooltip?.textContent).toContain("Open command palette");
-    expect(tooltip?.textContent).toContain("⌘K");
-    expect(tooltip?.textContent).not.toContain("Tip:");
+    activate("Cmd+K");
+    expect(card()?.textContent).toContain("Open command palette");
   });
 
-  it("falls back to 'Tip:' when the action has no resolvable title", () => {
-    getTitleMock.mockReturnValue("");
+  it.each(["", "   "])("shows the keys alone when the title is %j", (title) => {
+    getTitleMock.mockReturnValue(title);
     render(<ShortcutHint />);
-    activate("⌘K");
-    const tooltip = document.querySelector('[aria-hidden="true"]');
-    expect(tooltip?.textContent).toContain("Tip:");
-    expect(tooltip?.textContent).toContain("⌘K");
-  });
-
-  it("falls back to 'Tip:' when the title is only whitespace", () => {
-    getTitleMock.mockReturnValue("   ");
-    render(<ShortcutHint />);
-    activate("⌘K");
-    const tooltip = document.querySelector('[aria-hidden="true"]');
-    expect(tooltip?.textContent).toContain("Tip:");
-    expect(liveRegion()?.textContent).toBe("Shortcut: ⌘K");
+    activate("Cmd+K");
+    // Nothing but the chord: no filler label standing in for a missing title.
+    expect(card()?.children).toHaveLength(1);
+    expect(keys()).toEqual(["⌘", "K"]);
+    expect(liveRegion()?.textContent).toBe("Shortcut: Command K");
   });
 
   it("marks the visual tooltip aria-hidden so it doesn't double-announce", () => {
     getTitleMock.mockReturnValue("Open command palette");
     render(<ShortcutHint />);
-    activate("⌘K");
-    const tooltip = document.querySelector('[aria-hidden="true"]');
-    expect(tooltip).not.toBeNull();
-    expect(tooltip?.getAttribute("aria-hidden")).toBe("true");
+    activate("Cmd+K");
+    expect(card()?.getAttribute("aria-hidden")).toBe("true");
   });
 
-  it("announces the action title and combo in the live region", () => {
+  it("announces the action title and the keys by name", () => {
     getTitleMock.mockReturnValue("Open command palette");
     render(<ShortcutHint />);
-    activate("⌘K");
-    expect(liveRegion()?.textContent).toBe("Open command palette: ⌘K");
+    activate("Cmd+Shift+P");
+    expect(liveRegion()?.textContent).toBe("Open command palette: Command Shift P");
   });
 
-  it("announces a generic shortcut label when no title resolves", () => {
-    getTitleMock.mockReturnValue("");
+  it("never speaks a modifier glyph", () => {
     render(<ShortcutHint />);
-    activate("⌘K");
-    expect(liveRegion()?.textContent).toBe("Shortcut: ⌘K");
+    for (const combo of ["Cmd+Shift+P", "Ctrl+Alt+L", "Cmd+K Cmd+S", "Shift+Enter"]) {
+      activate(combo);
+      expect(liveRegion()?.textContent).not.toMatch(/[⌘⇧⌥⌃⏎]/);
+    }
+  });
+});
+
+describe("ShortcutHint keycaps", () => {
+  afterEach(() => {
+    cleanup();
+    shortcutHintStore.setState({ activeHint: null });
+  });
+
+  it("gives every key its own chip, with no joiner inside a chip", () => {
+    render(<ShortcutHint />);
+    for (const [combo, count] of [
+      ["Cmd+B", 2],
+      ["Cmd+Shift+P", 3],
+      ["Cmd+K Cmd+S", 4],
+      ["Cmd+Alt+Shift+R", 4],
+    ] as const) {
+      activate(combo);
+      const chips = keys();
+      expect(chips).toHaveLength(count);
+      for (const chip of chips) expect(chip).not.toMatch(/[+\s]/);
+    }
+  });
+});
+
+describe("ShortcutHint lifetime", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    getTitleMock.mockReturnValue("Open command palette");
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    shortcutHintStore.setState({ activeHint: null });
+  });
+
+  it("expires a hint that followed a click", () => {
+    render(<ShortcutHint />);
+    activate("Cmd+K", "dispatch");
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(shortcutHintStore.getState().activeHint).toBeNull();
+  });
+
+  it.each(["hover", "focus"] as const)("keeps a %s hint up until the user moves on", (origin) => {
+    render(<ShortcutHint />);
+    activate("Cmd+K", origin, { trigger: { left: 90, top: 90, right: 130, bottom: 110 } });
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(shortcutHintStore.getState().activeHint).not.toBeNull();
+  });
+
+  it.each(["dispatch", "hover", "focus"] as const)("dismisses a %s hint on Escape", (origin) => {
+    render(<ShortcutHint />);
+    activate("Cmd+K", origin);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(shortcutHintStore.getState().activeHint).toBeNull();
+  });
+
+  it("keeps a hover hint while the pointer stays on its trigger, and drops it once it leaves", () => {
+    render(<ShortcutHint />);
+    activate("Cmd+K", "hover", { trigger: { left: 90, top: 90, right: 130, bottom: 110 } });
+    const move = (clientX: number, clientY: number) =>
+      act(() => {
+        window.dispatchEvent(new PointerEvent("pointermove", { clientX, clientY }));
+      });
+
+    move(110, 100);
+    expect(shortcutHintStore.getState().activeHint).not.toBeNull();
+
+    move(400, 400);
+    expect(shortcutHintStore.getState().activeHint).toBeNull();
+  });
+});
+
+describe("ShortcutHint placement", () => {
+  const CARD = { width: 300, height: 30 };
+
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      return this.hasAttribute("data-shortcut-hint-surface") ? CARD.width : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      return this.hasAttribute("data-shortcut-hint-surface") ? CARD.height : 0;
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    shortcutHintStore.setState({ activeHint: null });
+  });
+
+  it.each([
+    { name: "right edge", x: window.innerWidth - 4, y: 300 },
+    { name: "left edge", x: 0, y: 300 },
+    { name: "top edge", x: 200, y: 2 },
+    { name: "bottom-right corner", x: window.innerWidth - 1, y: window.innerHeight - 1 },
+  ])("keeps the measured card inside the viewport gutter at the $name", ({ x, y }) => {
+    render(<ShortcutHint />);
+    activate("Cmd+Shift+P", "dispatch", { x, y });
+    const left = parseFloat(card()!.style.left);
+    const top = parseFloat(card()!.style.top);
+    expect(left).toBeGreaterThanOrEqual(8);
+    expect(top).toBeGreaterThanOrEqual(8);
+    expect(left + CARD.width).toBeLessThanOrEqual(window.innerWidth - 8);
+    expect(top + CARD.height).toBeLessThanOrEqual(window.innerHeight - 8);
+  });
+
+  it("never covers the pointer it was raised at", () => {
+    render(<ShortcutHint />);
+    for (const [x, y] of [
+      [200, 300],
+      [200, 2],
+    ] as const) {
+      activate("Cmd+Shift+P", "dispatch", { x, y });
+      const left = parseFloat(card()!.style.left);
+      const top = parseFloat(card()!.style.top);
+      const inside = x >= left && x <= left + CARD.width && y >= top && y <= top + CARD.height;
+      expect(inside).toBe(false);
+    }
   });
 });

@@ -1,6 +1,6 @@
 import { useRef, useEffect } from "react";
 import type React from "react";
-import { shortcutHintStore } from "@/store/shortcutHintStore";
+import { shortcutHintStore, type ShortcutHintRect } from "@/store/shortcutHintStore";
 import { isTooltipFocusOpenSuppressed } from "@/lib/tooltipDismissRegistry";
 import { keybindingService } from "./useKeybinding";
 
@@ -19,18 +19,23 @@ const HOVER_DWELL_MS = 1500;
  *     useShortcutHintHover("nav.toggleSidebar");
  *   <button onPointerEnter={onPointerEnter} ... onFocus={onFocus} onBlur={onBlur} />
  */
+function toRect(el: Element): ShortcutHintRect {
+  const { left, top, right, bottom } = el.getBoundingClientRect();
+  return { left, top, right, bottom };
+}
+
 export function useShortcutHintHover(actionId: string) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const displayComboRef = useRef<string>("");
+  const comboRef = useRef<string>("");
   const triggerRef = useRef<Element | null>(null);
   // Ref-based callback to avoid stale closures in setTimeout without useEffectEvent.
   const fireDwellRef = useRef<(clientX: number, clientY: number) => void>(() => {});
 
   // Keep display combo updated without re-creating the timer callbacks.
   useEffect(() => {
-    displayComboRef.current = keybindingService.getDisplayCombo(actionId);
+    comboRef.current = keybindingService.getEffectiveCombo(actionId) ?? "";
     const unsub = keybindingService.subscribe(() => {
-      displayComboRef.current = keybindingService.getDisplayCombo(actionId);
+      comboRef.current = keybindingService.getEffectiveCombo(actionId) ?? "";
     });
     return unsub;
   }, [actionId]);
@@ -38,8 +43,8 @@ export function useShortcutHintHover(actionId: string) {
   // Keep the dwell callback fresh with the latest actionId closure.
   useEffect(() => {
     fireDwellRef.current = (clientX: number, clientY: number) => {
-      const displayCombo = displayComboRef.current;
-      if (!displayCombo) return;
+      const combo = comboRef.current;
+      if (!combo) return;
 
       // Suppress when a Radix tooltip is already teaching the same shortcut on
       // this trigger (data-state is merged onto the trigger child via asChild).
@@ -49,9 +54,11 @@ export function useShortcutHintHover(actionId: string) {
       const store = shortcutHintStore;
       if (!store.getState().isHoverEligible(actionId)) return;
 
-      const shown = store.getState().show(actionId, displayCombo, {
+      const shown = store.getState().show(actionId, combo, {
         x: clientX,
         y: clientY,
+        origin: "hover",
+        trigger: triggerRef.current ? toRect(triggerRef.current) : undefined,
       });
       if (shown) {
         store.getState().markHoverShown(actionId);
@@ -74,8 +81,8 @@ export function useShortcutHintHover(actionId: string) {
   const onPointerEnter = (e: React.PointerEvent) => {
     if (timerRef.current) return;
 
-    const displayCombo = displayComboRef.current;
-    if (!displayCombo) return;
+    const combo = comboRef.current;
+    if (!combo) return;
     if (!shortcutHintStore.getState().isHoverEligible(actionId)) return;
 
     const clientX = e.clientX;
@@ -106,8 +113,8 @@ export function useShortcutHintHover(actionId: string) {
     // Same window that gates tooltip focus-opens (issue #11030).
     if (isTooltipFocusOpenSuppressed()) return;
 
-    const displayCombo = displayComboRef.current;
-    if (!displayCombo) return;
+    const combo = comboRef.current;
+    if (!combo) return;
 
     const target = e.currentTarget;
 
@@ -119,10 +126,12 @@ export function useShortcutHintHover(actionId: string) {
     const store = shortcutHintStore;
     if (!store.getState().isHoverEligible(actionId)) return;
 
-    const rect = target.getBoundingClientRect();
-    const shown = store.getState().show(actionId, displayCombo, {
-      x: rect.left,
-      y: rect.top,
+    const trigger = toRect(target);
+    const shown = store.getState().show(actionId, combo, {
+      x: trigger.left,
+      y: trigger.top,
+      origin: "focus",
+      trigger,
     });
     if (shown) {
       store.getState().markHoverShown(actionId);

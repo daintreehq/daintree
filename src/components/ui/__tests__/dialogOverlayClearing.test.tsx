@@ -60,7 +60,7 @@ vi.stubGlobal(
 );
 
 function showHint() {
-  shortcutHintStore.getState().show("test.action", "Cmd+K", { x: 10, y: 20 });
+  shortcutHintStore.getState().show("test.action", "Cmd+K", { x: 10, y: 20, origin: "hover" });
 }
 
 const harnesses = [

@@ -128,7 +128,7 @@ describe("ActionService overlay claim integration", () => {
     const result = await dispatched;
     expect(result.ok).toBe(true);
     expect(hintMocks.mockIncrementCount).toHaveBeenCalledWith("test.insideMountedDialog");
-    expect(hintMocks.mockShow).toHaveBeenCalledWith("test.insideMountedDialog", "⌘K");
+    expect(hintMocks.mockShow).toHaveBeenCalledWith("test.insideMountedDialog", "Cmd+K");
   });
 
   it("still emits the hint when the dialog unmounts and releases its claim mid-dispatch", async () => {
@@ -154,6 +154,6 @@ describe("ActionService overlay claim integration", () => {
     const result = await dispatched;
     expect(result.ok).toBe(true);
     expect(hintMocks.mockIncrementCount).toHaveBeenCalledWith("test.closesMountedDialog");
-    expect(hintMocks.mockShow).toHaveBeenCalledWith("test.closesMountedDialog", "⌘K");
+    expect(hintMocks.mockShow).toHaveBeenCalledWith("test.closesMountedDialog", "Cmd+K");
   });
 });

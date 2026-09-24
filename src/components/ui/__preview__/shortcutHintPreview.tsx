@@ -5,7 +5,6 @@ import type { ActionId } from "@shared/types/actions";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
 import { actionService } from "@/services/ActionService";
-import { keybindingService } from "@/services/KeybindingService";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { ShortcutHint } from "../ShortcutHint";
 import { requireShortcutHintFixture } from "./shortcutHintFixtures";
@@ -19,8 +18,8 @@ installPreviewShims();
  * In the app the hint appears for 2.5 seconds, at a pointer position, only at
  * an invocation milestone — so it is close to impossible to screenshot on
  * purpose. This mounts the real `ShortcutHint` and raises it the way the app
- * does: the combo goes through the keybinding service's own display formatter
- * and into `shortcutHintStore.show()`, so what renders is what a user sees.
+ * does: the combo, exactly as the keybinding registry stores it, goes into
+ * `shortcutHintStore.show()`, so what renders is what a user sees.
  *
  * Query parameters:
  *   ?theme=daintree|bondi|…   built-in theme id
@@ -51,9 +50,9 @@ function Preview() {
   useEffect(() => {
     const x = Math.round(window.innerWidth * fixture.anchor.x);
     const y = Math.round(window.innerHeight * fixture.anchor.y);
-    shortcutHintStore
-      .getState()
-      .show(PREVIEW_ACTION, keybindingService.formatComboForDisplay(fixture.combo), { x, y });
+    // A focus-raised hint: it stays up until blur or Escape, so the capture is
+    // not racing the 2.5-second timeout a post-click hint runs on.
+    shortcutHintStore.getState().show(PREVIEW_ACTION, fixture.combo, { x, y, origin: "focus" });
     document.documentElement.dataset.hintRaised = "true";
   }, []);
 
