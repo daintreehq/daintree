@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SearchField } from "@/components/ui/SearchField";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import type { ChipCounts } from "@/lib/worktreeFilters";
 import {
@@ -52,6 +54,7 @@ function FilterSection({
   const headerId = `filter-section-header-${reactId}`;
   const hasActive = activeCount > 0;
   const expandButtonRef = useRef<HTMLButtonElement>(null);
+  const { ref: summaryRef, isTruncated: isSummaryTruncated } = useTruncationDetection();
 
   // `defaultOpen` is only an initial value, so a section that gains its first
   // filter from outside the popover (the quick-state bar, a restored session)
@@ -74,41 +77,53 @@ function FilterSection({
           stays put whether or not a section has anything to clear. The row
           owns the hover so pointing at Clear doesn't drop the fill. */}
       <div className="group/filter-header relative">
-        <button
-          ref={expandButtonRef}
-          id={headerId}
-          type="button"
-          onClick={() => setIsOpen(!isOpen)}
-          aria-expanded={isOpen}
-          aria-controls={contentId}
-          className="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left text-xs font-medium text-text-secondary transition-colors group-hover/filter-header:bg-overlay-soft group-hover/filter-header:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+        {/* A collapsed facet's summary is the answer to "what is filtering my
+            list", so when several values clip it, the toggle carries the full
+            list on hover and focus rather than making the user reopen it. */}
+        <TruncatedTooltip
+          content={summary}
+          side="right"
+          isTruncated={!isOpen && isSummaryTruncated}
         >
-          <span className="flex min-w-0 flex-1 items-center gap-1.5">
-            <span className="shrink-0">{title}</span>
-            {hasActive && (
-              <span className="rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none tabular-nums text-text-secondary">
-                {activeCount}
-              </span>
-            )}
-            {!isOpen && summary && (
-              <span className="min-w-0 truncate text-2xs font-normal text-text-secondary">
-                {summary}
-              </span>
-            )}
-          </span>
-          {showClear && (
-            <span aria-hidden="true" className="invisible shrink-0 px-1 text-2xs">
-              Clear
+          <button
+            ref={expandButtonRef}
+            id={headerId}
+            type="button"
+            onClick={() => setIsOpen(!isOpen)}
+            aria-expanded={isOpen}
+            aria-controls={contentId}
+            className="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left text-xs font-medium text-text-secondary transition-colors group-hover/filter-header:bg-overlay-soft group-hover/filter-header:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+          >
+            <span className="flex min-w-0 flex-1 items-center gap-1.5">
+              <span className="shrink-0">{title}</span>
+              {hasActive && (
+                <span className="rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none tabular-nums text-text-secondary">
+                  {activeCount}
+                </span>
+              )}
+              {!isOpen && summary && (
+                <span
+                  ref={summaryRef}
+                  className="min-w-0 truncate text-2xs font-normal text-text-secondary"
+                >
+                  {summary}
+                </span>
+              )}
             </span>
-          )}
-          <ChevronDown
-            data-animated-chevron
-            className={cn(
-              "w-3.5 h-3.5 shrink-0 transition-transform",
-              isOpen ? "transform rotate-180" : ""
+            {showClear && (
+              <span aria-hidden="true" className="invisible shrink-0 px-1 text-2xs">
+                Clear
+              </span>
             )}
-          />
-        </button>
+            <ChevronDown
+              data-animated-chevron
+              className={cn(
+                "w-3.5 h-3.5 shrink-0 transition-transform",
+                isOpen ? "transform rotate-180" : ""
+              )}
+            />
+          </button>
+        </TruncatedTooltip>
         {showClear && (
           <button
             type="button"

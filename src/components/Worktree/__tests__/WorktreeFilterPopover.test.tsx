@@ -2,11 +2,19 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs";
 import path from "path";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render as rtlRender, screen, cleanup, fireEvent } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeFilterPopover } from "../WorktreeFilterPopover";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import type { ChipCounts } from "@/lib/worktreeFilters";
 import { STATUS_OPTIONS } from "@/lib/worktreeFilterOptions";
+
+// Section toggles are tooltip triggers (a collapsed summary that clips shows
+// in full), so the popover needs the provider the app mounts at its root.
+function render(ui: ReactElement) {
+  return rtlRender(ui, { wrapper: TooltipProvider });
+}
 
 const SOURCE = fs.readFileSync(path.resolve(__dirname, "../WorktreeFilterPopover.tsx"), "utf-8");
 
