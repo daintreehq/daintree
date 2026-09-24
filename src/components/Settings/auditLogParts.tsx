@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import { cn } from "@/lib/utils";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { Button } from "@/components/ui/button";
+import { SearchField } from "@/components/ui/SearchField";
 import { SettingsEmptyRow } from "./SettingsGroup";
 
 /**
@@ -57,13 +57,16 @@ export function AuditFilterInput({
   ariaLabel: string;
 }) {
   return (
-    <input
+    <SearchField
+      size="compact"
       type="search"
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      onClear={() => onChange("")}
+      // Each bar holds two of these, so the clear buttons name their field.
+      clearLabel={`Clear ${ariaLabel.charAt(0).toLowerCase()}${ariaLabel.slice(1)}`}
       placeholder={placeholder}
       aria-label={ariaLabel}
-      className={cn(FIELD_CLASS, "placeholder:text-text-placeholder")}
     />
   );
 }

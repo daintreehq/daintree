@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { cn } from "@/lib/utils";
-import { ChevronDown, GitBranch, Search, Settings2 } from "lucide-react";
+import { ChevronDown, GitBranch, Settings2 } from "lucide-react";
 import { GitHubIcon, GitLabIcon } from "@/components/icons/brands";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
 import {
   BUILTIN_GITHUB_PROVIDER_ID,
   BUILTIN_GITLAB_PROVIDER_ID,
@@ -151,29 +152,25 @@ export function ForgeProviderSelectorDropdown({
         style={{ width: "var(--radix-popover-trigger-width)" }}
         onEscapeKeyDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border-default">
-          <Search size={14} className="shrink-0 text-text-secondary" aria-hidden="true" />
-          <input
-            ref={inputRef}
-            type="text"
-            autoFocus
-            placeholder="Filter providers…"
-            value={filterQuery}
-            onChange={(e) => setFilterQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            role="combobox"
-            aria-label="Filter providers"
-            aria-expanded={open}
-            aria-autocomplete="list"
-            aria-controls="forge-provider-selector-list"
-            aria-activedescendant={
-              activeIndex >= 0 && items[activeIndex]
-                ? `forge-provider-selector-item-${items[activeIndex].id}`
-                : undefined
-            }
-            className="flex-1 min-w-0 px-1 py-0.5 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder rounded-[var(--radius-sm)] focus:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary"
-          />
-        </div>
+        <PopoverSearchField
+          ref={inputRef}
+          autoFocus
+          placeholder="Filter providers…"
+          value={filterQuery}
+          onChange={(e) => setFilterQuery(e.target.value)}
+          onKeyDown={handleKeyDown}
+          role="combobox"
+          aria-label="Filter providers"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          aria-controls="forge-provider-selector-list"
+          aria-activedescendant={
+            activeIndex >= 0 && items[activeIndex]
+              ? `forge-provider-selector-item-${items[activeIndex].id}`
+              : undefined
+          }
+          className="h-8 text-xs"
+        />
         <div
           role="listbox"
           id="forge-provider-selector-list"

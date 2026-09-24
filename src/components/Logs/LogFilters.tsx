@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, useRef } from "react";
-import { Check, ChevronDown, Search, X } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { SearchField } from "@/components/ui/SearchField";
 import { PRESSED_TOGGLE } from "@/components/Diagnostics/toggleStyles";
 import type { LogLevel, LogFilterOptions } from "@/types";
 
@@ -106,37 +107,17 @@ export function LogFilters({
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-divider px-3 py-1.5">
-      <div className="relative min-w-[150px] max-w-[260px] flex-1">
-        <Search
-          aria-hidden="true"
-          className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-text-secondary"
-        />
-        <input
-          type="search"
-          value={searchValue}
-          onChange={(e) => setSearchValue(e.target.value)}
-          placeholder="Search logs"
-          aria-label="Search logs"
-          className={cn(
-            "h-6 w-full rounded-[var(--radius-md)] pl-6 pr-7 text-xs",
-            "border border-border-default bg-surface-canvas",
-            "text-text-primary placeholder:text-text-placeholder",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-            "[&::-webkit-search-cancel-button]:hidden"
-          )}
-        />
-        {searchValue && (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={() => setSearchValue("")}
-            className="absolute right-0.5 top-1/2 h-5 w-5 -translate-y-1/2"
-            aria-label="Clear search"
-          >
-            <X />
-          </Button>
-        )}
-      </div>
+      <SearchField
+        size="compact"
+        // h-6 keeps the field level with the xs filter chips beside it.
+        fieldClassName="h-6 min-w-[150px] max-w-[260px] flex-1"
+        type="search"
+        value={searchValue}
+        onChange={(e) => setSearchValue(e.target.value)}
+        onClear={() => setSearchValue("")}
+        placeholder="Search logs"
+        aria-label="Search logs"
+      />
 
       <div className="flex items-center gap-1" role="group" aria-label="Filter by level">
         {LOG_LEVELS.map(({ level, label, dot }) => {

@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from "react";
-import { Search, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { RecipeRunnerItem } from "./RecipeRunnerItem";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SearchField } from "@/components/ui/SearchField";
 import type { RecipeSections, RankedRecipe } from "./recipeRunnerUtils";
 import type { TerminalRecipe } from "@/types";
 
@@ -118,33 +119,31 @@ export function RecipeRunnerList({
         // showed two equal search anchors and the lower one looked like
         // another way to launch anything. Naming the band and shrinking the
         // input to a filter says what its scope actually is.
-        <div className="mb-2 flex items-baseline gap-3 px-1">
+        <div className="mb-2 flex items-center gap-3 px-1">
           <span
             id="recipe-band-label"
             className="shrink-0 text-2xs font-medium uppercase tracking-wide text-text-secondary"
           >
             Recipes
           </span>
-          <div className="relative min-w-0 flex-1">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-text-secondary pointer-events-none" />
-            <input
-              ref={inputRef}
-              type="text"
-              role="combobox"
-              aria-expanded={true}
-              aria-controls="recipe-listbox"
-              aria-activedescendant={focusedItemId}
-              aria-label="Filter recipes"
-              // On the input, not the band: the combobox owns the arrow/Enter
-              // contract, and a handler on the wrapper also caught Enter on the
-              // Manage button beside it and launched the active recipe.
-              onKeyDown={onKeyDown}
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Filter recipes…"
-              className="w-full rounded-[var(--radius-md)] border border-border-subtle bg-transparent py-1 pl-7 pr-2 text-xs text-text-primary placeholder:text-text-placeholder focus:border-accent-primary focus:outline-hidden focus:ring-1 focus:ring-accent-primary"
-            />
-          </div>
+          <SearchField
+            size="compact"
+            fieldClassName="flex-1"
+            inputRef={inputRef}
+            role="combobox"
+            aria-expanded={true}
+            aria-controls="recipe-listbox"
+            aria-activedescendant={focusedItemId}
+            aria-label="Filter recipes"
+            // On the input, not the band: the combobox owns the arrow/Enter
+            // contract, and a handler on the wrapper also caught Enter on the
+            // Manage button beside it and launched the active recipe.
+            onKeyDown={onKeyDown}
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            onClear={() => onSearchChange("")}
+            placeholder="Filter recipes…"
+          />
           {/* In list mode the inventory is long enough that a link under it
               is a scroll away; the header is where management is findable. */}
           {onManage && (

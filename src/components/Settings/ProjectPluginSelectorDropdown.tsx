@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, FolderCog, Package, Search } from "lucide-react";
+import { ChevronDown, FolderCog, Package } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
 import { cn } from "@/lib/utils";
 
 /** The pseudo-entry that selects the project-wide pane rather than one plugin. */
@@ -175,28 +176,24 @@ export function ProjectPluginSelectorDropdown({
         style={{ width: "var(--radix-popover-trigger-width)" }}
         onEscapeKeyDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border-default">
-          <Search size={14} className="shrink-0 text-text-secondary" aria-hidden="true" />
-          <input
-            type="text"
-            autoFocus
-            placeholder="Filter plugins…"
-            value={filterQuery}
-            onChange={(e) => setFilterQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            role="combobox"
-            aria-label="Filter plugins"
-            aria-expanded={open}
-            aria-autocomplete="list"
-            aria-controls="project-plugin-selector-list"
-            aria-activedescendant={
-              activeIndex >= 0 && items[activeIndex]
-                ? `project-plugin-selector-item-${items[activeIndex].id}`
-                : undefined
-            }
-            className="flex-1 min-w-0 px-1 py-0.5 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder rounded-[var(--radius-sm)] focus:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary"
-          />
-        </div>
+        <PopoverSearchField
+          autoFocus
+          placeholder="Filter plugins…"
+          value={filterQuery}
+          onChange={(e) => setFilterQuery(e.target.value)}
+          onKeyDown={handleKeyDown}
+          role="combobox"
+          aria-label="Filter plugins"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          aria-controls="project-plugin-selector-list"
+          aria-activedescendant={
+            activeIndex >= 0 && items[activeIndex]
+              ? `project-plugin-selector-item-${items[activeIndex].id}`
+              : undefined
+          }
+          className="h-8 text-xs"
+        />
         <div
           role="listbox"
           id="project-plugin-selector-list"

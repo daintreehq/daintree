@@ -10,6 +10,7 @@ import {
   ZERO_COUNTS,
 } from "@/store/consoleCaptureStore";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { SearchField } from "@/components/ui/SearchField";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { sanitizeForClipboard } from "@/lib/clipboardSanitize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -365,13 +366,17 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
         </div>
 
         {/* Search */}
-        <input
-          type="text"
+        <SearchField
+          size="compact"
+          // 22px matches the toolbar's icon buttons; the compact 28px would
+          // make the filter the tallest thing in this strip.
+          fieldClassName="h-5.5 flex-1 max-w-[160px] gap-1 px-1.5 text-2xs [&_.search-field-icon]:size-3"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          onClear={() => setSearch("")}
+          clearLabel="Clear filter"
           placeholder="Filter…"
           aria-label="Filter console messages"
-          className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-2xs rounded bg-surface-canvas border border-overlay focus:outline-hidden focus:border-border-strong text-text-primary placeholder:text-text-placeholder"
         />
 
         <div className="flex-1" />

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo } from "react";
 import type { Dispatch, Ref, RefObject, SetStateAction } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { GitStatus, StagingFileEntry } from "@shared/types";
-import { ChevronDown, ChevronUp, Minus, Plus, Search, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, ChevronUp, Minus, Plus, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,6 +17,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SearchField } from "@/components/ui/SearchField";
 import { FileStageRow, type FileStageRowSection } from "./FileStageRow";
 import { type MountedRange } from "@/lib/fileListWindowing";
 import { isGeneratedFile } from "../generatedFileClassifier";
@@ -385,44 +386,21 @@ export function FileSection({
             )}
           </span>
           <div className="flex items-center gap-1.5 min-w-0">
-            <div
-              className={cn(
-                "flex items-center gap-1 h-5 pl-1.5 pr-1.5 rounded min-w-0",
-                "bg-tint/[0.04] border border-border-strong",
-                "hover:bg-tint/[0.06] transition-colors",
-                "focus-within:border-accent-primary",
-                // The strip IS the field, so it owns the forced-colors focus
-                // boundary. Without this the inner input painted its own
-                // rectangle inside the wrapper and the pair read as two
-                // separate controls.
-                "forced-colors:focus-within:outline forced-colors:focus-within:outline-2",
-                "forced-colors:focus-within:outline-[Highlight]",
+            <SearchField
+              size="compact"
+              // h-5 keeps the section header at its own height; the compact
+              // 28px would push the header taller than its label row.
+              fieldClassName={cn(
+                "h-5 gap-1 px-1.5 text-2xs [&_.search-field-icon]:size-3",
                 filterDropClass
               )}
-            >
-              <Search
-                aria-hidden="true"
-                className="w-3 h-3 shrink-0 text-daintree-text/40 forced-colors:text-[CanvasText]"
-              />
-              <input
-                ref={inputRef}
-                type="text"
-                aria-label={filterLabel}
-                placeholder="Filter…"
-                defaultValue={view.filterQuery}
-                onChange={(e) => setFilterQuery(e.target.value)}
-                className={cn(
-                  "w-[104px] min-w-0 bg-transparent text-2xs",
-                  "text-text-primary placeholder:text-text-placeholder",
-                  // The transparent-outline utility below is what forced
-                  // colors would normally turn into a visible box. That is
-                  // right for a standalone control and wrong inside a strip
-                  // whose wrapper already draws the boundary, so its width is
-                  // zeroed there and the wrapper paints the focus ring.
-                  "outline-hidden forced-colors:outline-0"
-                )}
-              />
-            </div>
+              inputRef={inputRef}
+              aria-label={filterLabel}
+              placeholder="Filter…"
+              defaultValue={view.filterQuery}
+              onChange={(e) => setFilterQuery(e.target.value)}
+              className="w-[104px] grow-0 basis-auto"
+            />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button

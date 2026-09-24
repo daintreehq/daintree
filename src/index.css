@@ -10,6 +10,7 @@
 @import "./styles/components/sidebar.css";
 @import "./styles/components/panels.css";
 @import "./styles/components/dock.css";
+@import "./styles/components/search-field.css";
 
 @font-face {
   font-family: "JetBrains Mono";

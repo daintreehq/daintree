@@ -1,9 +1,10 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
-import { CircleDot, Search, Link, Unlink, CircleCheck } from "lucide-react";
+import { CircleDot, Link, Unlink, CircleCheck } from "lucide-react";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SearchField } from "@/components/ui/SearchField";
 import { cn } from "@/lib/utils";
 import { forgeClient } from "@/clients";
 import type { Issue } from "@shared/types/forge";
@@ -202,18 +203,14 @@ export function IssuePickerDialog({
       </AppDialog.Header>
 
       <div className="px-6 pt-4 pb-3 space-y-3 shrink-0">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-daintree-text/40" />
-          <input
-            ref={inputRef}
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Search issues by title or number..."
-            className="w-full pl-10 pr-4 py-2 bg-tint/5 border border-border-default rounded-[var(--radius-md)] text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-selection-outline"
-          />
-        </div>
+        <SearchField
+          size="palette"
+          inputRef={inputRef}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Search issues by title or number..."
+        />
 
         <div className="flex gap-1">
           {(["open", "closed", "all"] as const).map((state) => (

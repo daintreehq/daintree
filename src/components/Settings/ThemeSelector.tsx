@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Check, Search } from "lucide-react";
+import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Input } from "@/components/ui/input";
+import { SearchField } from "@/components/ui/SearchField";
 
 interface ThemeSelectorGroup<T> {
   label: string;
@@ -258,27 +258,21 @@ export function ThemeSelector<T extends { id: string }>({
   return (
     <div className={cn("space-y-3", className)}>
       <div className="flex items-center gap-2">
-        <div className="relative flex-1 min-w-0">
-          <Search
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-secondary pointer-events-none"
-            aria-hidden="true"
-          />
-          <Input
-            type="text"
-            density="compact"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape" && query) {
-                e.stopPropagation();
-                setQuery("");
-              }
-            }}
-            placeholder={searchPlaceholder}
-            aria-label={searchLabel}
-            className="pl-8 h-7"
-          />
-        </div>
+        <SearchField
+          size="compact"
+          fieldClassName="flex-1"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onClear={() => setQuery("")}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && query) {
+              e.stopPropagation();
+              setQuery("");
+            }
+          }}
+          placeholder={searchPlaceholder}
+          aria-label={searchLabel}
+        />
         {toolbar}
       </div>
 

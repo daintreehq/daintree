@@ -25,6 +25,7 @@ import {
   useSettingsStore,
 } from "@/store";
 import { X, Search, ChevronRight, Info } from "lucide-react";
+import { SearchField } from "@/components/ui/SearchField";
 import { ArrowLeftRight, TriangleAlert } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
@@ -756,48 +757,20 @@ function SettingsDialogInner({
             )}
           </div>
 
-          <div
-            className={cn(
-              "flex items-center gap-1.5 px-2 py-1.5 mb-3 rounded-[var(--radius-md)]",
-              // The same boundary token as every text field (`Input`), so a theme that tunes its
-              // field edge tunes this one too; the magnifier and placeholder identify it.
-              "settings-search border border-border-input",
-              // Neutral, the palette input's own focus lift: the sidebar's active marker is
-              // this region's accent, and a second accent edge beside it split the eye.
-              "focus-within:border-selection-outline focus-within:ring-1 focus-within:ring-selection-outline/50"
-            )}
-          >
-            <Search
-              className="settings-search-icon w-3.5 h-3.5 shrink-0 pointer-events-none"
-              aria-hidden="true"
-            />
-            <input
-              ref={searchInputRef}
-              type="text"
-              placeholder="Search…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-              aria-label="Search settings"
-              {...searchComboboxAria}
-              className="settings-search-input flex-1 min-w-0 text-xs bg-transparent text-text-primary focus:outline-hidden"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchQuery("");
-                  searchInputRef.current?.focus();
-                }}
-                aria-label="Clear search"
-                // -my keeps the 20px target from growing the 16px field line, which
-                // pushed the whole nav down 8px the moment a query was typed.
-                className="-my-0.5 flex items-center justify-center w-5 h-5 rounded-[var(--radius-sm)] shrink-0 text-text-secondary hover:text-text-primary"
-              >
-                <X className="w-3 h-3" aria-hidden="true" />
-              </button>
-            )}
-          </div>
+          <SearchField
+            size="compact"
+            // `settings-search` maps the theme's own field fill and muted ink onto
+            // the shared field, so a theme that tunes this one keeps its tuning.
+            fieldClassName="settings-search mb-3"
+            inputRef={searchInputRef}
+            placeholder="Search…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            onClear={() => setSearchQuery("")}
+            aria-label="Search settings"
+            {...searchComboboxAria}
+          />
 
           {isSearching && (
             <p aria-live="polite" className="sr-only">

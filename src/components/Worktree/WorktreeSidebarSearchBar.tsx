@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState, useRef } from "react";
-import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
+import { SearchField } from "@/components/ui/SearchField";
 import type { ChipCounts } from "@/lib/worktreeFilters";
 
 interface WorktreeSidebarSearchBarProps {
@@ -241,47 +241,26 @@ export function WorktreeSidebarSearchBar({
       )}
     >
       <div className="flex items-stretch gap-1.5">
-        <div
-          role="search"
-          className={cn(
-            // h-7: 28px is the app's compact control height and the desktop-IDE
-            // norm; the field used to be 34px, which gave the rail more visual
-            // mass than the title above it.
-            "flex h-7 flex-1 min-w-0 items-center gap-1.5 px-2 rounded-[var(--radius-md)]",
-            // Fallback keeps themes without --worktree-search-input-bg byte-identical.
-            "bg-[var(--worktree-search-input-bg,var(--color-surface-canvas))] border border-border-default",
-            "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-accent-primary"
-          )}
-        >
-          <Search
-            className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none"
-            aria-hidden="true"
-          />
-          <input
-            ref={setRefs}
-            type="text"
-            value={liveQuery}
-            onChange={(e) => handleQueryChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            // Short on purpose: at the 200px minimum "Search worktrees..." clips
-            // to "Search worktree", which reads as a typo rather than as
-            // truncation. The noun is already the heading directly above, and
-            // the full phrase stays the accessible name.
-            placeholder="Search…"
-            aria-label="Search worktrees"
-            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden"
-          />
-          {showClear && (
-            <button
-              type="button"
-              onClick={handleClearSearch}
-              className="flex shrink-0 items-center justify-center w-5 h-5 rounded-[var(--radius-sm)] text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary"
-              aria-label="Clear search"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          )}
-        </div>
+        <SearchField
+          size="compact"
+          fieldProps={{ role: "search" }}
+          // h-7 via the compact size: 28px is the app's compact control height
+          // and the desktop-IDE norm; the field used to be 34px, which gave the
+          // rail more visual mass than the title above it. The theme's raised
+          // field colour, where it sets one, stays the resting well.
+          fieldClassName="flex-1 [--search-field-bg:var(--worktree-search-input-bg,var(--theme-surface-canvas))]"
+          inputRef={setRefs}
+          value={liveQuery}
+          onChange={(e) => handleQueryChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onClear={showClear ? handleClearSearch : undefined}
+          // Short on purpose: at the 200px minimum "Search worktrees..." clips
+          // to "Search worktree", which reads as a typo rather than as
+          // truncation. The noun is already the heading directly above, and
+          // the full phrase stays the accessible name.
+          placeholder="Search…"
+          aria-label="Search worktrees"
+        />
         {/* Filter/sort lives as its own adjacent control, not buried inside the
             field — matching the app's other search rails (Logs, Keyboard
             Shortcuts, Command Overrides). */}

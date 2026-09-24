@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, type ComponentType, type CSSProperties } from "react";
 import { cn } from "@/lib/utils";
-import { Settings2, ChevronDown, Search, ShieldOff, Check } from "lucide-react";
+import { Settings2, ChevronDown, ShieldOff, Check } from "lucide-react";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
 import { BrandMark } from "@/components/icons";
 import type { AgentAvailabilityState } from "@shared/types";
 import { getAgentHealth } from "./agentHealth";
@@ -151,27 +152,23 @@ export function AgentSelectorDropdown({
         style={{ width: "var(--radix-popover-trigger-width)" }}
         onEscapeKeyDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border-default">
-          <Search size={14} className="shrink-0 text-text-secondary" aria-hidden="true" />
-          <input
-            ref={inputRef}
-            type="text"
-            autoFocus
-            placeholder="Filter agents…"
-            value={filterQuery}
-            onChange={(e) => setFilterQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            role="combobox"
-            aria-label="Filter agents"
-            aria-expanded={open}
-            aria-autocomplete="list"
-            aria-controls="agent-selector-list"
-            aria-activedescendant={
-              items[activeIndex] ? `agent-selector-item-${items[activeIndex].id}` : undefined
-            }
-            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
-          />
-        </div>
+        <PopoverSearchField
+          ref={inputRef}
+          autoFocus
+          placeholder="Filter agents…"
+          value={filterQuery}
+          onChange={(e) => setFilterQuery(e.target.value)}
+          onKeyDown={handleKeyDown}
+          role="combobox"
+          aria-label="Filter agents"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          aria-controls="agent-selector-list"
+          aria-activedescendant={
+            items[activeIndex] ? `agent-selector-item-${items[activeIndex].id}` : undefined
+          }
+          className="h-8 text-xs"
+        />
         <div
           role="listbox"
           id="agent-selector-list"

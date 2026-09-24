@@ -8,18 +8,17 @@ import {
   type ReactNode,
 } from "react";
 import {
-  Search,
   RefreshCw,
   AlertCircle,
   ArrowUp,
   GitCommitHorizontal,
   Check,
   ChevronRight,
-  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { KbdChord } from "@/components/ui/Kbd";
+import { SearchField } from "@/components/ui/SearchField";
 import { SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -849,64 +848,44 @@ export function LocalCommitsDropdown({
   return (
     <div className="relative w-[450px] flex flex-col h-[500px]">
       <div className="p-3 border-b border-[var(--border-divider)] shrink-0">
-        <div
-          className={cn(
-            "flex items-center gap-1.5 px-2.5 h-8 rounded-[var(--radius-md)]",
-            "bg-overlay-soft border border-[var(--border-overlay)]",
-            // Full-strength accent, and only here: the search input is this
-            // region's single focus anchor.
-            "transition-[border-color] duration-150 ease-out",
-            "focus-within:border-accent-primary"
-          )}
-        >
-          {showRefreshing ? (
-            <RefreshCw
-              className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none animate-spin"
-              aria-hidden="true"
-            />
-          ) : (
-            <Search
-              className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none"
-              aria-hidden="true"
-            />
-          )}
-          <input
-            ref={inputRef}
-            type="text"
-            placeholder="Search commits…"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={handleInputKeyDown}
-            autoFocus
-            role="combobox"
-            aria-autocomplete="list"
-            aria-expanded={true}
-            aria-haspopup="grid"
-            aria-controls={LIST_ID}
-            aria-activedescendant={activeDescendantId}
-            aria-label="Search commits"
-            aria-keyshortcuts="ArrowDown ArrowUp Enter Shift+Enter PageDown PageUp Escape"
-            className="flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden"
-          />
-          {isSlowRefresh && (
-            // The previous rows stay up while a search runs, so the list can't
-            // carry the wait; the field that started it does.
-            <span className="shrink-0 text-xs text-text-secondary whitespace-nowrap">
-              Still working…
-            </span>
-          )}
-          {searchQuery && (
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={handleClearSearch}
-              aria-label="Clear search"
-              className="flex items-center justify-center w-5 h-5 rounded-[var(--radius-sm)] shrink-0 text-text-secondary hover:text-text-primary transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-            >
-              <X className="w-3 h-3" aria-hidden="true" />
-            </button>
-          )}
-        </div>
+        <SearchField
+          size="compact"
+          // Keeps the dropdown header's 32px, text-sm field rather than the
+          // rail's 28px.
+          fieldClassName="h-8 text-sm"
+          icon={
+            showRefreshing ? (
+              <RefreshCw
+                className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none animate-spin"
+                aria-hidden="true"
+              />
+            ) : undefined
+          }
+          inputRef={inputRef}
+          placeholder="Search commits…"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          onKeyDown={handleInputKeyDown}
+          autoFocus
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={true}
+          aria-haspopup="grid"
+          aria-controls={LIST_ID}
+          aria-activedescendant={activeDescendantId}
+          aria-label="Search commits"
+          aria-keyshortcuts="ArrowDown ArrowUp Enter Shift+Enter PageDown PageUp Escape"
+          onClear={handleClearSearch}
+          trailing={
+            isSlowRefresh && (
+              // The previous rows stay up while a search runs, so the list can't
+              // carry the wait; the field that started it does.
+              <span className="shrink-0 text-xs text-text-secondary whitespace-nowrap">
+                Still working…
+              </span>
+            )
+          }
+        />
       </div>
 
       {/* Outside the grid, whose aria-busy would hold the announcement back.
