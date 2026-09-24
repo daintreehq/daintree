@@ -138,7 +138,12 @@ const BUSY: WorktreeSeed[] = [
     behind: 4,
     sessions: [
       { agentId: "gemini", state: "working", title: "Reproduce the reflow on a 40-row pane" },
-      { agentId: "claude", state: "waiting", title: "Which merge side should win?" },
+      {
+        agentId: "claude",
+        state: "waiting",
+        title:
+          "Which merge side should win in useResizeReflow.ts — keep the viewport pin, or the scrollback replay from ESC[3J?",
+      },
     ],
   },
   {

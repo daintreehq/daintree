@@ -414,9 +414,11 @@ export function WorktreeOverviewRow({
                   onSelect={onBeforeMenuAction}
                 >
                   <span className="flex min-w-0 flex-col">
-                    <span className="truncate">{line.name}</span>
+                    <span className="whitespace-normal break-words">{line.name}</span>
                     {line.detail && line.detail !== line.name && (
-                      <span className="truncate text-2xs text-text-secondary">{line.detail}</span>
+                      <span className="whitespace-normal break-words text-2xs text-text-secondary">
+                        {line.detail}
+                      </span>
                     )}
                   </span>
                 </ContextMenuActionItem>
