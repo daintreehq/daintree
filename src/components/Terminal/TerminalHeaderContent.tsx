@@ -79,6 +79,7 @@ function SeverityMark({ severity }: { severity: ResourceSeverity }) {
     <Icon
       className={cn("w-3 h-3 shrink-0 mr-0.5", SEVERITY_TONE[severity])}
       data-severity-mark={severity}
+      data-resource-glyph=""
       aria-hidden="true"
     />
   );
@@ -180,6 +181,12 @@ export function TerminalHeaderContent({
   );
   const resourceSeverity =
     SEVERITY_ORDER[cpuSeverity] >= SEVERITY_ORDER[memorySeverity] ? cpuSeverity : memorySeverity;
+
+  // When memory is the worse band, the row that explains it leads.
+  const breakdownRows =
+    showResource && SEVERITY_ORDER[memorySeverity] > SEVERITY_ORDER[cpuSeverity]
+      ? [...resourceState.breakdown].sort((a, b) => b.memoryKb - a.memoryKb)
+      : (resourceState?.breakdown ?? []);
 
   const { isInputLocked, sessionCost, sessionTokens } = usePanelStore(
     useShallow((state) => {
@@ -357,7 +364,7 @@ export function TerminalHeaderContent({
         <Tooltip autoDismiss={false}>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1.5 text-2xs font-mono shrink-0 rounded-sm tabular-nums"
+              className="inline-flex items-center gap-1.5 px-1 text-2xs font-mono shrink-0 rounded-sm tabular-nums"
               role="status"
               aria-live="off"
               tabIndex={0}
@@ -379,19 +386,18 @@ export function TerminalHeaderContent({
                   SEVERITY_TONE[cpuSeverity]
                 )}
               />
-              <span className="flex items-center text-text-secondary" aria-hidden="true">
-                {/* Each reading reserves its common width — "12%", "283M" — so
-                    the line holds still as digits come and go; CPU pads away
-                    from the line's end dot so the dot stays on its number. */}
-                <span className="inline-flex min-w-[3ch] items-center">
-                  <SeverityMark severity={cpuSeverity} />
-                  {Math.round(resourceState.cpuPercent)}%
-                </span>
+              {/* One block reserved at the width of "999% · 1023M", slack at its
+                  trailing end: the line holds still as digits come and go, and
+                  the reading stays tight against the line's end dot. */}
+              <span
+                className="flex min-w-[12ch] items-center text-text-secondary"
+                aria-hidden="true"
+              >
+                <SeverityMark severity={cpuSeverity} />
+                <span>{Math.round(resourceState.cpuPercent)}%</span>
                 <span className="px-1">·</span>
-                <span className="inline-flex min-w-[4ch] items-center justify-end">
-                  <SeverityMark severity={memorySeverity} />
-                  {formatMemory(resourceState.memoryKb)}
-                </span>
+                <SeverityMark severity={memorySeverity} />
+                <span>{formatMemory(resourceState.memoryKb)}</span>
               </span>
             </div>
           </TooltipTrigger>
@@ -412,7 +418,7 @@ export function TerminalHeaderContent({
                     </tr>
                   </thead>
                   <tbody>
-                    {resourceState.breakdown.map((p) => (
+                    {breakdownRows.map((p) => (
                       <tr key={p.pid}>
                         <td className="pr-2 text-text-secondary">{p.pid}</td>
                         <td className="pr-2 truncate max-w-[8rem]">{p.comm}</td>

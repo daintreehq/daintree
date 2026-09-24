@@ -507,6 +507,53 @@ describe("TerminalHeaderContent — resource breakdown", () => {
     expect(screen.getByTestId("tooltip-content").textContent).not.toMatch(/ of \d+ processes/);
   });
 
+  it("leads with the biggest memory row when memory is the high reading", () => {
+    const rows = [
+      { pid: 21, comm: "codex", cpuPercent: 4.2, memoryKb: 238_000 },
+      { pid: 22, comm: "tsserver", cpuPercent: 0, memoryKb: 2_300_000 },
+    ];
+    mockResourceEnabled = true;
+    mockResourceState = {
+      cpuPercent: 4.2,
+      memoryKb: 2_540_000,
+      cpuHistory: [1, 2],
+      breakdown: rows,
+    };
+    const { rerender } = render(<TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />);
+    for (let i = 1; i <= 3; i++) {
+      mockResourceState = {
+        cpuPercent: 4.2,
+        memoryKb: 2_540_000,
+        cpuHistory: [1, 2],
+        breakdown: rows,
+      };
+      rerender(<TerminalHeaderContent id="t1" kind="terminal" queueCount={i} />);
+    }
+    const names = Array.from(
+      screen.getByTestId("tooltip-content").querySelectorAll("tbody tr td:nth-child(2)")
+    ).map((td) => td.textContent);
+    expect(names[0]).toBe("tsserver");
+  });
+
+  it("keeps the busiest-CPU order while CPU is the high reading", () => {
+    const rows = [
+      { pid: 31, comm: "cargo", cpuPercent: 212.6, memoryKb: 400_000 },
+      { pid: 32, comm: "tsserver", cpuPercent: 0, memoryKb: 900_000 },
+    ];
+    mockResourceEnabled = true;
+    mockResourceState = {
+      cpuPercent: 212.6,
+      memoryKb: 1_300_000,
+      cpuHistory: [1, 2],
+      breakdown: rows,
+    };
+    render(<TerminalHeaderContent id="t1" kind="terminal" />);
+    const names = Array.from(
+      screen.getByTestId("tooltip-content").querySelectorAll("tbody tr td:nth-child(2)")
+    ).map((td) => td.textContent);
+    expect(names).toEqual(["cargo", "tsserver"]);
+  });
+
   it("explains a reading above one core, and only then", () => {
     mockResourceEnabled = true;
     mockResourceState = { cpuPercent: 308.9, memoryKb: 2_500_000, cpuHistory: [1, 2], breakdown };
