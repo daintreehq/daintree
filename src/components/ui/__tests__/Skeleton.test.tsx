@@ -445,7 +445,7 @@ describe("SkeletonHint", () => {
   it("marks the visible copy span as aria-hidden so AT only hears the live region", () => {
     const { container } = render(<SkeletonHint />);
     advance(8_000);
-    const visible = container.querySelector(".animate-hint-fade-in > span[aria-hidden='true']");
+    const visible = container.querySelector("span.animate-hint-fade-in[aria-hidden='true']");
     expect(visible).toBeTruthy();
     expect(visible?.textContent).toBe("Still working…");
     // Live region is sr-only; the visible span must NOT carry aria-live.
@@ -467,41 +467,49 @@ describe("SkeletonHint", () => {
     expect(hint.closest('[role="status"]')).toBeNull();
   });
 
-  it("re-keys the visible row when copy escalates so the fade-in re-fires", () => {
+  function copyNode(container: HTMLElement) {
+    return container.querySelector("span.animate-hint-fade-in[aria-hidden='true']");
+  }
+
+  it("re-fires the copy's fade when the copy escalates", () => {
     const { container } = render(<SkeletonHint />);
     advance(8_000);
-    const first = container.querySelector(".animate-hint-fade-in");
-    expect(first).toBeTruthy();
+    const first = copyNode(container);
+    expect(first?.textContent).toBe("Still working…");
     advance(5_000);
-    const second = container.querySelector(".animate-hint-fade-in");
-    expect(second).toBeTruthy();
-    // Copy changed ("Still working…" → "Taking longer than usual…"), so the
-    // keyed node is replaced and the animation restarts.
+    const second = copyNode(container);
+    expect(second?.textContent).toBe("Taking longer than usual…");
     expect(second).not.toBe(first);
   });
 
-  it("preserves the visible node at action phase when no handlers are passed (no spurious re-fade)", () => {
+  it("keeps the copy node at the action phase when the words do not change", () => {
     const { container } = render(<SkeletonHint />);
     advance(13_000);
-    const before = container.querySelector(".animate-hint-fade-in");
+    const before = copyNode(container);
     expect(before).toBeTruthy();
-    // Crossing the action threshold with no handlers must NOT remount the node:
-    // visible content is identical, key is stable, fade-in does not re-fire.
     advance(7_000);
-    const after = container.querySelector(".animate-hint-fade-in");
-    expect(after).toBe(before);
+    expect(copyNode(container)).toBe(before);
   });
 
-  it("re-keys at the action phase when Retry surfaces so the fade-in re-fires", () => {
-    const { container } = render(<SkeletonHint onRetry={() => {}} />);
-    advance(13_000);
-    const before = container.querySelector(".animate-hint-fade-in");
-    expect(before).toBeTruthy();
+  it("fades Retry in when it surfaces at the action phase", () => {
+    render(<SkeletonHint onRetry={() => {}} />);
+    advance(20_000);
+    expect(screen.getByRole("button", { name: "Retry" }).className).toContain(
+      "animate-hint-fade-in"
+    );
+  });
+
+  it("never remounts Cancel as the copy escalates, so a focused Cancel keeps focus", () => {
+    render(<SkeletonHint onCancel={() => {}} onRetry={() => {}} />);
+    advance(8_000);
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    act(() => cancel.focus());
+    expect(document.activeElement).toBe(cancel);
+    // Both later rungs change what is on screen: the copy escalates, then Retry surfaces.
+    advance(5_000);
     advance(7_000);
-    const after = container.querySelector(".animate-hint-fade-in");
-    expect(after).toBeTruthy();
-    // Retry appearing is a meaningful visual change — re-fade is desired.
-    expect(after).not.toBe(before);
+    expect(screen.getByRole("button", { name: "Cancel" })).toBe(cancel);
+    expect(document.activeElement).toBe(cancel);
   });
 
   it("does not use transition-all", () => {
@@ -579,7 +587,7 @@ describe("SkeletonHint", () => {
   it("renders the copy in the visible (aria-hidden) row, not only the live region", () => {
     const { container } = render(<SkeletonHint message="Fetching 3 of 12 files…" />);
     advance(8_000);
-    const visible = container.querySelector('.animate-hint-fade-in > span[aria-hidden="true"]');
+    const visible = container.querySelector('span.animate-hint-fade-in[aria-hidden="true"]');
     expect(visible?.textContent).toBe("Fetching 3 of 12 files…");
   });
 

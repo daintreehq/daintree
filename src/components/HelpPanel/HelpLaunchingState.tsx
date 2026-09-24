@@ -1,5 +1,6 @@
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
+import { SkeletonHint } from "@/components/ui/Skeleton";
+import { Spinner } from "@/components/ui/Spinner";
 import type { HelpSessionPhase } from "@/controllers/HelpSessionController";
 
 interface HelpLaunchingStateProps {
@@ -11,15 +12,20 @@ interface HelpLaunchingStateProps {
   onCancel: () => void;
 }
 
+// "Still working…" at 5s, per the loading-indicator ladder. SkeletonHint's own 8s
+// default is tuned for skeletons that at least promise a shape; a spinner promises
+// nothing, so the reassurance (and Cancel with it) should come sooner.
+const STILL_WORKING_AFTER_MS = 5_000;
+
 // Exhaustive over HelpSessionPhase so adding a phase without a label fails to
-// compile. idle/live never reach the rendered skeleton (the parent gates them
+// compile. idle/live never reach the rendered state (the parent gates them
 // out), so they map to an empty label.
 function phaseLabel(phase: HelpSessionPhase): string {
   switch (phase) {
     case "version-checking":
       return "Checking version…";
     case "provisioning":
-      return "Provisioning session…";
+      return "Preparing session…";
     case "launching":
       return "Starting assistant…";
     case "hibernating":
@@ -31,34 +37,38 @@ function phaseLabel(phase: HelpSessionPhase): string {
 }
 
 /**
- * Phase-labeled loading skeleton for the assistant launch sequence. Replaces
- * the static empty state while auto-launch / select-agent runs (6–45s), so the
- * panel proves it's working instead of looking idle. Gated behind the 400ms
- * Doherty threshold to avoid flicker on fast launches; `SkeletonHint` surfaces
- * Cancel with the first hint (8s) and escalates copy for the long tail.
+ * Phase-labelled progress for the assistant launch sequence (6–45s), and for the
+ * save on hibernate. A spinner rather than a skeleton: what lands here is a
+ * terminal, which has no shape a placeholder could honestly predict — the same
+ * call `TerminalStartupPlaceholder` makes for an agent pane starting up.
+ *
+ * Gated behind the 400ms Doherty threshold to avoid flicker on fast launches.
+ * The hint sits in a reserved slot directly under the phase, so neither its
+ * arrival nor its escalation moves the spinner.
  */
 export function HelpLaunchingState({ phase, isLoading, onCancel }: HelpLaunchingStateProps) {
   const show = useDohertyGate(isLoading);
-  if (!show) return null;
-
-  const label = phaseLabel(phase);
+  const label = show ? phaseLabel(phase) : "";
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-6 p-8 relative">
-      <Skeleton label={label} className="flex flex-col items-center gap-4 w-full max-w-[28ch]">
-        <div className="w-full flex flex-col gap-2.5" aria-hidden="true">
-          <SkeletonBone className="h-3 w-3/5" />
-          <SkeletonBone className="h-2.5 w-full" />
-          <SkeletonBone className="h-2.5 w-4/5" />
+    <div className="flex-1 flex flex-col items-center justify-center px-6 py-8">
+      {/* The phase's one announcer. Mounted empty before the gate and kept outside
+          any aria-busy subtree, so each phase is spoken exactly once — the visible
+          label below is hidden from AT rather than announced a second time. */}
+      <span className="sr-only" role="status" aria-atomic="true">
+        {label}
+      </span>
+      {show && (
+        <div aria-hidden="true" className="flex flex-col items-center gap-3 text-center">
+          <Spinner size="xl" className="text-text-secondary" />
+          <p className="text-sm text-text-secondary">{label}</p>
         </div>
-        <p aria-hidden="true" className="text-xs text-text-secondary">
-          {label}
-        </p>
-      </Skeleton>
-
+      )}
+      {/* Mounted from the start so its thresholds count from the launch, not from
+          the gate. `min-h-7` reserves the row's height (the size="sm" Cancel). */}
       <SkeletonHint
-        className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto"
-        message={label}
+        className="mt-4 min-h-7 flex items-center justify-center"
+        firstThreshold={STILL_WORKING_AFTER_MS}
         onCancel={onCancel}
       />
     </div>

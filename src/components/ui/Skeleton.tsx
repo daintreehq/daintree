@@ -302,32 +302,40 @@ export function SkeletonHint({
   const showRetry = phase === "action" && hasRetry;
   const visibleCopy = hintCopy(phase, message);
 
-  // Key the visible row on its rendered state, not the raw phase. When phase
-  // moves "second" → "action" with no handlers, the visible content is
-  // identical, so React preserves the DOM node and the fade-in does NOT
-  // re-fire. The key only changes when the user-visible content actually
-  // changes (copy escalation, or a button surfacing). Cancel and Retry are
-  // tracked independently so each one's appearance re-fires the fade.
-  const visibleKey = `${visibleCopy}|${showCancel ? "cancel" : ""}|${showRetry ? "retry" : ""}`;
-
+  // Only the copy is keyed, never the row. Re-keying the row on an escalation
+  // remounted Cancel with it, so a keyboard user waiting on a focused Cancel lost
+  // focus to <body> the moment the copy changed. The copy span re-fires its fade
+  // when the words change and keeps its node when they do not ("second" →
+  // "action" with no handlers); each button fades in once, when it surfaces.
   return (
     <div {...rest} className={className}>
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         {liveRegionCopy(phase, showCancel, showRetry, message)}
       </span>
       {phase !== "hidden" && (
-        <div
-          key={visibleKey}
-          className="animate-hint-fade-in flex items-center gap-2 text-text-secondary text-xs"
-        >
-          <span aria-hidden="true">{visibleCopy}</span>
+        <div className="flex items-center gap-2 text-text-secondary text-xs">
+          <span key={visibleCopy} aria-hidden="true" className="animate-hint-fade-in">
+            {visibleCopy}
+          </span>
           {showCancel && (
-            <Button variant="ghost" size="sm" onClick={onCancel} type="button">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onCancel}
+              type="button"
+              className="animate-hint-fade-in"
+            >
               {CANCEL_LABEL}
             </Button>
           )}
           {showRetry && (
-            <Button variant="ghost" size="sm" onClick={onRetry} type="button">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onRetry}
+              type="button"
+              className="animate-hint-fade-in"
+            >
               {RETRY_LABEL}
             </Button>
           )}
