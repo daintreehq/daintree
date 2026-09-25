@@ -899,7 +899,7 @@ function toStringForIpc(data: string | Uint8Array): string {
 }
 
 // Wire up PtyManager events
-ptyManager.on("data", (id: string, data: string | Uint8Array) => {
+ptyManager.on("data", (id: string, data: string | Uint8Array, _routing, streamEnd) => {
   // Throughput-rate gauge accumulation — raw PTY byte/packet counts before
   // any path routing, suspension gating, or chunk wrapping. Gated so the hot
   // path is untouched when metrics are disabled (the default).
@@ -1009,7 +1009,11 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
         // never written for an engaged terminal, so nothing double-delivers.
         const workerConn = terminalWorkerConnections.get(windowId)?.get(id);
         const sink = workerConn?.engaged ? workerConn : conn;
-        if (sink.batcher.write(id, chunk, byteCount, owned, interactive, recentInput)) {
+        const accepted =
+          streamEnd === undefined
+            ? sink.batcher.write(id, chunk, byteCount, owned, interactive, recentInput)
+            : sink.batcher.write(id, chunk, byteCount, owned, interactive, recentInput, streamEnd);
+        if (accepted) {
           visualWritten = true;
           // Identified by the view Main brokered the port to, not by window:
           // the window's holder can change between here and Main routing the
@@ -1312,8 +1316,8 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       // whenever no port-less view forced the fallback open.
       sendEvent(
         portDeliveredWebContentsIds.length > 0
-          ? { type: "data", id, data: dataString, portDeliveredWebContentsIds }
-          : { type: "data", id, data: dataString }
+          ? { type: "data", id, data: dataString, portDeliveredWebContentsIds, streamEnd }
+          : { type: "data", id, data: dataString, streamEnd }
       );
       ipcDataEmitted = true;
 

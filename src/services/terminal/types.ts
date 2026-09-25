@@ -9,6 +9,8 @@ import { TerminalRefreshTier, PanelKind, AgentState } from "@/types";
 import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 import type { TerminalGeometry } from "@shared/types/terminal";
 import type { TerminalResizeResult } from "@shared/types/pty-host";
+import type { PartialEscapeTracker } from "@shared/utils/terminalPartialEscapeTail";
+import type { StreamRange } from "./streamFence";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
@@ -329,7 +331,19 @@ export interface ManagedTerminal {
   // the SAME pending port-ack FIFO entries the batch owns — the entries are
   // deliberately NOT settled at defer time (see TerminalWriteController), so
   // the host's flow control keeps pacing the PTY while the restore runs.
-  deferredOutput: Array<{ data: string | Uint8Array; chunkCount: number }>;
+  deferredOutput: Array<{
+    data: string | Uint8Array;
+    chunkCount: number;
+    range?: StreamRange;
+  }>;
+  // Stream offset the last live snapshot restore covered (#12791): output
+  // ending at or before it is already on screen, so the write path acks it
+  // without painting. Offsets only grow for a host's lifetime, so it never
+  // covers newer output; a host restart starts them over and clears it.
+  streamFence?: number;
+  // Follows every write to `terminal`, so a serialize of this xterm can hand
+  // over the escape sequence it is in the middle of.
+  parserTail?: PartialEscapeTracker;
 
   // Background scrollback restore state — prevents double-restore and tracks
   // lifecycle. Restores are queued ("pending"), replay asynchronously

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TerminalRestoreController, safeChunkSlice } from "../TerminalRestoreController";
 import { INCREMENTAL_RESTORE_CONFIG, type ManagedTerminal } from "../types";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
+import { PARSER_GROUND } from "@shared/utils/terminalPartialEscapeTail";
 
 /** Wrap a payload in the snapshot envelope the IPC now returns (#11552). */
 function snapshot(data: string, cols = 80, rows = 24): SerializedTerminalSnapshot {
@@ -166,7 +167,10 @@ describe("TerminalRestoreController", () => {
 
       expect(result).toBe(true);
       expect(mockTerminal.reset).toHaveBeenCalledTimes(1);
-      expect(mockTerminal.write).toHaveBeenCalledWith(smallState, expect.any(Function));
+      expect(mockTerminal.write).toHaveBeenCalledWith(
+        PARSER_GROUND + smallState,
+        expect.any(Function)
+      );
     });
 
     it("delegates to incremental for large state", () => {
@@ -280,7 +284,8 @@ describe("TerminalRestoreController", () => {
       const totalWritten = mockTerminal.write.mock.calls
         .map((call: [string, ...unknown[]]) => call[0].length)
         .reduce((sum: number, len: number) => sum + len, 0);
-      expect(totalWritten).toBe(largeState.length);
+      // One CAN leads the replay.
+      expect(totalWritten).toBe(largeState.length + 1);
     });
 
     it("falls back to scheduler.postTask when yield is unavailable", async () => {
@@ -303,7 +308,8 @@ describe("TerminalRestoreController", () => {
       const totalWritten = mockTerminal.write.mock.calls
         .map((call: [string, ...unknown[]]) => call[0].length)
         .reduce((sum: number, len: number) => sum + len, 0);
-      expect(totalWritten).toBe(data.length);
+      // One CAN leads the replay.
+      expect(totalWritten).toBe(data.length + 1);
     });
 
     it("does not split surrogate pairs across chunks", async () => {
@@ -328,9 +334,7 @@ describe("TerminalRestoreController", () => {
       await promise;
 
       const chunks = mockTerminal.write.mock.calls.map((call: [string, ...unknown[]]) => call[0]);
-      const totalWritten = chunks.reduce((sum: number, c: string) => sum + c.length, 0);
-      expect(totalWritten).toBe(state.length);
-      expect((chunks as string[]).join("")).toBe(state);
+      expect((chunks as string[]).join("")).toBe(PARSER_GROUND + state);
 
       for (const chunk of chunks as string[]) {
         if (chunk.length === 0) continue;
@@ -434,7 +438,8 @@ describe("TerminalRestoreController", () => {
       const totalWritten = mockTerminal.write.mock.calls
         .map((call: [string, ...unknown[]]) => call[0].length)
         .reduce((sum: number, len: number) => sum + len, 0);
-      expect(totalWritten).toBe(data.length);
+      // One CAN leads the replay.
+      expect(totalWritten).toBe(data.length + 1);
     });
   });
 
@@ -634,7 +639,7 @@ describe("TerminalRestoreController", () => {
       expect(outcome).toBe("recovered");
       expect(mockTerminal.reset).toHaveBeenCalledTimes(1);
       expect(mockTerminal.write).toHaveBeenCalledWith(
-        "oh-my-zsh update prompt",
+        PARSER_GROUND + "oh-my-zsh update prompt",
         expect.any(Function)
       );
       expect(managed.hasReceivedOutput).toBe(true);
@@ -831,7 +836,12 @@ describe("TerminalRestoreController", () => {
       // The resize must land between reset and write: xterm parses
       // asynchronously, so a grid corrected after write() returns would arrive
       // too late and the payload would lay out at the wrong width anyway.
-      expect(trace).toEqual(["reset", "resize:80x24", "write:payload", "resize:170x24"]);
+      expect(trace).toEqual([
+        "reset",
+        "resize:80x24",
+        `write:${PARSER_GROUND}payload`,
+        "resize:170x24",
+      ]);
       expect(managed.terminal.cols).toBe(170);
     });
 
@@ -857,7 +867,10 @@ describe("TerminalRestoreController", () => {
       await flushMicrotasks();
 
       expect(mockTerminal.resize).not.toHaveBeenCalled();
-      expect(mockTerminal.write).toHaveBeenCalledWith("payload", expect.any(Function));
+      expect(mockTerminal.write).toHaveBeenCalledWith(
+        PARSER_GROUND + "payload",
+        expect.any(Function)
+      );
     });
 
     it("refuses a geometry no terminal could have been captured at", async () => {
@@ -884,7 +897,10 @@ describe("TerminalRestoreController", () => {
       await flushMicrotasks();
 
       expect(mockTerminal.resize).not.toHaveBeenCalled();
-      expect(mockTerminal.write).toHaveBeenCalledWith("payload", expect.any(Function));
+      expect(mockTerminal.write).toHaveBeenCalledWith(
+        PARSER_GROUND + "payload",
+        expect.any(Function)
+      );
     });
 
     it("does not return an opened pane to a collapsed grid when the replay closes (#12442)", async () => {
@@ -903,7 +919,10 @@ describe("TerminalRestoreController", () => {
       await flushMicrotasks();
 
       expect(trace).not.toContain("resize:2x1");
-      expect(mockTerminal.write).toHaveBeenCalledWith("payload", expect.any(Function));
+      expect(mockTerminal.write).toHaveBeenCalledWith(
+        PARSER_GROUND + "payload",
+        expect.any(Function)
+      );
       expect(managed.isSerializedRestoreInProgress).toBe(false);
     });
 

@@ -18,6 +18,8 @@ export interface WorkerParseSessionOptions {
   // terminal already has state the worker never saw). Same restore message
   // demoteToWorker uses, just at construction time.
   initialSerializedState?: string;
+  /** The mirror's pending escape sequence at the seed serialize (#12791). */
+  initialEscapeTail?: string | null;
 }
 
 export const DEFAULT_CADENCE_MS = 250;
@@ -80,8 +82,12 @@ export class WorkerParseSession {
       rows: options.rows,
       scrollback: options.scrollback,
     });
-    if (options.initialSerializedState !== undefined && options.initialSerializedState !== "") {
-      transport.send({ type: "restore", serialized: options.initialSerializedState });
+    if (options.initialSerializedState || options.initialEscapeTail) {
+      transport.send({
+        type: "restore",
+        serialized: options.initialSerializedState ?? "",
+        pendingEscapeTail: options.initialEscapeTail,
+      });
     }
     this.startCadence();
   }
@@ -134,7 +140,12 @@ export class WorkerParseSession {
     try {
       const snapshot = await this.requestSnapshot(undefined);
       if (snapshot) {
-        applySnapshotToMirror(this.mirror, snapshot.serialized);
+        applySnapshotToMirror(
+          this.mirror,
+          snapshot.serialized,
+          undefined,
+          snapshot.pendingEscapeTail
+        );
       }
       const buffered = this.pendingInteractive;
       this.pendingInteractive = [];
@@ -151,11 +162,15 @@ export class WorkerParseSession {
    * authority missed every passthrough byte, so it re-seeds from the
    * mirror's serialized state — the caller owns the mirror's serialize addon.
    */
-  demoteToWorker(serializedMirrorState: string): void {
+  demoteToWorker(serializedMirrorState: string, pendingEscapeTail?: string | null): void {
     if (this.disposed || this.mode === "worker") return;
     // Geometry first: the restore must parse at the mirror's current size.
     this.transport.send({ type: "resize", cols: this.cols, rows: this.rows });
-    this.transport.send({ type: "restore", serialized: serializedMirrorState });
+    this.transport.send({
+      type: "restore",
+      serialized: serializedMirrorState,
+      pendingEscapeTail,
+    });
     this.mode = "worker";
     this.startCadence();
   }
@@ -217,7 +232,12 @@ export class WorkerParseSession {
       const snapshot = await this.requestSnapshot(this.boundedScrollbackLines);
       // A promotion may have raced this tick; its full snapshot supersedes.
       if (snapshot && !this.disposed && this.mode === "worker" && !this.promoting) {
-        applySnapshotToMirror(this.mirror, snapshot.serialized);
+        applySnapshotToMirror(
+          this.mirror,
+          snapshot.serialized,
+          undefined,
+          snapshot.pendingEscapeTail
+        );
       }
     } finally {
       this.tickInFlight = false;

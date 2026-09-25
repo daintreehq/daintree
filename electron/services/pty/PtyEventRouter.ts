@@ -158,10 +158,14 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
         event.portDeliveredWebContentsIds !== undefined ||
         event.portRecoveryWebContentsId !== undefined
       ) {
-        emitter.emit("data", event.id, event.data, {
+        const routing = {
           portDeliveredWebContentsIds: event.portDeliveredWebContentsIds,
           portRecoveryWebContentsId: event.portRecoveryWebContentsId,
-        });
+        };
+        if (event.streamEnd === undefined) emitter.emit("data", event.id, event.data, routing);
+        else emitter.emit("data", event.id, event.data, routing, event.streamEnd);
+      } else if (event.streamEnd !== undefined) {
+        emitter.emit("data", event.id, event.data, undefined, event.streamEnd);
       } else {
         emitter.emit("data", event.id, event.data);
       }

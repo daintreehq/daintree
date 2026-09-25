@@ -1,4 +1,5 @@
 import type { ManagedTerminal } from "./types";
+import { stripCoveredOutput, type StreamRange } from "./streamFence";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
@@ -212,7 +213,7 @@ export class TerminalWriteController {
     }
   }
 
-  write(id: string, data: string | Uint8Array, chunkCount = 1): void {
+  write(id: string, data: string | Uint8Array, chunkCount = 1, range?: StreamRange): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 
@@ -236,7 +237,7 @@ export class TerminalWriteController {
       // while the restore runs, so a flooding agent can no longer grow
       // deferredOutput without bound — the transport backpressure IS the cap,
       // and no bytes are dropped to enforce it.
-      managed.deferredOutput.push({ data, chunkCount });
+      managed.deferredOutput.push({ data, chunkCount, range });
       return;
     }
 
@@ -292,7 +293,12 @@ export class TerminalWriteController {
     // xterm parses entries FIFO, so the last callback means the whole batch
     // has landed — the port-ack ledger and inFlightBytes stay batch-scoped
     // and no per-slice accounting is needed.
-    const slices = sliceChunk(data);
+    // Ledgers above are charged for the whole batch; only the paint shrinks
+    // when a restore fence says the snapshot already holds these bytes. A
+    // fully covered batch still writes "" so its bookkeeping settles in order.
+    const paint = stripCoveredOutput(managed.streamFence, data, range);
+    managed.parserTail?.feedAny(paint);
+    const slices = sliceChunk(paint);
     for (let i = 0; i < slices.length - 1; i++) {
       terminal.write(slices[i]!);
     }

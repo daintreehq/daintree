@@ -602,6 +602,8 @@ export type PtyHostEvent =
       data: string;
       portDeliveredWebContentsIds?: number[];
       portRecoveryWebContentsId?: number;
+      /** End offset in the renderer-bound stream (see SnapshotContinuation). */
+      streamEnd?: number;
     }
   // A window's renderer connection is gone (#12557). Main clears its record of
   // that window's port holder so the view stops being treated as reachable by
@@ -1475,6 +1477,8 @@ export type PtyHostToRendererMessage =
       id: string;
       data: Uint8Array;
       bytes: number;
+      /** End offset in the renderer-bound stream (see SnapshotContinuation). */
+      streamEnd?: number;
     }
   | {
       type: "tier-changed";

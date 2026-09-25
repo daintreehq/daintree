@@ -461,3 +461,47 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
     expect(info.preservedSnapshotLastAccessedAt).toBeUndefined();
   });
 });
+
+describe("TerminalProcess — live snapshot continuation (#12791)", () => {
+  it("stamps the renderer-bound offset and the pending escape sequence together", async () => {
+    const pty = createControllablePty();
+    const streamEnds: number[] = [];
+    const terminal = new TerminalProcess(
+      "t1",
+      { cwd: process.cwd(), cols: 80, rows: 24, kind: "terminal", launchAgentId: "claude" },
+      {
+        emitData: (_id, _data, streamEnd) => streamEnds.push(streamEnd),
+        // A respawn at the same id continues the previous process's offsets.
+        streamOffsetBase: 1000,
+        onExit: () => {},
+      },
+      {
+        agentStateService: {
+          handleActivityState: () => {},
+          updateAgentState: () => {},
+          emitAgentKilled: () => {},
+          emitAgentCompleted: () => {},
+        } as unknown as ConstructorParameters<typeof TerminalProcess>[3]["agentStateService"],
+        ptyPool: null,
+        processTreeCache: null,
+      },
+      defaultSpawnContext(),
+      pty
+    );
+
+    pty.emitData("héllo ");
+    pty.emitData("\x1b[3");
+    const snapshot = await terminal.getSerializedStateAsync();
+
+    // The offset is the one the renderer saw on the last chunk it was sent.
+    expect(snapshot?.continuation).toEqual({
+      pendingEscapeTail: "\x1b[3",
+      streamOffset: streamEnds.at(-1),
+    });
+    expect(streamEnds).toEqual([
+      1000 + Buffer.byteLength("héllo ", "utf8"),
+      1000 + Buffer.byteLength("héllo \x1b[3", "utf8"),
+    ]);
+    expect(snapshot?.data).toContain("héllo");
+  });
+});

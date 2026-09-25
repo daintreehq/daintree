@@ -43,7 +43,15 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   // and JSON/base64 churn; see lessons #4899/#4862/#4639). Project-scoped: only
   // the owning project's views host a panel for the terminal, and its cached
   // views must still get every byte, since there is no resync on reactivation.
-  const handlePtyData = (id: string, data: string | Uint8Array, routing?: PtyDataRouting) => {
+  const handlePtyData = (
+    id: string,
+    data: string | Uint8Array,
+    routing?: PtyDataRouting,
+    streamEnd?: number
+  ) => {
+    // Omitted rather than sent as a trailing `undefined` when the host had no
+    // offset, so the wire shape of an unfenced chunk is unchanged.
+    const offsetArg = streamEnd === undefined ? [] : [streamEnd];
     // Recovery for one view whose port threw mid-flush (#12557). Every other
     // destination already has these bytes, so this goes to that view alone — a
     // re-broadcast would double-deliver to the siblings that took it on their
@@ -54,7 +62,7 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
       const holder = resolveLiveWebContents(routing.portRecoveryWebContentsId);
       if (!holder) return;
       try {
-        holder.send(CHANNELS.TERMINAL_DATA, id, data);
+        holder.send(CHANNELS.TERMINAL_DATA, id, data, ...offsetArg);
       } catch {
         // Renderer disposed mid-send; the port teardown already ran.
       }
@@ -73,7 +81,8 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
       exclude,
       CHANNELS.TERMINAL_DATA,
       id,
-      data
+      data,
+      ...offsetArg
     );
   };
   ptyClient.on("data", handlePtyData);

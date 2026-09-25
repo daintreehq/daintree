@@ -1013,27 +1013,31 @@ function _eventBusOn<K extends keyof IpcEventBusMap>(
 // one ipcRenderer listener dispatching by terminal id, instead of one
 // filtering listener per terminal (O(N) handler invocations per chunk and a
 // MaxListenersExceededWarning at 10+ terminals).
-type TerminalDataSubscriber = (data: string | Uint8Array) => void;
+type TerminalDataSubscriber = (data: string | Uint8Array, streamEnd?: number) => void;
 const _terminalDataSubscribers = new Map<string, Set<TerminalDataSubscriber>>();
 let _terminalDataWired = false;
 
 function _ensureTerminalDataWired(): void {
   if (_terminalDataWired) return;
   _terminalDataWired = true;
-  ipcRenderer.on(CHANNELS.TERMINAL_DATA, (_event, terminalId: unknown, data: unknown) => {
-    if (typeof terminalId !== "string") return;
-    const subs = _terminalDataSubscribers.get(terminalId);
-    if (!subs || subs.size === 0) return;
-    // Accept string, Uint8Array, or Buffer (Node.js extends Uint8Array)
-    if (typeof data === "string" || data instanceof Uint8Array || Buffer.isBuffer(data)) {
-      // Iterate the live Set directly — unlike the events:push dispatcher
-      // above, terminal data subscribers don't unsubscribe during dispatch,
-      // and this path runs per chunk, so the snapshot allocation matters.
-      for (const cb of subs) {
-        cb(data);
+  ipcRenderer.on(
+    CHANNELS.TERMINAL_DATA,
+    (_event, terminalId: unknown, data: unknown, streamEnd: unknown) => {
+      if (typeof terminalId !== "string") return;
+      const subs = _terminalDataSubscribers.get(terminalId);
+      if (!subs || subs.size === 0) return;
+      // Accept string, Uint8Array, or Buffer (Node.js extends Uint8Array)
+      if (typeof data === "string" || data instanceof Uint8Array || Buffer.isBuffer(data)) {
+        const end = typeof streamEnd === "number" ? streamEnd : undefined;
+        // Iterate the live Set directly — unlike the events:push dispatcher
+        // above, terminal data subscribers don't unsubscribe during dispatch,
+        // and this path runs per chunk, so the snapshot allocation matters.
+        for (const cb of subs) {
+          cb(data, end);
+        }
       }
     }
-  });
+  );
 }
 
 function _terminalDataOn(id: string, callback: TerminalDataSubscriber): () => void {
@@ -1276,7 +1280,7 @@ function buildElectronApi(): ElectronAPI {
 
       // Tuple payload [id, data] dispatched via the shared multiplexer above
       // Accepts both string and Uint8Array/Buffer (binary optimization for reduced GC pressure)
-      onData: (id: string, callback: (data: string | Uint8Array) => void) =>
+      onData: (id: string, callback: (data: string | Uint8Array, streamEnd?: number) => void) =>
         _terminalDataOn(id, callback),
 
       onExit: (callback: (id: string, exitCode: number) => void) =>

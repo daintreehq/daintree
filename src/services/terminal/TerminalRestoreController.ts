@@ -3,8 +3,10 @@ import type { ManagedTerminal } from "./types";
 import { INCREMENTAL_RESTORE_CONFIG } from "./types";
 import { logWarn, logError } from "@/utils/logger";
 import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
-import type { TerminalGeometry } from "@shared/types/terminal";
+import type { SnapshotContinuation, TerminalGeometry } from "@shared/types/terminal";
 import { isUsableTerminalGeometry } from "@shared/types/terminal";
+import { PARSER_GROUND } from "@shared/utils/terminalPartialEscapeTail";
+import type { StreamRange } from "./streamFence";
 
 function classifyRestoreError(error: unknown): TerminalScrollbackRestoreError {
   const timestamp = Date.now();
@@ -37,7 +39,12 @@ export interface RestoreControllerDeps {
   // chunkCount travels with each replayed deferred batch: the batch's pending
   // port-ack FIFO entries were deliberately NOT settled at defer time, so the
   // replay write must settle exactly them (see TerminalWriteController).
-  writeData: (id: string, data: string | Uint8Array, chunkCount: number) => void;
+  writeData: (
+    id: string,
+    data: string | Uint8Array,
+    chunkCount: number,
+    range?: StreamRange
+  ) => void;
 }
 
 // Slice a chunk without splitting a UTF-16 surrogate pair. xterm 6's parser
@@ -227,14 +234,39 @@ export class TerminalRestoreController {
     const deferred = managed.deferredOutput;
     managed.deferredOutput = [];
     for (const entry of deferred) {
-      this.deps.writeData(id, entry.data, entry.chunkCount);
+      if (entry.range) this.deps.writeData(id, entry.data, entry.chunkCount, entry.range);
+      else this.deps.writeData(id, entry.data, entry.chunkCount);
     }
+  }
+
+  /**
+   * What follows the snapshot in a restore payload: the escape sequence the
+   * source parser was left inside, but only when the snapshot is fenced
+   * against the live stream. Without the fence the chunk after the snapshot
+   * may be one it already contains, and that chunk would complete the tail
+   * into a command no one sent (#12791).
+   */
+  private restoreTail(continuation: SnapshotContinuation | undefined): string {
+    return continuation?.streamOffset !== undefined ? (continuation.pendingEscapeTail ?? "") : "";
+  }
+
+  /**
+   * Arm the fence right before the deferred replay: from here on, output the
+   * snapshot already holds is acked without being painted a second time.
+   */
+  private commitStreamFence(
+    managed: ManagedTerminal,
+    continuation: SnapshotContinuation | undefined
+  ): void {
+    if (continuation?.streamOffset === undefined) return;
+    managed.streamFence = Math.max(managed.streamFence ?? 0, continuation.streamOffset);
   }
 
   restoreFromSerialized(
     id: string,
     serializedState: string,
-    captureGeometry?: TerminalGeometry
+    captureGeometry?: TerminalGeometry,
+    continuation?: SnapshotContinuation
   ): boolean {
     const managed = this.deps.getInstance(id);
     if (!managed) {
@@ -248,7 +280,12 @@ export class TerminalRestoreController {
     let restoreWindow = -1;
     try {
       if (serializedState.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
-        void this.restoreFromSerializedIncremental(id, serializedState, captureGeometry);
+        void this.restoreFromSerializedIncremental(
+          id,
+          serializedState,
+          captureGeometry,
+          continuation
+        );
         return true;
       }
 
@@ -264,9 +301,14 @@ export class TerminalRestoreController {
       // resizing afterwards reflows an empty buffer instead of the content the
       // replay is about to discard. xterm parses asynchronously, so the grid
       // must be correct before `write` — not after it returns.
+      // CAN leads the payload because reset() leaves xterm's parser wherever
+      // the last live chunk stopped (xterm.js #5019): mid-sequence, it would
+      // eat the head of the snapshot.
       managed.terminal.reset();
       this.alignToCaptureGeometry(managed, captureGeometry);
-      managed.terminal.write(serializedState, () => {
+      const payload = PARSER_GROUND + serializedState + this.restoreTail(continuation);
+      managed.parserTail?.feed(payload);
+      managed.terminal.write(payload, () => {
         // Hop out of the write callback before touching geometry. The callback
         // runs inside xterm's parser drain, and resizing there re-applies the
         // chunk being drained against the new grid — a 4-cell write comes back
@@ -287,6 +329,7 @@ export class TerminalRestoreController {
             current.terminal.scrollToLine(Math.max(0, newBaseY - scrollBackOffset));
           }
 
+          this.commitStreamFence(current, continuation);
           this.replayDeferred(id, current);
         });
       });
@@ -309,7 +352,8 @@ export class TerminalRestoreController {
   async restoreFromSerializedIncremental(
     id: string,
     serializedState: string,
-    captureGeometry?: TerminalGeometry
+    captureGeometry?: TerminalGeometry,
+    continuation?: SnapshotContinuation
   ): Promise<boolean> {
     const managed = this.deps.getInstance(id);
     if (!managed) {
@@ -321,6 +365,7 @@ export class TerminalRestoreController {
     const restoreWindow = this.beginRestoreWindow(managed);
     managed.lastScrollbackRestoreError = undefined;
 
+    let replayed = false;
     const task = async (): Promise<boolean> => {
       const scrollBackOffset = managed.isUserScrolledBack
         ? managed.terminal.buffer.active.baseY - managed.terminal.buffer.active.viewportY
@@ -336,6 +381,9 @@ export class TerminalRestoreController {
         managed.terminal.reset();
         this.alignToCaptureGeometry(managed, captureGeometry);
 
+        // CAN rides the first chunk and the tail the last, so chunking and
+        // yielding stay a function of the snapshot alone.
+        const tail = this.restoreTail(continuation);
         let offset = 0;
         const total = serializedState.length;
 
@@ -347,18 +395,23 @@ export class TerminalRestoreController {
             return false;
           }
 
-          const chunk = safeChunkSlice(
+          const slice = safeChunkSlice(
             serializedState,
             offset,
             INCREMENTAL_RESTORE_CONFIG.chunkBytes
           );
-          offset += chunk.length;
+          const chunk =
+            (offset === 0 ? PARSER_GROUND : "") +
+            slice +
+            (offset + slice.length >= total ? tail : "");
+          offset += slice.length;
 
           let timeoutHandle!: ReturnType<typeof setTimeout>;
           try {
             await Promise.race([
               new Promise<void>((resolve, reject) => {
                 try {
+                  managed.parserTail?.feed(chunk);
                   managed.terminal.write(chunk, () => resolve());
                 } catch (err) {
                   reject(err);
@@ -378,6 +431,7 @@ export class TerminalRestoreController {
         }
 
         managed.hasReceivedOutput = true;
+        replayed = true;
         return true;
       } catch (error) {
         // Real failure during chunked replay (write timeout, xterm parse
@@ -403,6 +457,9 @@ export class TerminalRestoreController {
             managed.terminal.scrollToLine(Math.max(0, newBaseY - scrollBackOffset));
           }
 
+          // A partial replay holds only part of the snapshot, so nothing it
+          // could fence off is safe to drop.
+          if (replayed) this.commitStreamFence(managed, continuation);
           this.replayDeferred(id, managed);
         }
       }
@@ -437,18 +494,26 @@ export class TerminalRestoreController {
   async restoreFetchedState(
     id: string,
     serializedState: string | null,
-    captureGeometry?: TerminalGeometry
+    captureGeometry?: TerminalGeometry,
+    continuation?: SnapshotContinuation
   ): Promise<boolean> {
-    if (!serializedState) {
+    // An empty screen still has to land when the source is mid-sequence: the
+    // tail is the only record of bytes the pane never saw.
+    if (serializedState === null || (serializedState === "" && !this.restoreTail(continuation))) {
       logWarn(`No serialized state for terminal ${id}`);
       return false;
     }
 
     if (serializedState.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
-      return await this.restoreFromSerializedIncremental(id, serializedState, captureGeometry);
+      return await this.restoreFromSerializedIncremental(
+        id,
+        serializedState,
+        captureGeometry,
+        continuation
+      );
     }
 
-    return this.restoreFromSerialized(id, serializedState, captureGeometry);
+    return this.restoreFromSerialized(id, serializedState, captureGeometry, continuation);
   }
 
   async fetchAndRestore(id: string): Promise<boolean> {
@@ -490,7 +555,8 @@ export class TerminalRestoreController {
       const result = await this.restoreFetchedState(
         id,
         snapshot?.data ?? null,
-        snapshot ?? undefined
+        snapshot ?? undefined,
+        snapshot?.continuation
       );
       if (!result) {
         // The restore never ran (null state) or failed. When it ran it bumped
@@ -564,12 +630,17 @@ export class TerminalRestoreController {
         release();
         return "live-output";
       }
-      if (!snapshot?.data) {
+      if (!snapshot || (snapshot.data === "" && !this.restoreTail(snapshot.continuation))) {
         release();
         return "no-host-output";
       }
 
-      const restored = await this.restoreFetchedState(id, snapshot.data, snapshot);
+      const restored = await this.restoreFetchedState(
+        id,
+        snapshot.data,
+        snapshot,
+        snapshot.continuation
+      );
       if (restored) return "recovered";
       release();
       // The replay took its own generation, so a `false` with no classified

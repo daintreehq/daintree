@@ -4,10 +4,14 @@
 // mirror runs, so reflow behaviour here is the behaviour that ships. The
 // renderer's `@xterm/xterm` needs a live renderer to settle its write queue,
 // which jsdom cannot provide.
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Terminal } from "@xterm/headless";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { TerminalRestoreController } from "../TerminalRestoreController";
+import { TerminalWriteController } from "../TerminalWriteController";
+import { INCREMENTAL_RESTORE_CONFIG } from "../types";
+import { streamRangeOf, utf8Length } from "../streamFence";
+import { PartialEscapeTracker } from "@shared/utils/terminalPartialEscapeTail";
 import type { ManagedTerminal } from "../types";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
 import { terminalClient } from "@/clients";
@@ -19,6 +23,11 @@ vi.mock("@/clients", () => ({
 vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
   logError: vi.fn(),
+  logDebug: vi.fn(),
+}));
+
+vi.mock("@/utils/performance", () => ({
+  markRendererPerformance: vi.fn(),
 }));
 
 /**
@@ -388,6 +397,257 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
       await Promise.resolve();
 
       expect(live.cols).toBe(100);
+    });
+  });
+  const getSerializedState = vi.mocked(terminalClient.getSerializedState);
+
+  const settle = async (terminal: Terminal): Promise<void> => {
+    // A restore hops through a microtask before replaying deferred output, and
+    // each replayed write queues behind it.
+    for (let i = 0; i < 4; i++) {
+      await flush(terminal);
+      await Promise.resolve();
+    }
+  };
+
+  // Every terminal in a scenario — source, destination, reference — shares it.
+  let gridScrollback = 200;
+  function makeGrid(): Terminal {
+    return new Terminal({ cols: 40, rows: 6, scrollback: gridScrollback, allowProposedApi: true });
+  }
+
+  function screen(terminal: Terminal): { lines: string[]; cursor: string; fg: number[] } {
+    const buffer = terminal.buffer.active;
+    const lines: string[] = [];
+    const fg: number[] = [];
+    for (let y = 0; y < buffer.length; y++) {
+      const line = buffer.getLine(y);
+      if (!line) continue;
+      lines.push(line.translateToString(true));
+      for (let x = 0; x < line.length; x++) {
+        const cell = line.getCell(x);
+        if (cell?.getChars()) fg.push(cell.getFgColor());
+      }
+    }
+    return { lines, cursor: `${buffer.cursorX},${buffer.cursorY}`, fg };
+  }
+
+  /** The pty-host side: a mirror that has parsed the first `parsed` chunks. */
+  async function hostSnapshot(
+    chunks: string[],
+    parsed: number,
+    withContinuation = true
+  ): Promise<SerializedTerminalSnapshot> {
+    const mirror = makeGrid();
+    const addon = new SerializeAddon();
+    mirror.loadAddon(addon);
+    const tracker = new PartialEscapeTracker();
+    let offset = 0;
+    for (const chunk of chunks.slice(0, parsed)) {
+      await new Promise<void>((resolve) => mirror.write(chunk, resolve));
+      tracker.feed(chunk);
+      offset += utf8Length(chunk);
+    }
+    return {
+      data: addon.serialize(),
+      cols: mirror.cols,
+      rows: mirror.rows,
+      ...(withContinuation
+        ? { continuation: { pendingEscapeTail: tracker.tail, streamOffset: offset } }
+        : {}),
+    };
+  }
+
+  function makePane(terminal: Terminal) {
+    const { managed } = makeController(terminal, {
+      // Skips the rAF activity-marker refresh, which has no bearing here.
+      isAltBuffer: true,
+      parserTail: new PartialEscapeTracker(),
+    });
+    const acks = { port: 0, ipcBytes: 0 };
+    const writer = new TerminalWriteController({
+      getInstance: (id) => (id === "t1" ? managed : undefined),
+      acknowledgePortData: (_id, _bytes, chunkCount) => {
+        acks.port += chunkCount;
+      },
+      acknowledgeData: (_id, bytes) => {
+        acks.ipcBytes += bytes;
+      },
+      notifyWriteComplete: vi.fn(),
+      incrementUnseen: vi.fn(),
+    });
+    const restorer = new TerminalRestoreController({
+      getInstance: (id) => (id === "t1" ? managed : undefined),
+      writeData: (id, data, chunkCount, range) => writer.write(id, data, chunkCount, range),
+    });
+    const stream = { end: 0 };
+    // What the ingest path does per delivered chunk: stamp its stream range at
+    // receipt, then hand it to the write controller.
+    const deliver = (chunk: string, asBytes = false): void => {
+      stream.end += utf8Length(chunk);
+      // Port chunks arrive as UTF-8 bytes, IPC chunks as strings.
+      const data = asBytes ? new TextEncoder().encode(chunk) : chunk;
+      writer.write("t1", data, 1, streamRangeOf(data, stream.end));
+    };
+    return { managed, restorer, deliver, acks, stream };
+  }
+
+  async function uninterrupted(chunks: string[]): Promise<ReturnType<typeof screen>> {
+    const terminal = makeGrid();
+    for (const chunk of chunks) terminal.write(chunk);
+    await flush(terminal);
+    return screen(terminal);
+  }
+
+  /**
+   * The renderer painted `painted` chunks live, then a fetch-and-restore opened
+   * its window; every later chunk arrives during the fetch. The host serialized
+   * after parsing `parsed` of them, so chunks `painted..parsed` are delivered
+   * but already in the snapshot.
+   */
+  async function restoreMidStream(
+    chunks: string[],
+    painted: number,
+    parsed: number,
+    options: { withContinuation?: boolean; lateChunks?: number; asBytes?: boolean } = {}
+  ): Promise<{ result: ReturnType<typeof screen>; acks: { port: number; ipcBytes: number } }> {
+    const terminal = makeGrid();
+    const pane = makePane(terminal);
+    const late = options.lateChunks ?? 0;
+    const deliver = (chunk: string) => pane.deliver(chunk, options.asBytes);
+    for (const chunk of chunks.slice(0, painted)) deliver(chunk);
+    await flush(terminal);
+
+    const snapshot = await hostSnapshot(chunks, parsed, options.withContinuation ?? true);
+    getSerializedState.mockImplementationOnce(async () => {
+      for (const chunk of chunks.slice(painted, chunks.length - late)) deliver(chunk);
+      return snapshot;
+    });
+    await pane.restorer.fetchAndRestore("t1");
+    await settle(terminal);
+    for (const chunk of chunks.slice(chunks.length - late)) deliver(chunk);
+    await settle(terminal);
+    return { result: screen(terminal), acks: pane.acks };
+  }
+
+  const SPLITS: Record<string, string[]> = {
+    "CSI SGR": ["hello \x1b[3", "1mRED", " done"],
+    "OSC title": ["hello \x1b]0;ti", "tle\x07world", "!"],
+    "lone ESC": ["hello \x1b", "[31mRED", " done"],
+    "cursor position": ["hello \x1b[2;", "3Hworld", "!"],
+  };
+
+  describe("fetch-and-restore across a split escape sequence (#12791)", () => {
+    beforeEach(() => {
+      getSerializedState.mockReset();
+      gridScrollback = 200;
+    });
+
+    for (const [name, chunks] of Object.entries(SPLITS)) {
+      it(`renders a ${name} split the same as uninterrupted playback`, async () => {
+        const expected = await uninterrupted(chunks);
+        // Snapshot cut right after the chunk that ends mid-sequence, with that
+        // chunk either painted before the fetch or held back during it.
+        for (const painted of [0, 1]) {
+          const { result } = await restoreMidStream(chunks, painted, 1);
+          expect(result, `painted=${painted}`).toEqual(expected);
+        }
+      });
+    }
+
+    it("drops held-back chunks the snapshot already contains instead of repeating them", async () => {
+      const chunks = ["one\r\n", "two\r\n", "three\r\n", "four\r\n"];
+      const expected = await uninterrupted(chunks);
+      for (let parsed = 0; parsed <= chunks.length; parsed++) {
+        const { result } = await restoreMidStream(chunks, 0, parsed);
+        expect(result, `parsed=${parsed}`).toEqual(expected);
+      }
+    });
+
+    it("repeats held-back chunks when the snapshot carries no fence (the defect)", async () => {
+      const chunks = ["one\r\n", "two\r\n", "three\r\n"];
+      const { result } = await restoreMidStream(chunks, 0, 2, { withContinuation: false });
+      expect(result).not.toEqual(await uninterrupted(chunks));
+    });
+
+    it("drops a covered chunk that lands after the replay has finished", async () => {
+      const chunks = ["hello \x1b[3", "1mRED", " done"];
+      const { result } = await restoreMidStream(chunks, 0, 2, { lateChunks: 2 });
+      expect(result).toEqual(await uninterrupted(chunks));
+    });
+
+    it("settles every held-back chunk's ledger exactly once, painted or not", async () => {
+      const chunks = ["a", "b", "c", "d", "e"];
+      const { acks } = await restoreMidStream(chunks, 1, 3);
+      expect(acks.port).toBe(chunks.length);
+      expect(acks.ipcBytes).toBe(chunks.join("").length);
+    });
+
+    it("trims a held-back batch that straddles the snapshot's offset", async () => {
+      const chunks = ["ōne ", "twö 😀 ", "three"];
+      const terminal = makeGrid();
+      const pane = makePane(terminal);
+      const snapshot = await hostSnapshot(chunks, 1);
+      getSerializedState.mockImplementationOnce(async () => {
+        // The ingest queue coalesced the first two chunks into one batch.
+        const batch = chunks[0]! + chunks[1]!;
+        pane.stream.end = utf8Length(batch);
+        const range = streamRangeOf(batch, pane.stream.end);
+        pane.managed.deferredOutput.push({ data: batch, chunkCount: 2, range });
+        return snapshot;
+      });
+      await pane.restorer.fetchAndRestore("t1");
+      await settle(terminal);
+      pane.deliver(chunks[2]!);
+      await settle(terminal);
+      expect(screen(terminal)).toEqual(await uninterrupted(chunks));
+    });
+
+    it("fences port-delivered byte chunks the same way", async () => {
+      for (const chunks of Object.values(SPLITS)) {
+        const expected = await uninterrupted(chunks);
+        const { result } = await restoreMidStream(chunks, 0, 2, { asBytes: true });
+        expect(result).toEqual(expected);
+      }
+    });
+
+    it("restores a split through the incremental path for a large snapshot", async () => {
+      gridScrollback = 12000;
+      const filler = Array.from({ length: 11000 }, (_, i) => `line ${i} ${"x".repeat(24)}\r\n`);
+      const chunks = [filler.join(""), "tail \x1b[3", "1mRED"];
+      const snapshot = await hostSnapshot(chunks, 2);
+      expect(snapshot.data.length).toBeGreaterThan(
+        INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes
+      );
+      const expected = await uninterrupted(chunks);
+      const { result } = await restoreMidStream(chunks, 0, 2);
+      expect(result).toEqual(expected);
+    });
+
+    it("applies an empty screen when the source is only mid-sequence", async () => {
+      const chunks = ["\x1b[3", "1mRED"];
+      const { result } = await restoreMidStream(chunks, 0, 1);
+      expect(result).toEqual(await uninterrupted(chunks));
+    });
+
+    it("swallows the rest of a sequence too long to carry instead of printing it", async () => {
+      const chunks = ["hi \x1b]52;c;" + "QUFB".repeat(20000), "QUFB\x07world"];
+      const { result } = await restoreMidStream(chunks, 0, 1);
+      expect(result).toEqual(await uninterrupted(chunks));
+    });
+
+    it("grounds a destination parser left mid-sequence before the snapshot lands", async () => {
+      const chunks = ["prompt$ "];
+      const terminal = makeGrid();
+      const pane = makePane(terminal);
+      // A stale live write left the pane inside an OSC string, which would eat
+      // everything up to the next BEL without the leading CAN.
+      terminal.write("\x1b]0;stale");
+      await flush(terminal);
+      getSerializedState.mockResolvedValueOnce(await hostSnapshot(chunks, 1));
+      await pane.restorer.fetchAndRestore("t1");
+      await settle(terminal);
+      expect(screen(terminal).lines[0]?.trimEnd()).toBe("prompt$");
     });
   });
 });

@@ -17,6 +17,7 @@ import type { PanelTitleMode } from "../../../shared/types/panel.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { applyXtermReflowFastpath } from "../../../shared/utils/xtermReflowFastpath.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { PartialEscapeTracker } from "../../../shared/utils/terminalPartialEscapeTail.js";
 import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import type { ImagePathProbe } from "./ImagePathProbe.js";
@@ -118,7 +119,18 @@ import {
 const AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS = 50;
 
 export interface TerminalProcessCallbacks {
-  emitData: (id: string, data: string | Uint8Array) => void;
+  /**
+   * `streamEnd` is the UTF-8 byte offset, in this process's renderer-bound
+   * stream, just past `data`. A live snapshot is stamped with the same offset
+   * (#12791) so the renderer can tell which chunks it already contains.
+   */
+  emitData: (id: string, data: string, streamEnd: number) => void;
+  /**
+   * Where this process's stream offsets start. The owner carries it over from
+   * the previous process at the same id, so offsets never go backwards across
+   * a respawn and a restore fence can never cover the new process's output.
+   */
+  streamOffsetBase?: number;
   onExit: (id: string, exitCode: number, signal?: number) => void;
   /**
    * Fired once the preserved-exit snapshot has actually been captured (after
@@ -268,6 +280,9 @@ export class TerminalProcess {
   private _restoreBannerStart: IMarker | null = null;
   private _restoreBannerEnd: IMarker | null = null;
   private readonly textDecoder = new TextDecoder();
+  private emittedBytes = 0;
+  // In-thread mirror only; the worker's AnalysisSession tracks its own.
+  private readonly parserTail = new PartialEscapeTracker();
 
   private restoreSessionIfPresent(headlessTerminal: HeadlessTerminalType): void {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
@@ -384,6 +399,7 @@ export class TerminalProcess {
     prelude: string = "",
     dataHandoff?: PooledPtyDataHandoff
   ) {
+    this.emittedBytes = callbacks.streamOffsetBase ?? 0;
     const { shell, args: spawnArgs } = spawnContext;
     const spawnedAt = Date.now();
 
@@ -747,7 +763,7 @@ export class TerminalProcess {
       },
       readViewportLines: (n) => readLastNLines(this.terminalInfo.headlessTerminal, n),
       readCursorLine: () => readCursorLine(this.terminalInfo.headlessTerminal),
-      serialize: () => serializeTerminalAsync(this.id, this.terminalInfo),
+      serialize: () => this.serializeLiveInThread(),
       serializeForPersistence: () => this.serializeForPersistence(),
       captureFinalSnapshot: async (): Promise<AnalysisFinalCapture> => {
         const snapshot = await serializeTerminalAsync(this.id, this.terminalInfo);
@@ -1711,7 +1727,41 @@ export class TerminalProcess {
       terminal.preservedSnapshotLastAccessedAt = Date.now();
       return Promise.resolve(terminal.preservedSnapshot);
     }
-    return this.analysis.serialize();
+    // Sampled before the request leaves: every chunk emitted so far has
+    // already been fed to the analysis mirror (the pipeline forwards and feeds
+    // in the same step), and the serialize below drains exactly those feeds.
+    const streamOffset = this.emittedBytes;
+    return this.analysis.serialize().then((snapshot) => {
+      if (!snapshot?.continuation) return snapshot;
+      return { ...snapshot, continuation: { ...snapshot.continuation, streamOffset } };
+    });
+  }
+
+  /**
+   * Drain the scheduler and serialize inside the drain callback, so the screen
+   * and the parser tail describe the same parsed prefix. The yielding
+   * serializer is skipped on purpose: its deferred serialize would run after
+   * later chunks had parsed, and the snapshot would cover bytes past the
+   * offset it is stamped with.
+   */
+  private serializeLiveInThread(): Promise<SerializedTerminalSnapshot | null> {
+    const terminal = this.terminalInfo;
+    const headless = terminal.headlessTerminal;
+    if (terminal.preservedSnapshot !== undefined || !headless || !terminal.serializeAddon) {
+      return serializeTerminalAsync(this.id, terminal);
+    }
+    return new Promise((resolve) => {
+      headlessMirrorScheduler.flush(this.id, headless, () => {
+        if (terminal.headlessTerminal !== headless) {
+          resolve(serializeTerminal(this.id, terminal));
+          return;
+        }
+        const snapshot = serializeTerminal(this.id, terminal);
+        resolve(
+          snapshot && { ...snapshot, continuation: { pendingEscapeTail: this.parserTail.tail } }
+        );
+      });
+    });
   }
 
   serializeForPersistence(): SerializedTerminalSnapshot | null {
@@ -1737,7 +1787,7 @@ export class TerminalProcess {
 
     const recentLines = terminal.semanticBuffer.slice(-linesToReplay);
     const historyChunk = recentLines.join("\n") + "\n";
-    this.callbacks.emitData(this.id, historyChunk);
+    this.emitDataDirect(historyChunk);
 
     return linesToReplay;
   }
@@ -2082,6 +2132,7 @@ export class TerminalProcess {
     if (terminal.headlessTerminal) {
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
       headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, prelude, () => {
+        this.parserTail.feed(prelude);
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
         this.scheduleOutputProgressSample();
       });
@@ -2123,6 +2174,7 @@ export class TerminalProcess {
       // the callback fires only after the chunk has actually parsed).
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
       headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, data, () => {
+        this.parserTail.feed(data);
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
         // Invalidate before noteAgentOutputActivity reads the viewport: xterm
         // fires per-write callbacks before the onWriteParsed event the cache
@@ -2159,7 +2211,8 @@ export class TerminalProcess {
   }
 
   private emitDataDirect(data: string): void {
-    this.callbacks.emitData(this.id, data);
+    this.emittedBytes += Buffer.byteLength(data, "utf8");
+    this.callbacks.emitData(this.id, data, this.emittedBytes);
   }
 
   handleAgentDetection(result: DetectionResult, spawnedAt: number): void {

@@ -108,6 +108,7 @@ export class TerminalWorkerIngestController {
             if (parsed) this.deps.incrementUnseen(id, parsed.isUserScrolledBack);
             callback?.();
           };
+          current.parserTail?.feedAny(data);
           if (source !== "snapshot") {
             current.terminal.write(data, onParsed);
             return;
@@ -139,6 +140,8 @@ export class TerminalWorkerIngestController {
         const current = this.deps.getInstance(id);
         return current?.serializeAddon.serialize() ?? "";
       },
+      mirrorEscapeTail: () => this.deps.getInstance(id)?.parserTail?.tail ?? "",
+      getStreamFence: () => this.deps.getInstance(id)?.streamFence,
       getGeometry: () => {
         const current = this.deps.getInstance(id);
         return {

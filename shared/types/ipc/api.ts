@@ -343,7 +343,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     }>;
     getAnalysisBuffer(): Promise<SharedArrayBuffer | null>;
     getInfo(id: string): Promise<TerminalInfoPayload>;
-    onData(id: string, callback: (data: string | Uint8Array) => void): () => void;
+    onData(
+      id: string,
+      callback: (data: string | Uint8Array, streamEnd?: number) => void
+    ): () => void;
     onExit(callback: (id: string, exitCode: number) => void): () => void;
     onAgentStateChanged(callback: (data: AgentStateChangePayload) => void): () => void;
     onAgentDetected(callback: (data: AgentDetectedPayload) => void): () => void;

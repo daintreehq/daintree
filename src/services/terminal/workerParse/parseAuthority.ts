@@ -3,6 +3,10 @@ import type { SerializeAddon as SerializeAddonInstance } from "@xterm/addon-seri
 import * as xtermHeadlessModule from "@xterm/headless";
 import * as serializeAddonModule from "@xterm/addon-serialize";
 import { applyXtermReflowFastpath } from "../../../../shared/utils/xtermReflowFastpath.js";
+import {
+  PARSER_GROUND,
+  PartialEscapeTracker,
+} from "../../../../shared/utils/terminalPartialEscapeTail.js";
 
 // This module runs under three loaders: Vite (renderer Worker bundle), vitest,
 // and a plain node worker_thread via tsx (perf harness). xterm ships a
@@ -56,6 +60,8 @@ export interface AuthoritySnapshot {
   generation: number;
   serialized: string;
   isAltBuffer: boolean;
+  /** See SnapshotContinuation.pendingEscapeTail. */
+  pendingEscapeTail: string | null;
 }
 
 export class ParseAuthority {
@@ -65,6 +71,8 @@ export class ParseAuthority {
   private dirty = false;
   private pendingWrites = 0;
   private lastSnapshotBounded = false;
+  // Fed from parse callbacks, so it always matches what serialize() sees.
+  private readonly parserTail = new PartialEscapeTracker();
 
   constructor(options: ParseAuthorityOptions) {
     this.terminal = new Terminal({
@@ -93,6 +101,7 @@ export class ParseAuthority {
     this.pendingWrites += 1;
     try {
       this.terminal.write(data, () => {
+        this.parserTail.feedAny(data);
         this.pendingWrites -= 1;
         this.dirty = true;
         onParsed?.();
@@ -113,9 +122,11 @@ export class ParseAuthority {
   // Re-seed authority state from a serialized snapshot (a session demoting a
   // terminal back to worker parse after a passthrough period, during which
   // the authority saw none of the bytes).
-  restore(serialized: string): void {
+  restore(serialized: string, pendingEscapeTail?: string | null): void {
+    // reset() leaves the parser mid-sequence if the last write stopped there
+    // (xterm.js #5019); CAN grounds it before the snapshot's first byte.
     this.terminal.reset();
-    this.write(serialized);
+    this.write(PARSER_GROUND + serialized + (pendingEscapeTail ?? ""));
   }
 
   isDirty(): boolean {
@@ -155,6 +166,7 @@ export class ParseAuthority {
       generation: this.generation,
       serialized,
       isAltBuffer: this.terminal.buffer.active.type === "alternate",
+      pendingEscapeTail: this.parserTail.tail,
     };
   }
 

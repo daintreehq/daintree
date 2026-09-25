@@ -361,6 +361,47 @@ describe("AnalysisWorkerPool", () => {
     expect(worker.messagesOfType("data")).toHaveLength(2);
   });
 
+  it("stops carrying a continuation once a rebuild has cost the mirror output (#12791)", async () => {
+    const backend = pool.createBackend(
+      {
+        ...makeSpec("t1"),
+        flowControl: { highWatermark: 10, lowWatermark: 5, holdHardCap: 50 },
+      },
+      makeDelegate()
+    )!;
+    const worker = workers[0];
+    const reply = {
+      data: "SCREEN",
+      cols: 80,
+      rows: 24,
+      continuation: { pendingEscapeTail: "\x1b[3" },
+    };
+    const serializeWith = (result: typeof reply) => {
+      const promise = backend.serialize();
+      const request = worker.messagesOfType("request").at(-1)!;
+      worker.emit("message", {
+        type: "response",
+        requestId: request.requestId,
+        terminalId: "t1",
+        result,
+        generation: request.generation,
+      });
+      return promise;
+    };
+
+    await expect(serializeWith(reply)).resolves.toEqual(reply);
+
+    // Past the hard cap the hold is dropped and the slot rebuilt empty: the
+    // fresh mirror no longer covers the stream a fence would be measured on.
+    backend.feedChunk("x".repeat(20), { agentLive: false });
+    backend.feedChunk("y".repeat(30), { agentLive: false });
+    backend.feedChunk("z".repeat(30), { agentLive: false });
+    expect(worker.messagesOfType("create")).toHaveLength(2);
+    backend.feedChunk("w", { agentLive: false });
+
+    await expect(serializeWith(reply)).resolves.toEqual({ data: "SCREEN", cols: 80, rows: 24 });
+  });
+
   it("flushes the coalesced host-side hold before a serialize request reaches the worker", async () => {
     // End-to-end via a real runtime: data held above the high watermark must be
     // posted BEFORE the request, or the serialize would miss it (the runtime
