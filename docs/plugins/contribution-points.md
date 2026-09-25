@@ -740,7 +740,7 @@ A tour without `panelKind` is a **plugin tour**, offered from Help and the comma
 | `chapters[].audioUrl` | yes | A plugin-relative audio file, an `https://` URL on a host listed in `audioHosts`, or `null` for a silent chapter. |
 | `chapters[].narrationHash` | yes | The 8-character lowercase hex fingerprint of the narration the timing was generated from. |
 
-A malformed tour is a manifest error with the offending path, like any other malformed contribution. Tours are refused under `scope: "project"`.
+A malformed tour is reported with the offending path, like any other malformed contribution: `daintree-plugin validate` and the installer refuse it, and at load Daintree logs the issues and drops only that tour, so the rest of the plugin still loads. Exceeding the tour cap is still a whole-manifest error. `audioHosts` entries are ASCII (punycode) hostnames. Tours are refused under `scope: "project"`.
 
 ## Surfaces — _Shipped (project scope only)_
 

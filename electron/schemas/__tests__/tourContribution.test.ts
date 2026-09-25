@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getPluginManifestSchema,
   MANIFEST_CONTRIBUTION_CAPS,
+  parsePluginManifestForLoad,
   TOUR_CONTRIBUTION_LIMITS,
 } from "../plugin.js";
 
@@ -38,6 +39,14 @@ function errorCodes(result: ReturnType<typeof schema.safeParse>): string[] {
 
 function issuePaths(result: ReturnType<typeof schema.safeParse>): string[] {
   return result.success ? [] : result.error.issues.map((i) => i.path.join("."));
+}
+
+/** Fails, and every issue sits at `path` (or beneath it) — so it failed for the stated reason. */
+function expectOnlyAt(result: ReturnType<typeof schema.safeParse>, path: string) {
+  expect(result.success).toBe(false);
+  const paths = issuePaths(result);
+  expect(paths.length).toBeGreaterThan(0);
+  for (const p of paths) expect(p === path || p.startsWith(`${path}.`), p).toBe(true);
 }
 
 const panel = { id: "site-builder", name: "Site Builder", iconId: "globe", color: "#336699" };
@@ -166,25 +175,58 @@ describe("contributes.tours schema (#12768)", () => {
 
   it("rejects an unsafe componentPath", () => {
     for (const componentPath of ["../x.js", "/x.js", "https://cdn.example.com/x.js"]) {
-      expect(parse([tour({ componentPath })]).success).toBe(false);
+      expectOnlyAt(parse([tour({ componentPath })]), "contributes.tours.0.componentPath");
     }
   });
 
   it("rejects a malformed narration fingerprint", () => {
     for (const narrationHash of ["0A1B2C3D", "abc", "0a1b2c3d4", ""]) {
-      expect(parse([tour({ chapters: [chapter({ narrationHash })] })]).success).toBe(false);
+      expectOnlyAt(
+        parse([tour({ chapters: [chapter({ narrationHash })] })]),
+        "contributes.tours.0.chapters.0.narrationHash"
+      );
     }
   });
 
   it("requires audioUrl to be present, even when null", () => {
     const { audioUrl: _omit, ...withoutAudio } = chapter();
-    expect(parse([tour({ chapters: [withoutAudio] })]).success).toBe(false);
+    expectOnlyAt(
+      parse([tour({ chapters: [withoutAudio] })]),
+      "contributes.tours.0.chapters.0.audioUrl"
+    );
+  });
+
+  it("classifies audioUrl edge cases", () => {
+    const at = "contributes.tours.0.chapters.0.audioUrl";
+    const withAudio = (audioUrl: string) =>
+      parse([tour({ audioHosts: ["cdn.example.com"], chapters: [chapter({ audioUrl })] })]);
+    for (const audioUrl of [
+      "",
+      "//cdn.example.com/a.mp3",
+      " //other.example.com/a.mp3",
+      "\t//other.example.com/a.mp3",
+      "tours/a.mp3 ",
+      "https://cdn.example.com/a.mp3 ",
+      "https://127.1/a.mp3",
+    ]) {
+      expectOnlyAt(withAudio(audioUrl), at);
+    }
+    expect(withAudio("HTTPS://cdn.example.com/a.mp3").success).toBe(true);
+    // An unused declaration is allowed: a tour may list its host before its audio moves there.
+    expect(parse([tour({ audioHosts: ["cdn.example.com"] })]).success).toBe(true);
+  });
+
+  it("rejects a __proto__ cue instead of silently dropping it", () => {
+    const cues = JSON.parse('{"__proto__": 1}') as Record<string, number>;
+    const result = parse([tour({ chapters: [chapter({ cues })] })]);
+    expect(errorCodes(result)).toContain("tour_cue_name_reserved");
+    expectOnlyAt(result, "contributes.tours.0.chapters.0.cues");
   });
 
   it("rejects cues and captions outside the chapter duration", () => {
     const cue = parse([tour({ chapters: [chapter({ cues: { late: 11 } })] })]);
     expect(errorCodes(cue)).toContain("tour_cue_out_of_range");
-    expect(issuePaths(cue)).toContain("contributes.tours.0.chapters.0.cues.late");
+    expectOnlyAt(cue, "contributes.tours.0.chapters.0.cues.late");
 
     for (const caption of [
       { start: 5, end: 5, text: "empty" },
@@ -193,31 +235,39 @@ describe("contributes.tours schema (#12768)", () => {
     ]) {
       const result = parse([tour({ chapters: [chapter({ captions: [caption] })] })]);
       expect(errorCodes(result)).toContain("tour_caption_out_of_range");
+      expectOnlyAt(result, "contributes.tours.0.chapters.0.captions.0");
     }
   });
 
   it("rejects non-positive and over-long chapter durations", () => {
     for (const duration of [0, -1, TOUR_CONTRIBUTION_LIMITS.chapterDurationSeconds + 1]) {
-      expect(parse([tour({ chapters: [chapter({ duration })] })]).success).toBe(false);
+      expectOnlyAt(
+        parse([tour({ chapters: [chapter({ duration })] })]),
+        "contributes.tours.0.chapters.0.duration"
+      );
     }
   });
 
   it("rejects unknown keys at every level", () => {
-    expect(parse([tour({ autoplay: true })]).success).toBe(false);
-    expect(parse([tour({ chapters: [chapter({ voice: "x" })] })]).success).toBe(false);
-    expect(
-      parse([tour({ chapters: [chapter({ captions: [{ start: 0, end: 1, text: "a", x: 1 }] })] })])
-        .success
-    ).toBe(false);
+    expectOnlyAt(parse([tour({ autoplay: true })]), "contributes.tours.0");
+    expectOnlyAt(
+      parse([tour({ chapters: [chapter({ voice: "x" })] })]),
+      "contributes.tours.0.chapters.0"
+    );
+    expectOnlyAt(
+      parse([tour({ chapters: [chapter({ captions: [{ start: 0, end: 1, text: "a", x: 1 }] })] })]),
+      "contributes.tours.0.chapters.0.captions.0"
+    );
   });
 
   it("rejects duplicate tour ids and duplicate chapter ids within a tour", () => {
     const dupTour = parse([tour(), tour({ title: "Again" })]);
     expect(errorCodes(dupTour)).toContain("duplicate_contribution_id");
+    expectOnlyAt(dupTour, "contributes.tours.1.id");
 
     const dupChapter = parse([tour({ chapters: [chapter(), chapter()] })]);
     expect(errorCodes(dupChapter)).toContain("tour_chapter_duplicate_id");
-    expect(issuePaths(dupChapter)).toContain("contributes.tours.0.chapters.1.id");
+    expectOnlyAt(dupChapter, "contributes.tours.0.chapters.1.id");
 
     // Chapter ids are scoped per tour.
     expect(parse([tour(), tour({ id: "other" })]).success).toBe(true);
@@ -226,22 +276,26 @@ describe("contributes.tours schema (#12768)", () => {
   it("enforces the tour, chapter, caption, cue and host caps", () => {
     const tours = (n: number) => Array.from({ length: n }, (_v, i) => tour({ id: `t${i}` }));
     expect(parse(tours(MANIFEST_CONTRIBUTION_CAPS.tours)).success).toBe(true);
-    expect(parse(tours(MANIFEST_CONTRIBUTION_CAPS.tours + 1)).success).toBe(false);
+    expectOnlyAt(parse(tours(MANIFEST_CONTRIBUTION_CAPS.tours + 1)), "contributes.tours");
 
     const chapters = (n: number) => Array.from({ length: n }, (_v, i) => chapter({ id: `c${i}` }));
-    expect(parse([tour({ chapters: [] })]).success).toBe(false);
+    expectOnlyAt(parse([tour({ chapters: [] })]), "contributes.tours.0.chapters");
     expect(parse([tour({ chapters: chapters(TOUR_CONTRIBUTION_LIMITS.chapters) })]).success).toBe(
       true
     );
-    expect(
-      parse([tour({ chapters: chapters(TOUR_CONTRIBUTION_LIMITS.chapters + 1) })]).success
-    ).toBe(false);
+    expectOnlyAt(
+      parse([tour({ chapters: chapters(TOUR_CONTRIBUTION_LIMITS.chapters + 1) })]),
+      "contributes.tours.0.chapters"
+    );
 
     const captions = Array.from(
       { length: TOUR_CONTRIBUTION_LIMITS.captionsPerChapter + 1 },
       () => ({ start: 0, end: 1, text: "a" })
     );
-    expect(parse([tour({ chapters: [chapter({ captions })] })]).success).toBe(false);
+    expectOnlyAt(
+      parse([tour({ chapters: [chapter({ captions })] })]),
+      "contributes.tours.0.chapters.0.captions"
+    );
 
     const cues = Object.fromEntries(
       Array.from({ length: TOUR_CONTRIBUTION_LIMITS.cuesPerChapter + 1 }, (_v, i) => [`c${i}`, 1])
@@ -254,13 +308,80 @@ describe("contributes.tours schema (#12768)", () => {
       { length: TOUR_CONTRIBUTION_LIMITS.audioHosts + 1 },
       (_v, i) => `cdn${i}.example.com`
     );
-    expect(parse([tour({ audioHosts: hosts })]).success).toBe(false);
+    expectOnlyAt(parse([tour({ audioHosts: hosts })]), "contributes.tours.0.audioHosts");
+  });
+
+  it("accepts tours from a built-in plugin", () => {
+    const result = getPluginManifestSchema("builtin").safeParse({
+      name: "daintree.tours-plugin",
+      version: "1.0.0",
+      contributes: { tours: [tour()] },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("reports a malformed tour through safeParse rather than throwing", () => {
     for (const bad of [null, "tour", [null], [{}], { id: "x" }]) {
       expect(() => parse(bad)).not.toThrow();
       expect(parse(bad).success).toBe(false);
+    }
+  });
+});
+
+describe("parsePluginManifestForLoad tour isolation (#12768)", () => {
+  const manifest = (tours: unknown[], contributes: Record<string, unknown> = {}) => ({
+    name: "acme.tours-plugin",
+    version: "1.0.0",
+    contributes: { panels: [panel], tours, ...contributes },
+  });
+
+  it("drops only the malformed tours and keeps the rest of the plugin", () => {
+    const { result, droppedTourIssues } = parsePluginManifestForLoad(
+      "user",
+      manifest([
+        tour({ id: "good" }),
+        tour({ id: "bad-panel", panelKind: "someone-elses-panel" }),
+        tour({ id: "bad-audio", chapters: [chapter({ audioUrl: "https://x.example.com/a.mp3" })] }),
+        tour({ id: "good" }),
+      ])
+    );
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.contributes.tours.map((t) => t.id)).toEqual(["good"]);
+    expect(result.data.contributes.panels).toHaveLength(1);
+    // Paths name the author's original indices, even across drop rounds.
+    expect([...new Set(droppedTourIssues.map((i) => i.path.slice(0, 3).join(".")))].sort()).toEqual(
+      ["contributes.tours.1", "contributes.tours.2", "contributes.tours.3"]
+    );
+  });
+
+  it("returns a clean manifest untouched", () => {
+    const { result, droppedTourIssues } = parsePluginManifestForLoad("user", manifest([tour()]));
+    expect(result.success).toBe(true);
+    expect(droppedTourIssues).toEqual([]);
+  });
+
+  it("still refuses the manifest when any issue lies outside a single tour entry", () => {
+    const otherIssue = parsePluginManifestForLoad(
+      "user",
+      manifest([tour({ panelKind: "nope" })], { skills: [{ id: "s" }] })
+    );
+    expect(otherIssue.result.success).toBe(false);
+    expect(otherIssue.droppedTourIssues).toEqual([]);
+
+    const overCap = parsePluginManifestForLoad(
+      "user",
+      manifest(Array.from({ length: MANIFEST_CONTRIBUTION_CAPS.tours + 1 }, () => ({})))
+    );
+    expect(overCap.result.success).toBe(false);
+
+    const projectScope = parsePluginManifestForLoad("project", {
+      ...manifest([tour()]),
+      scope: "project",
+    });
+    expect(projectScope.result.success).toBe(false);
+    if (!projectScope.result.success) {
+      expect(errorCodes(projectScope.result)).toContain("tours_project_scope_forbidden");
     }
   });
 });

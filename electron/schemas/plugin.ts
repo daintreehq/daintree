@@ -984,8 +984,9 @@ const URL_SCHEME_PREFIX = /^[a-z][a-z0-9+.-]*:/i;
  * A declared narration host is a bare, exact DNS hostname — the list is a
  * disclosure the user reads, so it must say precisely where audio comes from.
  * Round-tripping through `URL` rejects ports, paths, credentials and non-ASCII
- * spellings (their `host` differs from the input); IP literals and a trailing
- * dot are rejected so matching stays a plain case-insensitive string compare.
+ * spellings (their `host` differs from the input); IP literals and empty
+ * labels (a leading, doubled or trailing dot) are rejected so matching stays a
+ * plain case-insensitive string compare.
  * Every private/loopback literal is single-label or an IP, so those rules also
  * cover the SSRF check; `isPrivateOrLoopbackHostname` stays as a backstop.
  */
@@ -994,7 +995,7 @@ const TourAudioHostSchema = z
   .min(1)
   .max(253)
   .superRefine((value, ctx) => {
-    let host: string | null = null;
+    let host: string | null;
     try {
       host = new URL(`https://${value}/`).hostname;
     } catch {
@@ -1005,7 +1006,7 @@ const TourAudioHostSchema = z
       host !== lower ||
       value.includes("*") ||
       !value.includes(".") ||
-      value.endsWith(".") ||
+      value.split(".").some((label) => label === "") ||
       value.startsWith("[") ||
       /^[\d.]+$/.test(value) ||
       isPrivateOrLoopbackHostname(lower)
@@ -1028,6 +1029,17 @@ const TourAudioUrlSchema = z
   .min(1)
   .max(4096)
   .superRefine((value, ctx) => {
+    // URL parsing strips leading/trailing C0 controls and spaces (<= U+0020),
+    // so " //host/a.mp3" would resolve remotely past the host declaration and a
+    // padded https URL would not be the string the declaration was checked on.
+    if (value.charCodeAt(0) <= 0x20 || value.charCodeAt(value.length - 1) <= 0x20) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "audioUrl must not start or end with whitespace or control characters",
+        params: { errorCode: "tour_audio_url_padded" },
+      });
+      return;
+    }
     if (URL_SCHEME_PREFIX.test(value)) {
       refinePluginHttpsUrl(value, ctx, "tours[].chapters[].audioUrl");
       return;
@@ -1579,6 +1591,33 @@ function normalizeDeprecatedContributionAliases(raw: unknown): unknown {
 }
 
 /**
+ * `z.record` skips an own `__proto__` key before validating it, so a cue named
+ * that would vanish from `contributes.tours[].chapters[].cues` without a word.
+ * Refuse it while the raw JSON still carries it. This runs in the `contributes`
+ * preprocess rather than on the `cues` field because a preprocess below a
+ * `.default()` makes the JSON Schema emitter drop every default above it.
+ */
+function reportReservedTourCueNames(raw: unknown, ctx: z.RefinementCtx): void {
+  const tours = (raw as { tours?: unknown } | null)?.tours;
+  if (!Array.isArray(tours)) return;
+  tours.forEach((tour, tourIndex) => {
+    const chapters = (tour as { chapters?: unknown } | null)?.chapters;
+    if (!Array.isArray(chapters)) return;
+    chapters.forEach((chapter, chapterIndex) => {
+      const cues = (chapter as { cues?: unknown } | null)?.cues;
+      if (typeof cues === "object" && cues !== null && Object.hasOwn(cues, "__proto__")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["tours", tourIndex, "chapters", chapterIndex, "cues"],
+          message: 'Cue name "__proto__" is reserved.',
+          params: { errorCode: "tour_cue_name_reserved" },
+        });
+      }
+    });
+  });
+}
+
+/**
  * `contributes.*` groups a `scope: "project"` plugin may not declare, each with
  * the structural reason it cannot yet be narrowed to one project.
  *
@@ -1656,6 +1695,53 @@ export function getPluginManifestSchema(origin: PluginOrigin | boolean): PluginM
   return buildPluginManifestSchema(
     typeof origin === "boolean" ? (origin ? "builtin" : "user") : origin
   );
+}
+
+/**
+ * Parse a manifest for loading, isolating malformed `contributes.tours` entries
+ * (#12768): a tour is optional polish, so a bad one is dropped and its issues
+ * returned as `droppedTourIssues` rather than refusing the whole plugin. Only
+ * issues addressed to a single tour entry are isolated — a cap overflow or the
+ * project-scope refusal sits on the array itself and still fails the parse, as
+ * does any other issue. Authoring surfaces (`daintree-plugin validate`, the
+ * installer) keep the strict parse so the author still sees every error.
+ */
+export function parsePluginManifestForLoad(
+  origin: PluginOrigin,
+  json: unknown
+): {
+  result: ReturnType<PluginManifestSchema["safeParse"]>;
+  droppedTourIssues: z.core.$ZodIssue[];
+} {
+  const schema = getPluginManifestSchema(origin);
+  const result = schema.safeParse(json);
+  const raw = json as { contributes?: { tours?: unknown } } | null;
+  if (result.success || !Array.isArray(raw?.contributes?.tours)) {
+    return { result, droppedTourIssues: [] };
+  }
+
+  // Manifest-level refinements (duplicate ids, panelKind) may be withheld while
+  // an entry is still malformed, so a drop can surface another round. Each
+  // round removes at least one entry, which bounds the loop by the array length.
+  let tours: unknown[] = raw.contributes.tours;
+  let originalIndex = tours.map((_tour, index) => index);
+  let current = result;
+  const dropped: z.core.$ZodIssue[] = [];
+  while (!current.success) {
+    const bad = new Set<number>();
+    for (const issue of current.error.issues) {
+      const [root, group, index, ...rest] = issue.path;
+      if (root !== "contributes" || group !== "tours" || typeof index !== "number") {
+        return { result, droppedTourIssues: [] };
+      }
+      bad.add(index);
+      dropped.push({ ...issue, path: ["contributes", "tours", originalIndex[index], ...rest] });
+    }
+    tours = tours.filter((_tour, index) => !bad.has(index));
+    originalIndex = originalIndex.filter((_original, index) => !bad.has(index));
+    current = schema.safeParse({ ...raw, contributes: { ...raw.contributes, tours } });
+  }
+  return { result: current, droppedTourIssues: dropped };
 }
 
 /**
@@ -1807,7 +1893,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       scopes: PluginManifestScopesSchema.optional(),
       activationEvents: z.array(z.literal("onStartupFinished")).default([]),
       contributes: z.preprocess(
-        normalizeDeprecatedContributionAliases,
+        (raw, ctx) => {
+          reportReservedTourCueNames(raw, ctx);
+          return normalizeDeprecatedContributionAliases(raw);
+        },
         z
           .strictObject({
             panels: z

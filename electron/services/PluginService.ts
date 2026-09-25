@@ -27,6 +27,7 @@ import {
   DEPRECATED_CONTRIBUTION_ALIASES,
   describeManifestIssues,
   getPluginManifestSchema,
+  parsePluginManifestForLoad,
   SCOPED_PLUGIN_NAME_PATTERN,
 } from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
@@ -323,7 +324,9 @@ async function readDevManifestError(pluginDir: string, pluginId: string): Promis
     return formatErrorMessage(err, "plugin.json could not be read");
   }
   const schema = getPluginManifestSchema(false);
-  const parsed = schema.safeParse(json);
+  // Same isolation the load applies: a malformed tour alone must not refuse the
+  // reload, or the dev loop would disagree with a cold start.
+  const { result: parsed } = parsePluginManifestForLoad("user", json);
   if (!parsed.success) {
     return `plugin.json is not a valid manifest: ${describeManifestIssues(parsed.error.issues, schema)}`;
   }
@@ -1642,7 +1645,13 @@ export class PluginService {
       return null;
     }
 
-    const parseResult = getPluginManifestSchema(origin).safeParse(json);
+    const { result: parseResult, droppedTourIssues } = parsePluginManifestForLoad(origin, json);
+    if (droppedTourIssues.length > 0) {
+      console.warn(
+        `[PluginService] Skipping malformed contributes.tours entries in ${dirName}:`,
+        droppedTourIssues
+      );
+    }
     if (!parseResult.success) {
       const namespaceIssue = parseResult.error.issues.find(
         (i) =>
