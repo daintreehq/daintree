@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   RESTORE_HYDRATION_WAIT_MS,
+  RESTORE_WINDOW_STALL_MS,
   normalizeWindowRecords,
   resolvePrimaryRestoreProjectId,
   restoreWindowFleet,
@@ -316,6 +317,70 @@ describe("restoreWindowFleet", () => {
     expect(h.openedProjects()).toEqual(["a", "b"]);
     expect(h.persisted()).toBe(false);
     expect(h.resumeSaves).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops before the next window once the app has started shutting down", async () => {
+    let quitting = false;
+    h = harness(
+      {
+        records: [record("a"), record("b"), record("c")],
+        hadManifest: true,
+        isShuttingDown: () => quitting,
+      },
+      async (projectId) => {
+        if (projectId === "b") quitting = true;
+        return "ok";
+      }
+    );
+    await restoreWindowFleet(h.deps);
+    expect(h.openedProjects()).toEqual(["a", "b"]);
+    expect(h.persisted()).toBe(false);
+    expect(h.resumeSaves).toHaveBeenCalledTimes(1);
+  });
+
+  describe("a background window whose setup never settles", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("lets the next window start once it has held the queue too long", async () => {
+      vi.useFakeTimers();
+      h = harness(
+        { records: [record("a"), record("b"), record("c")], hadManifest: true },
+        (projectId) =>
+          projectId === "b"
+            ? new Promise<CreateWindowResult>(() => {})
+            : Promise.resolve<CreateWindowResult>("ok")
+      );
+      const done = restoreWindowFleet(h.deps);
+
+      await vi.advanceTimersByTimeAsync(RESTORE_WINDOW_STALL_MS - 1);
+      expect(h.openedProjects()).toEqual(["a", "b"]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await done;
+      expect(h.openedProjects()).toEqual(["a", "b", "c"]);
+      expect(h.persisted()).toBe(false);
+    });
+
+    it("still reports it if it fails after the queue moved on", async () => {
+      vi.useFakeTimers();
+      let failLate: (error: Error) => void = () => {};
+      h = harness({ records: [record("a"), record("b")], hadManifest: true }, (projectId) =>
+        projectId === "b"
+          ? new Promise<CreateWindowResult>((_, reject) => {
+              failLate = reject;
+            })
+          : Promise.resolve<CreateWindowResult>("ok")
+      );
+      const done = restoreWindowFleet(h.deps);
+      await vi.advanceTimersByTimeAsync(RESTORE_WINDOW_STALL_MS);
+      await done;
+
+      failLate(new Error("host never came up"));
+      await Promise.resolve();
+      expect(h.onBackgroundWindowFailed).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("carries on past a window that is not ok", async () => {

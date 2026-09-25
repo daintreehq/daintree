@@ -149,9 +149,8 @@ export interface SetupBrowserWindowOptions {
   initialProjectId?: string;
   /**
    * How the reveal gate maps the window (#11492). "showInactive" is for the
-   * background windows of a startup restore: they finish loading in an
-   * unpredictable order, and a plain `show()` hands focus to whichever renderer
-   * happens to parse its skeleton last.
+   * background windows of a startup restore: they come up after the window the
+   * user is working in, and a plain `show()` would pull focus away from it.
    *
    * Defaults to "show" — every pre-existing call site is a window the user just
    * asked for and should get focus.

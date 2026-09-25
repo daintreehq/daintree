@@ -3,7 +3,7 @@
 import "./setup/environment.js";
 
 import nodeV8 from "node:v8";
-import { app, BrowserWindow, crashReporter, protocol } from "electron";
+import { app, BrowserWindow, crashReporter, protocol, webContents } from "electron";
 
 // Ask V8 to auto-dump a heap snapshot when the main process is genuinely close
 // to its heap limit. Complements the existing dev-only 600 MB RSS heuristic in
@@ -50,6 +50,7 @@ import {
   type CreateWindowResult,
 } from "./lifecycle/windowRestore.js";
 import { registerShutdownHandler } from "./lifecycle/shutdown.js";
+import { getActiveShutdown } from "./lifecycle/shutdownCoordinator.js";
 import {
   setMainWindow,
   getMainWindow,
@@ -429,7 +430,8 @@ if (!gotTheLock) {
     const closedWindowId = ctx.windowId;
     scheduleOpenWindowsSave();
     win.on("closed", () => saveOpenWindowsNow(closedWindowId));
-    windowRegistry.registerAppViewWebContents(ctx.windowId, appView.webContents.id);
+    const initialWebContentsId = appView.webContents.id;
+    windowRegistry.registerAppViewWebContents(ctx.windowId, initialWebContentsId);
     // Paint-fabric surface views load the same preload as project views; the
     // paintSurface IPC namespace builds its per-window manager lazily and
     // reads the path from here.
@@ -766,8 +768,15 @@ if (!gotTheLock) {
     // renderer has restored its panels and respawned its agents, rather than
     // while that work is still in flight. Pacing only — a timeout, a close or
     // a failed hydration all just let the next window go.
-    if (opts?.awaitHydrationMs !== undefined && !appView.webContents.isDestroyed()) {
-      await pvm.waitForViewHydrated(appView.webContents.id, {
+    // By id, never through `appView.webContents`: a project switch during boot
+    // can close the initial view, and reading a closed view's contents throws.
+    const initialContents = webContents.fromId(initialWebContentsId);
+    if (
+      opts?.awaitHydrationMs !== undefined &&
+      initialContents !== undefined &&
+      !initialContents.isDestroyed()
+    ) {
+      await pvm.waitForViewHydrated(initialWebContentsId, {
         timeoutMs: opts.awaitHydrationMs,
         signal: ctx.abortController.signal,
       });
@@ -953,6 +962,7 @@ if (!gotTheLock) {
         },
         isProjectOwned: (projectId) =>
           findOtherProjectOwner(windowRegistry, projectId, {}) !== null,
+        isShuttingDown: () => getActiveShutdown() !== null,
       });
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
