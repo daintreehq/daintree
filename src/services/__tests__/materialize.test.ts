@@ -59,4 +59,30 @@ describe("materialize", () => {
     expect(result.hostPath).toBe("/tmp/daintree-inbox/files/a.png");
     expect(remote).toHaveBeenCalledWith({ kind: "local-file", path: "/Users/me/a.png" }, undefined);
   });
+
+  it("builds the upload materializer for a view on a remote host", async () => {
+    const uploadLocalFile = vi.fn(async () => ({
+      hostPath: "/tmp/daintree-inbox/files/x/a.txt",
+      bytes: 1,
+      deduplicated: false,
+    }));
+    vi.stubGlobal("window", {
+      __DAINTREE_HOST_ID__: { id: "studio-01" },
+      electron: {
+        clipboard: { saveImage },
+        fileTransfer: {
+          statLocalFile: vi.fn(async () => ({ size: 1, isDirectory: false })),
+          uploadLocalFile,
+          uploadBytes: vi.fn(),
+          cancel: vi.fn(),
+          onEvent: () => () => {},
+        },
+      },
+    });
+    const result = await materialize({ kind: "local-file", path: "/Users/me/a.txt" });
+    expect(result.hostPath).toBe("/tmp/daintree-inbox/files/x/a.txt");
+    expect(uploadLocalFile).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "studio-01", localPath: "/Users/me/a.txt" })
+    );
+  });
 });

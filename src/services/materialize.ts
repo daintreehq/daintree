@@ -5,6 +5,7 @@ import type {
   MaterializeSource,
 } from "@shared/types/remoteHosts";
 import { isLocalHostId } from "@shared/types/remoteHosts";
+import { currentHostId, isRemoteWindow } from "@/hooks/useHostPlatform";
 
 function basename(p: string): string {
   const trimmed = p.replace(/\/+$/, "");
@@ -41,6 +42,26 @@ async function materializeLocally(source: MaterializeSource): Promise<Materializ
 }
 
 let remoteMaterializer: MaterializeFn | null = null;
+let viewMaterializer: MaterializeFn | null = null;
+let loadingViewMaterializer: Promise<MaterializeFn> | null = null;
+
+/**
+ * A view belongs to one host for its whole life, so a remote view loads its
+ * materializer once, on first use. A local view never loads it at all.
+ */
+function loadViewMaterializer(): Promise<MaterializeFn> {
+  loadingViewMaterializer ??= import("./remoteMaterializer").then(
+    (module) => {
+      viewMaterializer = module.createViewRemoteMaterializer(currentHostId());
+      return viewMaterializer;
+    },
+    (error: unknown) => {
+      loadingViewMaterializer = null;
+      throw error;
+    }
+  );
+  return loadingViewMaterializer;
+}
 
 /**
  * Installed for a window attached to a remote host, and cleared when it
@@ -58,6 +79,8 @@ export const materialize: MaterializeFn = (
   source: MaterializeSource,
   options?: MaterializeOptions
 ): Promise<MaterializeResult> => {
-  if (remoteMaterializer) return remoteMaterializer(source, options);
+  const remote = remoteMaterializer ?? viewMaterializer;
+  if (remote) return remote(source, options);
+  if (isRemoteWindow()) return loadViewMaterializer().then((fn) => fn(source, options));
   return materializeLocally(source);
 };

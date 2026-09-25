@@ -49,9 +49,8 @@ import { dispatchRecoveryNotifications } from "./recoveryNotifications";
 import { scheduleScrollbackRestore } from "./scrollbackRestoreScheduler";
 import { restorePanelsPhase } from "./panelRestorePhase";
 import { isRemoteWindow, setHostPlatformInfo } from "@/hooks/useHostPlatform";
+import { agentClipboardDirectory } from "@shared/types/agentSettings";
 import { isRemoteHostsSupported } from "@/lib/remoteHosts";
-
-const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 
 /**
  * Record which machine this view's project lives on. A remote view also asks
@@ -250,7 +249,9 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       agentSettings,
       gpuWebGLHardware,
     } = hydrateResult;
-    const clipboardDirectory = tmpDir ? `${tmpDir}/${CLIPBOARD_DIR_NAME}` : undefined;
+    const clipboardDirectory = tmpDir
+      ? agentClipboardDirectory(tmpDir, isRemoteWindow())
+      : undefined;
 
     useProjectStore.setState((state) => {
       // The full project list rides along in newer hydrate payloads (#10390).

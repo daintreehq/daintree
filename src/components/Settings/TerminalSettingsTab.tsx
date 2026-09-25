@@ -46,6 +46,57 @@ import {
 import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
 import { computeDefaultCachedViews } from "@shared/config/cachedProjectViews";
 import type { HardwareInfo } from "@shared/types/ipc/system";
+import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import {
+  refreshUploadPreferences,
+  setInterceptCtrlVImages,
+  shouldInterceptCtrlVImages,
+} from "@/components/Terminal/uploads/ctrlVImagePaste";
+
+/**
+ * Ctrl+V in an agent terminal of a window attached to a remote host sends this
+ * machine's clipboard image. Shown only once remote hosts are in use.
+ */
+function RemoteClipboardImagesRow() {
+  const [inUse, setInUse] = useState(false);
+  const [enabled, setEnabled] = useState(shouldInterceptCtrlVImages);
+  useEffect(() => {
+    if (!isRemoteHostsSupported()) return;
+    let cancelled = false;
+    const check = async () => {
+      if (!(await window.electron.remoteHosts.isInUse()) || cancelled) return;
+      await refreshUploadPreferences();
+      if (cancelled) return;
+      setEnabled(shouldInterceptCtrlVImages());
+      setInUse(true);
+    };
+    check().catch((error: unknown) =>
+      logWarn("[TerminalSettings] Remote hosts check failed", { error })
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (!inUse) return null;
+  const update = (next: boolean) => {
+    setEnabled(next);
+    setInterceptCtrlVImages(next).catch((error: unknown) => {
+      setEnabled(!next);
+      logError("[TerminalSettings] Failed to save the Ctrl+V image setting", error);
+    });
+  };
+  return (
+    <SettingsSwitchCard
+      id="terminal-remote-clipboard-images"
+      title="Send my clipboard images to remote agents on Ctrl+V"
+      subtitle="In a window attached to another machine, an agent's Ctrl+V gets the image on this computer's clipboard instead of the host's. With no image on the clipboard, Ctrl+V goes to the agent unchanged."
+      isEnabled={enabled}
+      onChange={() => update(!enabled)}
+      isModified={!enabled}
+      onReset={() => update(true)}
+    />
+  );
+}
 
 const STRATEGIES: Array<{
   id: PanelLayoutStrategy;
@@ -606,6 +657,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   onReset={() => void setHybridInputAutoFocus(true)}
                 />
               </SettingsDependents>
+              <RemoteClipboardImagesRow />
             </SettingsGroup>
           </SettingsSection>
         )}

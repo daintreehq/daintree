@@ -6,7 +6,7 @@ import type { ForwardedRef, ReactNode } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { ContextMenuItem } from "@/components/ui/context-menu";
-import { FILE_DRAG_MIME, decodeFileDragPaths } from "@/lib/fileDragPayload";
+import { FILE_DRAG_MIME, decodeFileDrag, decodeFileDragPaths } from "@/lib/fileDragPayload";
 import { FileTreeView } from "../FileTreeView";
 import type { FlatTreeRow } from "../fileBrowserTree";
 import { buildFileBrowserGitStatusIndex } from "../fileBrowserGitStatus";
@@ -813,6 +813,20 @@ describe("FileTreeView drag source", () => {
     expect([...data.keys()]).toEqual([FILE_DRAG_MIME]);
   });
 
+  it("names the window's remote host in the payload", () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    try {
+      const { getByRole } = renderTree();
+      const { data } = dragStart(getByRole("treeitem", { name: "README.md" }));
+      expect(decodeFileDrag(data.get(FILE_DRAG_MIME)!)).toEqual({
+        hostId: "studio-01",
+        paths: ["/repo/README.md"],
+      });
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+    }
+  });
+
   it("advertises a copy and previews the row itself", () => {
     const { getByRole } = renderTree();
     const rowElement = getByRole("treeitem", { name: "README.md" });
@@ -1201,5 +1215,68 @@ describe("FileTreeView aria-activedescendant against the virtualized window", ()
     expect(
       container.querySelector('[role="tree"]')?.getAttribute("aria-activedescendant")
     ).toBeNull();
+  });
+});
+
+describe("FileTreeView Add to project drop", () => {
+  function fileDrag(type: string, altKey: boolean, files: File[] = []) {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "altKey", { value: altKey });
+    Object.defineProperty(event, "dataTransfer", {
+      value: { types: ["Files"], files, dropEffect: "none" },
+    });
+    return event;
+  }
+
+  beforeEach(() => {
+    (window as unknown as { electron: unknown }).electron = {
+      files: { getDroppedFilePaths: (files: File[]) => files.map(() => "/Users/me/spec.md") },
+    };
+  });
+
+  it("is not a drop target without Option held", () => {
+    const onAddFilesToProject = vi.fn();
+    const { getByRole } = renderTree({ onAddFilesToProject });
+    const over = fileDrag("dragover", false);
+    fireEvent(getByRole("tree"), over);
+    expect(over.defaultPrevented).toBe(false);
+    fireEvent(
+      getByRole("treeitem", { name: "src" }),
+      fileDrag("drop", false, [new File(["x"], "spec.md")])
+    );
+    expect(onAddFilesToProject).not.toHaveBeenCalled();
+  });
+
+  it("adds Option-dropped files into the folder under the pointer", () => {
+    const onAddFilesToProject = vi.fn();
+    const { getByRole } = renderTree({ onAddFilesToProject });
+    const over = fileDrag("dragover", true);
+    fireEvent(getByRole("tree"), over);
+    expect(over.defaultPrevented).toBe(true);
+    fireEvent(
+      getByRole("treeitem", { name: "src" }),
+      fileDrag("drop", true, [new File(["x"], "spec.md")])
+    );
+    expect(onAddFilesToProject).toHaveBeenCalledWith(
+      [{ kind: "local", path: "/Users/me/spec.md", name: "spec.md", size: 1 }],
+      "/repo/src"
+    );
+  });
+
+  it("adds next to a file row, into its folder", () => {
+    const onAddFilesToProject = vi.fn();
+    const { getByRole } = renderTree({ onAddFilesToProject });
+    fireEvent(
+      getByRole("treeitem", { name: "README.md" }),
+      fileDrag("drop", true, [new File(["x"], "spec.md")])
+    );
+    expect(onAddFilesToProject.mock.calls[0]![1]).toBe("/repo");
+  });
+
+  it("stays only a drag source where the gesture doesn't exist", () => {
+    const { getByRole } = renderTree();
+    const over = fileDrag("dragover", true);
+    fireEvent(getByRole("tree"), over);
+    expect(over.defaultPrevented).toBe(false);
   });
 });

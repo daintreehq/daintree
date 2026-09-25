@@ -55,6 +55,16 @@ import {
 } from "@shared/utils/terminalInputProtocol.js";
 import { FILE_DRAG_MIME, encodeFileDragPaths } from "@/lib/fileDragPayload";
 import { setRemoteMaterializer } from "@/services/materialize";
+import {
+  _resetComposerDropTargetsForTests,
+  registerComposerDropTarget,
+} from "../uploads/composerRouting";
+import {
+  _resetPendingUploadsForTests,
+  hasPendingUploads,
+  terminalUploadSurface,
+} from "../uploads/pendingUploads";
+import { _resetCtrlVImagePasteForTests, getClipboardImagePaster } from "../uploads/ctrlVImagePaste";
 import type { MaterializeResult, MaterializeSource } from "@shared/types/remoteHosts";
 
 /** What `clipboard.saveImage` resolves to, taken from the IPC surface itself. */
@@ -1537,6 +1547,140 @@ describe("useTerminalFileTransfer hook", () => {
 
       expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
     });
+  });
+
+  describe("in a window attached to a remote host", () => {
+    beforeEach(() => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    });
+
+    afterEach(() => {
+      delete window.__DAINTREE_HOST_ID__;
+      _resetComposerDropTargetsForTests();
+      _resetPendingUploadsForTests();
+      _resetCtrlVImagePasteForTests();
+    });
+
+    function holdUploads(hostPathFor: (source: MaterializeSource) => string) {
+      const waiting: Array<() => void> = [];
+      const failing: Array<() => void> = [];
+      setRemoteMaterializer(
+        (source) =>
+          new Promise<MaterializeResult>((resolve, reject) => {
+            waiting.push(() =>
+              resolve({ hostPath: hostPathFor(source), displayName: "x", bytes: null })
+            );
+            failing.push(() => reject(new Error("Not connected to studio-01.")));
+          })
+      );
+      const finish = async (ok = true) => {
+        await act(async () => {
+          for (const settleOne of (ok ? waiting : failing).splice(0)) settleOne();
+          await settle();
+        });
+      };
+      return finish;
+    }
+
+    it("routes a drop on an agent terminal into the pane's composer", async () => {
+      const materializer = vi.fn();
+      setRemoteMaterializer(materializer);
+      const composer = vi.fn();
+      registerComposerDropTarget("term-1", composer);
+      const onDropSelect = vi.fn();
+      renderFileTransferHook({ detectedAgentId: "claude", onDropSelect });
+      await dropFiles([fileAt("a.png", "/Users/me/a.png")]);
+
+      expect(composer).toHaveBeenCalledWith([
+        { kind: "local", path: "/Users/me/a.png", name: "a.png", size: 0 },
+      ]);
+      expect(onDropSelect).toHaveBeenCalled();
+      expect(materializer).not.toHaveBeenCalled();
+      expect(terminalClient.write).not.toHaveBeenCalled();
+    });
+
+    it("writes a plain shell's path only once its upload completes, tracked meanwhile", async () => {
+      const finish = holdUploads(() => "/tmp/daintree-inbox/files/x/a.txt");
+      registerComposerDropTarget("term-1", vi.fn());
+      renderFileTransferHook({});
+      await dropFiles([fileAt("a.txt", "/Users/me/a.txt")]);
+
+      expect(terminalClient.write).not.toHaveBeenCalled();
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(true);
+      await finish();
+
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
+      expect(lastWrittenPayload()).toBe(
+        `${escapeShellArgOptional("/tmp/daintree-inbox/files/x/a.txt")} `
+      );
+    });
+
+    it("inserts nothing when the upload fails", async () => {
+      const finish = holdUploads(() => "/unused");
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await dropFiles([fileAt("a.txt", "/Users/me/a.txt")]);
+      await finish(false);
+
+      expect(terminalClient.write).not.toHaveBeenCalled();
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
+    });
+
+    it("formats against the cwd the terminal is in once the upload lands", async () => {
+      const finish = holdUploads(() => "/srv/proj/docs/a.md");
+      let cwd = "/srv/elsewhere";
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => cwd });
+      await dropFiles([fileAt("a.md", "/Users/me/a.md")]);
+      cwd = "/srv/proj";
+      await finish();
+
+      expect(lastWrittenPayload().trimEnd()).toContain("@docs/a.md");
+    });
+
+    it("keeps the host a tree drag names", async () => {
+      const seen: MaterializeSource[] = [];
+      setRemoteMaterializer(async (source) => {
+        seen.push(source);
+        throw new Error("That file is on studio-02; this window is studio-01.");
+      });
+      renderFileTransferHook({});
+      const event = makeInternalDropEvent(encodeFileDragPaths(["/srv/a.ts"], "studio-02"));
+      await act(async () => {
+        container.dispatchEvent(event);
+        await settle();
+      });
+
+      expect(seen).toEqual([{ kind: "host-file", path: "/srv/a.ts", hostId: "studio-02" }]);
+      expect(terminalClient.write).not.toHaveBeenCalled();
+    });
+
+    it("offers Ctrl+V a clipboard-image paster that reports an empty clipboard", async () => {
+      setRemoteMaterializer(async () => {
+        throw Object.assign(new Error("No image in clipboard"), { code: "CLIPBOARD_EMPTY" });
+      });
+      renderFileTransferHook({ detectedAgentId: "claude" });
+      const paster = getClipboardImagePaster("term-1");
+      expect(paster).not.toBeNull();
+      await expect(paster!()).resolves.toBe("empty");
+      expect(terminalClient.write).not.toHaveBeenCalled();
+    });
+
+    it("pastes the uploaded clipboard image path on Ctrl+V", async () => {
+      setRemoteMaterializer(async () => ({
+        hostPath: "/tmp/daintree-inbox/clipboard/clipboard-1.png",
+        displayName: "clipboard-1.png",
+        bytes: null,
+      }));
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await act(async () => {
+        await expect(getClipboardImagePaster("term-1")!()).resolves.toBe("inserted");
+      });
+      expect(lastWrittenPayload()).toContain("/tmp/daintree-inbox/clipboard/clipboard-1.png");
+    });
+  });
+
+  it("registers no Ctrl+V image paster in a window on this machine", () => {
+    renderFileTransferHook({ detectedAgentId: "claude" });
+    expect(getClipboardImagePaster("term-1")).toBeNull();
   });
 
   // --- Cleanup test ---

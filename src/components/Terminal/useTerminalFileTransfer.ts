@@ -12,6 +12,8 @@ import {
 import { hasFileDrag } from "@/lib/fileDragPayload";
 import { materializeTransferSources, resolveTransferSources } from "@/lib/transferSources";
 import { materialize } from "@/services/materialize";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { basename } from "@shared/utils/path";
 import { formatAtFileTokenForCwd } from "./hybridInputParsing";
 import { usePanelStore } from "@/store/panelStore";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
@@ -20,6 +22,9 @@ import {
   isImageAttachmentPath,
   type ImageInputSegment,
 } from "@shared/utils/imageAttachmentInput";
+import { terminalUploadSurface, trackUpload } from "./uploads/pendingUploads";
+import { routeDropToComposer } from "./uploads/composerRouting";
+import { registerClipboardImagePaster } from "./uploads/ctrlVImagePaste";
 
 export { IMAGE_EXTENSIONS };
 
@@ -348,6 +353,30 @@ export function useTerminalFileTransfer(
         });
     };
 
+    // Ctrl+V in an agent terminal of a remote window: this machine's clipboard
+    // image, uploaded to the host and typed as its path. "empty" lets the
+    // caller hand the key to the agent untouched.
+    const pasteClipboardImageForCtrlV = async (): Promise<"inserted" | "empty" | "failed"> => {
+      try {
+        const { hostPath: filePath } = await materialize({ kind: "clipboard-image" });
+        if (cancelled || !isMountedRef.current || isInputLockedRef.current) return "failed";
+        if (!filePath || !isDeliverablePath(filePath)) return "failed";
+        const isAgent = isAgentTerminal();
+        writeSegments(buildSegments([filePath], isAgent), isAgent);
+        return "inserted";
+      } catch (error) {
+        const empty =
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "CLIPBOARD_EMPTY";
+        return empty ? "empty" : "failed";
+      }
+    };
+    const unregisterImagePaster = isRemoteWindow()
+      ? registerClipboardImagePaster(terminalId, pasteClipboardImageForCtrlV)
+      : noop;
+
     const handlePaste = async (event: ClipboardEvent) => {
       if (isInputLockedRef.current) return;
       if (!hasImageClipboardItem(event)) return;
@@ -415,6 +444,14 @@ export function useTerminalFileTransfer(
       const sources = resolveTransferSources(transfer);
       if (sources.length === 0) return;
 
+      // In a remote window an agent pane's composer takes the drop: the upload
+      // shows its progress there, and the path can't collide with typing.
+      const remote = isRemoteWindow();
+      if (remote && isAgentTerminal() && routeDropToComposer(terminalId, sources)) {
+        onDropSelectRef.current?.();
+        return;
+      }
+
       // What held the keyboard when the pointer let go. A remote host can take
       // a while to resolve the paths; if the user has moved on to another
       // surface by then, the late landing must not pull focus back to here.
@@ -422,7 +459,14 @@ export function useTerminalFileTransfer(
       // Resolution starts now so drops still resolve concurrently, but each
       // one writes only after the one before it on this terminal has: a small
       // drop made second must not insert ahead of a large one made first.
-      const materializing = materializeTransferSources(sources);
+      // A plain shell has no composer, so a slow upload shows on the terminal itself.
+      const materializing = materializeTransferSources(
+        sources,
+        remote
+          ? (source, run) =>
+              trackUpload(terminalUploadSurface(terminalId), basename(source.path), run)
+          : undefined
+      );
       const previous = pendingDropWrites.get(terminalId);
 
       const landing = (async () => {
@@ -483,6 +527,7 @@ export function useTerminalFileTransfer(
 
     return () => {
       cancelled = true;
+      unregisterImagePaster();
       container.removeEventListener("paste", handlePaste, true);
       container.removeEventListener("dragenter", handleDragEnter);
       container.removeEventListener("dragover", handleDragOver);

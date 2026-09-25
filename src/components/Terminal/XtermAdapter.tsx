@@ -28,6 +28,15 @@ import {
   isTerminalClipboardPasteKey,
   isTuiReservedKey,
 } from "@/services/terminalReservedKeys";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import {
+  getClipboardImagePaster,
+  isClipboardImageCtrlV,
+  refreshUploadPreferences,
+} from "./uploads/ctrlVImagePaste";
+import { PendingUploadChips } from "./uploads/PendingUploadChips";
+import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
+import { terminalUploadSurface } from "./uploads/pendingUploads";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 
 export interface XtermAdapterProps {
@@ -101,6 +110,7 @@ export function XtermAdapter({
   const initialFitDoneRef = useRef(false);
   const launchAgentIdRef = useRef(launchAgentId);
   const detectedAgentIdRef = useRef(detectedAgentId);
+  const agentStateRef = useRef(agentState);
   const onReadyRef = useRef(onReady);
   const onExitRef = useRef(onExit);
   const onInputRef = useRef(onInput);
@@ -110,12 +120,23 @@ export function XtermAdapter({
   useLayoutEffect(() => {
     launchAgentIdRef.current = launchAgentId;
     detectedAgentIdRef.current = detectedAgentId;
+    agentStateRef.current = agentState;
     onReadyRef.current = onReady;
     onExitRef.current = onExit;
     onInputRef.current = onInput;
     onAttachedRef.current = onAttached;
     cwdRef.current = cwd;
-  }, [launchAgentId, detectedAgentId, onReady, onExit, onInput, onAttached, cwd]);
+  }, [launchAgentId, detectedAgentId, agentState, onReady, onExit, onInput, onAttached, cwd]);
+
+  // The Ctrl+V image preference is device-wide and can change from another view.
+  const isRemote = isRemoteWindow();
+  useEffect(() => {
+    if (!isRemote) return;
+    void refreshUploadPreferences();
+    const onFocus = () => void refreshUploadPreferences();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [isRemote]);
 
   const stableOnInput = useCallback((data: string) => {
     onInputRef.current?.(data);
@@ -356,6 +377,10 @@ export function XtermAdapter({
           return false;
         };
 
+        // One clipboard-image paste at a time: a second Ctrl+V while the first
+        // is uploading would send the same image twice.
+        let ctrlVPasteInFlight = false;
+
         const customKeyEventHandler = (event: KeyboardEvent): boolean => {
           // Only process keydown events to avoid double-firing
           if (event.type !== "keydown") {
@@ -425,6 +450,20 @@ export function XtermAdapter({
           // auto-repeats never reach the chord resolution below, where they could
           // complete or invalidate a pending chord the user never re-pressed.
           if (event.repeat) {
+            // A held Ctrl+V belongs to the image paste its first press started,
+            // never to the agent's own read of the host's clipboard.
+            if (
+              isClipboardImageCtrlV(event, {
+                launchAgentId: launchAgentIdRef.current,
+                detectedAgentId: detectedAgentIdRef.current,
+                agentState: agentStateRef.current,
+              }) &&
+              getClipboardImagePaster(terminalId)
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+              return false;
+            }
             return wordJumpSequence ? writeWordJump(event, wordJumpSequence) : true;
           }
 
@@ -443,6 +482,38 @@ export function XtermAdapter({
           // Intercept F6 for macro-region focus cycling before terminal processing
           if (event.key === "F6") {
             return false;
+          }
+
+          // An agent's own Ctrl+V would read the host's clipboard. In a remote
+          // window, send this machine's clipboard image instead when it holds
+          // one; with none, the agent gets the key exactly as typed. Plain
+          // shells and local windows are never intercepted.
+          if (
+            isClipboardImageCtrlV(event, {
+              launchAgentId: launchAgentIdRef.current,
+              detectedAgentId: detectedAgentIdRef.current,
+              agentState: agentStateRef.current,
+            }) &&
+            // A pending chord (Cmd+K Cmd+V) owns the key.
+            !keybindingService.getPendingChord()
+          ) {
+            const pasteImage = getClipboardImagePaster(terminalId);
+            if (pasteImage) {
+              event.preventDefault();
+              event.stopPropagation();
+              if (!managed.isInputLocked && !ctrlVPasteInFlight) {
+                ctrlVPasteInFlight = true;
+                void pasteImage().then((outcome) => {
+                  ctrlVPasteInFlight = false;
+                  if (outcome !== "empty" || managed.isInputLocked) return;
+                  const literalNext = "\x16";
+                  writeTerminalInputOrFleet(terminalId, literalNext);
+                  terminalInstanceService.notifyUserInput(terminalId);
+                  stableOnInput(literalNext);
+                });
+              }
+              return false;
+            }
           }
 
           // Allow critical Ctrl+<key> bindings to reach the TUI before checking global shortcuts
@@ -878,6 +949,15 @@ export function XtermAdapter({
           Drop to insert
         </span>
       </div>
+      {isRemote && (
+        <>
+          <PendingUploadChips
+            surface={terminalUploadSurface(terminalId)}
+            className="pointer-events-auto absolute bottom-2 left-3 right-3 z-20"
+          />
+          <LazyUploadConfirmHost />
+        </>
+      )}
     </div>
   );
 }

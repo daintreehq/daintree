@@ -2,6 +2,7 @@ import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../config/agentRegistry
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import { escapeShellArg, escapeShellArgOptional } from "../utils/shellEscape.js";
 import { systemPromptArgPositions } from "../utils/agentSystemPrompt.js";
+import { HOST_INBOX_DIR_NAME } from "./ipc/fileTransfer.js";
 
 /**
  * Tri-state permission-bypass intent. `"on"`/`"off"` are explicit user choices
@@ -1445,4 +1446,18 @@ export function buildLaunchCommandFromFlags(
     }
   }
   return parts.join(" ");
+}
+
+/** The temp folder pasted images land in on this machine. */
+export const LOCAL_CLIPBOARD_DIR_NAME = "daintree-clipboard";
+
+/**
+ * The folder an agent is given read access to for pasted and dropped files
+ * (Gemini's `--include-directories`), under the temp dir of the machine the
+ * agent runs on. A window attached to a remote host drops into that host's
+ * inbox, which holds pasted images and uploaded files alike; this machine
+ * keeps its clipboard folder.
+ */
+export function agentClipboardDirectory(tmpDir: string, remote: boolean): string {
+  return `${tmpDir}/${remote ? HOST_INBOX_DIR_NAME : LOCAL_CLIPBOARD_DIR_NAME}`;
 }

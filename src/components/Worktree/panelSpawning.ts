@@ -9,7 +9,8 @@ import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/pane
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { countPanelsTowardLimit } from "@/store/slices/panelRegistry/panelCount";
-import { resolveHostTmpDir } from "@/hooks/useHostPlatform";
+import { isRemoteWindow, resolveHostTmpDir } from "@/hooks/useHostPlatform";
+import { agentClipboardDirectory } from "@shared/types/agentSettings";
 
 export interface SpawnPanelsOptions {
   terminals: RecipeTerminal[];
@@ -47,7 +48,7 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
       ]);
       if (signal?.aborted) return;
       agentSettings = settings;
-      clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
+      clipboardDirectory = tmpDir ? agentClipboardDirectory(tmpDir, isRemoteWindow()) : undefined;
     } catch {
       if (signal?.aborted) return;
     }

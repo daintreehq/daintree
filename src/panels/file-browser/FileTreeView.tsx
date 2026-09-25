@@ -8,10 +8,12 @@ import {
   FolderOpen,
   FolderSymlink,
 } from "lucide-react";
-import { join } from "@shared/utils/path";
+import { dirname, join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { FILE_DRAG_MIME, encodeFileDragPaths } from "@/lib/fileDragPayload";
+import { resolveLocalFileSources, type TransferSource } from "@/lib/transferSources";
+import { currentHostId } from "@/hooks/useHostPlatform";
 import { Spinner } from "@/components/ui/Spinner";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
@@ -109,6 +111,21 @@ export interface FileTreeViewProps {
    * rows would tie the two update cadences together.
    */
   gitStatusIndex?: FileBrowserGitStatusIndex | null;
+  /**
+   * Add to project: files from this machine dropped with Option (Alt on
+   * Linux) held, into the folder under the pointer (or the tree's base).
+   * Only then is the tree a drop target; otherwise it stays a drag source.
+   * Absent where the gesture doesn't exist (a window on this machine).
+   */
+  onAddFilesToProject?: (
+    sources: Extract<TransferSource, { kind: "local" }>[],
+    directory: string
+  ) => void;
+}
+
+/** An OS file drag with Option/Alt held: the one drag the tree accepts. */
+function isAddToProjectDrag(event: React.DragEvent): boolean {
+  return event.altKey && event.dataTransfer.types.includes("Files");
 }
 
 /**
@@ -154,7 +171,40 @@ export function FileTreeView({
   basePath,
   label,
   gitStatusIndex = null,
+  onAddFilesToProject,
 }: FileTreeViewProps) {
+  const [isAddDropActive, setIsAddDropActive] = useState(false);
+  const acceptsAddDrop = onAddFilesToProject !== undefined && basePath !== "";
+
+  const handleAddDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!acceptsAddDrop || !isAddToProjectDrag(event)) {
+      if (isAddDropActive) setIsAddDropActive(false);
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    if (!isAddDropActive) setIsAddDropActive(true);
+  };
+
+  const handleAddDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    setIsAddDropActive(false);
+    if (!acceptsAddDrop || !isAddToProjectDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const sources = resolveLocalFileSources(Array.from(event.dataTransfer.files));
+    if (sources.length === 0) return;
+    const rowElement =
+      event.target instanceof Element ? event.target.closest<HTMLElement>("[data-row-path]") : null;
+    const rowPath = rowElement?.dataset.rowPath;
+    const directory =
+      rowPath === undefined
+        ? basePath
+        : rowElement?.dataset.rowDirectory !== undefined
+          ? join(basePath, rowPath)
+          : dirname(join(basePath, rowPath));
+    onAddFilesToProject!(sources, directory);
+  };
+
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   // Two browsers can be open on the same worktree, and both would otherwise
@@ -430,11 +480,22 @@ export function FileTreeView({
       {...(rowContextMenu ? { "data-row-menu": "" } : {})}
       onKeyDown={handleKeyDown}
       onPointerDown={handlePointerDown}
+      {...(acceptsAddDrop
+        ? {
+            onDragOver: handleAddDragOver,
+            onDragLeave: () => setIsAddDropActive(false),
+            onDrop: handleAddDrop,
+            "data-add-drop-active": isAddDropActive ? "true" : undefined,
+          }
+        : {})}
       // Focus styling is deliberately left to the global `*:focus-visible`
       // ring: this container is the tree's only focus target (rows are
       // virtualized and never take focus), so suppressing its outline would
       // leave keyboard navigation with no visible anchor at all.
-      className="h-full min-h-0 w-full overflow-hidden"
+      className={cn(
+        "h-full min-h-0 w-full overflow-hidden",
+        isAddDropActive && "outline outline-1 -outline-offset-1 outline-border-strong"
+      )}
     >
       <Virtuoso<FlatTreeRow, TreeContext>
         ref={virtuosoRef}
@@ -581,7 +642,11 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
     }
     // A list of one: the tree is single-select today, but the transport is
     // already shaped for the multi-select follow-up.
-    dataTransfer.setData(FILE_DRAG_MIME, encodeFileDragPaths([join(context.basePath, row.path)]));
+    // The host is named so a window on another host can refuse the drop.
+    dataTransfer.setData(
+      FILE_DRAG_MIME,
+      encodeFileDragPaths([join(context.basePath, row.path)], currentHostId())
+    );
     // Referencing a file never moves or removes it.
     dataTransfer.effectAllowed = "copy";
     // The row itself is the preview — it already reads as this file (icon,
@@ -669,6 +734,8 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
       // once the gesture actually starts.
       draggable={context.basePath !== ""}
       onDragStart={handleDragStart}
+      data-row-path={row.path}
+      {...(row.isDirectory ? { "data-row-directory": "" } : {})}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       style={{ paddingLeft: BASE_PADDING_PX + row.depth * INDENT_PER_DEPTH_PX }}
