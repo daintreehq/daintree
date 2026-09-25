@@ -332,8 +332,8 @@ describe("TerminalProcess rate-limit observation (#12797)", () => {
     ptyOnDataCallback!("■ You've hit your usage limit. Try again at 3:40 PM.\r\n");
     await vi.advanceTimersByTimeAsync(250);
     expect(seen).toHaveLength(1);
-    expect(Object.keys(seen[0]).sort()).toEqual(["observedAt", "terminalId", "timestamp"]);
-    expect(seen[0].terminalId).toBe("t1");
+    expect(Object.keys(seen[0] ?? {}).sort()).toEqual(["observedAt", "terminalId", "timestamp"]);
+    expect(seen[0]?.terminalId).toBe("t1");
 
     // Repaints while the banner stays on screen are the same observation.
     ptyOnDataCallback!("still waiting\r\n");

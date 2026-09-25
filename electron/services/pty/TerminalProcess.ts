@@ -261,6 +261,8 @@ export class TerminalProcess {
    */
   private rateLimitBannerVisible = false;
   private lastRateLimitObservedAt = Number.NEGATIVE_INFINITY;
+  /** True only while the exit path settles the mirror's last frame. */
+  private samplingFinalFrame = false;
 
   private agentOutputForwarder!: AgentOutputForwarder;
 
@@ -1044,7 +1046,12 @@ export class TerminalProcess {
     // Settle a pending sample against the mirror before it goes: a preserved
     // exit drains its final output first, and that frame is the last change
     // this terminal will ever show.
-    this.flushOutputProgressSample();
+    this.samplingFinalFrame = true;
+    try {
+      this.flushOutputProgressSample();
+    } finally {
+      this.samplingFinalFrame = false;
+    }
     this.analysis.release();
   }
 
@@ -2119,11 +2126,14 @@ export class TerminalProcess {
    * content (#12797).
    */
   private observeRateLimitBanner(lines: readonly string[], now: number): void {
-    // Agent attribution rather than `isAgentLive`: an agent that prints its
-    // limit and exits at once has already been marked exited by the time the
-    // trailing sample reads that last frame.
+    // A live agent only, so a shell that outlived its agent is never blamed.
+    // The one exception is the exit path's last frame: an agent that prints
+    // its limit and exits at once is already marked exited by then.
     const t = this.terminalInfo;
-    const hasAgent = t.detectedAgentId !== undefined || t.launchAgentId !== undefined;
+    const hasAgent =
+      this.isAgentLive ||
+      (this.samplingFinalFrame &&
+        (t.detectedAgentId !== undefined || t.launchAgentId !== undefined));
     const visible = hasAgent && hasRateLimitMessage(lines);
     // The cooldown absorbs a TUI repaint that blanks the banner for one frame,
     // which would otherwise read as a fresh appearance each time.

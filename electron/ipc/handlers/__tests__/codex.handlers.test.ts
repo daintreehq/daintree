@@ -15,7 +15,7 @@ const serviceMock = vi.hoisted(() => ({
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
 vi.mock("../../../services/codex/CodexSubagentService.js", () => serviceMock);
-const quotaMock = vi.hoisted(() => ({ readCodexQuota: vi.fn() }));
+const quotaMock = vi.hoisted(() => ({ readCodexQuota: vi.fn(), refreshCodexQuota: vi.fn() }));
 vi.mock("../../../services/codex/CodexQuotaService.js", () => quotaMock);
 
 import { registerCodexHandlers } from "../codex.js";
@@ -146,6 +146,14 @@ describe("codex IPC handlers", () => {
 
       expect(await getHandler(CHANNELS.CODEX_READ_QUOTA)(fakeEvent())).toBe(result);
       expect(quotaMock.readCodexQuota).toHaveBeenCalledTimes(1);
+    });
+
+    it("routes an explicit refresh past the cache", async () => {
+      const result = { status: "unavailable", reason: "timeout", fetchedAt: 2 };
+      quotaMock.refreshCodexQuota.mockResolvedValue(result);
+
+      expect(await getHandler(CHANNELS.CODEX_REFRESH_QUOTA)(fakeEvent())).toBe(result);
+      expect(quotaMock.readCodexQuota).not.toHaveBeenCalled();
     });
   });
 

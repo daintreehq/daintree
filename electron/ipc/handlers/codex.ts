@@ -105,6 +105,10 @@ export const codexNamespace = defineIpcNamespace({
       const { readCodexQuota } = await import("../../services/codex/CodexQuotaService.js");
       return readCodexQuota();
     }),
+    refreshQuota: op(CODEX_METHOD_CHANNELS.refreshQuota, async (): Promise<CodexQuotaResult> => {
+      const { refreshCodexQuota } = await import("../../services/codex/CodexQuotaService.js");
+      return refreshCodexQuota();
+    }),
   },
 });
 

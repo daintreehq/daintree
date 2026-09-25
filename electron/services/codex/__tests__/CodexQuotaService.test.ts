@@ -13,6 +13,7 @@ import { CodexAppServerError } from "../CodexAppServerClient.js";
 import {
   normalizeCodexRateLimits,
   readCodexQuota,
+  refreshCodexQuota,
   resetCodexQuotaCacheForTests,
 } from "../CodexQuotaService.js";
 
@@ -106,7 +107,7 @@ describe("normalizeCodexRateLimits", () => {
       { rateLimits: { primary: { usedPercent: 130, windowDurationMins: 300 } } },
       1
     );
-    expect(result.status === "ok" && result.windows[0].usedPercent).toBe(100);
+    expect(result.status === "ok" && result.windows[0]?.usedPercent).toBe(100);
   });
 });
 
@@ -174,6 +175,13 @@ describe("readCodexQuota", () => {
     finishStale({ rateLimits: { primary: FIVE_HOURS } });
     await stale;
     expect(await readCodexQuota()).toBe(fresh);
+  });
+
+  it("bypasses the cache on an explicit refresh", async () => {
+    respondWith(() => ({ rateLimits: { primary: FIVE_HOURS } }));
+    await readCodexQuota();
+    await refreshCodexQuota();
+    expect(runSession).toHaveBeenCalledTimes(2);
   });
 
   it("serves the cache for 30s, then reads again", async () => {

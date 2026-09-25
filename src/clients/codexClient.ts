@@ -49,4 +49,9 @@ export const codexClient = {
   readQuota: (): Promise<CodexQuotaResult> => {
     return window.electron.codex.readQuota();
   },
+
+  /** The same read past main's cache, for an explicit Retry. */
+  refreshQuota: (): Promise<CodexQuotaResult> => {
+    return window.electron.codex.refreshQuota();
+  },
 } as const;

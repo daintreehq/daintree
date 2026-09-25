@@ -21,7 +21,7 @@ export function useCodexQuota(enabled: boolean): {
   const [result, setResult] = useState<CodexQuotaResult | null>(null);
   const requestRef = useRef(0);
 
-  const refresh = useCallback(() => {
+  const load = useCallback((read: () => Promise<CodexQuotaResult>) => {
     const request = ++requestRef.current;
     const settle = (next: CodexQuotaResult) => {
       if (request !== requestRef.current) return;
@@ -29,24 +29,25 @@ export function useCodexQuota(enabled: boolean): {
         next.status === "unavailable" && previous?.status === "ok" ? previous : next
       );
     };
-    codexClient
-      .readQuota()
-      .then(settle, () =>
-        settle({ status: "unavailable", reason: "read-failed", fetchedAt: Date.now() })
-      );
+    read().then(settle, () =>
+      settle({ status: "unavailable", reason: "read-failed", fetchedAt: Date.now() })
+    );
   }, []);
+
+  const poll = useCallback(() => load(codexClient.readQuota), [load]);
+  const refresh = useCallback(() => load(codexClient.refreshQuota), [load]);
 
   useEffect(() => {
     if (!enabled) return;
-    refresh();
+    poll();
     const requests = requestRef;
     return () => {
       // Drop any answer still in flight: it belongs to a mount that's gone.
       requests.current++;
     };
-  }, [enabled, refresh]);
+  }, [enabled, poll]);
 
-  useVisibilityAwareInterval(refresh, CODEX_QUOTA_POLL_MS, enabled);
+  useVisibilityAwareInterval(poll, CODEX_QUOTA_POLL_MS, enabled);
 
   return { result: enabled ? result : null, refresh };
 }

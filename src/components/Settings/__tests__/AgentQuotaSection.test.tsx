@@ -4,9 +4,10 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import type { CodexQuotaResult } from "@shared/types/ipc/agentQuota";
 
 const readQuota = vi.hoisted(() => vi.fn<() => Promise<CodexQuotaResult>>());
+const refreshQuota = vi.hoisted(() => vi.fn<() => Promise<CodexQuotaResult>>());
 const clock = vi.hoisted(() => ({ now: 0 }));
 
-vi.mock("@/clients/codexClient", () => ({ codexClient: { readQuota } }));
+vi.mock("@/clients/codexClient", () => ({ codexClient: { readQuota, refreshQuota } }));
 vi.mock("@/hooks/useGlobalMinuteTicker", () => ({
   useGlobalMinuteClock: () => clock.now,
 }));
@@ -27,6 +28,7 @@ async function renderFor(agentId: string) {
 beforeEach(() => {
   clock.now = NOW;
   readQuota.mockReset();
+  refreshQuota.mockReset();
 });
 
 afterEach(() => {
@@ -128,7 +130,7 @@ describe("AgentQuotaSection refresh (#12797)", () => {
   it("reads again on Retry", async () => {
     readQuota.mockResolvedValueOnce({ status: "unavailable", reason: "timeout", fetchedAt: NOW });
     await renderFor("codex");
-    readQuota.mockResolvedValueOnce({
+    refreshQuota.mockResolvedValueOnce({
       status: "ok",
       planType: null,
       fetchedAt: NOW,
@@ -139,7 +141,9 @@ describe("AgentQuotaSection refresh (#12797)", () => {
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     });
 
-    expect(readQuota).toHaveBeenCalledTimes(2);
+    // Retry goes past main's cache; the poll doesn't.
+    expect(readQuota).toHaveBeenCalledTimes(1);
+    expect(refreshQuota).toHaveBeenCalledTimes(1);
     expect(meters().map((m) => m.getAttribute("aria-valuenow"))).toEqual(["30"]);
   });
 

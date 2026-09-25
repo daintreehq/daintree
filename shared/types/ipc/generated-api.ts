@@ -90,6 +90,9 @@ export interface GeneratedElectronAPI {
     readSubagentTranscript(
       ...args: IpcInvokeMap["codex:read-subagent-transcript"]["args"]
     ): Promise<IpcInvokeMap["codex:read-subagent-transcript"]["result"]>;
+    refreshQuota(
+      ...args: IpcInvokeMap["codex:refresh-quota"]["args"]
+    ): Promise<IpcInvokeMap["codex:refresh-quota"]["result"]>;
     resolveResumeLatestSession(
       ...args: IpcInvokeMap["codex:resolve-resume-latest-session"]["args"]
     ): Promise<IpcInvokeMap["codex:resolve-resume-latest-session"]["result"]>;

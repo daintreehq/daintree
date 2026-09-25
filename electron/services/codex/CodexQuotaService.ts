@@ -109,6 +109,14 @@ export function readCodexQuota(): Promise<CodexQuotaResult> {
     const ttl = cached.status === "ok" ? CACHE_TTL_MS : UNAVAILABLE_CACHE_TTL_MS;
     if (Date.now() - cached.fetchedAt < ttl) return Promise.resolve(cached);
   }
+  return refreshCodexQuota();
+}
+
+/**
+ * Ask Codex now, past the cache — what a user's Retry means. Still joins a
+ * read already in flight rather than starting a second session.
+ */
+export function refreshCodexQuota(): Promise<CodexQuotaResult> {
   if (inFlight) return inFlight;
   const requestGeneration = generation;
   const request = fetchCodexQuota().then((result) => {
