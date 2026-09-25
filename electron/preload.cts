@@ -581,8 +581,8 @@ class WorktreePortClient {
     if (!this.port) {
       // Main can't see this rejection — it never reaches the broker — so without
       // this line a failed request leaves no trace beside the brokering log.
-      // Console capture tags it with this view's webContentsId, the same key
-      // WorktreePortBroker logs under (#12759).
+      // For app and project views, console capture tags it with the view's
+      // webContentsId, the same key WorktreePortBroker logs under (#12759).
       console.warn(`[Preload] Worktree port request "${String(action)}" rejected: port not ready`);
       return Promise.reject(
         encodeBrokerError(new BrokerError("HOST_EXITED", "Worktree port not ready"))
