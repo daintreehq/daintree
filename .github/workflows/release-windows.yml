@@ -75,7 +75,7 @@ jobs:
     runs-on: windows-2022
     # Windows runs the same suite ~2.6x slower than macOS (25m vs 9m30s at
     # v0.30.0), and v0.29.0 passed with under a minute of headroom twice. The
-    # macOS and Linux jobs stay at 25.
+    # macOS and Linux jobs sit at 40; Linux outgrew 25 at v0.38.0.
     timeout-minutes: 60
     steps:
       - name: Check out repository

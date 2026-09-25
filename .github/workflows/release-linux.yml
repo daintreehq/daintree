@@ -57,7 +57,7 @@ jobs:
   unit-tests:
     name: Unit Tests (Linux)
     runs-on: ubuntu-22.04
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
