@@ -608,6 +608,26 @@ describe("remote session wiring", () => {
     expect(getEndpointRegistry().getRemote()).toHaveLength(0);
   });
 
+  it("exposes the host's open session with no view bound, and none while the link is down", async () => {
+    await startHarness();
+    const connection = h.manager.connect(HOST_ID);
+    await connect();
+    const session = connection.currentSession;
+    expect(session?.isOpen).toBe(true);
+    expect(getEndpointRegistry().getRemote()).toHaveLength(0);
+
+    h.allowConnect.value = false;
+    for (const socket of h.sockets) socket.destroy();
+    await waitFor(() => connection.currentSession === null);
+
+    h.allowConnect.value = true;
+    await waitFor(() => connection.currentSession !== null, 2_000);
+    expect(connection.currentSession).not.toBe(session);
+
+    await h.manager.disconnect(HOST_ID);
+    expect(connection.currentSession).toBeNull();
+  });
+
   it("closes endpoints of views that went away while the link was down once it resumes", async () => {
     await startHarness({ maxEndpoints: 2 });
     await connect();

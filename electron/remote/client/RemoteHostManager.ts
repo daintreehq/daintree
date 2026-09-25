@@ -167,6 +167,15 @@ export class HostConnection {
     return this.info;
   }
 
+  /**
+   * The host's open link session, or null while it has none. Session-level
+   * callers (port forwards, project switches) use it when no local view has
+   * an endpoint on the host.
+   */
+  get currentSession(): LinkSession | null {
+    return this.session?.isOpen ? this.session : null;
+  }
+
   onStateChange(listener: (state: LinkClientState) => void): () => void {
     return this.link.onStateChange(listener);
   }

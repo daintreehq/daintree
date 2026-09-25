@@ -36,6 +36,7 @@ import {
   encodeBrokerError,
 } from "./services/rpc/RequestResponseBroker.js";
 import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.js";
+import { buildDroppedFilePathsBinding } from "./utils/droppedFilePaths.js";
 import { buildGitFetchPreloadBindings } from "./ipc/handlers/gitFetch.preload.js";
 import { buildSlashCommandsPreloadBindings } from "./ipc/handlers/slashCommands.preload.js";
 import { buildGlobalEnvPreloadBindings } from "./ipc/handlers/globalEnv.preload.js";
@@ -1510,8 +1511,9 @@ function buildElectronApi(): ElectronAPI {
       // isolation. Plugin views render inline in this same document, so any
       // code in the page can still call it — separating them would need a
       // context of their own. `""` for a File with nothing on disk behind it.
-      getDroppedFilePaths: (files: readonly File[]): string[] =>
-        Array.from(files, (file) => webUtils.getPathForFile(file)),
+      getDroppedFilePaths: buildDroppedFilePathsBinding<File>((file) =>
+        webUtils.getPathForFile(file)
+      ),
     },
 
     // Diff media API — HEAD vs working-tree image versions for image compare

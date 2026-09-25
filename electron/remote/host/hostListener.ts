@@ -13,6 +13,9 @@ import { admitHybridHostLegs } from "../hybrid/index.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind, type LinkClientInfo } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
+import { attachHostPluginAssets, installPluginHost } from "../plugins/install.js";
+import { installHostPortService } from "../ports/hostPorts.js";
+import { installProjectsHost } from "../projects/hostInstall.js";
 import { registerRemoteService } from "../runtime.js";
 import {
   attachTerminalBridge,
@@ -64,6 +67,7 @@ function attachHostStreams(session: LinkSession, endpoint: RemoteViewEndpoint): 
   attachTerminalBridge(session, endpoint);
   attachWorktreePortBridge(session, endpoint);
   attachHostFiles(session, endpoint);
+  attachHostPluginAssets(session, endpoint);
 }
 
 function replaySnapshots(endpoint: RemoteViewEndpoint): void {
@@ -144,6 +148,12 @@ async function buildHostListener(
   // Previews, downloads and host pickers for remote views; revoked with the listener.
   const files = installHostFileService();
   teardowns.push(() => files.dispose());
+  // Port forwards and project moves are per session, not per endpoint.
+  teardowns.push(installHostPortService(server));
+  teardowns.push(installProjectsHost(server));
+  // Plugin prompts go to the project's driving frontend; view bundles are
+  // served per endpoint alongside its other streams.
+  teardowns.push(installPluginHost());
 
   // MCP dispatch and the drive lease agree on who drives a project. Installing
   // the resolver is also what lets the host run actions with no frontend

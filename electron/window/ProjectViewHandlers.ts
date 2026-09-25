@@ -12,7 +12,6 @@ import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { isRendererOwnedShortcut } from "../services/menuAccelerators.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
-import { isLocalhostUrl, isDevPreviewProxyUrl } from "../../shared/utils/urlUtils.js";
 import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { notifyError } from "../ipc/errorHandlers.js";
@@ -28,33 +27,15 @@ import {
 } from "../lifecycle/windowRecreationState.js";
 import { evictDeadView, getAvailableMemoryMb } from "./ProjectViewEvictionController.js";
 import { deliverPowerPolicy } from "./powerPolicyDelivery.js";
+import { isWebviewSrcAllowed } from "./webviewSrcGate.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
 
-/**
- * Decides which URLs a webview in a remote-bound view may load: that host's
- * forwarded ports instead of this machine's localhost. Returns null for a
- * view that runs locally, which keeps the local rule.
- */
-export type RemoteWebviewSrcGate = (webContentsId: number, src: string) => boolean | null;
-
-let remoteWebviewSrcGate: RemoteWebviewSrcGate | null = null;
-
-export function setRemoteWebviewSrcGate(gate: RemoteWebviewSrcGate | null): () => void {
-  remoteWebviewSrcGate = gate;
-  return () => {
-    if (remoteWebviewSrcGate === gate) remoteWebviewSrcGate = null;
-  };
-}
-
-/** Whether a view may attach a webview loading `src`. */
-export function isWebviewSrcAllowed(webContentsId: number, src: string): boolean {
-  const remote = remoteWebviewSrcGate?.(webContentsId, src) ?? null;
-  if (remote !== null) return remote;
-  // Dev-preview webviews load the stable proxy origin (dp-*.localhost), which
-  // isLocalhostUrl rejects — accept it explicitly (#9100).
-  return isLocalhostUrl(src) || isDevPreviewProxyUrl(src);
-}
+export {
+  isWebviewSrcAllowed,
+  setRemoteWebviewSrcGate,
+  type RemoteWebviewSrcGate,
+} from "./webviewSrcGate.js";
 
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;

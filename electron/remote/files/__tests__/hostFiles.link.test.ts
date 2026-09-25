@@ -28,6 +28,8 @@ import { serveOpenedContainedFile } from "../../../setup/protocols.js";
 import { HostFileService, type HostFileEndpoint } from "../HostFileService.js";
 import { DOWNLOAD_SINK_PREFIX, FileDownloadPayloadSchema, FileLinkMethod } from "../linkMethods.js";
 import { ViewFileCapabilities } from "../viewCapabilities.js";
+import { expectClientBundle } from "../../projects/bundleSinks.js";
+import { BUNDLE_SINK_PREFIX } from "../../projects/linkMethods.js";
 
 const HOST = "studio-01";
 
@@ -479,6 +481,31 @@ describe("save locally", () => {
     await expect(sent).rejects.toBeDefined();
     expect(client.isOpen).toBe(true);
     expect(await fs.readdir(downloads)).toEqual([]);
+  });
+
+  it("accepts a repository bundle the Shell asked for, once, beside its own downloads", async () => {
+    const { host } = await setup();
+    const token = crypto.randomBytes(16).toString("hex");
+    const target = path.join(downloads, "repository.bundle");
+    const release = expectClientBundle(token, target);
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const send = () =>
+      host.transfers.send(
+        {
+          size: bytes.byteLength,
+          sha256: sha256(bytes),
+          read: async (o, l) => bytes.subarray(o, o + l),
+        },
+        {
+          name: "repository.bundle",
+          destination: { kind: "path", path: `${BUNDLE_SINK_PREFIX}${token}` },
+        }
+      );
+    await send();
+    expect(await fs.readFile(target)).toEqual(Buffer.from(bytes));
+    // The slot is spent: a second bundle for it is refused.
+    await expect(send()).rejects.toBeDefined();
+    release();
   });
 
   it("fails, rather than hangs, when the download can't be saved here", async () => {

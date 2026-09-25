@@ -310,6 +310,7 @@ export const BUILT_IN_ACTION_IDS = [
   "host.switch",
   "host.add",
   "project.openOnHost",
+  "host.forwardPort",
 
   // -- appActions --
   "app.pluginManager",
