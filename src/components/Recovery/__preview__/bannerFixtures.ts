@@ -8,6 +8,7 @@ import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
 import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
+import { seedDriveLeaseView } from "../driveLeaseState";
 import type { GlobalBannerSlot } from "../useGlobalBannerPriority";
 import type { PrerequisiteCheckResult } from "@shared/types";
 
@@ -96,6 +97,26 @@ export const BANNER_FIXTURES = {
       });
     },
     settleMs: 600,
+  },
+  "drive-lease": {
+    slot: "drive-lease",
+    what: "a remote client drives this project from the host's own screen — neutral, with Take back",
+    seed: () => {
+      seedDriveLeaseView({
+        projectId: "preview-project",
+        holder: {
+          leaseId: 2,
+          endpointId: "remote-view-1",
+          clientId: "client-greg-mbp",
+          clientName: "greg-mbp",
+          isHostLocal: false,
+          acquiredAt: Date.now() - 60_000,
+        },
+        drivingHere: false,
+        isHolderEndpoint: false,
+        viewerIsHostLocal: true,
+      });
+    },
   },
   "host-crash": {
     slot: "host-crash",
@@ -247,10 +268,11 @@ export const BANNER_FIXTURES = {
 
 export type BannerFixtureName = keyof typeof BANNER_FIXTURES;
 
-/** The ten slots, in coordinator priority order, one canonical fixture each. */
+/** The eleven slots, in coordinator priority order, one canonical fixture each. */
 export const SHEET_ROWS: readonly BannerFixtureName[] = [
   "host-connection",
   "host-crash",
+  "drive-lease",
   "watchdog-disabled",
   "host-memory-stall",
   "safe-mode",

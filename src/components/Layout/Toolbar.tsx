@@ -142,6 +142,7 @@ import {
 } from "@/lazyPanels";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { ToolbarProjectPill, ToolbarProjectPillTooltipBody } from "./ToolbarProjectPill";
+import { HostChip } from "@/components/Hosts/HostChip";
 import { shortSha } from "@/utils/textParsing";
 import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
@@ -2493,6 +2494,7 @@ export function Toolbar({
                   />
                 </Suspense>
               )}
+              <HostChip />
               <Tooltip
                 open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
                 onOpenChange={

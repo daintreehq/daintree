@@ -29,6 +29,7 @@ import { getCloudSyncWarningCopy } from "@/utils/cloudSyncWarningCopy";
 import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
 import { useGlobalBannerDismissalStore } from "@/store/globalBannerDismissalStore";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import { _resetDriveLeaseBannerForTesting, seedDriveLeaseView } from "../driveLeaseState";
 import type { PrerequisiteCheckResult } from "@shared/types";
 
 function missingGit(overrides: Partial<PrerequisiteCheckResult> = {}): PrerequisiteCheckResult {
@@ -150,6 +151,37 @@ describe("GlobalBannerCoordinator", () => {
     expect(screen.getByText("studio-01 is unreachable")).toBeTruthy();
     expect(screen.queryByText("Terminal service crashed")).toBeNull();
     useHostConnectionStore.getState().reset();
+  });
+
+  it("shows who drives the project below a backend crash but above the watchdog", () => {
+    seedDriveLeaseView({
+      projectId: "p1",
+      holder: {
+        leaseId: 3,
+        endpointId: "remote-1",
+        clientId: "client-2",
+        clientName: "greg-mbp",
+        isHostLocal: false,
+        acquiredAt: 1,
+      },
+      drivingHere: false,
+      isHolderEndpoint: false,
+      viewerIsHostLocal: true,
+    });
+    try {
+      usePanelStore.setState({ watchdogStatus: "disabled" });
+      const { unmount } = render(<GlobalBannerCoordinator />);
+      expect(screen.getByText("Being driven from greg-mbp")).toBeTruthy();
+      expect(screen.queryByText("Crash watchdog disabled")).toBeNull();
+      unmount();
+
+      usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: null });
+      render(<GlobalBannerCoordinator />);
+      expect(screen.getByText("Terminal service crashed")).toBeTruthy();
+      expect(screen.queryByText("Being driven from greg-mbp")).toBeNull();
+    } finally {
+      _resetDriveLeaseBannerForTesting();
+    }
   });
 
   it("never shows a host banner in a window that runs on this machine", () => {

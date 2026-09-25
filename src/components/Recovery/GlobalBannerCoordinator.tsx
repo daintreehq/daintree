@@ -1,4 +1,5 @@
 import { HostConnectionBanner } from "./HostConnectionBanner";
+import { DriveLeaseBanner } from "./DriveLeaseBanner";
 import { HostCrashBanner } from "./HostCrashBanner";
 import { WatchdogDisabledBanner } from "./WatchdogDisabledBanner";
 import { HostMemoryStallBanner } from "./HostMemoryStallBanner";
@@ -29,6 +30,8 @@ function activeBanner(slot: ReturnType<typeof useGlobalBannerPriority>) {
       return <HostConnectionBanner />;
     case "host-crash":
       return <HostCrashBanner />;
+    case "drive-lease":
+      return <DriveLeaseBanner />;
     case "watchdog-disabled":
       return <WatchdogDisabledBanner />;
     case "host-memory-stall":
