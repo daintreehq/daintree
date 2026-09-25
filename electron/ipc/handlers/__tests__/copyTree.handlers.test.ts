@@ -84,6 +84,10 @@ import {
 } from "../../../services/operations/index.js";
 import type { OperationsEvent } from "../../../../shared/types/ipc/operations.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
+import { getIpcDispatcher } from "../../dispatcher.js";
+import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
+import type { ClientEndpoint } from "../../endpoint.js";
+import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 import { contextDir, _resetReservedPathsForTests } from "../../../services/copyTreeOutputFile.js";
 import {
   registerCopyTreeHandlers,
@@ -1111,6 +1115,99 @@ describe("file-backed generation", () => {
       "<files>clipboard me</files>"
     );
   });
+  describe("bundle grants for a remote Shell", () => {
+    function remoteEndpoint(): ClientEndpoint {
+      return {
+        endpointId: "remote:-1",
+        clientId: "client--1",
+        projectId: "proj-file-backed",
+        kind: "remote-view",
+        handle: -1,
+        send: vi.fn(),
+        request: vi.fn(),
+        onClose: () => ({ dispose: () => undefined }),
+        isClosed: () => false,
+      } as unknown as ClientEndpoint;
+    }
+
+    async function generateFrom(endpoint: ClientEndpoint, payload: Record<string, unknown>) {
+      return getIpcDispatcher().invokeForEndpoint(
+        {
+          endpoint,
+          client: {
+            clientId: endpoint.clientId,
+            clientName: "b",
+            platform: "darwin",
+            kind: "remote",
+          },
+        },
+        CHANNELS.COPYTREE_GENERATE,
+        [payload]
+      );
+    }
+
+    beforeEach(() => {
+      _resetRemoteServicesForTest();
+      getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) =>
+        wrapSuccess(await call())
+      );
+    });
+
+    afterEach(() => {
+      getIpcDispatcher().setInvokeEnveloper(null);
+      _resetRemoteServicesForTest();
+    });
+
+    it("grants the generated bundle to the remote endpoint that asked for it", async () => {
+      makeService("<files/>");
+      const recordBundle = vi.fn();
+      registerRemoteService("hostFileService", { recordBundle } as never);
+      const endpoint = remoteEndpoint();
+
+      const envelope = (await generateFrom(endpoint, { worktreeId: "wt-1" })) as {
+        ok: boolean;
+        data: { filePath: string };
+      };
+
+      expect(envelope.ok).toBe(true);
+      expect(envelope.data.filePath).toBe(lastOutputPath);
+      expect(recordBundle).toHaveBeenCalledTimes(1);
+      expect(recordBundle).toHaveBeenCalledWith(endpoint, lastOutputPath);
+    });
+
+    it("grants nothing for a failed run", async () => {
+      makeService("<files/>", { error: "boom" });
+      const recordBundle = vi.fn();
+      registerRemoteService("hostFileService", { recordBundle } as never);
+
+      await generateFrom(remoteEndpoint(), { worktreeId: "wt-1" });
+
+      expect(recordBundle).not.toHaveBeenCalled();
+    });
+
+    it("grants nothing to a local view", async () => {
+      makeService("<files/>");
+      const recordBundle = vi.fn();
+      registerRemoteService("hostFileService", { recordBundle } as never);
+
+      const result = (await getInvokeHandler(CHANNELS.COPYTREE_GENERATE)(mockSender, {
+        worktreeId: "wt-1",
+      })) as Record<string, unknown>;
+
+      expect(result.filePath).toBe(lastOutputPath);
+      expect(recordBundle).not.toHaveBeenCalled();
+    });
+
+    it("still answers a remote caller when the host's file service isn't running", async () => {
+      makeService("<files/>");
+      const envelope = (await generateFrom(remoteEndpoint(), { worktreeId: "wt-1" })) as {
+        ok: boolean;
+        data: { filePath: string };
+      };
+      expect(envelope.data.filePath).toBe(lastOutputPath);
+    });
+  });
+
   it("runs a named generate once and answers a retry from the operation record", async () => {
     const events: OperationsEvent[] = [];
     const registry = new OperationRegistry({ emit: (_projectId, event) => events.push(event) });

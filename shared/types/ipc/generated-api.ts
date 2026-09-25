@@ -227,6 +227,9 @@ export interface GeneratedElectronAPI {
     download(
       ...args: IpcInvokeMap["file-transfer:download"]["args"]
     ): Promise<IpcInvokeMap["file-transfer:download"]["result"]>;
+    getPreviewCapability(
+      ...args: IpcInvokeMap["file-transfer:get-preview-capability"]["args"]
+    ): Promise<IpcInvokeMap["file-transfer:get-preview-capability"]["result"]>;
     uploadBytes(
       ...args: IpcInvokeMap["file-transfer:upload-bytes"]["args"]
     ): Promise<IpcInvokeMap["file-transfer:upload-bytes"]["result"]>;

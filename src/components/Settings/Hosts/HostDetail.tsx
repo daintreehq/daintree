@@ -14,6 +14,8 @@ import { buildLabel, connectionLabel, platformLabel } from "./hostLabels";
 interface HostDetailProps {
   entry: HostListEntry;
   onBack: () => void;
+  /** Open straight into this host's update flow (the host chip's "Update …"). */
+  openUpdate?: boolean;
 }
 
 function useCommittedField(initial: string, commit: (value: string) => Promise<unknown>) {
@@ -30,11 +32,13 @@ function useCommittedField(initial: string, commit: (value: string) => Promise<u
 }
 
 /** One host: its name and SSH target, what its connection reports, and forgetting it. */
-export function HostDetail({ entry, onBack }: HostDetailProps) {
+export function HostDetail({ entry, onBack, openUpdate = false }: HostDetailProps) {
   const { descriptor, connection, summary } = entry;
   const [confirmForget, setConfirmForget] = useState(false);
   const [forgetError, setForgetError] = useState<string | null>(null);
-  const [updateOpen, setUpdateOpen] = useState(false);
+  const [updateOpen, setUpdateOpen] = useState(openUpdate);
+  const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
   const name = useCommittedField(descriptor.name, (value) =>
     remoteHostsClient.update({ hostId: descriptor.id, name: value })
   );
@@ -42,6 +46,18 @@ export function HostDetail({ entry, onBack }: HostDetailProps) {
     remoteHostsClient.update({ hostId: descriptor.id, sshTarget: value })
   );
   const agentClis = summary?.agentClis ?? [];
+
+  const connect = () => {
+    setConnecting(true);
+    setConnectError(null);
+    remoteHostsClient.connect(descriptor.id).then(
+      () => setConnecting(false),
+      (err: unknown) => {
+        setConnecting(false);
+        setConnectError(formatErrorMessage(err, "Couldn't connect"));
+      }
+    );
+  };
 
   const forget = () => {
     remoteHostsClient.forget(descriptor.id).then(
@@ -89,15 +105,29 @@ export function HostDetail({ entry, onBack }: HostDetailProps) {
           />
           <SettingsRow
             label="Connection"
-            description={connectionLabel(connection)}
+            description={
+              connectError ? (
+                <>
+                  {connectionLabel(connection)}
+                  <br />
+                  <span role="alert" className="text-status-error select-text">
+                    Couldn&apos;t connect: {connectError}
+                  </span>
+                </>
+              ) : (
+                connectionLabel(connection)
+              )
+            }
             control={
               connection.status !== "connected" ? (
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => void remoteHostsClient.connect(descriptor.id)}
+                  onClick={connect}
+                  disabled={connecting}
+                  aria-busy={connecting || undefined}
                 >
-                  Connect
+                  {connectError ? "Retry" : "Connect"}
                 </Button>
               ) : undefined
             }

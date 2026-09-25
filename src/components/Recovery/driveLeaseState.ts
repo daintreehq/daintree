@@ -1,9 +1,9 @@
 import { useEffect, useSyncExternalStore } from "react";
-import type { DriveLeaseEvent, DriveLeaseView } from "@shared/types/ipc/driveLease";
+import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
 import { isRemoteHostsSupported } from "@/lib/remoteHosts";
 import { getViewHostId } from "@/hooks/useHostConnection";
+import { getDriveLeaseSnapshot, subscribeDriveLeaseSnapshot } from "@/services/terminal/inputGate";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import { logWarn } from "@/utils/logger";
 
 /**
  * Which drive-lease banner this view shows:
@@ -45,10 +45,9 @@ export function selectDriveLeaseBanner(
 
 let lease: DriveLeaseView | null = null;
 const listeners = new Set<() => void>();
-/** Bumped by every event and teardown, so a slower lookup never overrides either. */
-let generation = 0;
 
 function setLease(next: DriveLeaseView | null): void {
+  if (lease === next) return;
   lease = next;
   for (const listener of [...listeners]) listener();
 }
@@ -62,48 +61,32 @@ function getLease(): DriveLeaseView | null {
   return lease;
 }
 
-/** Adopt a lease answer this view received directly (e.g. from its own takeover). */
-export function applyDriveLeaseView(view: DriveLeaseView): void {
-  if (view.projectId !== getViewWorkspaceId()) return;
-  generation += 1;
-  setLease(view);
-}
-
 /** Set the lease outright, bypassing the view's own project check. For the preview harness and tests. */
 export function seedDriveLeaseView(view: DriveLeaseView | null): void {
-  generation += 1;
   setLease(view);
 }
 
 let syncRefs = 0;
 let stopSync: (() => void) | null = null;
 
+/**
+ * Mirrors the lease the input gate was set from. The host-connection sync owns
+ * the IPC: the lease events, the up-front lookup (a remote view always, a view
+ * on this machine only once remote hosts are in use) and the refresh after a
+ * reconnect. One source means the banner, the chip and the gate never disagree
+ * about who drives, and nobody asks the host twice.
+ */
 function beginSync(): () => void {
   if (!isRemoteHostsSupported()) return () => {};
-  const api = window.electron?.driveLease;
-  const projectId = getViewWorkspaceId();
-  if (!api || !projectId) return () => {};
-  const off = api.onEvent((event: DriveLeaseEvent) => {
-    if (event.type !== "changed" || event.state.projectId !== projectId) return;
-    generation += 1;
-    setLease(event.state);
-  });
-  // A view on this machine asks nothing up front: only a remote client taking
-  // over can drive it from elsewhere, and that arrives as an event.
-  if (getViewHostId() !== null) {
-    const current = generation;
-    api
-      .get({ projectId })
-      .then((view) => {
-        if (current === generation) setLease(view);
-      })
-      .catch((error: unknown) => {
-        logWarn("[DriveLease] Couldn't read the project's drive lease", { error });
-      });
-  }
+  const adopt = () => {
+    const next = getDriveLeaseSnapshot();
+    setLease(next !== null && next.projectId === getViewWorkspaceId() ? next : null);
+  };
+  // Nothing to adopt yet leaves a seeded lease (preview, tests) in place.
+  if (getDriveLeaseSnapshot() !== null) adopt();
+  const off = subscribeDriveLeaseSnapshot(adopt);
   return () => {
     off();
-    generation += 1;
     setLease(null);
   };
 }
@@ -136,7 +119,6 @@ export function _resetDriveLeaseBannerForTesting(): void {
   stopSync?.();
   stopSync = null;
   syncRefs = 0;
-  generation += 1;
   lease = null;
   listeners.clear();
 }

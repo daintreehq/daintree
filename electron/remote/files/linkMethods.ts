@@ -33,12 +33,15 @@ export const PULL_MAX_BYTES = 1024 * 1024;
 export const CONTAINED_FILE_SCHEMES = ["daintree-file", "daintree-media", "daintree-pdf"] as const;
 
 const hostPath = z.string().min(1).max(4096);
-const endpointIds = z.array(z.string().min(1).max(256)).min(1).max(64);
+const endpointId = z.string().min(1).max(256);
 const hexId = z.string().regex(/^[0-9a-f]{32}$/);
 
 export const FileRequestPayloadSchema = z.object({
-  /** The Shell's endpoints on this host; the first one allowed to read `root` is used. */
-  endpointIds,
+  /**
+   * The asking view's own endpoint on this host. The request runs under that
+   * endpoint's project and lease only, never another view's.
+   */
+  endpointId,
   scheme: z.enum(CONTAINED_FILE_SCHEMES),
   path: hostPath,
   root: hostPath,
@@ -75,7 +78,8 @@ export type FilePullResult = z.infer<typeof FilePullResultSchema>;
 export const FileCancelPayloadSchema = z.object({ streamId: hexId });
 
 export const FileDownloadPayloadSchema = z.object({
-  endpointIds,
+  /** As for a preview: the asking view's own endpoint. */
+  endpointId,
   hostPath,
   token: hexId,
 });

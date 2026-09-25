@@ -136,12 +136,58 @@ function viewRemoteHostId(): string | null {
   return id && id !== LOCAL_HOST_ID ? id : null;
 }
 
+let previewCapability: string | null = null;
+let previewCapabilityRequest: Promise<string | null> | null = null;
+
 /**
- * `load` for this machine, `host/<hostId>/load` for a remote host. Local URLs
- * keep exactly the shape they always had.
+ * Fetch this view's preview capability once and keep it for the view's life.
+ * A protocol request carries no sender, so the host serves a remote view's
+ * preview only when its URL carries the token main minted for that view.
+ * Resolves null without any IPC for a view of this machine.
+ */
+export function primeHostPreviewCapability(): Promise<string | null> {
+  if (previewCapability !== null) return Promise.resolve(previewCapability);
+  if (viewRemoteHostId() === null) return Promise.resolve(null);
+  if (previewCapabilityRequest) return previewCapabilityRequest;
+  const fileTransfer = window.electron?.fileTransfer;
+  if (!fileTransfer?.getPreviewCapability) return Promise.resolve(null);
+  const request = fileTransfer
+    .getPreviewCapability()
+    .then((capability) => {
+      previewCapability = capability;
+      return capability;
+    })
+    .catch(() => null)
+    .finally(() => {
+      // A failed fetch leaves nothing cached, so the next preview asks again.
+      if (previewCapabilityRequest === request) previewCapabilityRequest = null;
+    });
+  previewCapabilityRequest = request;
+  return request;
+}
+
+/** Test seam: forget the cached capability. */
+export function resetHostPreviewCapabilityForTests(): void {
+  previewCapability = null;
+  previewCapabilityRequest = null;
+}
+
+/**
+ * `load` for this machine, `host/<hostId>/<capability>/load` for the remote
+ * host this view is bound to. Local URLs keep exactly the shape they always
+ * had. The capability is only valid for the view's own host, so a URL naming
+ * any other host (or built before the capability arrived) goes without it and
+ * the host refuses it rather than serving it under the wrong view.
  */
 function previewAuthority(hostId: string | null): string {
-  return hostId === null ? "load" : `host/${encodeURIComponent(hostId)}/load`;
+  if (hostId === null) return "load";
+  const host = `host/${encodeURIComponent(hostId)}`;
+  if (hostId !== viewRemoteHostId()) return `${host}/load`;
+  if (previewCapability === null) {
+    void primeHostPreviewCapability();
+    return `${host}/load`;
+  }
+  return `${host}/${previewCapability}/load`;
 }
 
 function previewQuery(filePath: string, rootPath: string): string {

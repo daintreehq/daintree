@@ -6,14 +6,14 @@ import {
   buildContainedFileUrl,
   buildDaintreeFileErrorHeaders,
   resolveContainedRealPath,
-  serveContainedFileRequest,
-  type ContainedFileScheme,
+  serveOpenedContainedFile,
 } from "../../setup/protocols.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { logWarn } from "../../utils/logger.js";
 import type { LinkSession } from "../link/session.js";
 import { BULK_CHUNK_BYTES } from "../link/frames.js";
 import { bytesTransferSource, type TransferSource } from "../link/transfer.js";
+import { componentsBelow, openBeneath, type OpenedHostFile } from "./hostContainment.js";
 import {
   DOWNLOAD_SINK_PREFIX,
   FileCancelPayloadSchema,
@@ -34,16 +34,19 @@ import {
 /**
  * The host half of a remote window's file previews and downloads.
  *
- * A preview request is answered by the very handler that serves this
- * machine's own views ({@link serveContainedFileRequest}), so path shape,
- * realpath containment, symlink and size rules, MIME gates and Range handling
- * are the local ones, run here against this machine's files. On top of that,
- * the caller-supplied root must lie inside the project the asking endpoint is
- * attached to (its folder or one of its git worktrees); a Shell can't name an
- * arbitrary root the way a local view can.
+ * Every call names the asking view's own endpoint, and runs under that
+ * endpoint's project and drive lease only. The file is reached by walking from
+ * the project's folder (or one of its worktrees) one component at a time
+ * without following symlinks, and is served from the descriptor that walk
+ * opened ({@link openBeneath}), with the local handlers' MIME gates, caps and
+ * Range handling ({@link serveOpenedContainedFile}). The only file outside a
+ * project a view may download is a CopyTree bundle the host generated for that
+ * same endpoint and project ({@link HostFileService.recordBundle}).
  *
- * Streams and downloads belong to the endpoint that opened them and are
- * revoked when it closes, moves to another project, or stops driving it.
+ * Capacity (requests, open streams, buffered bytes, downloads) is reserved
+ * before any filesystem work and released on every path. Streams and
+ * downloads belong to the endpoint that opened them and are revoked when it
+ * closes, moves to another project, or stops driving it.
  */
 
 export type HostFileEndpoint = Pick<
@@ -54,24 +57,33 @@ export type HostFileEndpoint = Pick<
 export interface HostFileServiceOptions {
   /** Folders a project's previews may be rooted in. */
   rootsFor(projectId: string): Promise<string[]>;
-  /**
-   * A download outside the project's folders the project may still take (a
-   * bundle generated for it). Returns the canonical path when granted.
-   */
-  grantDownload?(projectId: string, candidate: string): Promise<string | null>;
   isDriving(projectId: string, endpoint: HostFileEndpoint): boolean;
-  serve?(scheme: ContainedFileScheme, request: Request): Promise<Response>;
+  /** Answers from the opened descriptor; tests substitute it. */
+  serve?: typeof serveOpenedContainedFile;
   maxStreamsPerSession?: number;
   maxConcurrentPulls?: number;
+  /** Previews being admitted and answered at once, per Shell. */
+  maxRequestsPerSession?: number;
+  /** Bytes buffered for previews (images, PDFs, text) across every Shell. */
+  maxBufferedBytes?: number;
+  maxDownloadsPerSession?: number;
   /** A stream nobody pulls for this long is closed. */
   streamIdleMs?: number;
   maxDownloadBytes?: number;
+  /** How long a recorded CopyTree bundle stays downloadable. */
+  bundleTtlMs?: number;
 }
 
 const DEFAULT_MAX_STREAMS_PER_SESSION = 32;
 const DEFAULT_MAX_CONCURRENT_PULLS = 4;
+const DEFAULT_MAX_REQUESTS_PER_SESSION = 8;
+const DEFAULT_MAX_BUFFERED_BYTES = 128 * 1024 * 1024;
+const DEFAULT_MAX_DOWNLOADS_PER_SESSION = 2;
 const DEFAULT_STREAM_IDLE_MS = 60_000;
 const DEFAULT_MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+const DEFAULT_BUNDLE_TTL_MS = 10 * 60 * 1000;
+const MAX_BUNDLES_PER_ENDPOINT = 8;
+const MAX_BUNDLE_ENDPOINTS = 256;
 const MAX_ERROR_TEXT = 1024;
 
 interface SessionFiles {
@@ -79,6 +91,9 @@ interface SessionFiles {
   endpoints: Map<string, HostFileEndpoint>;
   streams: Set<string>;
   pulls: number;
+  requests: number;
+  pendingStreams: number;
+  downloads: number;
   unregister: Array<() => void>;
 }
 
@@ -92,12 +107,26 @@ interface HostStream {
   busy: boolean;
   controller: AbortController;
   idleTimer: ReturnType<typeof setTimeout> | null;
+  /** Returns the buffered bytes this stream's body holds to the shared budget. */
+  release(): void;
 }
 
 interface HostDownload {
   endpoint: HostFileEndpoint;
   projectId: string;
   controller: AbortController;
+}
+
+interface RecordedBundle {
+  projectId: string;
+  expiresAt: number;
+}
+
+interface Located {
+  anchor: string;
+  components: string[];
+  /** Other spellings of the anchor an absolute symlink target may use (e.g. /tmp for /private/tmp). */
+  anchorSpellings?: string[];
 }
 
 function newId(): string {
@@ -119,30 +148,19 @@ function concat(chunks: Uint8Array[], total: number): Uint8Array {
   return out;
 }
 
-async function isInside(allowedRoot: string, candidate: string): Promise<string | null> {
-  const contained = await resolveContainedRealPath(
-    path.normalize(allowedRoot),
-    path.normalize(candidate)
-  );
-  return contained instanceof Response ? null : contained.realFile;
+function isRequestPath(candidate: string): boolean {
+  return !candidate.includes("\0") && path.isAbsolute(candidate);
 }
 
 /**
- * Open the admitted file without following a final-component symlink, check
- * it on the descriptor, then hash and serve every read from that same
- * descriptor, so a swap after admission can't substitute another file.
+ * Hash and serve every read from the descriptor the containment walk opened,
+ * so nothing is resolved by path after admission. Takes ownership of `handle`;
  * `close` is idempotent.
  */
-async function openDownloadSource(
-  realPath: string,
+async function downloadSourceFrom(
+  handle: OpenedHostFile,
   maxBytes: number
 ): Promise<TransferSource & { close(): Promise<void> }> {
-  let handle: Awaited<ReturnType<typeof fs.open>>;
-  try {
-    handle = await fs.open(realPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-  } catch {
-    throw new AppError({ code: "NOT_FOUND", message: "The file could not be opened" });
-  }
   let closed = false;
   const close = async () => {
     if (closed) return;
@@ -195,6 +213,9 @@ export class HostFileService {
   private readonly streams = new Map<string, HostStream>();
   private readonly downloads = new Set<HostDownload>();
   private readonly endpointSubscriptions = new Map<string, { dispose(): void }>();
+  /** Host endpoint id → the bundles generated for it, by exact path. */
+  private readonly bundles = new Map<string, Map<string, RecordedBundle>>();
+  private bufferedBytes = 0;
   private disposed = false;
 
   constructor(private readonly options: HostFileServiceOptions) {}
@@ -209,11 +230,37 @@ export class HostFileService {
         endpoint.endpointId,
         endpoint.onClose(() => {
           this.endpointSubscriptions.delete(endpoint.endpointId);
+          this.bundles.delete(endpoint.endpointId);
           this.revokeWhere((entry) => entry.endpoint === endpoint);
           files.endpoints.delete(endpoint.clientEndpointId);
         })
       );
     }
+  }
+
+  /**
+   * A CopyTree bundle was generated for this endpoint's project. That exact
+   * file becomes downloadable by the same endpoint, while it stays attached to
+   * the same project, for a short while; nothing else in the shared context
+   * folder does.
+   */
+  recordBundle(endpoint: Pick<ClientEndpoint, "endpointId" | "projectId">, filePath: string): void {
+    if (this.disposed || !endpoint.projectId || !isRequestPath(filePath)) return;
+    let recorded = this.bundles.get(endpoint.endpointId);
+    if (!recorded) {
+      if (this.bundles.size >= MAX_BUNDLE_ENDPOINTS) {
+        this.bundles.delete(this.bundles.keys().next().value!);
+      }
+      recorded = new Map();
+      this.bundles.set(endpoint.endpointId, recorded);
+    }
+    const key = path.normalize(filePath);
+    recorded.delete(key);
+    if (recorded.size >= MAX_BUNDLES_PER_ENDPOINT) recorded.delete(recorded.keys().next().value!);
+    recorded.set(key, {
+      projectId: endpoint.projectId,
+      expiresAt: Date.now() + (this.options.bundleTtlMs ?? DEFAULT_BUNDLE_TTL_MS),
+    });
   }
 
   /**
@@ -224,7 +271,11 @@ export class HostFileService {
   async holdsRoot(projectId: string, candidate: string): Promise<boolean> {
     if (this.disposed) return false;
     for (const root of await this.options.rootsFor(projectId)) {
-      if ((await isInside(root, candidate)) !== null) return true;
+      const contained = await resolveContainedRealPath(
+        path.normalize(root),
+        path.normalize(candidate)
+      );
+      if (!(contained instanceof Response)) return true;
     }
     return false;
   }
@@ -251,12 +302,18 @@ export class HostFileService {
     return this.downloads.size;
   }
 
+  /** Preview bytes held right now against the shared budget. */
+  get heldBufferedBytes(): number {
+    return this.bufferedBytes;
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     this.revokeWhere(() => true);
     for (const subscription of this.endpointSubscriptions.values()) subscription.dispose();
     this.endpointSubscriptions.clear();
+    this.bundles.clear();
   }
 
   private sessionFiles(session: LinkSession): SessionFiles {
@@ -267,6 +324,9 @@ export class HostFileService {
       endpoints: new Map(),
       streams: new Set(),
       pulls: 0,
+      requests: 0,
+      pendingStreams: 0,
+      downloads: 0,
       unregister: [],
     };
     created.unregister.push(
@@ -297,36 +357,65 @@ export class HostFileService {
     return created;
   }
 
-  /**
-   * The first of the Shell's endpoints that is attached to a project, drives
-   * it, and whose project holds `candidate`; with the canonical path found.
-   */
-  private async admit(
+  /** The asking view's own endpoint, when it is attached to a project it drives. */
+  private admit(
     files: SessionFiles,
-    endpointIds: readonly string[],
-    candidate: string,
-    grant?: (projectId: string, candidate: string) => Promise<string | null>
-  ): Promise<
-    | { endpoint: HostFileEndpoint; projectId: string; realPath: string }
-    | { refused: "not-found" | "driven-elsewhere" }
-  > {
-    let drivenElsewhere = false;
-    for (const id of endpointIds) {
-      const endpoint = files.endpoints.get(id);
-      const projectId = endpoint?.projectId ?? null;
-      if (!endpoint || endpoint.isClosed() || projectId === null) continue;
-      if (!this.options.isDriving(projectId, endpoint)) {
-        drivenElsewhere = true;
-        continue;
+    endpointId: string
+  ):
+    | { endpoint: HostFileEndpoint; projectId: string }
+    | { refused: "not-found" | "driven-elsewhere" } {
+    const endpoint = files.endpoints.get(endpointId);
+    const projectId = endpoint?.projectId ?? null;
+    if (!endpoint || endpoint.isClosed() || projectId === null) return { refused: "not-found" };
+    if (!this.options.isDriving(projectId, endpoint)) return { refused: "driven-elsewhere" };
+    return { endpoint, projectId };
+  }
+
+  /**
+   * Where to walk from to reach `target`: a project folder or worktree that
+   * holds it (and `within`, when given, which must itself be in that folder
+   * and hold `target`), as spelled by the project or canonically.
+   */
+  private async locate(
+    projectId: string,
+    target: string,
+    within?: string
+  ): Promise<Located | null> {
+    if (within !== undefined && componentsBelow(within, target) === null) return null;
+    for (const root of await this.options.rootsFor(projectId)) {
+      const anchor = await fs.realpath(root).catch(() => null);
+      if (anchor === null) continue;
+      for (const spelling of new Set([path.normalize(root), anchor])) {
+        if (within !== undefined && componentsBelow(spelling, within) === null) continue;
+        const components = componentsBelow(spelling, target);
+        if (components !== null) {
+          const normalized = path.normalize(root);
+          return normalized === anchor
+            ? { anchor, components }
+            : { anchor, components, anchorSpellings: [normalized] };
+        }
       }
-      for (const root of await this.options.rootsFor(projectId)) {
-        const realPath = await isInside(root, candidate);
-        if (realPath !== null) return { endpoint, projectId, realPath };
-      }
-      const granted = grant ? await grant(projectId, candidate) : null;
-      if (granted !== null) return { endpoint, projectId, realPath: granted };
     }
-    return { refused: drivenElsewhere ? "driven-elsewhere" : "not-found" };
+    return null;
+  }
+
+  /** The bundle recorded for exactly this endpoint, project and path, if still fresh. */
+  private async locateBundle(
+    endpoint: HostFileEndpoint,
+    projectId: string,
+    hostPath: string
+  ): Promise<Located | null> {
+    const recorded = this.bundles.get(endpoint.endpointId);
+    const key = path.normalize(hostPath);
+    const bundle = recorded?.get(key);
+    if (!bundle) return null;
+    if (bundle.expiresAt <= Date.now()) {
+      recorded!.delete(key);
+      return null;
+    }
+    if (bundle.projectId !== projectId) return null;
+    const anchor = await fs.realpath(path.dirname(key)).catch(() => null);
+    return anchor === null ? null : { anchor, components: [path.basename(key)] };
   }
 
   /** Whether what was admitted still holds after the awaits that followed admission. */
@@ -349,60 +438,93 @@ export class HostFileService {
     files: SessionFiles,
     payload: FileRequestPayload
   ): Promise<FileResponse> {
-    if (payload.root.includes("\0") || !path.isAbsolute(payload.root)) {
+    if (!isRequestPath(payload.root) || !isRequestPath(payload.path)) {
       return errorResponse(400, "Invalid path");
     }
-    const admitted = await this.admit(files, payload.endpointIds, payload.root);
-    if ("refused" in admitted) {
-      return admitted.refused === "driven-elsewhere"
-        ? errorResponse(403, "Forbidden")
-        : errorResponse(404, "Not Found");
-    }
-
-    const request = new Request(buildContainedFileUrl(payload.scheme, payload.path, payload.root), {
-      method: payload.method,
-      headers: payload.range ? { range: payload.range } : {},
-    });
-    const response = await (this.options.serve ?? serveContainedFileRequest)(
-      payload.scheme,
-      request
-    );
-    if (!this.stillAdmitted(files, admitted.endpoint, admitted.projectId)) {
-      await response.body?.cancel().catch(() => {});
-      return errorResponse(403, "Forbidden");
-    }
-    const headers: Record<string, string> = {};
-    response.headers.forEach((value, key) => {
-      headers[key] = value;
-    });
-
-    if (payload.method === "HEAD" || response.body === null || response.status >= 300) {
-      const text = response.status >= 400 ? (await response.text()).slice(0, MAX_ERROR_TEXT) : null;
-      if (text === null) await response.body?.cancel().catch(() => {});
-      return { status: response.status, headers, text, streamId: null };
-    }
-
+    // Capacity is taken before anything touches the filesystem.
     if (
-      files.streams.size >= (this.options.maxStreamsPerSession ?? DEFAULT_MAX_STREAMS_PER_SESSION)
+      this.disposed ||
+      files.requests >= (this.options.maxRequestsPerSession ?? DEFAULT_MAX_REQUESTS_PER_SESSION) ||
+      files.streams.size + files.pendingStreams >=
+        (this.options.maxStreamsPerSession ?? DEFAULT_MAX_STREAMS_PER_SESSION)
     ) {
-      await response.body.cancel().catch(() => {});
       return errorResponse(503, "Too many open previews");
     }
-    const stream: HostStream = {
-      id: newId(),
-      owner: files,
-      endpoint: admitted.endpoint,
-      projectId: admitted.projectId,
-      reader: response.body.getReader(),
-      leftover: null,
-      busy: false,
-      controller: new AbortController(),
-      idleTimer: null,
+    files.requests++;
+    files.pendingStreams++;
+    let reserved = 0;
+    const release = () => {
+      this.bufferedBytes -= reserved;
+      reserved = 0;
     };
-    this.streams.set(stream.id, stream);
-    files.streams.add(stream.id);
-    this.touch(stream);
-    return { status: response.status, headers, text: null, streamId: stream.id };
+    let handedOff = false;
+    try {
+      const admitted = this.admit(files, payload.endpointId);
+      if ("refused" in admitted) {
+        return admitted.refused === "driven-elsewhere"
+          ? errorResponse(403, "Forbidden")
+          : errorResponse(404, "Not Found");
+      }
+      const located = await this.locate(admitted.projectId, payload.path, payload.root);
+      const opened =
+        located && (await openBeneath(located.anchor, located.components, located.anchorSpellings));
+      if (!opened || opened === "not-a-file") return errorResponse(404, "Not Found");
+
+      const request = new Request(
+        buildContainedFileUrl(payload.scheme, payload.path, payload.root),
+        { method: payload.method, headers: payload.range ? { range: payload.range } : {} }
+      );
+      const maxBuffered = this.options.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
+      const response = await (this.options.serve ?? serveOpenedContainedFile)(
+        payload.scheme,
+        opened.handle,
+        opened.canonicalPath,
+        request,
+        (bytes) => {
+          if (this.bufferedBytes + bytes > maxBuffered) return false;
+          this.bufferedBytes += bytes;
+          reserved += bytes;
+          return true;
+        }
+      );
+      if (!this.stillAdmitted(files, admitted.endpoint, admitted.projectId)) {
+        await response.body?.cancel().catch(() => {});
+        return errorResponse(403, "Forbidden");
+      }
+      const headers: Record<string, string> = {};
+      response.headers.forEach((value, key) => {
+        headers[key] = value;
+      });
+
+      if (payload.method === "HEAD" || response.body === null || response.status >= 300) {
+        const text =
+          response.status >= 400 ? (await response.text()).slice(0, MAX_ERROR_TEXT) : null;
+        if (text === null) await response.body?.cancel().catch(() => {});
+        return { status: response.status, headers, text, streamId: null };
+      }
+
+      const stream: HostStream = {
+        id: newId(),
+        owner: files,
+        endpoint: admitted.endpoint,
+        projectId: admitted.projectId,
+        reader: response.body.getReader(),
+        leftover: null,
+        busy: false,
+        controller: new AbortController(),
+        idleTimer: null,
+        release,
+      };
+      handedOff = true;
+      this.streams.set(stream.id, stream);
+      files.streams.add(stream.id);
+      this.touch(stream);
+      return { status: response.status, headers, text: null, streamId: stream.id };
+    } finally {
+      files.requests--;
+      files.pendingStreams--;
+      if (!handedOff) release();
+    }
   }
 
   private async handlePull(files: SessionFiles, payload: FilePullPayload): Promise<FilePullResult> {
@@ -473,60 +595,85 @@ export class HostFileService {
     files: SessionFiles,
     payload: FileDownloadPayload
   ): Promise<FileDownloadStart> {
-    if (payload.hostPath.includes("\0") || !path.isAbsolute(payload.hostPath)) {
+    if (!isRequestPath(payload.hostPath)) {
       throw new AppError({ code: "INVALID_PATH", message: "The path must be absolute" });
     }
-    const admitted = await this.admit(
-      files,
-      payload.endpointIds,
-      payload.hostPath,
-      this.options.grantDownload?.bind(this.options)
-    );
-    if ("refused" in admitted) {
-      throw admitted.refused === "driven-elsewhere"
-        ? new AppError({
-            code: "DRIVEN_ELSEWHERE",
-            message: "Another window drives this project",
-            userMessage: "Another window is driving this project. Take it over to download.",
-          })
-        : new AppError({
-            code: "NOT_FOUND",
-            message: "No such file in the project",
-            userMessage: "That file isn't in this project on the host.",
-          });
-    }
-    const source = await openDownloadSource(
-      admitted.realPath,
-      this.options.maxDownloadBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES
-    );
-    if (!this.stillAdmitted(files, admitted.endpoint, admitted.projectId)) {
-      await source.close();
-      throw new AppError({ code: "CANCELLED", message: "The download was revoked" });
-    }
-    const download: HostDownload = {
-      endpoint: admitted.endpoint,
-      projectId: admitted.projectId,
-      controller: new AbortController(),
-    };
-    this.downloads.add(download);
-    const name = path.basename(admitted.realPath);
-    void files.session.transfers
-      .send(source, {
-        name,
-        destination: { kind: "path", path: `${DOWNLOAD_SINK_PREFIX}${payload.token}` },
-        signal: download.controller.signal,
-      })
-      .catch((error: unknown) => {
-        logWarn("remote.files.download-failed", {
-          code: error instanceof AppError ? error.code : "INTERNAL",
-        });
-      })
-      // A send refused before it started never took ownership of the source.
-      .finally(() => {
-        this.downloads.delete(download);
-        void source.close();
+    if (
+      this.disposed ||
+      files.downloads >= (this.options.maxDownloadsPerSession ?? DEFAULT_MAX_DOWNLOADS_PER_SESSION)
+    ) {
+      throw new AppError({
+        code: "RATE_LIMITED",
+        message: "Too many downloads in flight",
+        userMessage:
+          "Other downloads from this host are still running. Try again when they finish.",
       });
-    return { name, size: source.size };
+    }
+    files.downloads++;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      files.downloads--;
+    };
+    let handedOff = false;
+    try {
+      const admitted = this.admit(files, payload.endpointId);
+      if ("refused" in admitted) {
+        throw admitted.refused === "driven-elsewhere"
+          ? new AppError({
+              code: "DRIVEN_ELSEWHERE",
+              message: "Another window drives this project",
+              userMessage: "Another window is driving this project. Take it over to download.",
+            })
+          : notInProject();
+      }
+      const located =
+        (await this.locateBundle(admitted.endpoint, admitted.projectId, payload.hostPath)) ??
+        (await this.locate(admitted.projectId, payload.hostPath));
+      const opened =
+        located && (await openBeneath(located.anchor, located.components, located.anchorSpellings));
+      if (opened === "not-a-file") {
+        throw new AppError({ code: "NOT_A_FILE", message: "Only files can be downloaded" });
+      }
+      if (!opened) throw notInProject();
+      const source = await downloadSourceFrom(
+        opened.handle,
+        this.options.maxDownloadBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES
+      );
+      if (!this.stillAdmitted(files, admitted.endpoint, admitted.projectId)) {
+        await source.close();
+        throw new AppError({ code: "CANCELLED", message: "The download was revoked" });
+      }
+      const download: HostDownload = {
+        endpoint: admitted.endpoint,
+        projectId: admitted.projectId,
+        controller: new AbortController(),
+      };
+      this.downloads.add(download);
+      const name = path.basename(opened.canonicalPath);
+      handedOff = true;
+      void files.session.transfers
+        .send(source, {
+          name,
+          destination: { kind: "path", path: `${DOWNLOAD_SINK_PREFIX}${payload.token}` },
+          signal: download.controller.signal,
+        })
+        .catch((error: unknown) => {
+          logWarn("remote.files.download-failed", {
+            code: error instanceof AppError ? error.code : "INTERNAL",
+          });
+        })
+        // A send refused before it started never took ownership of the source.
+        .finally(() => {
+          this.downloads.delete(download);
+          release();
+          void source.close();
+        });
+      return { name, size: source.size };
+    } finally {
+      if (!handedOff) release();
+    }
   }
 
   private touch(stream: HostStream): void {
@@ -545,6 +692,7 @@ export class HostFileService {
     if (stream.idleTimer) clearTimeout(stream.idleTimer);
     stream.idleTimer = null;
     stream.controller.abort();
+    stream.release();
     void stream.reader.cancel().catch(() => {});
   }
 
@@ -559,4 +707,12 @@ export class HostFileService {
       }
     }
   }
+}
+
+function notInProject(): AppError {
+  return new AppError({
+    code: "NOT_FOUND",
+    message: "No such file in the project",
+    userMessage: "That file isn't in this project on the host.",
+  });
 }

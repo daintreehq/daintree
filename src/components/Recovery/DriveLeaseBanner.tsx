@@ -3,7 +3,8 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { applyDriveLeaseView, useDriveLeaseBanner } from "./driveLeaseState";
+import { takeOverDrive } from "@/hooks/useHostConnection";
+import { useDriveLeaseBanner } from "./driveLeaseState";
 import { getDriveLeaseBannerCopy } from "./recoveryCopy";
 
 /** Never rejects: a refusal is reported with a way to try again. */
@@ -12,7 +13,8 @@ async function takeOverProject(
   kind: "taken-from-host" | "driven-elsewhere"
 ): Promise<void> {
   try {
-    applyDriveLeaseView(await window.electron.driveLease.takeOver({ projectId }));
+    // Through the connection sync so the input gate opens with the banner.
+    await takeOverDrive(projectId);
   } catch (error) {
     notify({
       type: "error",

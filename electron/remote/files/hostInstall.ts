@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
 import path from "node:path";
+import type { ClientEndpoint } from "../../ipc/endpoint.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
-import { contextDir } from "../../services/copyTreeOutputFile.js";
 import { getDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -43,40 +42,6 @@ export async function projectFileRoots(projectId: string): Promise<string[]> {
   return roots;
 }
 
-const BUNDLE_MAX_AGE_MS = 10 * 60 * 1000;
-
-function bundlePrefix(root: string): string {
-  // Mirrors buildContextFileName's project segment.
-  const segment = path
-    .basename(root)
-    .replace(/[^a-zA-Z0-9-_]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 50);
-  return `${segment || "project"}-`;
-}
-
-/**
- * A CopyTree bundle for a remote window's "copy as file". The context folder
- * is shared by every project, so a bundle is granted only to a project whose
- * folder or worktree it was generated from (by its name) and only while it is
- * fresh — not the whole folder.
- */
-export async function grantContextBundle(
-  projectId: string,
-  candidate: string,
-  dir: string = contextDir()
-): Promise<string | null> {
-  if (path.dirname(path.normalize(candidate)) !== path.normalize(dir)) return null;
-  const name = path.basename(candidate);
-  const roots = await projectFileRoots(projectId);
-  if (!roots.some((root) => name.startsWith(bundlePrefix(root)))) return null;
-  const stat = await fs.lstat(candidate).catch(() => null);
-  if (!stat?.isFile() || Date.now() - stat.mtimeMs > BUNDLE_MAX_AGE_MS) return null;
-  const realDir = await fs.realpath(dir).catch(() => null);
-  return realDir ? path.join(realDir, name) : null;
-}
-
 /**
  * Start serving remote windows' previews and downloads from this host.
  * Returns the service (attach endpoints to it as their links come up) and a
@@ -86,7 +51,6 @@ export function installHostFileService(): { service: HostFileService; dispose():
   const lease = getDriveLeaseService();
   const service = new HostFileService({
     rootsFor: projectFileRoots,
-    grantDownload: grantContextBundle,
     isDriving: (projectId, endpoint) => lease.isDriving(projectId, endpoint),
   });
   const disposers = [
@@ -107,4 +71,15 @@ export function installHostFileService(): { service: HostFileService; dispose():
 /** Boot hook: serve file calls for this endpoint on the link it rides now. */
 export function attachHostFiles(session: LinkSession, endpoint: HostFileEndpoint): void {
   getRemoteService("hostFileService")?.attach(session, endpoint);
+}
+
+/**
+ * CopyTree hook: a bundle was generated for a remote endpoint, so that endpoint
+ * (and only it, for its project) may download that exact file.
+ */
+export function recordHostBundle(
+  endpoint: Pick<ClientEndpoint, "endpointId" | "projectId">,
+  filePath: string
+): void {
+  getRemoteService("hostFileService")?.recordBundle(endpoint, filePath);
 }

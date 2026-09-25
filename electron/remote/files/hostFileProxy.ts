@@ -1,3 +1,4 @@
+import type { HostId } from "../../../shared/types/remoteHosts.js";
 import type { HostFileRequestProxy } from "../../setup/protocols.js";
 import { buildDaintreeFileErrorHeaders } from "../../setup/protocols.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -34,16 +35,32 @@ function plain(status: number, text: string): Response {
   return new Response(text, { status, headers: buildDaintreeFileErrorHeaders() });
 }
 
+export interface HostFileProxyViews {
+  /** The view a preview capability was minted for, while that view lives. */
+  viewForCapability(capability: string): number | null;
+  /** The host a view is bound to, or null for a local view. */
+  hostForView(webContentsId: number): HostId | null;
+}
+
 /**
- * Answer a remote window's `daintree-file|media|pdf://host/<hostId>/…`
- * request from that host. The host runs its own handler and the body arrives
- * in verified slices, pulled only as fast as the consumer reads, so a large
- * video costs a slice of memory here, never the file.
+ * Answer a remote window's `daintree-file|media|pdf://host/<hostId>/<cap>/…`
+ * request from that host, under the authority of the one view whose capability
+ * the URL carries (a protocol request names no sender of its own). The host
+ * runs its own handler and the body arrives in verified slices, pulled only as
+ * fast as the consumer reads, so a large video costs a slice of memory here,
+ * never the file.
  */
-export function createHostFileProxy(transport: ClientFileTransport): HostFileRequestProxy {
-  return async (scheme, hostId, request) => {
+export function createHostFileProxy(
+  transport: ClientFileTransport,
+  views: HostFileProxyViews
+): HostFileRequestProxy {
+  return async (scheme, { hostId, viewCapability }, request) => {
     if (request.method !== "GET" && request.method !== "HEAD") {
       return plain(405, "Method Not Allowed");
+    }
+    const webContentsId = viewCapability === null ? null : views.viewForCapability(viewCapability);
+    if (webContentsId === null || views.hostForView(webContentsId) !== hostId) {
+      return plain(403, "Forbidden");
     }
     const url = new URL(request.url);
     const filePath = url.searchParams.get("path");
@@ -52,13 +69,17 @@ export function createHostFileProxy(transport: ClientFileTransport): HostFileReq
 
     let answer;
     try {
-      answer = await transport.request(hostId, {
-        scheme,
-        path: filePath,
-        root: rootPath,
-        method: request.method,
-        range: request.headers.get("range"),
-      });
+      answer = await transport.request(
+        hostId,
+        {
+          scheme,
+          path: filePath,
+          root: rootPath,
+          method: request.method,
+          range: request.headers.get("range"),
+        },
+        webContentsId
+      );
     } catch (error) {
       const code = error instanceof AppError ? error.code : null;
       return code === "HOST_DISCONNECTED" || code === "HOST_VERSION_MISMATCH"

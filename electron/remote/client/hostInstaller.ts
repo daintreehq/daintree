@@ -6,8 +6,9 @@ import type {
   InstallHostPayload,
   InstallHostResult,
 } from "../../../shared/types/ipc/remoteHosts.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
-import type { CommandRunner } from "./commandRunner.js";
+import type { CommandResult, CommandRunner } from "./commandRunner.js";
 import {
   APPIMAGE_BUILD_INFO_SUFFIX,
   BUILD_INFO_PATTERN,
@@ -175,13 +176,18 @@ async function stage(
   return { dir, file };
 }
 
-/** Unpack and check the staged build, so nothing is stopped for a bad download. */
+/**
+ * Unpack and check the staged build, so nothing is stopped for a bad
+ * download. Returns the build marker read out of the build itself: a build
+ * without one can't be told apart from any other and is refused.
+ */
 async function verifyStaged(
   deps: InstallerDeps,
   plan: HostInstallPlan,
   staged: { dir: string; file: string },
   signal: AbortSignal
-): Promise<void> {
+): Promise<string | null> {
+  const expected = formatBuildInfo(plan.version, plan.commit);
   if (plan.packaging === "app-bundle") {
     const out = await exec(
       deps,
@@ -196,19 +202,40 @@ async function verifyStaged(
         markerValue(out, "version") ?? ""
       );
     }
-    // A build without the marker (older, or a dev build) can't be checked this way.
+    checkMarker(markerValue(out, "buildinfo"), expected);
+    return expected;
+  }
+  if (plan.packaging === "appimage") {
+    // The image's own runtime unpacks just the archive (no FUSE needed), so
+    // the build is read from what will run rather than from its file name.
+    const root = `${staged.dir}/squashfs-root`;
+    const out = await exec(
+      deps,
+      `test -s ${remotePath(staged.file)} || exit 3; chmod 755 ${remotePath(staged.file)} && cd ${remotePath(staged.dir)} && ${remotePath(staged.file)} --appimage-extract resources/app.asar >/dev/null 2>&1; b=$(grep -a -o -m 1 -E ${sq(BUILD_INFO_PATTERN)} ${remotePath(`${root}/resources/app.asar`)} 2>/dev/null | head -n 1); rm -rf ${remotePath(root)}; echo "${MARK}buildinfo $b"`,
+      signal,
+      "The staged build is missing on the host",
+      5 * 60_000
+    );
     const marker = markerValue(out, "buildinfo");
-    if (marker && marker !== formatBuildInfo(plan.version, plan.commit)) {
-      throw failed("The staged build isn't the expected commit", marker);
-    }
-    return;
+    checkMarker(marker, expected);
+    return marker;
   }
   await exec(
     deps,
-    `test -s ${remotePath(staged.file)} && chmod ${plan.packaging === "deb" ? "644" : "755"} ${remotePath(staged.file)}`,
+    `test -s ${remotePath(staged.file)} && chmod 644 ${remotePath(staged.file)}`,
     signal,
     "The staged build is missing on the host"
   );
+  return null;
+}
+
+function checkMarker(marker: string | null, expected: string): void {
+  if (!marker) {
+    throw failed(
+      "The staged build carries no build marker, so it can't be confirmed as this machine's build"
+    );
+  }
+  if (marker !== expected) throw failed("The staged build isn't the expected commit", marker);
 }
 
 async function waitForIdle(
@@ -258,35 +285,40 @@ function stopScript(
 function swapScript(
   plan: HostInstallPlan,
   staged: { dir: string; file: string },
-  target: string
+  target: string,
+  marker: string | null
 ): string {
   if (plan.packaging === "app-bundle") {
     const app = remotePath(MAC_APP_PATH);
     const old = remotePath(`${MAC_APP_PATH}.old`);
     return `rm -rf ${old}; if [ -d ${app} ]; then mv ${app} ${old} || exit 1; fi; if mv ${remotePath(`${staged.dir}/x/Daintree.app`)} ${app}; then rm -rf ${remotePath(staged.dir)}; else if [ -d ${old} ]; then mv ${old} ${app}; fi; exit 1; fi`;
   }
-  const marker = sq(formatBuildInfo(plan.version, plan.commit));
   const t = remotePath(target);
   const old = remotePath(`${target}.old`);
   const info = remotePath(`${target}${APPIMAGE_BUILD_INFO_SUFFIX}`);
-  return `mkdir -p ${remotePath(path.posix.dirname(target))} && rm -f ${old} && if [ -f ${t} ]; then cp -p ${t} ${old}; fi && mv -f ${remotePath(staged.file)} ${t} && chmod 755 ${t} && printf '%s' ${marker} > ${info} && rm -rf ${remotePath(staged.dir)}`;
+  const infoOld = remotePath(`${target}${APPIMAGE_BUILD_INFO_SUFFIX}.old`);
+  // The marker written beside the image is the one read out of it at staging.
+  return `mkdir -p ${remotePath(path.posix.dirname(target))} && rm -f ${old} ${infoOld} && if [ -f ${t} ]; then cp -p ${t} ${old}; fi && if [ -f ${info} ]; then cp -p ${info} ${infoOld}; fi && mv -f ${remotePath(staged.file)} ${t} && chmod 755 ${t} && printf '%s' ${sq(marker ?? "")} > ${info} && rm -rf ${remotePath(staged.dir)}`;
 }
 
-/** Put the previous build back after a failed swap or a host that didn't come back. */
+/** Put the previous build (and its marker) back. Says what it did, so a restore is never assumed. */
 function rollbackScript(plan: HostInstallPlan, target: string): string {
   if (plan.packaging === "app-bundle") {
     const app = remotePath(MAC_APP_PATH);
     const old = remotePath(`${MAC_APP_PATH}.old`);
-    return `if [ -d ${old} ]; then rm -rf ${app} && mv ${old} ${app}; fi`;
+    return `if [ -d ${old} ]; then if rm -rf ${app} && mv ${old} ${app}; then echo "${MARK}rolledback yes"; else echo "${MARK}rolledback failed"; fi; else echo "${MARK}rolledback none"; fi`;
   }
+  const t = remotePath(target);
   const old = remotePath(`${target}.old`);
-  return `if [ -f ${old} ]; then mv -f ${old} ${remotePath(target)} && rm -f ${remotePath(`${target}${APPIMAGE_BUILD_INFO_SUFFIX}`)}; fi`;
+  const info = remotePath(`${target}${APPIMAGE_BUILD_INFO_SUFFIX}`);
+  const infoOld = remotePath(`${target}${APPIMAGE_BUILD_INFO_SUFFIX}.old`);
+  return `if [ -f ${old} ]; then if mv -f ${old} ${t}; then if [ -f ${infoOld} ]; then mv -f ${infoOld} ${info}; else rm -f ${info}; fi; echo "${MARK}rolledback yes"; else echo "${MARK}rolledback failed"; fi; else echo "${MARK}rolledback none"; fi`;
 }
 
 function dropBackupScript(plan: HostInstallPlan, target: string): string {
   return plan.packaging === "app-bundle"
     ? `rm -rf ${remotePath(`${MAC_APP_PATH}.old`)}`
-    : `rm -f ${remotePath(`${target}.old`)}`;
+    : `rm -f ${remotePath(`${target}.old`)} ${remotePath(`${target}${APPIMAGE_BUILD_INFO_SUFFIX}.old`)}`;
 }
 
 function startScript(plan: HostInstallPlan, hostMode: boolean, hasUnit: boolean): string | null {
@@ -317,7 +349,12 @@ export async function runHostInstall(
     });
   }
   const probe = before.result;
-  const plan = planInstall({ client: deps.client, probe, linuxPackage: payload.linuxPackage });
+  const plan = planInstall({
+    client: deps.client,
+    probe,
+    linuxPackage: payload.linuxPackage,
+    appImageConflict: before.parsed.appImageConflict,
+  });
   if (plan.kind === "up-to-date") return { status: "up-to-date", probe };
   if (plan.kind === "unsupported") {
     throw new AppError({
@@ -335,7 +372,7 @@ export async function runHostInstall(
 
   const staged = await stage(deps, plan, signal, report);
   report({ stage: "verifying", fraction: 0.6, message: "Checking the staged build" });
-  await verifyStaged(deps, plan, staged, signal);
+  const marker = await verifyStaged(deps, plan, staged, signal);
 
   if (plan.packaging === "deb") {
     const after = await deps.probe(signal);
@@ -370,10 +407,10 @@ export async function runHostInstall(
   const wasHostMode = parsed.hostModeListening;
   const wasRunning = parsed.appRunning || wasHostMode;
   const start = wasRunning ? startScript(plan, wasHostMode, hasUnit) : null;
+  const dropStaged = () =>
+    deps.shell.exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 }).catch(() => {});
   if (wasRunning && start === null) {
-    await deps.shell
-      .exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 })
-      .catch(() => {});
+    await dropStaged();
     throw new AppError({
       code: "UNSUPPORTED",
       message: "No way to restart Daintree on the host",
@@ -389,76 +426,159 @@ export async function runHostInstall(
         ? probe.install.path
         : `${await homeOf(deps, signal)}/Applications/Daintree.AppImage`;
   }
-  if (signal.aborted) throw cancelled();
-
-  if (wasRunning) {
-    report({ stage: "stopping", fraction: 0.7, message: "Stopping Daintree on the host" });
-    const out = await exec(
-      deps,
-      stopScript(platform, parsed.hostPid, hasUnit),
-      signal,
-      "Couldn't stop Daintree on the host"
-    );
-    if (markerValue(out, "stopped") !== "yes") {
-      throw failed("Daintree on the host didn't quit, so nothing was replaced");
-    }
+  if (signal.aborted) {
+    await dropStaged();
+    throw cancelled();
   }
 
-  // Past this point the host is stopped: finish even if cancelled, so it isn't left down.
+  // From the first stop on, every step runs to completion whatever the
+  // cancel does, and any failure or cancel goes through `recover`, so the host
+  // is never left stopped or half-replaced.
   const settle = new AbortController().signal;
-  const restartOld = async () => {
-    await deps.shell.exec(rollbackScript(plan, target), { timeoutMs: 120_000 }).catch(() => {});
-    if (start) await deps.shell.exec(start, { timeoutMs: 30_000 }).catch(() => {});
+  const now = deps.now ?? Date.now;
+  let swapped = false;
+
+  const probeUntilBack = async (): Promise<ProbeOutcome> => {
+    let after = await deps.probe(settle);
+    if (wasHostMode) {
+      const deadline = now() + (deps.comeBackTimeoutMs ?? 90_000);
+      while (!after.result.hostModeListening && now() < deadline) {
+        await deps.sleep(2_000, settle);
+        after = await deps.probe(settle);
+      }
+    }
+    return after;
   };
 
-  report({ stage: "installing", fraction: 0.8, message: "Installing the new build" });
+  const run = (script: string, timeoutMs: number) =>
+    deps.shell.exec(script, { signal: settle, timeoutMs }).catch((err: unknown): CommandResult => ({
+      code: null,
+      stdout: "",
+      stderr: formatErrorMessage(err, "ssh failed"),
+      spawnError: null,
+      timedOut: false,
+    }));
+
+  type Recovery = "unchanged" | "restarted" | "restored" | "no-previous" | "not-restored";
+
+  /** Stop whatever the swap started, put the previous build back, start it, and check it. */
+  const recover = async (): Promise<Recovery> => {
+    let previous = true;
+    if (swapped) {
+      if (wasRunning) await run(stopScript(platform, null, hasUnit), 120_000);
+      const rolled = await run(rollbackScript(plan, target), 120_000);
+      const state = rolled.code === 0 ? markerValue(rolled.stdout, "rolledback") : null;
+      if (state !== "yes" && state !== "none") return "not-restored";
+      previous = state === "yes";
+    } else {
+      await dropStaged();
+    }
+    if (!wasRunning && !swapped) return "unchanged";
+    if (!wasRunning && !previous) return "no-previous";
+    if (wasRunning) {
+      const started = await run(start!, 30_000);
+      if (started.code !== 0) return "not-restored";
+    }
+    const back = await probeUntilBack();
+    const running =
+      !wasRunning || (wasHostMode ? back.result.hostModeListening : back.result.appRunning);
+    const sameBuild =
+      back.result.install?.version === probe.install?.version &&
+      back.result.install?.commit === probe.install?.commit;
+    if (!back.result.reachable || !running || !sameBuild) return "not-restored";
+    return swapped ? "restored" : "restarted";
+  };
+
+  const RECOVERY_NOTE: Record<Exclude<Recovery, "unchanged">, string> = {
+    restarted: "Daintree was started again on the host.",
+    restored: wasRunning
+      ? "The previous build was put back and is running again."
+      : "The previous build was put back.",
+    "no-previous": "There was no previous build to put back.",
+    "not-restored": "Daintree couldn't be restored on the host; check it at the machine.",
+  };
+
+  const withRecovery = async (err: unknown): Promise<never> => {
+    const outcome = await recover();
+    const base =
+      err instanceof AppError
+        ? err
+        : failed("The install failed", formatErrorMessage(err, "unknown error"));
+    if (outcome === "unchanged") throw base;
+    const note = RECOVERY_NOTE[outcome];
+    throw new AppError({
+      code: base.code,
+      message: `${base.message}. ${note}`,
+      userMessage: `${base.userMessage ?? base.message}. ${note}`,
+    });
+  };
+
+  let after: ProbeOutcome;
   try {
+    if (wasRunning) {
+      report({ stage: "stopping", fraction: 0.7, message: "Stopping Daintree on the host" });
+      const out = await exec(
+        deps,
+        stopScript(platform, parsed.hostPid, hasUnit),
+        settle,
+        "Couldn't stop Daintree on the host"
+      );
+      if (markerValue(out, "stopped") !== "yes") {
+        throw failed("Daintree on the host didn't quit, so nothing was replaced");
+      }
+    }
+    if (signal.aborted) throw cancelled();
+
+    report({ stage: "installing", fraction: 0.8, message: "Installing the new build" });
+    swapped = true;
     await exec(
       deps,
-      swapScript(plan, staged, target),
+      swapScript(plan, staged, target, marker),
       settle,
       "Couldn't put the new build in place"
     );
+    if (signal.aborted) throw cancelled();
     if (start) {
       report({ stage: "restarting", fraction: 0.9, message: "Starting Daintree on the host" });
       await exec(deps, start, settle, "Couldn't start Daintree on the host");
     }
+
+    after = await probeUntilBack();
+    if (!after.result.reachable) {
+      throw failed("The host stopped answering after the install");
+    }
+    // The installed build must be read back as exactly this one; a build that
+    // can't be read is not taken on trust.
+    if (after.result.matchesClient !== true) {
+      throw failed(
+        after.result.matchesClient === false
+          ? "The host still reported a different build after installing"
+          : "The installed build couldn't be read back on the host"
+      );
+    }
+    if (wasHostMode && !after.result.hostModeListening) {
+      throw failed("Host mode didn't come back on the host after installing");
+    }
   } catch (err) {
-    await restartOld();
-    throw err;
+    return withRecovery(err);
   }
 
-  let after = await deps.probe(settle);
-  if (wasHostMode) {
-    const deadline = (deps.now ?? Date.now)() + (deps.comeBackTimeoutMs ?? 90_000);
-    while (!after.result.hostModeListening && (deps.now ?? Date.now)() < deadline) {
-      await deps.sleep(2_000, settle);
-      after = await deps.probe(settle);
-    }
-  }
-  if (!after.result.reachable) {
-    throw failed("The host stopped answering after the install; check it at the machine");
-  }
-  if (after.result.matchesClient === false) {
-    await deps.shell
-      .exec(`pkill -TERM -o -x ${platform === "darwin" ? "Daintree" : "daintree"}`, {
-        timeoutMs: 30_000,
-      })
-      .catch(() => {});
-    await restartOld();
-    throw failed(
-      "The host still reported a different build after installing, so the previous one was put back"
-    );
-  }
-  if (wasHostMode && !after.result.hostModeListening) {
-    throw failed("Daintree was installed, but Host mode didn't come back on the host");
-  }
-  await deps.shell.exec(dropBackupScript(plan, target), { timeoutMs: 120_000 }).catch(() => {});
+  // The running host is the final word: its handshake names the version and
+  // commit it actually runs. The backup stays until that passes.
   let reconnected: boolean | null = null;
   if (hostId && deps.reconnect && after.result.hostModeListening) {
     report({ stage: "reconnecting", fraction: 0.95, message: "Reconnecting to the host" });
-    reconnected = await deps.reconnect(hostId);
+    reconnected = await deps.reconnect(hostId).catch(() => null);
+    if (reconnected === false) {
+      return withRecovery(failed("The running host reported a different build after installing"));
+    }
+    if (reconnected === null) {
+      throw failed(
+        "The new build is in place, but the host didn't answer a connection, so the build it runs couldn't be confirmed. The previous build is kept beside it."
+      );
+    }
   }
+  await deps.shell.exec(dropBackupScript(plan, target), { timeoutMs: 120_000 }).catch(() => {});
   return { status: "installed", probe: after.result, reconnected };
 }
 
