@@ -235,16 +235,22 @@ describe("TourHost", () => {
   });
 
   it("drops a tour still loading once the dialog is closed", async () => {
+    const slowLoad = vi.fn();
     let resolveSlow: (tour: TourDefinition) => void = () => {};
     unregister = registerTour({
       summary: { id: ACME_TOUR_ID, title: "Acme Tour", minutes: 1, chapterTitles: [] },
-      load: () => new Promise((resolve) => (resolveSlow = resolve)),
+      load: () => {
+        slowLoad();
+        return new Promise((resolve) => (resolveSlow = resolve));
+      },
     });
     getOnboardingStateMock.mockResolvedValue({ tours: {}, tourMuted: false });
     const daintree = await openHostedTour();
     act(() => {
       openTour(ACME_TOUR_ID);
     });
+    // The load has to be under way before the close, or there's nothing to drop.
+    await waitFor(() => expect(slowLoad).toHaveBeenCalled());
     act(() => {
       daintree.onClose();
     });
