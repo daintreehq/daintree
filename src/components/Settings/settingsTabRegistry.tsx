@@ -278,10 +278,17 @@ const HOSTS_TAB = {
   sections: [
     {
       id: "hosts-list",
-      section: "Hosts",
-      title: "Hosts",
+      section: "Remote hosts",
+      title: "Remote hosts",
       description: "Add a host, rename it, change its SSH target, update its build or forget it",
       keywords: ["add host", "forget", "rename", "ssh target", "discover", "bonjour"],
+    },
+    {
+      id: "host-mode",
+      section: "This machine as a host",
+      title: "Allow this machine to be a host",
+      description: "Let Daintree on your other machines open this one's projects over SSH",
+      keywords: ["host mode", "start at login", "socket", "keychain", "attached machines"],
     },
   ],
 } as const satisfies LazySettingsTabEntry;

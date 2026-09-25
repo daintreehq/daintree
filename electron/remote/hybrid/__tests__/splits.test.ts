@@ -491,12 +491,23 @@ describe("opening host files", () => {
   it("refuses native pickers and clipboard capture clearly", async () => {
     const forward = vi.fn();
     const { invoke, listener } = setup(forward, () => "local");
+    for (const channel of [CHANNELS.CLIPBOARD_SAVE_IMAGE, CHANNELS.PROJECT_OPEN_GIT_INIT_DIALOG]) {
+      await expect(invoke(channel, [])).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    }
+    expect(listener).not.toHaveBeenCalled();
+    expect(forward).not.toHaveBeenCalled();
+  });
+
+  it("leaves the host-picker channels to the picker splits", async () => {
+    const forward = vi.fn();
+    const { invoke, listener } = setup(forward, () => "local");
     for (const channel of [
-      CHANNELS.CLIPBOARD_SAVE_IMAGE,
       CHANNELS.PROJECT_OPEN_DIALOG,
+      CHANNELS.PROJECT_LOCATE,
       CHANNELS.PLUGIN_PICK_PATH,
     ]) {
-      await expect(invoke(channel, [])).rejects.toMatchObject({ code: "UNSUPPORTED" });
+      expect(HYBRID_SPLITS[channel], channel).toBeUndefined();
+      await expect(invoke(channel, [])).rejects.toMatchObject({ code: "CHANNEL_NOT_REMOTABLE" });
     }
     expect(listener).not.toHaveBeenCalled();
     expect(forward).not.toHaveBeenCalled();

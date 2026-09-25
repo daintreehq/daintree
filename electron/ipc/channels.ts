@@ -1245,6 +1245,7 @@ export const CHANNELS = {
   REMOTE_HOSTS_GET_INSTALL_STATUS: "remote-hosts:get-install-status",
   REMOTE_HOSTS_CANCEL_INSTALL: "remote-hosts:cancel-install",
   REMOTE_HOSTS_START_HOST_MODE: "remote-hosts:start-host-mode",
+  REMOTE_HOSTS_LIST_HOST_PROJECTS: "remote-hosts:list-host-projects",
   REMOTE_HOSTS_EVENT: "remote-hosts:event",
 
   // Remote Hosts: hostMode (shell).

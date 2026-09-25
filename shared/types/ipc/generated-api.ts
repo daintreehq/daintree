@@ -966,6 +966,9 @@ export interface GeneratedElectronAPI {
     list(
       ...args: IpcInvokeMap["remote-hosts:list"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:list"]["result"]>;
+    listHostProjects(
+      ...args: IpcInvokeMap["remote-hosts:list-host-projects"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:list-host-projects"]["result"]>;
     planInstall(
       ...args: IpcInvokeMap["remote-hosts:plan-install"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:plan-install"]["result"]>;

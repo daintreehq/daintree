@@ -7,6 +7,7 @@ import {
 import { getDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { setMcpDriveTargetResolver } from "../../services/mcp-server/driveTarget.js";
 import type { AttachedClientInfo } from "../../../shared/types/ipc/hostMode.js";
+import { attachHostFiles, installHostFileService } from "../files/hostInstall.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
 import { admitHybridHostLegs } from "../hybrid/index.js";
 import { Lane } from "../link/frames.js";
@@ -62,6 +63,7 @@ export function hostLocation(): HostSocketLocation {
 function attachHostStreams(session: LinkSession, endpoint: RemoteViewEndpoint): void {
   attachTerminalBridge(session, endpoint);
   attachWorktreePortBridge(session, endpoint);
+  attachHostFiles(session, endpoint);
 }
 
 function replaySnapshots(endpoint: RemoteViewEndpoint): void {
@@ -138,6 +140,10 @@ async function buildHostListener(
   teardowns.push(() => disposeAllTerminalBridges());
 
   teardowns.push(admitHybridHostLegs());
+
+  // Previews, downloads and host pickers for remote views; revoked with the listener.
+  const files = installHostFileService();
+  teardowns.push(() => files.dispose());
 
   // MCP dispatch and the drive lease agree on who drives a project. Installing
   // the resolver is also what lets the host run actions with no frontend

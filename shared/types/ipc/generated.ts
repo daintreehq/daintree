@@ -1779,6 +1779,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../remoteHosts.js").HostListEntry[];
   };
+  "remote-hosts:list-host-projects": {
+    args: [payload: import("./remoteHosts.js").ListHostProjectsPayload];
+    result: import("./remoteHosts.js").HostProjectSummary[];
+  };
   "remote-hosts:plan-install": {
     args: [payload: import("./remoteHosts.js").PlanInstallPayload];
     result: import("./remoteHosts.js").HostInstallPlan;
