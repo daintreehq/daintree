@@ -1,6 +1,15 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 import type { AgentCliDetail } from "@shared/types";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
+
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platform")>()),
+  isMac: () => true,
+  isWindows: () => false,
+  isLinux: () => false,
+}));
 
 function detail(overrides: Partial<AgentCliDetail>): AgentCliDetail {
   return {
@@ -86,5 +95,55 @@ describe("resolveAgentLaunchBaseCommand", () => {
     expect(
       resolveAgentLaunchBaseCommand(String.raw`C:\plugins\acme\bin\agent.cmd`, undefined, "windows")
     ).toBe(String.raw`& 'C:\plugins\acme\bin\agent.cmd'`);
+  });
+});
+
+describe("a leading ~ launching on a Linux host from a macOS client", () => {
+  afterEach(() => {
+    _resetHostPlatformForTests();
+    delete window.__DAINTREE_HOST_ID__;
+  });
+
+  function remoteLinuxHost(homeDir: string | null) {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    setHostPlatformInfo({ platform: "linux", homeDir, tmpDir: "/tmp" });
+  }
+
+  it("expands the tilde with the host's home before quoting", () => {
+    remoteLinuxHost("/home/greg");
+    expect(resolveAgentLaunchBaseCommand("claude", detail({ resolvedPath: "~/bin/claude" }))).toBe(
+      "/home/greg/bin/claude"
+    );
+  });
+
+  it("quotes the expanded path when it holds spaces or apostrophes", () => {
+    remoteLinuxHost("/home/o'neil");
+    expect(
+      resolveAgentLaunchBaseCommand("claude", detail({ resolvedPath: "~/my tools/claude" }))
+    ).toBe(String.raw`'/home/o'\''neil/my tools/claude'`);
+  });
+
+  it("leaves the tilde to the host's shell when its home isn't known yet", () => {
+    remoteLinuxHost(null);
+    expect(
+      resolveAgentLaunchBaseCommand("claude", detail({ resolvedPath: "~/my tools/claude" }))
+    ).toBe(`~/'my tools/claude'`);
+  });
+
+  it("never expands another user's home or a tilde mid-path", () => {
+    remoteLinuxHost("/home/greg");
+    expect(resolveAgentLaunchBaseCommand("claude", detail({ resolvedPath: "~bob/claude" }))).toBe(
+      "'~bob/claude'"
+    );
+    expect(resolveAgentLaunchBaseCommand("claude", detail({ resolvedPath: "/opt/~/claude" }))).toBe(
+      "'/opt/~/claude'"
+    );
+  });
+
+  it("builds a local window's command exactly as before", () => {
+    setHostPlatformInfo({ platform: "darwin", homeDir: "/Users/greg", tmpDir: "/tmp" });
+    expect(resolveAgentLaunchBaseCommand("claude", detail({ resolvedPath: "~/bin/claude" }))).toBe(
+      "'~/bin/claude'"
+    );
   });
 });

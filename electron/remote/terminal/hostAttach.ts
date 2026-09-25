@@ -84,9 +84,10 @@ export function attachTerminalBridge(
       // Main's spawn records are written before any output exists and dropped
       // when the terminal goes, so they decide what this endpoint may touch.
       ownerOf: (id) => getPtyClient()?.getTerminalProjectId(id) ?? null,
-      mayResize: () =>
-        endpoint.projectId !== null &&
-        getDriveLeaseService().isDriving(endpoint.projectId, endpoint),
+      driveLease: () =>
+        endpoint.projectId === null
+          ? false
+          : getDriveLeaseService().drivingLeaseId(endpoint.projectId, endpoint),
       ...overrides,
     });
     const created = bridge;

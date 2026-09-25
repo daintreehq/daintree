@@ -4,6 +4,11 @@ vi.mock("electron", () => ({
   app: { getVersion: () => "1.2.3" },
 }));
 
+const storeValues = vi.hoisted(() => new Map<string, unknown>());
+vi.mock("../../../store.js", () => ({
+  store: { get: (key: string) => storeValues.get(key) },
+}));
+
 const { remoteHostsNamespace } = await import("../remoteHosts.js");
 const { registerRemoteService, _resetRemoteServicesForTest } =
   await import("../../../remote/runtime.js");
@@ -15,6 +20,7 @@ const ctx = { event: null, webContentsId: 5, senderWindow: null, projectId: null
 
 afterEach(() => {
   _resetRemoteServicesForTest();
+  storeValues.clear();
 });
 
 describe("remoteHosts handlers", () => {
@@ -59,6 +65,27 @@ describe("remoteHosts handlers", () => {
     expect(client.add).toHaveBeenCalledWith({ name: "box", sshTarget: "box.example" });
     expect(client.connect).toHaveBeenCalledWith({ hostId: "box" });
     expect(client.switchWindowHost).toHaveBeenCalledWith(ctx, { hostId: "box", newWindow: true });
+  });
+
+  it("reports not in use for a user who never set up a host", async () => {
+    expect(ops.isInUse!.handler()).toBe(false);
+    storeValues.set("remoteHosts", { hosts: [] });
+    storeValues.set("hostMode", { enabled: false, startAtLogin: false });
+    expect(ops.isInUse!.handler()).toBe(false);
+  });
+
+  it("reports in use once a host is configured", async () => {
+    storeValues.set("remoteHosts", { hosts: [{ id: "box", name: "box", sshTarget: "box" }] });
+    expect(ops.isInUse!.handler()).toBe(true);
+  });
+
+  it("reports in use while Host mode is enabled or running", async () => {
+    storeValues.set("hostMode", { enabled: true, startAtLogin: false });
+    expect(ops.isInUse!.handler()).toBe(true);
+    storeValues.clear();
+    // A `--host-mode` launch runs the server without the setting.
+    registerRemoteService("hostServer", {} as never);
+    expect(ops.isInUse!.handler()).toBe(true);
   });
 
   it("leaves discovery and probing to a later change", async () => {

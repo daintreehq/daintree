@@ -52,6 +52,7 @@ function makeDeps(overrides: Partial<ViewlessDeps> = {}) {
   });
   const deps: ViewlessDeps = {
     getProject: (id) => (id === PROJECT.id ? PROJECT : null),
+    getLaunchEnvLayers: async () => ({ global: {}, project: {} }),
     getProjectState: store.getProjectState,
     stateWriter: store,
     getPtyReader: () => null,
@@ -104,6 +105,8 @@ describe("viewless actions", () => {
           rows: 24,
         }),
       ]);
+      // No configured variables: the spawn keeps the process environment.
+      expect(invoke.mock.calls[0][2][0]).not.toHaveProperty("env");
       // What an attaching frontend reads back.
       const hydrated = await deps.getProjectState(PROJECT.id);
       expect(hydrated?.terminals).toEqual([
@@ -112,9 +115,55 @@ describe("viewless actions", () => {
           kind: "terminal",
           location: "grid",
           cwd: "/repo",
+          spawnedBy: "mcp",
         }),
       ]);
       expect(store.read()?.projectId).toBe(PROJECT.id);
+    });
+
+    it("launches with the global and project environment, as a window's launch does", async () => {
+      const { deps, invoke } = makeDeps({
+        getLaunchEnvLayers: async () => ({
+          global: { PATH_EXTRA: "/g", SHARED: "global" },
+          project: { SHARED: "project" },
+        }),
+      });
+
+      await executeViewlessAction(request("terminal.new", {}), deps);
+
+      expect(invoke.mock.calls[0][2][0]).toMatchObject({
+        env: { PATH_EXTRA: "/g", SHARED: "project" },
+      });
+    });
+
+    it("still launches when the environment cannot be read", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { deps, invoke } = makeDeps({
+        getLaunchEnvLayers: () => Promise.reject(new Error("settings unreadable")),
+      });
+
+      const result = await executeViewlessAction(request("terminal.new", {}), deps);
+
+      expect(result?.ok).toBe(true);
+      expect(invoke.mock.calls[0][2][0]).not.toHaveProperty("env");
+    });
+
+    it("stamps provenance from the dispatching session, never the caller's claim", async () => {
+      const { deps, store } = makeDeps();
+
+      await executeViewlessAction(
+        {
+          ...request("terminal.new", { spawnedBy: "assistant" }),
+          sessionOrigin: "external" as const,
+        },
+        deps
+      );
+      await executeViewlessAction(
+        { ...request("terminal.new", {}), sessionOrigin: "help" as const },
+        deps
+      );
+
+      expect(store.read()?.terminals.map((t) => t.spawnedBy)).toEqual(["mcp", "assistant"]);
     });
 
     it("opens in the pane's own worktree, then the project's active one", async () => {

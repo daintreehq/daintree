@@ -22,6 +22,7 @@ import type { HostRegistry } from "./HostRegistry.js";
 import type { RemoteHostManager } from "./RemoteHostManager.js";
 import type { SenderLookup } from "./RemoteRouter.js";
 import type { WindowHostBinding } from "./WindowHostBinding.js";
+import { DetachedViewRegistry } from "./reconnect/DetachedViewRegistry.js";
 
 /** What the client needs from the window layer, kept narrow so it can be faked in tests. */
 export interface WindowControl {
@@ -82,15 +83,31 @@ export class RemoteHostsClient {
   private routerInstalled = false;
   private readonly watchedWindows = new Set<number>();
   private readonly unsubscribe: Array<() => void> = [];
+  private readonly detached: DetachedViewRegistry;
 
   constructor(private readonly options: RemoteHostsClientOptions) {
+    this.detached = new DetachedViewRegistry({
+      isBoundTo: (webContentsId, hostId) => this.viewHost(webContentsId) === hostId,
+      whenReady: async (hostId) => {
+        const connection = this.options.manager.get(hostId);
+        if (!connection) return false;
+        const readiness = await connection.whenReady(
+          this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS
+        );
+        return readiness === "ready";
+      },
+      // Every view of the host hears it; the renderer ignores other hosts' resyncs.
+      resync: (hostId) =>
+        this.options.emit({ type: "resync-required", hostId, reason: "reconnected" }),
+    });
     this.unsubscribe.push(
       options.registry.onChange(() =>
         this.options.emit({ type: "hosts-changed", hosts: this.list() })
       ),
-      options.manager.onStateChange((hostId, connection) =>
-        this.options.emit({ type: "connection-changed", hostId, connection })
-      )
+      options.manager.onStateChange((hostId, connection) => {
+        this.options.emit({ type: "connection-changed", hostId, connection });
+        this.detached.onConnectionState(hostId, connection);
+      })
     );
   }
 
@@ -111,6 +128,7 @@ export class RemoteHostsClient {
     const after = this.options.registry.update(payload);
     if (after.sshTarget !== before.sshTarget && this.options.manager.get(after.id)) {
       // The link was built for the old target; dial the new one.
+      this.rememberBoundViews(after.id);
       await this.options.manager.disconnect(after.id);
       this.options.manager.connect(after.id);
     }
@@ -121,6 +139,7 @@ export class RemoteHostsClient {
     const hostId = hostIdOf(payload);
     this.options.registry.require(hostId);
     await this.options.manager.disconnect(hostId);
+    this.detached.forget(hostId);
     for (const windowId of this.options.bindings.windowsOn(hostId)) {
       this.options.bindings.set(windowId, LOCAL_HOST_ID);
     }
@@ -134,7 +153,9 @@ export class RemoteHostsClient {
   }
 
   async disconnect(payload: { hostId: string }): Promise<void> {
-    await this.options.manager.disconnect(hostIdOf(payload));
+    const hostId = hostIdOf(payload);
+    this.rememberBoundViews(hostId);
+    await this.options.manager.disconnect(hostId);
   }
 
   getWindowHost(ctx: IpcContext): WindowHostInfo {
@@ -236,6 +257,19 @@ export class RemoteHostsClient {
     if (this.routerInstalled) this.options.installRouter(null);
     this.routerInstalled = false;
     await this.options.manager.disposeAll();
+  }
+
+  /** Kept across the connection's discard, so a later connection can resync them. */
+  private rememberBoundViews(hostId: HostId): void {
+    const views = this.options.manager.get(hostId)?.boundViews() ?? [];
+    this.detached.remember(hostId, views);
+  }
+
+  private viewHost(webContentsId: number): HostId {
+    const key = this.options.senders.projectKeyFor(webContentsId);
+    if (key !== null) return parseHostScopedKey(key).hostId;
+    const windowId = this.options.senders.windowIdFor(webContentsId);
+    return windowId === null ? LOCAL_HOST_ID : this.options.bindings.get(windowId);
   }
 
   private ensureRouter(): void {

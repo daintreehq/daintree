@@ -2,10 +2,13 @@ import type { IpcDispatcher, RemoteRouter } from "../../ipc/endpoint.js";
 import type { IpcContext } from "../../ipc/types.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import { installNotificationHostRelay, installRemoteNotificationSink } from "./notifications.js";
+import { installRemoteProjectResidency } from "./residency.js";
 import { HYBRID_HOST_LEGS, HYBRID_SPLITS } from "./splits.js";
+import { installEndpointVisibility } from "./visibility.js";
 
 export { acceptHostPush, acceptLocalPushForRemoteView, eventsPushSource } from "./eventsPush.js";
 export { NOTIFICATION_SHOW_METHOD, showHostNotification } from "./notifications.js";
+export { ViewVisibilityReporter } from "./visibility.js";
 
 type Dispatcher = Pick<IpcDispatcher<IpcContext>, "registerHybridSplit" | "allowHybridOverLink">;
 
@@ -35,12 +38,15 @@ export function installHybridSplits(
 }
 
 /**
- * Host side: admit the host legs of those splits for link calls, and route
- * notifications decided for a remote view to its Shell.
+ * Host side: admit the host legs of those splits for link calls, route
+ * notifications decided for a remote view to its Shell, keep each remote
+ * view's project resident, and track which remote views are on screen.
  */
 export function admitHybridHostLegs(options: { dispatcher?: Dispatcher } = {}): () => void {
   const dispatcher = options.dispatcher ?? getIpcDispatcher();
   const disposers = HYBRID_HOST_LEGS.map((channel) => dispatcher.allowHybridOverLink(channel));
   disposers.push(installRemoteNotificationSink());
+  disposers.push(installRemoteProjectResidency());
+  disposers.push(installEndpointVisibility());
   return disposeAll(disposers);
 }

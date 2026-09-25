@@ -60,10 +60,13 @@ export interface TerminalStreamBridgeOptions {
    */
   ownerOf(terminalId: string): string | null;
   /**
-   * Whether this endpoint may resize its project's terminals right now (its
-   * client holds the drive lease). Absent means always.
+   * Whether this endpoint drives its project right now, and under which lease:
+   * `false` when someone else does, the lease id when this endpoint holds it,
+   * `null` when nobody does. Input and resizes are gated on it and stamped
+   * with the lease id, so the pty-host can refuse what a takeover made stale
+   * while it waited in the port. Absent means always, unstamped.
    */
-  mayResize?(): boolean;
+  driveLease?(): number | null | false;
   budget?: RingBudget;
   ringBytesPerTerminal?: number;
   /**
@@ -734,9 +737,11 @@ export class TerminalStreamBridge {
       this.ackPty(message.id, bytes);
       return;
     }
-    // Only the driver sizes the PTY; anyone else's grid would fight it.
-    if (message.type === "resize" && this.opts.mayResize && !this.opts.mayResize()) return;
-    safePost(this.port, message);
+    // Only the driver types into or sizes the PTY; anyone else's input would
+    // interleave with it and anyone else's grid would fight it.
+    const leaseId = this.opts.driveLease ? this.opts.driveLease() : null;
+    if (leaseId === false) return;
+    safePost(this.port, leaseId === null ? message : { ...message, leaseId });
   }
 
   private settleOutstanding(stream: StreamState): void {

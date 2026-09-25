@@ -1123,7 +1123,7 @@ describe("NotificationService remote owners", () => {
     notificationService.dispose();
   });
 
-  it("hands a remote view's notification to its Shell instead of this screen", () => {
+  it("hands a remote view's notification to its Shell, as a category, instead of this screen", () => {
     const shown = electronMock.notificationInstances.length;
     const sink = vi.fn();
     notificationService.setRemoteNotificationSink(sink);
@@ -1131,16 +1131,25 @@ describe("NotificationService remote owners", () => {
 
     notificationService.showWatchNotification("Agent waiting", "b", context, "nav:channel", {
       ownerWebContentsId: -4,
+      silent: true,
+      category: "waiting",
     });
 
     expect(sink).toHaveBeenCalledWith({
       ownerHandle: -4,
       title: "Agent waiting",
       body: "b",
-      silent: true,
+      category: "waiting",
       navigation: { channel: "nav:channel", context },
     });
     expect(electronMock.notificationInstances.length).toBe(shown);
+  });
+
+  it("sends an uncategorised notification to a Shell as info, which carries no sound", () => {
+    const sink = vi.fn();
+    notificationService.setRemoteNotificationSink(sink);
+    notificationService.showNativeNotification("t", "b", { ownerWebContentsId: -4 });
+    expect(sink).toHaveBeenCalledWith(expect.objectContaining({ category: "info" }));
   });
 
   it("never shows a remote owner's notification here, even with no sink", () => {

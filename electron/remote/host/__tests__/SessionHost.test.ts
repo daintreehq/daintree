@@ -218,6 +218,30 @@ describe("SessionHost", () => {
     expect(registry.getRemote()).toHaveLength(0);
   });
 
+  it("reports its endpoints' link dropping and resuming, before the session expires", () => {
+    const changes: Array<[string[], boolean]> = [];
+    host.onTransportChange((endpointIds, attached) => changes.push([endpointIds, attached]));
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    const ids = registry.getRemote().map((e) => e.endpointId);
+    expect(changes).toEqual([]);
+
+    link.drop();
+    expect(changes).toEqual([[ids, false]]);
+
+    server.attach("s1", fakeLink(), true);
+    expect(changes).toEqual([
+      [ids, false],
+      [ids, true],
+    ]);
+
+    // A fresh session announces nothing: its endpoints start attached.
+    server.attach("s2", fakeLink());
+    expect(changes).toHaveLength(2);
+  });
+
   it("resyncs a Shell whose event lane stays over high water past the grace", () => {
     const link = fakeLink();
     server.attach("s1", link);

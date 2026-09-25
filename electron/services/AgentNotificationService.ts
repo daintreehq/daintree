@@ -1,9 +1,12 @@
 import { events } from "./events.js";
 import {
   notificationService,
+  type NotificationCategory,
   type NotificationOwnerId,
   type WatchNotificationContext,
 } from "./NotificationService.js";
+import { isRemoteEndpointHandle } from "../ipc/endpoint.js";
+import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import { store, type StoreSchema } from "../store.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import { projectStore } from "./ProjectStore.js";
@@ -19,6 +22,13 @@ import {
   describeWaiting,
   describeWaitingMany,
 } from "../../shared/utils/waitingReasonDisplay.js";
+
+/** A view on a remote Shell owns it: that Shell presents it, sound included. */
+function isRemoteNotificationOwner(
+  ownerId: NotificationOwnerId | undefined
+): ownerId is NotificationOwnerId {
+  return ownerId !== undefined && isRemoteEndpointHandle(ownerId);
+}
 
 const COMPLETION_DEBOUNCE_MS = 2000;
 const NOTIFICATION_STAGGER_MS = 500;
@@ -55,6 +65,7 @@ interface PendingNotification {
   triggerSound: boolean;
   soundFile?: string;
   ownerWebContentsId?: NotificationOwnerId;
+  category: NotificationCategory;
 }
 
 interface BurstWaitingEntry {
@@ -106,8 +117,14 @@ class AgentNotificationService {
   private agentSpawnTimestamps = new Map<string, number>();
   /** Timestamp when the service was initialized — sounds are suppressed during boot */
   private initializedAt = 0;
-  /** Session-mute expiry mirrored from the renderer's quick-action buttons. */
+  /** Session-mute expiry mirrored from this machine's renderers' quick-action buttons. */
   private sessionMuteUntil = 0;
+  /**
+   * Session mutes of remote Shells, by client. Muting is about the person at
+   * one screen, so a Shell's mute holds back only the notifications this host
+   * sends that Shell, never this machine's own or another Shell's.
+   */
+  private remoteSessionMuteUntil = new Map<string, number>();
 
   syncWatchedPanels(ownerWebContentsId: NotificationOwnerId, panelIds: string[]): void {
     const previous = this.watchedPanelsByOwner.get(ownerWebContentsId);
@@ -215,12 +232,36 @@ class AgentNotificationService {
     this.lastOwnerByPanel.delete(terminalId);
   }
 
-  setSessionMuteUntil(timestampMs: number): void {
-    this.sessionMuteUntil = Number.isFinite(timestampMs) ? timestampMs : 0;
+  /** With a `clientId`, the mute of that remote Shell only. */
+  setSessionMuteUntil(timestampMs: number, clientId?: string): void {
+    const until = Number.isFinite(timestampMs) ? timestampMs : 0;
+    if (clientId === undefined) {
+      this.sessionMuteUntil = until;
+      return;
+    }
+    const now = Date.now();
+    for (const [id, expiry] of this.remoteSessionMuteUntil) {
+      if (expiry <= now) this.remoteSessionMuteUntil.delete(id);
+    }
+    if (until > now) this.remoteSessionMuteUntil.set(clientId, until);
+    else this.remoteSessionMuteUntil.delete(clientId);
   }
 
-  private isSessionMuted(): boolean {
+  /** This machine's own mute: its screen, its speakers. */
+  isSessionMuted(): boolean {
     return Date.now() < this.sessionMuteUntil;
+  }
+
+  /**
+   * The mute that governs a notification for `ownerId`: the owning Shell's for
+   * a remote view, this machine's otherwise.
+   */
+  private isSessionMutedFor(ownerId: NotificationOwnerId | undefined): boolean {
+    if (!isRemoteNotificationOwner(ownerId)) return this.isSessionMuted();
+    if (this.remoteSessionMuteUntil.size === 0) return false;
+    const clientId = getEndpointRegistry().getByHandle(ownerId)?.clientId;
+    if (clientId === undefined) return false;
+    return Date.now() < (this.remoteSessionMuteUntil.get(clientId) ?? 0);
   }
 
   initialize(): void {
@@ -618,6 +659,7 @@ class AgentNotificationService {
         agentId,
         triggerSound: settings.soundEnabled,
         ownerWebContentsId,
+        category: "completed",
       });
       if (!this.completionBurstSoundFile) {
         this.completionBurstSoundFile = settings.completedSoundFile;
@@ -674,9 +716,11 @@ class AgentNotificationService {
     const closeWithPanels = dedupedItems.flatMap((item) =>
       item.terminalId ? [item.terminalId] : []
     );
-    this.playNotificationSound(first.soundEnabled, first.soundFile);
-
     const ownerWebContentsId = this.emitOwner(first.terminalId, first.ownerWebContentsId);
+    // A remote view's Shell plays its own sound for the category.
+    if (!isRemoteNotificationOwner(ownerWebContentsId)) {
+      this.playNotificationSound(first.soundEnabled, first.soundFile);
+    }
 
     if (dedupedItems.length === 1) {
       const label = this.getLabel(first.agentId, first.worktreeId);
@@ -686,7 +730,7 @@ class AgentNotificationService {
         describeWaiting(label, first.waitingReason),
         context,
         CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-        { silent: true, ownerWebContentsId, closeWithPanels }
+        { silent: true, ownerWebContentsId, closeWithPanels, category: "waiting" }
       );
     } else {
       const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
@@ -703,7 +747,7 @@ class AgentNotificationService {
         describeWaitingMany(dedupedItems.length, uniformReason ?? undefined),
         context,
         CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-        { silent: true, ownerWebContentsId, closeWithPanels }
+        { silent: true, ownerWebContentsId, closeWithPanels, category: "waiting" }
       );
     }
   }
@@ -728,6 +772,7 @@ class AgentNotificationService {
           agentId: first.agentId,
           triggerSound: first.triggerSound,
           ownerWebContentsId: first.ownerWebContentsId,
+          category: first.category,
         },
         true,
         soundFile
@@ -769,7 +814,13 @@ class AgentNotificationService {
         (id) => this.getTerminalSnapshotFrom(currentTerminals, id)?.location === "dock"
       );
 
-      this.playNotificationSound(currentSettings.soundEnabled, currentSettings.escalationSoundFile);
+      const ownerWebContentsId = this.resolveOwner(terminalId);
+      if (!isRemoteNotificationOwner(ownerWebContentsId)) {
+        this.playNotificationSound(
+          currentSettings.soundEnabled,
+          currentSettings.escalationSoundFile
+        );
+      }
 
       // Escalation is the most urgent notification and was the only one with no
       // click handler at all, so it could never navigate anywhere. Attach panel
@@ -786,7 +837,6 @@ class AgentNotificationService {
         channel: CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
         context: this.makeContext(terminalId, agentId, currentTerminal.worktreeId ?? worktreeId),
       };
-      const ownerWebContentsId = this.resolveOwner(terminalId);
 
       if (waitingDockTerminalIds.length > 1) {
         // Cancel sibling escalation timers so only one grouped notification fires
@@ -798,7 +848,12 @@ class AgentNotificationService {
         notificationService.showNativeNotification(
           "Agents still waiting",
           `${waitingDockTerminalIds.length} agents have been waiting for input`,
-          { ownerWebContentsId, navigation, closeWithPanels: waitingDockTerminalIds }
+          {
+            ownerWebContentsId,
+            navigation,
+            closeWithPanels: waitingDockTerminalIds,
+            category: "escalation",
+          }
         );
       } else {
         const label = currentTerminal.title || this.getLabel(agentId, worktreeId);
@@ -810,7 +865,7 @@ class AgentNotificationService {
         notificationService.showNativeNotification(
           "Agent still waiting",
           reason ? describeWaiting(label, reason) : `${label} has been waiting for input`,
-          { ownerWebContentsId, navigation, closeWithPanels: [terminalId] }
+          { ownerWebContentsId, navigation, closeWithPanels: [terminalId], category: "escalation" }
         );
       }
     }, settings.waitingEscalationDelayMs);
@@ -892,7 +947,10 @@ class AgentNotificationService {
       }
       // Skip this tick's sound but keep the loop alive so pulses resume
       // automatically once the suppression lifts.
-      if (this.isInformationalAudioSuppressed(currentSettings)) {
+      if (
+        this.isInformationalAudioSuppressed(currentSettings) ||
+        isRemoteNotificationOwner(this.resolveOwner(terminalId))
+      ) {
         const jitter =
           WORKING_PULSE_MIN_INTERVAL_MS +
           Math.random() * (WORKING_PULSE_MAX_INTERVAL_MS - WORKING_PULSE_MIN_INTERVAL_MS);
@@ -971,10 +1029,12 @@ class AgentNotificationService {
       return;
     }
 
+    const ownerWebContentsId = this.emitOwner(item.terminalId, item.ownerWebContentsId);
+
     // Quiet hours schedule and renderer-driven session mute both suppress
     // completion/pulse alerts but not waiting alerts — waiting agents block
-    // user work and should page through.
-    if (isScheduledQuietNow(settings) || this.isSessionMuted()) {
+    // user work and should page through. The mute is the owning screen's.
+    if (isScheduledQuietNow(settings) || this.isSessionMutedFor(ownerWebContentsId)) {
       if (this.notificationQueue.length > 0) {
         this.staggerTimer = setTimeout(() => {
           this.staggerTimer = null;
@@ -986,7 +1046,7 @@ class AgentNotificationService {
       return;
     }
 
-    if (item.soundFile) {
+    if (item.soundFile && !isRemoteNotificationOwner(ownerWebContentsId)) {
       this.playNotificationSound(item.triggerSound, item.soundFile);
     }
 
@@ -996,7 +1056,7 @@ class AgentNotificationService {
       item.body,
       context,
       CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-      { silent: true, ownerWebContentsId: this.emitOwner(item.terminalId, item.ownerWebContentsId) }
+      { silent: true, ownerWebContentsId, category: item.category }
     );
 
     if (this.notificationQueue.length > 0) {
@@ -1104,6 +1164,7 @@ class AgentNotificationService {
     this.peakConcurrentWorking = 0;
     this.activeTerminalIds.clear();
     this.sessionMuteUntil = 0;
+    this.remoteSessionMuteUntil.clear();
 
     soundService.cancel();
     soundService.cancelPulse();

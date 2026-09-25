@@ -1,12 +1,13 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { isPtyPanel } from "@shared/types/panel";
 import { LOCAL_HOST_ID, type HostId, type OperationId } from "@shared/types/remoteHosts";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import type { DriveLeaseEvent, DriveLeaseView } from "@shared/types/ipc/driveLease";
 import { isRemoteHostsSupported } from "@/lib/remoteHosts";
 import { useHostConnectionStore, isHostLinkUp } from "@/store/hostConnectionStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { resyncHostTerminals } from "@/store/hostTerminalResync";
 import {
+  getLeaseInputBlock,
   getTerminalInputBlock,
   setHostInputBlock,
   setLeaseInputBlock,
@@ -52,6 +53,12 @@ function publishHostInputBlock(): void {
 
 let resyncRunning: Promise<void> | null = null;
 let resyncAgain = false;
+/**
+ * Bumped by every resync request and by teardown. A pass applies what it read
+ * only while this still matches, so an answer overtaken by a newer request
+ * (or a closed sync) is dropped and the follow-up pass applies a fresh one.
+ */
+let resyncGeneration = 0;
 
 /**
  * Refetch what this view shows from its host after the host dropped events on
@@ -60,6 +67,7 @@ let resyncAgain = false;
  * follow-up pass.
  */
 export function resyncFromHost(): Promise<void> {
+  resyncGeneration += 1;
   if (resyncRunning) {
     resyncAgain = true;
     return resyncRunning;
@@ -77,13 +85,18 @@ export function resyncFromHost(): Promise<void> {
 
 async function runResyncPass(): Promise<void> {
   const projectId = getViewWorkspaceId();
+  const generation = resyncGeneration;
+  const isCurrent = () => generation === resyncGeneration && getViewWorkspaceId() === projectId;
   const steps: Array<[string, () => Promise<unknown>]> = [
     ["worktrees", () => window.electron.worktree.refresh()],
     [
       "worktree topology",
       () => window.electron.worktreePort.request("reconcile-topology", { force: true }),
     ],
-    ["agent states", () => (projectId ? resyncAgentStates(projectId) : Promise.resolve())],
+    [
+      "terminals",
+      () => (projectId ? resyncHostTerminals(projectId, { isCurrent }) : Promise.resolve()),
+    ],
     [
       "plugins",
       async () => {
@@ -101,32 +114,6 @@ async function runResyncPass(): Promise<void> {
   });
 }
 
-/** Adopt the host's agent states where they are newer than what this view last applied. */
-async function resyncAgentStates(projectId: string): Promise<void> {
-  const infos = await window.electron.terminal.getForProject(projectId);
-  const [{ usePanelStore }, { terminalInstanceService }] = await Promise.all([
-    import("@/store/panelStore"),
-    import("@/services/TerminalInstanceService"),
-  ]);
-  const store = usePanelStore.getState();
-  for (const info of infos) {
-    const panel = store.panelsById[info.id];
-    if (!panel || !isPtyPanel(panel) || panel.isRestarting) continue;
-    if (!info.agentState || typeof info.lastStateChange !== "number") continue;
-    if (panel.lastStateChange && info.lastStateChange <= panel.lastStateChange) continue;
-    terminalInstanceService.setAgentState(info.id, info.agentState);
-    store.updateAgentState(
-      info.id,
-      info.agentState,
-      undefined,
-      info.lastStateChange,
-      undefined,
-      undefined,
-      info.waitingReason
-    );
-  }
-}
-
 /** Bumped by every lease event and by teardown, so a slower lookup never overrides either. */
 let leaseGeneration = 0;
 
@@ -135,20 +122,54 @@ async function refreshLease(): Promise<void> {
   const lease = window.electron?.driveLease;
   if (!projectId || !lease) return;
   const generation = leaseGeneration;
-  let state: DriveLeaseView | null;
+  let state: DriveLeaseView;
   try {
     state = await lease.get({ projectId });
   } catch {
-    // Unsupported (no lease service yet) or unanswerable right now: nothing
-    // says another frontend drives this project, so input stays with this one.
-    state = null;
+    // An unanswered lookup says nothing new: whatever block (or unknown
+    // ownership) this view already has stays until the host does answer.
+    return;
   }
   if (generation === leaseGeneration) applyLease(state);
 }
 
-function applyLease(lease: DriveLeaseView | null): void {
+function applyLease(lease: DriveLeaseView): void {
   const driver = drivenElsewhereBy(lease);
-  setLeaseInputBlock(driver === null ? null : { kind: "driven-elsewhere", driverName: driver });
+  setLeaseInputBlock(
+    driver === null
+      ? null
+      : {
+          kind: "driven-elsewhere",
+          driverName: driver,
+          projectId: lease.projectId,
+          hostLocal: lease.viewerIsHostLocal,
+        }
+  );
+}
+
+/**
+ * A view on this machine can only be driven from elsewhere once a remote
+ * client is attached here, which takes Host mode, or once this user runs
+ * remote hosts at all. Neither is true for someone who never set up a host,
+ * so they make no lease call. Where the namespace is absent (Windows) or the
+ * answer fails, it counts as unused.
+ */
+async function remoteDrivingPossible(): Promise<boolean> {
+  try {
+    return (await window.electron?.remoteHosts?.isInUse?.()) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ask the host to hand this view's project to this view. The answer is
+ * applied at once; the previous driver learns of it from its own lease event.
+ */
+export async function takeOverDrive(projectId: string): Promise<void> {
+  const view = await window.electron.driveLease.takeOver({ projectId });
+  leaseGeneration += 1;
+  applyLease(view);
 }
 
 let syncRefs = 0;
@@ -190,15 +211,25 @@ function beginSync(): () => void {
         }
       })
     );
-    // A local view asks nothing up front: only a remote client taking over
-    // can drive it from elsewhere, and that arrives as an event.
-    if (hostId !== null) void refreshLease();
+    if (hostId !== null) {
+      // Until the host says who drives, a remote view could be typing over
+      // someone else, so it starts read-only.
+      setLeaseInputBlock({ kind: "lease-unknown", hostName: hostLabel() });
+      void refreshLease();
+    } else {
+      void remoteDrivingPossible().then((possible) => {
+        if (possible && !disposed) void refreshLease();
+      });
+    }
   }
 
   const remoteHosts = window.electron?.remoteHosts;
   if (hostId !== null && remoteHosts) {
     const store = useHostConnectionStore.getState();
     store.bindHost(hostId, null);
+    // Set by an explicit disconnect and kept through the connecting states
+    // that follow it, so the session that eventually comes up still resyncs.
+    let resyncPending = false;
     disposers.push(
       useHostConnectionStore.subscribe((next, prev) => {
         if (
@@ -207,15 +238,20 @@ function beginSync(): () => void {
           next.hostId !== prev.hostId
         ) {
           publishHostInputBlock();
+          if (getLeaseInputBlock()?.kind === "lease-unknown") {
+            setLeaseInputBlock({ kind: "lease-unknown", hostName: hostLabel() });
+          }
         }
-        // After an explicit disconnect the Shell drops this view's endpoint, so
-        // the next session has nothing to reopen and main has no view to tell.
-        if (
-          prev.connection?.status === "disconnected" &&
-          prev.everConnected &&
-          next.connection?.status === "connected"
-        ) {
-          void resyncFromHost();
+        if (next.connection?.status === "disconnected" && next.everConnected) {
+          resyncPending = true;
+        }
+        if (next.connection?.status === "connected" && prev.connection?.status !== "connected") {
+          if (resyncPending) {
+            resyncPending = false;
+            void resyncFromHost();
+          } else if (getLeaseInputBlock()?.kind === "lease-unknown") {
+            void refreshLease();
+          }
         }
       })
     );
@@ -257,6 +293,7 @@ function beginSync(): () => void {
   return () => {
     disposed = true;
     leaseGeneration += 1;
+    resyncGeneration += 1;
     for (const dispose of disposers.splice(0)) dispose();
     setHostInputBlock(null);
     setLeaseInputBlock(null);

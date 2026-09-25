@@ -2,7 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import type { DriveLeaseEvent } from "@shared/types/ipc/driveLease";
-import type { DriveLeaseHolder, OperationOutcome } from "@shared/types/remoteHosts";
+import type {
+  DriveLeaseHolder,
+  HostConnectionState,
+  OperationOutcome,
+} from "@shared/types/remoteHosts";
 
 const { pluginRefresh, updateAgentState, setAgentState, panels } = vi.hoisted(() => ({
   pluginRefresh: vi.fn(),
@@ -34,6 +38,7 @@ import {
   resyncFromHost,
   runHostOperation,
   startHostConnectionSync,
+  takeOverDrive,
 } from "../useHostConnection";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import type { resolveUnknownOutcome } from "@/utils/resolveUnknownOutcome";
@@ -77,7 +82,9 @@ function leaseView(
   };
 }
 
-function installElectron() {
+function installElectron(
+  windowConnection: HostConnectionState = { status: "connected", rttMs: 5, handshake: HANDSHAKE }
+) {
   let hostListener: ((event: RemoteHostsEvent) => void) | null = null;
   let leaseListener: ((event: DriveLeaseEvent) => void) | null = null;
   const electron = {
@@ -85,7 +92,7 @@ function installElectron() {
       getWindowHost: vi.fn(async () => ({
         hostId: "studio-01",
         descriptor: { id: "studio-01", name: "studio-01" },
-        connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
+        connection: windowConnection,
         hostPlatform: "linux",
         hostHomeDir: null,
         hostTmpDir: null,
@@ -99,9 +106,8 @@ function installElectron() {
       }),
     },
     driveLease: {
-      get: vi.fn(async (): Promise<unknown> => {
-        throw new Error("[AppError|UNSUPPORTED] not yet");
-      }),
+      get: vi.fn(async (): Promise<unknown> => leaseView(null, true)),
+      takeOver: vi.fn(async (): Promise<unknown> => leaseView(null, true)),
       onEvent: vi.fn((callback: (event: DriveLeaseEvent) => void) => {
         leaseListener = callback;
         return () => {
@@ -160,8 +166,57 @@ describe("host connection sync", () => {
     expect(electron.remoteHosts.onEvent).not.toHaveBeenCalled();
     expect(electron.driveLease.get).not.toHaveBeenCalled();
     expect(useHostConnectionStore.getState().hostId).toBeNull();
-    // An unanswerable lease leaves input with this view.
     expect(getTerminalInputBlock()).toBeNull();
+    stop();
+  });
+
+  it("asks nothing about the lease for a local view when no host is set up", async () => {
+    const { electron } = installElectron();
+    Object.assign(electron, {
+      remoteHosts: { ...electron.remoteHosts, isInUse: vi.fn(async () => false) },
+    });
+    bindView(null);
+    const stop = startHostConnectionSync();
+    await flush();
+    expect(electron.driveLease.get).not.toHaveBeenCalled();
+    expect(getTerminalInputBlock()).toBeNull();
+    stop();
+  });
+
+  it("treats an unanswerable in-use check as unused", async () => {
+    const { electron } = installElectron();
+    Object.assign(electron, {
+      remoteHosts: {
+        ...electron.remoteHosts,
+        isInUse: vi.fn(async () => {
+          throw new Error("No handler registered");
+        }),
+      },
+    });
+    bindView(null);
+    const stop = startHostConnectionSync();
+    await flush();
+    expect(electron.driveLease.get).not.toHaveBeenCalled();
+    expect(getTerminalInputBlock()).toBeNull();
+    stop();
+  });
+
+  it("reads the lease a local view opens into once remote hosts are in use", async () => {
+    const { electron } = installElectron();
+    Object.assign(electron, {
+      remoteHosts: { ...electron.remoteHosts, isInUse: vi.fn(async () => true) },
+    });
+    electron.driveLease.get.mockResolvedValue(leaseView(holder(), false));
+    bindView(null);
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() =>
+      expect(getTerminalInputBlock()).toMatchObject({
+        kind: "driven-elsewhere",
+        driverName: "greg-mbp",
+        projectId: "proj-1",
+      })
+    );
+    expect(electron.driveLease.get).toHaveBeenCalledWith({ projectId: "proj-1" });
     stop();
   });
 
@@ -261,7 +316,12 @@ describe("host connection sync", () => {
     await flush();
 
     emitLease({ type: "changed", state: leaseView(holder(), false) });
-    expect(getTerminalInputBlock()).toEqual({ kind: "driven-elsewhere", driverName: "greg-mbp" });
+    expect(getTerminalInputBlock()).toEqual({
+      kind: "driven-elsewhere",
+      driverName: "greg-mbp",
+      projectId: "proj-1",
+      hostLocal: false,
+    });
 
     emitLease({ type: "changed", state: leaseView(null, true, "other") });
     expect(getTerminalInputBlock()).not.toBeNull();
@@ -274,6 +334,64 @@ describe("host connection sync", () => {
 });
 
 describe("lease and reconnect races", () => {
+  it("keeps a remote view read-only until the host says who drives", async () => {
+    const { electron, emitHost } = installElectron({ status: "connecting", attempt: 1 });
+    electron.driveLease.get.mockRejectedValueOnce(new Error("[AppError|HOST_DISCONNECTED] down"));
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
+    });
+    // The link is up but the first lookup never answered, so ownership is unknown.
+    expect(getTerminalInputBlock()).toEqual({ kind: "lease-unknown", hostName: "studio-01" });
+    await flush();
+    expect(electron.driveLease.get).toHaveBeenCalledTimes(2);
+    expect(getTerminalInputBlock()).toBeNull();
+    stop();
+  });
+
+  it("never clears an existing block when a lease refresh fails", async () => {
+    const { electron, emitLease } = installElectron();
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    emitLease({ type: "changed", state: leaseView(holder(), false) });
+    electron.driveLease.get.mockRejectedValue(new Error("[AppError|HOST_DISCONNECTED] down"));
+
+    await resyncFromHost();
+
+    expect(getTerminalInputBlock()?.kind).toBe("driven-elsewhere");
+    stop();
+  });
+
+  it("hands the project over between two clients, each seeing the other drive", async () => {
+    const { electron, emitLease } = installElectron();
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    const mine = holder({ clientId: "client-1", clientName: "studio-mbp", endpointId: "view-4" });
+
+    // This client (the one being driven over) takes the project.
+    emitLease({ type: "changed", state: leaseView(holder(), false) });
+    expect(getTerminalInputBlock()?.kind).toBe("driven-elsewhere");
+    electron.driveLease.takeOver.mockResolvedValue(leaseView(mine, true));
+    await takeOverDrive("proj-1");
+    expect(electron.driveLease.takeOver).toHaveBeenCalledWith({ projectId: "proj-1" });
+    expect(getTerminalInputBlock()).toBeNull();
+
+    // The former driver hears the same takeover as an event about someone else.
+    emitLease({ type: "changed", state: leaseView(mine, false) });
+    expect(getTerminalInputBlock()).toMatchObject({
+      kind: "driven-elsewhere",
+      driverName: "studio-mbp",
+      projectId: "proj-1",
+    });
+    stop();
+  });
+
   it("never lets a slower lease lookup override a newer event", async () => {
     const { electron, emitLease } = installElectron();
     bindView("studio-01");
@@ -303,6 +421,12 @@ describe("lease and reconnect races", () => {
       type: "connection-changed",
       hostId: "studio-01",
       connection: { status: "disconnected" },
+    });
+    // A real reconnect dials first; the pending resync must survive that.
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connecting", attempt: 1 },
     });
     expect(electron.worktree.refresh).not.toHaveBeenCalled();
     emitHost({

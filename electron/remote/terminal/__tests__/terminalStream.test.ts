@@ -169,20 +169,25 @@ describe("terminal stream over the link", () => {
     ]);
   });
 
-  it("drops resizes while this endpoint's client does not hold the drive lease", async () => {
-    let driving = false;
-    const h = await setup({ mayResize: () => driving });
+  it("drops input and resizes while this endpoint does not drive, and stamps its lease when it does", async () => {
+    // Asked as each message is applied, so answer per message, in order.
+    const answers: Array<number | null | false> = [false, false, 7, 7, null];
+    const h = await setup({ driveLease: () => answers.shift() ?? null });
     await h.connectLink();
 
     h.renderer().post({ type: "resize", id: "t1", cols: 90, rows: 20 });
     h.renderer().post({ type: "write", id: "t1", data: "a" });
-    await waitFor(() => h.pty().received.length === 1);
-    expect(h.pty().received).toEqual([{ type: "write", id: "t1", data: "a" }]);
-
-    driving = true;
+    // A stamp is the host's to make, never the client's.
+    h.renderer().post({ type: "write", id: "t1", data: "b", leaseId: 99 });
     h.renderer().post({ type: "resize", id: "t1", cols: 120, rows: 40 });
-    await waitFor(() => h.pty().received.length === 2);
-    expect(h.pty().received[1]).toEqual({ type: "resize", id: "t1", cols: 120, rows: 40 });
+    // Nobody holds the project: through, unstamped.
+    h.renderer().post({ type: "write", id: "t1", data: "c" });
+    await waitFor(() => h.pty().received.length === 3);
+    expect(h.pty().received).toEqual([
+      { type: "write", id: "t1", data: "b", leaseId: 7 },
+      { type: "resize", id: "t1", cols: 120, rows: 40, leaseId: 7 },
+      { type: "write", id: "t1", data: "c" },
+    ]);
   });
 
   it("relays status pulses and drops renderer messages a remote view may not send", async () => {

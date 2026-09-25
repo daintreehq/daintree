@@ -84,6 +84,13 @@ export type EndpointOpenedListener = (
   handle: EndpointSessionHandle
 ) => void;
 
+/**
+ * A Shell's link dropped (`attached` false) or resumed, for the registry ids of
+ * the endpoints it carries. The endpoints themselves live on through the
+ * session's resume window; this says whether anyone is behind them.
+ */
+export type TransportChangeListener = (endpointIds: string[], attached: boolean) => void;
+
 const DEFAULT_OVER_HIGH_WATER_GRACE_MS = 5_000;
 const DEFAULT_MAX_ENDPOINTS_PER_SESSION = 256;
 
@@ -122,6 +129,7 @@ function defaultHostInfo(): HostInfo {
 export class SessionHost {
   private readonly states = new Map<string, SessionState>();
   private readonly openedListeners = new Set<EndpointOpenedListener>();
+  private readonly transportListeners = new Set<TransportChangeListener>();
   private readonly unsubscribe: Array<() => void> = [];
   private readonly highWaterBytes: number;
   private readonly graceMs: number;
@@ -147,6 +155,12 @@ export class SessionHost {
     return () => this.openedListeners.delete(listener);
   }
 
+  /** Seam for state that must notice a Shell going away before its session expires (the drive lease). */
+  onTransportChange(listener: TransportChangeListener): () => void {
+    this.transportListeners.add(listener);
+    return () => this.transportListeners.delete(listener);
+  }
+
   /** Shells with a live link right now. */
   get attachedCount(): number {
     let count = 0;
@@ -164,6 +178,7 @@ export class SessionHost {
     for (const off of this.unsubscribe.splice(0)) off();
     for (const sessionId of [...this.states.keys()]) this.expire(sessionId);
     this.openedListeners.clear();
+    this.transportListeners.clear();
     this.publishFrontendCount();
   }
 
@@ -200,8 +215,22 @@ export class SessionHost {
       state = created;
       this.states.set(ctx.sessionId, state);
     }
+    const resumed = state.link === null && state.endpoints.size > 0;
     this.bindLink(state, ctx.session);
+    if (resumed) this.notifyTransport(state, true);
     this.publishFrontendCount();
+  }
+
+  private notifyTransport(state: SessionState, attached: boolean): void {
+    const endpointIds = [...state.endpoints.values()].map((endpoint) => endpoint.endpointId);
+    if (endpointIds.length === 0) return;
+    for (const listener of [...this.transportListeners]) {
+      try {
+        listener(endpointIds, attached);
+      } catch (error) {
+        console.error("[SessionHost] transport-change listener failed:", error);
+      }
+    }
   }
 
   /**
@@ -237,6 +266,7 @@ export class SessionHost {
         // Whatever is pushed while the Shell is away is lost to it.
         for (const id of s.endpoints.keys()) s.stale.add(id);
         s.staleReason = "reattached";
+        this.notifyTransport(s, false);
         this.publishFrontendCount();
       })
     );

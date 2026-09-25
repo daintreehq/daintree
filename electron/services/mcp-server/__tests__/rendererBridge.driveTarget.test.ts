@@ -63,6 +63,7 @@ vi.mock("../../viewless/index.js", () => viewless);
 
 import {
   createRendererBridge,
+  DriveHolderUnavailableError,
   NoFrontendAttachedError,
   WorkspaceBindingError,
 } from "../rendererBridge.js";
@@ -133,7 +134,30 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
     _resetMcpDriveTargetResolverForTesting();
   });
 
+  describe("without Host-mode routing (no lease installed)", () => {
+    it("fails a detached workspace exactly as before: a binding failure, nothing run in main", async () => {
+      const err = await bridge
+        .dispatchActionForWorkspace(WORKSPACE, "terminal.new", {})
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(WorkspaceBindingError);
+      expect(err).not.toBeInstanceOf(NoFrontendAttachedError);
+      expect((err as WorkspaceBindingError).reason).toBe("not-found");
+      expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+    });
+
+    it("rejects a detached workspace's manifest with the plain binding failure", async () => {
+      const err = await bridge.requestManifestForWorkspace(WORKSPACE).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(WorkspaceBindingError);
+      expect(err).not.toBeInstanceOf(NoFrontendAttachedError);
+    });
+  });
+
   describe("with every renderer detached", () => {
+    beforeEach(() => {
+      setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    });
+
     it("runs a host-runnable action in main and stamps the workspace", async () => {
       viewless.runViewlessAction.mockResolvedValue({ ok: true, result: { terminalId: "t-new" } });
       const context = { projectId: WORKSPACE, activeWorktreeId: "/repo/wt" };
@@ -152,6 +176,7 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
         actionId: "terminal.new",
         args: {},
         confirmed: false,
+        sessionOrigin: "external",
         context,
       });
       expect(envelope.result).toEqual({ ok: true, result: { terminalId: "t-new" } });
@@ -244,7 +269,9 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
         confirmationDecision: "approved",
         approvalScope: "session",
       }));
-      setMcpDriveTargetResolver((projectId) => (projectId === WORKSPACE ? endpoint : null));
+      setMcpDriveTargetResolver((projectId) =>
+        projectId === WORKSPACE ? { state: "live", endpoint } : { state: "vacant" }
+      );
 
       const envelope = await bridge.dispatchActionForWorkspace(
         WORKSPACE,
@@ -282,7 +309,7 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
       const endpoint = makeRemoteEndpoint(async () => {
         throw Object.assign(new Error("gone"), { code: "HOST_DISCONNECTED" });
       });
-      setMcpDriveTargetResolver(() => endpoint);
+      setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
 
       const err = await bridge
         .dispatchActionForWorkspace(WORKSPACE, "terminal.new", {})
@@ -294,7 +321,10 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
     });
 
     it("rejects a malformed answer rather than inventing a result", async () => {
-      setMcpDriveTargetResolver(() => makeRemoteEndpoint(async () => ({ ok: true })));
+      setMcpDriveTargetResolver(() => ({
+        state: "live",
+        endpoint: makeRemoteEndpoint(async () => ({ ok: true })),
+      }));
 
       await expect(
         bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.new", {})
@@ -304,7 +334,7 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
     it("fetches and caches a remote driver's manifest", async () => {
       const manifest = [{ id: "terminal.new" }] as unknown as ActionManifestEntry[];
       const endpoint = makeRemoteEndpoint(async () => manifest);
-      setMcpDriveTargetResolver(() => endpoint);
+      setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
 
       expect(bridge.getCachedManifestForWorkspace(WORKSPACE)).toBeNull();
       await expect(bridge.requestManifestForWorkspace(WORKSPACE)).resolves.toBe(manifest);
@@ -337,9 +367,8 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
       mockWebContentsRegistry.set(2, driver);
       mockProjectViews.set(WORKSPACE, [other, driver]);
       setMcpDriveTargetResolver(() => ({
-        ...makeRemoteEndpoint(async () => null),
-        kind: "local-view",
-        handle: 2,
+        state: "live",
+        endpoint: { ...makeRemoteEndpoint(async () => null), kind: "local-view", handle: 2 },
       }));
 
       const envelope = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.list", {});
@@ -350,13 +379,59 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
     });
 
     it("falls back to local resolution when the lease names nobody", async () => {
-      setMcpDriveTargetResolver(() => null);
+      setMcpDriveTargetResolver(() => ({ state: "vacant" }));
       viewless.runViewlessAction.mockResolvedValue({ ok: true, result: { terminalId: "t" } });
 
       const envelope = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.new", {});
 
       expect(envelope.result.ok).toBe(true);
       expect(viewless.runViewlessAction).toHaveBeenCalledTimes(1);
+    });
+
+    describe("whose holder cannot be reached", () => {
+      const localView = makeWebContents(3);
+
+      beforeEach(() => {
+        localView.send.mockClear();
+        mockWebContentsRegistry.set(3, localView);
+        mockProjectViews.set(WORKSPACE, [localView]);
+      });
+
+      async function expectRetriableRefusal(): Promise<void> {
+        const err = await bridge
+          .dispatchActionForWorkspace(WORKSPACE, "terminal.new", {})
+          .catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(DriveHolderUnavailableError);
+        expect((err as DriveHolderUnavailableError).retriable).toBe(true);
+        await expect(bridge.requestManifestForWorkspace(WORKSPACE)).rejects.toBeInstanceOf(
+          DriveHolderUnavailableError
+        );
+        expect(bridge.getCachedManifestForWorkspace(WORKSPACE)).toBeNull();
+        // Neither another renderer nor main acts for a holder that is away.
+        expect(localView.send).not.toHaveBeenCalled();
+        expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+      }
+
+      it("refuses retriably while the lease holds a place for it", async () => {
+        setMcpDriveTargetResolver(() => ({ state: "unavailable", reason: "reserved" }));
+        await expectRetriableRefusal();
+      });
+
+      it("refuses retriably when the named driver has already closed", async () => {
+        setMcpDriveTargetResolver(() => ({
+          state: "live",
+          endpoint: { ...makeRemoteEndpoint(async () => null), isClosed: () => true },
+        }));
+        await expectRetriableRefusal();
+      });
+
+      it("refuses retriably when the lease cannot be read, never routing the old way", async () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        setMcpDriveTargetResolver(() => {
+          throw new Error("lease broke");
+        });
+        await expectRetriableRefusal();
+      });
     });
   });
 });

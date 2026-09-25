@@ -23,10 +23,15 @@ const m = vi.hoisted(() => {
   };
 
   const openedListeners = new Set<(endpoint: unknown, handle: unknown) => void>();
+  const transportListeners = new Set<(endpointIds: string[], attached: boolean) => void>();
   const sessionHost = {
     onEndpointOpened: vi.fn((l: (endpoint: unknown, handle: unknown) => void) => {
       openedListeners.add(l);
       return () => openedListeners.delete(l);
+    }),
+    onTransportChange: vi.fn((l: (endpointIds: string[], attached: boolean) => void) => {
+      transportListeners.add(l);
+      return () => transportListeners.delete(l);
     }),
   };
 
@@ -56,7 +61,8 @@ const m = vi.hoisted(() => {
   const leaseListeners = new Set<(state: unknown) => void>();
   const lease = {
     noteEndpointClient: vi.fn(),
-    getHolderEndpoint: vi.fn((_projectId: string) => null as unknown),
+    noteEndpointTransport: vi.fn(),
+    getDriveTarget: vi.fn((_projectId: string) => ({ kind: "vacant" }) as unknown),
     onChange: vi.fn((l: (state: unknown) => void) => {
       leaseListeners.add(l);
       return () => leaseListeners.delete(l);
@@ -74,6 +80,7 @@ const m = vi.hoisted(() => {
     server,
     sessionHost,
     openedListeners,
+    transportListeners,
     client,
     lease,
     leaseListeners,
@@ -128,6 +135,11 @@ const m = vi.hoisted(() => {
     isWorkspaceClientStarting: vi.fn(() => false),
     ensureWorkspaceClient: vi.fn(async () => ({})),
     resolveLiveWebContents: vi.fn((id: number) => ({ id })),
+    visibility: {
+      noteEndpointOpened: vi.fn(),
+      noteEndpointClosed: vi.fn(),
+      noteViewActivated: vi.fn(),
+    },
   };
 });
 
@@ -216,6 +228,9 @@ vi.mock("../hybrid/index.js", () => ({
   installHybridSplits: m.installHybridSplits,
   admitHybridHostLegs: m.admitHybridHostLegs,
   acceptLocalPushForRemoteView: m.acceptLocalPushForRemoteView,
+  ViewVisibilityReporter: vi.fn(function ViewVisibilityReporter() {
+    return m.visibility;
+  }),
 }));
 vi.mock("../client/viewRequests.js", () => ({
   installViewReverseRequests: vi.fn(() => m.uninstallViewRequests),
@@ -397,6 +412,39 @@ describe("startRemoteHosts", () => {
     expect(m.redeliverClientWorktreePort).toHaveBeenCalledWith(wc);
   });
 
+  it("reports which views each window shows to their hosts", async () => {
+    await startRemoteHosts({ hostMode: false });
+    m.clientHooks.current.onFirstUse?.();
+    m.viewHosts.set(11, "studio-01");
+    const session = { id: "s" };
+    for (const l of m.clientOpenedListeners) {
+      l("studio-01", { session, webContentsId: 11, endpointId: "view-11" });
+    }
+    expect(m.visibility.noteEndpointOpened).toHaveBeenCalledWith({
+      session,
+      webContentsId: 11,
+      endpointId: "view-11",
+    });
+
+    m.clientHooks.current.onRemoteViewActivated?.(3, { id: 11 }, true);
+    expect(m.visibility.noteViewActivated).toHaveBeenCalledWith(3, 11);
+
+    for (const l of m.clientClosedListeners) {
+      l("studio-01", { webContentsId: 11, endpointId: "view-11" });
+    }
+    expect(m.visibility.noteEndpointClosed).toHaveBeenCalledWith(11, "view-11");
+  });
+
+  it("reports no visibility for an endpoint whose view belongs to another host", async () => {
+    await startRemoteHosts({ hostMode: false });
+    m.clientHooks.current.onFirstUse?.();
+    m.viewHosts.set(11, "studio-02");
+    for (const l of m.clientOpenedListeners) {
+      l("studio-01", { session: {}, webContentsId: 11, endpointId: "view-11" });
+    }
+    expect(m.visibility.noteEndpointOpened).not.toHaveBeenCalled();
+  });
+
   it("skips relays for a view that is already gone", async () => {
     await startRemoteHosts({ hostMode: false });
     m.clientHooks.current.onFirstUse?.();
@@ -478,13 +526,28 @@ describe("startRemoteHosts", () => {
   it("admits hybrid host legs and routes MCP to the lease holder in Host mode", async () => {
     await startRemoteHosts({ hostMode: true });
     expect(m.admitHybridHostLegs).toHaveBeenCalledTimes(1);
-    const holder = { endpointId: "remote:s1:view-11" };
-    m.lease.getHolderEndpoint.mockReturnValueOnce(holder);
-    expect(m.mcpResolver.current?.("proj-1")).toBe(holder);
-    expect(m.lease.getHolderEndpoint).toHaveBeenCalledWith("proj-1");
+    const endpoint = { endpointId: "remote:s1:view-11" };
+    m.lease.getDriveTarget.mockReturnValueOnce({ kind: "live", holder: {}, endpoint });
+    expect(m.mcpResolver.current?.("proj-1")).toEqual({ state: "live", endpoint });
+    expect(m.lease.getDriveTarget).toHaveBeenCalledWith("proj-1");
+    // A holder that is away holds its reservation: nobody else is routed to.
+    m.lease.getDriveTarget.mockReturnValueOnce({ kind: "reserved", holder: {} });
+    expect(m.mcpResolver.current?.("proj-1")).toEqual({ state: "unavailable", reason: "reserved" });
+    expect(m.mcpResolver.current?.("proj-2")).toEqual({ state: "vacant" });
 
     await stopRemoteHosts();
     expect(m.mcpResolver.current).toBeNull();
+  });
+
+  it("tells the lease when a Shell's link drops and resumes", async () => {
+    await startRemoteHosts({ hostMode: true });
+    for (const l of m.transportListeners) l(["remote:s1:view-11"], false);
+    expect(m.lease.noteEndpointTransport).toHaveBeenCalledWith(["remote:s1:view-11"], false);
+    for (const l of m.transportListeners) l(["remote:s1:view-11"], true);
+    expect(m.lease.noteEndpointTransport).toHaveBeenLastCalledWith(["remote:s1:view-11"], true);
+
+    await stopRemoteHosts();
+    expect(m.transportListeners.size).toBe(0);
   });
 
   it("names each endpoint's machine to the lease and tells Shells showing the project of changes", async () => {
