@@ -13,6 +13,11 @@ export const REMOTE_HOSTS_METHOD_CHANNELS = {
   probe: "remote-hosts:probe",
   getLocalHandshake: "remote-hosts:get-local-handshake",
   isInUse: "remote-hosts:is-in-use",
+  planInstall: "remote-hosts:plan-install",
+  install: "remote-hosts:install",
+  getInstallStatus: "remote-hosts:get-install-status",
+  cancelInstall: "remote-hosts:cancel-install",
+  startHostMode: "remote-hosts:start-host-mode",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof REMOTE_HOSTS_METHOD_CHANNELS;

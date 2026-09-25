@@ -19,7 +19,7 @@ import type { IpcContext } from "../../ipc/types.js";
 import type { RemoteRouter } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { HostRegistry } from "./HostRegistry.js";
-import type { RemoteHostManager } from "./RemoteHostManager.js";
+import type { HostReadiness, RemoteHostManager } from "./RemoteHostManager.js";
 import type { SenderLookup } from "./RemoteRouter.js";
 import type { WindowHostBinding } from "./WindowHostBinding.js";
 import { DetachedViewRegistry } from "./reconnect/DetachedViewRegistry.js";
@@ -58,6 +58,8 @@ export interface RemoteHostsClientOptions {
   onFirstUse?: () => void;
   /** How long opening a host's project waits for its link before giving up. */
   readyTimeoutMs?: number;
+  /** After a host is forgotten: drop what this machine kept for it (SSH master, cached bundles). */
+  onForget?: (descriptor: HostDescriptor) => Promise<void>;
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 20_000;
@@ -137,19 +139,28 @@ export class RemoteHostsClient {
 
   async forget(payload: { hostId: string }): Promise<void> {
     const hostId = hostIdOf(payload);
-    this.options.registry.require(hostId);
+    const descriptor = this.options.registry.require(hostId);
     await this.options.manager.disconnect(hostId);
     this.detached.forget(hostId);
     for (const windowId of this.options.bindings.windowsOn(hostId)) {
       this.options.bindings.set(windowId, LOCAL_HOST_ID);
     }
     this.options.registry.forget(hostId);
+    await this.options.onForget?.(descriptor).catch((error: unknown) => {
+      console.warn("[RemoteHosts] Cleanup after forgetting a host failed:", error);
+    });
   }
 
   connect(payload: { hostId: string }): HostConnectionState {
     const hostId = hostIdOf(payload);
     this.ensureRouter();
     return this.options.manager.connect(hostId).state();
+  }
+
+  /** Dial (or re-dial) a host and settle once it is usable, runs another build, or times out. */
+  connectAndWait(hostId: HostId, timeoutMs: number): Promise<HostReadiness> {
+    this.ensureRouter();
+    return this.options.manager.connect(hostId).whenReady(timeoutMs);
   }
 
   async disconnect(payload: { hostId: string }): Promise<void> {

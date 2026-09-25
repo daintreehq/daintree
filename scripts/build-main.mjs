@@ -40,6 +40,24 @@ function resolveBuildCommit() {
 }
 const buildCommit = resolveBuildCommit();
 
+/**
+ * The build's version and commit as a marker file packed into the app. A
+ * client probing a machine over SSH reads it straight out of the archive
+ * (the bytes are stored uncompressed), so it can tell which build is
+ * installed there without launching it. Keys and order are fixed: the probe
+ * matches this exact shape.
+ */
+export function formatBuildInfo(version, commit) {
+  return JSON.stringify({ daintreeBuildInfo: 1, version, commit });
+}
+
+function writeBuildInfo() {
+  const { version } = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  const target = path.join(root, "dist-electron/build-info.json");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, formatBuildInfo(version, buildCommit), "utf8");
+}
+
 const common = {
   bundle: true,
   minify: isProd,
@@ -781,6 +799,7 @@ async function run() {
       console.log("[Build] Watching for changes...");
     } else {
       await Promise.all([build(esmConfig), build(cjsConfig), ...guestConfigs.map(build)]);
+      writeBuildInfo();
       copyBuiltInWorkflows();
       copyBuiltInPluginManifests();
       copySamplePluginManifests();

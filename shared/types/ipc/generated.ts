@@ -1731,6 +1731,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./remoteHosts.js").AddHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;
   };
+  "remote-hosts:cancel-install": {
+    args: [payload: { opId: string }];
+    result: boolean;
+  };
   "remote-hosts:connect": {
     args: [payload: { hostId: string }];
     result: import("../remoteHosts.js").HostConnectionState;
@@ -1747,6 +1751,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { hostId: string }];
     result: void;
   };
+  "remote-hosts:get-install-status": {
+    args: [payload: { opId: string }];
+    result: import("../remoteHosts.js").OperationOutcome;
+  };
   "remote-hosts:get-local-handshake": {
     args: [];
     result: import("../remoteHosts.js").HostHandshakeInfo;
@@ -1754,6 +1762,10 @@ export interface GeneratedIpcInvokeMap {
   "remote-hosts:get-window-host": {
     args: [];
     result: import("./remoteHosts.js").WindowHostInfo;
+  };
+  "remote-hosts:install": {
+    args: [payload: import("./remoteHosts.js").InstallHostPayload];
+    result: import("./remoteHosts.js").InstallHostResult;
   };
   "remote-hosts:is-in-use": {
     args: [];
@@ -1763,8 +1775,16 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../remoteHosts.js").HostListEntry[];
   };
+  "remote-hosts:plan-install": {
+    args: [payload: import("./remoteHosts.js").PlanInstallPayload];
+    result: import("./remoteHosts.js").HostInstallPlan;
+  };
   "remote-hosts:probe": {
-    args: [_payload: { sshTarget: string }];
+    args: [payload: { sshTarget: string }];
+    result: import("./remoteHosts.js").HostProbeResult;
+  };
+  "remote-hosts:start-host-mode": {
+    args: [payload: { sshTarget: string }];
     result: import("./remoteHosts.js").HostProbeResult;
   };
   "remote-hosts:switch-window-host": {

@@ -1240,6 +1240,11 @@ export const CHANNELS = {
   REMOTE_HOSTS_PROBE: "remote-hosts:probe",
   REMOTE_HOSTS_GET_LOCAL_HANDSHAKE: "remote-hosts:get-local-handshake",
   REMOTE_HOSTS_IS_IN_USE: "remote-hosts:is-in-use",
+  REMOTE_HOSTS_PLAN_INSTALL: "remote-hosts:plan-install",
+  REMOTE_HOSTS_INSTALL: "remote-hosts:install",
+  REMOTE_HOSTS_GET_INSTALL_STATUS: "remote-hosts:get-install-status",
+  REMOTE_HOSTS_CANCEL_INSTALL: "remote-hosts:cancel-install",
+  REMOTE_HOSTS_START_HOST_MODE: "remote-hosts:start-host-mode",
   REMOTE_HOSTS_EVENT: "remote-hosts:event",
 
   // Remote Hosts: hostMode (shell).

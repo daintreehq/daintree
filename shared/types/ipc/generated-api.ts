@@ -930,6 +930,9 @@ export interface GeneratedElectronAPI {
     add(
       ...args: IpcInvokeMap["remote-hosts:add"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:add"]["result"]>;
+    cancelInstall(
+      ...args: IpcInvokeMap["remote-hosts:cancel-install"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:cancel-install"]["result"]>;
     connect(
       ...args: IpcInvokeMap["remote-hosts:connect"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:connect"]["result"]>;
@@ -942,21 +945,33 @@ export interface GeneratedElectronAPI {
     forget(
       ...args: IpcInvokeMap["remote-hosts:forget"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:forget"]["result"]>;
+    getInstallStatus(
+      ...args: IpcInvokeMap["remote-hosts:get-install-status"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:get-install-status"]["result"]>;
     getLocalHandshake(
       ...args: IpcInvokeMap["remote-hosts:get-local-handshake"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:get-local-handshake"]["result"]>;
     getWindowHost(
       ...args: IpcInvokeMap["remote-hosts:get-window-host"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:get-window-host"]["result"]>;
+    install(
+      ...args: IpcInvokeMap["remote-hosts:install"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:install"]["result"]>;
     isInUse(
       ...args: IpcInvokeMap["remote-hosts:is-in-use"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:is-in-use"]["result"]>;
     list(
       ...args: IpcInvokeMap["remote-hosts:list"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:list"]["result"]>;
+    planInstall(
+      ...args: IpcInvokeMap["remote-hosts:plan-install"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:plan-install"]["result"]>;
     probe(
       ...args: IpcInvokeMap["remote-hosts:probe"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:probe"]["result"]>;
+    startHostMode(
+      ...args: IpcInvokeMap["remote-hosts:start-host-mode"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:start-host-mode"]["result"]>;
     switchWindowHost(
       ...args: IpcInvokeMap["remote-hosts:switch-window-host"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:switch-window-host"]["result"]>;

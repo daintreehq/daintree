@@ -21,11 +21,13 @@ import {
   KeyRound,
   Shield,
   ArrowDownUp,
+  Server,
 } from "lucide-react";
 import { DaintreeIcon, FolderGit2, Plug, McpServerIcon, Workflow } from "@/components/icons";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { GeneralTab } from "./GeneralTab";
+import { isRemoteHostsSupported } from "@/lib/remoteHosts";
 import type {
   GlobalSettingsTab,
   ProjectSettingsTab,
@@ -129,6 +131,7 @@ const importDaintreeAssistantSettingsTab = () => import("./DaintreeAssistantSett
 const importEnvironmentSettingsTab = () => import("./EnvironmentSettingsTab");
 const importPrivacyDataTab = () => import("./PrivacyDataTab");
 const importImportExportSettingsTab = () => import("./ImportExportSettingsTab");
+const importHostsSettingsTab = () => import("./Hosts/HostsSettingsTab");
 const importProjectGeneralTab = () => import("@/components/Project/GeneralTab");
 const importProjectContextTab = () => import("@/components/Project/ContextTab");
 const importProjectVariablesTab = () => import("@/components/Project/EnvironmentVariablesEditor");
@@ -187,6 +190,7 @@ const LazyRunHistorySettingsTab = lazy(() =>
   importRunHistorySettingsTab().then((m) => ({ default: m.RunHistorySettingsTab }))
 );
 const LazyPluginsTab = lazy(() => importPluginsTab().then((m) => ({ default: m.PluginsTab })));
+const LazyHostsSettingsTab = lazy(importHostsSettingsTab);
 const LazyDaintreeAssistantSettingsTab = lazy(() =>
   importDaintreeAssistantSettingsTab().then((m) => ({ default: m.DaintreeAssistantSettingsTab }))
 );
@@ -243,6 +247,44 @@ const MCP_REQUIRES_ENABLED = {
   settingId: "mcp-server-enable",
   label: "MCP server",
 } as const;
+
+/**
+ * Settings → Hosts. Registered only where Remote Hosts exists (never on
+ * Windows), so the tab, its panel and its search entries are all absent there.
+ */
+const HOSTS_TAB = {
+  id: "hosts",
+  scope: "global",
+  group: "Integrations",
+  label: "Hosts",
+  icon: <Server className="w-4 h-4" />,
+  importKind: "lazy",
+  importer: importHostsSettingsTab,
+  LazyComponent: LazyHostsSettingsTab,
+  searchNavDescription:
+    "Machines this one opens projects on over SSH, adding one, and this machine as a host",
+  searchNavKeywords: [
+    "hosts",
+    "remote",
+    "ssh",
+    "tailscale",
+    "linux",
+    "mac",
+    "server",
+    "host mode",
+    "install",
+    "update",
+  ],
+  sections: [
+    {
+      id: "hosts-list",
+      section: "Hosts",
+      title: "Hosts",
+      description: "Add a host, rename it, change its SSH target, update its build or forget it",
+      keywords: ["add host", "forget", "rename", "ssh target", "discover", "bonjour"],
+    },
+  ],
+} as const satisfies LazySettingsTabEntry;
 
 // ── Registry (module-level const — stable identity for Fuse.js WeakMap) ─
 
@@ -1484,6 +1526,8 @@ export const SETTINGS_REGISTRY = [
     ],
   } satisfies LazySettingsTabEntry,
 
+  ...(isRemoteHostsSupported() ? [HOSTS_TAB] : []),
+
   {
     id: "portal",
     scope: "global",
@@ -2173,6 +2217,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   notifications: <Bell className="w-5 h-5 text-text-secondary" />,
   "import-export": <ArrowDownUp className="w-5 h-5 text-text-secondary" />,
   integrations: <Blocks className="w-5 h-5 text-text-secondary" />,
+  hosts: <Server className="w-5 h-5 text-text-secondary" />,
   voice: <Mic className="w-5 h-5 text-text-secondary" />,
   mcp: <McpServerIcon className="w-5 h-5 text-text-secondary" />,
   plugins: <Package className="w-5 h-5 text-text-secondary" />,
