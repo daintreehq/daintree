@@ -18,6 +18,11 @@ import { createActionDefinitions } from "../../actionDefinitions";
 import { registerHostActions } from "../hostActions";
 import { requestHostMenu } from "@/components/Hosts/hostMenuRequests";
 import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
+import {
+  _resetHostSwitchRequestsForTesting,
+  currentHostSwitchRequest,
+  registerHostSwitchDialogHost,
+} from "@/components/HostSwitch/hostSwitchRequests";
 
 const HOST_ACTION_IDS = ["host.switch", "host.add", "project.openOnHost"];
 
@@ -172,12 +177,66 @@ describe("host.switch", () => {
 });
 
 describe("project.openOnHost", () => {
-  it("refuses clearly until the clone dialog exists", async () => {
+  let releaseHost: (() => void) | null = null;
+
+  beforeEach(() => {
+    _resetHostSwitchRequestsForTesting();
+    releaseHost = null;
+  });
+
+  function withDialogHost(): void {
+    releaseHost = registerHostSwitchDialogHost();
+  }
+
+  it("opens the switch dialog for the window's project, with its active worktree", async () => {
+    withDialogHost();
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    const definition = registry.get("project.openOnHost")!();
+    await definition.run({ hostId: "studio-01", projectId: "p1" }, {
+      projectId: "p1",
+      activeWorktreePath: "/repo-worktrees/feature",
+    } as ActionContext);
+    expect(currentHostSwitchRequest()).toMatchObject({
+      toHostId: "studio-01",
+      projectId: "p1",
+      worktreePath: "/repo-worktrees/feature",
+    });
+    expect(switchWindowHost).not.toHaveBeenCalled();
+    releaseHost?.();
+  });
+
+  it("uses the project folder for a project other than the window's", async () => {
+    withDialogHost();
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    await registry.get("project.openOnHost")!().run({ hostId: "studio-01", projectId: "p2" }, {
+      projectId: "p1",
+      activeWorktreePath: "/elsewhere",
+    } as ActionContext);
+    expect(currentHostSwitchRequest()?.worktreePath).toBeNull();
+    releaseHost?.();
+  });
+
+  it("refuses a host that isn't in the list, and the window's own host", async () => {
+    withDialogHost();
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    await expect(
+      run(registry, "project.openOnHost", { hostId: "nowhere", projectId: "p1" })
+    ).rejects.toThrow(/nowhere/);
+    await expect(
+      run(registry, "project.openOnHost", { hostId: "local", projectId: "p1" })
+    ).rejects.toThrow(/already on that host/);
+    expect(currentHostSwitchRequest()).toBeNull();
+    releaseHost?.();
+  });
+
+  it("says so when no view can show the dialog", async () => {
     const registry: ActionRegistry = new Map();
     registerHostActions(registry, callbacks());
     await expect(
       run(registry, "project.openOnHost", { hostId: "studio-01", projectId: "p1" })
-    ).rejects.toThrow(/clone dialog/);
-    expect(switchWindowHost).not.toHaveBeenCalled();
+    ).rejects.toThrow(/dialog/);
   });
 });

@@ -2,6 +2,9 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const PROJECT_MATCH_METHOD_CHANNELS = {
   find: "project-match:find",
+  scan: "project-match:scan",
+  findWorktreeForBranch: "project-match:find-worktree-for-branch",
+  takePendingSetup: "project-match:take-pending-setup",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PROJECT_MATCH_METHOD_CHANNELS;

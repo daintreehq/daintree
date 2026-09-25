@@ -1,0 +1,399 @@
+import fs from "node:fs";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { ExecuteCloneOptions } from "../../../ipc/handlers/projectCrud/gitClone.js";
+import { AppError, GitOperationError } from "../../../utils/errorTypes.js";
+import { aliasRemote, commit, git, makeBare, makeRepo, tempRoot } from "./gitFixtures.js";
+import { createTestHost, plainClone, settled } from "./testService.js";
+
+let root: string;
+let bare: string;
+const URL = "https://example.test/daintreehq/daintree.git";
+
+beforeAll(() => {
+  root = tempRoot("pah-svc-");
+  bare = makeBare(root, "origin");
+  aliasRemote(URL, bare);
+  const seed = makeRepo(root, "seed", bare);
+  fs.mkdirSync(path.join(seed, ".daintree", "recipes"), { recursive: true });
+  fs.writeFileSync(
+    path.join(seed, ".daintree", "recipes", "setup.json"),
+    JSON.stringify({ id: "inrepo-setup", name: "Setup" })
+  );
+  git(seed, ["add", "."]);
+  git(seed, ["commit", "-q", "-m", "recipes"]);
+  git(seed, ["push", "-q", "-u", "origin", "main"]);
+  git(seed, ["checkout", "-q", "-b", "feature/host-chip"]);
+  commit(seed, "feature");
+  git(seed, ["push", "-q", "-u", "origin", "feature/host-chip"]);
+});
+
+afterAll(() => {
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+const branch = { name: "feature/host-chip", remoteBranch: "feature/host-chip" };
+let opCounter = 0;
+const nextOpId = () => `op-${++opCounter}`;
+
+describe("cloneAndOpen", () => {
+  it("clones, registers, creates the branch's worktree and keeps the outcome", async () => {
+    const host = createTestHost(root, "studio-a");
+    const destination = path.join(root, "studio-a-home", "Projects", "daintree");
+    const opId = nextOpId();
+    const outcome = await host.service.cloneAndOpen({
+      opId,
+      source: { kind: "remote", url: URL },
+      destination,
+      branch,
+      options: { submodules: false, depth: "full" },
+      setupRecipeId: "inrepo-setup",
+    });
+    expect(outcome).toMatchObject({
+      ok: true,
+      projectPath: destination,
+      worktreePath: path.join(`${destination}-worktrees`, "feature-host-chip"),
+      setupRecipeId: "inrepo-setup",
+    });
+    expect(host.projects.map((p) => p.path)).toEqual([destination]);
+    expect(host.createWorktree).toHaveBeenCalledWith(
+      destination,
+      expect.objectContaining({
+        baseBranch: "origin/feature/host-chip",
+        newBranch: "feature/host-chip",
+        fromRemote: true,
+        collisionPolicy: "error",
+      })
+    );
+    expect(host.focusWorktree).toHaveBeenCalled();
+    const record = host.service.operationStatus(opId);
+    expect(record.status).toBe("succeeded");
+    const projectId = host.projects[0]!.id;
+    expect(host.service.takePendingSetup(projectId)).toMatchObject({ recipeId: "inrepo-setup" });
+    expect(host.service.takePendingSetup(projectId)).toBeNull();
+  });
+
+  it("lets a second client join a clone of the same repository into the same folder", async () => {
+    const host = createTestHost(root, "studio-b");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    host.clone.mockImplementation(async (options: ExecuteCloneOptions) => {
+      await gate;
+      await plainClone(options);
+    });
+    const destination = path.join(root, "studio-b-home", "daintree");
+    const request = {
+      source: { kind: "remote" as const, url: URL },
+      destination,
+      branch: null,
+      options: { submodules: false, depth: "full" as const },
+      setupRecipeId: null,
+    };
+    const first = host.service.cloneAndOpen({ ...request, opId: "first" });
+    const second = host.service.cloneAndOpen({
+      ...request,
+      opId: "second",
+      source: { kind: "remote", url: "git@example.test:daintreehq/daintree.git" },
+    });
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    expect(host.clone).toHaveBeenCalledTimes(1);
+    expect(a).toEqual(b);
+    expect(host.service.operationStatus("second").status).toBe("succeeded");
+  });
+
+  it("cancels on request and leaves nothing registered", async () => {
+    const host = createTestHost(root, "studio-c");
+    host.clone.mockImplementation(
+      (options: ExecuteCloneOptions) =>
+        new Promise<void>((_, reject) => {
+          options.signal.addEventListener("abort", () =>
+            reject(new AppError({ code: "CANCELLED", message: "Clone cancelled" }))
+          );
+        })
+    );
+    const opId = nextOpId();
+    const running = host.service.cloneAndOpen({
+      opId,
+      source: { kind: "remote", url: URL },
+      destination: path.join(root, "studio-c-home", "daintree"),
+      branch: null,
+      options: { submodules: false, depth: "full" },
+      setupRecipeId: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(host.service.cancelOperation(opId)).toBe(true);
+    await expect(running).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(host.service.operationStatus(opId).status).toBe("cancelled");
+    expect(host.projects).toEqual([]);
+  });
+
+  it("records git's reason and its own words when the host can't clone", async () => {
+    const host = createTestHost(root, "studio-d");
+    host.clone.mockRejectedValue(
+      new GitOperationError("auth-failed", "git@github.com: Permission denied (publickey).", {
+        op: "clone",
+      })
+    );
+    const opId = nextOpId();
+    await expect(
+      host.service.cloneAndOpen({
+        opId,
+        source: { kind: "remote", url: "git@github.com:daintreehq/daintree.git" },
+        destination: path.join(root, "studio-d-home", "daintree"),
+        branch: null,
+        options: { submodules: false, depth: "full" },
+        setupRecipeId: null,
+      })
+    ).rejects.toBeInstanceOf(GitOperationError);
+    await settled(host.registry, opId);
+    expect(host.service.operationStatus(opId)).toMatchObject({
+      status: "failed",
+      error: { code: "auth-failed", message: expect.stringContaining("Permission denied") },
+    });
+  });
+
+  it("refuses a folder that holds something else, before cloning", async () => {
+    const host = createTestHost(root, "studio-e");
+    const destination = path.join(root, "studio-e-home", "busy");
+    fs.mkdirSync(destination, { recursive: true });
+    fs.writeFileSync(path.join(destination, "x"), "x");
+    await expect(
+      host.service.cloneAndOpen({
+        opId: nextOpId(),
+        source: { kind: "remote", url: URL },
+        destination,
+        branch: null,
+        options: { submodules: false, depth: "full" },
+        setupRecipeId: null,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(host.clone).not.toHaveBeenCalled();
+  });
+
+  it("passes the submodule and depth choices to the clone", async () => {
+    const host = createTestHost(root, "studio-f");
+    await host.service.cloneAndOpen({
+      opId: nextOpId(),
+      source: { kind: "remote", url: URL },
+      destination: path.join(root, "studio-f-home", "daintree"),
+      branch: null,
+      options: { submodules: true, depth: "partial" },
+      setupRecipeId: null,
+    });
+    expect(host.clone).toHaveBeenCalledWith(
+      expect.objectContaining({ depth: "partial", recurseSubmodules: true })
+    );
+  });
+});
+
+describe("repository bundles", () => {
+  it("clones from a bundle, keeps its branches, drops origin and deletes the bundle", async () => {
+    const source = createTestHost(root, "bundle-src");
+    const target = createTestHost(root, "bundle-dst");
+    const repo = makeRepo(root, "local-only");
+    git(repo, ["checkout", "-q", "-b", "topic"]);
+    commit(repo, "topic work");
+    const project = source.addProject(repo);
+
+    const created = await source.service.createBundle({ projectId: project.id });
+    const slot = await target.service.bundles.expect();
+    fs.copyFileSync(created.path, slot.path);
+    await source.service.bundles.discard(created.token);
+    expect(fs.existsSync(created.path)).toBe(false);
+
+    const destination = path.join(root, "bundle-dst-home", "local-only");
+    const outcome = await target.service.cloneAndOpen({
+      opId: nextOpId(),
+      source: { kind: "bundle", token: slot.token },
+      destination,
+      branch: { name: "main", remoteBranch: "main" },
+      options: { submodules: false, depth: "full" },
+      setupRecipeId: null,
+    });
+    expect(outcome.ok).toBe(true);
+    expect(git(destination, ["remote"])).toBe("");
+    expect(git(destination, ["branch", "--format=%(refname:short)"]).split("\n").sort()).toEqual([
+      "main",
+      "topic",
+    ]);
+    expect(fs.existsSync(slot.path)).toBe(false);
+    expect(target.service.bundles.get(slot.token)).toBeNull();
+  });
+
+  it("refuses a token it never minted", async () => {
+    const target = createTestHost(root, "bundle-bad");
+    await expect(
+      target.service.cloneAndOpen({
+        opId: nextOpId(),
+        source: { kind: "bundle", token: "0".repeat(32) },
+        destination: path.join(root, "bundle-bad-home", "x"),
+        branch: null,
+        options: { submodules: false, depth: "full" },
+        setupRecipeId: null,
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("opening a project the host already has", () => {
+  it("focuses the worktree that already has the branch instead of making a suffixed one", async () => {
+    const host = createTestHost(root, "studio-g");
+    const clone = path.join(root, "studio-g-clone");
+    git(root, ["clone", "-q", URL, clone]);
+    const existing = path.join(root, "studio-g-wt");
+    git(clone, ["worktree", "add", "-q", existing, "feature/host-chip"]);
+    const project = host.addProject(clone);
+
+    const opened = await host.service.open({
+      projectId: project.id,
+      path: clone,
+      remoteUrls: [URL],
+      branch,
+      branchRemoteUrl: URL,
+    });
+    expect(opened.worktreePath).toBe(existing);
+    expect(host.createWorktree).not.toHaveBeenCalled();
+    expect(host.focusWorktree).toHaveBeenCalledWith(project.id, existing);
+  });
+
+  it("offers the branch for checkout when it is on the remote, then checks out that exact name", async () => {
+    const host = createTestHost(root, "studio-h");
+    const clone = path.join(root, "studio-h-clone");
+    git(root, ["clone", "-q", "--single-branch", "-b", "main", URL, clone]);
+    const project = host.addProject(clone);
+
+    const opened = await host.service.open({
+      projectId: project.id,
+      path: clone,
+      remoteUrls: [URL],
+      branch,
+      branchRemoteUrl: URL,
+    });
+    expect(opened).toMatchObject({ worktreePath: null, canCheckOutBranch: true });
+
+    const checkedOut = await host.service.checkOut({
+      projectId: project.id,
+      branch,
+      branchRemoteUrl: URL,
+    });
+    expect(checkedOut.worktreePath).toBe(path.join(`${clone}-worktrees`, "feature-host-chip"));
+    expect(host.createWorktree).toHaveBeenCalledWith(
+      clone,
+      expect.objectContaining({ collisionPolicy: "error", newBranch: "feature/host-chip" })
+    );
+  });
+
+  it("adopts an unregistered clone only when it is the same repository", async () => {
+    const host = createTestHost(root, "studio-i");
+    // Adoption is limited to what the host's own scan finds: its projects folder.
+    const clone = path.join(root, "studio-i-home", "Projects", "daintree");
+    git(root, ["clone", "-q", URL, clone]);
+    const opened = await host.service.open({
+      projectId: null,
+      path: clone,
+      remoteUrls: [URL],
+      branch: null,
+      branchRemoteUrl: null,
+    });
+    expect(host.projects.map((p) => p.path)).toEqual([clone]);
+    expect(opened.projectPath).toBe(clone);
+
+    const outside = path.join(root, "studio-i-outside");
+    git(root, ["clone", "-q", URL, outside]);
+    await expect(
+      host.service.open({
+        projectId: null,
+        path: outside,
+        remoteUrls: [URL],
+        branch: null,
+        branchRemoteUrl: null,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+
+    const unrelated = makeRepo(
+      path.join(root, "studio-i-home", "Projects"),
+      "other",
+      "git@github.com:else/where.git"
+    );
+    await expect(
+      host.service.open({
+        projectId: null,
+        path: unrelated,
+        remoteUrls: [URL],
+        branch: null,
+        branchRemoteUrl: null,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+});
+
+describe("source side", () => {
+  it("describes the branch, remotes and committed recipes of the project", async () => {
+    const host = createTestHost(root, "source-a");
+    const clone = path.join(root, "source-a-home", "Projects", "daintree");
+    git(root, ["clone", "-q", "-b", "feature/host-chip", URL, clone]);
+    const project = host.addProject(clone);
+    fs.writeFileSync(path.join(clone, "dirty.txt"), "uncommitted");
+    const described = await host.service.describeSource({
+      projectId: project.id,
+      worktreePath: null,
+    });
+    expect(described).toMatchObject({
+      branch: "feature/host-chip",
+      branchCheck: { kind: "same-tip", remote: "origin" },
+      cloneUrl: URL,
+      hasUncommittedChanges: true,
+      homeRelativePath: "Projects/daintree",
+      recipes: [{ id: "inrepo-setup", name: "Setup" }],
+    });
+  });
+
+  it("lists the commits a push would publish", async () => {
+    const host = createTestHost(root, "source-d");
+    const clone = path.join(root, "source-d-clone");
+    git(root, ["clone", "-q", "-b", "feature/host-chip", URL, clone]);
+    commit(clone, "Unpushed work");
+    const project = host.addProject(clone);
+    const described = await host.service.describeSource({
+      projectId: project.id,
+      worktreePath: null,
+    });
+    expect(described.branchCheck).toMatchObject({ kind: "ahead", ahead: 1 });
+    expect(described.unpushedCommits.map((c) => c.subject)).toEqual(["Unpushed work"]);
+  });
+
+  it("refuses a worktree path that isn't one of the project's", async () => {
+    const host = createTestHost(root, "source-b");
+    const clone = path.join(root, "source-b-clone");
+    git(root, ["clone", "-q", URL, clone]);
+    const project = host.addProject(clone);
+    await expect(
+      host.service.describeSource({ projectId: project.id, worktreePath: root })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
+  it("pushes with set-upstream, and hands back git's text when the push is refused", async () => {
+    const host = createTestHost(root, "source-c");
+    const clone = path.join(root, "source-c-clone");
+    git(root, ["clone", "-q", URL, clone]);
+    git(clone, ["checkout", "-q", "-b", "new-branch"]);
+    commit(clone, "new");
+    const project = host.addProject(clone);
+    const payload = {
+      projectId: project.id,
+      worktreePath: clone,
+      branch: "new-branch",
+      remote: "origin",
+      remoteBranch: "new-branch",
+    };
+    expect(await host.service.pushBranch(payload)).toEqual({ ok: true });
+    expect(git(clone, ["config", "branch.new-branch.remote"])).toBe("origin");
+
+    git(clone, ["reset", "-q", "--hard", "HEAD~1"]);
+    commit(clone, "rewritten");
+    const refused = await host.service.pushBranch(payload);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.message).toMatch(/rejected|non-fast-forward|fetch first/);
+  });
+});
