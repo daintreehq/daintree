@@ -102,16 +102,21 @@ export function previewTheme(themeId: string): PreviewTheme {
   };
 }
 
-/** Every `.js`/`.mjs` file under `dir`, skipping `node_modules` and hidden folders. */
+/**
+ * Every `.js`/`.mjs` file under `dir`. `node_modules` and hidden folders are
+ * never entered, so a large dependency tree or `.git` costs nothing.
+ */
 export async function listScripts(dir: string): Promise<string[]> {
   const out: string[] = [];
-  for (const entry of await fs.readdir(dir, { withFileTypes: true, recursive: true })) {
-    if (!entry.isFile() || !/\.m?js$/.test(entry.name)) continue;
-    const full = path.join(entry.parentPath, entry.name);
-    const parts = path.relative(dir, full).split(path.sep);
-    if (parts.some((part) => part === "node_modules" || part.startsWith("."))) continue;
-    out.push(full);
-  }
+  const walk = async (current: string): Promise<void> => {
+    for (const entry of await fs.readdir(current, { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) await walk(full);
+      else if (entry.isFile() && /\.m?js$/.test(entry.name)) out.push(full);
+    }
+  };
+  await walk(dir);
   return out.sort();
 }
 

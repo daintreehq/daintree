@@ -115,7 +115,7 @@ function frameName(index: number, cue: string | null): string {
   return `${String(index).padStart(2, "0")}-${cue ?? "start"}.png`;
 }
 
-const FRAME_FILE = /^\d{2}-[A-Za-z0-9._-]+\.png$/;
+const FRAME_FILE = /^\d{2,}-[A-Za-z0-9._-]+\.png$/;
 
 /**
  * Remove frames an earlier capture left in this chapter's folder, so a cue that
@@ -224,6 +224,7 @@ export async function captureTour(opts: CaptureOptions): Promise<CaptureManifest
       });
     }
 
+    throwIfAborted(opts.signal);
     const manifest: CaptureManifest = {
       version: 1,
       tourId: opts.config.tourId,

@@ -28,7 +28,7 @@ import {
 } from "../tour/preview/protocol.js";
 import { renderShell } from "../tour/preview/shell.js";
 import { TourPlayer } from "../../../tour/src/TourPlayer.js";
-import { compilePreviewCss, previewTheme } from "../tour/preview/styles.js";
+import { compilePreviewCss, listScripts, previewTheme } from "../tour/preview/styles.js";
 import type { CapturePage, Playwright } from "../tour/preview/capture.js";
 
 const NARRATION = {
@@ -261,7 +261,24 @@ describe("preview page", () => {
     expect(css).toContain("box-sizing: border-box");
     expect(css).toContain(".tour-click-ring");
     // Host-derived variables tokens like bg-surface-dialog resolve through.
-    expect(css).toMatch(/\.light \{[^}]*--theme-surface-dialog: var\(--theme-surface-panel-elevated\)/);
+    expect(css).toMatch(
+      /\.light \{[^}]*--theme-surface-dialog: var\(--theme-surface-panel-elevated\)/
+    );
+  });
+
+  it("scans the plugin's scripts for classes without entering dependencies or hidden folders", async () => {
+    for (const file of [
+      "dist/a.js",
+      "dist/chunks/b.mjs",
+      "node_modules/x/c.js",
+      ".git/d.js",
+      "src/e.ts",
+    ]) {
+      await fs.mkdir(path.dirname(path.join(tmpDir, file)), { recursive: true });
+      await fs.writeFile(path.join(tmpDir, file), "");
+    }
+    const found = (await listScripts(tmpDir)).map((file) => path.relative(tmpDir, file));
+    expect(found).toEqual([path.join("dist", "a.js"), path.join("dist", "chunks", "b.mjs")]);
   });
 
   it("names the built-in themes when given an unknown one", () => {
