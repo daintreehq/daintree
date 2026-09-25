@@ -39,7 +39,14 @@ import {
 import { useWorktreeFormErrors } from "./hooks/useWorktreeFormErrors";
 import { useWorktreeFormValidation } from "./hooks/useWorktreeFormValidation";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { spawnPanelsFromRecipe } from "./panelSpawning";
+import { recipeTerminalsStartAgent, spawnPanelsFromRecipe } from "./panelSpawning";
+import {
+  notifyAgentNotStarted,
+  startFirstAgentWhenReady,
+  type FirstAgentLaunch,
+} from "./worktreeAgentLaunch";
+import { useFirstAgentOptions } from "./hooks/useFirstAgentOptions";
+import { Textarea } from "@/components/ui/textarea";
 
 import {
   PrHeader,
@@ -53,6 +60,7 @@ import {
   WorktreePathPicker,
   EnvironmentRadioGroup,
   RecipePickerPopover,
+  AgentPickerPopover,
   FormGrid,
   FormSection,
   FormRow,
@@ -101,6 +109,8 @@ interface NewWorktreeDialogProps {
   initialPR?: PR | null;
   initialRecipeId?: string | null;
   initialBranchInput?: string | null;
+  initialAgentId?: string | null;
+  initialPrompt?: string | null;
 }
 
 export function NewWorktreeDialog({
@@ -112,6 +122,8 @@ export function NewWorktreeDialog({
   initialPR,
   initialRecipeId,
   initialBranchInput,
+  initialAgentId,
+  initialPrompt,
 }: NewWorktreeDialogProps) {
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -136,6 +148,12 @@ export function NewWorktreeDialog({
   );
   const setLastSelectedWorktreeRecipeIdByProject = usePreferencesStore(
     (s) => s.setLastSelectedWorktreeRecipeIdByProject
+  );
+  const lastSelectedWorktreeAgentIdByProject = usePreferencesStore(
+    (s) => s.lastSelectedWorktreeAgentIdByProject
+  );
+  const setLastSelectedWorktreeAgentIdByProject = usePreferencesStore(
+    (s) => s.setLastSelectedWorktreeAgentIdByProject
   );
   // Flattened to `[branch, id, name] x N` so the selector stays shallow-comparable
   // while still carrying the owning worktree's identity. One source for both the
@@ -165,6 +183,14 @@ export function NewWorktreeDialog({
   const currentProject = useProjectStore((s) => s.currentProject);
   const projectId = currentProject?.id ?? "";
   const lastSelectedWorktreeRecipeId = lastSelectedWorktreeRecipeIdByProject[projectId];
+  const lastSelectedWorktreeAgentId = lastSelectedWorktreeAgentIdByProject[projectId];
+  const agentOptions = useFirstAgentOptions();
+  const [firstAgentId, setFirstAgentId] = useState<string | null>(null);
+  const [firstPrompt, setFirstPrompt] = useState("");
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  // A remembered or restored agent that is no longer launchable reads as "No
+  // agent" rather than launching something the picker can't show.
+  const firstAgent = agentOptions.find((a) => a.id === firstAgentId);
   const { entry: forgeEntry } = useResolvedForgeProvider(currentProject?.id ?? null);
   const forgeName = forgeEntry?.contribution.name ?? "the forge";
 
@@ -222,6 +248,20 @@ export function NewWorktreeDialog({
     setBranchInput(initialBranchInput);
     branchInputTouchedRef.current = true;
   }, [isOpen, initialBranchInput, setBranchInput, branchInputTouchedRef]);
+
+  // Seeded once per open: a Retry's draft wins over the project's remembered agent.
+  const appliedAgentDraftRef = useRef(false);
+  useEffect(() => {
+    if (!isOpen) {
+      appliedAgentDraftRef.current = false;
+      return;
+    }
+    if (appliedAgentDraftRef.current || !projectId) return;
+    appliedAgentDraftRef.current = true;
+    setFirstAgentId(initialAgentId ?? lastSelectedWorktreeAgentId ?? null);
+    setFirstPrompt(initialPrompt ?? "");
+    setAgentPickerOpen(false);
+  }, [isOpen, projectId, initialAgentId, initialPrompt, lastSelectedWorktreeAgentId]);
 
   const canAssignIssue = Boolean(currentUser && selectedIssue);
 
@@ -544,8 +584,10 @@ export function NewWorktreeDialog({
     if (errors.touchedFields.recipe) return true;
     if (errors.touchedFields.worktreePath && worktreePath.trim()) return true;
     if (worktreeMode !== "local") return true;
+    if (firstPrompt.trim()) return true;
     return false;
   }, [
+    firstPrompt,
     branchInput,
     worktreePath,
     selectedIssue,
@@ -620,6 +662,8 @@ export function NewWorktreeDialog({
     const snapCurrentUser = currentUser;
     const snapCurrentUserAvatar = currentUserAvatar;
     const snapBaseBranch = baseBranch;
+    const snapFirstAgent = firstAgent;
+    const snapFirstPrompt = snapFirstAgent ? firstPrompt : "";
     // Anchor the sidebar placeholder by the path the host will normalize to as
     // the worktree id. Relative paths can't anchor a placeholder because the
     // host resolves them server-side, so the renderer-keyed Map entry would
@@ -629,7 +673,12 @@ export function NewWorktreeDialog({
     const selectionStore = useWorktreeSelectionStore.getState();
 
     if (placeholderPath) {
-      selectionStore.addPendingCreation(placeholderPath, { branch: fullBranchName });
+      selectionStore.addPendingCreation(placeholderPath, {
+        branch: fullBranchName,
+        recipeId: snapRecipeId,
+        agentId: snapFirstAgent?.id ?? null,
+        prompt: snapFirstPrompt,
+      });
     }
 
     onClose();
@@ -786,11 +835,16 @@ export function NewWorktreeDialog({
           }
         }
 
+        // Set when the layout itself starts an agent, so the dialog's agent is
+        // handed back to the user rather than becoming a silent second one.
+        let layoutAgentConflict: "recipe-has-agent" | "layout-has-agent" | null = null;
+
         if (snapRecipeId === CLONE_LAYOUT_ID && sourceWorktreeId) {
           try {
             const terminals = useRecipeStore
               .getState()
               .generateRecipeFromActiveTerminals(sourceWorktreeId);
+            if (recipeTerminalsStartAgent(terminals)) layoutAgentConflict = "layout-has-agent";
             await spawnPanelsFromRecipe({
               terminals,
               worktreeId,
@@ -806,6 +860,13 @@ export function NewWorktreeDialog({
             });
           }
         } else if (snapSelectedRecipe) {
+          // Shadowing can swap in a different recipe at run time, so judge
+          // the one that will actually execute.
+          const executedRecipe =
+            useRecipeStore.getState().getRecipeById(snapSelectedRecipe.id) ?? snapSelectedRecipe;
+          if (recipeTerminalsStartAgent(executedRecipe.terminals)) {
+            layoutAgentConflict = "recipe-has-agent";
+          }
           try {
             const results = await runRecipeWithResults(
               snapSelectedRecipe.id,
@@ -854,6 +915,18 @@ export function NewWorktreeDialog({
               ],
             });
           }
+        }
+
+        if (snapFirstAgent) {
+          const launch: FirstAgentLaunch = {
+            agentId: snapFirstAgent.id,
+            agentName: snapFirstAgent.name,
+            prompt: snapFirstPrompt,
+            worktreeId,
+            cwd: placeholderPath ?? undefined,
+          };
+          if (layoutAgentConflict) notifyAgentNotStarted(launch, layoutAgentConflict);
+          else void startFirstAgentWhenReady(launch);
         }
 
         onWorktreeCreated?.(worktreeId);
@@ -946,6 +1019,14 @@ export function NewWorktreeDialog({
     ]
   );
 
+  const handleFirstAgentSelect = useCallback(
+    (id: string | null) => {
+      setFirstAgentId(id);
+      if (projectId) setLastSelectedWorktreeAgentIdByProject(projectId, id);
+    },
+    [projectId, setLastSelectedWorktreeAgentIdByProject]
+  );
+
   const handlePrefixSelectWrap = useCallback(
     (suggestion: { type: { prefix: string; displayName: string } }) => {
       handlePrefixSelect(suggestion.type.prefix);
@@ -1020,8 +1101,14 @@ export function NewWorktreeDialog({
   );
 
   const showIssueRow = !initialPR && !!forgeEntry?.contribution.slots?.issueSelector;
-  const showRecipeRow = startingLayoutRecipes.length > 0;
-  const hasSetupSection = showIssueRow || hasAnyEnvironments || showRecipeRow;
+  // Without saved recipes the layout silently defaults to a clone of the
+  // current one, which can itself start an agent — so once an agent is picked
+  // the layout choice is shown too.
+  const showRecipeRow = startingLayoutRecipes.length > 0 || firstAgent !== undefined;
+  const showPromptRow = firstAgent !== undefined;
+  const selectedRecipeStartsAgent = selectedRecipe
+    ? recipeTerminalsStartAgent(selectedRecipe.terminals)
+    : false;
 
   // Same flags the real sections are built from, so the skeleton is the shape
   // that is actually about to render rather than a generic three-block guess.
@@ -1033,16 +1120,16 @@ export function NewWorktreeDialog({
       rows: isExistingMode ? ["field"] : ["field", "hint", "field"],
     },
     { title: "Destination", rows: ["field"] },
-    ...(hasSetupSection
-      ? [
-          {
-            title: "Setup",
-            rows: Array<"field">(
-              Number(showIssueRow) + Number(hasAnyEnvironments) + Number(showRecipeRow)
-            ).fill("field"),
-          },
-        ]
-      : []),
+    {
+      title: "Setup",
+      rows: Array<"field">(
+        Number(showIssueRow) +
+          Number(hasAnyEnvironments) +
+          Number(showRecipeRow) +
+          1 +
+          Number(showPromptRow)
+      ).fill("field"),
+    },
   ];
 
   return (
@@ -1189,60 +1276,94 @@ export function NewWorktreeDialog({
                 </FormRow>
               </FormSection>
 
-              {hasSetupSection && (
-                <FormSection title="Setup">
-                  {showIssueRow && (
-                    <FormRow
-                      label="Issue"
-                      hint={
-                        canAssignIssue && (
-                          <AssignIssueToggle
-                            assignWorktreeToSelf={assignWorktreeToSelf}
-                            onSetAssignWorktreeToSelf={setAssignWorktreeToSelf}
-                            currentUser={currentUser}
-                            currentUserAvatar={currentUserAvatar}
-                          />
-                        )
-                      }
-                    >
-                      <IssueLinkerView
-                        projectPath={rootPath}
-                        selectedIssue={selectedIssue}
-                        onSelectIssue={handleIssueSelectWrapper}
-                      />
-                    </FormRow>
-                  )}
+              <FormSection title="Setup">
+                {showIssueRow && (
+                  <FormRow
+                    label="Issue"
+                    hint={
+                      canAssignIssue && (
+                        <AssignIssueToggle
+                          assignWorktreeToSelf={assignWorktreeToSelf}
+                          onSetAssignWorktreeToSelf={setAssignWorktreeToSelf}
+                          currentUser={currentUser}
+                          currentUserAvatar={currentUserAvatar}
+                        />
+                      )
+                    }
+                  >
+                    <IssueLinkerView
+                      projectPath={rootPath}
+                      selectedIssue={selectedIssue}
+                      onSelectIssue={handleIssueSelectWrapper}
+                    />
+                  </FormRow>
+                )}
 
-                  {hasAnyEnvironments && (
-                    <FormRow label="Environment" selfLabelled>
-                      <EnvironmentRadioGroup
-                        worktreeMode={worktreeMode}
-                        onChange={setWorktreeMode}
-                        resourceEnvironments={resourceEnvironments}
-                        hasAnyEnvironments={hasAnyEnvironments}
-                      />
-                    </FormRow>
-                  )}
+                {hasAnyEnvironments && (
+                  <FormRow label="Environment" selfLabelled>
+                    <EnvironmentRadioGroup
+                      worktreeMode={worktreeMode}
+                      onChange={setWorktreeMode}
+                      resourceEnvironments={resourceEnvironments}
+                      hasAnyEnvironments={hasAnyEnvironments}
+                    />
+                  </FormRow>
+                )}
 
-                  {showRecipeRow && (
-                    <FormRow label="Recipe" htmlFor="recipe-selector-trigger">
-                      <RecipePickerPopover
-                        recipes={startingLayoutRecipes}
-                        selectedRecipeId={selectedRecipeId}
-                        selectedRecipe={selectedRecipe}
-                        defaultRecipeId={defaultRecipeId}
-                        open={recipePickerOpen}
-                        onOpenChange={setRecipePickerOpen}
-                        onSelectRecipe={handleRecipeSelect}
-                        onMarkTouched={() => {
-                          markTouched("recipe");
-                        }}
-                        listId="recipe-selector"
-                      />
-                    </FormRow>
-                  )}
-                </FormSection>
-              )}
+                {showRecipeRow && (
+                  <FormRow label="Recipe" htmlFor="recipe-selector-trigger">
+                    <RecipePickerPopover
+                      recipes={startingLayoutRecipes}
+                      selectedRecipeId={selectedRecipeId}
+                      selectedRecipe={selectedRecipe}
+                      defaultRecipeId={defaultRecipeId}
+                      open={recipePickerOpen}
+                      onOpenChange={setRecipePickerOpen}
+                      onSelectRecipe={handleRecipeSelect}
+                      onMarkTouched={() => {
+                        markTouched("recipe");
+                      }}
+                      listId="recipe-selector"
+                    />
+                  </FormRow>
+                )}
+
+                <FormRow
+                  label="Agent"
+                  htmlFor="first-agent-selector-trigger"
+                  hint={
+                    firstAgent &&
+                    selectedRecipeStartsAgent && (
+                      <span className="text-xs text-text-secondary">
+                        This recipe already starts an agent, so {firstAgent.name} won't start on its
+                        own
+                      </span>
+                    )
+                  }
+                >
+                  <AgentPickerPopover
+                    agents={agentOptions}
+                    selectedAgentId={firstAgent?.id ?? null}
+                    open={agentPickerOpen}
+                    onOpenChange={setAgentPickerOpen}
+                    onSelectAgent={handleFirstAgentSelect}
+                    listId="first-agent-selector"
+                  />
+                </FormRow>
+
+                {showPromptRow && (
+                  <FormRow label="Prompt" htmlFor="first-agent-prompt">
+                    <Textarea
+                      id="first-agent-prompt"
+                      data-testid="first-agent-prompt"
+                      rows={3}
+                      value={firstPrompt}
+                      onChange={(e) => setFirstPrompt(e.target.value)}
+                      placeholder="First task for the agent (optional)"
+                    />
+                  </FormRow>
+                )}
+              </FormSection>
             </FormGrid>
 
             {initialPR && prBranchResolved === false && (

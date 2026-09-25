@@ -67,6 +67,24 @@ describe("preferencesStore migration", () => {
     expect(state.lastSelectedWorktreeRecipeIdByProject).toEqual({});
   });
 
+  it("remembers the new-worktree agent per project and drops malformed entries on hydration", async () => {
+    setStoredState(
+      {
+        lastSelectedWorktreeAgentIdByProject: { "proj-1": "claude", "proj-2": null, bad: 42 },
+      },
+      20
+    );
+    const store = await loadStore();
+    expect(store.getState().lastSelectedWorktreeAgentIdByProject).toEqual({
+      "proj-1": "claude",
+      "proj-2": null,
+    });
+
+    store.getState().setLastSelectedWorktreeAgentIdByProject("proj-3", "codex");
+    expect(store.getState().lastSelectedWorktreeAgentIdByProject["proj-3"]).toBe("codex");
+    expect(store.getState().lastSelectedWorktreeAgentIdByProject["proj-1"]).toBe("claude");
+  });
+
   it("removes lastSelectedWorktreeRecipeId and initializes the per-project map during v0 migration", async () => {
     setStoredState(
       {

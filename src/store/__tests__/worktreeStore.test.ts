@@ -620,6 +620,35 @@ describe("worktreeStore", () => {
       expect(entry?.error).toBeUndefined();
     });
 
+    it("keeps the retry draft through a failure so Retry can restore it", () => {
+      useWorktreeSelectionStore.getState().addPendingCreation("/abs/path", {
+        branch: "feature/foo",
+        recipeId: "recipe-1",
+        agentId: "claude",
+        prompt: "fix the login bug",
+      });
+      useWorktreeSelectionStore.getState().failPendingCreation("/abs/path", "boom");
+      const entry = useWorktreeSelectionStore.getState().pendingCreations.get("/abs/path");
+      expect(entry?.status).toBe("error");
+      expect(entry?.recipeId).toBe("recipe-1");
+      expect(entry?.agentId).toBe("claude");
+      expect(entry?.prompt).toBe("fix the login bug");
+    });
+
+    it("openCreateDialog carries the agent draft and closing clears it", () => {
+      useWorktreeSelectionStore.getState().openCreateDialog(null, {
+        initialAgentId: "claude",
+        initialPrompt: "fix the login bug",
+      });
+      let dialog = useWorktreeSelectionStore.getState().createDialog;
+      expect(dialog.initialAgentId).toBe("claude");
+      expect(dialog.initialPrompt).toBe("fix the login bug");
+      useWorktreeSelectionStore.getState().closeCreateDialog();
+      dialog = useWorktreeSelectionStore.getState().createDialog;
+      expect(dialog.initialAgentId).toBeNull();
+      expect(dialog.initialPrompt).toBeNull();
+    });
+
     it("resolvePendingCreation removes the entry", () => {
       useWorktreeSelectionStore
         .getState()

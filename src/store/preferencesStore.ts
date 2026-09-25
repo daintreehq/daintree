@@ -180,6 +180,9 @@ interface PreferencesState {
     projectId: string,
     id: string | null | undefined
   ) => void;
+  /** Agent last chosen to start in a new worktree, per project. `null` = none. */
+  lastSelectedWorktreeAgentIdByProject: Record<string, string | null | undefined>;
+  setLastSelectedWorktreeAgentIdByProject: (projectId: string, id: string | null) => void;
   skipPushConfirmByWorktreePath: Record<string, boolean>;
   setSkipPushConfirmForWorktree: (worktreePath: string, value: boolean) => void;
   /**
@@ -347,6 +350,10 @@ function sanitizePersistedPreferences(
     sanitized.projectSwitcherCollapsedBands
   );
 
+  sanitized.lastSelectedWorktreeAgentIdByProject = normalizeRecipeMap(
+    sanitized.lastSelectedWorktreeAgentIdByProject
+  );
+
   // A non-boolean here would be truthy for any hand-edited string, retiring the
   // hint for a user who never saw it.
   if (typeof sanitized.hasSeenActionPalettePrefixHint !== "boolean") {
@@ -385,6 +392,7 @@ type PreferencesPersistedState = Pick<
   | "projectSwitcherOtherSortMode"
   | "projectSwitcherCollapsedBands"
   | "lastSelectedWorktreeRecipeIdByProject"
+  | "lastSelectedWorktreeAgentIdByProject"
   | "skipPushConfirmByWorktreePath"
   | "fileBrowserAlwaysHiddenPatterns"
   | "hasSeenActionPalettePrefixHint"
@@ -413,6 +421,7 @@ const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
   projectSwitcherOtherSortMode: DEFAULT_OTHER_PROJECTS_SORT_MODE,
   projectSwitcherCollapsedBands: {},
   lastSelectedWorktreeRecipeIdByProject: {},
+  lastSelectedWorktreeAgentIdByProject: {},
   skipPushConfirmByWorktreePath: {},
   fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN],
   hasSeenActionPalettePrefixHint: false,
@@ -552,6 +561,9 @@ function toPreferencesPersisted(
     lastSelectedWorktreeRecipeIdByProject: normalizeRecipeMap(
       raw.lastSelectedWorktreeRecipeIdByProject
     ),
+    lastSelectedWorktreeAgentIdByProject: normalizeRecipeMap(
+      raw.lastSelectedWorktreeAgentIdByProject
+    ),
     skipPushConfirmByWorktreePath: normalizeBooleanMap(raw.skipPushConfirmByWorktreePath),
     fileBrowserAlwaysHiddenPatterns: sanitizeAlwaysHiddenPatterns(
       raw.fileBrowserAlwaysHiddenPatterns
@@ -683,6 +695,11 @@ function mergePreferencesPersistedWrite({
         inc.lastSelectedWorktreeRecipeIdByProject,
         disk.lastSelectedWorktreeRecipeIdByProject
       ),
+      lastSelectedWorktreeAgentIdByProject: mergeRecordByWriterDelta(
+        base.lastSelectedWorktreeAgentIdByProject,
+        inc.lastSelectedWorktreeAgentIdByProject,
+        disk.lastSelectedWorktreeAgentIdByProject
+      ),
       skipPushConfirmByWorktreePath: mergeRecordByWriterDelta(
         base.skipPushConfirmByWorktreePath,
         inc.skipPushConfirmByWorktreePath,
@@ -754,6 +771,14 @@ export const usePreferencesStore = create<PreferencesState>()(
         set((state) => ({
           lastSelectedWorktreeRecipeIdByProject: {
             ...state.lastSelectedWorktreeRecipeIdByProject,
+            [projectId]: id,
+          },
+        })),
+      lastSelectedWorktreeAgentIdByProject: {},
+      setLastSelectedWorktreeAgentIdByProject: (projectId, id) =>
+        set((state) => ({
+          lastSelectedWorktreeAgentIdByProject: {
+            ...state.lastSelectedWorktreeAgentIdByProject,
             [projectId]: id,
           },
         })),
@@ -864,6 +889,7 @@ export const usePreferencesStore = create<PreferencesState>()(
         projectSwitcherOtherSortMode: state.projectSwitcherOtherSortMode,
         projectSwitcherCollapsedBands: state.projectSwitcherCollapsedBands,
         lastSelectedWorktreeRecipeIdByProject: state.lastSelectedWorktreeRecipeIdByProject,
+        lastSelectedWorktreeAgentIdByProject: state.lastSelectedWorktreeAgentIdByProject,
         skipPushConfirmByWorktreePath: state.skipPushConfirmByWorktreePath,
         fileBrowserAlwaysHiddenPatterns: state.fileBrowserAlwaysHiddenPatterns,
         hasSeenActionPalettePrefixHint: state.hasSeenActionPalettePrefixHint,
@@ -1040,5 +1066,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean | null; diffMarkdownRendered: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; markdownFontSize: MarkdownFontSize; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean; keyboardLayoutConfirmationsByBinding: Record<string, number> }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean | null; diffMarkdownRendered: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; markdownFontSize: MarkdownFontSize; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; lastSelectedWorktreeAgentIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean; keyboardLayoutConfirmationsByBinding: Record<string, number> }",
 });

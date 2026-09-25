@@ -36,10 +36,12 @@ import {
 /**
  * Fields that should be redacted from event payloads to prevent secret leakage.
  * Substring match (no word boundaries) so `apiKey`, `authHeader`, `refreshToken`
- * are caught at any depth. Module-level so we don't allocate a fresh matcher
- * per recursive frame in `redactSensitiveArgs`.
+ * are caught at any depth. Prompts are the user's own words to an agent and are
+ * never logged, so `prompt`, `systemPrompt` and `initialPrompt` go too.
+ * Module-level so we don't allocate a fresh matcher per recursive frame in
+ * `redactSensitiveArgs`.
  */
-const SENSITIVE_ARG_FIELD_PATTERN = /token|password|secret|key|auth|credential/i;
+const SENSITIVE_ARG_FIELD_PATTERN = /token|password|secret|key|auth|credential|prompt/i;
 
 /** Max size for args in event payloads (prevents explosion) */
 const MAX_ARG_PAYLOAD_SIZE = 1024;
