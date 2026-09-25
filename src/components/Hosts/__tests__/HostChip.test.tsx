@@ -38,6 +38,8 @@ import { _resetHostListForTesting } from "../hostList";
 import { requestHostMenu } from "../hostMenuRequests";
 import { takePendingHostUpdate } from "@/components/Settings/Hosts/hostUpdateRequests";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import { useProjectStore } from "@/store/projectStore";
+import type { Project } from "@shared/types";
 import { _resetDriveLeaseBannerForTesting } from "@/components/Recovery/driveLeaseState";
 
 const HANDSHAKE = {
@@ -214,6 +216,32 @@ describe("HostChip", () => {
     await waitFor(() =>
       expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h2", newWindow: true })
     );
+  });
+
+  it("takes the open project along on a plain click, and opens just the host on Cmd-click", async () => {
+    const previous = useProjectStore.getState().currentProject;
+    useProjectStore.setState({ currentProject: { id: "proj-1" } as Project });
+    try {
+      await renderWithHosts([host("h1", "studio-01")]);
+      let menu = await openMenu();
+      fireEvent.click(menu.querySelector("[data-host-id='h1']")!);
+      await waitFor(() =>
+        expect(dispatch).toHaveBeenCalledWith(
+          "project.openOnHost",
+          { hostId: "h1", projectId: "proj-1" },
+          { source: "user" }
+        )
+      );
+      expect(switchWindowHost).not.toHaveBeenCalled();
+
+      menu = await openMenu();
+      fireEvent.click(menu.querySelector("[data-host-id='h1']")!, { metaKey: true });
+      await waitFor(() =>
+        expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: true })
+      );
+    } finally {
+      useProjectStore.setState({ currentProject: previous });
+    }
   });
 
   it("uses Ctrl-click for a new window off macOS", async () => {

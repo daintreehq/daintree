@@ -11,6 +11,7 @@ import { Lane } from "../link/frames.js";
 import { LinkSession, type LinkCloseInfo, type LinkSessionOptions } from "../link/session.js";
 import { assertSocketPathFits, type HostSocketLocation } from "./hostSocketPath.js";
 import { removeDiscoveryFile, tokensEqual, writeDiscoveryFile } from "./discoveryFile.js";
+import { withHostSocketLock } from "./hostSocketLock.js";
 
 /**
  * Host mode's listener: a 0600 Unix socket in a 0700 directory, a per-launch
@@ -178,9 +179,17 @@ export class HostServer {
   }
 
   private async start(generation: number): Promise<void> {
-    const { dir, socketPath, discoveryPath } = this.options.location;
+    const { dir, socketPath } = this.options.location;
     assertSocketPathFits(socketPath);
     await prepareOwnerOnlyDir(dir);
+    // Probe, unlink, bind and advertise as one step per socket path, so two
+    // starts can't both judge the same socket stale and unlink each other's.
+    await withHostSocketLock(socketPath, () => this.bindAndAdvertise(generation));
+  }
+
+  private async bindAndAdvertise(generation: number): Promise<void> {
+    const { socketPath, discoveryPath } = this.options.location;
+    this.assertCurrent(generation);
     await clearStaleSocket(socketPath);
     this.assertCurrent(generation);
 
@@ -207,10 +216,13 @@ export class HostServer {
     } catch (err) {
       this.closeSessions();
       await this.closeListener(server);
+      // Still under the lock, so this can only be our own socket file.
       await fs.rm(socketPath, { force: true }).catch(() => {});
       await removeDiscoveryFile(discoveryPath, this.token).catch(() => false);
       throw err;
     }
+    // Published in the same tick as the last generation check, so a close()
+    // from here on sees the listener it has to tear down.
     this.server = server;
   }
 
@@ -219,8 +231,12 @@ export class HostServer {
     if (!server) return;
     await this.closeListener(server);
     // Closing the listener already unlinked the socket file (libuv does it
-    // for pipe servers).
-    await removeDiscoveryFile(this.options.location.discoveryPath, this.token);
+    // for pipe servers). Under the lock, so a start publishing its own file
+    // can't land between the token check and the removal.
+    const { socketPath, discoveryPath } = this.options.location;
+    await withHostSocketLock(socketPath, () =>
+      removeDiscoveryFile(discoveryPath, this.token)
+    ).catch(() => false);
   }
 
   private closeSessions(): void {
@@ -403,7 +419,9 @@ async function prepareOwnerOnlyDir(dir: string): Promise<void> {
 
 /**
  * Remove a socket file left by a crashed launch, but never one another live
- * process is serving, and never something that isn't a socket.
+ * process is serving, and never something that isn't a socket. Runs under the
+ * socket lock; the file is also re-checked to be the one probed before it is
+ * unlinked, for a process that doesn't take the lock.
  */
 async function clearStaleSocket(socketPath: string): Promise<void> {
   let stat;
@@ -434,5 +452,16 @@ async function clearStaleSocket(socketPath: string): Promise<void> {
     });
   });
   if (!stale) throw new HostServerError(`Another process is already listening on ${socketPath}`);
-  await fs.rm(socketPath, { force: true });
+  let current;
+  try {
+    current = await fs.lstat(socketPath);
+  } catch {
+    return;
+  }
+  if (current.dev !== stat.dev || current.ino !== stat.ino) {
+    throw new HostServerError(`Another process is already listening on ${socketPath}`);
+  }
+  await fs.unlink(socketPath).catch((err: NodeJS.ErrnoException) => {
+    if (err.code !== "ENOENT") throw err;
+  });
 }

@@ -6,6 +6,7 @@ import { AppError } from "../../utils/errorTypes.js";
 import type { TransferBeginMessage, TransferReason } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
 import type { TransferSink } from "../link/transfer.js";
+import { acceptClientBundleTransfer } from "../projects/bundleSinks.js";
 import {
   DOWNLOAD_SINK_PREFIX,
   FileDownloadStartSchema,
@@ -212,7 +213,12 @@ export class ClientFileTransport {
       const destination = begin.destination;
       if (destination.kind !== "path") throw new Error("Unexpected transfer destination");
       const create = this.sinks.get(destination.path);
-      if (!create) throw new Error("No transfer was requested for this destination");
+      if (!create) {
+        // A repository bundle a host sends when a project is copied here.
+        const bundle = acceptClientBundleTransfer(begin);
+        if (bundle) return bundle;
+        throw new Error("No transfer was requested for this destination");
+      }
       this.sinks.delete(destination.path);
       return create(begin);
     });

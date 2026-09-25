@@ -1,3 +1,5 @@
+import path from "node:path";
+import { app } from "electron";
 import { ensureWorkspaceClient, isWorkspaceClientStarting } from "../boot/hostServices.js";
 import { setRemoteBoundViewFilter } from "../ipc/utils.js";
 import { releaseWindowTerminalPort, setRemoteViewHooks } from "../window/portDistribution.js";
@@ -14,6 +16,9 @@ import {
   ViewVisibilityReporter,
 } from "./hybrid/index.js";
 import { installPickerSplits } from "./hybrid/pickers.js";
+import { installPluginClient } from "./plugins/install.js";
+import { installPortForwardClient } from "./ports/clientInstall.js";
+import { installHostSwitchService } from "./projects/clientInstall.js";
 import { registerRemoteService } from "./runtime.js";
 import {
   attachClientTerminalRelay,
@@ -77,6 +82,13 @@ function startClient(): void {
         hostForView
       )
     );
+    // Host plugins' prompts, consent and view bundles for the views driving their projects.
+    teardowns.push(
+      installPluginClient({
+        onEndpointOpened: client.onEndpointOpened,
+        onEndpointClosed: client.onEndpointClosed,
+      })
+    );
     // This machine's agents, terminals and projects are not a remote view's.
     teardowns.push(
       setRemoteBoundViewFilter(
@@ -132,6 +144,24 @@ function startClient(): void {
   });
   hostForView = client.hostForView;
   teardowns.push(() => client.dispose());
+  // Session-level services: both reach a host through its current session,
+  // so they work with no local view on it and cost nothing until a host is used.
+  teardowns.push(
+    installHostSwitchService({ client: client.client, sessionFor: client.sessionFor })
+  );
+  const hostEntry = (hostId: string) =>
+    client.client.list().find((entry) => entry.descriptor.id === hostId);
+  teardowns.push(
+    installPortForwardClient({
+      onEndpointOpened: client.onEndpointOpened,
+      hostForView: (webContentsId) => hostForView(webContentsId),
+      isKnownHost: (hostId) => hostEntry(hostId) !== undefined,
+      sessionFor: client.sessionFor,
+      hostIds: () => client.client.list().map((entry) => entry.descriptor.id),
+      sshTargetFor: (hostId) => hostEntry(hostId)?.descriptor.sshTarget ?? null,
+      clientDir: path.join(app.getPath("userData"), "rh"),
+    })
+  );
   // Answered only once a session exists, so registering costs nothing until then.
   teardowns.push(installViewReverseRequests());
 }

@@ -472,6 +472,7 @@ function probeDefinitions(): unknown[] {
 export const HOST_GATED_ACTION_IDS: ReadonlySet<string> = new Set([
   "host.switch",
   "project.openOnHost",
+  "host.forwardPort",
 ]);
 
 const CLONE_ID_MARKER = "#perfclone";

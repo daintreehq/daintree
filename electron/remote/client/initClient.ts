@@ -17,6 +17,7 @@ import {
 } from "../../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
+import type { LinkSession } from "../link/session.js";
 import { registerRemoteService } from "../runtime.js";
 import { HostRegistry, type RemoteHostsStore } from "./HostRegistry.js";
 import {
@@ -193,6 +194,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   hostForView(webContentsId: number): HostId | null;
   /** The dispatcher's router, for Shell-side relays that forward on a view's behalf. */
   router: RemoteRouterImpl;
+  /** The host's open session, whether or not a local view has an endpoint on it. */
+  sessionFor(hostId: HostId): LinkSession | null;
   dispose(): Promise<void>;
 } {
   const registry = new HostRegistry(store as unknown as RemoteHostsStore);
@@ -274,6 +277,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     onEndpointClosed: (listener) => manager.onEndpointClosed(listener),
     hostForView,
     router: remoteRouter,
+    sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
     async dispose() {
       unregister();
       unregisterSetup();

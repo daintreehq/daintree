@@ -17,6 +17,9 @@ import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { actionService } from "@/services/ActionService";
 import { useDriveLeaseView } from "@/components/Recovery/driveLeaseState";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { useProjectStore } from "@/store/projectStore";
+import { notify } from "@/lib/notify";
+import { logWarn } from "@/utils/logger";
 import { requestHostUpdate } from "@/components/Settings/Hosts/hostUpdateRequests";
 import { PlatformGlyph } from "./PlatformGlyph";
 import { isNewWindowClick, switchToHost } from "./hostSwitching";
@@ -47,6 +50,24 @@ function runUpdate(target: "host" | "local", hostId: string): void {
   }
   safeFireAndForget(window.electron.update.checkForUpdates(), {
     context: "Checking for an update after a host build mismatch",
+  });
+}
+
+/** Take the open project to another host: the switch dialog finds or clones it there. */
+async function openProjectOnHost(hostId: string, projectId: string): Promise<void> {
+  const result = await actionService.dispatch(
+    "project.openOnHost",
+    { hostId, projectId },
+    { source: "user" }
+  );
+  if (result.ok) return;
+  logWarn("[Hosts] Opening the project on another host failed", { error: result.error });
+  // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+  notify({
+    type: "error",
+    context: { eventKind: "connectivity" },
+    title: "Couldn't open project on host",
+    message: "The host switch dialog couldn't open. Try again from the host menu.",
   });
 }
 
@@ -102,6 +123,7 @@ export function HostChip() {
   const connection = useHostConnectionStore((s) => s.connection);
   const storeHostName = useHostConnectionStore((s) => s.hostName);
   const lease = useDriveLeaseView();
+  const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
   const [open, setOpen] = useState(false);
   const visible = supported && hasRemoteHosts(hostList);
 
@@ -129,6 +151,12 @@ export function HostChip() {
 
   const pick = (row: HostMenuRow, newWindow: boolean) => {
     if (row.isCurrent && !newWindow) return;
+    // With a project open, switching this window means bringing the project
+    // along; a new window just opens the host.
+    if (projectId && !newWindow) {
+      void openProjectOnHost(row.hostId, projectId);
+      return;
+    }
     void switchToHost(row.hostId, newWindow);
   };
 
