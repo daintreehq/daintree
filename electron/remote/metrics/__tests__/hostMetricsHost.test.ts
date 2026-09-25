@@ -15,6 +15,7 @@ import {
   installHostMetricsHostWith,
   type MetricsHostDeps,
   type MetricsSessionSource,
+  type WaitingEvent,
 } from "../hostMetricsHost.js";
 import type { AttentionPayload } from "../linkMethods.js";
 import { SummaryLoop } from "../summaryLoop.js";
@@ -52,19 +53,20 @@ function summary(sampledAt: number): HostMetricsSummary {
   };
 }
 
+type FakeCtx = { session: LinkSession; client: LinkClientInfo; sessionId: string };
+
 class FakeServer implements MetricsSessionSource {
-  sessions: Array<{ session: LinkSession; client: LinkClientInfo }> = [];
-  private readonly listeners = new Set<
-    (ctx: { session: LinkSession; client: LinkClientInfo }) => void
-  >();
-  onSession(listener: (ctx: { session: LinkSession; client: LinkClientInfo }) => void) {
+  sessions: FakeCtx[] = [];
+  private readonly listeners = new Set<(ctx: FakeCtx) => void>();
+  onSession(listener: (ctx: FakeCtx) => void) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
-  attach(session: LinkSession, clientId: string) {
+  attach(session: LinkSession, clientId: string, sessionId = `session-of-${clientId}`) {
     const ctx = {
       session,
       client: { clientId, clientName: clientId, platform: "darwin" as const },
+      sessionId,
     };
     this.sessions.push(ctx);
     for (const listener of this.listeners) listener(ctx);
@@ -77,10 +79,19 @@ async function pair() {
   return p;
 }
 
+const NO_QUIET_HOURS = {
+  enabled: true,
+  waitingEnabled: true,
+  quietHoursEnabled: false,
+  quietHoursStartMin: 0,
+  quietHoursEndMin: 0,
+  quietHoursWeekdays: [],
+};
+
 function deps(overrides: Partial<MetricsHostDeps> = {}): MetricsHostDeps & {
-  fireWaiting: (payload: AttentionPayload) => void;
+  fireWaiting: (payload: WaitingEvent) => void;
 } {
-  let waiting: ((payload: AttentionPayload) => void) | null = null;
+  let waiting: ((payload: WaitingEvent) => void) | null = null;
   let clock = 0;
   return {
     loop: { subscribe: () => () => {}, latest: () => null },
@@ -91,6 +102,7 @@ function deps(overrides: Partial<MetricsHostDeps> = {}): MetricsHostDeps & {
       waiting = listener;
       return () => (waiting = null);
     },
+    notificationSettings: () => NO_QUIET_HOURS,
     now: () => (clock += 1000),
     fireWaiting: (payload) => waiting?.(payload),
     ...overrides,
@@ -155,14 +167,33 @@ describe("installHostMetricsHostWith", () => {
     dispose();
   });
 
-  it("submits fleet prompts as the calling Shell", async () => {
+  it("submits fleet prompts as the calling session, never the client id its HELLO claimed", async () => {
     const server = new FakeServer();
     const submitFleet = vi.fn(async () => {});
     const dispose = installHostMetricsHostWith(server, deps({ submitFleet }));
     const p = await pair();
-    server.attach(p.host, "shell-7");
+    server.attach(p.host, "shell-7", "sess-abc");
     await p.client.call(MetricsLinkMethod.SUBMIT_FLEET, { terminalId: "t1", text: "go" });
-    expect(submitFleet).toHaveBeenCalledWith("t1", "go", { kind: "remote", clientId: "shell-7" });
+    expect(submitFleet).toHaveBeenLastCalledWith(
+      "t1",
+      "go",
+      { kind: "remote", sessionId: "sess-abc" },
+      null
+    );
+    await p.client.call(MetricsLinkMethod.SUBMIT_FLEET, {
+      terminalId: "t1",
+      text: "go",
+      opId: "op-1",
+    });
+    expect(submitFleet).toHaveBeenLastCalledWith(
+      "t1",
+      "go",
+      { kind: "remote", sessionId: "sess-abc" },
+      "op-1"
+    );
+    await expect(
+      p.client.call(MetricsLinkMethod.SUBMIT_FLEET, { terminalId: "t1", text: "go", opId: "a b" })
+    ).rejects.toBeTruthy();
     await expect(
       p.client.call(MetricsLinkMethod.SUBMIT_FLEET, { terminalId: "t1", text: "" })
     ).rejects.toBeTruthy();
@@ -222,7 +253,7 @@ describe("installHostMetricsHostWith", () => {
       heardB.push(p);
       return null;
     });
-    const payload: AttentionPayload = {
+    const payload: WaitingEvent = {
       kind: "waiting",
       terminalId: "t1",
       projectName: "app",
@@ -235,7 +266,52 @@ describe("installHostMetricsHostWith", () => {
     clock += ATTENTION_COOLDOWN_MS;
     d.fireWaiting(payload);
     await waitFor(() => heardA.length === 2);
-    expect(heardA[0]).toEqual(payload);
+    expect(heardA[0]).toEqual({ ...payload, quiet: false });
+    dispose();
+  });
+
+  it("applies its own notification policy before any Shell hears about a waiting agent", async () => {
+    const server = new FakeServer();
+    let clock = new Date(2026, 8, 25, 12, 0).getTime();
+    let settings = { ...NO_QUIET_HOURS, waitingEnabled: false };
+    const d = deps({ now: () => clock, notificationSettings: () => settings });
+    const dispose = installHostMetricsHostWith(server, d);
+    const p = await pair();
+    server.attach(p.host, "shell");
+    const heard: AttentionPayload[] = [];
+    p.client.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, (body) => {
+      heard.push(body);
+      return null;
+    });
+    const event = (terminalId: string): WaitingEvent => ({
+      kind: "waiting",
+      terminalId,
+      projectName: null,
+      agentName: null,
+    });
+
+    // Waiting notifications off on this host: nothing leaves it.
+    d.fireWaiting(event("off"));
+    settings = { ...NO_QUIET_HOURS, enabled: false };
+    d.fireWaiting(event("off"));
+
+    // This host's quiet hours cover noon: the Shell is told to keep it quiet.
+    settings = {
+      ...NO_QUIET_HOURS,
+      quietHoursEnabled: true,
+      quietHoursStartMin: 11 * 60,
+      quietHoursEndMin: 13 * 60,
+    };
+    d.fireWaiting(event("quiet"));
+    await waitFor(() => heard.length === 1);
+    expect(heard[0]).toMatchObject({ terminalId: "quiet", quiet: true });
+
+    // Outside them it is announced normally.
+    clock = new Date(2026, 8, 25, 14, 0).getTime();
+    d.fireWaiting(event("loud"));
+    await waitFor(() => heard.length === 2);
+    expect(heard[1]).toMatchObject({ terminalId: "loud", quiet: false });
+    expect(heard.some((body) => body.terminalId === "off")).toBe(false);
     dispose();
   });
 });

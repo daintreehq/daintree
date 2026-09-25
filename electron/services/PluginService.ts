@@ -1168,6 +1168,7 @@ export class PluginService {
       reservedNames: this.reservedNames,
       disabledPlugins: this.disabledPlugins,
       blockedPlugins: this.blockedPlugins,
+      getInstalledVersion: (pluginId) => this.installedPluginVersion(pluginId),
     });
 
     const offRegister = onPanelKindRegistered(() => this.broadcaster.schedulePanelKindsBroadcast());
@@ -4504,11 +4505,13 @@ export class PluginService {
    * blocklist names this version; a package the load-time blocklist would
    * refuse is never copied into place. `pluginId` pins the package to the
    * plugin the person asked for, and `update` requires it to be installed
-   * here already.
+   * here already. Whether it may replace what is installed is decided inside
+   * the installer's lock, against what is installed at that moment. `jobId`
+   * is a job already registered for progress and cancellation.
    */
   async installPluginFromAnotherMachine(
     archivePath: string,
-    expect: { pluginId?: string; update?: boolean } = {}
+    expect: { pluginId?: string; update?: boolean; jobId?: string } = {}
   ): Promise<PluginInstallResult> {
     await this.waitForInit();
     let manifest: PluginManifest;
@@ -4530,13 +4533,6 @@ export class PluginService {
           },
         ],
       };
-    }
-    const installedVersion =
-      (this.plugins.get(manifest.name) ?? this.disabledPlugins.get(manifest.name))?.manifest
-        .version ?? null;
-    const replacement = replacementRefusal(manifest, installedVersion, expect);
-    if (replacement) {
-      return { status: "failed", errors: [{ code: "archive_mismatch", message: replacement }] };
     }
     const blocklist = (await this.blocklistService.getBlocklist()) ?? this.startupBlocklist;
     const refusal = pluginInstallRefusal(manifest, { platform: process.platform, blocklist });
@@ -4562,7 +4558,26 @@ export class PluginService {
         `${displayName} ${manifest.version} is blocked: ${refusal.message}`
       );
     }
-    return this.installer.installPlugin(archivePath, { source: "sideload" });
+    const target = { pluginId: expect.pluginId, update: expect.update };
+    return this.installer.installPlugin(
+      archivePath,
+      { source: "sideload", ...(expect.jobId !== undefined ? { jobId: expect.jobId } : {}) },
+      (installedVersion) => replacementRefusal(manifest, installedVersion, target)
+    );
+  }
+
+  /**
+   * The version installed under `pluginId`, whether it loaded, was skipped as
+   * disabled, or was refused by the blocklist; null when none is.
+   */
+  private installedPluginVersion(pluginId: string): string | null {
+    return (
+      (
+        this.plugins.get(pluginId) ??
+        this.disabledPlugins.get(pluginId) ??
+        this.blockedPlugins.get(pluginId)
+      )?.manifest.version ?? null
+    );
   }
 
   /**

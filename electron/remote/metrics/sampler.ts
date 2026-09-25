@@ -41,8 +41,9 @@ export interface HostSampleSources {
   listDir(path: string): Promise<string[]>;
   /** macOS thermal state from the power monitor; null elsewhere or unknown. */
   thermalState(): ThermalState | null;
-  agents(): Promise<ObservedAgents>;
-  projects(): Promise<{ projectCount: number; worktreeCount: number }>;
+  /** Null when the agents can't all be observed; never a partial tally. */
+  agents(): Promise<ObservedAgents | null>;
+  projects(): Promise<{ projectCount: number | null; worktreeCount: number | null }>;
   driver(): DriveLeaseHolder | null;
   agentClis(): Promise<Array<{ agentId: string; version: string | null }>>;
   now(): number;
@@ -84,8 +85,12 @@ export class HostMetricsSampler {
         thermal: null,
         cpuPressure: null,
       }),
-      settle(() => s.agents(), { working: 0, waiting: 0, idle: 0 }),
-      settle(() => s.projects(), { projectCount: 0, worktreeCount: 0 }),
+      // A failed read is unknown, not zero: zero working agents lets an update restart the host.
+      settle<ObservedAgents | null>(() => s.agents(), null),
+      settle<{ projectCount: number | null; worktreeCount: number | null }>(() => s.projects(), {
+        projectCount: null,
+        worktreeCount: null,
+      }),
       settle(() => s.agentClis(), []),
     ]);
 

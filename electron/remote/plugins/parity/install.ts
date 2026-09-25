@@ -1,6 +1,11 @@
 import { BrowserWindow, dialog } from "electron";
 import type { HostId } from "../../../../shared/types/remoteHosts.js";
-import type { PluginInstallResult } from "../../../../shared/types/plugin.js";
+import type {
+  PluginInstallPhase,
+  PluginInstallProgressEvent,
+  PluginInstallResult,
+} from "../../../../shared/types/plugin.js";
+import { describePluginInstallSource } from "../../../../shared/utils/pluginInstallSource.js";
 import { CHANNELS } from "../../../ipc/channels.js";
 import { getIpcDispatcher } from "../../../ipc/dispatcher.js";
 import type { HybridSplit, IpcDispatcher } from "../../../ipc/endpoint.js";
@@ -80,10 +85,48 @@ function notRunning(): AppError {
   });
 }
 
-function installOnHost(hostId: HostId, localPath: string): Promise<PluginInstallResult> {
+// Same bound the local install handlers put on a renderer-minted job id.
+const INSTALL_JOB_ID_PATTERN = /^[0-9a-fA-F-]{8,64}$/;
+
+function validJobId(value: unknown): string | undefined {
+  return typeof value === "string" && INSTALL_JOB_ID_PATTERN.test(value) ? value : undefined;
+}
+
+/** Push an install's phases to the window that asked, as the local install does. */
+function progressTo(webContentsId: number, jobId: string, localPath: string) {
+  const source = describePluginInstallSource(localPath);
+  return (phase: PluginInstallPhase) => {
+    const wc = resolveLiveWebContents(webContentsId);
+    if (!wc || wc.isDestroyed()) return;
+    const event: PluginInstallProgressEvent = {
+      jobId,
+      phase,
+      cancellable: phase !== "activating",
+      source,
+    };
+    wc.send(CHANNELS.PLUGIN_INSTALL_PROGRESS, event);
+  };
+}
+
+/**
+ * The window's job id travels with the package: the host registers it, so the
+ * window's Cancel (sent to the host) stops the transfer or the install up to
+ * its commit point, and the host's install phases come back to the window.
+ */
+function installOnHost(
+  hostId: HostId,
+  webContentsId: number,
+  localPath: string,
+  jobIdArg: unknown
+): Promise<PluginInstallResult> {
   const parity = getRemoteService("pluginParityClient");
   if (!parity) throw notRunning();
-  return parity.installLocalPackageOnHost(hostId, localPath);
+  const jobId = validJobId(jobIdArg);
+  return parity.installLocalPackageOnHost(
+    hostId,
+    localPath,
+    jobId === undefined ? {} : { jobId, onPhase: progressTo(webContentsId, jobId, localPath) }
+  );
 }
 
 /**
@@ -96,17 +139,17 @@ export function createPluginInstallSplits(
   pick: (webContentsId: number) => Promise<string | null>
 ): Record<string, HybridSplit> {
   return {
-    [CHANNELS.PLUGIN_INSTALL_FROM_PATH]: async ({ hostId, args }) => {
+    [CHANNELS.PLUGIN_INSTALL_FROM_PATH]: async ({ hostId, webContentsId, args }) => {
       const localPath = args[0];
       if (typeof localPath !== "string" || localPath.length === 0 || localPath.includes("\0")) {
         return { status: "failed", errors: [{ code: "archive_invalid", message: "Invalid path" }] };
       }
-      return installOnHost(hostId, localPath);
+      return installOnHost(hostId, webContentsId, localPath, args[1]);
     },
-    [CHANNELS.PLUGIN_INSTALL_FROM_FILE]: async ({ hostId, webContentsId }) => {
+    [CHANNELS.PLUGIN_INSTALL_FROM_FILE]: async ({ hostId, webContentsId, args }) => {
       const localPath = await pick(webContentsId);
       if (localPath === null) return { status: "cancelled" };
-      return installOnHost(hostId, localPath);
+      return installOnHost(hostId, webContentsId, localPath, args[0]);
     },
   };
 }

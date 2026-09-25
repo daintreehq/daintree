@@ -1,5 +1,7 @@
 import type { HostFleetTarget, HostWorktreeEntry } from "../../../shared/types/ipc/hostMetrics.js";
+import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
 import type { HostMetricsSummary } from "../../../shared/types/remoteHosts.js";
+import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind, type LinkClientInfo } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
@@ -12,9 +14,16 @@ import {
 } from "./linkMethods.js";
 
 /** The slice of the host server this needs: every attached session, now and later. */
+export interface MetricsSessionContext {
+  session: LinkSession;
+  client: LinkClientInfo;
+  /** This host's own id for the session; fleet submits are authorized by it. */
+  sessionId: string;
+}
+
 export interface MetricsSessionSource {
-  readonly sessions: ReadonlyArray<{ session: LinkSession; client: LinkClientInfo }>;
-  onSession(listener: (ctx: { session: LinkSession; client: LinkClientInfo }) => void): () => void;
+  readonly sessions: ReadonlyArray<MetricsSessionContext>;
+  onSession(listener: (ctx: MetricsSessionContext) => void): () => void;
 }
 
 export interface MetricsHostDeps {
@@ -23,11 +32,42 @@ export interface MetricsHostDeps {
     latest(): HostMetricsSummary | null;
   };
   listFleetTargets(): Promise<HostFleetTarget[]>;
-  submitFleet(terminalId: string, text: string, caller: FleetCaller): Promise<void>;
+  submitFleet(
+    terminalId: string,
+    text: string,
+    caller: FleetCaller,
+    opId: string | null
+  ): Promise<void>;
   listWorktrees(): Promise<HostWorktreeEntry[]>;
   /** Told when one of this host's agents goes from working to waiting. */
-  onAgentWaiting(listener: (payload: AttentionPayload) => void): () => void;
+  onAgentWaiting(listener: (payload: WaitingEvent) => void): () => void;
+  /** This host's own notification settings: its policy decides, not the Shell's window. */
+  notificationSettings(): Pick<
+    NotificationSettings,
+    | "enabled"
+    | "waitingEnabled"
+    | "quietHoursEnabled"
+    | "quietHoursStartMin"
+    | "quietHoursEndMin"
+    | "quietHoursWeekdays"
+  >;
   now(): number;
+}
+
+/** A waiting agent before this host's policy has been applied. */
+export type WaitingEvent = Omit<AttentionPayload, "quiet">;
+
+/**
+ * This host's verdict on a waiting agent: not announced at all when its user
+ * turned waiting notifications off, quiet (inbox only) during its quiet hours.
+ * A Shell showing another host must not decide this from that host's settings.
+ */
+export function waitingPolicy(
+  settings: ReturnType<MetricsHostDeps["notificationSettings"]>,
+  now: Date
+): "silent" | "quiet" | "announce" {
+  if (settings.enabled === false || settings.waitingEnabled === false) return "silent";
+  return isScheduledQuietNow(settings, now) ? "quiet" : "announce";
 }
 
 /** One reminder per agent per window: a flapping FSM must not page a Shell repeatedly. */
@@ -62,7 +102,7 @@ export function installHostMetricsHostWith(
   const wired = new WeakSet<LinkSession>();
   const lastAttention = new Map<string, number>();
 
-  const wire = (session: LinkSession, client: LinkClientInfo): void => {
+  const wire = ({ session, sessionId }: MetricsSessionContext): void => {
     if (wired.has(session)) return;
     wired.add(session);
     session.registerCallHandler(
@@ -73,8 +113,8 @@ export function installHostMetricsHostWith(
     session.registerCallHandler(
       MetricsLinkMethod.SUBMIT_FLEET,
       SubmitFleetPayloadSchema,
-      async ({ terminalId, text }) => {
-        await deps.submitFleet(terminalId, text, { kind: "remote", clientId: client.clientId });
+      async ({ terminalId, text, opId }) => {
+        await deps.submitFleet(terminalId, text, { kind: "remote", sessionId }, opId ?? null);
         return null;
       }
     );
@@ -85,9 +125,9 @@ export function installHostMetricsHostWith(
     if (latest) postSummary(session, latest);
   };
 
-  for (const ctx of server.sessions) wire(ctx.session, ctx.client);
+  for (const ctx of server.sessions) wire(ctx);
   const offSession = server.onSession((ctx) => {
-    wire(ctx.session, ctx.client);
+    wire(ctx);
     ensureLoop();
   });
 
@@ -110,8 +150,17 @@ export function installHostMetricsHostWith(
   };
   if (server.sessions.length > 0) ensureLoop();
 
-  const offWaiting = deps.onAgentWaiting((payload) => {
+  const offWaiting = deps.onAgentWaiting((event) => {
     const now = deps.now();
+    let policy: ReturnType<typeof waitingPolicy>;
+    try {
+      policy = waitingPolicy(deps.notificationSettings(), new Date(now));
+    } catch (error) {
+      console.warn("[HostMetrics] Couldn't read notification settings:", error);
+      return;
+    }
+    if (policy === "silent") return;
+    const payload: AttentionPayload = { ...event, quiet: policy === "quiet" };
     const last = lastAttention.get(payload.terminalId);
     if (last !== undefined && now - last < ATTENTION_COOLDOWN_MS) return;
     lastAttention.set(payload.terminalId, now);
@@ -165,6 +214,7 @@ export async function installHostMetricsHost(server: MetricsSessionSource): Prom
         listener({ kind: "waiting", terminalId, projectName: project?.name ?? null, agentName });
       });
     },
+    notificationSettings: () => projectStore.getEffectiveNotificationSettings(),
     now: Date.now,
   });
 }

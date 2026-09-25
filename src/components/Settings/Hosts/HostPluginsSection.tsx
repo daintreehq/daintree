@@ -1,10 +1,12 @@
 import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { PluginParityGroup, PluginParityRow } from "@shared/types/ipc/pluginParity";
 import type { HostId } from "@shared/types/remoteHosts";
 import { usePluginParity } from "@/components/Plugin/usePluginParity";
-import { describeIncompatibility } from "@/components/Plugin/pluginParityCopy";
+import {
+  describeIncompatibility,
+  pluginParityErrorText,
+} from "@/components/Plugin/pluginParityCopy";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 
@@ -49,7 +51,7 @@ function rowDescription(row: PluginParityRow, host: string): string {
  * applies. Nothing is copied unless the person asks, one plugin at a time.
  */
 export function HostPluginsSection({ hostId, hostName, connected }: HostPluginsSectionProps) {
-  const { state, refresh } = usePluginParity(hostId, connected);
+  const { state, refresh } = usePluginParity(hostId, connected, hostName);
   const [busy, setBusy] = useState<string | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
 
@@ -75,7 +77,13 @@ export function HostPluginsSection({ hostId, hostName, connected }: HostPluginsS
         setBusy(null);
         setRowErrors((prev) => ({
           ...prev,
-          [row.pluginId]: formatErrorMessage(err, `Couldn't install on ${hostName}`),
+          [row.pluginId]: pluginParityErrorText(
+            err,
+            hostName,
+            row.action === "update-on-host"
+              ? `Couldn't update ${row.displayName} on ${hostName}`
+              : `Couldn't install ${row.displayName} on ${hostName}`
+          ),
         }));
       }
     );

@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallResult } from "../../../../../shared/types/plugin.js";
 import { pluginIncompatibleError } from "../../../../services/plugin/parity/errors.js";
+import { pluginInstallJobs } from "../../../../services/plugin/PluginInstallJobRegistry.js";
+import { AppError } from "../../../../utils/errorTypes.js";
 import type {
   PluginInventory,
   PluginInventoryEntry,
@@ -15,7 +17,7 @@ import {
   openSessionPair,
   removeTempDir,
 } from "../../../link/__tests__/linkTestUtils.js";
-import { ClientPluginParity } from "../ClientPluginParity.js";
+import { ClientPluginParity, type ParitySession } from "../ClientPluginParity.js";
 import { HostPluginParity, type HostPluginParityPlugins } from "../HostPluginParity.js";
 import { PluginParityLinkMethod, STAGE_CHUNK_BYTES } from "../linkMethods.js";
 
@@ -87,6 +89,8 @@ beforeEach(async () => {
     },
     pack,
     tmpDir: dir,
+    pollMs: 5,
+    reconcileTimeoutMs: 2_000,
   });
 });
 
@@ -186,22 +190,43 @@ describe("plugin parity over a link", () => {
     expect(error).toMatchObject({
       code: "PLUGIN_INCOMPATIBLE",
       details: { pluginId: "acme.md", hostId: HOST, reason: { kind: "untrusted" } },
-      userMessage: "Markdown Preview 1.0.0 is blocked: bad; it can't be installed on studio-01.",
+      userMessage: "That plugin is blocked on studio-01 by the plugin blocklist.",
     });
   });
 
-  it("names the host when an install fails there", async () => {
+  it("names the host when an install fails there, in its own words rather than the host's", async () => {
     localInventory.plugins = [entry("acme.md")];
     hostPlugins.installPluginFromAnotherMachine.mockResolvedValueOnce({
       status: "failed",
-      errors: [{ code: "manifest_invalid", message: "plugin.json is not valid JSON" }],
+      errors: [
+        {
+          code: "archive_invalid",
+          message: "Failed to extract archive: EACCES /home/host/.daintree/plugins/.install-tmp-1",
+        },
+      ],
     });
-    await expect(client.installOnHost({ hostId: HOST, pluginId: "acme.md" })).rejects.toMatchObject(
-      {
-        userMessage:
-          "Couldn't install Markdown Preview on studio-01: plugin.json is not valid JSON",
-      }
+    const error = (await client
+      .installOnHost({ hostId: HOST, pluginId: "acme.md" })
+      .catch((err: unknown) => err)) as { userMessage: string; message: string };
+    expect(error.userMessage).toBe(
+      "studio-01 couldn't read this machine's package of Markdown Preview."
     );
+    expect(`${error.userMessage} ${error.message}`).not.toMatch(/\/home|EACCES/);
+  });
+
+  it("restates a host's own error text by its code", async () => {
+    localInventory.plugins = [entry("acme.md")];
+    hostPlugins.installPluginFromAnotherMachine.mockRejectedValueOnce(
+      new AppError({
+        code: "PERMISSION",
+        message: "EACCES /home/host/secret",
+        userMessage: "Couldn't write /home/host/secret",
+      })
+    );
+    const error = (await client
+      .installOnHost({ hostId: HOST, pluginId: "acme.md" })
+      .catch((err: unknown) => err)) as { userMessage: string };
+    expect(error.userMessage).toBe("Couldn't install the plugin on studio-01.");
   });
 
   it("installs a .dntr from this machine on the host and refuses anything else", async () => {
@@ -234,6 +259,198 @@ describe("plugin parity over a link", () => {
       code: "HOST_DISCONNECTED",
       userMessage: expect.stringContaining(HOST),
     });
+  });
+});
+
+/** The client's session, with one method's answer lost on the way back. */
+function losingAnswerTo(method: string, forward: boolean): ParitySession {
+  const real = sessions.client;
+  return {
+    get isOpen() {
+      return real.isOpen;
+    },
+    call(m, payload, options) {
+      if (m !== method) return real.call(m, payload, options);
+      if (forward) void real.call(m, payload, options).catch(() => undefined);
+      return Promise.reject(
+        new AppError({ code: "OUTCOME_UNKNOWN", message: "Link closed before the peer answered" })
+      );
+    },
+  };
+}
+
+function clientWith(session: ParitySession, patch: object = {}): ClientPluginParity {
+  return new ClientPluginParity({
+    sessionFor: () => session,
+    isKnownHost: (hostId) => hostId === HOST,
+    hostLabel: () => HOST,
+    local: {
+      inventory: async () => localInventory,
+      installedDir: async () => dir,
+    },
+    pack,
+    tmpDir: dir,
+    pollMs: 5,
+    reconcileTimeoutMs: 2_000,
+    ...patch,
+  });
+}
+
+describe("an install whose answer was lost", () => {
+  it("asks the host what happened and reports the install it finished", async () => {
+    localInventory.plugins = [entry("acme.md")];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    hostPlugins.installPluginFromAnotherMachine.mockImplementationOnce(async () => {
+      await gate;
+      return { status: "installed", pluginId: "acme.md" };
+    });
+    const lossy = clientWith(losingAnswerTo(PluginParityLinkMethod.STAGE_INSTALL, true));
+    const install = lossy.installOnHost({ hostId: HOST, pluginId: "acme.md" });
+    await vi.waitFor(() => expect(hostPlugins.installPluginFromAnotherMachine).toHaveBeenCalled());
+    release();
+    await expect(install).resolves.toBeUndefined();
+    expect(hostPlugins.installPluginFromAnotherMachine).toHaveBeenCalledTimes(1);
+  });
+
+  it("says nothing was installed when the host never received it", async () => {
+    localInventory.plugins = [entry("acme.md")];
+    const lossy = clientWith(losingAnswerTo(PluginParityLinkMethod.STAGE_INSTALL, false));
+    await expect(lossy.installOnHost({ hostId: HOST, pluginId: "acme.md" })).rejects.toMatchObject({
+      userMessage: expect.stringContaining("Nothing was installed"),
+    });
+    expect(hostPlugins.installPluginFromAnotherMachine).not.toHaveBeenCalled();
+  });
+
+  it("keeps saying the outcome is unknown while the host can't be asked", async () => {
+    localInventory.plugins = [entry("acme.md")];
+    const real = sessions.client;
+    let open = true;
+    const flaky: ParitySession = {
+      get isOpen() {
+        return open && real.isOpen;
+      },
+      call(m, payload, options) {
+        if (m !== PluginParityLinkMethod.STAGE_INSTALL) return real.call(m, payload, options);
+        open = false;
+        return Promise.reject(new AppError({ code: "OUTCOME_UNKNOWN", message: "dropped" }));
+      },
+    };
+    const lossy = clientWith(flaky, { reconcileTimeoutMs: 30 });
+    await expect(lossy.installOnHost({ hostId: HOST, pluginId: "acme.md" })).rejects.toMatchObject({
+      code: "OUTCOME_UNKNOWN",
+      userMessage: expect.stringContaining("Check its plugin list"),
+    });
+  });
+
+  it("runs one install per operation id on the host and answers a repeat with its outcome", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const stageAndInstall = async () => {
+      const { token } = (await sessions.client.call(PluginParityLinkMethod.STAGE_BEGIN, {
+        size: 3,
+        sha256,
+      })) as { token: string };
+      await sessions.client.call(PluginParityLinkMethod.STAGE_CHUNK, { token, offset: 0, bytes });
+      return sessions.client.call(PluginParityLinkMethod.STAGE_INSTALL, {
+        token,
+        update: false,
+        opId: "op-1",
+      });
+    };
+    await expect(stageAndInstall()).resolves.toEqual({ status: "installed", pluginId: "acme.md" });
+    await expect(stageAndInstall()).resolves.toEqual({ status: "installed", pluginId: "acme.md" });
+    expect(hostPlugins.installPluginFromAnotherMachine).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(stagingRoot)).toEqual([]);
+    await expect(
+      sessions.client.call(PluginParityLinkMethod.INSTALL_STATUS, { opId: "op-1" })
+    ).resolves.toMatchObject({
+      status: "succeeded",
+      result: { status: "installed", pluginId: "acme.md" },
+    });
+    await expect(
+      sessions.client.call(PluginParityLinkMethod.INSTALL_STATUS, { opId: "op-2" })
+    ).resolves.toEqual({ status: "unknown" });
+  });
+});
+
+describe("a window's install job on the host", () => {
+  const JOB = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+
+  async function localArchive(): Promise<string> {
+    const archive = path.join(dir, "graph.dntr");
+    await fs.writeFile(
+      archive,
+      Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), packageBytes])
+    );
+    return archive;
+  }
+
+  it("hands the job to the host's installer and relays its phases", async () => {
+    const phases: string[] = [];
+    hostPlugins.installPluginFromAnotherMachine.mockImplementationOnce(
+      async (_path: string, expect: { jobId?: string }) => {
+        pluginInstallJobs.setPhase(expect.jobId, "extracting");
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        pluginInstallJobs.setPhase(expect.jobId, "activating");
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        return { status: "installed", pluginId: "acme.md" };
+      }
+    );
+    await expect(
+      client.installLocalPackageOnHost(HOST, await localArchive(), {
+        jobId: JOB,
+        onPhase: (phase) => phases.push(phase),
+      })
+    ).resolves.toEqual({ status: "installed", pluginId: "acme.md" });
+    expect(hostPlugins.installPluginFromAnotherMachine.mock.calls[0]![1]).toEqual({
+      update: false,
+      jobId: JOB,
+    });
+    expect(phases).toEqual(["extracting", "activating"]);
+    // The job lives exactly as long as its slot.
+    expect(pluginInstallJobs.size).toBe(0);
+  });
+
+  it("refuses a job id that is already running here", async () => {
+    const begin = () =>
+      sessions.client.call(PluginParityLinkMethod.STAGE_BEGIN, {
+        size: 1,
+        sha256: "0".repeat(64),
+        jobId: JOB,
+      });
+    await begin();
+    await expect(begin()).rejects.toBeTruthy();
+    expect(await fs.readdir(stagingRoot)).toHaveLength(1);
+  });
+
+  it("stops the transfer and removes the staged package when the window cancels", async () => {
+    const real = sessions.client;
+    let chunks = 0;
+    const cancelling: ParitySession = {
+      get isOpen() {
+        return real.isOpen;
+      },
+      async call(m, payload, options) {
+        if (m === PluginParityLinkMethod.STAGE_CHUNK) chunks++;
+        const answer = await real.call(m, payload, options);
+        if (m === PluginParityLinkMethod.STAGE_CHUNK && chunks === 1) {
+          // The window's Cancel, which it sends to the host.
+          expect(pluginInstallJobs.cancel(JOB)).toBe(true);
+        }
+        return answer;
+      },
+    };
+    await expect(
+      clientWith(cancelling).installLocalPackageOnHost(HOST, await localArchive(), { jobId: JOB })
+    ).resolves.toEqual({ status: "cancelled" });
+    // The chunk after the Cancel was refused; the rest were never sent.
+    expect(chunks).toBe(2);
+    expect(hostPlugins.installPluginFromAnotherMachine).not.toHaveBeenCalled();
+    await vi.waitFor(async () => expect(await fs.readdir(stagingRoot)).toEqual([]));
+    expect(pluginInstallJobs.size).toBe(0);
   });
 });
 

@@ -6,7 +6,9 @@ import { HANDSHAKE, makeSummary } from "./fixtures";
 
 const { hostList, dispatch } = vi.hoisted(() => ({
   hostList: { hosts: [] as HostListEntry[], localSummary: null as unknown },
-  dispatch: vi.fn(async () => ({ ok: true })),
+  dispatch: vi.fn(async (..._args: unknown[]): Promise<{ ok: boolean; error?: unknown }> => ({
+    ok: true,
+  })),
 }));
 
 vi.mock("../../hostList", () => ({
@@ -88,12 +90,40 @@ describe("WorktreePlacementRow", () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId("worktree-placement-continue"));
     });
-    expect(onLeave).toHaveBeenCalled();
     expect(dispatch).toHaveBeenCalledWith(
       "project.openOnHost",
       { hostId: "studio-02", projectId: "p1" },
       { source: "user" }
     );
+    // The dialog closes only once the host's switch dialog is up.
+    expect(onLeave).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.invocationCallOrder[0]!).toBeLessThan(
+      onLeave.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("keeps the dialog open and names the host when the handoff fails", async () => {
+    dispatch.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "No view can show the host switch dialog" },
+    });
+    const onLeave = vi.fn();
+    render(<WorktreePlacementRow projectId="p1" onLeave={onLeave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("worktree-placement-continue"));
+    });
+    expect(onLeave).not.toHaveBeenCalled();
+    const error = screen.getByTestId("worktree-placement-error");
+    expect(error.getAttribute("role")).toBe("alert");
+    expect(error.textContent).toBe(
+      "Couldn't open this project on studio-02. Check that it's connected and retry."
+    );
+    // Retrying is the same button, and a success then closes the dialog.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("worktree-placement-continue"));
+    });
+    expect(onLeave).toHaveBeenCalledTimes(1);
   });
 
   it("renders nothing until another host exists", () => {

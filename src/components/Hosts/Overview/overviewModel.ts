@@ -50,10 +50,20 @@ export function describeThermal(summary: HostMetricsSummary): string | null {
   return summary.thermal === null ? null : `Thermal ${summary.thermal}`;
 }
 
-/** Observed agent counts, always labelled as observations. */
+/** Observed agent counts, always labelled as observations; a failed read says so, never 0. */
 export function describeObservedAgents(summary: HostMetricsSummary): string {
+  if (!summary.agentsObserved) return "Agent activity unknown";
   const { working, waiting, idle } = summary.agentsObserved;
   return `${working} working · ${waiting} waiting · ${idle} idle (observed)`;
+}
+
+/** "2 open · 5 worktrees", with whichever count failed to read shown as unknown, never 0. */
+export function describeProjects(summary: HostMetricsSummary): string {
+  const { projectCount, worktreeCount } = summary;
+  if (projectCount === null && worktreeCount === null) return "Unknown";
+  const open = projectCount === null ? "? open" : `${projectCount} open`;
+  const worktrees = worktreeCount === null ? "worktrees unknown" : `${worktreeCount} worktrees`;
+  return `${open} · ${worktrees}`;
 }
 
 export function describeDriver(summary: HostMetricsSummary): string | null {
@@ -95,32 +105,64 @@ const PRESSURE_PENALTY: Record<NonNullable<HostMetricsSummary["memoryPressure"]>
   critical: 100,
 };
 const WORKING_AGENT_PENALTY = 15;
+/**
+ * What a measurement the host didn't report costs: as much as the worst it
+ * could have been. A host with less evidence must never outrank one that
+ * measured a light load.
+ */
+const UNMEASURED_PENALTY = 100;
 
 /**
  * Least-loaded first, from what each reachable host last reported: its CPU,
  * memory pressure and observed working agents. A host that reported neither
  * CPU nor pressure can't be compared and is left out, as is one that can't
- * be reached. The result is a suggestion; the user always picks.
+ * be reached. A missing measurement counts as the worst case, so partial data
+ * sinks below full data; ties go to the host that reported more, then by name.
+ * The result is a suggestion; the user always picks.
  */
 export function rankPlacement(candidates: readonly PlacementCandidate[]): PlacementChoice[] {
-  const ranked: PlacementChoice[] = [];
+  const ranked: Array<PlacementChoice & { missing: number }> = [];
   for (const candidate of candidates) {
     const summary = candidate.summary;
     if (!candidate.reachable || !summary) continue;
     if (summary.cpuPercent === null && summary.memoryPressure === null) continue;
-    const cpu = summary.cpuPercent ?? 0;
-    const pressure = summary.memoryPressure ? PRESSURE_PENALTY[summary.memoryPressure] : 0;
-    const working = summary.agentsObserved.working;
+    const working = summary.agentsObserved?.working ?? null;
+    let score = 0;
+    let missing = 0;
     const parts: string[] = [];
-    if (summary.cpuPercent !== null) parts.push(`CPU ${Math.round(summary.cpuPercent)}%`);
-    if (summary.memoryPressure !== null) parts.push(`memory ${summary.memoryPressure}`);
-    parts.push(`${working} working (observed)`);
+    if (summary.cpuPercent !== null) {
+      score += summary.cpuPercent;
+      parts.push(`CPU ${Math.round(summary.cpuPercent)}%`);
+    } else {
+      score += UNMEASURED_PENALTY;
+      missing += 1;
+      parts.push("CPU not reported");
+    }
+    if (summary.memoryPressure !== null) {
+      score += PRESSURE_PENALTY[summary.memoryPressure];
+      parts.push(`memory ${summary.memoryPressure}`);
+    } else {
+      score += UNMEASURED_PENALTY;
+      missing += 1;
+      parts.push("memory not reported");
+    }
+    if (working !== null) {
+      score += working * WORKING_AGENT_PENALTY;
+      parts.push(`${working} working (observed)`);
+    } else {
+      score += UNMEASURED_PENALTY;
+      missing += 1;
+      parts.push("agents unknown");
+    }
     ranked.push({
       hostId: candidate.hostId,
       name: candidate.name,
-      score: cpu + pressure + working * WORKING_AGENT_PENALTY,
+      score,
       reason: parts.join(" · "),
+      missing,
     });
   }
-  return ranked.sort((a, b) => a.score - b.score || a.name.localeCompare(b.name));
+  return ranked
+    .sort((a, b) => a.score - b.score || a.missing - b.missing || a.name.localeCompare(b.name))
+    .map(({ missing: _missing, ...choice }) => choice);
 }

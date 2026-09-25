@@ -4,6 +4,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import type { AgentState } from "@/types";
+import type { HostId } from "@shared/types/remoteHosts";
 import {
   isAgentFleetActionEligible,
   isAgentTerminalFleetEligible,
@@ -25,6 +26,24 @@ export {
   resolveFleetAgentCapabilityId,
 } from "./fleetEligibility";
 
+/**
+ * An agent on another host armed into this view's fleet. The panel store only
+ * knows this view's own terminals, so these ride beside `armedIds` under
+ * host-qualified keys, and their submits go over each host's link. They are
+ * members of the same fleet: clearing it or replacing its selection drops
+ * them too, and every count of the fleet includes them.
+ */
+export interface CrossHostFleetTarget {
+  /** Host-qualified id used wherever the fleet lists targets. */
+  key: string;
+  hostId: HostId;
+  hostName: string;
+  terminalId: string;
+  title: string;
+}
+
+const NO_CROSS_HOST_TARGETS: readonly CrossHostFleetTarget[] = Object.freeze([]);
+
 export type FleetArmStatePreset = "working" | "waiting" | "finished";
 export type FleetArmScope = "current" | "all";
 
@@ -44,6 +63,9 @@ interface FleetArmingState {
   // user commits to the menu item.
   previewArmedIds: Set<string>;
 
+  /** Agents on other hosts in this fleet, in the order they were armed. */
+  crossHostTargets: readonly CrossHostFleetTarget[];
+
   armId: (id: string) => void;
   disarmId: (id: string) => void;
   toggleId: (id: string) => void;
@@ -57,6 +79,17 @@ interface FleetArmingState {
   noteBroadcastCommit: () => void;
   setPreviewArmedIds: (ids: Set<string>) => void;
   clearPreviewArmedIds: () => void;
+  armCrossHostTarget: (target: CrossHostFleetTarget) => void;
+  disarmCrossHostTarget: (key: string) => void;
+  /** Keep only other-host targets whose host is still in the host list. */
+  retainCrossHostTargetsFor: (hostIds: ReadonlySet<HostId>) => void;
+}
+
+/** Every member of the fleet: this view's armed panes plus agents on other hosts. */
+export function selectFleetMemberCount(
+  s: Pick<FleetArmingState, "armedIds" | "crossHostTargets">
+): number {
+  return s.armedIds.size + s.crossHostTargets.length;
 }
 
 function rebuildOrderById(order: string[]): Record<string, number> {
@@ -170,6 +203,7 @@ export const useFleetArmingStore = create<FleetArmingState>()((set, get) => ({
   lastArmedId: null,
   broadcastSignal: 0,
   previewArmedIds: new Set<string>(),
+  crossHostTargets: NO_CROSS_HOST_TARGETS,
 
   armId: (id) =>
     set((s) => {
@@ -189,7 +223,12 @@ export const useFleetArmingStore = create<FleetArmingState>()((set, get) => ({
 
   disarmId: (id) =>
     set((s) => {
-      if (!s.armedIds.has(id)) return {};
+      if (!s.armedIds.has(id)) {
+        // Another host's agent leaves the fleet by the same call as a pane does.
+        if (!s.crossHostTargets.some((t) => t.key === id)) return {};
+        const kept = s.crossHostTargets.filter((t) => t.key !== id);
+        return { crossHostTargets: kept.length === 0 ? NO_CROSS_HOST_TARGETS : kept };
+      }
       const nextArmed = new Set(s.armedIds);
       nextArmed.delete(id);
       const nextOrder = s.armOrder.filter((x) => x !== id);
@@ -220,11 +259,14 @@ export const useFleetArmingStore = create<FleetArmingState>()((set, get) => ({
         unique.push(id);
       }
     }
+    // A replacement selection is the whole fleet: agents on other hosts armed
+    // before it are not part of what was just chosen.
     set({
       armedIds: new Set(unique),
       armOrder: unique,
       armOrderById: rebuildOrderById(unique),
       lastArmedId: unique[unique.length - 1] ?? null,
+      crossHostTargets: NO_CROSS_HOST_TARGETS,
     });
   },
 
@@ -337,6 +379,7 @@ export const useFleetArmingStore = create<FleetArmingState>()((set, get) => ({
       armOrderById: {},
       lastArmedId: null,
       previewArmedIds: new Set<string>(),
+      crossHostTargets: NO_CROSS_HOST_TARGETS,
     }),
 
   prune: (validIds) =>
@@ -385,6 +428,25 @@ export const useFleetArmingStore = create<FleetArmingState>()((set, get) => ({
     if (get().previewArmedIds.size === 0) return;
     set({ previewArmedIds: new Set<string>() });
   },
+
+  armCrossHostTarget: (target) =>
+    set((s) =>
+      s.crossHostTargets.some((t) => t.key === target.key)
+        ? {}
+        : { crossHostTargets: [...s.crossHostTargets, target] }
+    ),
+
+  disarmCrossHostTarget: (key) => {
+    if (get().armedIds.has(key)) return;
+    get().disarmId(key);
+  },
+
+  retainCrossHostTargetsFor: (hostIds) =>
+    set((s) => {
+      const kept = s.crossHostTargets.filter((t) => hostIds.has(t.hostId));
+      if (kept.length === s.crossHostTargets.length) return {};
+      return { crossHostTargets: kept.length === 0 ? NO_CROSS_HOST_TARGETS : kept };
+    }),
 }));
 
 function getActiveWorktreeId(): string | null {

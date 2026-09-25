@@ -96,6 +96,7 @@ function resetStores() {
     armOrderById: {},
     lastArmedId: null,
     previewArmedIds: new Set<string>(),
+    crossHostTargets: [],
   });
   useFleetPendingActionStore.setState({ pending: null });
   useFleetRunStore.getState()._reset();
@@ -1449,6 +1450,28 @@ describe("supervised run status line (#10930)", () => {
     expect(screen.queryByTestId("fleet-run-dismiss")).toBeNull();
   });
 
+  it("says an agent on another host was sent to, not that it is working or done", () => {
+    seedRun("watching", [
+      makeRunTarget("a", { settled: true, agentState: "completed" }),
+      makeRunTarget("host-fleet:studio-01:t1", {
+        worktreeId: null,
+        agentState: null,
+        host: {
+          hostId: "studio-01",
+          hostName: "studio-01",
+          terminalId: "t1",
+          observed: false,
+          sawBusy: false,
+        },
+      }),
+    ]);
+    render(<FleetArmingRibbon />);
+    const status = screen.getByTestId("fleet-run-status");
+    expect(status.textContent).toContain("1 sent to studio-01");
+    expect(status.textContent).toContain("1 done");
+    expect(status.textContent).not.toContain("working");
+  });
+
   it("shows a dismissible summary once the run finishes", () => {
     seedRun("completed", [
       makeRunTarget("a", { settled: true, agentState: "completed" }),
@@ -1501,5 +1524,65 @@ describe("supervised run status line (#10930)", () => {
     });
     render(<FleetArmingRibbon />);
     expect(screen.queryByTestId("fleet-run-status")).toBeNull();
+  });
+});
+
+describe("fleets with agents on other hosts", () => {
+  function armRemote(terminalId: string, hostName = "studio-01") {
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key: `host-fleet:${hostName}:${terminalId}`,
+      hostId: hostName,
+      hostName,
+      terminalId,
+      title: `Claude ${terminalId}`,
+    });
+  }
+
+  beforeEach(() => {
+    resetStores();
+    useFleetBroadcastProgressStore.setState({
+      completed: 0,
+      total: 0,
+      failed: 0,
+      isActive: false,
+      cancelled: false,
+    });
+  });
+
+  it("shows a fleet made only of other hosts' agents, with its members and a field to message them", () => {
+    armRemote("t1");
+    armRemote("t2", "studio-02");
+    render(<FleetArmingRibbon />);
+    expect(screen.getByTestId("fleet-arming-ribbon")).toBeTruthy();
+    expect(screen.getByTestId("fleet-armed-count-chip").textContent).toContain("2");
+    expect(screen.getByTestId("fleet-host-composer")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+    expect(screen.getByTestId("fleet-row-host-host-fleet:studio-01:t1").textContent).toContain(
+      "on studio-01"
+    );
+  });
+
+  it("counts a pane here and an agent on another host as a fleet of two, with no extra field", () => {
+    seed([makeAgent("a")]);
+    useFleetArmingStore.getState().armId("a");
+    armRemote("t1");
+    render(<FleetArmingRibbon />);
+    expect(screen.getByTestId("fleet-armed-count-chip").textContent).toContain("2");
+    // The pane's own composer is where to type.
+    expect(screen.queryByTestId("fleet-host-composer")).toBeNull();
+  });
+
+  it("drops the other hosts' agents on exit, so re-arming starts an empty fleet", () => {
+    seed([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armId("a");
+    armRemote("t1");
+    render(<FleetArmingRibbon />);
+    fireEvent.click(screen.getByTestId("fleet-exit"));
+    expect(useFleetArmingStore.getState().crossHostTargets).toEqual([]);
+    expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
+    act(() => {
+      useFleetArmingStore.getState().armId("b");
+    });
+    expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
   });
 });

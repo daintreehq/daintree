@@ -96,9 +96,9 @@ const HostSummarySchema = z.object({
   swapTotalBytes: nullableCount,
   thermal: z.enum(["nominal", "fair", "serious", "critical"]).nullable(),
   cpuPressure: z.number().finite().nullable(),
-  agentsObserved: z.object({ working: count, waiting: count, idle: count }),
-  projectCount: count,
-  worktreeCount: count,
+  agentsObserved: z.object({ working: count, waiting: count, idle: count }).nullable(),
+  projectCount: count.nullable(),
+  worktreeCount: count.nullable(),
   driver: DriveLeaseHolderSchema.nullable(),
   agentClis: z.array(z.object({ agentId: id, version: z.string().max(256).nullable() })).max(256),
 });

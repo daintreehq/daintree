@@ -47,7 +47,7 @@ import {
 } from "./worktreeAgentLaunch";
 import { useFirstAgentOptions } from "./hooks/useFirstAgentOptions";
 import { Textarea } from "@/components/ui/textarea";
-import { WorktreePlacementRow } from "@/components/Hosts/Overview/WorktreePlacementRow";
+import { LazyWorktreePlacementRow } from "@/components/Hosts/Overview/LazyHostOverviewParts";
 
 import {
   PrHeader,
@@ -1286,7 +1286,7 @@ export function NewWorktreeDialog({
                     onBrowseClick={handleBrowseClick}
                   />
                 </FormRow>
-                <WorktreePlacementRow
+                <LazyWorktreePlacementRow
                   projectId={currentProject?.id ?? null}
                   onLeave={onClose}
                   onElsewhereChange={setPlacementElsewhere}

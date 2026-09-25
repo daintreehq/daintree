@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { selectFleetMemberCount, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { resolveFleetBroadcastTargetIds } from "../fleetBroadcast";
 import {
@@ -15,7 +15,9 @@ import {
   crossHostTargetKey,
   getArmedCrossHostTargets,
   retainCrossHostTargetsFor,
+  submitCrossHostTarget,
 } from "../crossHostFleet";
+import { sendDraftToFleet, tryFleetBroadcastFromEditor } from "../fleetEnterBroadcast";
 
 const localSubmit = vi.hoisted(() => vi.fn<(id: string, text: string) => Promise<void>>());
 const notifyUserInput = vi.hoisted(() => vi.fn());
@@ -38,7 +40,9 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 }));
 
 const submitFleet =
-  vi.fn<(payload: { hostId: string; terminalId: string; text: string }) => Promise<void>>();
+  vi.fn<
+    (payload: { hostId: string; terminalId: string; text: string; opId?: string }) => Promise<void>
+  >();
 
 function agent(id: string): PtyPanelData {
   return {
@@ -122,12 +126,17 @@ describe("cross-host fleet targets", () => {
       hostId: "studio-01",
       terminalId: "t1",
       text: "ship it",
+      opId: expect.any(String),
     });
     expect(submitFleet).toHaveBeenCalledWith({
       hostId: "studio-02",
       terminalId: "t1",
       text: "ship it",
+      opId: expect.any(String),
     });
+    // Each target submit carries its own opId.
+    const opIds = submitFleet.mock.calls.map(([p]) => p.opId);
+    expect(new Set(opIds).size).toBe(2);
     // Directing state is this view's terminals' business only.
     expect(notifyUserInput.mock.calls.map(([id]) => id)).toEqual(["local-1"]);
     expect(notifyEnterPressed.mock.calls.map(([id]) => id)).toEqual(["local-1"]);
@@ -160,6 +169,73 @@ describe("cross-host fleet targets", () => {
       hostId: "studio-01",
       terminalId: "t1",
       text: "on {{branch_name}}",
+      opId: expect.any(String),
     });
+  });
+
+  it("leaves with the rest of the fleet on exit, so re-arming one pane can't reach it", () => {
+    useFleetArmingStore.getState().clear();
+    expect(getArmedCrossHostTargets()).toEqual([]);
+    useFleetArmingStore.getState().armId("local-1");
+    expect(resolveFleetBroadcastTargetIds()).toEqual(["local-1"]);
+    // One pane alone is no fleet: Enter sends only there.
+    expect(tryFleetBroadcastFromEditor("local-1", "go", () => {})).toBe(false);
+    expect(submitFleet).not.toHaveBeenCalled();
+  });
+
+  it("is dropped when the selection is replaced, and leaves by the same disarm as a pane", () => {
+    useFleetArmingStore.getState().armIds(["local-1"]);
+    expect(getArmedCrossHostTargets()).toEqual([]);
+    armCrossHostTarget({
+      hostId: "studio-01",
+      hostName: "studio-01",
+      terminalId: "t1",
+      title: "C",
+    });
+    useFleetArmingStore.getState().disarmId(crossHostTargetKey("studio-01", "t1"));
+    expect(getArmedCrossHostTargets()).toEqual([]);
+  });
+
+  it("counts agents on other hosts as fleet members", () => {
+    expect(selectFleetMemberCount(useFleetArmingStore.getState())).toBe(3);
+    useFleetArmingStore.getState().disarmId("local-1");
+    // Two agents on other hosts are a fleet of two with no pane here.
+    expect(selectFleetMemberCount(useFleetArmingStore.getState())).toBe(2);
+    expect(resolveFleetBroadcastTargetIds()).toEqual([
+      crossHostTargetKey("studio-01", "t1"),
+      crossHostTargetKey("studio-02", "t1"),
+    ]);
+  });
+
+  it("sends a fleet made only of other hosts' agents from the fleet's own field", async () => {
+    useFleetArmingStore.getState().disarmId("local-1");
+    expect(await sendDraftToFleet("ship it")).toBe(true);
+    expect(submitFleet.mock.calls.map(([p]) => p.hostId)).toEqual(["studio-01", "studio-02"]);
+    expect(localSubmit).not.toHaveBeenCalled();
+  });
+
+  it("retries a submit whose outcome was never confirmed under the same opId", async () => {
+    const key = crossHostTargetKey("studio-01", "t1");
+    submitFleet.mockRejectedValueOnce(
+      new Error("[AppError|OUTCOME_UNKNOWN] Couldn't confirm fleet submit")
+    );
+    await expect(submitCrossHostTarget(key, "go")).rejects.toBeTruthy();
+    const first = submitFleet.mock.calls[0]![0].opId;
+    await submitCrossHostTarget(key, "go", { retry: true });
+    expect(submitFleet.mock.calls[1]![0].opId).toBe(first);
+    // A fresh broadcast of the same words is a new submit, not a retry.
+    await submitCrossHostTarget(key, "go");
+    expect(submitFleet.mock.calls[2]![0].opId).not.toBe(first);
+    // Confirmed once, the old opId is not reused.
+    await submitCrossHostTarget(key, "go", { retry: true });
+    expect(submitFleet.mock.calls[3]![0].opId).not.toBe(first);
+  });
+
+  it("does not reuse an opId after a refusal the host answered", async () => {
+    const key = crossHostTargetKey("studio-01", "t1");
+    submitFleet.mockRejectedValueOnce(new Error("[AppError|DRIVEN_ELSEWHERE] driven"));
+    await expect(submitCrossHostTarget(key, "go")).rejects.toBeTruthy();
+    await submitCrossHostTarget(key, "go", { retry: true });
+    expect(submitFleet.mock.calls[1]![0].opId).not.toBe(submitFleet.mock.calls[0]![0].opId);
   });
 });

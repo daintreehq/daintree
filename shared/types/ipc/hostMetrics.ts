@@ -19,6 +19,12 @@ export interface HostAttentionEvent {
   terminalId: string;
   projectName: string | null;
   agentName: string | null;
+  /**
+   * The source host's quiet hours are in effect. The host applied its own
+   * notification policy before sending; this Shell adds only focus and its
+   * session mute.
+   */
+  quiet: boolean;
 }
 
 export type HostMetricsEvent =
@@ -40,6 +46,11 @@ export interface HostFleetSubmitPayload {
   hostId: HostId;
   terminalId: string;
   text: string;
+  /**
+   * Minted once per target submit and reused by its retry, so a host that did
+   * run a submit whose answer was lost answers the retry instead of running it again.
+   */
+  opId?: string;
 }
 
 /** One worktree of one of a host's open projects, for the read-only all-hosts dashboard. */

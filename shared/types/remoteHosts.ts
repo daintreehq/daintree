@@ -169,10 +169,16 @@ export interface HostMetricsSummary {
   thermal: "nominal" | "fair" | "serious" | "critical" | null;
   /** Linux PSI cpu `some avg10`; null elsewhere. */
   cpuPressure: number | null;
-  /** Observed agent states from the Host's FSM. Observations, not conclusions. */
-  agentsObserved: { working: number; waiting: number; idle: number };
-  projectCount: number;
-  worktreeCount: number;
+  /**
+   * Observed agent states from the Host's FSM. Observations, not conclusions.
+   * Null when the read failed or not every terminal shard answered: a partial
+   * tally must never pass for "nothing working".
+   */
+  agentsObserved: { working: number; waiting: number; idle: number } | null;
+  /** Open projects; null when the read failed. */
+  projectCount: number | null;
+  /** Worktrees across open projects; null when the read failed. */
+  worktreeCount: number | null;
   driver: DriveLeaseHolder | null;
   /** Installed agent CLIs and their versions, as the Host's detection reports them. */
   agentClis: Array<{ agentId: string; version: string | null }>;

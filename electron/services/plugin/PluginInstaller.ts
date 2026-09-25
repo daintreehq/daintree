@@ -104,7 +104,15 @@ interface PluginInstallerDeps {
   disabledPlugins: Map<string, unknown>;
   /** Shared blocklisted-at-launch manifest map (#10891) — stays PluginService-owned. */
   blockedPlugins: Map<string, unknown>;
+  /** Version of the installed plugin under this id, loaded, disabled or blocklisted; null when none. */
+  getInstalledVersion: (pluginId: string) => string | null;
 }
+
+/**
+ * Whether a package may replace what is installed, given the version installed
+ * under its id right now (null when none is). Returns the refusal, or null.
+ */
+export type ReplacementCheck = (installedVersion: string | null) => string | null;
 
 /**
  * Owns the atomic install/upgrade orchestration (lockfile, temp-dir staging,
@@ -246,9 +254,30 @@ export class PluginInstaller {
    * data, never thrown, so they survive the IPC structured-clone boundary
    * intact (#3769) for the F22/F23/F24 install dialogs.
    */
-  async installPlugin(
+  installPlugin(
     archivePath: string,
-    opts?: PluginInstallOptions
+    opts?: PluginInstallOptions,
+    replacement?: ReplacementCheck
+  ): Promise<PluginInstallResult> {
+    // One install at a time in this process. `install.lock` serializes
+    // processes, but its bounded retries would turn a second in-process install
+    // queued behind a slow one into `lock_failed` instead of letting it run next.
+    const run = this.installQueue.then(() =>
+      this.installPluginSerialized(archivePath, opts, replacement)
+    );
+    this.installQueue = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  private installQueue: Promise<void> = Promise.resolve();
+
+  private async installPluginSerialized(
+    archivePath: string,
+    opts: PluginInstallOptions | undefined,
+    replacement: ReplacementCheck | undefined
   ): Promise<PluginInstallResult> {
     // Progress + cancellation ride an optional caller-minted job (#11302). With
     // no `jobId` every registry call below is a no-op and the install behaves
@@ -462,6 +491,15 @@ export class PluginInstaller {
         );
       }
 
+      // Checked here, under the lock and against what is installed right now,
+      // so a check made before queueing can't be stale by the time this
+      // replaces anything: an update queued behind a newer one must not
+      // downgrade it, and an install queued behind another must not replace it.
+      if (replacement) {
+        const refusal = replacement(await this.installedVersion(pluginId, finalDir, existing));
+        if (refusal) return fail("archive_mismatch", refusal);
+      }
+
       // Abort before the irreversible swap if the lock was compromised — a
       // second instance may now hold it and racing the rename would corrupt
       // the directory. Nothing has been written to the final location yet.
@@ -641,6 +679,31 @@ export class PluginInstaller {
         console.warn("[PluginService] Failed to release install lock:", err);
       });
     }
+  }
+
+  /**
+   * The version installed under `pluginId` right now: the manifest in its
+   * folder when it has one (a disabled plugin replaced this session keeps its
+   * old manifest in memory), else what the plugin service holds for it, loaded,
+   * disabled or blocklisted.
+   */
+  private async installedVersion(
+    pluginId: string,
+    finalDir: string,
+    existing: boolean
+  ): Promise<string | null> {
+    if (existing) {
+      try {
+        const raw: unknown = JSON.parse(
+          await fs.readFile(path.join(finalDir, "plugin.json"), "utf-8")
+        );
+        const version = (raw as { version?: unknown } | null)?.version;
+        if (typeof version === "string") return version;
+      } catch {
+        // Unreadable: fall back to the service's record of it.
+      }
+    }
+    return this.deps.getInstalledVersion(pluginId);
   }
 
   /**

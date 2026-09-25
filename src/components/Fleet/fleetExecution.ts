@@ -120,10 +120,13 @@ export function filterEligibleIds(ids: string[]): string[] {
   );
 }
 
-/** Local submits go through this view's terminal client; another host's go over its link. */
-function submitTarget(terminalId: string, payload: string): Promise<void> {
+/**
+ * Local submits go through this view's terminal client; another host's go over
+ * its link, where a retry reuses the opId of a submit the host never confirmed.
+ */
+function submitTarget(terminalId: string, payload: string, retry: boolean): Promise<void> {
   return isCrossHostTargetId(terminalId)
-    ? submitCrossHostTarget(terminalId, payload)
+    ? submitCrossHostTarget(terminalId, payload, { retry })
     : terminalClient.submit(terminalId, payload);
 }
 
@@ -197,8 +200,10 @@ export async function executeFleetBroadcast(
   draft: string,
   targetIds: string[],
   perTargetOverrides?: Record<string, string>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: { retry?: boolean } = {}
 ): Promise<FleetExecutionResult> {
+  const retry = options.retry === true;
   const resolved = resolveSubmissions(draft, targetIds, perTargetOverrides);
   const results: PromiseSettledResult<void>[] = [];
   let dispatchedCount = 0;
@@ -267,7 +272,7 @@ export async function executeFleetBroadcast(
         // (not "") preserves Phase 2 escalation for large pastes — see #3565.
         for (const r of batch) noteUserInput(r.terminalId, r.payload);
         const batchResults = await Promise.allSettled(
-          batch.map((r) => submitTarget(r.terminalId, r.payload))
+          batch.map((r) => submitTarget(r.terminalId, r.payload, retry))
         );
         for (let j = 0; j < batchResults.length; j += 1) {
           const r = batchResults[j]!;
@@ -298,7 +303,7 @@ export async function executeFleetBroadcast(
       // Same ordering rule as the batched path — see comment above.
       for (const r of resolved) noteUserInput(r.terminalId, r.payload);
       const all = await Promise.allSettled(
-        resolved.map((r) => submitTarget(r.terminalId, r.payload))
+        resolved.map((r) => submitTarget(r.terminalId, r.payload, retry))
       );
       for (let j = 0; j < all.length; j += 1) {
         const r = all[j]!;

@@ -24,6 +24,7 @@ import {
   FleetTargetListSchema,
   MetricsLinkMethod,
   WorktreeListSchema,
+  normalizeFleetOpId,
 } from "./linkMethods.js";
 import { HOST_METRICS_INTERVAL_MS } from "./sampler.js";
 
@@ -57,10 +58,25 @@ export interface HostMetricsClientOptions {
   /** This machine's fleet and worktree reads, for the "local" host. */
   local: {
     listFleetTargets(): Promise<HostFleetTarget[]>;
-    submitFleet(terminalId: string, text: string, caller: FleetCaller): Promise<void>;
+    submitFleet(
+      terminalId: string,
+      text: string,
+      caller: FleetCaller,
+      opId: string | null
+    ): Promise<void>;
     listWorktrees(): Promise<HostWorktreeEntry[]>;
   };
   ringSize?: number;
+  /** How long a fleet submit whose answer was lost waits for its host to come back and say. */
+  fleetReconcileMs?: number;
+}
+
+/** Long enough for a dropped link's automatic reconnect; short enough not to hold a broadcast. */
+export const FLEET_RECONCILE_MS = 10_000;
+
+function isUnknownOutcome(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "OUTCOME_UNKNOWN" || code === "HOST_DISCONNECTED";
 }
 
 function invalid(message: string): AppError {
@@ -117,7 +133,7 @@ export class HostMetricsClient {
   /** Working agents a connected host last reported; unknown while it isn't connected. */
   workingAgents(hostId: HostId): number | null {
     if (this.options.manager.connectionState(hostId).status !== "connected") return null;
-    return this.latest(hostId)?.agentsObserved.working ?? null;
+    return this.latest(hostId)?.agentsObserved?.working ?? null;
   }
 
   async listFleetTargets(payload: unknown): Promise<HostFleetTarget[]> {
@@ -136,18 +152,68 @@ export class HostMetricsClient {
     return parsed.data.map((target) => ({ ...target, hostId }));
   }
 
+  /**
+   * Submit one fleet prompt. A remote submit carries the renderer's opId; when
+   * its answer is lost the host may or may not have typed it, so this asks
+   * again with the same opId once the host is back, and the host answers from
+   * its record rather than typing it twice. Still unanswered, the outcome is
+   * reported unknown, and a retry that reuses the opId stays safe.
+   */
   async submitFleet(payload: unknown): Promise<void> {
     const hostId = this.hostIdOf(payload);
-    const { terminalId, text } = (payload ?? {}) as Partial<HostFleetSubmitPayload>;
+    const { terminalId, text, opId } = (payload ?? {}) as Partial<HostFleetSubmitPayload>;
     const id = requireString(terminalId, "terminalId", 256);
     const body = requireString(text, "text", 1024 * 1024);
+    const op = normalizeFleetOpId(opId);
     if (isLocalHostId(hostId)) {
-      await this.options.local.submitFleet(id, body, { kind: "local" });
+      await this.options.local.submitFleet(id, body, { kind: "local" }, op);
       return;
     }
-    await this.connection(hostId).callHost(MetricsLinkMethod.SUBMIT_FLEET, {
-      terminalId: id,
-      text: body,
+    const request = { terminalId: id, text: body, opId: op };
+    // No link at all means nothing was sent: that is a plain failure, not an unknown outcome.
+    const first = this.connection(hostId);
+    try {
+      await first.callHost(MetricsLinkMethod.SUBMIT_FLEET, request);
+    } catch (error) {
+      if (op === null || !isUnknownOutcome(error)) throw error;
+      const connection = await this.waitForConnection(hostId);
+      const name = this.options.registry.get(hostId)?.name ?? hostId;
+      const unknown = new AppError({
+        code: "OUTCOME_UNKNOWN",
+        message: `Couldn't confirm fleet submit ${op} on host ${hostId}`,
+        userMessage: `Couldn't confirm whether ${name} received the prompt. Retrying won't send it twice.`,
+      });
+      if (!connection) throw unknown;
+      try {
+        await connection.callHost(MetricsLinkMethod.SUBMIT_FLEET, request);
+      } catch (again) {
+        throw isUnknownOutcome(again) ? unknown : again;
+      }
+    }
+  }
+
+  /** The host's link once it is back, or null when it isn't within the reconcile window. */
+  private waitForConnection(hostId: HostId): Promise<MetricsConnection | null> {
+    const now = this.options.manager.get(hostId);
+    if (now && this.options.manager.connectionState(hostId).status === "connected") {
+      return Promise.resolve(now);
+    }
+    return new Promise((resolve) => {
+      let off: (() => void) | null = null;
+      const done = (connection: MetricsConnection | null): void => {
+        clearTimeout(timer);
+        off?.();
+        resolve(connection);
+      };
+      const timer = setTimeout(
+        () => done(null),
+        this.options.fleetReconcileMs ?? FLEET_RECONCILE_MS
+      );
+      off = this.options.manager.onSessionOpened((opened) => {
+        if (opened !== hostId) return;
+        const connection = this.options.manager.get(hostId);
+        if (connection) done(connection);
+      });
     });
   }
 
@@ -216,6 +282,7 @@ export class HostMetricsClient {
         terminalId: payload.terminalId,
         projectName: payload.projectName,
         agentName: payload.agentName,
+        quiet: payload.quiet,
       });
       return null;
     });

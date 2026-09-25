@@ -29,12 +29,23 @@ export const AttentionPayloadSchema = z.object({
   terminalId: id,
   projectName: name.nullable(),
   agentName: name.nullable(),
+  /** The host's own quiet hours hold this back: the Shell files it in the inbox without a toast. */
+  quiet: z.boolean(),
 });
 export type AttentionPayload = z.infer<typeof AttentionPayloadSchema>;
+
+const FLEET_OP_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/** A Shell-minted fleet opId, or null when absent or malformed. */
+export function normalizeFleetOpId(value: unknown): string | null {
+  return typeof value === "string" && FLEET_OP_ID_PATTERN.test(value) ? value : null;
+}
 
 export const SubmitFleetPayloadSchema = z.object({
   terminalId: id,
   text: z.string().min(1).max(MAX_FLEET_SUBMIT_CHARS),
+  /** The Shell's id for this one submit: a resend with it never types the prompt twice. */
+  opId: z.string().regex(FLEET_OP_ID_PATTERN).nullish(),
 });
 
 const agentState = z.enum(["idle", "working", "waiting", "directing", "completed", "exited"]);
