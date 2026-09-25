@@ -7,6 +7,7 @@ import {
   EventKind,
   InteractiveKind,
   RpcKind,
+  TRANSFER_REASONS,
   frameToMessage,
   type LinkMessage,
 } from "./messages.js";
@@ -161,12 +162,13 @@ export const TransferBeginSchema = z.object({
   ]),
 });
 const TransferEndSchema = z.object({ transferId: u32.min(1) });
-const TransferAbortSchema = z.object({ transferId: u32.min(1), reason: shortText });
+const TransferReasonSchema = z.enum(TRANSFER_REASONS);
+const TransferAbortSchema = z.object({ transferId: u32.min(1), reason: TransferReasonSchema });
 const TransferAckSchema = z.object({
   transferId: u32.min(1),
   receivedBytes: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   path: z.string().max(4096).nullable(),
-  error: shortText.nullable(),
+  error: TransferReasonSchema.nullable(),
 });
 
 const BODY_SCHEMAS: Record<number, Record<number, z.ZodType>> = {

@@ -85,7 +85,7 @@ describe("LinkSession request/response", () => {
     expect(!env.ok && env.error.code).toBe("OUTCOME_UNKNOWN");
   });
 
-  it("settles every pending request with HOST_DISCONNECTED when the session dies", async () => {
+  it("settles sent requests as OUTCOME_UNKNOWN and reverse requests as HOST_DISCONNECTED when the session dies", async () => {
     const { host, client } = await pair();
     host.setInvokeHandler(() => new Promise(() => {}));
     host.registerCallHandler("hang", z.unknown(), () => new Promise(() => {}));
@@ -97,10 +97,40 @@ describe("LinkSession request/response", () => {
     host.close("going away");
     const [env] = await Promise.all([
       invoke,
-      expect(call).rejects.toMatchObject({ code: "HOST_DISCONNECTED" }),
+      expect(call).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" }),
       expect(reverse).rejects.toMatchObject({ code: "HOST_DISCONNECTED" }),
     ]);
+    expect(!env.ok && env.error.code).toBe("OUTCOME_UNKNOWN");
+  });
+
+  it("settles requests that never reached the socket as HOST_DISCONNECTED", async () => {
+    const { host, client } = await pair();
+    host.setInvokeHandler(() => new Promise(() => {}));
+    host.registerCallHandler("hang", z.unknown(), () => new Promise(() => {}));
+    // Queued in this tick; the close drops them before the deferred flush.
+    const invoke = client.invoke("e1", "hang", []);
+    const call = client.call("hang", null);
+    client.close("leaving");
+    const [env] = await Promise.all([
+      invoke,
+      expect(call).rejects.toMatchObject({ code: "HOST_DISCONNECTED" }),
+    ]);
     expect(!env.ok && env.error.code).toBe("HOST_DISCONNECTED");
+  });
+
+  it("refuses requests beyond the pending cap until earlier ones settle", async () => {
+    const { host, client } = await pair({}, { maxPendingRequests: 2 });
+    host.setInvokeHandler(async (msg) =>
+      msg.channel === "hang"
+        ? new Promise<never>(() => {})
+        : { __daintreeIpcEnvelope: true, ok: true, data: "done" }
+    );
+    const first = client.invoke("e1", "hang", [], { timeoutMs: 30 });
+    const second = client.invoke("e1", "hang", [], { timeoutMs: 30 });
+    const third = await client.invoke("e1", "ok", []);
+    expect(!third.ok && third.error.code).toBe("RATE_LIMITED");
+    await Promise.all([first, second]);
+    await expect(client.invoke("e1", "ok", [])).resolves.toMatchObject({ ok: true, data: "done" });
   });
 
   it("validates CALL payloads by method and rejects unknown methods", async () => {

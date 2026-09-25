@@ -45,12 +45,19 @@ export interface HostServerOptions {
   token?: string;
   /** How long a dropped session stays resumable. */
   resumeGraceMs?: number;
+  /** Cap on attached plus parked (resumable) sessions. */
   maxSessions?: number;
   session?: Omit<LinkSessionOptions, "role">;
   now?: () => number;
 }
 
+/**
+ * What a parked session keeps: only what a resume has to match. The dropped
+ * LinkSession and its context are not retained, so a parked slot costs a few
+ * strings and a timer however much the session carried.
+ */
 interface Resumable {
+  sessionId: string;
   clientId: string;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -82,6 +89,12 @@ export class HostServer {
   readonly token: string;
   private server: net.Server | null = null;
   private closing = false;
+  // listen()/close() are serialized: every call bumps the generation, a start
+  // that finds itself superseded tears down what it built, and close() waits
+  // for any in-flight start before it tears down.
+  private generation = 0;
+  private starting: Promise<void> | null = null;
+  private stopping: Promise<void> | null = null;
   private readonly sockets = new Set<net.Socket>();
   private readonly live = new Map<string, HostSessionContext>();
   private readonly resumable = new Map<string, Resumable>();
@@ -116,13 +129,60 @@ export class HostServer {
     return () => this.expiredListeners.delete(listener);
   }
 
-  async listen(): Promise<void> {
-    if (this.server) return;
-    this.closing = false;
+  /** Concurrent calls share one start; a close() before it finishes makes it reject. */
+  listen(): Promise<void> {
+    if (this.server) return Promise.resolve();
+    if (this.starting) return this.starting;
+    const generation = ++this.generation;
+    const stopping = this.stopping;
+    const start = (async () => {
+      await stopping?.catch(() => {});
+      this.assertCurrent(generation);
+      this.closing = false;
+      await this.start(generation);
+    })();
+    this.starting = start;
+    const settled = () => {
+      if (this.starting === start) this.starting = null;
+    };
+    start.then(settled, settled);
+    return start;
+  }
+
+  close(): Promise<void> {
+    this.generation++;
+    this.closing = true;
+    const starting = this.starting;
+    this.starting = null;
+    const server = this.server;
+    this.server = null;
+    const previous = this.stopping;
+    const stop = (async () => {
+      await previous?.catch(() => {});
+      // A start in flight cleans up after itself once it sees the new generation.
+      await starting?.catch(() => {});
+      await this.teardown(server);
+    })();
+    this.stopping = stop;
+    const settled = () => {
+      if (this.stopping === stop) this.stopping = null;
+    };
+    stop.then(settled, settled);
+    return stop;
+  }
+
+  private assertCurrent(generation: number): void {
+    if (generation !== this.generation) {
+      throw new HostServerError("Host server was closed before it finished starting");
+    }
+  }
+
+  private async start(generation: number): Promise<void> {
     const { dir, socketPath, discoveryPath } = this.options.location;
     assertSocketPathFits(socketPath);
     await prepareOwnerOnlyDir(dir);
     await clearStaleSocket(socketPath);
+    this.assertCurrent(generation);
 
     const server = net.createServer((socket) => this.onConnection(socket));
     await new Promise<void>((resolve, reject) => {
@@ -135,6 +195,7 @@ export class HostServer {
     server.on("error", () => {});
     try {
       await fs.chmod(socketPath, 0o600);
+      this.assertCurrent(generation);
       // Advertise only once the socket is live and locked down.
       await writeDiscoveryFile(discoveryPath, {
         version: 1,
@@ -142,23 +203,34 @@ export class HostServer {
         token: this.token,
         pid: process.pid,
       });
+      this.assertCurrent(generation);
     } catch (err) {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      this.closeSessions();
+      await this.closeListener(server);
       await fs.rm(socketPath, { force: true }).catch(() => {});
+      await removeDiscoveryFile(discoveryPath, this.token).catch(() => false);
       throw err;
     }
     this.server = server;
   }
 
-  async close(): Promise<void> {
-    const server = this.server;
-    this.server = null;
-    this.closing = true;
+  private async teardown(server: net.Server | null): Promise<void> {
+    this.closeSessions();
+    if (!server) return;
+    await this.closeListener(server);
+    // Closing the listener already unlinked the socket file (libuv does it
+    // for pipe servers).
+    await removeDiscoveryFile(this.options.location.discoveryPath, this.token);
+  }
+
+  private closeSessions(): void {
     for (const ctx of [...this.live.values()]) ctx.session.close("shutting-down");
     this.live.clear();
     for (const entry of this.resumable.values()) clearTimeout(entry.timer);
     this.resumable.clear();
-    if (!server) return;
+  }
+
+  private async closeListener(server: net.Server): Promise<void> {
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
         for (const socket of this.sockets) socket.destroy();
@@ -169,9 +241,6 @@ export class HostServer {
       });
     });
     this.sockets.clear();
-    // Closing the listener already unlinked the socket file (libuv does it
-    // for pipe servers).
-    await removeDiscoveryFile(this.options.location.discoveryPath, this.token);
   }
 
   private onConnection(socket: net.Socket): void {
@@ -229,7 +298,7 @@ export class HostServer {
       }
     }
     const resumed = sessionId !== null;
-    if (!resumed && this.live.size >= (this.options.maxSessions ?? DEFAULT_MAX_SESSIONS)) {
+    if (!resumed && !this.makeRoomForSession()) {
       session.reject({ reason: "busy", handshake: null, detail: null });
       return;
     }
@@ -254,6 +323,23 @@ export class HostServer {
   }
 
   /**
+   * Parked sessions count against the cap too, so a client that keeps
+   * dropping can't grow the resumable set without bound. When the cap is hit
+   * the oldest parked session is given up first; attached ones never are.
+   */
+  private makeRoomForSession(): boolean {
+    const max = this.options.maxSessions ?? DEFAULT_MAX_SESSIONS;
+    while (this.live.size + this.resumable.size >= max) {
+      const oldest = this.resumable.values().next();
+      if (oldest.done) return false;
+      clearTimeout(oldest.value.timer);
+      this.resumable.delete(oldest.value.sessionId);
+      this.expire(oldest.value.sessionId, oldest.value.clientId);
+    }
+    return true;
+  }
+
+  /**
    * Keep a lost session resumable for the grace window. A client that said
    * GOODBYE, or broke the protocol, left on purpose and expires at once.
    */
@@ -261,23 +347,26 @@ export class HostServer {
     if (this.live.get(ctx.sessionId) !== ctx) return;
     this.live.delete(ctx.sessionId);
     if (this.closing) return;
+    const { sessionId } = ctx;
+    const clientId = ctx.client.clientId;
     const deliberate = close.by === "remote" || close.reason.startsWith("protocol error");
     if (deliberate) {
-      this.expire(ctx);
+      this.expire(sessionId, clientId);
       return;
     }
     const grace = this.options.resumeGraceMs ?? DEFAULT_RESUME_GRACE_MS;
+    // The timer closes over ids only, never ctx, so the dropped session can be collected.
     const timer = setTimeout(() => {
-      if (this.resumable.get(ctx.sessionId)?.timer !== timer) return;
-      this.resumable.delete(ctx.sessionId);
-      this.expire(ctx);
+      if (this.resumable.get(sessionId)?.timer !== timer) return;
+      this.resumable.delete(sessionId);
+      this.expire(sessionId, clientId);
     }, grace);
     timer.unref?.();
-    this.resumable.set(ctx.sessionId, { clientId: ctx.client.clientId, timer });
+    this.resumable.set(sessionId, { sessionId, clientId, timer });
   }
 
-  private expire(ctx: HostSessionContext): void {
-    const info = { sessionId: ctx.sessionId, clientId: ctx.client.clientId };
+  private expire(sessionId: string, clientId: string): void {
+    const info = { sessionId, clientId };
     for (const listener of this.expiredListeners) {
       try {
         listener(info);

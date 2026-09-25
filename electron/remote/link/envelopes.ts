@@ -3,6 +3,7 @@ import type {
   IpcErrorEnvelope,
   SerializedError,
 } from "../../../shared/types/ipc/errors.js";
+import { toTransportSafeError } from "../../ipc/transportSafeError.js";
 import type { AppErrorCode } from "../../../shared/types/appError.js";
 import {
   deserializeError,
@@ -13,17 +14,16 @@ import { AppError } from "../../utils/errorTypes.js";
 
 /**
  * Errors cross the link in the same envelope `security.ts` produces for local
- * IPC. Stacks describe the sending machine's source tree and help nobody on
- * the other side, so they are dropped before anything is sent.
+ * IPC, under the packaged-build policy regardless of how this build was made:
+ * the peer is another machine, so the sender's paths, stacks, secrets and
+ * free-form context never go with it. `code` and allowlisted `details` survive.
  */
-function stripStacks(error: SerializedError): SerializedError {
-  const out: SerializedError = { ...error, stack: undefined };
-  if (out.cause) out.cause = stripStacks(out.cause);
-  return out;
-}
-
 export function linkErrorEnvelope(error: unknown): IpcErrorEnvelope {
-  return { __daintreeIpcEnvelope: true, ok: false, error: stripStacks(serializeError(error)) };
+  return {
+    __daintreeIpcEnvelope: true,
+    ok: false,
+    error: toTransportSafeError(serializeError(error)),
+  };
 }
 
 export function linkSuccessEnvelope(data: unknown): IpcEnvelope {

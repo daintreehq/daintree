@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { AppError } from "../../utils/errorTypes.js";
+import { logWarn } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { BULK_CHUNK_BYTES, Lane } from "./frames.js";
 import {
@@ -9,6 +10,7 @@ import {
   type TransferAbortMessage,
   type TransferAckMessage,
   type TransferBeginMessage,
+  type TransferReason,
 } from "./messages.js";
 import type { EnqueueResult } from "./scheduler.js";
 import { TransferBeginSchema } from "./schemas.js";
@@ -23,7 +25,13 @@ import { TransferBeginSchema } from "./schemas.js";
  * unacknowledged, so a slow disk on the far side throttles the sender instead
  * of filling memory. The receiver hashes as it goes and only commits (moves
  * into place) when the digest matches; where the bytes land is decided by the
- * injected sink. A final ACK carries the placed path or the error.
+ * injected sink. A final ACK carries the placed path or the error, as a
+ * {@link TransferReason} code; the diagnostic stays in the local log.
+ *
+ * Both ends time a transfer out when it stops moving (no chunk or ack for
+ * {@link DEFAULT_INACTIVITY_TIMEOUT_MS}) or when placing it takes longer than
+ * {@link DEFAULT_COMMIT_TIMEOUT_MS}, so a wedged sink or a silent peer frees its
+ * slot instead of holding it for the life of the session.
  *
  * Transfer ids are per sender. Clients use odd ids and hosts even ids so an
  * ABORT, which either side may send, always names one transfer unambiguously.
@@ -34,6 +42,8 @@ const ACK_EVERY_BYTES = 4 * BULK_CHUNK_BYTES;
 const DEFAULT_MAX_INCOMING = 8;
 const DEFAULT_MAX_INCOMING_BYTES = 4 * 1024 * 1024 * 1024;
 const MAX_RETRY_QUEUE = 4096;
+export const DEFAULT_INACTIVITY_TIMEOUT_MS = 60_000;
+export const DEFAULT_COMMIT_TIMEOUT_MS = 120_000;
 
 export interface TransferSource {
   size: number;
@@ -79,6 +89,10 @@ export interface LinkTransfersOptions {
   maxIncoming?: number;
   maxIncomingBytes?: number;
   onIncomingProgress?: (begin: TransferBeginMessage, bytes: number) => void;
+  /** No chunk or ack progress for this long aborts the transfer. */
+  inactivityTimeoutMs?: number;
+  /** Time allowed from END to the placed file (or, sending, to its ack). */
+  commitTimeoutMs?: number;
 }
 
 /** What the transfer layer needs from its session. */
@@ -143,6 +157,7 @@ interface Outgoing {
   sent: number;
   acked: number;
   stash: Uint8Array | null;
+  timer: ReturnType<typeof setTimeout> | null;
   onProgress?: (progress: TransferProgress) => void;
   resolve: (result: TransferResult) => void;
   reject: (err: Error) => void;
@@ -160,19 +175,56 @@ interface Incoming {
   ended: boolean;
   /** Once the sink is placing the file, the outcome belongs to the commit; aborts are ignored. */
   committing: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
 }
 
-const MAX_REASON_LENGTH = 1024;
-
-function clip(reason: string): string {
-  return reason.length > MAX_REASON_LENGTH ? reason.slice(0, MAX_REASON_LENGTH) : reason;
-}
+const PEER_REASON_MESSAGES: Record<TransferReason, string> = {
+  cancelled: "The transfer was cancelled",
+  "source-failed": "The sender could not read the file",
+  "sink-failed": "The receiver could not save the file",
+  "checksum-mismatch": "Checksum mismatch",
+  "invalid-data": "The transfer data was invalid",
+  timeout: "The transfer stalled and timed out",
+  "too-large": "Transfer is too large",
+  busy: "Too many transfers in progress",
+  "not-accepted": "The other side does not accept transfers",
+};
 
 function transferError(
-  code: "CANCELLED" | "HOST_DISCONNECTED" | "INTERNAL" | "OUTCOME_UNKNOWN" | "VALIDATION",
+  code:
+    | "CANCELLED"
+    | "HOST_DISCONNECTED"
+    | "INTERNAL"
+    | "OUTCOME_UNKNOWN"
+    | "PAYLOAD_TOO_LARGE"
+    | "RATE_LIMITED"
+    | "VALIDATION",
   message: string
 ) {
   return new AppError({ code, message });
+}
+
+function peerFailure(reason: TransferReason): AppError {
+  const message = PEER_REASON_MESSAGES[reason];
+  switch (reason) {
+    case "cancelled":
+      return transferError("CANCELLED", message);
+    case "too-large":
+      return transferError("PAYLOAD_TOO_LARGE", message);
+    case "busy":
+      return transferError("RATE_LIMITED", message);
+    default:
+      return transferError("INTERNAL", message);
+  }
+}
+
+function logFailure(side: "send" | "receive", id: number, reason: TransferReason, err?: unknown) {
+  logWarn("remote.transfer.failed", {
+    side,
+    transferId: id,
+    reason,
+    ...(err !== undefined ? { detail: formatErrorMessage(err, reason) } : {}),
+  });
 }
 
 export class LinkTransfers {
@@ -245,7 +297,7 @@ export class LinkTransfers {
         );
       };
       const cleanup = () => options.signal?.removeEventListener("abort", onAbort);
-      this.outgoing.set(id, {
+      const t: Outgoing = {
         id,
         source,
         begin,
@@ -253,6 +305,7 @@ export class LinkTransfers {
         sent: 0,
         acked: 0,
         stash: null,
+        timer: null,
         onProgress: options.onProgress,
         resolve: (result) => {
           cleanup();
@@ -262,7 +315,9 @@ export class LinkTransfers {
           cleanup();
           reject(err);
         },
-      });
+      };
+      this.outgoing.set(id, t);
+      this.armOutgoing(t);
       options.signal?.addEventListener("abort", onAbort, { once: true });
       this.schedulePump();
     });
@@ -306,11 +361,22 @@ export class LinkTransfers {
     if (this.closed) return;
     this.closed = true;
     this.retry.length = 0;
-    for (const id of [...this.outgoing.keys()]) {
-      this.finishOutgoing(id, transferError("HOST_DISCONNECTED", `Link closed: ${reason}`));
+    for (const [id, t] of [...this.outgoing]) {
+      // Once END is out the receiver may have verified and placed the file
+      // before the link dropped; only the missing ack is certain.
+      this.finishOutgoing(
+        id,
+        t.phase === "wait"
+          ? transferError(
+              "OUTCOME_UNKNOWN",
+              `Link closed after all data was sent; the file may have been saved: ${reason}`
+            )
+          : transferError("HOST_DISCONNECTED", `Link closed: ${reason}`)
+      );
     }
     for (const [id, t] of [...this.incoming]) {
       this.incoming.delete(id);
+      this.clearTimer(t);
       if (t.committing) continue;
       t.failed = true;
       void t.sink.then((sink) => sink.abort(reason)).catch(() => {});
@@ -329,6 +395,65 @@ export class LinkTransfers {
     return (id % 2 === 1) === (this.link.role === "client");
   }
 
+  private clearTimer(t: { timer: ReturnType<typeof setTimeout> | null }): void {
+    if (t.timer) clearTimeout(t.timer);
+    t.timer = null;
+  }
+
+  private startTimer(
+    t: { timer: ReturnType<typeof setTimeout> | null },
+    ms: number,
+    onFire: () => void
+  ): void {
+    this.clearTimer(t);
+    t.timer = setTimeout(() => {
+      t.timer = null;
+      onFire();
+    }, ms);
+    t.timer.unref?.();
+  }
+
+  /** (Re)start the sender's clock: inactivity while sending, commit once END is out. */
+  private armOutgoing(t: Outgoing): void {
+    if (t.phase === "wait") {
+      this.startTimer(t, this.options.commitTimeoutMs ?? DEFAULT_COMMIT_TIMEOUT_MS, () => {
+        if (!this.active(t)) return;
+        logFailure("send", t.id, "timeout");
+        this.postControl({
+          lane: Lane.BULK,
+          kind: BulkKind.TRANSFER_ABORT,
+          body: { transferId: t.id, reason: "timeout" },
+        });
+        this.finishOutgoing(
+          t.id,
+          transferError(
+            "OUTCOME_UNKNOWN",
+            "The other side did not confirm the transfer in time; the file may have been saved"
+          )
+        );
+      });
+      return;
+    }
+    this.startTimer(t, this.options.inactivityTimeoutMs ?? DEFAULT_INACTIVITY_TIMEOUT_MS, () => {
+      if (!this.active(t)) return;
+      this.failOutgoing(t, "timeout");
+    });
+  }
+
+  /** (Re)start the receiver's clock: inactivity until END, then the commit budget. */
+  private armIncoming(id: number, t: Incoming): void {
+    if (t.failed) return;
+    const ms = t.ended
+      ? (this.options.commitTimeoutMs ?? DEFAULT_COMMIT_TIMEOUT_MS)
+      : (this.options.inactivityTimeoutMs ?? DEFAULT_INACTIVITY_TIMEOUT_MS);
+    this.startTimer(t, ms, () => {
+      // A commit in progress is no longer abortable from the peer, but a sink
+      // that never settles must not hold the slot for the rest of the session.
+      t.committing = false;
+      this.failIncoming(id, t, "timeout", true);
+    });
+  }
+
   private postControl(message: LinkMessage): void {
     if (this.closed) return;
     if (this.retry.length === 0) {
@@ -336,7 +461,7 @@ export class LinkTransfers {
       try {
         result = this.link.post(message);
       } catch {
-        // Unsendable (should not happen with clipped reasons); drop rather than wedge.
+        // Unsendable (should not happen with fixed reason codes); drop rather than wedge.
         return;
       }
       if (result !== "refused") return;
@@ -376,7 +501,7 @@ export class LinkTransfers {
           try {
             await this.pumpOne(t);
           } catch (err) {
-            if (this.active(t)) this.failOutgoing(t, formatErrorMessage(err, "Could not send"));
+            if (this.active(t)) this.failOutgoing(t, "source-failed", err);
           }
           if (this.closed) return;
         }
@@ -409,12 +534,16 @@ export class LinkTransfers {
         try {
           chunk = await t.source.read(t.sent, length);
         } catch (err) {
-          this.failOutgoing(t, formatErrorMessage(err, "Could not read the file"));
+          this.failOutgoing(t, "source-failed", err);
           return;
         }
         if (!this.active(t)) return;
         if (chunk.byteLength !== length) {
-          this.failOutgoing(t, "The file changed while it was being sent");
+          this.failOutgoing(
+            t,
+            "source-failed",
+            new Error("The file changed while it was being sent")
+          );
           return;
         }
       }
@@ -430,6 +559,7 @@ export class LinkTransfers {
       }
       t.stash = null;
       t.sent += length;
+      this.armOutgoing(t);
       if (result === "over-high-water") this.bulkPaused = true;
     }
     if (t.phase === "data" && t.sent === size) {
@@ -440,15 +570,22 @@ export class LinkTransfers {
       });
       if (result === "refused") return;
       t.phase = "wait";
+      this.armOutgoing(t);
     }
   }
 
-  private failOutgoing(t: Outgoing, reason: string): void {
-    this.finishOutgoing(t.id, transferError("INTERNAL", reason));
+  /** Our own failure: the detail stays in the local error and log; the peer gets the code. */
+  private failOutgoing(t: Outgoing, reason: TransferReason, err?: unknown): void {
+    logFailure("send", t.id, reason, err);
+    const message =
+      err !== undefined
+        ? formatErrorMessage(err, PEER_REASON_MESSAGES[reason])
+        : PEER_REASON_MESSAGES[reason];
+    this.finishOutgoing(t.id, transferError("INTERNAL", message));
     this.postControl({
       lane: Lane.BULK,
       kind: BulkKind.TRANSFER_ABORT,
-      body: { transferId: t.id, reason: clip(reason) },
+      body: { transferId: t.id, reason },
     });
   }
 
@@ -456,6 +593,7 @@ export class LinkTransfers {
     const t = this.outgoing.get(id);
     if (!t) return;
     this.outgoing.delete(id);
+    this.clearTimer(t);
     void Promise.resolve(t.source.close?.()).catch(() => {});
     if (outcome instanceof Error) t.reject(outcome);
     else t.resolve(outcome);
@@ -465,7 +603,7 @@ export class LinkTransfers {
     const t = this.outgoing.get(ack.transferId);
     if (!t) return;
     if (ack.error !== null) {
-      this.finishOutgoing(t.id, transferError("INTERNAL", `Receiver failed: ${ack.error}`));
+      this.finishOutgoing(t.id, peerFailure(ack.error));
       return;
     }
     if (ack.receivedBytes > t.sent) {
@@ -474,6 +612,7 @@ export class LinkTransfers {
     }
     if (ack.receivedBytes > t.acked) {
       t.acked = ack.receivedBytes;
+      this.armOutgoing(t);
       try {
         t.onProgress?.({ transferId: t.id, bytes: t.acked, totalBytes: t.source.size });
       } catch {
@@ -493,10 +632,7 @@ export class LinkTransfers {
 
   private onAbort(abort: TransferAbortMessage): void {
     if (this.isOwnId(abort.transferId)) {
-      this.finishOutgoing(
-        abort.transferId,
-        transferError("INTERNAL", `Receiver aborted: ${abort.reason}`)
-      );
+      this.finishOutgoing(abort.transferId, peerFailure(abort.reason));
       return;
     }
     const t = this.incoming.get(abort.transferId);
@@ -509,19 +645,19 @@ export class LinkTransfers {
       this.link.protocolError("bad transfer id");
       return;
     }
-    const refuse = (reason: string) =>
+    const refuse = (reason: TransferReason) =>
       this.postControl({
         lane: Lane.BULK,
         kind: BulkKind.TRANSFER_ACK,
-        body: { transferId: id, receivedBytes: 0, path: null, error: clip(reason) },
+        body: { transferId: id, receivedBytes: 0, path: null, error: reason },
       });
     const factory = this.sinkFactory;
-    if (!factory) return refuse("This side does not accept transfers");
+    if (!factory) return refuse("not-accepted");
     if (this.incoming.size >= (this.options.maxIncoming ?? DEFAULT_MAX_INCOMING)) {
-      return refuse("Too many transfers in progress");
+      return refuse("busy");
     }
     if (begin.size > (this.options.maxIncomingBytes ?? DEFAULT_MAX_INCOMING_BYTES)) {
-      return refuse("Transfer is too large");
+      return refuse("too-large");
     }
     const sink = Promise.resolve().then(() => factory(begin));
     const t: Incoming = {
@@ -535,11 +671,11 @@ export class LinkTransfers {
       failed: false,
       ended: false,
       committing: false,
+      timer: null,
     };
     this.incoming.set(id, t);
-    t.chain = t.chain.catch((err: unknown) =>
-      this.failIncoming(id, t, formatErrorMessage(err, "Could not accept the transfer"), true)
-    );
+    this.armIncoming(id, t);
+    t.chain = t.chain.catch((err: unknown) => this.failIncoming(id, t, "sink-failed", true, err));
   }
 
   private onChunk(id: number, chunk: Uint8Array): void {
@@ -551,24 +687,33 @@ export class LinkTransfers {
       return;
     }
     if (t.received + chunk.byteLength > t.begin.size) {
-      this.failIncoming(id, t, "More data than announced", true);
+      this.failIncoming(id, t, "invalid-data", true, new Error("More data than announced"));
       return;
     }
     if (t.received + chunk.byteLength - t.ackedTo > TRANSFER_WINDOW_BYTES) {
-      this.failIncoming(id, t, "Sender exceeded the flow-control window", true);
+      this.failIncoming(
+        id,
+        t,
+        "invalid-data",
+        true,
+        new Error("Sender exceeded the flow-control window")
+      );
       return;
     }
     t.received += chunk.byteLength;
     t.hash.update(chunk);
+    this.armIncoming(id, t);
     t.chain = t.chain.then(async () => {
       if (t.failed) return;
       try {
         await (await t.sink).write(chunk);
       } catch (err) {
-        this.failIncoming(id, t, formatErrorMessage(err, "Could not write the file"), true);
+        this.failIncoming(id, t, "sink-failed", true, err);
         return;
       }
+      if (t.failed) return;
       t.written += chunk.byteLength;
+      if (!t.ended) this.armIncoming(id, t);
       try {
         this.options.onIncomingProgress?.(t.begin, t.written);
       } catch {
@@ -587,14 +732,15 @@ export class LinkTransfers {
     }
     t.ended = true;
     if (t.received !== t.begin.size) {
-      this.failIncoming(id, t, "Transfer ended early", true);
+      this.failIncoming(id, t, "invalid-data", true, new Error("Transfer ended early"));
       return;
     }
+    this.armIncoming(id, t);
     const digest = t.hash.digest("hex");
     t.chain = t.chain.then(async () => {
       if (t.failed) return;
       if (digest !== t.begin.sha256) {
-        this.failIncoming(id, t, "Checksum mismatch", true);
+        this.failIncoming(id, t, "checksum-mismatch", true);
         return;
       }
       let placed: string;
@@ -603,10 +749,13 @@ export class LinkTransfers {
         placed = await (await t.sink).commit();
       } catch (err) {
         t.committing = false;
-        this.failIncoming(id, t, formatErrorMessage(err, "Could not save the file"), true);
+        this.failIncoming(id, t, "sink-failed", true, err);
         return;
       }
+      // Timed out while placing: the peer has already been told it failed.
+      if (t.failed) return;
       if (this.incoming.get(id) === t) this.incoming.delete(id);
+      this.clearTimer(t);
       this.ack(t, placed);
     });
   }
@@ -625,16 +774,24 @@ export class LinkTransfers {
     });
   }
 
-  private failIncoming(id: number, t: Incoming, reason: string, notifyPeer: boolean): void {
+  private failIncoming(
+    id: number,
+    t: Incoming,
+    reason: TransferReason,
+    notifyPeer: boolean,
+    err?: unknown
+  ): void {
     if (t.failed) return;
     t.failed = true;
+    this.clearTimer(t);
     if (this.incoming.get(id) === t) this.incoming.delete(id);
+    if (notifyPeer) logFailure("receive", id, reason, err);
     void t.sink.then((sink) => sink.abort(reason)).catch(() => {});
     if (notifyPeer) {
       this.postControl({
         lane: Lane.BULK,
         kind: BulkKind.TRANSFER_ACK,
-        body: { transferId: id, receivedBytes: t.written, path: null, error: clip(reason) },
+        body: { transferId: id, receivedBytes: t.written, path: null, error: reason },
       });
     }
   }
