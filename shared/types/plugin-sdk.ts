@@ -78,6 +78,7 @@ export type {
   PluginHostActionsApi,
   PluginActivationApi,
   PluginHostCallOptions,
+  PluginPromptCallOptions,
   PluginHostSubscriptionOptions,
   ActionHandler,
   PluginToastOptions,
@@ -169,6 +170,7 @@ export type {
 
 export type {
   PluginIpcContext,
+  PluginInvokeOrigin,
   PluginIpcHandler,
   PluginChannelSchema,
   PluginTypedIpcHandler,
