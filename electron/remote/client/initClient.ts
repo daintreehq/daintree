@@ -22,6 +22,7 @@ import { HostRegistry, type RemoteHostsStore } from "./HostRegistry.js";
 import {
   RemoteHostManager,
   type EndpointClosedInfo,
+  type HostReadiness,
   type EndpointSessionInfo,
   type ViewSink,
 } from "./RemoteHostManager.js";
@@ -30,11 +31,28 @@ import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
 import { answerReverseRequest } from "./reverseRequests.js";
 import { SshTransport } from "./sshTransport.js";
 import { WindowHostBinding } from "./WindowHostBinding.js";
+import { defaultCommandRunner } from "./commandRunner.js";
+import { detectClientBundle, downloadArtifact } from "./clientBuild.js";
+import { HostSetupService, RELEASE_FEED_PREFIXES } from "./HostSetupService.js";
 
 declare module "../runtime.js" {
   interface RemoteServices {
     remoteHostsClient: RemoteHostsClient;
+    hostSetup: HostSetupService;
   }
+}
+
+type WorkingAgentsSource = (hostId: HostId) => number | null;
+
+let workingAgentsSource: WorkingAgentsSource | null = null;
+
+/**
+ * Where "agents working on this host" comes from for the update gate. Until a
+ * source is set the host list's summary frame is read; with no summary the
+ * count is unknown, and an update then needs the user's confirmation.
+ */
+export function setHostWorkingAgentsSource(source: WorkingAgentsSource | null): void {
+  workingAgentsSource = source;
 }
 
 type WindowOpener = () => Promise<number>;
@@ -199,7 +217,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const bindings = new WindowHostBinding();
   const remoteRouter = new RemoteRouterImpl(manager, bindings, senders);
   router = remoteRouter;
-  const client = new RemoteHostsClient({
+  const client: RemoteHostsClient = new RemoteHostsClient({
     registry,
     manager,
     bindings,
@@ -209,8 +227,47 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     installRouter: (next) => getIpcDispatcher().setRemoteRouter(next),
     emit: broadcastLocal,
     onFirstUse: hooks.onFirstUse,
+    onForget: (descriptor): Promise<void> => setup.forgetArtifacts(descriptor),
+  });
+  const setup: HostSetupService = new HostSetupService({
+    run: defaultCommandRunner,
+    clientDir,
+    platform: process.platform,
+    knownTargets: () => registry.list().map((host) => host.sshTarget),
+    clientBuild: () => {
+      const handshake = getLocalHandshakeInfo();
+      return {
+        platform: handshake.platform,
+        arch: handshake.arch,
+        version: handshake.version,
+        commit: handshake.commit,
+        channel: store.get("updateChannel") === "nightly" ? "nightly" : "stable",
+        bundle: detectClientBundle({
+          isPackaged: app.isPackaged,
+          exePath: app.getPath("exe"),
+          platform: process.platform,
+          env: process.env,
+        }),
+      };
+    },
+    async workingAgents(hostId) {
+      if (!hostId) return null;
+      if (workingAgentsSource) return workingAgentsSource(hostId);
+      const entry = client.list().find((host) => host.descriptor.id === hostId);
+      return entry?.summary?.agentsObserved.working ?? null;
+    },
+    async reconnect(hostId) {
+      const existing = manager.get(hostId);
+      if (!existing) return null;
+      const readiness: HostReadiness = await client.connectAndWait(hostId, 30_000);
+      return readiness === "ready" ? true : readiness === "version-mismatch" ? false : null;
+    },
+    download: (url, destination, signal) =>
+      downloadArtifact({ url, destination, signal, allowedPrefixes: RELEASE_FEED_PREFIXES }),
+    emit: broadcastLocal,
   });
   const unregister = registerRemoteService("remoteHostsClient", client);
+  const unregisterSetup = registerRemoteService("hostSetup", setup);
   return {
     client,
     onEndpointOpened: (listener) => manager.onEndpointOpened(listener),
@@ -219,6 +276,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     router: remoteRouter,
     async dispose() {
       unregister();
+      unregisterSetup();
       await client.dispose();
     },
   };

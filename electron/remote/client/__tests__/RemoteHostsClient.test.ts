@@ -214,6 +214,47 @@ describe("RemoteHostsClient", () => {
     expect(events.some((e) => e.type === "hosts-changed")).toBe(true);
   });
 
+  it("cleans up what this machine kept for a forgotten host, after it leaves the list", async () => {
+    const onForget = vi.fn(async () => {
+      expect(registry.get("studio-01")).toBeNull();
+    });
+    const withCleanup = new RemoteHostsClient({
+      registry,
+      manager: manager as unknown as RemoteHostManager,
+      bindings,
+      router,
+      senders: { projectKeyFor: () => null, windowIdFor: () => null },
+      windows,
+      installRouter,
+      emit: () => {},
+      onForget,
+    });
+    await withCleanup.forget({ hostId: "studio-01" });
+    expect(onForget).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "studio-01", sshTarget: "studio.example" })
+    );
+  });
+
+  it("still forgets a host when its cleanup fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failing = new RemoteHostsClient({
+      registry,
+      manager: manager as unknown as RemoteHostManager,
+      bindings,
+      router,
+      senders: { projectKeyFor: () => null, windowIdFor: () => null },
+      windows,
+      installRouter,
+      emit: () => {},
+      onForget: async () => {
+        throw new Error("ssh gone");
+      },
+    });
+    await expect(failing.forget({ hostId: "studio-01" })).resolves.toBeUndefined();
+    expect(registry.list()).toEqual([]);
+    warn.mockRestore();
+  });
+
   it("lists hosts with their connection and pushes connection changes", () => {
     client.connect({ hostId: "studio-01" });
     expect(client.list()).toEqual([

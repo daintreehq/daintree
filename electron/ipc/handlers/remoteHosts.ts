@@ -2,7 +2,6 @@ import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
 import os from "node:os";
 import { store } from "../../store.js";
-import { pendingRemoteHostsHandler } from "../../remote/pendingHandler.js";
 import { getRemoteService, requireRemoteService } from "../../remote/runtime.js";
 import { REMOTE_HOSTS_METHOD_CHANNELS } from "./remoteHosts.preload.js";
 import { getLocalHandshakeInfo } from "../../remote/handshakeInfo.js";
@@ -12,11 +11,17 @@ import {
   type HostDescriptor,
   type HostHandshakeInfo,
   type HostListEntry,
+  type OperationId,
+  type OperationOutcome,
 } from "../../../shared/types/remoteHosts.js";
 import type {
   AddHostPayload,
   DiscoveredHost,
+  HostInstallPlan,
   HostProbeResult,
+  InstallHostPayload,
+  InstallHostResult,
+  PlanInstallPayload,
   SwitchWindowHostPayload,
   UpdateHostPayload,
   WindowHostInfo,
@@ -94,12 +99,37 @@ export const remoteHostsNamespace = defineIpcNamespace({
       { withContext: true }
     ),
     discover: op(REMOTE_HOSTS_METHOD_CHANNELS.discover, async (): Promise<DiscoveredHost[]> =>
-      pendingRemoteHostsHandler(REMOTE_HOSTS_METHOD_CHANNELS.discover)
+      requireRemoteService("hostSetup").discover()
     ),
     probe: op(
       REMOTE_HOSTS_METHOD_CHANNELS.probe,
-      async (_payload: { sshTarget: string }): Promise<HostProbeResult> =>
-        pendingRemoteHostsHandler(REMOTE_HOSTS_METHOD_CHANNELS.probe)
+      async (payload: { sshTarget: string }): Promise<HostProbeResult> =>
+        requireRemoteService("hostSetup").probe(payload)
+    ),
+    planInstall: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.planInstall,
+      async (payload: PlanInstallPayload): Promise<HostInstallPlan> =>
+        requireRemoteService("hostSetup").planInstall(payload)
+    ),
+    install: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.install,
+      async (payload: InstallHostPayload): Promise<InstallHostResult> =>
+        requireRemoteService("hostSetup").install(payload)
+    ),
+    getInstallStatus: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.getInstallStatus,
+      async (payload: { opId: OperationId }): Promise<OperationOutcome> =>
+        getRemoteService("hostSetup")?.installStatus(payload) ?? { status: "unknown" }
+    ),
+    cancelInstall: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.cancelInstall,
+      async (payload: { opId: OperationId }): Promise<boolean> =>
+        getRemoteService("hostSetup")?.cancelInstall(payload) ?? false
+    ),
+    startHostMode: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.startHostMode,
+      async (payload: { sshTarget: string }): Promise<HostProbeResult> =>
+        requireRemoteService("hostSetup").startHostMode(payload)
     ),
     isInUse: op(REMOTE_HOSTS_METHOD_CHANNELS.isInUse, (): boolean => remoteHostsInUse()),
     getLocalHandshake: op(REMOTE_HOSTS_METHOD_CHANNELS.getLocalHandshake, (): HostHandshakeInfo =>

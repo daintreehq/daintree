@@ -7,6 +7,9 @@ import type {
   HostId,
   HostListEntry,
   HostPlatform,
+  OperationId,
+  OperationOutcome,
+  OperationProgress,
 } from "../remoteHosts.js";
 
 export interface AddHostPayload {
@@ -69,7 +72,87 @@ export interface HostProbeResult {
   hostModeListening: boolean;
   /** Commands the user runs themselves (sudo, linger, pmset). Daintree never runs sudo. */
   suggestedCommands: Array<{ label: string; command: string }>;
+  /** A Daintree process is running there, in Host mode or not. */
+  appRunning: boolean;
+  /** AppImages found in ~/Applications on a Linux host. */
+  appImages: string[];
+  /** curl or wget is there, so the host can fetch its own build. */
+  canDownload: boolean;
+  /** The installed build is this client's version and commit; null when that can't be read. */
+  matchesClient: boolean | null;
+  advice: HostAdvice;
 }
+
+/** What the probe saw that bears on running a host unattended. Observations only. */
+export interface HostAdvice {
+  /** macOS: pmset's `sleep` value. Linux: the state of sleep.target. */
+  sleepObserved: string | null;
+  /** True when the observed value means the machine does not sleep when idle. */
+  sleepDisabled: boolean | null;
+  /** Linux: whether a keyring daemon was running for this user. Null on macOS. */
+  keyring: "running" | "not-running" | null;
+  /** Linux: whether lingering is on, so user services run without a login. */
+  linger: boolean | null;
+  /** Linux: whether the Daintree-owned systemd user unit is there. */
+  hostModeUnit: boolean | null;
+}
+
+export type LinuxPackagePreference = "deb" | "appimage";
+
+/**
+ * How the build reaches the host: this client's own bundle copied over (same
+ * platform and arch), the host downloading its artifact from the release
+ * feed, or this client downloading that artifact and copying it over.
+ */
+export type InstallDelivery = "push-bundle" | "host-fetch" | "client-download-push";
+
+export interface HostInstallPlan {
+  kind: "up-to-date" | "install" | "unsupported";
+  delivery: InstallDelivery | null;
+  packaging: "app-bundle" | "deb" | "appimage" | null;
+  /** The exact build the host gets: always this client's. */
+  version: string;
+  commit: string;
+  /** This client's release channel, which the host follows. */
+  channel: "stable" | "nightly";
+  artifactName: string | null;
+  artifactUrl: string | null;
+  /** Installing restarts Daintree on the host, which ends its terminals. */
+  restartsHost: boolean;
+  /** A deb needs sudo, so the last step is a command the user runs. */
+  userCommandNeeded: boolean;
+  /** Why nothing can be installed, when kind is "unsupported". */
+  reason: string | null;
+}
+
+export interface PlanInstallPayload {
+  sshTarget: string;
+  linuxPackage?: LinuxPackagePreference;
+}
+
+export interface InstallHostPayload {
+  opId: OperationId;
+  sshTarget: string;
+  /** Set when the host is already in the list, so its link can be checked afterwards. */
+  hostId?: HostId;
+  linuxPackage?: LinuxPackagePreference;
+  /**
+   * When the host reports working agents: stop and say so (default), go ahead
+   * because the user confirmed, or stage now and restart once none are working.
+   */
+  whileWorking?: "refuse" | "proceed" | "wait-for-idle";
+}
+
+export type InstallHostResult =
+  | { status: "installed"; probe: HostProbeResult; reconnected: boolean | null }
+  | { status: "up-to-date"; probe: HostProbeResult }
+  /** Nothing was changed: the host reported agents working (null: it couldn't be seen). */
+  | { status: "agents-working"; working: number | null }
+  | {
+      status: "needs-user-command";
+      command: { label: string; command: string };
+      probe: HostProbeResult;
+    };
 
 export type RemoteHostsEvent =
   | { type: "hosts-changed"; hosts: HostListEntry[] }
@@ -85,4 +168,7 @@ export type RemoteHostsEvent =
       type: "resync-required";
       hostId: HostId;
       reason: "overflow" | "reattached" | "reconnected";
-    };
+    }
+  /** An install or update this client is running on a host. */
+  | { type: "install-progress"; opId: OperationId; sshTarget: string; progress: OperationProgress }
+  | { type: "install-settled"; opId: OperationId; sshTarget: string; outcome: OperationOutcome };
