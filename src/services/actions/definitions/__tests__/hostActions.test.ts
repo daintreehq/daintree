@@ -23,8 +23,13 @@ import {
   currentHostSwitchRequest,
   registerHostSwitchDialogHost,
 } from "@/components/HostSwitch/hostSwitchRequests";
+import {
+  _resetHostsOverviewRequestsForTesting,
+  isHostsOverviewOpen,
+  registerHostsOverviewHost,
+} from "@/components/Hosts/Overview/hostsOverviewRequests";
 
-const HOST_ACTION_IDS = ["host.switch", "host.add", "project.openOnHost"];
+const HOST_ACTION_IDS = ["host.switch", "host.add", "host.overview.open", "project.openOnHost"];
 
 function callbacks(overrides: Partial<ActionCallbacks> = {}): ActionCallbacks {
   return {
@@ -123,6 +128,7 @@ describe("host action visibility", () => {
     const ctx = {} as ActionContext;
     expect(registry.get("host.switch")!().isVisible?.(ctx)).toBe(false);
     expect(registry.get("project.openOnHost")!().isVisible?.(ctx)).toBe(false);
+    expect(registry.get("host.overview.open")!().isVisible?.(ctx)).toBe(false);
     expect(registry.get("host.add")!().isVisible).toBeUndefined();
   });
 });
@@ -173,6 +179,26 @@ describe("host.switch", () => {
     registerHostActions(registry, callbacks());
     await expect(run(registry, "host.switch", { hostId: "nowhere" })).rejects.toThrow(/nowhere/);
     expect(switchWindowHost).not.toHaveBeenCalled();
+  });
+});
+
+describe("host.overview.open", () => {
+  beforeEach(() => _resetHostsOverviewRequestsForTesting());
+
+  it("opens the overview in this view", async () => {
+    const release = registerHostsOverviewHost();
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    await run(registry, "host.overview.open");
+    expect(isHostsOverviewOpen()).toBe(true);
+    release();
+    expect(isHostsOverviewOpen()).toBe(false);
+  });
+
+  it("says so when no view can show it", async () => {
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    await expect(run(registry, "host.overview.open")).rejects.toThrow(/hosts overview/);
   });
 });
 

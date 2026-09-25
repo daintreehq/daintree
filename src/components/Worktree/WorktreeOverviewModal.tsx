@@ -46,6 +46,7 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
+import { OtherHostsWorktrees } from "@/components/Hosts/Overview/OtherHostsWorktrees";
 
 const LIST_ID = "worktree-overview-list";
 
@@ -790,6 +791,8 @@ export function WorktreeOverviewModal({
               </div>
             )}
           </ScrollShadow>
+
+          <OtherHostsWorktrees onNavigate={onClose} />
 
           {/* The footer is the action bar: the keyboard contract at rest, the
               bulk actions while a selection is active — next to the count they

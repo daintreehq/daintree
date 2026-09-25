@@ -10,6 +10,7 @@ import { initRemoteHostsClient } from "./client/initClient.js";
 import { installViewReverseRequests } from "./client/viewRequests.js";
 import { installHostFileClient } from "./files/clientInstall.js";
 import { installHostUploadClient } from "./files/uploadClient.js";
+import { installHostMetricsClient } from "./metrics/clientInstall.js";
 import { createHostModeService } from "./host/hostModeDefaults.js";
 import {
   acceptLocalPushForRemoteView,
@@ -160,6 +161,14 @@ function startClient(): void {
       hostIds: () => client.client.list().map((entry) => entry.descriptor.id),
       sshTargetFor: (hostId) => hostEntry(hostId)?.descriptor.sshTarget ?? null,
       clientDir: path.join(app.getPath("userData"), "rh"),
+    })
+  );
+  // Summary-only links to every known host; dials nothing while the host list is empty.
+  teardowns.push(
+    installHostMetricsClient({
+      manager: client.manager,
+      registry: client.registry,
+      hostForView: client.hostForView,
     })
   );
   // Answered only once a session exists, so registering costs nothing until then.

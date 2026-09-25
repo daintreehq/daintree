@@ -53,6 +53,7 @@ import {
 } from "./worktreeAgentLaunch";
 import { useFirstAgentOptions } from "./hooks/useFirstAgentOptions";
 import { Textarea } from "@/components/ui/textarea";
+import { WorktreePlacementRow } from "@/components/Hosts/Overview/WorktreePlacementRow";
 
 import {
   PrHeader,
@@ -1093,7 +1094,10 @@ export function NewWorktreeDialog({
     [handleIssueSelect, markTouched, clearErrors]
   );
 
+  // Another host chosen for the worktree: the project continues there, nothing is created here.
+  const [placementElsewhere, setPlacementElsewhere] = useState(false);
   const submitDisabled =
+    placementElsewhere ||
     loading ||
     isCheckingBranch ||
     isGeneratingPath ||
@@ -1313,6 +1317,11 @@ export function NewWorktreeDialog({
                       onBrowseClick={handleBrowseClick}
                     />
                   </FormRow>
+                  <WorktreePlacementRow
+                    projectId={currentProject?.id ?? null}
+                    onLeave={onClose}
+                    onElsewhereChange={setPlacementElsewhere}
+                  />
                 </FormSection>
 
                 <FormSection title="Setup">

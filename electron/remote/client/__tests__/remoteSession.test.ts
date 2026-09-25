@@ -88,6 +88,9 @@ import {
 import { RemoteRouterImpl } from "../RemoteRouter.js";
 import { createDirectTransport, type LinkTransport } from "../transport.js";
 import { WindowHostBinding } from "../WindowHostBinding.js";
+import { installHostMetricsHostWith } from "../../metrics/hostMetricsHost.js";
+import { MetricsLinkMethod } from "../../metrics/linkMethods.js";
+import { ControlKind } from "../../link/messages.js";
 
 const HOST_CHANNEL = "git:get-file-diff";
 const SHELL_CHANNEL = "window:new";
@@ -694,6 +697,48 @@ describe("remote session wiring", () => {
     });
     await h.manager.disconnect(HOST_ID);
     expect(closed).toHaveLength(2);
+  });
+
+  it("carries host summaries and session calls on a link no view is bound to", async () => {
+    await startHarness();
+    const summary = {
+      hostId: "local",
+      sampledAt: 7,
+      platform: "linux" as const,
+      cpuPercent: 12,
+      memoryPressure: "normal" as const,
+      memoryUsedBytes: null,
+      memoryTotalBytes: null,
+      swapUsedBytes: null,
+      swapTotalBytes: null,
+      thermal: null,
+      cpuPressure: null,
+      agentsObserved: { working: 1, waiting: 0, idle: 2 },
+      projectCount: 1,
+      worktreeCount: 2,
+      driver: null,
+      agentClis: [],
+    };
+    const disposeHost = installHostMetricsHostWith(h.server, {
+      loop: { subscribe: () => () => {}, latest: () => summary },
+      listFleetTargets: async () => [],
+      submitFleet: async () => {},
+      listWorktrees: async () => [],
+      onAgentWaiting: () => () => {},
+      now: Date.now,
+    });
+    cleanups.push(disposeHost);
+    const seen: number[] = [];
+    h.manager.onSessionOpened((hostId, session) => {
+      if (hostId !== HOST_ID) return;
+      session.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (body) => seen.push(body.sampledAt));
+    });
+    await connect();
+    await waitFor(() => seen.length === 1);
+    expect(h.manager.get(HOST_ID)!.boundViews()).toEqual([]);
+    await expect(
+      h.manager.get(HOST_ID)!.callHost(MetricsLinkMethod.LIST_WORKTREES, null)
+    ).resolves.toEqual([]);
   });
 
   it("settles whenReady on connect, stop and timeout", async () => {

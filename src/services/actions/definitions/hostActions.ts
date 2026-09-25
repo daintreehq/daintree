@@ -5,7 +5,8 @@ import { requestHostSwitch } from "@/components/HostSwitch/hostSwitchRequests";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { isSettingsTab } from "@/components/Settings/settingsTabIds";
 import { requestHostMenu } from "@/components/Hosts/hostMenuRequests";
-import { HOSTS_SETTINGS_TAB } from "@/components/Hosts/hostModel";
+import { HOSTS_OVERVIEW_ACTION_ID, HOSTS_SETTINGS_TAB } from "@/components/Hosts/hostModel";
+import { requestHostsOverview } from "@/components/Hosts/Overview/hostsOverviewRequests";
 import { ClientAppError } from "@/utils/clientAppError";
 import { getHostListSnapshot, hasRemoteHosts } from "@/components/Hosts/hostList";
 
@@ -100,6 +101,29 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     nonRepeatable: true,
     run: async () => {
       openHostsSettings(callbacks);
+    },
+  }));
+
+  actions.set(HOSTS_OVERVIEW_ACTION_ID, () => ({
+    id: HOSTS_OVERVIEW_ACTION_ID,
+    title: "Hosts overview…",
+    description:
+      "Open the hosts overview: one card per machine with its recent CPU and memory pressure, observed agent counts, open projects, version, link latency, who drives it, and active port forwards. Clicking a card switches this window to that host.",
+    category: "workspace",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["host", "hosts", "machine", "remote", "overview", "metrics", "fleet", "ports"],
+    nonRepeatable: true,
+    isVisible: anyRemoteHost,
+    run: async () => {
+      if (!requestHostsOverview()) {
+        throw new ClientAppError(
+          "UNSUPPORTED",
+          "No view can show the hosts overview",
+          "Couldn't open the hosts overview in this window."
+        );
+      }
     },
   }));
 

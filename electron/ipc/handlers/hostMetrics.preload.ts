@@ -2,6 +2,9 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const HOST_METRICS_METHOD_CHANNELS = {
   getSnapshots: "host-metrics:get-snapshots",
+  listFleetTargets: "host-metrics:list-fleet-targets",
+  submitFleet: "host-metrics:submit-fleet",
+  listWorktrees: "host-metrics:list-worktrees",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof HOST_METRICS_METHOD_CHANNELS;

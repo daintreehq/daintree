@@ -27,6 +27,7 @@ import { attachWorktreePortBridge, detachWorktreePortBridge } from "../worktreeP
 import { HostServer } from "./HostServer.js";
 import { hostSocketLocation, type HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
+import { installHostMetricsHost } from "../metrics/hostMetricsHost.js";
 import type { RemoteViewEndpoint } from "./RemoteViewEndpoint.js";
 
 declare module "../runtime.js" {
@@ -146,6 +147,9 @@ async function buildHostListener(
   teardowns.push(() => disposeAllTerminalBridges());
 
   teardowns.push(admitHybridHostLegs());
+
+  // Summaries to every attached Shell, and the overview's and fleet's session methods.
+  teardowns.push(await installHostMetricsHost(server));
 
   // Previews, downloads and host pickers for remote views; revoked with the listener.
   const files = installHostFileService();

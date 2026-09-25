@@ -334,6 +334,16 @@ vi.mock("../projects/hostInstall.js", () => ({
     return m.uninstallProjectsHost;
   }),
 }));
+const metrics = vi.hoisted(() => ({
+  installHostMetricsClient: vi.fn((_options: unknown) => () => {}),
+  installHostMetricsHost: vi.fn(async (_server: unknown) => () => {}),
+}));
+vi.mock("../metrics/clientInstall.js", () => ({
+  installHostMetricsClient: metrics.installHostMetricsClient,
+}));
+vi.mock("../metrics/hostMetricsHost.js", () => ({
+  installHostMetricsHost: metrics.installHostMetricsHost,
+}));
 vi.mock("../client/viewRequests.js", () => ({
   installViewReverseRequests: vi.fn(() => m.uninstallViewRequests),
 }));
@@ -431,6 +441,8 @@ describe("startRemoteHosts", () => {
     expect(getRemoteService("hostServer")).toBeUndefined();
     // A user with no hosts: boot never asks for a connection.
     expect(m.client.client.connect).not.toHaveBeenCalled();
+    // Summary links are started with the client; with no hosts they dial nothing.
+    expect(metrics.installHostMetricsClient).toHaveBeenCalledTimes(1);
     expect(m.attachClientTerminalRelay).not.toHaveBeenCalled();
     // Nothing per-view is installed until a host is actually used.
     expect(m.installTerminalOverride).not.toHaveBeenCalled();
@@ -702,6 +714,8 @@ describe("startRemoteHosts", () => {
       "advertise.start",
     ]);
     expect(m.initRemoteHostsHost).toHaveBeenCalledWith(m.server);
+    // Every attached Shell gets this host's summaries.
+    expect(metrics.installHostMetricsHost).toHaveBeenCalledWith(m.server);
     expect(getRemoteService("hostServer")).toBe(m.server);
     expect(getRemoteService("hostMode")).toBeDefined();
   });
