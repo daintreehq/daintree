@@ -125,11 +125,16 @@ function backoffDelayMs(baseMs: number, unproductivePasses: number): number {
 }
 
 interface PidTrendState {
+  type: string;
   startedAt: number;
   tickInBucket: number;
   bucketMin: number;
   ema: number;
   emaHistory: number[];
+  /** Epoch ms each {@link emaHistory} entry was committed, index-aligned. */
+  emaHistoryAt: number[];
+  latestMb: number;
+  peakMb: number;
 }
 
 /**
@@ -143,12 +148,41 @@ const trendState = new Map<number, PidTrendState>();
 export interface MainProcessTrendSample {
   /** OS process id. Join to app.getAppMetrics() by pid, not webContentsId. */
   pid: number;
+  /** Electron process type (Browser, Tab, Utility). */
+  type: string;
   /** Epoch ms when this pid was first sampled in the current monitor lifetime. */
   startedAt: number;
   /** Latest exponential moving average of working-set footprint, in MB. */
   emaMb: number;
   /** Bounded rolling EMA history (≤ BUCKET_WINDOW entries), in MB, oldest→newest. */
   emaHistoryMb: number[];
+  /** Most recent raw working-set sample, in MB. */
+  mb: number;
+  /** Largest raw working-set sample seen for this pid, in MB. */
+  peakMb: number;
+}
+
+export interface ProcessTypePeakSample {
+  type: string;
+  /**
+   * Largest working set any single process of this type reached — not the
+   * combined footprint of every process of the type.
+   */
+  peakMb: number;
+  pid: number;
+  /** Epoch ms of the sample that set the peak. */
+  at: number;
+}
+
+/**
+ * Session high-water mark per monitored process type. Keyed by type, so it is
+ * bounded by MONITORED_TYPES and survives pid churn and suspend; only a fresh
+ * {@link startAppMetricsMonitor} resets it.
+ */
+const sessionPeaks = new Map<string, ProcessTypePeakSample>();
+
+export function getSessionPeakSnapshot(): ProcessTypePeakSample[] {
+  return Array.from(sessionPeaks.values(), (p) => ({ ...p, peakMb: Math.round(p.peakMb) }));
 }
 
 /**
@@ -162,9 +196,12 @@ export function getTrendSnapshot(): MainProcessTrendSample[] {
   for (const [pid, state] of trendState) {
     out.push({
       pid,
+      type: state.type,
       startedAt: state.startedAt,
       emaMb: Math.round(state.ema),
       emaHistoryMb: state.emaHistory.map((v) => Math.round(v)),
+      mb: Math.round(state.latestMb),
+      peakMb: Math.round(state.peakMb),
     });
   }
   return out;
@@ -439,6 +476,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
   // it. Reset on each (re)start so a previous monitor lifetime's pids don't
   // bleed into a fresh one — tests call startAppMetricsMonitor repeatedly.
   trendState.clear();
+  sessionPeaks.clear();
   let removeSuspendListener: (() => void) | null = null;
   let removeWakeListener: (() => void) | null = null;
   let pollCount = 0;
@@ -579,36 +617,60 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           thresholdExceededPids.delete(proc.pid);
         }
 
+        const sampledAt = Date.now();
+        const typePeak = sessionPeaks.get(proc.type);
+        if (!typePeak || mb > typePeak.peakMb) {
+          sessionPeaks.set(proc.type, {
+            type: proc.type,
+            peakMb: mb,
+            pid: proc.pid,
+            at: sampledAt,
+          });
+        }
+
         let state = trendState.get(proc.pid);
         if (!state) {
           state = {
-            startedAt: Date.now(),
+            type: proc.type,
+            startedAt: sampledAt,
             tickInBucket: 0,
             bucketMin: mb,
             ema: mb,
             emaHistory: [],
+            emaHistoryAt: [],
+            latestMb: mb,
+            peakMb: mb,
           };
           trendState.set(proc.pid, state);
         }
 
+        state.latestMb = mb;
+        state.peakMb = Math.max(state.peakMb, mb);
         state.bucketMin = Math.min(state.bucketMin, mb);
         state.tickInBucket++;
 
         if (state.tickInBucket === BUCKET_TICKS) {
           state.ema = EMA_ALPHA * state.bucketMin + (1 - EMA_ALPHA) * state.ema;
           state.emaHistory.push(state.ema);
+          state.emaHistoryAt.push(sampledAt);
           if (state.emaHistory.length > BUCKET_WINDOW) {
             state.emaHistory.shift();
+            state.emaHistoryAt.shift();
           }
 
           if (
-            Date.now() - state.startedAt >= STARTUP_SUPPRESSION_MS &&
+            sampledAt - state.startedAt >= STARTUP_SUPPRESSION_MS &&
             state.emaHistory.length === BUCKET_WINDOW
           ) {
             const oldest = state.emaHistory[0]!;
             const newest = state.emaHistory[BUCKET_WINDOW - 1]!;
-            const windowHours = ((BUCKET_WINDOW - 1) * 60) / 3600;
-            const growthMbPerHour = (newest - oldest) / windowHours;
+            // Measured span, not bucket count × nominal cadence: power policy
+            // stretches the poll interval up to 10x and a focus refresh polls
+            // early, so the nominal span misstates the rate (#12802).
+            const windowHours =
+              (state.emaHistoryAt[BUCKET_WINDOW - 1]! - state.emaHistoryAt[0]!) / 3_600_000;
+            // A span that didn't move forward (wall-clock adjustment) has no rate.
+            const growthMbPerHour = windowHours > 0 ? (newest - oldest) / windowHours : 0;
             if (growthMbPerHour > TREND_WARN_MB_PER_HOUR) {
               if (!trendWarnedPids.has(proc.pid)) {
                 trendWarnedPids.add(proc.pid);
@@ -616,6 +678,8 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
                   pid: proc.pid,
                   type: proc.type,
                   growthMbPerHour: Math.round(growthMbPerHour),
+                  mb: Math.round(mb),
+                  peakMb: Math.round(state.peakMb),
                 });
               }
             } else if (growthMbPerHour <= 0) {

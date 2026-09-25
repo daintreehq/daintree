@@ -66,6 +66,8 @@ import {
   RENDERER_ELU_HIGH_SAMPLE_COUNT,
   hasSustainedRendererSaturation,
   getTrendSnapshot,
+  getSessionPeakSnapshot,
+  setAppMetricsMonitorPollInterval,
   type MemoryPressureActions,
 } from "../ProcessMemoryMonitor.js";
 import type { TrimStateSummary } from "../../../shared/types/pty-host.js";
@@ -397,6 +399,102 @@ describe("ProcessMemoryMonitor", () => {
     expect(
       (trendCalls[0]![1] as { growthMbPerHour: number }).growthMbPerHour
     ).toBeGreaterThanOrEqual(5);
+  });
+
+  describe("trend rate uses measured time, not nominal cadence (#12802)", () => {
+    afterEach(() => {
+      setAppMetricsMonitorPollInterval(30_000);
+    });
+
+    function trendWarnings() {
+      return vi
+        .mocked(logWarn)
+        .mock.calls.filter((c) => c[0] === "process-memory-trend-warning")
+        .map((c) => c[1] as { growthMbPerHour: number; mb: number; peakMb: number });
+    }
+
+    // Memory grows at a fixed MB/hour of wall-clock time, whatever the poll cadence.
+    function growByWallClock(mbPerHour: number) {
+      const t0 = Date.now();
+      mockGetAppMetrics.mockImplementation(() => {
+        const mb = 100 + ((Date.now() - t0) / 3_600_000) * mbPerHour;
+        return [makeMetric("Tab", mb * 1024, 500)];
+      });
+    }
+
+    it("does not inflate a sub-threshold rate when polling is stretched 10x", () => {
+      setAppMetricsMonitorPollInterval(300_000);
+      growByWallClock(2);
+      stop = startAppMetricsMonitor();
+
+      vi.advanceTimersByTime(70 * 300_000);
+
+      // Nominal-cadence math would report well over 5 MB/hr here and warn.
+      expect(trendWarnings()).toHaveLength(0);
+    });
+
+    it("reports the real rate when polling is stretched 5x", () => {
+      setAppMetricsMonitorPollInterval(150_000);
+      growByWallClock(10);
+      stop = startAppMetricsMonitor();
+
+      vi.advanceTimersByTime(70 * 150_000);
+
+      const warnings = trendWarnings();
+      expect(warnings).toHaveLength(1);
+      // The one-shot warning fires as the EMA slope climbs past 5 toward the
+      // true 10; nominal-cadence math would report ~50 here.
+      expect(warnings[0]!.growthMbPerHour).toBeGreaterThanOrEqual(5);
+      expect(warnings[0]!.growthMbPerHour).toBeLessThanOrEqual(12);
+    });
+
+    it("reports the real rate when the cadence changes mid-window", () => {
+      growByWallClock(10);
+      stop = startAppMetricsMonitor();
+
+      vi.advanceTimersByTime(30 * 30_000);
+      setAppMetricsMonitorPollInterval(300_000);
+      vi.advanceTimersByTime(70 * 300_000);
+
+      const warnings = trendWarnings();
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]!.growthMbPerHour).toBeGreaterThanOrEqual(5);
+      expect(warnings[0]!.growthMbPerHour).toBeLessThanOrEqual(15);
+    });
+
+    it("carries the current and peak size in the warning", () => {
+      let tick = 0;
+      mockGetAppMetrics.mockImplementation(() => {
+        tick++;
+        // Steady growth, with one early spike that stays the peak.
+        const mb = tick === 3 ? 900 : 100 + tick * 0.5;
+        return [makeMetric("Tab", mb * 1024, 500)];
+      });
+      stop = startAppMetricsMonitor();
+
+      vi.advanceTimersByTime(62 * 30_000);
+
+      const warnings = trendWarnings();
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]!.mb).toBeGreaterThan(120);
+      expect(warnings[0]!.mb).toBeLessThan(140);
+      expect(warnings[0]!.peakMb).toBe(900);
+    });
+
+    it("does not warn when the wall clock steps back past the window start", () => {
+      let mb = 100;
+      mockGetAppMetrics.mockImplementation(() => [makeMetric("Tab", mb * 1024, 500)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(200 * 30_000);
+
+      // Memory falls while the clock jumps back 40 min: a falling EMA over a
+      // negative span would divide out to a positive rate.
+      vi.setSystemTime(Date.now() - 40 * 60_000);
+      mb = 90;
+      vi.advanceTimersByTime(4 * 30_000);
+
+      expect(trendWarnings()).toHaveLength(0);
+    });
   });
 
   it("suppresses trend warning before 30 buckets are accumulated", () => {
@@ -2473,6 +2571,23 @@ describe("ProcessMemoryMonitor", () => {
       expect(getTrendSnapshot().some((s) => s.pid === 7777)).toBe(false);
     });
 
+    it("reports type, latest size and peak size per pid", () => {
+      let kb = 200 * 1024;
+      mockGetAppMetrics.mockImplementation(() => [makeMetric("Utility", kb, 4242)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+      kb = 350 * 1024;
+      vi.advanceTimersByTime(30_000);
+      kb = 250 * 1024;
+      vi.advanceTimersByTime(30_000);
+
+      expect(getTrendSnapshot().find((s) => s.pid === 4242)).toMatchObject({
+        type: "Utility",
+        mb: 250,
+        peakMb: 350,
+      });
+    });
+
     it("clears stale pids when the monitor is restarted", () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 4242)]);
       stop = startAppMetricsMonitor();
@@ -2483,6 +2598,53 @@ describe("ProcessMemoryMonitor", () => {
       // A fresh monitor must not surface the previous lifetime's pid.
       stop = startAppMetricsMonitor();
       expect(getTrendSnapshot()).toEqual([]);
+    });
+  });
+  describe("getSessionPeakSnapshot (#12802)", () => {
+    it("keeps each type's single-process peak after the pid exits", () => {
+      mockGetAppMetrics.mockReturnValue([
+        makeMetric("Tab", 600 * 1024, 11),
+        makeMetric("Tab", 400 * 1024, 12),
+        makeMetric("Browser", 250 * 1024, 1),
+      ]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+
+      mockGetAppMetrics.mockReturnValue([
+        makeMetric("Tab", 450 * 1024, 12),
+        makeMetric("Browser", 240 * 1024, 1),
+      ]);
+      vi.advanceTimersByTime(30_000);
+
+      expect(getTrendSnapshot().some((s) => s.pid === 11)).toBe(false);
+      const peaks = getSessionPeakSnapshot();
+      expect(peaks.find((p) => p.type === "Tab")).toMatchObject({ pid: 11, peakMb: 600 });
+      expect(peaks.find((p) => p.type === "Browser")).toMatchObject({ pid: 1, peakMb: 250 });
+      expect(peaks).toHaveLength(2);
+    });
+
+    it("excludes non-monitored types", () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("GPU", 900 * 1024, 7777)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+      expect(getSessionPeakSnapshot()).toEqual([]);
+    });
+
+    it("survives suspend but resets on a fresh monitor start", () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Tab", 600 * 1024, 11)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+
+      const sleep = vi.mocked(getSystemSleepService)();
+      const onSuspend = vi.mocked(sleep.onSuspend).mock.calls.at(-1)![0] as () => void;
+      onSuspend();
+
+      expect(getTrendSnapshot()).toEqual([]);
+      expect(getSessionPeakSnapshot()).toHaveLength(1);
+
+      stop();
+      stop = startAppMetricsMonitor();
+      expect(getSessionPeakSnapshot()).toEqual([]);
     });
   });
 });
