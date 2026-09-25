@@ -932,8 +932,8 @@ export type WorkspaceHostEvent =
     }
   // An externally-deleted worktree whose Git metadata the host kept rather than
   // pruned, because its submodule stores hold commits that exist nowhere else
-  // or could not be inspected (#12790). Emitted once per distinct loss; the
-  // router surfaces it as a warning toast carrying the store location.
+  // or could not be inspected (#12790). Emitted on every sweep that keeps the
+  // entry; the router shows it once per project view as a warning toast.
   | {
       type: "worktree-prune-retained";
       adminDir: string;

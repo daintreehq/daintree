@@ -165,16 +165,29 @@ describe("WorkspaceHostEventRouter", () => {
   });
 
   describe("worktree-prune-retained (#12790)", () => {
-    it("shows the host's own explanation and offers the store location", () => {
-      router.routeHostEvent(makeEntry(), {
+    const retained = (adminDir = "/project/test/.git/worktrees/wt") =>
+      ({
         type: "worktree-prune-retained",
-        adminDir: "/project/test/.git/worktrees/wt",
+        adminDir,
         worktreePath: "/project/wt",
         message: "its submodule repositories still hold 1 submodule commit",
-      });
+      }) as const;
 
-      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
-      const [channel, payload] = vi.mocked(broadcastToRenderer).mock.calls[0];
+    function viewEntry(): { entry: ProcessEntry; send: ReturnType<typeof vi.fn> } {
+      const send = vi.fn();
+      const entry = makeEntry({
+        directPortViews: new Map([[7, { isDestroyed: () => false, send }]]) as never,
+      });
+      return { entry, send };
+    }
+
+    it("shows the host's explanation in this project's views, with the store location", () => {
+      const { entry, send } = viewEntry();
+
+      router.routeHostEvent(entry, retained());
+
+      expect(send).toHaveBeenCalledTimes(1);
+      const [channel, payload] = send.mock.calls[0];
       expect(channel).toBe(CHANNELS.NOTIFICATION_SHOW_TOAST);
       expect(payload).toMatchObject({
         type: "warning",
@@ -184,21 +197,29 @@ describe("WorkspaceHostEventRouter", () => {
           data: path.join("/project/test/.git/worktrees/wt", "modules"),
         },
       });
+      // Scoped to the owning project, not every window.
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
     });
 
-    it("keeps two retained entries from sharing one rate-limit bucket", () => {
-      for (const id of ["a", "b"]) {
-        router.routeHostEvent(makeEntry(), {
-          type: "worktree-prune-retained",
-          adminDir: `/project/test/.git/worktrees/${id}`,
-          message: "submodule contents that could not be inspected",
-        });
-      }
+    it("shows each kept entry once, however often the host re-reports it", () => {
+      const { entry, send } = viewEntry();
 
-      const keys = vi
-        .mocked(broadcastToRenderer)
-        .mock.calls.map(([, payload]) => (payload as { rateLimitKey?: string }).rateLimitKey);
-      expect(new Set(keys).size).toBe(2);
+      router.routeHostEvent(entry, retained());
+      router.routeHostEvent(entry, retained());
+      router.routeHostEvent(entry, retained("/project/test/.git/worktrees/other"));
+
+      expect(send).toHaveBeenCalledTimes(2);
+    });
+
+    it("holds a warning raised before any view attached until one can show it", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, retained());
+
+      const send = vi.fn();
+      entry.directPortViews.set(7, { isDestroyed: () => false, send } as never);
+      router.routeHostEvent(entry, retained());
+
+      expect(send).toHaveBeenCalledTimes(1);
     });
   });
 

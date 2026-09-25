@@ -444,8 +444,6 @@ function samePath(a: string, b: string): boolean {
 export class WorkspaceService {
   private monitors = new Map<string, WorktreeMonitor>();
   private readonly statusTiming = new StatusTimingRecorder();
-  /** Admin dir → the loss last reported for it, so each is warned about once. */
-  private readonly retainedPruneWarnings = new Map<string, string>();
   /** Tail of the sweep chain — load, refresh and delete never sweep at once. */
   private pruneSweepTail: Promise<void> = Promise.resolve();
   private pollQueue = new PQueue({
@@ -4778,8 +4776,7 @@ export class WorkspaceService {
    *
    * Replaces the unqualified prune at every call site: prune cannot be scoped,
    * so checking one target and then pruning swept up every other phantom entry
-   * unchecked. Retained entries are reported once per distinct loss, and the
-   * report is withdrawn when a later sweep no longer finds the entry at risk.
+   * unchecked. Retained entries are reported on every sweep that keeps them.
    * Best-effort throughout — nothing here may fail a load, refresh or delete.
    */
   private sweepPrunableWorktreeEntries(): Promise<void> {
@@ -4821,15 +4818,12 @@ export class WorkspaceService {
       const cacheKey = this.listService.getCacheKey();
       if (cacheKey) this.listService.invalidateCache(cacheKey);
     }
-    if (!result.complete) return;
 
-    // An entry a probe failed on is unsettled, not resolved: its warning, if
-    // any, stays until a sweep can actually look at it again.
-    const current = new Set<string>(result.unknown);
+    // Reported on every sweep that keeps the entry, not once: only main knows
+    // whether a view of this project was there to show it, so the dedupe
+    // lives in the router (a warning raised during a prewarm, before any view
+    // attached, would otherwise never be seen).
     for (const entry of result.retained) {
-      current.add(entry.adminDir);
-      if (this.retainedPruneWarnings.get(entry.adminDir) === entry.loss) continue;
-      this.retainedPruneWarnings.set(entry.adminDir, entry.loss);
       const where = entry.worktreePath ?? entry.adminDir;
       this.sendEvent({
         type: "worktree-prune-retained",
@@ -4837,9 +4831,6 @@ export class WorkspaceService {
         adminDir: entry.adminDir,
         message: `The folder ${where} is gone, but its submodule repositories still hold ${entry.loss}. Daintree kept them instead of cleaning up. Push those commits from the submodule repositories, then delete the worktree in Daintree.`,
       });
-    }
-    for (const adminDir of this.retainedPruneWarnings.keys()) {
-      if (!current.has(adminDir)) this.retainedPruneWarnings.delete(adminDir);
     }
   }
 
@@ -5907,7 +5898,6 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.wslDefaultDistroPromise = null;
     this.wslLastKnownDefaultDistro = undefined;
 
-    this.retainedPruneWarnings.clear();
     clearGitDirCache();
     clearGitCommonDirCache();
     this.listService.invalidateCache();
@@ -6034,7 +6024,6 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.backgroundGitWatcherLru.clear();
     this.agentActiveWorktreeIds.clear();
     this.authFailureConfirmedNotified.clear();
-    this.retainedPruneWarnings.clear();
     this.pollQueue.clear();
     this.stopForgeRemoteDetection();
     this.listService.invalidateCache();

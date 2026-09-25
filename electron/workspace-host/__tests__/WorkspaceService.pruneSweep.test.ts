@@ -1,13 +1,5 @@
 import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -120,12 +112,14 @@ describe("WorkspaceService worktree cleanup keeps stranded submodule commits (#1
     expect(retainedEvents()).toHaveLength(0);
   });
 
-  it("warns once per loss, then cleans up once the commits reach a remote", async () => {
+  it("reports the kept entry on every sweep, then cleans it up once the commits reach a remote", async () => {
     phantomWithSubmodule("wt-at-risk", "stranded submodule work");
 
     await service["sweepPrunableWorktreeEntries"]();
     await service["sweepPrunableWorktreeEntries"]();
-    expect(retainedEvents()).toHaveLength(1);
+    // Main decides when a view has actually shown it; the host keeps reporting.
+    expect(retainedEvents()).toHaveLength(2);
+    sendEvent.mockClear();
 
     const store = path.join(registry, "wt-at-risk", "modules", "lib");
     git(
@@ -141,29 +135,23 @@ describe("WorkspaceService worktree cleanup keeps stranded submodule commits (#1
     await service["sweepPrunableWorktreeEntries"]();
 
     expect(existsSync(path.join(registry, "wt-at-risk"))).toBe(false);
-    expect(service["retainedPruneWarnings"].size).toBe(0);
+    expect(retainedEvents()).toHaveLength(0);
     expect(git(root, "worktree", "list", "--porcelain")).not.toContain("wt-at-risk");
   });
 
-  it("keeps the warning while a later sweep cannot look at the entry", async () => {
-    phantomWithSubmodule("wt-at-risk", "stranded submodule work");
-    await service["sweepPrunableWorktreeEntries"]();
-    const adminDir = path.join(registry, "wt-at-risk");
-    expect(service["retainedPruneWarnings"].has(adminDir)).toBe(true);
-
-    // An unreadable pointer is a failed probe, not a resolution.
+  it("leaves an entry alone while its pointer cannot be read", async () => {
+    phantomWithSubmodule("wt-unreadable");
+    const adminDir = path.join(registry, "wt-unreadable");
+    // A pointer that is a directory: git would prune this, but a failed probe
+    // establishes nothing, so the entry stays and nothing claims it at risk.
     const pointer = path.join(adminDir, "gitdir");
-    const saved = readFileSync(pointer, "utf-8");
     rmSync(pointer);
     mkdirSync(pointer);
-    await service["sweepPrunableWorktreeEntries"]();
-    expect(service["retainedPruneWarnings"].has(adminDir)).toBe(true);
 
-    rmSync(pointer, { recursive: true });
-    writeFileSync(pointer, saved);
     await service["sweepPrunableWorktreeEntries"]();
-    // Same loss as before, so no second warning.
-    expect(retainedEvents()).toHaveLength(1);
+
+    expect(existsSync(path.join(adminDir, "modules", "lib"))).toBe(true);
+    expect(retainedEvents()).toHaveLength(0);
   });
 
   it("runs selectively through the refresh path, the way the 90s reconcile does", async () => {
