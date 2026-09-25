@@ -264,7 +264,7 @@ describe("Remote Hosts end to end over a real socket", () => {
   );
 
   it(
-    "reconnect: missed output replays exactly once in order; an overflowed ring resets from a snapshot",
+    "reconnect (transport): missed output replays exactly once in order; an overflowed ring sends one snapshot RESET frame",
     async () => {
       const r = await harness();
       r.pty.spawn("t1", "proj-1");
@@ -318,7 +318,9 @@ describe("Remote Hosts end to end over a real socket", () => {
       const terminal = r.pty.terminals.get("t1")!;
       expect(reset!.snapshot).toEqual({ data: terminal.transcript, cols: 80, rows: 24 });
       expect((reset!.snapshot as { data: string }).data.endsWith("TAIL-OF-OVERFLOW")).toBe(true);
-      // None of the overflowed range was painted piecemeal; the snapshot covers it.
+      // Transport only: no data frame carried the overflowed range, so the
+      // RESET frame is its sole carrier. FakeView records frames and paints
+      // nothing; the xterm repaint is TerminalInstanceService.remoteReset.test.ts.
       expect(view.text("t1")).toBe(painted);
 
       r.pty.emit("t1", "live-again");
@@ -330,24 +332,31 @@ describe("Remote Hosts end to end over a real socket", () => {
   );
 
   it(
-    "operation outcome: a clone whose reply was lost resolves to succeeded after the reconnect",
+    "operation outcome (transport): a clone whose reply was lost resolves to succeeded over the reconnected link",
     async () => {
       const r = await harness();
       const view = r.addView(VIEW_A, "proj-1");
       let finish!: () => void;
       const finished = new Promise<void>((resolve) => (finish = resolve));
+      // A stand-in for the clone handler with the production registry shape;
+      // counted so the retry claim rests on executions, not on bookkeeping.
+      let handlerCalls = 0;
+      let cloneRuns = 0;
       cleanups.push(
         typedHandleWithContext(
           CHANNELS.PROJECT_CLONE_REPO as never,
-          ((ctx: IpcContext, payload: { opId: string; url: string }) =>
-            getOperationRegistry().run(
+          ((ctx: IpcContext, payload: { opId: string; url: string }) => {
+            handlerCalls++;
+            return getOperationRegistry().run(
               { opId: payload.opId, kind: "git-clone", projectId: ctx.projectId },
               async (op) => {
+                cloneRuns++;
                 op.progress({ fraction: 0.5, stage: "receiving", message: null });
                 await finished;
                 return { success: true, clonedPath: `/srv/${payload.url.split("/").pop()}` };
               }
-            )) as never
+            );
+          }) as never
         )
       );
 
@@ -404,6 +413,8 @@ describe("Remote Hosts end to end over a real socket", () => {
         url: "https://example.com/acme/widgets",
       });
       expect(again).toEqual(wrapSuccess({ success: true, clonedPath: "/srv/widgets" }));
+      expect(handlerCalls).toBe(2);
+      expect(cloneRuns).toBe(1);
       expect(getEndpointRegistry().getRemote()).toHaveLength(1);
     },
     TEST_TIMEOUT_MS

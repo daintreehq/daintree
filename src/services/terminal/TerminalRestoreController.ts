@@ -519,6 +519,30 @@ export class TerminalRestoreController {
     return this.restoreFromSerialized(id, serializedState, captureGeometry, continuation);
   }
 
+  /**
+   * Apply a host-side reset: repaint from `serializedState`, or clear the screen
+   * when there is nothing to repaint from (null, or an empty mirror).
+   *
+   * Unlike `restoreFetchedState`, an empty state is a real outcome here — the
+   * host said the screen is blank — so it must still supersede any restore in
+   * flight and wipe what is visible. The clear is written as RIS through the
+   * normal restore path rather than a bare `terminal.reset()`: that bumps the
+   * generation (so a paused incremental restore stops before its next chunk),
+   * owns the restore window (so output held under it is released under the new
+   * generation), and queues behind any chunk xterm has already accepted, which a
+   * synchronous reset would let paint on top of the cleared screen.
+   */
+  applyReset(
+    id: string,
+    serializedState: string | null,
+    captureGeometry?: TerminalGeometry
+  ): Promise<boolean> {
+    if (serializedState) {
+      return this.restoreFetchedState(id, serializedState, captureGeometry);
+    }
+    return Promise.resolve(this.restoreFromSerialized(id, "\x1bc", captureGeometry));
+  }
+
   async fetchAndRestore(id: string): Promise<boolean> {
     const managed = this.deps.getInstance(id);
     if (!managed) {
