@@ -789,6 +789,94 @@ describe("terminalClient MessagePort data routing", () => {
       }, 100);
     });
   });
+
+  describe("reset from a relayed remote port", () => {
+    const PORT_DELIVERY_MS = 30;
+    const tick = () => new Promise((resolve) => setTimeout(resolve, PORT_DELIVERY_MS));
+
+    function collectAcks(port: MessagePort): number[] {
+      const acks: number[] = [];
+      port.addEventListener("message", (event: MessageEvent<unknown>) => {
+        const msg = event.data;
+        if (msg && typeof msg === "object" && "type" in msg && msg.type === "ack") {
+          if ("bytes" in msg && typeof msg.bytes === "number") acks.push(msg.bytes);
+        }
+      });
+      port.start();
+      return acks;
+    }
+
+    it("clears the terminal and repaints the snapshot through its data path", async () => {
+      const port = acquirePort();
+      const received: string[] = [];
+      terminalClient.onData("term-1", (data) => {
+        received.push(typeof data === "string" ? data : new TextDecoder().decode(data));
+      });
+
+      port.postMessage({ type: "data", id: "term-1", data: "before", bytes: 6 });
+      port.postMessage({ type: "reset", id: "term-1", snapshot: "SNAPSHOT" });
+      port.postMessage({ type: "data", id: "term-1", data: "after", bytes: 5 });
+      await tick();
+
+      expect(received).toEqual(["before", "\x1bcSNAPSHOT", "after"]);
+    });
+
+    it("clears without repainting when the snapshot is null", async () => {
+      const port = acquirePort();
+      const received: string[] = [];
+      terminalClient.onData("term-1", (data) => received.push(String(data)));
+
+      port.postMessage({ type: "reset", id: "term-1", snapshot: null });
+      await tick();
+
+      expect(received).toEqual(["\x1bc"]);
+    });
+
+    it("discards the pending acks queued before the reset and never acks the repaint", async () => {
+      const port = acquirePort();
+      const acks = collectAcks(port);
+      terminalClient.onData("term-1", () => {});
+
+      port.postMessage({ type: "data", id: "term-1", data: "one", bytes: 3 });
+      port.postMessage({ type: "data", id: "term-1", data: "two", bytes: 4 });
+      port.postMessage({ type: "reset", id: "term-1", snapshot: "S" });
+      await tick();
+      // The repaint write completes, then the stale chunks' writes complete.
+      terminalClient.acknowledgePortData("term-1", 0, 3);
+      port.postMessage({ type: "data", id: "term-1", data: "new", bytes: 9 });
+      await tick();
+      terminalClient.acknowledgePortData("term-1", 0);
+      await tick();
+
+      expect(acks).toEqual([9]);
+    });
+
+    it("replaces early-buffered output with the repaint when nothing is attached yet", async () => {
+      const port = acquirePort();
+      port.postMessage({ type: "data", id: "term-1", data: "stale", bytes: 5 });
+      port.postMessage({ type: "reset", id: "term-1", snapshot: "S" });
+      await tick();
+
+      const received: string[] = [];
+      terminalClient.onData("term-1", (data) => received.push(String(data)));
+      expect(received).toEqual(["\x1bcS"]);
+    });
+
+    it("hands the reset to a subscriber instead of painting it itself", async () => {
+      const port = acquirePort();
+      const received: string[] = [];
+      const resets: Array<{ id: string; snapshot: string | null }> = [];
+      terminalClient.onData("term-1", (data) => received.push(String(data)));
+      const unsubscribe = terminalClient.onReset((id, snapshot) => resets.push({ id, snapshot }));
+
+      port.postMessage({ type: "reset", id: "term-1", snapshot: "S" });
+      await tick();
+      unsubscribe();
+
+      expect(resets).toEqual([{ id: "term-1", snapshot: "S" }]);
+      expect(received).toEqual([]);
+    });
+  });
 });
 
 describe("terminalClient resize normalization (#11641)", () => {

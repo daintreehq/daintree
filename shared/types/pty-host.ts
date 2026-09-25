@@ -1509,6 +1509,15 @@ export type PtyHostToRendererMessage =
       /** Byte count discarded — only set when status is "data-loss". */
       droppedBytes?: number;
       timestamp: number;
+    }
+  // Only from a remote host's relayed port: output the view is missing cannot
+  // be replayed (the host's replay ring moved past it, or the PTY restarted),
+  // so discard what the terminal shows and repaint from `snapshot` — or leave
+  // it cleared when null. Output after the reset follows on the same port.
+  | {
+      type: "reset";
+      id: string;
+      snapshot: string | null;
     };
 
 /** Per-process resource breakdown entry */
