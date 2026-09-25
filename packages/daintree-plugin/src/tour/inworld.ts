@@ -1,10 +1,14 @@
+import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { stripDirectionTags, type WordAlignment } from "../../../tour/src/tourNarration.js";
 
 /** Inworld's "Simon" — articulate and steady, made for technical tutorials. */
 export const DEFAULT_TTS_VOICE = "Simon";
 export const DEFAULT_TTS_MODEL = "inworld-tts-2";
-/** Inworld's own recogniser; any model Inworld's STT endpoint routes also works. */
-export const DEFAULT_STT_MODEL = "inworld/inworld-stt-1";
+/**
+ * Any model Inworld's STT endpoint routes, so long as it returns word
+ * timestamps — Inworld's own `inworld/inworld-stt-1` does not.
+ */
+export const DEFAULT_STT_MODEL = "groq/whisper-large-v3";
 /** Inworld rejects longer synthesis requests. */
 export const MAX_TTS_CHARACTERS = 2000;
 
@@ -41,7 +45,8 @@ export function inworldKeyFromEnv(env: NodeJS.ProcessEnv = process.env): string 
 
 async function post(auth: InworldAuth, url: string, label: string, body: unknown) {
   const doFetch = auth.fetch ?? fetch;
-  let response: Response;
+  let response: Response | undefined;
+  let transportError = "";
   try {
     response = await doFetch(url, {
       method: "POST",
@@ -49,9 +54,12 @@ async function post(auth: InworldAuth, url: string, label: string, body: unknown
       body: JSON.stringify(body),
     });
   } catch (error) {
-    throw new Error(
-      redact(`${label} request failed: ${(error as Error).message ?? String(error)}`, auth.apiKey)
-    );
+    // Only a redacted message leaves here: the original error, or its cause,
+    // could carry the request and with it the Authorization header.
+    transportError = formatErrorMessage(error, "network error");
+  }
+  if (!response) {
+    throw new Error(redact(`${label} request failed: ${transportError}`, auth.apiKey));
   }
   if (!response.ok) {
     const text = await response.text().catch(() => "");
@@ -83,7 +91,14 @@ export async function synthesizeSpeech(
   })) as { audioContent?: string; timestampInfo?: { wordAlignment?: WordAlignment } };
   const alignment = body.timestampInfo?.wordAlignment;
   if (!body.audioContent) throw new Error("Inworld TTS response carried no audio");
-  if (!alignment) throw new Error("Inworld TTS response carried no word alignment");
+  if (
+    !alignment ||
+    !Array.isArray(alignment.words) ||
+    alignment.wordStartTimeSeconds?.length !== alignment.words.length ||
+    alignment.wordEndTimeSeconds?.length !== alignment.words.length
+  ) {
+    throw new Error("Inworld TTS response carried no usable word alignment");
+  }
   return {
     audio: Buffer.from(body.audioContent, "base64"),
     alignment: stripDirectionTags(alignment),
@@ -106,7 +121,25 @@ export async function transcribeSpeech(opts: TranscribeOptions): Promise<WordAli
       wordTimestamps?: { word: string; startTimeMs: number; endTimeMs: number }[];
     };
   };
+  const model = opts.model ?? DEFAULT_STT_MODEL;
   const words = body.transcription?.wordTimestamps ?? [];
+  if (words.length === 0) {
+    throw new Error(
+      `Inworld STT (${model}) returned no word timestamps; pick a model that does with --stt-model`
+    );
+  }
+  if (
+    words.some(
+      (w) =>
+        typeof w.word !== "string" ||
+        !Number.isFinite(w.startTimeMs) ||
+        !Number.isFinite(w.endTimeMs) ||
+        w.startTimeMs < 0 ||
+        w.endTimeMs < w.startTimeMs
+    )
+  ) {
+    throw new Error(`Inworld STT (${model}) returned malformed word timestamps`);
+  }
   return {
     words: words.map((w) => w.word),
     wordStartTimeSeconds: words.map((w) => w.startTimeMs / 1000),

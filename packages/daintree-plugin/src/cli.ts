@@ -174,8 +174,6 @@ function printTourResult(result: TourCommandResult): void {
   for (const chapter of result.chapters) {
     if (chapter.stale) {
       console.log(`⚠  ${chapter.id}: timing is stale — its narration changed since it was made`);
-    } else if (chapter.estimated) {
-      console.log(`⚠  ${chapter.id}: no audio yet — estimated timing, plays silent`);
     }
   }
   console.log(`✓ Wrote timing for tour "${result.tourId}" to ${result.manifestPath}`);
@@ -193,7 +191,7 @@ tour
   .option("--tour <id>", "which contributes.tours entry (needed when there are several)")
   .option("--narration <file>", "narration file (default: tours/<tourId>.narration.json)")
   .option("--voice <id>", "Inworld voice id", "Simon")
-  .option("--model <id>", "Inworld TTS model id")
+  .option("--model <id>", "Inworld TTS model id (default: inworld-tts-2)")
   .option("--only <ids>", "comma-separated chapter ids", parseOnly)
   .option("--force", "re-voice every chapter, even ones whose narration is unchanged")
   .action(
@@ -221,7 +219,10 @@ tour
   .requiredOption("--recordings <dir>", "folder of per-chapter recordings")
   .option("--tour <id>", "which contributes.tours entry (needed when there are several)")
   .option("--narration <file>", "narration file (default: tours/<tourId>.narration.json)")
-  .option("--stt-model <id>", "Inworld STT model id")
+  .option(
+    "--stt-model <id>",
+    "an Inworld-routed STT model that returns word timestamps (default: groq/whisper-large-v3)"
+  )
   .option("--only <ids>", "comma-separated chapter ids", parseOnly)
   .action(
     async (opts: {

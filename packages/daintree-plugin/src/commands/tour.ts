@@ -4,14 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { SAFE_ID_PATTERN, TourContributionSchema } from "../../../../electron/schemas/plugin.js";
 import {
-  estimateTiming,
   narrationFingerprint,
   parseNarration,
   type ParsedNarration,
 } from "../../../tour/src/tourNarration.js";
+import type { TourChapterTiming } from "../../../tour/src/tourTypes.js";
 import { encodeOggOpus, oggOpusDuration } from "../tour/audio.js";
 import {
   DEFAULT_STT_MODEL,
+  DEFAULT_TTS_MODEL,
   DEFAULT_TTS_VOICE,
   inworldKeyFromEnv,
   synthesizeSpeech,
@@ -41,6 +42,7 @@ interface TourCommonOptions {
 export interface TourVoiceOptions extends TourCommonOptions {
   /** Inworld voice id (default: Simon). */
   voice?: string;
+  /** Inworld TTS model id (default: inworld-tts-2). */
   model?: string;
   /** Re-voice every chapter, even ones whose narration is unchanged. */
   force?: boolean;
@@ -49,6 +51,7 @@ export interface TourVoiceOptions extends TourCommonOptions {
 export interface TourAlignOptions extends TourCommonOptions {
   /** Folder holding `<chapter-id>.{wav,mp3,m4a,ogg,flac,aac}` recordings. */
   recordings: string;
+  /** An Inworld-routed STT model that returns word timestamps. */
   sttModel?: string;
 }
 
@@ -60,8 +63,6 @@ export interface TourChapterReport {
   outcome: TourChapterOutcome;
   /** Timing no longer matches the narration and nothing replaced it on this run. */
   stale: boolean;
-  /** No timing existed, so the chapter carries an estimate and no audio. */
-  estimated: boolean;
   matched?: number;
   total?: number;
   audioPath?: string;
@@ -76,7 +77,6 @@ export interface TourCommandResult {
 
 interface NarrationChapter {
   id: string;
-  narration: string;
   parsed: ParsedNarration;
   hash: string;
 }
@@ -97,6 +97,19 @@ interface TourContext {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Tour and chapter ids become file and folder names, so on top of the
+ * manifest's id grammar they must not be `.`/`..` or hidden, and must not
+ * collide on a case-insensitive filesystem.
+ */
+function checkPathId(kind: string, id: string): void {
+  if (!SAFE_ID_PATTERN.test(id) || id.length > 64 || id.startsWith(".")) {
+    throw new Error(
+      `${kind} id "${id}" must be 1–64 letters, digits, ".", "_" or "-", not starting with "."`
+    );
+  }
 }
 
 async function loadTour(opts: TourCommonOptions): Promise<TourContext> {
@@ -127,22 +140,17 @@ async function loadTour(opts: TourCommonOptions): Promise<TourContext> {
       "plugin.json declares no contributes.tours entry; add one (id, title, componentPath) first"
     );
   }
+  const ids = declared.map((t) => t.id).join(", ");
   let tour: (typeof declared)[number] | undefined;
   if (opts.tour) {
     tour = declared.find((t) => t.id === opts.tour);
-    if (!tour) {
-      throw new Error(
-        `No tour "${opts.tour}" in plugin.json; declared: ${declared.map((t) => t.id).join(", ")}`
-      );
-    }
+    if (!tour) throw new Error(`No tour "${opts.tour}" in plugin.json; declared: ${ids}`);
   } else if (declared.length === 1) {
-    tour = declared[0];
+    tour = declared[0]!;
   } else {
-    throw new Error(
-      `plugin.json declares several tours; pick one with --tour (${declared.map((t) => t.id).join(", ")})`
-    );
+    throw new Error(`plugin.json declares several tours; pick one with --tour (${ids})`);
   }
-  tour = tour!;
+  checkPathId("Tour", tour.id);
 
   const narrationPath = path.resolve(dir, opts.narration ?? `tours/${tour.id}.narration.json`);
   const chapters = await loadNarration(narrationPath);
@@ -187,62 +195,95 @@ async function loadNarration(file: string): Promise<NarrationChapter[]> {
   if (!Array.isArray(list) || list.length === 0) {
     throw new Error(`${file} must have a non-empty "chapters" array`);
   }
+  const limit = 32;
+  if (list.length > limit) throw new Error(`${file}: a tour holds at most ${limit} chapters`);
   const seen = new Set<string>();
   return list.map((item, index) => {
     if (!isRecord(item) || typeof item.id !== "string" || typeof item.narration !== "string") {
       throw new Error(`${file}: chapters[${index}] needs a string "id" and "narration"`);
     }
     const { id, narration } = item;
-    if (!SAFE_ID_PATTERN.test(id) || id.length > 64) {
-      throw new Error(`${file}: chapter id "${id}" must match ${SAFE_ID_PATTERN}`);
-    }
-    if (seen.has(id)) throw new Error(`${file}: duplicate chapter id "${id}"`);
-    seen.add(id);
+    checkPathId("Chapter", id);
+    if (seen.has(id.toLowerCase())) throw new Error(`${file}: duplicate chapter id "${id}"`);
+    seen.add(id.toLowerCase());
     let parsed: ParsedNarration;
     try {
       parsed = parseNarration(narration);
     } catch (error) {
-      throw new Error(`${file}: chapter "${id}": ${(error as Error).message}`);
+      throw new Error(`${file}: chapter "${id}": ${(error as Error).message}`, { cause: error });
     }
     if (parsed.words.length === 0) throw new Error(`${file}: chapter "${id}" has no words`);
-    return { id, narration, parsed, hash: narrationFingerprint(parsed) };
+    return { id, parsed, hash: narrationFingerprint(parsed) };
   });
 }
 
 /**
- * Rebuild the tour's chapters in narration order and write plugin.json. A
- * chapter with no timing yet gets an estimate and no audio so the manifest
- * stays loadable; chapters the narration no longer lists are dropped. The tour
- * is checked against the host's own schema first, so a run never leaves a
- * manifest the host would refuse.
+ * Every chapter the narration lists must end the run with real timing: a
+ * chapter that never had any, and that this run won't produce, would leave a
+ * manifest the host refuses. Checked before any paid request is made.
  */
-async function save(ctx: TourContext): Promise<void> {
-  ctx.tour.chapters = ctx.chapters.map((chapter) => {
-    const entry = ctx.entries.get(chapter.id);
-    if (entry) return entry;
-    return {
-      id: chapter.id,
-      ...roundTiming(estimateTiming(chapter.narration)),
-      narrationHash: chapter.hash,
-    };
-  });
-  const checked = TourContributionSchema.safeParse(ctx.tour);
+function requireCoverage(ctx: TourContext, producing: ReadonlySet<string>, hint: string): void {
+  const missing = ctx.chapters
+    .filter((chapter) => !ctx.entries.has(chapter.id) && !producing.has(chapter.id))
+    .map((chapter) => chapter.id);
+  if (missing.length > 0) {
+    throw new Error(`No timing yet for ${missing.join(", ")}; ${hint}`);
+  }
+}
+
+/**
+ * The tour with its chapters rebuilt in narration order (chapters the
+ * narration no longer lists are dropped), checked against the host's own
+ * schema so a run never leaves a manifest the host would refuse.
+ */
+function candidateTour(ctx: TourContext, entries: Map<string, ChapterEntry>) {
+  const chapters = ctx.chapters.map((chapter) => entries.get(chapter.id)!);
+  const tour = { ...ctx.tour, chapters };
+  const checked = TourContributionSchema.safeParse(tour);
   if (!checked.success) {
     const issues = checked.error.issues
       .map((issue) => `${issue.path.join(".") || "(tour)"}: ${issue.message}`)
       .join("\n");
     throw new Error(`The tour's timing would not validate; plugin.json not written:\n${issues}`);
   }
-  await fs.writeFile(ctx.manifestPath, `${JSON.stringify(ctx.manifest, null, ctx.indent)}\n`);
+  return chapters;
 }
 
-function record(ctx: TourContext, chapter: NarrationChapter, timing: object, audioPath: string) {
-  ctx.entries.set(chapter.id, {
+async function writeManifest(ctx: TourContext, chapters: ChapterEntry[]): Promise<void> {
+  ctx.tour.chapters = chapters;
+  const temp = `${ctx.manifestPath}.${process.pid}.tmp`;
+  await fs.writeFile(temp, `${JSON.stringify(ctx.manifest, null, ctx.indent)}\n`);
+  await fs.rename(temp, ctx.manifestPath);
+}
+
+/**
+ * Commit one produced chapter: validate the whole tour with it, then put the
+ * audio in place, then write plugin.json. Once all chapters have timing the
+ * manifest is written after each one, so an interrupted run keeps what it
+ * paid for; until then entries are only staged.
+ */
+async function commitChapter(
+  ctx: TourContext,
+  chapter: NarrationChapter,
+  timing: TourChapterTiming,
+  audio: { from: Buffer | string; path: string }
+): Promise<void> {
+  const next = new Map(ctx.entries);
+  next.set(chapter.id, {
     id: chapter.id,
-    ...roundTiming(timing),
-    audioUrl: audioPath,
+    ...roundTiming({ ...timing, audioUrl: audio.path }),
     narrationHash: chapter.hash,
   });
+  const complete = ctx.chapters.every((c) => next.has(c.id));
+  const chapters = complete ? candidateTour(ctx, next) : null;
+
+  const target = path.join(ctx.dir, audio.path);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  if (typeof audio.from === "string") await fs.copyFile(audio.from, target);
+  else await fs.writeFile(target, audio.from);
+
+  ctx.entries = next;
+  if (chapters) await writeManifest(ctx, chapters);
 }
 
 function report(
@@ -256,23 +297,40 @@ function report(
     id: chapter.id,
     outcome,
     stale: entry !== undefined && entry.narrationHash !== chapter.hash,
-    estimated: entry === undefined,
     ...extra,
   };
 }
 
-function audioPathFor(tourId: string, chapterId: string, variant: string): string {
-  return `tours/${tourId}/${chapterId}.${variant}.ogg`;
+async function finish(ctx: TourContext, reports: TourChapterReport[]): Promise<TourCommandResult> {
+  await writeManifest(ctx, candidateTour(ctx, ctx.entries));
+  return {
+    tourId: ctx.tour.id,
+    manifestPath: ctx.manifestPath,
+    narrationPath: ctx.narrationPath,
+    chapters: reports,
+  };
 }
 
-/** Filename-safe spelling of a voice id, so each voice's audio has its own path. */
-function voiceSlug(voice: string): string {
-  const slug = voice
+/** Filename-safe spelling of a voice or model id. */
+function slug(value: string, kind: string): string {
+  const out = value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  if (!slug) throw new Error(`Voice "${voice}" has no usable letters or digits`);
-  return slug;
+  if (!out) throw new Error(`${kind} "${value}" has no usable letters or digits`);
+  return out;
+}
+
+/**
+ * Where a chapter's audio lives. The voice (and a non-default model) is part
+ * of the name, so switching either re-voices instead of passing for current.
+ */
+function voicedAudioPath(tourId: string, chapterId: string, voice: string, model?: string) {
+  const variant =
+    model && model !== DEFAULT_TTS_MODEL
+      ? `${slug(voice, "Voice")}-${slug(model, "Model")}`
+      : slug(voice, "Voice");
+  return `tours/${tourId}/${chapterId}.${variant}.ogg`;
 }
 
 /**
@@ -284,17 +342,22 @@ function voiceSlug(voice: string): string {
 export async function runTourVoice(opts: TourVoiceOptions = {}): Promise<TourCommandResult> {
   const ctx = await loadTour(opts);
   const voice = opts.voice ?? DEFAULT_TTS_VOICE;
-  const slug = voiceSlug(voice);
-  let apiKey = opts.apiKey;
   const log = opts.log ?? (() => {});
-  const reports: TourChapterReport[] = [];
+  const selected = ctx.chapters.filter((c) => !opts.only || opts.only.includes(c.id));
+  requireCoverage(
+    ctx,
+    new Set(selected.map((c) => c.id)),
+    "voice them too (leave them out of --only)"
+  );
 
+  let apiKey = opts.apiKey;
+  const reports: TourChapterReport[] = [];
   for (const chapter of ctx.chapters) {
-    if (opts.only && !opts.only.includes(chapter.id)) {
+    if (!selected.includes(chapter)) {
       reports.push(report(ctx, chapter, "not-selected"));
       continue;
     }
-    const audioPath = audioPathFor(ctx.tour.id, chapter.id, slug);
+    const audioPath = voicedAudioPath(ctx.tour.id, chapter.id, voice, opts.model);
     const existing = ctx.entries.get(chapter.id);
     const upToDate =
       existing?.narrationHash === chapter.hash &&
@@ -322,54 +385,61 @@ export async function runTourVoice(opts: TourVoiceOptions = {}): Promise<TourCom
       oggOpusDuration(audio),
       audioPath
     );
-    const target = path.join(ctx.dir, audioPath);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, audio);
-    record(ctx, chapter, timing, audioPath);
-    await save(ctx);
+    await commitChapter(ctx, chapter, timing, { from: audio, path: audioPath });
     reports.push(report(ctx, chapter, "voiced", { matched, total, audioPath }));
   }
-
-  await save(ctx);
-  return {
-    tourId: ctx.tour.id,
-    manifestPath: ctx.manifestPath,
-    narrationPath: ctx.narrationPath,
-    chapters: reports,
-  };
+  return finish(ctx, reports);
 }
 
-async function findRecording(dir: string, chapterId: string): Promise<string | null> {
-  const names = await fs.readdir(dir);
-  const match = names.find((name) => {
-    const ext = path.extname(name).toLowerCase();
-    return (
-      RECORDING_EXTENSIONS.includes(ext) && path.basename(name, path.extname(name)) === chapterId
-    );
-  });
-  return match ? path.join(dir, match) : null;
+async function findRecordings(dir: string): Promise<Map<string, string>> {
+  const byChapter = new Map<string, string>();
+  for (const name of await fs.readdir(dir)) {
+    const ext = path.extname(name);
+    if (!RECORDING_EXTENSIONS.includes(ext.toLowerCase())) continue;
+    const id = path.basename(name, ext);
+    const other = byChapter.get(id);
+    if (other) {
+      throw new Error(`Two recordings for chapter "${id}": ${path.basename(other)} and ${name}`);
+    }
+    byChapter.set(id, path.join(dir, name));
+  }
+  return byChapter;
 }
 
 /**
  * Time the author's own recordings: each `<chapter-id>.<ext>` in `recordings`
- * is encoded to mono Ogg Opus inside the plugin, transcribed with word
- * timestamps by Inworld STT, and aligned back to the narration's cue markers.
- * Every chapter with a recording is re-timed, since a new take of the same
- * words is still a new take; chapters without one keep their timing.
+ * is encoded to mono Ogg Opus, transcribed with word timestamps by an
+ * Inworld-routed STT model, and aligned back to the narration's cue markers;
+ * the encoded audio is what ships in the plugin. Every chapter with a
+ * recording is re-timed, since a new take of the same words is still a new
+ * take; chapters without one keep their timing.
  */
 export async function runTourAlign(opts: TourAlignOptions): Promise<TourCommandResult> {
-  const recordings = path.resolve(opts.recordings);
+  const recordingsDir = path.resolve(opts.recordings);
   let isDir = false;
   try {
-    isDir = (await fs.stat(recordings)).isDirectory();
+    isDir = (await fs.stat(recordingsDir)).isDirectory();
   } catch {
     // reported below
   }
-  if (!isDir) throw new Error(`Recordings folder not found: ${recordings}`);
+  if (!isDir) throw new Error(`Recordings folder not found: ${recordingsDir}`);
 
   const ctx = await loadTour(opts);
-  let apiKey = opts.apiKey;
+  const recordings = await findRecordings(recordingsDir);
   const log = opts.log ?? (() => {});
+  const selected = ctx.chapters.filter(
+    (c) => (!opts.only || opts.only.includes(c.id)) && recordings.has(c.id)
+  );
+  if (selected.length === 0) {
+    throw new Error(`No recording in ${recordingsDir} matches a selected chapter id`);
+  }
+  requireCoverage(
+    ctx,
+    new Set(selected.map((c) => c.id)),
+    `add their recordings to ${recordingsDir}`
+  );
+
+  let apiKey = opts.apiKey;
   const reports: TourChapterReport[] = [];
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-tour-align-"));
   try {
@@ -378,7 +448,7 @@ export async function runTourAlign(opts: TourAlignOptions): Promise<TourCommandR
         reports.push(report(ctx, chapter, "not-selected"));
         continue;
       }
-      const recording = await findRecording(recordings, chapter.id);
+      const recording = recordings.get(chapter.id);
       if (!recording) {
         log(`! ${chapter.id}: no recording found, keeping previous timing`);
         reports.push(report(ctx, chapter, "no-recording"));
@@ -387,7 +457,7 @@ export async function runTourAlign(opts: TourAlignOptions): Promise<TourCommandR
 
       apiKey ??= inworldKeyFromEnv();
       log(`→ ${chapter.id}: transcribing ${path.basename(recording)}`);
-      const audioPath = audioPathFor(ctx.tour.id, chapter.id, "recorded");
+      const audioPath = `tours/${ctx.tour.id}/${chapter.id}.recorded.ogg`;
       // Encoded outside the plugin, so a take that fails to align never
       // replaces the audio the current timing was made from.
       const encoded = path.join(workDir, `${chapter.id}.ogg`);
@@ -406,22 +476,11 @@ export async function runTourAlign(opts: TourAlignOptions): Promise<TourCommandR
         oggOpusDuration(audio),
         audioPath
       );
-      const target = path.join(ctx.dir, audioPath);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.copyFile(encoded, target);
-      record(ctx, chapter, timing, audioPath);
-      await save(ctx);
+      await commitChapter(ctx, chapter, timing, { from: encoded, path: audioPath });
       reports.push(report(ctx, chapter, "aligned", { matched, total, audioPath }));
     }
   } finally {
     await fs.rm(workDir, { recursive: true, force: true });
   }
-
-  await save(ctx);
-  return {
-    tourId: ctx.tour.id,
-    manifestPath: ctx.manifestPath,
-    narrationPath: ctx.narrationPath,
-    chapters: reports,
-  };
+  return finish(ctx, reports);
 }
