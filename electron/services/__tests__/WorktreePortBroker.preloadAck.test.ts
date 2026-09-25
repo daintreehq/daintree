@@ -42,3 +42,29 @@ describe("preload worktree port receipt", () => {
     expect(guardIdx).toBeLessThan(ackIdx);
   });
 });
+
+/**
+ * A request made before the port arrives is rejected in preload and never
+ * reaches the broker, so this warning is main's only record of it (#12759).
+ */
+describe("preload worktree request without a port", () => {
+  let branch: string;
+
+  beforeAll(async () => {
+    const source = await readFile(PRELOAD_CTS, "utf8");
+    const start = source.indexOf("if (!this.port) {\n      // Main can't see this rejection");
+    expect(start).toBeGreaterThan(-1);
+    const end = source.indexOf("\n    }\n", start);
+    expect(end).toBeGreaterThan(start);
+    branch = source.slice(start, end);
+  });
+
+  it("warns with the requested action before rejecting", () => {
+    const warnIdx = branch.indexOf(
+      'console.warn(`[Preload] Worktree port request "${String(action)}" rejected: port not ready`)'
+    );
+    const rejectIdx = branch.indexOf('new BrokerError("HOST_EXITED", "Worktree port not ready")');
+    expect(warnIdx).toBeGreaterThan(-1);
+    expect(rejectIdx).toBeGreaterThan(warnIdx);
+  });
+});
