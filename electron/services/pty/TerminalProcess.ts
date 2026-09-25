@@ -1309,11 +1309,17 @@ export class TerminalProcess {
    * handback (#12488); its instruction is already in `text`. A terminal that
    * never asked keeps no tracker, so its submits pay one property read.
    */
-  submit(text: string, token?: string, handbackCode?: string, guard?: TerminalSubmitGuard): void {
+  submit(
+    text: string,
+    token?: string,
+    handbackCode?: string,
+    guard?: TerminalSubmitGuard,
+    imagePaths?: readonly string[]
+  ): void {
     const tracker =
       handbackCode !== undefined ? this.ensureHandbackTracker() : this.terminalInfo.handbackTracker;
     const onPtyWritten = tracker?.noteSubmission(handbackCode, token);
-    this.inputController.submit(text, token, onPtyWritten, guard);
+    this.inputController.submit(text, token, onPtyWritten, guard, imagePaths);
   }
 
   private ensureHandbackTracker(): HandbackTracker {

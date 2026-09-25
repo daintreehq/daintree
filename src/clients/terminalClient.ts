@@ -24,6 +24,7 @@ import type { PanelTitleMode } from "@shared/types/panel";
 import type { TerminalSubmissionLookup } from "@shared/types/terminalSubmission";
 import type { TerminalOutputActivityLookup } from "@shared/types/terminalStatus";
 import { normalizeTerminalGridDimension } from "@shared/types/terminal";
+import { isImageAttachmentPath, MAX_SUBMIT_IMAGE_PATHS } from "@shared/utils/imageAttachmentInput";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
@@ -385,6 +386,22 @@ export const terminalClient = {
     return handbackCode === undefined
       ? window.electron.terminal.submit(id, text, submissionToken)
       : window.electron.terminal.submit(id, text, submissionToken, handbackCode);
+  },
+
+  /**
+   * {@link submit} for a composer draft carrying image chips (#12792).
+   * `imagePaths` are absolute and each also appears in `text`, in order; an
+   * agent that takes a lone pasted path as an image attachment gets each one
+   * that way, and every other agent gets `text` exactly as `submit` sends it.
+   */
+  submitWithImages: (id: string, text: string, imagePaths: string[]): Promise<void> => {
+    // Main refuses the whole submission over one path it cannot attach, so a
+    // chip that could never be an attachment (a UNC share, say) is dropped
+    // here and simply stays text — the draft still goes out.
+    const attachable = imagePaths.filter(isImageAttachmentPath).slice(0, MAX_SUBMIT_IMAGE_PATHS);
+    return attachable.length === 0
+      ? window.electron.terminal.submit(id, text)
+      : window.electron.terminal.submit(id, text, undefined, undefined, attachable);
   },
 
   /**

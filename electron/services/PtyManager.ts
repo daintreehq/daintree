@@ -669,7 +669,8 @@ export class PtyManager extends EventEmitter {
     text: string,
     submissionToken?: string,
     handbackCode?: string,
-    guard?: TerminalSubmitGuard
+    guard?: TerminalSubmitGuard,
+    imagePaths?: readonly string[]
   ): void {
     const terminal = this.registry.get(id);
     if (!terminal) {
@@ -680,7 +681,7 @@ export class PtyManager extends EventEmitter {
       // that would answer for tokens this host never accepted.
       return;
     }
-    terminal.submit(text, submissionToken, handbackCode, guard);
+    terminal.submit(text, submissionToken, handbackCode, guard, imagePaths);
   }
 
   /**

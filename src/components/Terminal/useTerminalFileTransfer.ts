@@ -16,12 +16,17 @@ import {
 } from "@/lib/fileDragPayload";
 import { formatAtFileTokenForCwd } from "./hybridInputParsing";
 import { usePanelStore } from "@/store/panelStore";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import {
+  IMAGE_EXTENSIONS,
+  isImageAttachmentPath,
+  type ImageInputSegment,
+} from "@shared/utils/imageAttachmentInput";
 
-/**
- * Image file extension pattern shared with HybridInputBar.
- * Exported so both the input bar and terminal can use the same detection.
- */
-export const IMAGE_EXTENSIONS = /\.(png|jpe?g|bmp|tiff?|avif|heic)$/i;
+export { IMAGE_EXTENSIONS };
+
+/** Gap between the separate pastes of one image-bearing drop (#12792). */
+const IMAGE_PASTE_GAP_MS = 200;
 
 /**
  * Runtime identity inputs used to decide whether an agent CLI — rather than a
@@ -106,6 +111,10 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
  * - **Text paste:** Passes through to xterm's native handler (bracketed paste, etc.).
  * - **File drop:** Resolves file paths via `webUtils.getPathForFile()` and writes them
  *   into the terminal as text. Works for both image and non-image files.
+ * - **Images to an agent that attaches them** (#12792): when the agent declares
+ *   `imageInput: "bracketed-path"` and xterm reports bracketed-paste mode, each
+ *   image is pasted on its own as its raw absolute path — the only form the
+ *   CLI turns into an attachment — with the surrounding text pasted between.
  *
  * Two independent axes decide what reaches the PTY (#11574):
  *
@@ -228,6 +237,94 @@ export function useTerminalFileTransfer(
       onInput?.(text);
     };
 
+    // A gesture that lands while an earlier one is still pacing its images
+    // queues behind it, so the two cannot interleave their bytes. With nothing
+    // pacing, a write still goes out synchronously as it always has.
+    let writeChain: Promise<void> = Promise.resolve();
+    let pacingCount = 0;
+
+    /**
+     * Whether images go to this terminal as attachments (#12792): the agent
+     * declares the lone-bracketed-path protocol, and the live xterm positively
+     * reports bracketed-paste mode. An instance that is not up yet is not
+     * evidence of the mode, so it keeps the text reference.
+     */
+    const takesImagePaths = (): boolean => {
+      const { isAgent, agentId } = deriveTerminalChrome(identityRef.current);
+      if (!isAgent || !agentId) return false;
+      if (getEffectiveAgentConfig(agentId)?.capabilities?.imageInput !== "bracketed-path") {
+        return false;
+      }
+      return terminalInstanceService.get(terminalId)?.terminal.modes.bracketedPasteMode === true;
+    };
+
+    /**
+     * Build what one gesture writes: each file in order, separated by a space
+     * and followed by one. Images become their own segment when the terminal
+     * takes them as attachments; everything else is the usual text reference.
+     */
+    const buildSegments = (filePaths: readonly string[], isAgent: boolean): ImageInputSegment[] => {
+      const imagesAttach = isAgent && takesImagePaths();
+      const segments: ImageInputSegment[] = [];
+      const pushText = (text: string) => {
+        const last = segments[segments.length - 1];
+        if (last?.kind === "text") last.text += text;
+        else segments.push({ kind: "text", text });
+      };
+      filePaths.forEach((filePath, index) => {
+        if (index > 0) pushText(" ");
+        if (imagesAttach && isImageAttachmentPath(filePath)) {
+          segments.push({ kind: "image", path: filePath });
+        } else {
+          pushText(formatPath(filePath, isAgent));
+        }
+      });
+      pushText(" ");
+      return segments;
+    };
+
+    /**
+     * Writes a gesture's segments. Without an image segment this is the single
+     * insertion it has always been. With one, each segment is its own
+     * bracketed paste — an image's payload is only its raw path, the one shape
+     * the CLIs turn into an attachment — spaced so the CLI neither drops a
+     * same-tick write nor folds the pastes back into one.
+     */
+    const writeSegments = (segments: readonly ImageInputSegment[], isAgent: boolean) => {
+      if (!segments.some((segment) => segment.kind === "image")) {
+        const text = segments
+          .map((segment) => (segment.kind === "text" ? segment.text : ""))
+          .join("");
+        if (pacingCount === 0) {
+          writeToTerminal(text, isAgent);
+        } else {
+          writeChain = writeChain.then(() => {
+            if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
+            writeToTerminal(text, isAgent);
+          });
+        }
+        return;
+      }
+      pacingCount++;
+      writeChain = writeChain
+        .then(async () => {
+          for (let index = 0; index < segments.length; index++) {
+            if (index > 0) {
+              await new Promise((resolve) => setTimeout(resolve, IMAGE_PASTE_GAP_MS));
+            }
+            if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
+            const segment = segments[index]!;
+            const text = segment.kind === "image" ? segment.path : segment.text;
+            terminalClient.write(terminalId, formatWithBracketedPaste(text));
+            terminalInstanceService.notifyUserInput(terminalId);
+            onInput?.(text);
+          }
+        })
+        .finally(() => {
+          pacingCount--;
+        });
+    };
+
     const handlePaste = async (event: ClipboardEvent) => {
       if (isInputLockedRef.current) return;
       if (!hasImageClipboardItem(event)) return;
@@ -243,7 +340,7 @@ export function useTerminalFileTransfer(
         if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
         if (!filePath || !isDeliverablePath(filePath)) return;
         const isAgent = isAgentTerminal();
-        writeToTerminal(`${formatPath(filePath, isAgent)} `, isAgent);
+        writeSegments(buildSegments([filePath], isAgent), isAgent);
       } catch {
         // Empty clipboard, IPC failure during window close, etc. — nothing to do.
       }
@@ -293,16 +390,15 @@ export function useTerminalFileTransfer(
         : Array.from(transfer.files).map((file) => window.electron.webUtils.getPathForFile(file));
 
       const isAgent = isAgentTerminal();
-      const formatted: string[] = [];
-      for (const filePath of paths) {
-        if (filePath && isDeliverablePath(filePath)) formatted.push(formatPath(filePath, isAgent));
-      }
+      const deliverable = paths.filter(
+        (filePath): filePath is string => !!filePath && isDeliverablePath(filePath)
+      );
 
-      if (formatted.length === 0) return;
+      if (deliverable.length === 0) return;
 
       // Trailing space terminates the last token and leaves the caret ready for
       // the next argument or prompt word, matching the hybrid input's drop.
-      writeToTerminal(`${formatted.join(" ")} `, isAgent);
+      writeSegments(buildSegments(deliverable, isAgent), isAgent);
 
       // The gesture already pointed at this terminal, so it ends the same way a
       // click on it does: pane selected, keyboard here, ready to type about the

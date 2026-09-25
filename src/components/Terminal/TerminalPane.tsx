@@ -1648,14 +1648,18 @@ function TerminalPaneComponent({
                   agentState={agentState}
                   restartKey={restartKey}
                   onActivate={handleClick}
-                  onSend={({ trackerData, text }) => {
+                  onSend={({ trackerData, text, imagePaths }) => {
                     if (!isInputLocked && !isRestarting) {
                       terminalInstanceService.notifyUserInput(id);
                       // submit now rejects when the PTY is gone (#8706); the
                       // single-pane path has no recovery UI for that, so
                       // swallow to log instead of leaking an unhandled
                       // rejection. Banners/agent-state surface the dead pane.
-                      terminalClient.submit(id, text).catch((err) => {
+                      const submission =
+                        imagePaths !== undefined && imagePaths.length > 0
+                          ? terminalClient.submitWithImages(id, text, imagePaths)
+                          : terminalClient.submit(id, text);
+                      submission.catch((err) => {
                         logWarn("[TerminalPane] submit failed", { id, error: err });
                       });
                       handleInput(trackerData);

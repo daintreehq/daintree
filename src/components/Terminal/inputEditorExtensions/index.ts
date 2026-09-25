@@ -26,6 +26,7 @@ export { createFileChipField, createFileChipTooltip } from "./fileChip";
 export {
   addImageChip,
   imageChipField,
+  readImageChipPaths,
   createImageChipTooltip,
   createImagePasteHandler,
 } from "./imageChip";

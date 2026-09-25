@@ -1238,8 +1238,23 @@ function buildElectronApi(): ElectronAPI {
 
       write: (id: string, data: string) => ipcRenderer.send(CHANNELS.TERMINAL_INPUT, id, data),
 
-      submit: (id: string, text: string, submissionToken?: string, handbackCode?: string) =>
-        _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text, submissionToken, handbackCode),
+      submit: (
+        id: string,
+        text: string,
+        submissionToken?: string,
+        handbackCode?: string,
+        imagePaths?: string[]
+      ) =>
+        imagePaths === undefined
+          ? _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text, submissionToken, handbackCode)
+          : _unwrappingInvoke(
+              CHANNELS.TERMINAL_SUBMIT,
+              id,
+              text,
+              submissionToken,
+              handbackCode,
+              imagePaths
+            ),
 
       /**
        * Resolve one submission token across several terminals (#12337). A

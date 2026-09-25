@@ -113,7 +113,12 @@ interface LatestRefShape {
   projectId?: string;
   disabled: boolean;
   value: string;
-  onSend: (payload: { data: string; trackerData: string; text: string }) => void;
+  onSend: (payload: {
+    data: string;
+    trackerData: string;
+    text: string;
+    imagePaths?: string[];
+  }) => void;
   addToHistory: (terminalId: string, command: string, projectId?: string) => void;
   resetHistoryIndex: (terminalId: string, projectId?: string) => void;
   clearDraftInput: (terminalId: string, projectId?: string) => void;
@@ -135,6 +140,12 @@ export interface SendTextOptions {
    * (#11867).
    */
   submit?: (text: string) => Promise<boolean>;
+  /**
+   * Absolute paths of the draft's image chips, in document order (#12792).
+   * Each is also in the text; the pty-host decides whether the agent takes it
+   * as an attachment. Ignored when `submit` replaces the pane's handoff.
+   */
+  imagePaths?: readonly string[];
   /**
    * Consulted just before the editor and the draft store are cleared, on a send
    * that has already succeeded. `false` leaves the draft alone: an awaited
@@ -259,7 +270,14 @@ export function useTokenResolution({
           if (!(await options.submit(outgoing))) return false;
         } else {
           const payload = buildTerminalSendPayload(outgoing);
-          latest.onSend({ data: payload.data, trackerData: payload.trackerData, text: outgoing });
+          latest.onSend({
+            data: payload.data,
+            trackerData: payload.trackerData,
+            text: outgoing,
+            ...(options?.imagePaths !== undefined && options.imagePaths.length > 0
+              ? { imagePaths: [...options.imagePaths] }
+              : {}),
+          });
         }
 
         // Learn dictionary words from manual corrections to dictated text. Uses
