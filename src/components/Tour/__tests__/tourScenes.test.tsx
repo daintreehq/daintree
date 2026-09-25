@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { TOUR_SCENES } from "../TourStage";
+import { DAINTREE_TOUR_SCENES } from "../daintreeTour";
 import { DAINTREE_MOCK_KIT } from "../daintreeMockKit";
 import { MockKitContext } from "../mockup/MockKitContext";
 import type { CursorStep } from "../mockup/TourMock";
@@ -55,7 +55,7 @@ function sceneAt(chapterId: string, t: number, keyboard: TourKeyboard = "mac"): 
     cancelFrame: () => {},
   });
   player.seek(t);
-  const Scene = TOUR_SCENES[chapterId]!;
+  const Scene = DAINTREE_TOUR_SCENES[chapterId]!;
   const { container } = render(
     <MockKitContext.Provider value={DAINTREE_MOCK_KIT}>
       <TourPlayerContext.Provider value={player}>

@@ -3,7 +3,6 @@ import { Pause, Play, RotateCcw, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { TOUR_CHAPTERS } from "./tourChapters";
 import type { TourPlayer } from "@daintreehq/tour";
 import { useTourPlayerState, useTourTime } from "@daintreehq/tour/react";
 
@@ -199,15 +198,17 @@ function IconButton({
  */
 export function TourControls({
   player,
+  chapters,
   onMutedChange,
 }: {
   player: TourPlayer;
+  chapters: readonly { id: string; title: string }[];
   onMutedChange: (muted: boolean) => void;
 }) {
   const state = useTourPlayerState(player);
   const playing = state.status === "playing";
   const ended = state.status === "ended";
-  const chapter = TOUR_CHAPTERS[state.chapterIndex]!;
+  const chapter = chapters[state.chapterIndex]!;
   const carried = useRef(false);
   const [carryFocus] = useState<TrackFocus>(() => ({
     leave: () => {
@@ -223,7 +224,7 @@ export function TourControls({
   return (
     <div className="border-t border-border-subtle bg-surface-panel px-3 pb-2 pt-1">
       <div className="flex items-center gap-1" role="group" aria-label="Chapters">
-        {TOUR_CHAPTERS.map((c, i) => {
+        {chapters.map((c, i) => {
           return i !== state.chapterIndex ? (
             <ChapterSegment
               key={c.id}

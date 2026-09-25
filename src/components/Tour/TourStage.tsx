@@ -1,40 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentType } from "react";
 import { ArrowRight, Check, Pause, Play, RotateCcw } from "lucide-react";
+import { ErrorBoundary } from "@/components/ErrorBoundary/ErrorBoundary";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { TOUR_CANVAS } from "./mockup/TourMock";
-import { AgentsScene } from "./scenes/AgentsScene";
-import { AssistantScene } from "./scenes/AssistantScene";
-import { ContextScene } from "./scenes/ContextScene";
-import { FilesScene } from "./scenes/FilesScene";
-import { OutroScene } from "./scenes/OutroScene";
-import { PaletteScene } from "./scenes/PaletteScene";
-import { FleetScene } from "./scenes/FleetScene";
-import { GitHubScene } from "./scenes/GitHubScene";
-import { PilotScene } from "./scenes/PilotScene";
-import { PreviewScene } from "./scenes/PreviewScene";
-import { ReviewScene } from "./scenes/ReviewScene";
-import { StateScene } from "./scenes/StateScene";
-import { WelcomeScene } from "./scenes/WelcomeScene";
-import { WorktreesScene } from "./scenes/WorktreesScene";
 import { useTourPlayer, useTourPlayerState, useTourTime } from "@daintreehq/tour/react";
-
-export const TOUR_SCENES: Record<string, ComponentType> = {
-  welcome: WelcomeScene,
-  worktrees: WorktreesScene,
-  agents: AgentsScene,
-  state: StateScene,
-  fleet: FleetScene,
-  files: FilesScene,
-  context: ContextScene,
-  preview: PreviewScene,
-  github: GitHubScene,
-  review: ReviewScene,
-  pilot: PilotScene,
-  assistant: AssistantScene,
-  palette: PaletteScene,
-  outro: OutroScene,
-};
 
 /**
  * The narration line, in a band of its own under the stage rather than over
@@ -73,6 +43,8 @@ export interface TourEndCard {
   onHold: () => void;
   onNext: () => void;
   onReplay: () => void;
+  /** On the last chapter, what Finish does beyond closing. */
+  finishHint?: string;
 }
 
 const RING_RADIUS = 34;
@@ -149,6 +121,7 @@ function EndCard({
   onHold,
   onNext,
   onReplay,
+  finishHint,
   onUnmountWithFocus,
 }: TourEndCard & { onUnmountWithFocus: () => void }) {
   const autoAdvance = nextTitle !== null && !held;
@@ -202,10 +175,8 @@ function EndCard({
           </span>
         </>
       )}
-      {!nextTitle && (
-        <span className="mt-1 text-xs text-text-secondary">
-          Finish opens the Getting Started checklist to run your first agents
-        </span>
+      {!nextTitle && finishHint && (
+        <span className="mt-1 text-xs text-text-secondary">{finishHint}</span>
       )}
       {nextTitle ? (
         <button
@@ -319,10 +290,19 @@ function PlaySurface({
  * than cutting, so the change of scene reads as a change of chapter.
  */
 export function TourStage({
+  tourId,
   chapterId,
+  chapterTitle,
+  Scene,
+  onSceneError,
   endCard,
 }: {
+  tourId: string;
   chapterId: string;
+  chapterTitle: string;
+  Scene: ComponentType;
+  /** A scene threw: the stage shows a fallback in its place. */
+  onSceneError?: (error: Error) => void;
   /** Present once the chapter has finished playing. */
   endCard: TourEndCard | null;
 }) {
@@ -356,24 +336,36 @@ export function TourStage({
     return () => observer.disconnect();
   }, []);
 
-  const Scene = TOUR_SCENES[chapterId];
-
   return (
     <div
       ref={ref}
       className="relative aspect-video w-full select-none overflow-hidden bg-surface-canvas"
     >
-      {/* The mockup is illustration; the chapter title and captions carry the content. */}
-      <div
-        key={chapterId}
-        aria-hidden="true"
-        data-tour-canvas=""
-        className="absolute left-0 top-0 origin-top-left motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]"
-        style={{ width: TOUR_CANVAS.width, height: TOUR_CANVAS.height, scale: String(scale) }}
-      >
-        {Scene && <Scene />}
+      {/* Scenes are third-party code: one that throws fails its chapter, not the
+          dialog. The boundary sits outside the aria-hidden canvas and takes the
+          play surface with it, so its fallback stays reachable; captions,
+          controls and navigation live outside it and keep working. */}
+      <div className="absolute inset-0 flex items-center justify-center">
+        <ErrorBoundary
+          variant="component"
+          componentName="TourScene"
+          displayName={chapterTitle}
+          resetKeys={[tourId, chapterId]}
+          onError={(error) => onSceneError?.(error)}
+        >
+          {/* The mockup is illustration; the chapter title and captions carry the content. */}
+          <div
+            key={chapterId}
+            aria-hidden="true"
+            data-tour-canvas=""
+            className="absolute left-0 top-0 origin-top-left motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]"
+            style={{ width: TOUR_CANVAS.width, height: TOUR_CANVAS.height, scale: String(scale) }}
+          >
+            <Scene />
+          </div>
+          <PlaySurface buttonRef={playRef} covered={endCard !== null} />
+        </ErrorBoundary>
       </div>
-      <PlaySurface buttonRef={playRef} covered={endCard !== null} />
       {endCard && (
         <EndCard
           {...endCard}

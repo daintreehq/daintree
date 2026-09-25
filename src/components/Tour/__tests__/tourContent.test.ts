@@ -203,8 +203,8 @@ describe("tour content", () => {
   });
 });
 
-// The invitation renders at startup and reads only the summary, so the summary
-// has to say what the player would.
+// The invitation renders at startup and reads only the registered summary, so
+// the summary has to say what the player would.
 describe("tour summary", () => {
   it("quotes the length the player's timings add up to", () => {
     expect(TOUR_MINUTES, "the tour summary is stale — run npm run tour:audio").toBe(
@@ -221,15 +221,23 @@ describe("tour summary", () => {
 
   // One static import of these anywhere below a startup module pulls the
   // narration, the cue manifest and the parser back into the first-render graph.
-  it.each(["TourInviteCard.tsx", "DaintreeTourHost.tsx"])(
+  it.each(["TourInviteCard.tsx", "TourHost.tsx", "tourRegistry.ts"])(
     "%s reaches no narration, timing or parser module statically",
     (file) => {
       expect(heavyModulesReachedFrom(file)).toEqual([]);
     }
   );
 
-  it("sees the heavy modules from the lazily loaded player", () => {
-    expect(heavyModulesReachedFrom("TourDialog.tsx")).toEqual([...HEAVY_MODULES].sort());
+  it("sees the heavy modules from the lazily loaded Daintree definition", () => {
+    expect(heavyModulesReachedFrom("daintreeTour.tsx")).toEqual([...HEAVY_MODULES].sort());
+  });
+
+  // The player plays whatever definition it is handed; no tour's content is built in.
+  it("keeps the player free of any one tour's content", () => {
+    const daintreeContent = heavyModulesReachedFrom("TourDialog.tsx").filter((path) =>
+      path.startsWith("src/components/Tour/")
+    );
+    expect(daintreeContent).toEqual([]);
   });
 });
 

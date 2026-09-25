@@ -8,7 +8,7 @@ const { getOnboardingStateMock } = vi.hoisted(() => ({ getOnboardingStateMock: v
 vi.mock("@/clients/onboardingClient", () => ({ getOnboardingState: getOnboardingStateMock }));
 
 import { TOUR_CHAPTERS } from "../tourChapters";
-import { DAINTREE_TOUR_COMPLETED_EVENT, OPEN_DAINTREE_TOUR_EVENT } from "../tourEvents";
+import { OPEN_TOUR_EVENT, TOUR_COMPLETED_EVENT } from "../tourEvents";
 import { inviteStateFor, TourInviteCard, TourWelcomeLink } from "../TourInviteCard";
 
 const tour = (patch: Partial<TourOnboardingState> = {}): TourOnboardingState => ({
@@ -59,11 +59,14 @@ describe("TourInviteCard", () => {
     setup(tour());
     render(<TourInviteCard />);
     const start = await screen.findByRole("button", { name: "Start tour" });
-    const opened = vi.fn();
-    window.addEventListener(OPEN_DAINTREE_TOUR_EVENT, opened);
+    const opened = vi.fn((event: Event): unknown =>
+      event instanceof CustomEvent ? event.detail : null
+    );
+    window.addEventListener(OPEN_TOUR_EVENT, opened);
     fireEvent.click(start);
-    window.removeEventListener(OPEN_DAINTREE_TOUR_EVENT, opened);
+    window.removeEventListener(OPEN_TOUR_EVENT, opened);
     expect(opened).toHaveBeenCalledTimes(1);
+    expect(opened.mock.results[0]!.value).toEqual({ tourId: DAINTREE_TOUR_ID });
   });
 
   it("names the chapter an unfinished tour resumes at", async () => {
@@ -93,9 +96,25 @@ describe("TourInviteCard", () => {
     render(<TourInviteCard />);
     await screen.findByRole("button", { name: "Start tour" });
     act(() => {
-      window.dispatchEvent(new CustomEvent(DAINTREE_TOUR_COMPLETED_EVENT));
+      window.dispatchEvent(
+        new CustomEvent(TOUR_COMPLETED_EVENT, { detail: { tourId: DAINTREE_TOUR_ID } })
+      );
     });
     expect(screen.queryByTestId("tour-invite-card")).toBeNull();
+  });
+
+  it("stays when some other tour is finished", async () => {
+    setup(tour());
+    render(<TourInviteCard />);
+    await screen.findByRole("button", { name: "Start tour" });
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(TOUR_COMPLETED_EVENT, {
+          detail: { tourId: makePluginTourId("acme.tools", "welcome") },
+        })
+      );
+    });
+    expect(screen.queryByTestId("tour-invite-card")).not.toBeNull();
   });
 
   it("withdraws when the tour was finished in another project view", async () => {
