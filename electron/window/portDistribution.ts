@@ -17,6 +17,56 @@ import type { WindowContext } from "./WindowRegistry.js";
 import type { PtyClient } from "../services/PtyClient.js";
 
 /**
+ * Claims a view whose terminal port comes from somewhere other than this
+ * process's pty-host — a view bound to a remote host, whose port is relayed
+ * over the link. Returns true when it (re)delivered that port itself.
+ */
+export type TerminalPortOverride = (targetWc: Electron.WebContents) => boolean;
+
+let terminalPortOverride: TerminalPortOverride | null = null;
+
+/**
+ * Install the override consulted before every local port distribution, so the
+ * paths that re-broker a view's port (load, reload, project switch, pty-host
+ * restart) re-deliver the relayed port instead of replacing it with a local one.
+ */
+export function setTerminalPortOverride(override: TerminalPortOverride | null): () => void {
+  terminalPortOverride = override;
+  return () => {
+    if (terminalPortOverride === override) terminalPortOverride = null;
+  };
+}
+
+/**
+ * Hand a view the renderer end of a fresh terminal port using the token
+ * handshake the renderer's terminal client expects: the token first, then the
+ * port carrying it. Returns the other end, or null when the view could not
+ * take it (both ends are closed then).
+ */
+export function postTerminalPortToView(
+  targetWc: Electron.WebContents
+): Electron.MessagePortMain | null {
+  if (targetWc.isDestroyed()) return null;
+  const { port1, port2 } = new MessageChannelMain();
+  const handshakeToken = randomBytes(32).toString("hex");
+  try {
+    targetWc.postMessage("terminal-port-token", { token: handshakeToken });
+    targetWc.postMessage("terminal-port", { token: handshakeToken }, [port1]);
+    return port2;
+  } catch (error) {
+    console.warn("[portDistribution] Failed to deliver relayed terminal MessagePort:", error);
+    for (const port of [port1, port2]) {
+      try {
+        port.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    return null;
+  }
+}
+
+/**
  * Create a MessagePort pair and send it to a specific WebContents.
  * Each call replaces the window's active port pair — the pty-host only
  * keeps one renderer connection per windowId.
@@ -27,6 +77,8 @@ export function distributePortsToView(
   targetWc: Electron.WebContents,
   ptyClient: PtyClient | null
 ): void {
+  if (terminalPortOverride?.(targetWc)) return;
+
   // Dedicated worker-ingest ports share the window port's lifecycle chokepoint:
   // replacing the window pair (project switch, reload) severs them too — the
   // outgoing view's parse workers must not keep receiving bytes once the

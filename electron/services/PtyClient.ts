@@ -443,6 +443,9 @@ export class PtyClient extends EventEmitter {
    */
   private onPortRefresh: ((windowId?: number) => void) | null = null;
 
+  /** Refresh callbacks for auxiliary connections, keyed by connection id. */
+  private readonly auxPortRefresh = new Map<number, () => void>();
+
   /** Cached log-level overrides. Replayed on every host spawn/restart via the
    * `ready` event, which is the first moment the child's message listener is
    * attached (push-on-spawn would race and silently drop the first message).
@@ -1067,15 +1070,15 @@ export class PtyClient extends EventEmitter {
     // Notify that ports need refresh after the shard restart. Fabric mode
     // targets only the windows whose port lived on this shard; the legacy
     // single-host path keeps the refresh-everything behavior.
-    if (this.onPortRefresh) {
+    if (this.onPortRefresh || this.auxPortRefresh.size > 0) {
       shard.closePendingPorts();
       if (!this.fabricEnabled) {
-        this.onPortRefresh();
+        this.notifyPortRefresh();
       } else {
         for (const [windowId, key] of [...this.windowPortShard]) {
           if (key !== shard.key) continue;
           this.windowPortShard.delete(windowId);
-          this.onPortRefresh(windowId);
+          this.notifyPortRefresh(windowId);
         }
       }
     }
@@ -1219,7 +1222,7 @@ export class PtyClient extends EventEmitter {
     for (const [windowId, key] of [...this.windowPortShard]) {
       if (key !== shard.key) continue;
       this.windowPortShard.delete(windowId);
-      this.onPortRefresh?.(windowId);
+      this.notifyPortRefresh(windowId);
     }
 
     shard.dispose();
@@ -1300,11 +1303,11 @@ export class PtyClient extends EventEmitter {
       this.connectMessagePort(windowId, pendingPort);
       return;
     }
-    if (!this.onPortRefresh) return;
+    if (!this.onPortRefresh && !this.auxPortRefresh.has(windowId)) return;
     console.log(
       `[PtyClient] Rerouting window ${windowId} PTY port: shard '${currentKey}' → '${targetKey}'`
     );
-    this.onPortRefresh(windowId);
+    this.notifyPortRefresh(windowId);
   }
 
   private cleanupOrphanedPtysForShard(shard: PtyShard, crashType: CrashType): void {
@@ -1391,6 +1394,28 @@ export class PtyClient extends EventEmitter {
    */
   setPortRefreshCallback(callback: (windowId?: number) => void): void {
     this.onPortRefresh = callback;
+  }
+
+  /**
+   * Own the port refresh for an auxiliary connection that no window re-brokers
+   * (a remote endpoint's synthetic window). Its callback replaces the window
+   * callback for that id and also runs on a full-host refresh. Pass null to
+   * unregister.
+   */
+  setAuxConnectionRefresh(connectionId: number, callback: (() => void) | null): void {
+    if (callback) this.auxPortRefresh.set(connectionId, callback);
+    else this.auxPortRefresh.delete(connectionId);
+  }
+
+  private notifyPortRefresh(windowId?: number): void {
+    if (windowId === undefined) {
+      this.onPortRefresh?.();
+      for (const refresh of [...this.auxPortRefresh.values()]) refresh();
+      return;
+    }
+    const aux = this.auxPortRefresh.get(windowId);
+    if (aux) aux();
+    else this.onPortRefresh?.(windowId);
   }
 
   /**

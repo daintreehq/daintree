@@ -113,6 +113,45 @@ function settleWorkerPortRequest(id: string, port: MessagePort | null): void {
 // `onStatus` subscribers as the IPC path. No ACK, no byte accounting — pulses.
 const terminalStatusCallbacks = new Set<(data: TerminalStatusPayload) => void>();
 
+// Resets from a remote host's relayed port: the host could not replay output
+// this view missed, so the terminal must be cleared and repainted from the
+// snapshot. A subscriber (the restore path) takes over when present;
+// otherwise the reset is painted through the terminal's own data path.
+const resetCallbacks = new Set<(id: string, snapshot: string | null) => void>();
+
+// Full reset (RIS): clears the screen, scrollback and modes — what the restore
+// path does with terminal.reset() before replaying a snapshot.
+const FULL_RESET_SEQUENCE = "\x1bc";
+
+function handlePortReset(id: string, snapshot: string | null): void {
+  // The host settled its flow control for everything before the reset, so
+  // queued acks must not reach it; and buffered output predates the snapshot.
+  pendingPortAckBytes.delete(id);
+  earlyDataBuffer.delete(id);
+  earlyDataBufferBytes.delete(id);
+
+  if (resetCallbacks.size > 0) {
+    for (const cb of resetCallbacks) {
+      cb(id, snapshot);
+    }
+    return;
+  }
+
+  const repaint = FULL_RESET_SEQUENCE + (snapshot ?? "");
+  const cbs = dataCallbacks.get(id);
+  if (cbs) {
+    // A zero-byte FIFO entry keeps the consumer's per-chunk ack count aligned
+    // without acking anything for the repaint.
+    pendingPortAckBytes.set(id, [0]);
+    for (const cb of cbs) {
+      cb(repaint);
+    }
+    return;
+  }
+  earlyDataBuffer.set(id, [repaint]);
+  earlyDataBufferBytes.set(id, earlyChunkSize(repaint));
+}
+
 // Sampled keystroke→echo probe (DAINTREE_PERF_CAPTURE only): ~1/32 port
 // writes stamp performance.now(); the next port data chunk for the same
 // terminal closes the pair as INPUT_ECHO_LATENCY. Pairs older than 250ms are
@@ -178,6 +217,10 @@ function installPortDataHandler(port: MessagePort): void {
           timestamp: msg.timestamp,
         });
       }
+      return;
+    }
+    if (msg?.type === "reset" && typeof msg.id === "string") {
+      handlePortReset(msg.id, typeof msg.snapshot === "string" ? msg.snapshot : null);
       return;
     }
     if (msg?.type === "data" && typeof msg.id === "string") {
@@ -699,6 +742,19 @@ export const terminalClient = {
     } catch {
       return false;
     }
+  },
+
+  /**
+   * Subscribe to resets from a remote host's relayed port: clear the terminal
+   * and repaint it from `snapshot` (null: leave it cleared). Pending acks and
+   * buffered output for the terminal are already discarded when this fires.
+   * While nobody subscribes, the reset is painted through the data path.
+   */
+  onReset: (callback: (id: string, snapshot: string | null) => void): (() => void) => {
+    resetCallbacks.add(callback);
+    return () => {
+      resetCallbacks.delete(callback);
+    };
   },
 
   /** Subscribe to engage-barrier markers (see sendWorkerIngestEngage). */
