@@ -59,8 +59,10 @@ vi.mock("../../services/PluginService.js", () => ({
 // environment.ts registers real `open-file` listeners and calls enableSandbox()
 // at import time; only the external folder-open dispatch is needed here.
 const dispatchOpenDirPathMock = vi.hoisted(() => vi.fn<(dirPath: string) => void>());
+const hasOpenDirConsumerMock = vi.hoisted(() => vi.fn<() => boolean>(() => true));
 vi.mock("../../setup/environment.js", () => ({
   dispatchOpenDirPath: dispatchOpenDirPathMock,
+  hasOpenDirConsumer: hasOpenDirConsumerMock,
 }));
 
 import fs from "node:fs";
@@ -382,6 +384,172 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
   });
 });
 
+describe("registerAppLifecycleHandlers – second-instance with no window", () => {
+  type SecondInstanceHandler = (
+    event: unknown,
+    commandLine: string[],
+    workingDirectory: string
+  ) => void;
+
+  let cliDir: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    appMock.isReady.mockReturnValue(true);
+    hasOpenDirConsumerMock.mockReturnValue(true);
+    vi.spyOn(process, "on").mockImplementation(() => process);
+    vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    cliDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "daintree-second-instance-nowin-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(cliDir, { recursive: true, force: true });
+  });
+
+  async function register(overrides?: Partial<AppLifecycleOptions>) {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const opts = makeOpts(overrides);
+    const handle = registerAppLifecycleHandlers(opts);
+    const call = appMock.on.mock.calls.find(([event]: string[]) => event === "second-instance");
+    return { opts, handle, handler: call![1] as SecondInstanceHandler };
+  }
+
+  function makeWindow() {
+    return {
+      isMinimized: vi.fn(() => false),
+      isDestroyed: vi.fn(() => false),
+      restore: vi.fn(),
+      focus: vi.fn(),
+    };
+  }
+
+  it("opens a window for a plain relaunch when none exists", async () => {
+    const { opts, handler } = await register();
+
+    handler({}, ["daintree"], "/");
+
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("treats a destroyed primary window as no window", async () => {
+    const destroyed = {
+      isMinimized: vi.fn(() => false),
+      isDestroyed: vi.fn(() => true),
+      restore: vi.fn(),
+      focus: vi.fn(),
+    };
+    const { opts, handler } = await register({
+      getMainWindow: vi.fn(() => destroyed as unknown as import("electron").BrowserWindow),
+    });
+
+    handler({}, ["daintree"], "/");
+
+    expect(destroyed.focus).not.toHaveBeenCalled();
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("does not open a second window while the launch is still bringing its own up", async () => {
+    const { opts, handler } = await register({ isLaunchSettled: () => false });
+
+    handler({}, ["daintree"], "/");
+
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("answers a relaunch that arrived during a windowless start once it settles", async () => {
+    let settled = false;
+    const { opts, handle, handler } = await register({ isLaunchSettled: () => settled });
+
+    handler({}, ["daintree"], "/");
+    handler({}, ["daintree"], "/");
+    settled = true;
+    handle.onLaunchSettled();
+    handle.onLaunchSettled();
+
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("focuses the launch's own window instead when one came up meanwhile", async () => {
+    let settled = false;
+    let win: ReturnType<typeof makeWindow> | null = null;
+    const { opts, handle, handler } = await register({
+      isLaunchSettled: () => settled,
+      getMainWindow: vi.fn(() => win as unknown as import("electron").BrowserWindow),
+    });
+
+    handler({}, ["daintree"], "/");
+    win = makeWindow();
+    settled = true;
+    handle.onLaunchSettled();
+
+    expect(win.focus).toHaveBeenCalledOnce();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("opens a window for a folder queued during a windowless start", async () => {
+    let settled = false;
+    hasOpenDirConsumerMock.mockReturnValue(false);
+    const { opts, handle, handler } = await register({ isLaunchSettled: () => settled });
+
+    handler({}, ["daintree", `--cli-path=${cliDir}`], "/");
+    expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
+    settled = true;
+    handle.onLaunchSettled();
+
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("does nothing on settle when no second launch arrived", async () => {
+    hasOpenDirConsumerMock.mockReturnValue(false);
+    const { opts, handle } = await register();
+
+    handle.onLaunchSettled();
+
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("does not open a window before the app is ready", async () => {
+    appMock.isReady.mockReturnValue(false);
+    const { opts, handler } = await register();
+
+    handler({}, ["daintree"], "/");
+
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("brings a live window forward for a plain relaunch instead of opening another", async () => {
+    const win = makeWindow();
+    const { opts, handler } = await register({
+      getMainWindow: vi.fn(() => win as unknown as import("electron").BrowserWindow),
+    });
+
+    handler({}, ["daintree"], "/");
+
+    expect(win.focus).toHaveBeenCalledOnce();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("leaves a folder open to the routing that makes its own window", async () => {
+    const { opts, handler } = await register();
+
+    handler({}, ["daintree", `--cli-path=${cliDir}`], "/");
+
+    expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("opens a window for a folder when no window has ever installed that routing", async () => {
+    hasOpenDirConsumerMock.mockReturnValue(false);
+    const { opts, handler } = await register();
+
+    handler({}, ["daintree", `--cli-path=${cliDir}`], "/");
+
+    // Queued by the dispatch; the new window drains it.
+    expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+});
+
 describe("registerAppLifecycleHandlers – window-all-closed", () => {
   const originalPlatform = process.platform;
 
@@ -405,6 +573,26 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     Object.defineProperty(process, "platform", { value: "linux" });
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts());
+
+    getWindowAllClosedHandler()();
+
+    expect(appMock.quit).toHaveBeenCalledOnce();
+  });
+
+  it("keeps running on linux while Host mode is active", async () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts({ isHostModeActive: () => true }));
+
+    getWindowAllClosedHandler()();
+
+    expect(appMock.quit).not.toHaveBeenCalled();
+  });
+
+  it("still quits on linux when Host mode is off", async () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts({ isHostModeActive: () => false }));
 
     getWindowAllClosedHandler()();
 

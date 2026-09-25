@@ -11,7 +11,7 @@ import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js"
 import { isWindowRecreating } from "./windowRecreationState.js";
 import { SAFETY_BELT_TIMEOUT_MS } from "./shutdownConfig.js";
 import { extractDaintreeUrl, handleDaintreeUrl } from "../setup/deepLinkInstall.js";
-import { dispatchOpenDirPath } from "../setup/environment.js";
+import { dispatchOpenDirPath, hasOpenDirConsumer } from "../setup/environment.js";
 
 const CLI_PATH_FLAG = "--cli-path";
 const CLI_PATH_PREFIX = `${CLI_PATH_FLAG}=`;
@@ -228,9 +228,30 @@ export interface AppLifecycleOptions {
   onCreateWindow: () => void | Promise<void>;
   getMainWindow: () => BrowserWindow | null;
   windowRegistry?: WindowRegistry;
+  /**
+   * True while this process serves as a Host. Closing the last window then
+   * leaves it running on every platform, since remote Shells and working
+   * agents still depend on it.
+   */
+  isHostModeActive?: () => boolean;
+  /**
+   * Whether the launch has finished bringing up its initial windows (or its
+   * windowless Host runtime). Until then a second launch must not open a
+   * window of its own — the startup path is about to.
+   */
+  isLaunchSettled?: () => boolean;
 }
 
-export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
+export interface AppLifecycleHandle {
+  /**
+   * Called once the launch's own windows (or its windowless Host runtime) are
+   * up. A second launch that arrived before then, while nothing was on screen,
+   * is answered now.
+   */
+  onLaunchSettled(): void;
+}
+
+export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLifecycleHandle {
   // Initialize crash recovery only in the winning instance
   getCrashRecoveryService();
 
@@ -288,10 +309,34 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
     process.on("SIGHUP", signalHandler);
   }
 
+  // A second launch that arrived before the first had anything on screen.
+  // `plainRelaunch` is true if any of them was a plain relaunch.
+  let deferredRelaunch: { plainRelaunch: boolean } | null = null;
+
+  const focusWindow = (win: BrowserWindow): void => {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  };
+
+  const getLiveWindow = (): BrowserWindow | null => {
+    const win = opts.windowRegistry?.getPrimary()?.browserWindow ?? opts.getMainWindow();
+    return win && !win.isDestroyed() ? win : null;
+  };
+
+  // Nothing is on screen — a windowless Host, or macOS after the last window
+  // closed. A relaunch is the user asking to see the app, so it gets a window.
+  // A folder open only needs one when no window has ever set up the routing
+  // that would make one for it; queued, it opens in the new window.
+  const openWindowIfNeeded = (plainRelaunch: boolean): void => {
+    if (!plainRelaunch && hasOpenDirConsumer()) return;
+    void Promise.resolve(opts.onCreateWindow()).catch((err) =>
+      console.error("[MAIN] Failed to open a window for a second launch:", err)
+    );
+  };
+
   app.on("second-instance", (_event, commandLine, workingDirectory) => {
     console.log("[MAIN] Second instance detected");
-    const mainWindow = opts.windowRegistry?.getPrimary()?.browserWindow ?? opts.getMainWindow();
-    const liveWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    const liveWindow = getLiveWindow();
     const cliPath = extractCliPath(commandLine, workingDirectory);
     // An explicit `--cli-path` already names the folder to open, so the URI
     // scan is skipped rather than routing the same launch twice. Gated on the
@@ -340,10 +385,20 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
     // Bring the primary window to the front for `.dntr` installs and for plain
     // re-launches (no path argument). A CLI path or folder open raises the
     // window it lands in, so it is excluded.
-    if (liveWindow && (dntrPaths.length > 0 || (!cliPath && directoryPaths.length === 0))) {
-      if (liveWindow.isMinimized()) liveWindow.restore();
-      liveWindow.focus();
+    const plainRelaunch = dntrPaths.length > 0 || (!cliPath && directoryPaths.length === 0);
+    if (liveWindow) {
+      if (plainRelaunch) focusWindow(liveWindow);
+      return;
     }
+    if (!app.isReady() || !(opts.isLaunchSettled?.() ?? true)) {
+      // The launch is still bringing up its own windows or its windowless
+      // Host; decided once it has, against whatever is on screen then.
+      deferredRelaunch = {
+        plainRelaunch: (deferredRelaunch?.plainRelaunch ?? false) || plainRelaunch,
+      };
+      return;
+    }
+    openWindowIfNeeded(plainRelaunch);
   });
 
   // The application menu is process-global but its project gates track the
@@ -377,7 +432,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
     // survives windowless with just its menu bar.
     refreshProjectMenuState();
 
-    if (process.platform !== "darwin") {
+    if (process.platform !== "darwin" && !opts.isHostModeActive?.()) {
       app.quit();
     }
   });
@@ -395,6 +450,20 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
       opts.onCreateWindow();
     }
   });
+
+  return {
+    onLaunchSettled: () => {
+      const pending = deferredRelaunch;
+      deferredRelaunch = null;
+      if (!pending) return;
+      const liveWindow = getLiveWindow();
+      if (liveWindow) {
+        if (pending.plainRelaunch) focusWindow(liveWindow);
+        return;
+      }
+      openWindowIfNeeded(pending.plainRelaunch);
+    },
+  };
 }
 
 // Windows-only: route `WM_ENDSESSION` (planned shutdown, logoff, restart,
