@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mockDispatch = vi.fn<(actionId: string, args?: unknown, options?: unknown) => unknown>();
 vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch: (...args: unknown[]) => mockDispatch(...args) },
+  actionService: {
+    dispatch: (actionId: string, args?: unknown, options?: unknown) =>
+      mockDispatch(actionId, args, options),
+  },
 }));
 
 interface NotifyPayloadShape {
@@ -18,7 +21,9 @@ const mockDismissNotification = vi.fn();
 vi.mock("@/store/notificationStore", () => ({
   useNotificationStore: { getState: () => ({ dismissNotification: mockDismissNotification }) },
 }));
-vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
+vi.mock("@/lib/notify", () => ({
+  notify: (payload: NotifyPayloadShape) => mockNotify(payload),
+}));
 
 type PanelState = { panelsById: Record<string, { spawnStatus?: string }> };
 const panelStore = vi.hoisted(() => {
