@@ -47,6 +47,7 @@ import type {
   ProjectSwitchTrace,
 } from "../../shared/types/ipc/project.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
+import { toHostScopedKey, type HostId } from "../../shared/types/remoteHosts.js";
 import { markPerformance } from "../utils/performance.js";
 import { collectGuestPids } from "./ProjectViewLifecycleController.js";
 
@@ -590,6 +591,20 @@ export class ProjectViewManager {
       () => undefined
     );
     return task;
+  }
+
+  /**
+   * Switch to a project on a host. Views are keyed by `toHostScopedKey`, so a
+   * remote project can never collide with a local one of the same id, and a
+   * local project keeps the bare id it has always had.
+   */
+  switchToHostProject(
+    hostId: HostId,
+    projectId: string,
+    projectPath: string,
+    trace?: ProjectSwitchTrace
+  ): Promise<{ view: WebContentsView; isNew: boolean }> {
+    return this.switchTo(toHostScopedKey(hostId, projectId), projectPath, trace);
   }
 
   /**

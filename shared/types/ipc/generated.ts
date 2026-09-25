@@ -1724,15 +1724,15 @@ export interface GeneratedIpcInvokeMap {
     result: import("./project.js").ProjectSleepResult;
   };
   "remote-hosts:add": {
-    args: [_payload: import("./remoteHosts.js").AddHostPayload];
+    args: [payload: import("./remoteHosts.js").AddHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;
   };
   "remote-hosts:connect": {
-    args: [_payload: { hostId: string }];
+    args: [payload: { hostId: string }];
     result: import("../remoteHosts.js").HostConnectionState;
   };
   "remote-hosts:disconnect": {
-    args: [_payload: { hostId: string }];
+    args: [payload: { hostId: string }];
     result: void;
   };
   "remote-hosts:discover": {
@@ -1740,7 +1740,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./remoteHosts.js").DiscoveredHost[];
   };
   "remote-hosts:forget": {
-    args: [_payload: { hostId: string }];
+    args: [payload: { hostId: string }];
     result: void;
   };
   "remote-hosts:get-local-handshake": {
@@ -1760,11 +1760,11 @@ export interface GeneratedIpcInvokeMap {
     result: import("./remoteHosts.js").HostProbeResult;
   };
   "remote-hosts:switch-window-host": {
-    args: [_payload: import("./remoteHosts.js").SwitchWindowHostPayload];
+    args: [payload: import("./remoteHosts.js").SwitchWindowHostPayload];
     result: void;
   };
   "remote-hosts:update": {
-    args: [_payload: import("./remoteHosts.js").UpdateHostPayload];
+    args: [payload: import("./remoteHosts.js").UpdateHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;
   };
   "run-history:append": {

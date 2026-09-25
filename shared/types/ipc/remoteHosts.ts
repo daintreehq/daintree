@@ -74,4 +74,10 @@ export interface HostProbeResult {
 export type RemoteHostsEvent =
   | { type: "hosts-changed"; hosts: HostListEntry[] }
   | { type: "connection-changed"; hostId: HostId; connection: HostConnectionState }
-  | { type: "local-handshake"; handshake: HostHandshakeInfo };
+  | { type: "local-handshake"; handshake: HostHandshakeInfo }
+  /**
+   * Sent to one remote view: the host dropped events on their way to it (the
+   * link fell behind, or it was away), so what it shows may be stale. Refetch
+   * state rather than trusting what has been applied.
+   */
+  | { type: "resync-required"; hostId: HostId; reason: "overflow" | "reattached" };

@@ -257,6 +257,11 @@ const initialProjectId = process.argv
   .find((a) => a.startsWith(INITIAL_PROJECT_ID_ARG))
   ?.slice(INITIAL_PROJECT_ID_ARG.length);
 
+// The host a remote view is attached to. Absent for local views, so the
+// initial project id above is this machine's own and nothing else changes.
+const HOST_ID_ARG = "--daintree-host-id=";
+const viewHostId = process.argv.find((a) => a.startsWith(HOST_ID_ARG))?.slice(HOST_ID_ARG.length);
+
 // Instance role passed from the main process via additionalArguments (#10123),
 // with a process.env fallback for contexts the main process did not seed
 // (process.env is polyfilled even under sandbox: true). Worker instances
@@ -3811,6 +3816,12 @@ if (initialProjectId) {
   contextBridge.exposeInMainWorld("__DAINTREE_INITIAL_PROJECT__", {
     id: initialProjectId,
   });
+}
+
+// Exposed only for a view of a remote host's project; its initial project id
+// is the host's id for the project, and persisted keys scope by this host.
+if (viewHostId) {
+  contextBridge.exposeInMainWorld("__DAINTREE_HOST_ID__", { id: viewHostId });
 }
 
 // Surface the instance role so renderer pollers can suppress automatic
