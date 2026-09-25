@@ -10,6 +10,7 @@ import {
 } from "../../../shared/types/remoteHosts.js";
 import type {
   AddHostPayload,
+  HostProjectSummary,
   RemoteHostsEvent,
   SwitchWindowHostPayload,
   UpdateHostPayload,
@@ -167,6 +168,25 @@ export class RemoteHostsClient {
     const hostId = hostIdOf(payload);
     this.rememberBoundViews(hostId);
     await this.options.manager.disconnect(hostId);
+  }
+
+  /**
+   * A connected host's projects, for the other-hosts listings. Listing never
+   * dials: a host that isn't connected is reported as such.
+   */
+  async listHostProjects(payload: { hostId: string }): Promise<HostProjectSummary[]> {
+    const hostId = hostIdOf(payload);
+    if (isLocalHostId(hostId)) throw invalid("The local host is listed by the Shell");
+    this.options.registry.require(hostId);
+    const connection = this.options.manager.get(hostId);
+    if (!connection) {
+      throw new AppError({
+        code: "HOST_DISCONNECTED",
+        message: `Host ${hostId} is not connected`,
+        userMessage: "Couldn't reach this host. Check that it is on and try again.",
+      });
+    }
+    return connection.listProjects();
   }
 
   getWindowHost(ctx: IpcContext): WindowHostInfo {

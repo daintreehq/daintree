@@ -20,10 +20,12 @@ import type { LinkSession, LinkSessionOptions } from "../link/session.js";
 import {
   EndpointResyncPayloadSchema,
   HostInfoSchema,
+  HostProjectListSchema,
   LinkMethod,
   ProjectDescriptionSchema,
   type EndpointResyncReason,
   type HostInfo,
+  type HostProjectList,
   type ProjectDescription,
 } from "../host/linkMethods.js";
 import type { HostRegistry } from "./HostRegistry.js";
@@ -329,6 +331,30 @@ export class HostConnection {
     const answer = await session.call(LinkMethod.DESCRIBE_PROJECT, { projectId });
     const parsed = ProjectDescriptionSchema.safeParse(answer);
     return parsed.success ? parsed.data : null;
+  }
+
+  /**
+   * Every project the host has, asked at session level so no view has to be
+   * bound to the host to list it. Rejects while the host can't be reached.
+   */
+  async listProjects(): Promise<HostProjectList> {
+    const session = this.session;
+    if (this.unavailableEnvelope() || !session) {
+      throw new AppError({
+        code: "HOST_DISCONNECTED",
+        message: `Host ${this.hostId} is not connected`,
+        userMessage: "Couldn't reach this host. Check that it is on and try again.",
+      });
+    }
+    const answer = await session.call(LinkMethod.LIST_PROJECTS, null);
+    const parsed = HostProjectListSchema.safeParse(answer);
+    if (!parsed.success) {
+      throw new AppError({
+        code: "INTERNAL",
+        message: `Host ${this.hostId} sent an invalid project list`,
+      });
+    }
+    return parsed.data;
   }
 
   /** Local views that have an endpoint on the host right now. */

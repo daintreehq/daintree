@@ -9,6 +9,11 @@ vi.mock("../../../store.js", () => ({
   store: { get: (key: string) => storeValues.get(key) },
 }));
 
+const getAllProjects = vi.hoisted(() => vi.fn());
+vi.mock("../../../services/ProjectStore.js", () => ({
+  projectStore: { getAllProjects },
+}));
+
 const { remoteHostsNamespace } = await import("../remoteHosts.js");
 const { registerRemoteService, _resetRemoteServicesForTest } =
   await import("../../../remote/runtime.js");
@@ -21,6 +26,7 @@ const ctx = { event: null, webContentsId: 5, senderWindow: null, projectId: null
 afterEach(() => {
   _resetRemoteServicesForTest();
   storeValues.clear();
+  getAllProjects.mockReset();
 });
 
 describe("remoteHosts handlers", () => {
@@ -65,6 +71,30 @@ describe("remoteHosts handlers", () => {
     expect(client.add).toHaveBeenCalledWith({ name: "box", sshTarget: "box.example" });
     expect(client.connect).toHaveBeenCalledWith({ hostId: "box" });
     expect(client.switchWindowHost).toHaveBeenCalledWith(ctx, { hostId: "box", newWindow: true });
+  });
+
+  it("lists this machine's projects from its own store, even before the runtime starts", async () => {
+    getAllProjects.mockReturnValue([
+      { id: "p1", name: "App", path: "/work/app", emoji: "🌲", status: "active" },
+      { id: "p2", name: "Lib", path: "/work/lib", emoji: "" },
+    ]);
+    await expect(ops.listHostProjects!.handler({ hostId: "local" })).resolves.toEqual([
+      { id: "p1", name: "App", path: "/work/app", emoji: "🌲" },
+      { id: "p2", name: "Lib", path: "/work/lib" },
+    ]);
+  });
+
+  it("asks the running client for a remote host's projects", async () => {
+    await expect(ops.listHostProjects!.handler({ hostId: "box" })).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    const listHostProjects = vi.fn(async () => [{ id: "r1", name: "Remote", path: "/srv/r" }]);
+    registerRemoteService("remoteHostsClient", { listHostProjects } as never);
+    await expect(ops.listHostProjects!.handler({ hostId: "box" })).resolves.toEqual([
+      { id: "r1", name: "Remote", path: "/srv/r" },
+    ]);
+    expect(listHostProjects).toHaveBeenCalledWith({ hostId: "box" });
+    expect(getAllProjects).not.toHaveBeenCalled();
   });
 
   it("reports not in use for a user who never set up a host", async () => {

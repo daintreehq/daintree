@@ -22,6 +22,7 @@ function fakeManager() {
       hostInfo: { platform: "linux"; homeDir: string; tmpDir: string } | null;
       state: () => HostConnectionState;
       describeProject: ReturnType<typeof vi.fn>;
+      listProjects: ReturnType<typeof vi.fn>;
       whenReady: ReturnType<typeof vi.fn>;
       boundViews: () => number[];
     }
@@ -43,6 +44,7 @@ function fakeManager() {
             path: `/srv/${projectId}`,
             name: projectId,
           })),
+          listProjects: vi.fn(async () => [{ id: "proj-1", name: "App", path: "/srv/app" }]),
           whenReady: vi.fn(async () => manager.readiness),
           boundViews: () => [...manager.bound],
         };
@@ -135,6 +137,25 @@ describe("RemoteHostsClient", () => {
     });
     expect(info.hostHomeDir).toBeTruthy();
     expect(info.hostTmpDir).toBeTruthy();
+    expect(installRouter).not.toHaveBeenCalled();
+  });
+
+  it("lists a connected host's projects and never dials one to do it", async () => {
+    await expect(client.listHostProjects({ hostId: "studio-01" })).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+    expect(manager.connect).not.toHaveBeenCalled();
+
+    manager.connect("studio-01");
+    await expect(client.listHostProjects({ hostId: "studio-01" })).resolves.toEqual([
+      { id: "proj-1", name: "App", path: "/srv/app" },
+    ]);
+    await expect(client.listHostProjects({ hostId: "nowhere" })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await expect(client.listHostProjects({ hostId: "local" })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
     expect(installRouter).not.toHaveBeenCalled();
   });
 

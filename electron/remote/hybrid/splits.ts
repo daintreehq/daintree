@@ -372,14 +372,8 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
   [CHANNELS.CLIPBOARD_PICK_ATTACHMENTS]: refuse(
     (host) => `Attaching files from this computer to ${host} isn't available yet.`
   ),
-  [CHANNELS.PROJECT_OPEN_DIALOG]: refuse(
-    (host) => `Opening a folder on ${host} from this window isn't available yet.`
-  ),
   [CHANNELS.PROJECT_OPEN_GIT_INIT_DIALOG]: refuse(
     (host) => `Opening a folder on ${host} from this window isn't available yet.`
-  ),
-  [CHANNELS.PROJECT_LOCATE]: refuse(
-    (host) => `Locating a project folder on ${host} isn't available yet.`
   ),
   [CHANNELS.SCRATCH_SWITCH]: refuse((host) => `Scratch workspaces aren't available on ${host}.`),
   [CHANNELS.SCRATCH_SAVE_AS_PROJECT]: refuse(
@@ -390,9 +384,6 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
   ),
   [CHANNELS.PLUGIN_INSTALL_FROM_PATH]: refuse(
     (host) => `Installing a plugin folder from this computer on ${host} isn't available yet.`
-  ),
-  [CHANNELS.PLUGIN_PICK_PATH]: refuse(
-    (host) => `Picking a plugin folder on ${host} isn't available yet.`
   ),
   [CHANNELS.CONFIG_BUNDLE_EXPORT]: refuse(
     (host) => `Export configuration from a window on this computer, not one attached to ${host}.`

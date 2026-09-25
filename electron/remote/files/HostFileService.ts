@@ -216,6 +216,19 @@ export class HostFileService {
     }
   }
 
+  /**
+   * Whether `candidate` lies in the project's folder or one of its worktrees:
+   * the only roots a remote endpoint of that project may name to the host's
+   * own file readers.
+   */
+  async holdsRoot(projectId: string, candidate: string): Promise<boolean> {
+    if (this.disposed) return false;
+    for (const root of await this.options.rootsFor(projectId)) {
+      if ((await isInside(root, candidate)) !== null) return true;
+    }
+    return false;
+  }
+
   /** An endpoint moved project or closed: whatever it opened for the old one is revoked. */
   onEndpointsChanged(): void {
     this.revokeWhere(

@@ -222,6 +222,12 @@ export const LazyDiagnosticsReviewDialogHost = lazyWithPreload(
 );
 export const preloadDiagnosticsReviewDialogHost = LazyDiagnosticsReviewDialogHost.preload;
 
+// Direct file import so the host picker's chunk is loaded only where remote hosts exist.
+export const LazyHostFilePickerHost = lazyWithPreload(
+  () => import("./components/HostFilePicker/HostFilePickerHost"),
+  (m) => m.HostFilePickerHost
+);
+
 export const LazyGitPushConfirmDialog = lazyWithPreload(
   () => import("./components/Git/GitPushConfirmDialog"),
   (m) => m.GitPushConfirmDialog

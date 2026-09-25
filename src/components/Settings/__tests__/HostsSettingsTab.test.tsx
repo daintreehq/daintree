@@ -33,6 +33,7 @@ function entry(id: string, name: string): HostListEntry {
 
 let listeners: Array<(event: RemoteHostsEvent) => void>;
 let remoteHosts: Record<string, ReturnType<typeof vi.fn>>;
+let hostMode: Record<string, ReturnType<typeof vi.fn>>;
 
 beforeEach(() => {
   listeners = [];
@@ -50,8 +51,20 @@ beforeEach(() => {
       };
     }),
   };
+  hostMode = {
+    getStatus: vi.fn(async () => ({
+      supported: true,
+      enabled: false,
+      startAtLogin: false,
+      socketPath: "/run/user/501/daintree/host.sock",
+      listening: false,
+      attachedClients: [],
+      rows: [],
+    })),
+    onEvent: vi.fn(() => () => {}),
+  };
   Object.defineProperty(window, "electron", {
-    value: { remoteHosts },
+    value: { remoteHosts, hostMode },
     configurable: true,
     writable: true,
   });
@@ -70,6 +83,18 @@ describe("HostsSettingsTab", () => {
       )
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Add host" })).toBeTruthy();
+  });
+
+  it("gives the hosts list and this machine's Host mode their own sections", async () => {
+    const { container } = render(<HostsSettingsTab />);
+    expect(await screen.findByText("Allow this machine to be a host")).toBeTruthy();
+    const headings = [...container.querySelectorAll("[data-settings-section-title]")].map(
+      (heading) => heading.textContent
+    );
+    expect(headings).toEqual(["Remote hosts", "This machine as a host"]);
+    // Search results scroll to these.
+    expect(container.querySelector("#hosts-list")).not.toBeNull();
+    expect(container.querySelector("#host-mode")).not.toBeNull();
   });
 
   it("lists hosts with what was observed, and follows host list events", async () => {

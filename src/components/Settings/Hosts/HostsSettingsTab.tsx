@@ -32,9 +32,10 @@ export default function HostsSettingsTab() {
   return (
     <div className="space-y-8">
       <SettingsSection
-        title="Hosts"
+        title="Remote hosts"
         description="Macs and Linux machines this one opens projects on, over your own SSH"
         action={hosts.length > 0 ? addButton : undefined}
+        id="hosts-list"
       >
         <SettingsGroup>
           {loadError ? (

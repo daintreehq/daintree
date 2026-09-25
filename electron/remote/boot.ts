@@ -6,12 +6,14 @@ import { resolveLiveWebContents } from "../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { initRemoteHostsClient } from "./client/initClient.js";
 import { installViewReverseRequests } from "./client/viewRequests.js";
+import { installHostFileClient } from "./files/clientInstall.js";
 import { createHostModeService } from "./host/hostModeDefaults.js";
 import {
   acceptLocalPushForRemoteView,
   installHybridSplits,
   ViewVisibilityReporter,
 } from "./hybrid/index.js";
+import { installPickerSplits } from "./hybrid/pickers.js";
 import { registerRemoteService } from "./runtime.js";
 import {
   attachClientTerminalRelay,
@@ -68,6 +70,13 @@ function startClient(): void {
     teardowns.push(installClientTerminalPortOverride(hostForView));
     teardowns.push(installClientWorktreePortOverride(hostForView));
     teardowns.push(installHybridSplits({ router: client.router }));
+    teardowns.push(installPickerSplits());
+    teardowns.push(
+      installHostFileClient(
+        { onEndpointOpened: client.onEndpointOpened, onEndpointClosed: client.onEndpointClosed },
+        hostForView
+      )
+    );
     // This machine's agents, terminals and projects are not a remote view's.
     teardowns.push(
       setRemoteBoundViewFilter(

@@ -87,6 +87,12 @@ const m = vi.hoisted(() => {
     viewFilter,
     mcpResolver,
     installHybridSplits: vi.fn(() => vi.fn()),
+    uninstallPickerSplits: vi.fn(() => record("uninstall picker splits")),
+    uninstallHostFileClient: vi.fn(() => record("uninstall host file client")),
+    installHostFileClient: vi.fn(),
+    hostFilesDispose: vi.fn(() => record("host files dispose")),
+    installHostFileService: vi.fn(),
+    attachHostFiles: vi.fn(),
     admitHybridHostLegs: vi.fn(() => vi.fn()),
     acceptLocalPushForRemoteView: vi.fn((channel: string) => channel === "shell:ok"),
     uninstallViewRequests: vi.fn(),
@@ -232,6 +238,22 @@ vi.mock("../hybrid/index.js", () => ({
     return m.visibility;
   }),
 }));
+vi.mock("../hybrid/pickers.js", () => ({
+  installPickerSplits: vi.fn(() => m.uninstallPickerSplits),
+}));
+vi.mock("../files/clientInstall.js", () => ({
+  installHostFileClient: vi.fn((feed: unknown, hostForView: unknown) => {
+    m.installHostFileClient(feed, hostForView);
+    return m.uninstallHostFileClient;
+  }),
+}));
+vi.mock("../files/hostInstall.js", () => ({
+  installHostFileService: vi.fn(() => {
+    m.installHostFileService();
+    return { service: {}, dispose: m.hostFilesDispose };
+  }),
+  attachHostFiles: m.attachHostFiles,
+}));
 vi.mock("../client/viewRequests.js", () => ({
   installViewReverseRequests: vi.fn(() => m.uninstallViewRequests),
 }));
@@ -365,6 +387,30 @@ describe("startRemoteHosts", () => {
 
     await stopRemoteHosts();
     expect(m.viewFilter.current).toBeNull();
+  });
+
+  it("installs the host picker splits and the host file client on first use", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(m.installHostFileClient).not.toHaveBeenCalled();
+
+    m.clientHooks.current.onFirstUse?.();
+    expect(m.installHostFileClient).toHaveBeenCalledTimes(1);
+    const [feed, hostForView] = m.installHostFileClient.mock.calls[0] as [
+      { onEndpointOpened: unknown; onEndpointClosed: unknown },
+      (id: number) => unknown,
+    ];
+    expect(feed.onEndpointOpened).toBe(m.client.onEndpointOpened);
+    expect(feed.onEndpointClosed).toBe(m.client.onEndpointClosed);
+    m.viewHosts.set(11, "studio-01");
+    expect(hostForView(11)).toBe("studio-01");
+
+    await stopRemoteHosts();
+    expect(m.uninstallPickerSplits).toHaveBeenCalledTimes(1);
+    expect(m.uninstallHostFileClient).toHaveBeenCalledTimes(1);
+    // The file client goes before the picker splits that reach it.
+    expect(m.calls.indexOf("uninstall host file client")).toBeLessThan(
+      m.calls.indexOf("uninstall picker splits")
+    );
   });
 
   it("waits for a workspace client still starting before installing the port overrides", async () => {
@@ -565,6 +611,27 @@ describe("startRemoteHosts", () => {
     expect(m.fleetPush).toHaveBeenCalledWith(endpoint);
   });
 
+  it("serves host files only while listening, for opened and resumed endpoints", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(m.installHostFileService).not.toHaveBeenCalled();
+
+    const hostMode = getRemoteService("hostMode")!;
+    await hostMode.startListening();
+    expect(m.installHostFileService).toHaveBeenCalledTimes(1);
+    const endpoint = fakeEndpoint("remote:s1:view-11");
+    const link = { id: "link-1" };
+    openEndpoint(endpoint, "s1", link);
+    expect(m.attachHostFiles).toHaveBeenCalledWith(link, endpoint);
+
+    const resumed = { id: "link-1b" };
+    for (const l of m.server.sessionListeners)
+      l({ sessionId: "s1", resumed: true, session: resumed });
+    expect(m.attachHostFiles).toHaveBeenLastCalledWith(resumed, endpoint);
+
+    await hostMode.stopListening();
+    expect(m.hostFilesDispose).toHaveBeenCalledTimes(1);
+  });
+
   it("re-attaches a session's endpoints to the new link when it resumes", async () => {
     await startRemoteHosts({ hostMode: true });
     const kept = fakeEndpoint("remote:s1:view-11");
@@ -711,9 +778,12 @@ describe("stopRemoteHosts", () => {
       "dispose terminal relays",
       "dispose worktree relays",
       "uninstall view hooks",
+      "uninstall host file client",
+      "uninstall picker splits",
       "uninstall worktree override",
       "uninstall terminal override",
       "advertise.stop",
+      "host files dispose",
       "disposeAllTerminalBridges",
       "host.dispose",
       "server.close",

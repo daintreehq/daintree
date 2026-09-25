@@ -20,9 +20,11 @@ import {
   DescribeProjectPayloadSchema,
   EmptyPayloadSchema,
   LinkMethod,
+  MAX_LISTED_PROJECTS,
   type EndpointResyncPayload,
   type EndpointResyncReason,
   type HostInfo,
+  type HostProjectList,
   type ProjectDescription,
 } from "./linkMethods.js";
 import { RemoteViewEndpoint, type RemoteEndpointTransport } from "./RemoteViewEndpoint.js";
@@ -65,6 +67,7 @@ export interface SessionHostOptions {
   setAttachedFrontendCount?: (count: number) => void;
   hostInfo?: () => HostInfo;
   describeProject?: (projectId: string) => ProjectDescription | null;
+  listProjects?: () => HostProjectList;
   eventsHighWaterBytes?: number;
   /** How long the EVENTS lane may stay over high water before the Shell is resynced. */
   overHighWaterGraceMs?: number;
@@ -259,6 +262,9 @@ export class SessionHost {
         LinkMethod.DESCRIBE_PROJECT,
         DescribeProjectPayloadSchema,
         ({ projectId }) => this.options.describeProject?.(projectId) ?? null
+      ),
+      link.registerCallHandler(LinkMethod.LIST_PROJECTS, EmptyPayloadSchema, () =>
+        (this.options.listProjects?.() ?? []).slice(0, MAX_LISTED_PROJECTS)
       ),
       link.onClose(() => {
         if (s.link !== link) return;

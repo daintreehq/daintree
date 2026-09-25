@@ -43,6 +43,18 @@ export interface SwitchWindowHostPayload {
   projectId?: string;
 }
 
+/** A project as the host that has it lists it. Its id means something only on that host. */
+export interface HostProjectSummary {
+  id: string;
+  name: string;
+  path: string;
+  emoji?: string;
+}
+
+export interface ListHostProjectsPayload {
+  hostId: HostId;
+}
+
 /** A machine discovery saw. Reachability only; whether Daintree runs there is learned by connecting. */
 export interface DiscoveredHost {
   name: string;
