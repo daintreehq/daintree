@@ -415,6 +415,8 @@ export class PtyClient extends EventEmitter {
   private lastResourceProfile: ResourceProfile | null = null;
   /** Last fallback-eligible project set pushed to the shards (#12557); replayed on shard boot. */
   private fallbackEligibleProjects: string[] = [];
+  /** Projects another client drives (the drive lease); replayed on shard boot. */
+  private resizeHeldElsewhere: string[] = [];
   /** Per-connection holder identity, echoed to the host on every (re)connect (#12557). */
   private windowPortHolders = new Map<number, number>();
   private lastProcessTreePollIntervalMs: number | null = null;
@@ -1151,6 +1153,12 @@ export class PtyClient extends EventEmitter {
         type: "set-fallback-eligible-projects",
         projectIds: this.fallbackEligibleProjects,
       });
+    }
+
+    // Without it a restarted shard lets this machine's windows resize terminals
+    // another client is driving.
+    if (this.resizeHeldElsewhere.length > 0) {
+      shard.send({ type: "set-resize-held-elsewhere", projectIds: this.resizeHeldElsewhere });
     }
   }
 
@@ -2022,6 +2030,19 @@ export class PtyClient extends EventEmitter {
         type: "set-fallback-eligible-projects",
         projectIds: this.fallbackEligibleProjects,
       });
+    }
+  }
+
+  /**
+   * Projects whose drive lease another client holds: resizes arriving on this
+   * machine's own window ports are dropped for their terminals, so the driver's
+   * grid is the one the PTY keeps. An authoritative replace, sent to every
+   * shard because a project's terminals can span them.
+   */
+  setResizeHeldElsewhere(projectIds: string[]): void {
+    this.resizeHeldElsewhere = [...projectIds];
+    for (const shard of this.shards.values()) {
+      shard.send({ type: "set-resize-held-elsewhere", projectIds: this.resizeHeldElsewhere });
     }
   }
 

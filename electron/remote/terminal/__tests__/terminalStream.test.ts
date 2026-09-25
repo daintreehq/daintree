@@ -169,6 +169,22 @@ describe("terminal stream over the link", () => {
     ]);
   });
 
+  it("drops resizes while this endpoint's client does not hold the drive lease", async () => {
+    let driving = false;
+    const h = await setup({ mayResize: () => driving });
+    await h.connectLink();
+
+    h.renderer().post({ type: "resize", id: "t1", cols: 90, rows: 20 });
+    h.renderer().post({ type: "write", id: "t1", data: "a" });
+    await waitFor(() => h.pty().received.length === 1);
+    expect(h.pty().received).toEqual([{ type: "write", id: "t1", data: "a" }]);
+
+    driving = true;
+    h.renderer().post({ type: "resize", id: "t1", cols: 120, rows: 40 });
+    await waitFor(() => h.pty().received.length === 2);
+    expect(h.pty().received[1]).toEqual({ type: "resize", id: "t1", cols: 120, rows: 40 });
+  });
+
   it("relays status pulses and drops renderer messages a remote view may not send", async () => {
     const h = await setup();
     await h.connectLink();

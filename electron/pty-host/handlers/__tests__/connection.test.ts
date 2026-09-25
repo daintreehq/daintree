@@ -13,6 +13,8 @@ function makeCtx(stateRef: {
     setSabMode: vi.fn(),
     isSabMode: vi.fn(() => true),
     resize: vi.fn(),
+    isResizeHeldElsewhere: vi.fn(() => false),
+    setResizeHeldElsewhere: vi.fn(),
   } as unknown as HostContext["ptyManager"];
 
   return {
@@ -881,5 +883,46 @@ describe("resize transport attribution (#12442)", () => {
     port.emit("message", { data: { type: "resize", id: "term-1", cols: 100, rows: 30 } });
 
     expect(ctx.ptyManager.resize).toHaveBeenCalledWith("term-1", 100, 30, "renderer-message-port");
+  });
+
+  function makeResizeCtx() {
+    const ctx = makeCtx(makeStateRef());
+    vi.mocked(ctx.createPortQueueManager).mockReturnValue({
+      removeBytes: vi.fn(),
+      tryResume: vi.fn(),
+      dispose: vi.fn(),
+    } as unknown as ReturnType<HostContext["createPortQueueManager"]>);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    return ctx;
+  }
+
+  it("drops a local window's resize while another client drives the terminal's project", () => {
+    const ctx = makeResizeCtx();
+    vi.mocked(ctx.ptyManager.isResizeHeldElsewhere).mockReturnValue(true);
+    const handlers = createConnectionHandlers(ctx);
+    const local = makeNodePort();
+    const remote = makeNodePort();
+
+    handlers["connect-port"]({ windowId: 1 }, [local] as never);
+    handlers["connect-port"]({ windowId: -3 }, [remote] as never);
+    local.emit("message", { data: { type: "resize", id: "term-1", cols: 100, rows: 30 } });
+    expect(ctx.ptyManager.resize).not.toHaveBeenCalled();
+
+    // A remote endpoint's port is gated by its own bridge before it gets here.
+    remote.emit("message", { data: { type: "resize", id: "term-1", cols: 90, rows: 20 } });
+    expect(ctx.ptyManager.resize).toHaveBeenCalledWith("term-1", 90, 20, "renderer-message-port");
+  });
+
+  it("applies the lease set from Main and refuses a malformed one", () => {
+    const ctx = makeResizeCtx();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const handlers = createConnectionHandlers(ctx);
+
+    handlers["set-resize-held-elsewhere"]({ projectIds: ["p1", "p2"] }, undefined as never);
+    expect(ctx.ptyManager.setResizeHeldElsewhere).toHaveBeenCalledWith(["p1", "p2"]);
+
+    handlers["set-resize-held-elsewhere"]({ projectIds: ["p1", 3] }, undefined as never);
+    handlers["set-resize-held-elsewhere"]({ projectIds: "p1" }, undefined as never);
+    expect(ctx.ptyManager.setResizeHeldElsewhere).toHaveBeenCalledTimes(1);
   });
 });

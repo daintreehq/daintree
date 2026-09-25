@@ -1056,6 +1056,24 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
+    it("replays the drive lease's resize hold to a fresh shard", () => {
+      const client = createFabricClient();
+      client.setResizeHeldElsewhere(["project-a"]);
+      expect(messagesOfType(defaultShard().child, "set-resize-held-elsewhere")).toEqual([
+        { type: "set-resize-held-elsewhere", projectIds: ["project-a"] },
+      ]);
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.postMessage.mockClear();
+
+      shardA.child.emit("message", { type: "ready" });
+
+      expect(messagesOfType(shardA.child, "set-resize-held-elsewhere")).toEqual([
+        { type: "set-resize-held-elsewhere", projectIds: ["project-a"] },
+      ]);
+      client.dispose();
+    });
+
     it("replays the LATEST set, not every update", () => {
       const client = createFabricClient();
       client.setFallbackEligibleProjects(["project-a"]);

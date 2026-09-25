@@ -379,12 +379,12 @@ export interface GeneratedIpcInvokeMap {
     result: import("./diffMedia.js").DiffMediaFileVersions;
   };
   "drive-lease:get": {
-    args: [_payload: import("./driveLease.js").DriveLeaseProjectPayload];
-    result: import("../remoteHosts.js").DriveLeaseState;
+    args: [payload: import("./driveLease.js").DriveLeaseProjectPayload];
+    result: import("./driveLease.js").DriveLeaseView;
   };
   "drive-lease:take-over": {
-    args: [_payload: import("./driveLease.js").DriveLeaseProjectPayload];
-    result: import("../remoteHosts.js").DriveLeaseState;
+    args: [payload: import("./driveLease.js").DriveLeaseProjectPayload];
+    result: import("./driveLease.js").DriveLeaseView;
   };
   "editor:discover": {
     args: [];

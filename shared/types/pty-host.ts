@@ -303,6 +303,10 @@ export type PtyHostRequest =
   // `windowProjectMap` holds one active project per window and says nothing
   // about the views behind it. Main owns the answer and pushes it on change.
   | { type: "set-fallback-eligible-projects"; projectIds: string[] }
+  // Projects whose drive lease another client holds. Resizes from this
+  // machine's own window ports are dropped for their terminals. Main owns the
+  // lease and replaces the whole set on change.
+  | { type: "set-resize-held-elsewhere"; projectIds: string[] }
   | { type: "disconnect-port"; windowId: number }
   | { type: "kill-by-project"; projectId: string; requestId: string }
   | { type: "get-project-stats"; projectId: string; requestId: string }
