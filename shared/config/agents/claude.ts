@@ -196,7 +196,7 @@ export const config: AgentConfig = {
     { key: "API_TIMEOUT_MS", hint: "Request timeout in ms (e.g. 3000000)" },
     {
       key: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-      hint: "1 to disable telemetry — also removes Monitor, push notifications and claude.ai connectors",
+      hint: "Any value stops telemetry and updates, and hides Monitor",
     },
   ],
   providerTemplates: [
