@@ -9,8 +9,10 @@ import {
 import { formatAtFileTokenForCwd } from "../hybridInputParsing";
 import { materializeTransferSources } from "@/lib/transferSources";
 import { materialize } from "@/services/materialize";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { trackUpload } from "../uploads/pendingUploads";
 
-export function usePasteExtensions(cwd: string) {
+export function usePasteExtensions(cwd: string, uploadSurface?: string) {
   // `useEditorFactory` reads these extensions once, while building the initial
   // `EditorState`, under an effect keyed on `terminalId` alone — and no
   // compartment wraps them. A memo that rebuilt the extension when `cwd`
@@ -22,15 +24,24 @@ export function usePasteExtensions(cwd: string) {
   // installed-once handlers.
   "use no memo";
   const cwdRef = useRef(cwd);
+  const uploadSurfaceRef = useRef(uploadSurface);
   useEffect(() => {
     cwdRef.current = cwd;
-  }, [cwd]);
+    uploadSurfaceRef.current = uploadSurface;
+  }, [cwd, uploadSurface]);
 
   const imagePasteExtension = useMemo(
     () =>
       createImagePasteHandler(async (view) => {
         try {
-          const { hostPath: filePath, thumbnail } = await materialize({ kind: "clipboard-image" });
+          // Tracked in a remote window, so sending waits for the image to reach the host.
+          const surface = uploadSurfaceRef.current;
+          const { hostPath: filePath, thumbnail } =
+            surface !== undefined && isRemoteWindow()
+              ? await trackUpload(surface, "Pasted image", () =>
+                  materialize({ kind: "clipboard-image" })
+                )
+              : await materialize({ kind: "clipboard-image" });
           // The caret is read after the save, never before: typing may have
           // moved it. A view destroyed meanwhile takes the dispatch silently.
           const cursor = view.state.selection.main.head;
@@ -70,8 +81,17 @@ export function usePasteExtensions(cwd: string) {
   const filePasteExtension = useMemo(
     () =>
       createFilePasteHandler(async (view, files) => {
+        const surface = uploadSurfaceRef.current;
         const materialized = await materializeTransferSources(
-          files.map((file) => ({ kind: "local", path: file.path }))
+          files.map((file) => ({ kind: "local", path: file.path })),
+          surface !== undefined && isRemoteWindow()
+            ? (source, run) =>
+                trackUpload(
+                  surface,
+                  files.find((file) => file.path === source.path)?.name ?? source.path,
+                  run
+                )
+            : undefined
         );
         // Caret and cwd are read after the await, like the image paste, so
         // typing or a `cd` in between lands the paste where the user now is.

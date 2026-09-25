@@ -32,6 +32,18 @@ function getClipboardDir(): string {
   return path.join(os.tmpdir(), CLIPBOARD_DIR_NAME);
 }
 
+// Set only while this machine accepts uploads from remote windows, whose
+// pasted and dropped images live in the host inbox rather than the clipboard dir.
+let hostInboxRoot: string | null = null;
+
+/** The host inbox joins the thumbnail roots while uploads are accepted; null removes it. */
+export function setThumbnailInboxRoot(root: string | null): () => void {
+  hostInboxRoot = root;
+  return () => {
+    if (hostInboxRoot === root) hostInboxRoot = null;
+  };
+}
+
 function logCleanupRejections(results: PromiseSettledResult<unknown>[]): void {
   for (const result of results) {
     if (result.status === "rejected") {
@@ -182,7 +194,11 @@ async function handleThumbnailFromPath(
   // rather than the path-taking nativeImage.createFromPath — that API follows
   // symlinks in C++, leaving a TOCTOU window an fs.realpath check alone can't
   // close. Mirrors the safe read pattern in electron/ipc/handlers/files.ts.
-  const roots = [getClipboardDir(), ...projectStore.getAllProjects().map((p) => p.path)];
+  const roots = [
+    getClipboardDir(),
+    ...(hostInboxRoot ? [hostInboxRoot] : []),
+    ...projectStore.getAllProjects().map((p) => p.path),
+  ];
   await resolveContainedPath(filePath, roots);
 
   // Open the user-supplied filePath (not the realpath) with O_NOFOLLOW so a

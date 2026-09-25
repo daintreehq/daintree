@@ -1,28 +1,72 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { defineIpcNamespace, op } from "../define.js";
-import { pendingRemoteHostsHandler } from "../../remote/pendingHandler.js";
 import { getRemoteService, requireRemoteService } from "../../remote/runtime.js";
+import { store } from "../../store.js";
+import { AppError } from "../../utils/errorTypes.js";
 import { FILE_TRANSFER_METHOD_CHANNELS } from "./fileTransfer.preload.js";
 import type {
   AnswerHostPickPayload,
   DownloadPayload,
   DownloadResult,
+  LocalFileStat,
   UploadBytesPayload,
   UploadLocalFilePayload,
+  UploadPreferences,
   UploadResult,
 } from "../../../shared/types/ipc/fileTransfer.js";
+
+function readUploadPreferences(): UploadPreferences {
+  // Absent until the user changes it, so the settings file of someone who
+  // never uses remote hosts stays untouched.
+  return {
+    interceptCtrlVImages: store.get("remoteHostsPreferences")?.interceptCtrlVImages ?? true,
+  };
+}
+
+/** Size and kind of a local file about to be uploaded, or null when there is none. */
+async function statLocalFile(payload: { localPath: string }): Promise<LocalFileStat | null> {
+  const localPath = payload?.localPath;
+  if (typeof localPath !== "string" || !path.isAbsolute(localPath) || localPath.includes("\0")) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid local path" });
+  }
+  const stat = await fs.stat(localPath).catch(() => null);
+  if (!stat) return null;
+  return { size: stat.size, isDirectory: stat.isDirectory() };
+}
 
 export const fileTransferNamespace = defineIpcNamespace({
   name: "fileTransfer",
   ops: {
     uploadLocalFile: op(
       FILE_TRANSFER_METHOD_CHANNELS.uploadLocalFile,
-      async (_payload: UploadLocalFilePayload): Promise<UploadResult> =>
-        pendingRemoteHostsHandler(FILE_TRANSFER_METHOD_CHANNELS.uploadLocalFile)
+      async (ctx, payload: UploadLocalFilePayload): Promise<UploadResult> =>
+        requireRemoteService("hostUploadClient").uploadLocalFile(ctx.webContentsId, payload),
+      { withContext: true }
     ),
     uploadBytes: op(
       FILE_TRANSFER_METHOD_CHANNELS.uploadBytes,
-      async (_payload: UploadBytesPayload): Promise<UploadResult> =>
-        pendingRemoteHostsHandler(FILE_TRANSFER_METHOD_CHANNELS.uploadBytes)
+      async (ctx, payload: UploadBytesPayload): Promise<UploadResult> =>
+        requireRemoteService("hostUploadClient").uploadBytes(ctx.webContentsId, payload),
+      { withContext: true }
+    ),
+    statLocalFile: op(FILE_TRANSFER_METHOD_CHANNELS.statLocalFile, statLocalFile),
+    getUploadPreferences: op(
+      FILE_TRANSFER_METHOD_CHANNELS.getUploadPreferences,
+      async (): Promise<UploadPreferences> => readUploadPreferences()
+    ),
+    setUploadPreferences: op(
+      FILE_TRANSFER_METHOD_CHANNELS.setUploadPreferences,
+      async (patch: Partial<UploadPreferences>): Promise<UploadPreferences> => {
+        if (typeof patch?.interceptCtrlVImages !== "boolean") {
+          throw new AppError({ code: "VALIDATION", message: "Invalid upload preferences" });
+        }
+        store.set("remoteHostsPreferences", {
+          ...readUploadPreferences(),
+          interceptCtrlVImages: patch.interceptCtrlVImages,
+        });
+        return readUploadPreferences();
+      }
     ),
     download: op(
       FILE_TRANSFER_METHOD_CHANNELS.download,
@@ -34,6 +78,8 @@ export const fileTransferNamespace = defineIpcNamespace({
       FILE_TRANSFER_METHOD_CHANNELS.cancel,
       async (payload: { opId: string }): Promise<void> => {
         if (typeof payload?.opId !== "string") return;
+        // Uploads and downloads share the operation id space; whichever owns it stops.
+        if (getRemoteService("hostUploadClient")?.cancel(payload.opId)) return;
         requireRemoteService("hostFileClient").cancel(payload.opId);
       }
     ),
