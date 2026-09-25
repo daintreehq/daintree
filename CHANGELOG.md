@@ -1,5 +1,140 @@
 # Changelog
 
+## [0.38.0] - 2026-09-25
+
+A release-long design pass, judged against real rendered captures: every settings page is rebuilt on one layout grammar, and palettes, search fields, banners, dialogs and destructive confirms each become one family that says what is true. Opening a project across windows gets one set of rules: one live view per project, and external opens never replace an occupied window. The Daintree Tour ships as a narrated walkthrough of the app.
+
+### Features
+
+**Windows and projects**
+
+- Folders opened from outside Daintree (Dock drop, Finder "Open With", `daintree <dir>`) reuse an empty window or open a new one, and never replace an occupied window (#12600)
+- A project is live in one window at a time; opening it again focuses the window that already has it (#12603)
+- Open Project, Open Recent, the welcome screen and the clone and create-folder dialogs offer an explicit Open in New Window, with an `Open folders in new window` setting for the default (#12601, #12604)
+- The project switcher marks projects open in another window and offers "Go to window" for them (#12605)
+
+**Daintree Tour**
+
+- A narrated, animated 14-chapter walkthrough of the app, from Help › Daintree Tour, the `help.tour.show` action or the empty-grid invite card, with chapter scrubbing, keyboard controls and a hold (#12749)
+
+**Settings**
+
+- Every settings page follows one section → group → row layout, with dependent settings indented under their parent and disabled with the reason beside them (#12651)
+- Search lands focus on the setting's own control, and the sidebar heading doubles as the Global/Project scope switcher (#12681, #12695)
+- A new Import & export tab replaces the Help menu items, and importing a configuration names every item it will replace and offers a backup first (#12714)
+- Pages that read or write state — plugins, forge, integrations, MCP, privacy, run history, assistant, voice — say what is actually set up, missing or failed, with Retry beside the failed control (#12671, #12682, #12686)
+- Toolbar customization lists each button once, and buttons can be reordered and moved between sides without dragging (#12687, #12698)
+- The keyboard shortcut and command override pages are rebuilt, and recording a shortcut no longer fires the action currently bound to it (#12679)
+
+**Worktrees and sidebar**
+
+- The worktree overview is a keyboard-first list that doubles as a quick switcher, now on `Cmd+Alt+R` (#12739)
+- The sidebar's off-screen pills show whether anything past the edge needs attention and jump to the nearest one (#12667)
+- The sidebar footer is one row, with the project status on the left and Run command on the right, and a resource popover that shows where memory is going (#12636)
+- Quick Run groups its suggestions and says where a command will run before you run it (#12647)
+- The commit hover card leads with the subject and body, then author, co-authors, exact time and SHA (#12657, #12662)
+- The local commits dropdown marks unpushed commits and shares one list with the GitHub commits dropdown (#12676)
+- The dock's project-wide status pills sit apart from the worktree's chips, and every pill's popover splits its rows into this worktree and other worktrees (#12642, #12708)
+
+**Palettes, launcher and dialogs**
+
+- The action palette, quick switcher, new-terminal palette, prompt history and command picker share one row design that leads with the title and shows why a row matched (#12670, #12675, #12732)
+- The `+` launcher reflows into two columns and its highlight follows the pointer without lag (#12639)
+- Every search field in the app is one quiet, neutral-focus control (#12697)
+- The clone, create-folder, git init, move-or-rename and change-directory dialogs are rebuilt on one form layout, and the change-directory dialog offers real folders to pick (#12635, #12674, #12712)
+- The keyboard shortcut reference opens on its search field, shows every key bound to an action on one row, and fits about twice as much (#12668)
+- The notification centre shows where each entry came from and where the new ones end, even at fleet volume (#12672, #12700)
+- Saved fleets are saved, listed, armed and deleted from their own dialogs, and the cold-start picker recalls one in a click (#12710)
+
+**Destructive confirms**
+
+- Terminal kill and trash confirms name the terminals they act on and lead with any agent still mid-work (#12727)
+- The worktree delete dialog names the teardown it runs first and states refusals and losses plainly, including for submodules (#12683)
+- The git push and pull-rebase confirms say what git will actually do and diagnose a refusal before you approve (#12691)
+- The dev preview's clear-cache and reinstall confirm reads what is there first, and offers only what will actually run (#12724)
+
+**Panels and terminals**
+
+- The dev preview address bar shows the dev server's own address and route instead of the proxy origin (#12650)
+- Dev preview console rows name their source file and line inline, and only errors, warnings and `console.trace` offer the full stack (#12743)
+- The Portal is redesigned and adds Grok, Le Chat, Qwen and Kimi as built-in chat services (#12701)
+- The file viewer keeps the file's name and a way out in every state, including deleted, binary and unsupported files (#12646)
+- Grid pane title bars lead with the task, and the window controls sit in the same place on every pane kind (#12641)
+- The pane resource badge shows CPU and memory on their own bands, with one fixed CPU scale across panes (#12706)
+- Minimizing a panel animates from the pane to the dock chip it becomes, in both directions (#12744)
+- The in-pane terminal banners, store errors and grid notification bar read as one banner family (#12660, #12733, #12738)
+- A calm crash screen and error fallbacks say what broke in plain words and that terminals and agents are still running (#12677)
+
+**Onboarding**
+
+- The first-run journey leads with opening a project, so the setup wizard never launches an agent into the home folder, and skipping setup keeps the getting-started checklist (#12648)
+
+**MCP**
+
+- A project's MCP tier is the line below which agent-pane calls run without asking; calls above it prompt for approval instead of failing, with an "Allow for the rest of this session" option (#12694)
+- `terminal.getStatus` reports `lastTypedInputAt`, so a supervisor can tell a CLI's pre-filled suggestion from input actually sent (#12745)
+- `worktree.waitForPullRequest` waits, bounded, until any of up to 32 worktrees has a pull request detected (#12746)
+
+**Daintree Assistant**
+
+- The assistant folder gains trust tiers: `instructions.md`, `reference/`, commands and skills load from both global and project folders, while MCP servers and hooks load only from the global folder behind a setting that is off by default (#12734)
+- Sessions receive the project's name, forge remote and worktrees, kept current on every launch (#12720)
+- Session tabs are named from the agent's observed task title (#12748)
+- The launch state shows the current phase, and the CLI version gate shows the agent's own update commands (#12725)
+
+**Plugins**
+
+- Plugin panels can be reloaded from the panel menu, by the view itself or by its backend via `host.reloadPanel`, with a loop guard and an unsaved-changes confirm (#12632, #12633, #12634)
+- `createViewScope` in the plugin SDK releases a view's listeners, timers, observers and workers when it is disposed (#12624)
+- A plugin outside its `engines.daintree` range loads with a warning instead of being skipped (#12591)
+- The Plugin Manager leads with search, every row says whether the plugin is OK, and a failed load recovers in one click (#12689)
+- The plugin author packages are ready for npm: `@daintreehq/plugin-sdk` (with a `./testing` entry), `@daintreehq/plugin-vite`, `daintree-plugin` and `create-daintree-plugin` (#12599)
+
+### Bug Fixes
+
+**Plugins and security**
+
+- Confirming a plugin update could install a different archive from the one its preview read; the install is now bound to the previewed archive's hash (#12623)
+- A project-scoped secret setting was written into the repository, in plaintext when no keychain was available (#12625)
+- Plugin-shipped MCP servers inherited the host's full environment, including API tokens (#12629)
+- `host.fs` writes without options skipped the containment recheck that catches a symlink swapped in after consent (#12628)
+- Plugin agent MCP tools' declared input and output schemas were never enforced (#12631)
+- Concurrent plugin MCP handshakes could exceed the per-credential session cap (#12627)
+- On Linux the plugin secret store could report the OS keychain tier for a plaintext backend (#12620)
+- A plugin panel shown in a dialog mounted without its persisted state (#12621)
+
+**Worktrees**
+
+- The sidebar flagged normal states as problems: "Counts may be out of date" after every app switch, and "Couldn't reach the remote" for repos with no remote (#12696)
+- The upstream sync line faded its counts in degraded states and never offered Reconnect on an auth failure (#12661)
+- A worktree that switched branches kept showing its old pull request (#12746)
+- The worktree activity light never faded and its "4m" label never ticked in the built app (#12707)
+- Relative times could sit a whole unit behind because they flipped on wall-clock boundaries (#12657)
+- Agent pips hid a waiting session whenever a sibling session of the same agent was working (#12707)
+- A failed worktree load left the loading skeleton shimmering under the error (#12705)
+- The environment popover showed stale logs under a newer status, labelled local worktrees Remote, and its refresh could stay busy forever (#12693)
+
+**UI**
+
+- PDFs in the file viewer rendered as a blank box with no error (#12602)
+- The canonical pane skeleton was invisible in every theme, and every skeleton blinked once per cycle (#12735)
+- The shared empty state collapsed to one word per line in 23 places, and the diagnostics Events tab showed no events at the default dock height (#12649)
+- The forge stats pill's activity chips never fired (#12640)
+- Right-click opened nothing on twelve toolbar buttons (#12645)
+- The keyboard shortcut reference showed the wrong key for actions bound to two keys (#12668)
+- The Why slow? panel blamed a memory pause on output arriving too fast (#12663)
+- The rate-limit panel hid the time that actually governs the pause, so a 47-second pause read as 51 minutes (#12664)
+- The panel limit confirm miscounted open panels and reported the user's own Cancel as a failed recipe launch (#12665)
+- The all-clear flash painted over dialogs and toasts and was nearly invisible on dark themes (#12659)
+- Clearing run history never closed its confirm dialog (#12686)
+- Picking an item from a menu inside the notification inbox closed the inbox (#12700)
+- `InlineStatusBanner` actions dropped focus to the page when they became unavailable (#12711)
+- The shared checkbox and switch had contrast failures across the 15 built-in themes (#12648)
+
+**Security**
+
+- Advisories in `smol-toml`, `vite` and a nested `js-yaml` are cleared (#12622)
+
 ## [0.37.0] - 2026-09-22
 
 SvelteKit Tools ships as a built-in plugin: click an element in a running dev preview, see its source, and hand the request to an agent in the same worktree. Alongside it, a release-long push on battery and idle energy — one power policy composed from battery, focus, visibility and lock, and the end of the pty-host's `ps` forking, cached views painting, and animations holding the frame scheduler at display rate. MCP grew the primitives an orchestrator needs to supervise agents it did not launch.
