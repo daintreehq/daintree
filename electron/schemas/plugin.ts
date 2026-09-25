@@ -83,6 +83,9 @@ export const PanelMenuItemSchema = z
   })
   .strict();
 
+/** Values of a manifest's `platforms`: Node's `process.platform` names. */
+export const PLUGIN_PLATFORMS = ["darwin", "linux", "win32"] as const;
+
 /**
  * One `contributes.panels[].toolbar` entry: a button in the panel header.
  * `actionId` is held to the plugin's own namespace by the same manifest-level
@@ -2048,6 +2051,17 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // Whether a window attached from another machine may use the plugin.
       // Absent means supported: plugin main code runs on the host either way.
       remote: z.enum(["supported", "unsupported"]).optional(),
+      // The operating systems the package has a build for. Absent means any:
+      // only a plugin shipping native modules for one OS needs to say so, and
+      // installing it on another machine is refused before anything is copied.
+      platforms: z
+        .array(z.enum(PLUGIN_PLATFORMS))
+        .min(1)
+        .max(PLUGIN_PLATFORMS.length)
+        .refine((list) => new Set(list).size === list.length, {
+          message: "platforms must not repeat an entry",
+        })
+        .optional(),
       capabilities: z.array(PluginCapabilitySchema).default([]),
       scopes: PluginManifestScopesSchema.optional(),
       activationEvents: z.array(z.literal("onStartupFinished")).default([]),

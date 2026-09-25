@@ -4,6 +4,7 @@ export const PLUGIN_PARITY_METHOD_CHANNELS = {
   diff: "plugin-parity:diff",
   installOnHost: "plugin-parity:install-on-host",
   updateOnHost: "plugin-parity:update-on-host",
+  claimSwitchNotice: "plugin-parity:claim-switch-notice",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PLUGIN_PARITY_METHOD_CHANNELS;
