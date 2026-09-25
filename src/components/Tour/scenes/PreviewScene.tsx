@@ -9,19 +9,27 @@ import {
   Search,
   SquareTerminal,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { ANCHOR, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
+  cn,
+  type CursorStep,
   MockCursor,
-  MockPane,
-  MockStateGlyph,
+  MockMenu,
+  MockPanel,
+  MockSearchField,
+  MockSpotlight,
   MockStreamingLines,
   reveal,
   useMockCursor,
-  type CursorStep,
-} from "../mockup/TourMock";
+} from "@daintreehq/tour/kit";
+import {
+  ANCHOR,
+  MockApp,
+  MockGrid,
+  MockPane,
+  MockStateGlyph,
+  MockWorktreeCard,
+} from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
-import { MockMenu, MockPanel, MockSearchField, MockSpotlight } from "./sceneParts";
 
 const LAUNCHER = ANCHOR.launcher;
 const MENU = { x: LAUNCHER.x - 8, y: LAUNCHER.y + 14, width: 164 };

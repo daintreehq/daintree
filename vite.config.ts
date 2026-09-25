@@ -488,6 +488,54 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
     "useTourPlayerState",
     "useTourTime",
   ],
+  "@daintreehq/tour/kit": [
+    "MockCallout",
+    "MockCursor",
+    "MockFocusRing",
+    "MockKeys",
+    "MockLegend",
+    "MockLines",
+    "MockMenu",
+    "MockPanel",
+    "MockSearchField",
+    "MockSpotlight",
+    "MockStreamingLines",
+    "MockTooltip",
+    "MockTyping",
+    "PLAIN_TOUR_SHORTCUTS",
+    "TOUR_CANVAS",
+    "TourCanvas",
+    "TourShortcutsContext",
+    "cn",
+    "measureAnchor",
+    "reveal",
+    "typingRate",
+    "useMockCursor",
+    "useTourShortcuts",
+  ],
+  "@daintreehq/tour/mock-app": [
+    "ANCHOR",
+    "APP_LAYOUT",
+    "EMPTY_MOCK_KIT",
+    "GRID_RECT",
+    "MockAgentGlyph",
+    "MockAgentIcon",
+    "MockApp",
+    "MockAppMark",
+    "MockCIGlyph",
+    "MockEmptyGrid",
+    "MockGrid",
+    "MockKitContext",
+    "MockPane",
+    "MockStateGlyph",
+    "MockWaitingPill",
+    "MockWorktreeCard",
+    "TOOLBAR_AGENTS",
+    "resolveMockAgent",
+    "resolveMockCI",
+    "resolveMockState",
+    "useMockKit",
+  ],
 };
 
 interface FacadeLookupChunk {
@@ -1551,8 +1599,10 @@ export default defineConfig(({ command, mode }) => {
         "@shared": path.resolve(__dirname, "./shared"),
         // The app compiles the tour engine from source, so an edit shows up
         // without rebuilding the package's `dist/` (which only exists for
-        // publishing). `/react` first so the root entry alias doesn't swallow it.
+        // publishing). Subpaths first so the root entry alias doesn't swallow them.
         "@daintreehq/tour/react": path.resolve(__dirname, "./packages/tour/src/react.ts"),
+        "@daintreehq/tour/kit": path.resolve(__dirname, "./packages/tour/src/kit.ts"),
+        "@daintreehq/tour/mock-app": path.resolve(__dirname, "./packages/tour/src/mock-app.ts"),
         "@daintreehq/tour": path.resolve(__dirname, "./packages/tour/src/index.ts"),
         // refractor/core eagerly imports parse-entities, whose browser-condition
         // decode-named-character-reference touches `document` at module scope —

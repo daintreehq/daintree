@@ -1,23 +1,25 @@
 import {
-  ClaudeIcon,
-  CodexIcon,
-  AntigravityIcon,
-  CursorIcon,
-  OpenCodeIcon,
-} from "@/components/icons";
-import { cn } from "@/lib/utils";
-import { ANCHOR, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
-import {
+  cn,
+  type CursorStep,
   MockCursor,
-  MockPane,
+  MockMenu,
+  MockSearchField,
+  MockSpotlight,
   MockStreamingLines,
   MockTyping,
   reveal,
   useMockCursor,
-  type CursorStep,
-} from "../mockup/TourMock";
+} from "@daintreehq/tour/kit";
+import {
+  ANCHOR,
+  MockApp,
+  MockEmptyGrid,
+  MockGrid,
+  MockPane,
+  MockWorktreeCard,
+  MockAgentGlyph,
+} from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
-import { MockEmptyGrid, MockMenu, MockSearchField, MockSpotlight } from "./sceneParts";
 
 const LAUNCHER = ANCHOR.launcher;
 const MENU = { x: LAUNCHER.x - 8, y: LAUNCHER.y + 14, width: 164 };
@@ -148,11 +150,11 @@ export function AgentsScene() {
           </MockSearchField>
         }
         items={[
-          { icon: <ClaudeIcon />, label: "Claude" },
-          { icon: <CodexIcon />, label: "Codex" },
-          { icon: <AntigravityIcon />, label: "Antigravity" },
-          { icon: <CursorIcon />, label: "Cursor" },
-          { icon: <OpenCodeIcon />, label: "OpenCode" },
+          { icon: <MockAgentGlyph agent="claude" />, label: "Claude" },
+          { icon: <MockAgentGlyph agent="codex" />, label: "Codex" },
+          { icon: <MockAgentGlyph agent="antigravity" />, label: "Antigravity" },
+          { icon: <MockAgentGlyph agent="cursor" />, label: "Cursor" },
+          { icon: <MockAgentGlyph agent="opencode" />, label: "OpenCode" },
         ]}
       />
       <MockSpotlight targets={spot} visible={agents && spot.length > 0} />

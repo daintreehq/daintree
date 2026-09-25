@@ -1,13 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { EMPTY_MOCK_KIT, MockKitContext } from "./mockup/MockKitContext";
 import { TourControls } from "./TourControls";
 import { TourPlayer, type TourAudio } from "@daintreehq/tour";
 import type { TourDefinition } from "./tourDefinition";
 import { TourCaption, TourStage } from "./TourStage";
 import { currentTourKeyboard, type TourKeyboard } from "./tourKeys";
 import { TourPlayerContext, useTourPlayerState } from "@daintreehq/tour/react";
-import { TourKeyboardContext } from "./tourKeyboardContext";
+import { TourShortcutsContext } from "@daintreehq/tour/kit";
+import { EMPTY_MOCK_KIT, MockKitContext } from "@daintreehq/tour/mock-app";
+import { daintreeTourShortcuts } from "./daintreeTourShortcuts";
 
 export interface TourDialogProps {
   isOpen: boolean;
@@ -266,7 +267,7 @@ export function TourDialog({
       {player && (
         <MockKitContext.Provider value={tour.mockKit ?? EMPTY_MOCK_KIT}>
           <TourPlayerContext.Provider value={player}>
-            <TourKeyboardContext.Provider value={keyboard}>
+            <TourShortcutsContext.Provider value={daintreeTourShortcuts(keyboard)}>
               <TourBody
                 tour={tour}
                 player={player}
@@ -275,7 +276,7 @@ export function TourDialog({
                 onCompleted={onCompleted}
                 onMutedChange={onMutedChange}
               />
-            </TourKeyboardContext.Provider>
+            </TourShortcutsContext.Provider>
           </TourPlayerContext.Provider>
         </MockKitContext.Provider>
       )}

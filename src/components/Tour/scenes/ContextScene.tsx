@@ -1,18 +1,18 @@
 import { ArrowUp, Folders, History, Settings2 } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { ANCHOR, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
+  cn,
+  type CursorStep,
   MockCursor,
   MockLines,
-  MockPane,
+  MockMenu,
+  MockSpotlight,
+  MockTooltip,
   reveal,
   useMockCursor,
-  type CursorStep,
-} from "../mockup/TourMock";
+  useTourShortcuts,
+} from "@daintreehq/tour/kit";
+import { ANCHOR, MockApp, MockGrid, MockPane, MockWorktreeCard } from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
-import { useTourKeyboard } from "../tourKeyboardContext";
-import { tourShortcutHint } from "../tourKeys";
-import { MockMenu, MockSpotlight, MockTooltip } from "./sceneParts";
 
 const COPY = ANCHOR["copy-context"];
 const COPY_BUTTON = { anchor: "copy-context" };
@@ -82,7 +82,7 @@ export function ContextScene() {
   const portalCue = useCue("portal");
   const portalOpen = useCue("portal", 0.6);
   const pasted = useCue("paste", 0.3);
-  const keyboard = useTourKeyboard();
+  const shortcuts = useTourShortcuts();
   const cursor = useMockCursor({ x: 420, y: 200 }, CURSOR);
 
   return (
@@ -115,7 +115,7 @@ export function ContextScene() {
           {
             icon: <Folders />,
             label: "Copy full context",
-            hint: tourShortcutHint("worktree.copyTree", keyboard),
+            hint: shortcuts.hint("worktree.copyTree"),
           },
           { icon: <History />, label: "Recent", muted: true },
           { icon: <Settings2 />, label: "Context settings", muted: true, separator: true },

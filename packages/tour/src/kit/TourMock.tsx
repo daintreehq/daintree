@@ -1,21 +1,18 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { MousePointer2, RadioTower } from "lucide-react";
-import { cn } from "./cn";
-import {
-  resolveMockAgent,
-  resolveMockState,
-  useMockKit,
-  type MockAgent,
-  type MockAgentId,
-  type MockStateId,
-} from "./MockKitContext";
+import { useLayoutEffect, useRef, useState } from "react";
+import { MousePointer2 } from "lucide-react";
 import {
   useSecondsSinceCue,
   useTimelineIndex,
   useTourPlayer,
   type TimelinePoint,
-} from "@daintreehq/tour/react";
-import { ANCHOR_SETTLE_MS, hasCanvasLayout, measureAnchor } from "./tourAnchors";
+} from "../react.js";
+import { cn } from "./cn.js";
+import { ANCHOR_SETTLE_MS, hasCanvasLayout, measureAnchor } from "./tourAnchors.js";
+
+/** Vite's dev flag; undefined — so no warnings — under any other bundler. */
+function isDevBuild(): boolean {
+  return (import.meta as { env?: { DEV?: boolean } }).env?.DEV === true;
+}
 
 /** Breathing room between the last typed character and the moment it's acted on. */
 const TYPING_MARGIN_S = 0.15;
@@ -36,31 +33,6 @@ export function typingRate(
   return available > 0 ? Math.max(floor, length / available) : floor * 4;
 }
 
-/** Scenes are authored on a fixed canvas and scaled to fit the stage. */
-export const TOUR_CANVAS = { width: 640, height: 360 } as const;
-
-export type { MockAgent, MockAgentId, MockStateId } from "./MockKitContext";
-
-export function MockAgentIcon({
-  agent,
-  className,
-}: {
-  /** A known id, or a full descriptor for an agent the kit hasn't been given. */
-  agent: MockAgentId | MockAgent;
-  className?: string;
-}) {
-  const { Icon, color } = resolveMockAgent(useMockKit(), agent);
-  return (
-    <span style={{ color }} className="inline-flex shrink-0">
-      {Icon ? (
-        <Icon className={cn("size-3.5", className)} />
-      ) : (
-        <span className={cn("size-3.5", className)} aria-hidden="true" />
-      )}
-    </span>
-  );
-}
-
 /** Entry/exit for any element a cue reveals. Opacity survives reduced motion; the lift does not. */
 export function reveal(visible: boolean, from: "below" | "above" | "left" | "none" = "below") {
   return cn(
@@ -69,19 +41,6 @@ export function reveal(visible: boolean, from: "below" | "above" | "left" | "non
     !visible && from === "below" && "translate-y-2",
     !visible && from === "above" && "-translate-y-2",
     !visible && from === "left" && "-translate-x-3"
-  );
-}
-
-export function MockStateGlyph({ state }: { state: MockStateId | null }) {
-  const kit = useMockKit();
-  const visual = state === null ? undefined : resolveMockState(kit, state);
-  // Reserved box, as in the real header: the glyph never shifts the title.
-  if (!visual?.Icon) return <span className="size-3.5 shrink-0" aria-hidden="true" />;
-  const { Icon, colorClass, iconClassName } = visual;
-  return (
-    <span className={cn("inline-flex size-3.5 shrink-0 items-center", colorClass)}>
-      <Icon className={cn("size-3.5", iconClassName)} />
-    </span>
   );
 }
 
@@ -107,98 +66,6 @@ export function MockLines({
           style={{ width: `${width}%` }}
         />
       ))}
-    </div>
-  );
-}
-
-interface MockPaneProps {
-  /** A known id, or a full descriptor for an agent the kit hasn't been given. */
-  agent: MockAgentId | MockAgent;
-  /** Prefix for this pane's anchors (`<anchor>-titlebar`, `-glyph`, `-armed`, `-body`, `-input`). Defaults to the agent. */
-  anchor?: string;
-  state?: MockStateId | null;
-  armed?: boolean;
-  focused?: boolean;
-  /** Text shown in the input bar; the placeholder is used when empty. */
-  input?: ReactNode;
-  inputAddon?: ReactNode;
-  /** Something is being dragged over the prompt bar: the real bar's drop highlight. */
-  dragOver?: boolean;
-  children?: ReactNode;
-  className?: string;
-  title?: string;
-}
-
-export function MockPane({
-  agent,
-  anchor,
-  state = null,
-  armed = false,
-  focused = false,
-  input,
-  inputAddon,
-  dragOver = false,
-  children,
-  className,
-  title,
-}: MockPaneProps) {
-  const resolved = resolveMockAgent(useMockKit(), agent);
-  const name = resolved.name;
-  const anchorPrefix = anchor ?? resolved.id;
-  return (
-    <div
-      className={cn(
-        "flex min-h-0 flex-col overflow-hidden rounded-lg border bg-surface-panel",
-        "transition-[border-color,box-shadow] duration-150 ease-out",
-        focused
-          ? "border-border-interactive shadow-[var(--theme-shadow-ambient)]"
-          : "border-border-default",
-        className
-      )}
-    >
-      <div
-        data-tour-anchor={`${anchorPrefix}-titlebar`}
-        className="flex h-6 shrink-0 items-center gap-1.5 border-b border-border-subtle bg-surface-panel-elevated px-2"
-      >
-        <MockAgentIcon agent={resolved} className="size-3" />
-        <span className="truncate text-2xs font-medium text-text-primary">{title ?? name}</span>
-        <span className="flex-1" />
-        <span
-          data-tour-anchor={`${anchorPrefix}-armed`}
-          className={cn(
-            "inline-flex text-category-amber-text transition-opacity duration-150 ease-out",
-            armed ? "opacity-100" : "opacity-0"
-          )}
-        >
-          <RadioTower className="size-3" aria-hidden="true" />
-        </span>
-        <span data-tour-anchor={`${anchorPrefix}-glyph`} className="inline-flex">
-          <MockStateGlyph state={state} />
-        </span>
-      </div>
-      <div
-        data-tour-anchor={`${anchorPrefix}-body`}
-        className="min-h-0 flex-1 overflow-hidden px-2.5 py-2"
-      >
-        {children}
-      </div>
-      <div className="shrink-0 px-1.5 pb-1.5">
-        <div
-          data-tour-anchor={`${anchorPrefix}-input`}
-          className={cn(
-            "flex h-5 items-center gap-2 rounded-md border bg-surface-input px-2 transition-[border-color] duration-150 ease-out",
-            dragOver ? "border-border-strong bg-overlay-subtle" : "border-border-subtle"
-          )}
-        >
-          {input ? (
-            <span className="truncate text-2xs text-text-primary">{input}</span>
-          ) : (
-            <span className="truncate text-2xs text-text-secondary">Ask {name}</span>
-          )}
-          <span className="flex-1" />
-          {inputAddon}
-        </div>
-      </div>
     </div>
   );
 }
@@ -362,7 +229,7 @@ export function MockCursor({
     };
     measure();
     const timer = window.setTimeout(() => {
-      if (!measure() && import.meta.env.DEV && hasCanvasLayout(el)) {
+      if (!measure() && isDevBuild() && hasCanvasLayout(el)) {
         console.warn(`[tour] cursor target "${anchor}" is not rendered`);
       }
     }, ANCHOR_SETTLE_MS);

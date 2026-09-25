@@ -4,35 +4,31 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-// The mockup kit is headed for `@daintreehq/tour` and plugin scenes (#12764),
-// so it must draw only from what it is handed. Everything it imports — type
-// imports included — has to stay inside the kit, reach the tour runtime its
-// timeline hooks read, or name a short list of packages. The runtime is the
-// engine #12764 extracts and is checked there, so edges into it are allowed
-// but not followed. The app's own picture of itself lives in
-// `daintreeMockKit.ts`, outside this boundary.
+// The built-in scenes are written against `@daintreehq/tour`'s public surface
+// alone, which is the guarantee a plugin's tour can do anything Daintree's
+// does. Everything a scene imports — type imports included — has to be another
+// scene, React, Lucide, or a public entry of the package. The package's own
+// boundary is checked in `packages/tour`, so edges into it are allowed but not
+// followed. What the host hands the scenes (its agents, glyphs and shortcuts)
+// arrives through the kit's contexts, from `TourDialog.tsx`.
 
 const TOUR_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const MOCKUP_DIR = path.join(TOUR_DIR, "mockup");
+const SCENES_DIR = path.join(TOUR_DIR, "scenes");
 
-function kitSources(dir: string, out: string[] = []): string[] {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name !== "__tests__") kitSources(full, out);
-    } else if (/\.tsx?$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name)) {
-      out.push(full);
-    }
-  }
-  return out;
-}
+const ROOTS = fs
+  .readdirSync(SCENES_DIR)
+  .filter((name) => /\.tsx?$/.test(name) && !/\.(test|spec)\.tsx?$/.test(name))
+  .map((name) => path.join(SCENES_DIR, name));
 
-const ROOTS = [...kitSources(MOCKUP_DIR), path.join(TOUR_DIR, "scenes", "sceneParts.tsx")];
+/** The package's public entries; a boundary, not walked. */
+const PUBLIC_ENTRIES = new Set([
+  "@daintreehq/tour",
+  "@daintreehq/tour/react",
+  "@daintreehq/tour/kit",
+  "@daintreehq/tour/mock-app",
+]);
 
-/** The player runtime the kit's timeline hooks read; a boundary, not walked. */
-const RUNTIME = new Set(["@daintreehq/tour", "@daintreehq/tour/react"]);
-
-const PACKAGES = new Set(["react", "lucide-react", "clsx", "tailwind-merge"]);
+const PACKAGES = new Set(["react", "lucide-react"]);
 
 /** Stands in for a module reference no scanner can resolve, e.g. `import(\`@/${x}\`)`. */
 const DYNAMIC = "<non-literal module reference>";
@@ -82,7 +78,7 @@ function resolveRelative(specifier: string, from: string): string | null {
   );
 }
 
-/** Offending `file -> specifier` edges across the kit's whole import closure. */
+/** Offending `file -> specifier` edges across the scenes' whole import closure. */
 function violations(): { reached: Set<string>; offenders: string[] } {
   const visited = new Set<string>();
   const reached = new Set<string>();
@@ -98,7 +94,7 @@ function violations(): { reached: Set<string>; offenders: string[] } {
         const resolved = resolveRelative(specifier, file);
         if (resolved && ROOTS.includes(resolved)) pending.push(resolved);
         else offenders.push(`${rel} -> ${specifier}`);
-      } else if (RUNTIME.has(specifier)) {
+      } else if (PUBLIC_ENTRIES.has(specifier)) {
         reached.add(specifier);
       } else if (!PACKAGES.has(specifier)) {
         offenders.push(`${rel} -> ${specifier}`);
@@ -108,18 +104,13 @@ function violations(): { reached: Set<string>; offenders: string[] } {
   return { reached, offenders };
 }
 
-describe("mockup kit isolation", () => {
-  it("finds the kit's sources", () => {
+describe("built-in scene isolation", () => {
+  it("finds the scenes", () => {
     const names = ROOTS.map((file) => path.relative(TOUR_DIR, file));
     expect(names).toEqual(
-      expect.arrayContaining([
-        "mockup/TourMock.tsx",
-        "mockup/MockApp.tsx",
-        "mockup/MockKitContext.ts",
-        "mockup/MockCIGlyph.tsx",
-        "scenes/sceneParts.tsx",
-      ])
+      expect.arrayContaining(["scenes/WelcomeScene.tsx", "scenes/PaletteScene.tsx"])
     );
+    expect(names.length).toBeGreaterThanOrEqual(14);
   });
 
   it("reads every kind of module reference", () => {
@@ -150,7 +141,9 @@ describe("mockup kit isolation", () => {
   it("imports nothing from the app", () => {
     const { reached, offenders } = violations();
     expect(offenders).toEqual([]);
-    // The walk really followed the kit's edges: its timeline hooks come from the runtime.
-    expect([...reached]).toContain("@daintreehq/tour/react");
+    // The walk really read the scenes' imports: they draw with both halves of the kit.
+    expect([...reached]).toEqual(
+      expect.arrayContaining(["@daintreehq/tour/kit", "@daintreehq/tour/mock-app"])
+    );
   });
 });

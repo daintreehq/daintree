@@ -15,15 +15,15 @@ import {
   SquareTerminal,
   Zap,
 } from "lucide-react";
-import { cn } from "./cn";
+import { cn } from "../kit/cn.js";
 import {
   resolveMockState,
   useMockKit,
   type MockAgent,
   type MockAgentId,
   type MockStateId,
-} from "./MockKitContext";
-import { MockAgentIcon, MockStateGlyph } from "./TourMock";
+} from "./MockKitContext.js";
+import { MockAgentIcon, MockStateGlyph } from "./MockGlyphs.js";
 
 /**
  * The whole Daintree window, compressed onto the 640×360 tour canvas. Every
@@ -209,7 +209,7 @@ export function MockWaitingPill({ count, className }: { count: number; className
   );
 }
 
-interface MockAppProps {
+export interface MockAppProps {
   /** Agents pinned to the toolbar, in order. Defaults to the built-in three. */
   toolbarAgents?: readonly (MockAgentId | MockAgent)[];
   /** Regions kept at full strength; the rest recede. Omit to show everything evenly. */

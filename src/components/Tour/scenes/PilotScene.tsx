@@ -1,27 +1,31 @@
 import { CirclePause } from "lucide-react";
-import { cn } from "@/lib/utils";
-import type { AgentState } from "@/types";
-import { MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
+import {
+  cn,
+  MockKeys,
+  MockLines,
+  MockSearchField,
+  MockSpotlight,
+  reveal,
+  useTourShortcuts,
+} from "@daintreehq/tour/kit";
 import {
   MockAgentIcon,
-  MockLines,
+  type MockAgentId,
+  MockApp,
+  MockGrid,
   MockPane,
   MockStateGlyph,
-  reveal,
-  type MockAgentId,
-} from "../mockup/TourMock";
-import { pilotParkKeys } from "@/components/Pilot/pilotKeys";
+  MockWorktreeCard,
+  type MockStateId,
+} from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
-import { useTourKeyboard } from "../tourKeyboardContext";
-import { tourKeycaps } from "../tourKeys";
-import { MockKeys, MockSearchField, MockSpotlight } from "./sceneParts";
 
 const PALETTE = { x: 150, y: 44, width: 340 } as const;
 
 interface Run {
   agent: MockAgentId;
   title: string;
-  state: AgentState;
+  state: MockStateId;
   age: string;
 }
 
@@ -86,10 +90,10 @@ export function PilotScene() {
   const enterKey = useCue("park", 1.9);
   const parked = useCue("park", 2.5);
   const editorOpen = editing && !parked;
-  const keyboard = useTourKeyboard();
-  const parkHint = pilotParkKeys(keyboard === "mac");
+  const shortcuts = useTourShortcuts();
+  const parkHint = shortcuts.hint("pilot.park");
   // The same keys the footer hint shows ("⌥↵", "Alt+↵"), one cap each.
-  const parkKeycaps = keyboard === "mac" ? Array.from(parkHint) : parkHint.split("+");
+  const parkKeycaps = shortcuts.keycaps("pilot.park");
 
   return (
     <MockApp
@@ -114,12 +118,7 @@ export function PilotScene() {
         </MockGrid>
       }
     >
-      <MockKeys
-        keys={tourKeycaps("pilot.toggle", keyboard)}
-        x={320}
-        y={180}
-        visible={keys && !open}
-      />
+      <MockKeys keys={shortcuts.keycaps("pilot.toggle")} x={320} y={180} visible={keys && !open} />
       <div
         className={cn(
           "absolute z-20 flex flex-col rounded-lg border border-border-strong bg-surface-dialog p-2 shadow-[var(--theme-shadow-ambient)]",

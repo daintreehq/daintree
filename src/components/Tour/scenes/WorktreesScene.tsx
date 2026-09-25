@@ -1,16 +1,22 @@
-import { cn } from "@/lib/utils";
-import { GRID_RECT, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
+  cn,
+  type CursorStep,
   MockCursor,
   MockLines,
-  MockPane,
+  MockSpotlight,
   MockTyping,
   reveal,
   useMockCursor,
-  type CursorStep,
-} from "../mockup/TourMock";
+} from "@daintreehq/tour/kit";
+import {
+  GRID_RECT,
+  MockApp,
+  MockEmptyGrid,
+  MockGrid,
+  MockPane,
+  MockWorktreeCard,
+} from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
-import { MockEmptyGrid, MockSpotlight } from "./sceneParts";
 
 const DIALOG = { x: GRID_RECT.x + 119, y: 84, width: 230 } as const;
 const NAME_FIELD = { anchor: "create-worktree-name", dx: 5, dy: -3 };

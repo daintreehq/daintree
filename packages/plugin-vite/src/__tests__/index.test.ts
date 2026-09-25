@@ -102,13 +102,17 @@ describe("@daintreehq/plugin-vite — daintreePlugin", () => {
 
   it("throws from the external decision for an unmapped tour subpath", () => {
     const external = externalOf(daintreePlugin());
-    expect(() => external("@daintreehq/tour/kit")).toThrow(/@daintreehq\/tour\/kit.*import map/);
+    expect(() => external("@daintreehq/tour/internal")).toThrow(
+      /@daintreehq\/tour\/internal.*import map/
+    );
   });
 
   it("does not let an author external smuggle an unmapped tour subpath past the guard", () => {
     const external = externalOf(daintreePlugin({ externals: [/^@daintreehq\//] }));
-    expect(() => external("@daintreehq/tour/kit")).toThrow(/import map does not serve/);
+    expect(() => external("@daintreehq/tour/internal")).toThrow(/import map does not serve/);
     expect(external("@daintreehq/tour/react")).toBe(true);
+    expect(external("@daintreehq/tour/kit")).toBe(true);
+    expect(external("@daintreehq/tour/mock-app")).toBe(true);
   });
 
   it("merges caller-supplied externals with the React preset", () => {
@@ -184,13 +188,15 @@ describe("@daintreehq/plugin-vite — real build honours the unmapped subpath gu
     expect(chunks[0]?.code).toContain('from "react-dom/client"');
   });
 
-  it("leaves both tour subpaths external so a scene shares the host's tour instance", async () => {
+  it("leaves every tour subpath external so a scene shares the host's tour instance", async () => {
     const chunks = await buildEntry(
-      'import { TourPlayer } from "@daintreehq/tour"; import { useCue } from "@daintreehq/tour/react"; export { TourPlayer, useCue };'
+      'import { TourPlayer } from "@daintreehq/tour"; import { useCue } from "@daintreehq/tour/react"; import { TourCanvas } from "@daintreehq/tour/kit"; import { MockApp } from "@daintreehq/tour/mock-app"; export { TourPlayer, useCue, TourCanvas, MockApp };'
     );
     expect(chunks).toHaveLength(1);
     expect([...(chunks[0]?.imports ?? [])].sort()).toEqual([
       "@daintreehq/tour",
+      "@daintreehq/tour/kit",
+      "@daintreehq/tour/mock-app",
       "@daintreehq/tour/react",
     ]);
     expect(chunks[0]?.code).not.toContain("TourPlayerContext");
@@ -198,8 +204,8 @@ describe("@daintreehq/plugin-vite — real build honours the unmapped subpath gu
 
   it("rejects a bundle importing an unmapped tour subpath", async () => {
     await expect(
-      buildEntry('import { kit } from "@daintreehq/tour/kit"; export { kit };')
-    ).rejects.toThrow(/@daintreehq\/tour\/kit.*import map does not serve/);
+      buildEntry('import { internal } from "@daintreehq/tour/internal"; export { internal };')
+    ).rejects.toThrow(/@daintreehq\/tour\/internal.*import map does not serve/);
   });
 });
 
@@ -258,7 +264,7 @@ describe("@daintreehq/plugin-vite — unmapped subpath guard", () => {
     const resolveId = resolveIdOf(daintreePlugin());
     expect(() => resolveId("react-dom/server")).toThrow(/react-dom\/server/);
     expect(() => resolveId("react/compiler-runtime")).toThrow(/import map/);
-    expect(() => resolveId("@daintreehq/tour/kit")).toThrow(/@daintreehq\/tour\/kit/);
+    expect(() => resolveId("@daintreehq/tour/internal")).toThrow(/@daintreehq\/tour\/internal/);
   });
 
   it("allows every host-served specifier through (returns null to externalize)", () => {

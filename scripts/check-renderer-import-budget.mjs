@@ -120,11 +120,12 @@ function readManifest() {
 // and the gate would silently measure a ~1KB shim instead of the app.
 // Matches on `name` when the manifest carries one and falls back to the emitted
 // `file` path, so the check holds regardless of which field Vite populates.
-// Tour facade names are exact (`host-daintreehq-tour`, `host-daintreehq-tour-react`)
-// so a real entry that merely shares the prefix is still picked; files carry the
+// Tour facade names are exact (`host-daintreehq-tour`, `-react`, `-kit`,
+// `-mock-app`) so a real entry that merely shares the prefix is still picked; files carry the
 // 8-character Rolldown hash after the name.
-const HOST_FACADE_NAME = /^host-(?:react-|daintreehq-tour(?:-react)?$)/;
-const HOST_FACADE_FILE = /(^|\/)host-(?:react-|daintreehq-tour(?:-react)?-[\w-]{8}\.js$)/;
+const HOST_FACADE_NAME = /^host-(?:react-|daintreehq-tour(?:-react|-kit|-mock-app)?$)/;
+const HOST_FACADE_FILE =
+  /(^|\/)host-(?:react-|daintreehq-tour(?:-react|-kit|-mock-app)?-[\w-]{8}\.js$)/;
 
 function isHostFacadeChunk(chunk) {
   const name = typeof chunk?.name === "string" ? chunk.name : "";

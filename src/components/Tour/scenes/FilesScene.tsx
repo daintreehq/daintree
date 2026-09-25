@@ -1,15 +1,15 @@
 import { ChevronDown, FileCode, FileText, Folder, FolderTree, X } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
+  cn,
+  type CursorStep,
   MockCursor,
   MockLines,
-  MockPane,
+  MockPanel,
+  MockSpotlight,
   useMockCursor,
-  type CursorStep,
-} from "../mockup/TourMock";
+} from "@daintreehq/tour/kit";
+import { MockApp, MockGrid, MockPane, MockWorktreeCard } from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
-import { MockPanel, MockSpotlight } from "./sceneParts";
 
 const TREE: ReadonlyArray<{ name: string; depth: number; folder?: boolean }> = [
   { name: "src", depth: 0, folder: true },

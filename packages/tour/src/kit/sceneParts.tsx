@@ -1,20 +1,7 @@
-import { useId, useLayoutEffect, useRef, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Search } from "lucide-react";
-import { cn } from "../mockup/cn";
-import { ANCHOR_SETTLE_MS, canvasSize, measureAnchor } from "../mockup/tourAnchors";
-
-/** The empty grid, as a new worktree shows it: the launcher and nothing else. */
-export function MockEmptyGrid({ label, className }: { label: string; className?: string }) {
-  return (
-    <div className={cn("flex size-full flex-col items-center justify-center gap-2", className)}>
-      <span className="text-xs font-semibold text-text-primary">{label}</span>
-      <span className="flex h-6 w-48 items-center gap-1.5 rounded-md border border-border-default bg-surface-panel px-2">
-        <Search className="size-3 text-text-secondary" aria-hidden="true" />
-        <span className="text-3xs text-text-secondary">Search agents &amp; panels…</span>
-      </span>
-    </div>
-  );
-}
+import { cn } from "./cn.js";
+import { ANCHOR_SETTLE_MS, canvasSize, measureAnchor } from "./tourAnchors.js";
 
 /** A small label that names what a glyph means, pinned beside it on the canvas. */
 export function MockCallout({
@@ -134,7 +121,7 @@ export function MockSpotlight({
 }
 
 export interface LegendItem {
-  glyph: React.ReactNode;
+  glyph: ReactNode;
   label: string;
   active: boolean;
 }
@@ -184,11 +171,11 @@ export function MockPanel({
   children,
   className,
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   title: string;
   focused?: boolean;
-  toolbar?: React.ReactNode;
-  children: React.ReactNode;
+  toolbar?: ReactNode;
+  children: ReactNode;
   className?: string;
 }) {
   return (
@@ -243,9 +230,9 @@ export function MockKeys({
 }
 
 export interface MockMenuItem {
-  icon?: React.ReactNode;
+  icon?: ReactNode;
   label: string;
-  hint?: React.ReactNode;
+  hint?: ReactNode;
   /** A second, quieter line under the label (the action palette's summary). */
   detail?: string;
   /** Dimmed row: present but not the one being pointed at. */
@@ -271,7 +258,7 @@ export function MockMenu({
   x: number;
   y: number;
   width: number;
-  header?: React.ReactNode;
+  header?: ReactNode;
   /** Prefix for each row's spotlight anchor, so two open menus stay distinct. */
   anchor?: string;
 }) {
@@ -309,7 +296,7 @@ export function MockMenu({
 }
 
 /** A search field row, as palettes and dropdowns open with. */
-export function MockSearchField({ children }: { children: React.ReactNode }) {
+export function MockSearchField({ children }: { children: ReactNode }) {
   return (
     <div className="mb-1 flex h-5 items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md border border-border-subtle bg-surface-input px-1.5 text-3xs">
       <Search className="size-2.5 shrink-0 text-text-secondary" aria-hidden="true" />

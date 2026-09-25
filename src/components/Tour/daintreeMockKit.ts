@@ -1,4 +1,11 @@
-import { AntigravityIcon, ClaudeIcon, CodexIcon, DaintreeIcon } from "@/components/icons";
+import {
+  AntigravityIcon,
+  ClaudeIcon,
+  CodexIcon,
+  CursorIcon,
+  DaintreeIcon,
+  OpenCodeIcon,
+} from "@/components/icons";
 import {
   STATE_COLORS,
   STATE_ICONS,
@@ -8,7 +15,7 @@ import { getAgentConfig } from "@/config/agents";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import type { AgentState } from "@/types";
 import type { CIStatus } from "@shared/types/forge";
-import type { MockAgent, MockCIVisual, MockKit, MockStateVisual } from "./mockup/MockKitContext";
+import type { MockAgent, MockCIVisual, MockKit, MockStateVisual } from "@daintreehq/tour/mock-app";
 
 function agent(id: string, name: string, Icon: MockAgent["Icon"]): MockAgent {
   return { id, name, Icon, color: getAgentConfig(id)?.color };
@@ -46,6 +53,8 @@ export const DAINTREE_MOCK_KIT: MockKit = {
     claude: agent("claude", "Claude", ClaudeIcon),
     codex: agent("codex", "Codex", CodexIcon),
     antigravity: agent("antigravity", "Antigravity", AntigravityIcon),
+    cursor: agent("cursor", "Cursor", CursorIcon),
+    opencode: agent("opencode", "OpenCode", OpenCodeIcon),
   },
   states: Object.fromEntries(STATE_PRIORITY.map((id) => [id, state(id)])),
   statePriority: STATE_PRIORITY,
