@@ -137,10 +137,12 @@ vi.mock("@/hooks/useKeybinding", async (importOriginal) => ({
 }));
 
 import {
+  getPanelKindConfig,
   panelKindIsDockable,
   registerPanelKind,
   unregisterPanelKind,
 } from "@shared/config/panelKindRegistry";
+import { registerTour } from "@/components/Tour/tourRegistry";
 import type { PanelLocation } from "@/types";
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import {
@@ -248,10 +250,13 @@ function renderMenuFor(panel: Record<string, unknown>, forceLocation?: PanelLoca
   );
 }
 
-function registerPluginKind(id: string, options: { hasPty?: boolean; dockable?: boolean } = {}) {
+function registerPluginKind(
+  id: string,
+  options: { hasPty?: boolean; dockable?: boolean; name?: string; tourId?: string } = {}
+) {
   registerPanelKind({
     id,
-    name: id,
+    name: options.name ?? id,
     iconId: "terminal",
     color: "#abcdef",
     hasPty: options.hasPty ?? false,
@@ -259,7 +264,20 @@ function registerPluginKind(id: string, options: { hasPty?: boolean; dockable?: 
     canConvert: false,
     extensionId: "acme",
     ...(options.dockable !== undefined ? { dockable: options.dockable } : {}),
+    ...(options.tourId !== undefined ? { tourId: options.tourId } : {}),
   });
+}
+
+const tourCleanups: Array<() => void> = [];
+
+/** Registers a tour under `id` so a kind declaring it has something to play. */
+function registerPlayableTour(id: string) {
+  tourCleanups.push(
+    registerTour({
+      summary: { id, title: "Acme Tour", minutes: 1, chapterTitles: ["One"] },
+      load: () => Promise.reject(new Error("not under test")),
+    })
+  );
 }
 
 const pluginPanel = {
@@ -275,6 +293,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     // Unmounted first: dropping a kind while the menu still listens would
     // notify it outside act().
     cleanup();
+    for (const cleanupTour of tourCleanups.splice(0)) cleanupTour();
     dispatch.mockReset();
     worktreeList.current = [];
     layoutState.current = { maximizeTarget: null, group: undefined };
@@ -424,6 +443,33 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     );
   });
 
+  it("offers a kind's declared tour in the shared list and plays it by id (#12774)", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { name: "Dashboard", tourId: "acme.dashboard-intro" });
+    registerPlayableTour("acme.dashboard-intro");
+    renderMenuFor(pluginPanel);
+
+    expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
+    findRow("Dashboard Welcome Tour")!.click();
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      "help.tour.show",
+      { tourId: "acme.dashboard-intro" },
+      expect.anything()
+    );
+  });
+
+  it("offers a declared tour only once it is registered (#12774)", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { name: "Dashboard", tourId: "acme.dashboard-intro" });
+    renderMenuFor(pluginPanel);
+    expect(menuRows()).toEqual(sharedRows());
+    cleanup();
+
+    registerPlayableTour("acme.dashboard-intro");
+    renderMenuFor(pluginPanel);
+    expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
+  });
+
   it("asks a panel holding unsaved work before removing it", async () => {
     let verdict: "proceed" | "cancel" = "cancel";
     const guard = vi.fn(async () => verdict);
@@ -511,5 +557,58 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     expect(screen.getByText("Rename terminal")).toBeTruthy();
     // Its kind has no duplicate recipe, so a Duplicate here would throw.
     expect(screen.queryByText("Duplicate terminal")).toBeNull();
+    expect(screen.queryByText(/Welcome Tour$/)).toBeNull();
+  });
+
+  it("offers a tour a built-in kind declares, with no menu changes (#12774)", () => {
+    const browser = getPanelKindConfig("browser")!;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    registerPanelKind({ ...browser, tourId: "browser-intro" });
+    registerPlayableTour("browser-intro");
+    try {
+      renderMenuFor({
+        id: "panel-1",
+        title: "Docs",
+        kind: "browser",
+        browserUrl: "https://example.com",
+        worktreeId: "wt-1",
+      });
+
+      findRow(`${browser.name} Welcome Tour`)!.click();
+
+      expect(dispatch).toHaveBeenCalledWith(
+        "help.tour.show",
+        { tourId: "browser-intro" },
+        expect.anything()
+      );
+    } finally {
+      cleanup();
+      registerPanelKind(browser);
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("offers a PTY-backed plugin kind's tour on the terminal menu (#12774)", () => {
+    registerPluginKind(PTY_PLUGIN_KIND, {
+      hasPty: true,
+      name: "Shell",
+      tourId: "acme.shell-intro",
+    });
+    registerPlayableTour("acme.shell-intro");
+    renderMenuFor({
+      id: "panel-1",
+      title: "Acme Shell",
+      kind: PTY_PLUGIN_KIND,
+      pluginId: "acme",
+      worktreeId: "wt-1",
+    });
+
+    findRow("Shell Welcome Tour")!.click();
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "help.tour.show",
+      { tourId: "acme.shell-intro" },
+      expect.anything()
+    );
   });
 });

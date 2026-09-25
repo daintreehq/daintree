@@ -160,6 +160,12 @@ export interface PanelKindConfig {
    */
   stateVersion?: number;
   /**
+   * Tour the kind's menus offer as "{name} Welcome Tour", played through
+   * `help.tour.show`. A plugin sets it by declaring a tour with this kind as its
+   * `panelKind`; absent means the menus offer no tour.
+   */
+  tourId?: string;
+  /**
    * Owning project, or `null`/absent for global plugin and built-in kinds. Set
    * only for kinds contributed by a project-local plugin, whose `id` is the
    * project-qualified runtime form (`project:{projectId}/{manifestId}/{kindId}`).

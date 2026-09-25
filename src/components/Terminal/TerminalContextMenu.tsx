@@ -66,6 +66,7 @@ import {
   ArrowDownFromLine,
   Bell,
   BellOff,
+  CirclePlay,
   Clipboard,
   Copy,
   CopyPlus,
@@ -106,9 +107,14 @@ import {
 import { MenuActionSourceContext, type MenuActionSourceValue } from "@/components/ui/menu-source";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { PopoverAnchor } from "@/components/ui/popover";
+import {
+  getRegisteredTourIdsSnapshot,
+  subscribeToTourRegistry,
+} from "@/components/Tour/tourRegistry";
 import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
 import {
   GENERIC_PANEL_RELOAD_ACTION_ID,
+  GENERIC_PANEL_TOUR_ACTION_ID,
   canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
@@ -176,6 +182,11 @@ export function TerminalContextMenu({
     subscribeToPanelKindRegistry,
     getPanelKindRegistrySnapshot,
     getPanelKindRegistrySnapshot
+  );
+  const registeredTourIds = useSyncExternalStore(
+    subscribeToTourRegistry,
+    getRegisteredTourIdsSnapshot,
+    getRegisteredTourIdsSnapshot
   );
 
   // Which panel the picker was opened for, not a bare flag: the dock's tab
@@ -697,6 +708,20 @@ export function TerminalContextMenu({
             { source: sourceRef.current }
           );
           break;
+        case "tour": {
+          const tour = readPanelKindMenuCapabilities(
+            panelKindRegistry,
+            terminal.kind ?? "terminal",
+            registeredTourIds
+          ).tour;
+          if (!tour) break;
+          void actionService.dispatch(
+            GENERIC_PANEL_TOUR_ACTION_ID,
+            { tourId: tour.id },
+            { source: sourceRef.current }
+          );
+          break;
+        }
         case "reload-browser":
           void actionService.dispatch(
             "browser.reload",
@@ -724,7 +749,7 @@ export function TerminalContextMenu({
           break;
       }
     },
-    [terminal, terminalId, terminalPty, terminalBrowser]
+    [terminal, terminalId, terminalPty, terminalBrowser, panelKindRegistry, registeredTourIds]
   );
 
   const handleCloseAutoFocus = useCallback(
@@ -796,7 +821,11 @@ export function TerminalContextMenu({
   const isFileBrowser = isFileBrowserPanel(terminal);
   const isDiff = isDiffPanel(terminal);
   const kind = terminal.kind ?? "terminal";
-  const kindCapabilities = readPanelKindMenuCapabilities(panelKindRegistry, kind);
+  const kindCapabilities = readPanelKindMenuCapabilities(
+    panelKindRegistry,
+    kind,
+    registeredTourIds
+  );
   const hasPty = terminal.kind ? kindCapabilities.hasPty : true;
   // A non-PTY plugin kind matches none of the built-in guards, so without this
   // it falls through to the terminal menu and is offered "Duplicate terminal",
@@ -806,6 +835,15 @@ export function TerminalContextMenu({
   // kinds stay out: they render through TerminalPane and are genuine
   // terminals, so they keep copy/paste, redraw, restart and the rest.
   const hasGenericMenu = hasGenericPanelMenu(kind, hasPty);
+  // The generic list carries the tour as a command of its own; the built-in
+  // menus below draw this beside Rename, so a built-in kind that declares a
+  // tour gets it on right-click with no menu changes.
+  const tourMenuItem = kindCapabilities.tour ? (
+    <ContextMenuItem onSelect={() => handleAction("tour")}>
+      <CirclePlay className={ICON_CLASS} aria-hidden="true" />
+      {kindCapabilities.tour.label}
+    </ContextMenuItem>
+  ) : null;
 
   const submenuWorktrees = worktrees.slice(0, MOVE_TO_WORKTREE_SUBMENU_LIMIT);
   const hasMoreWorktrees = worktrees.length > submenuWorktrees.length;
@@ -961,6 +999,7 @@ export function TerminalContextMenu({
             <Pencil className={ICON_CLASS} aria-hidden="true" />
             Rename browser
           </ContextMenuItem>
+          {tourMenuItem}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1024,6 +1063,7 @@ export function TerminalContextMenu({
             <Pencil className={ICON_CLASS} aria-hidden="true" />
             Rename dev preview
           </ContextMenuItem>
+          {tourMenuItem}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1073,6 +1113,7 @@ export function TerminalContextMenu({
             <Pencil className={ICON_CLASS} aria-hidden="true" />
             Rename review
           </ContextMenuItem>
+          {tourMenuItem}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1122,6 +1163,7 @@ export function TerminalContextMenu({
             isDockable: kindCapabilities.isDockable,
             canMoveToWorktree,
             canReload: canReloadPanelKind(kind),
+            tourLabel: kindCapabilities.tour?.label,
           }).map((group, groupIndex) => (
             <Fragment key={group[0]?.id ?? groupIndex}>
               {groupIndex > 0 && <ContextMenuSeparator />}
@@ -1420,6 +1462,7 @@ export function TerminalContextMenu({
             <Info className={ICON_CLASS} aria-hidden="true" />
             View terminal info
           </ContextMenuItem>
+          {tourMenuItem}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />

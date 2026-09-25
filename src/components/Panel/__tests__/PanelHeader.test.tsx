@@ -10,6 +10,7 @@ import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getGenericPanelMenuGroups, type GenericPanelMenuInput } from "../genericPanelMenu";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
+import { registerTour } from "@/components/Tour/tourRegistry";
 import type { PanelKind } from "@/types";
 import {
   __resetPanelCloseGuardsForTests,
@@ -951,11 +952,11 @@ describe("PanelHeader", () => {
 
     function registerPluginKind(
       id: string,
-      options: { hasPty?: boolean; dockable?: boolean } = {}
+      options: { hasPty?: boolean; dockable?: boolean; name?: string; tourId?: string } = {}
     ) {
       registerPanelKind({
         id,
-        name: id,
+        name: options.name ?? id,
         iconId: "terminal",
         color: "#abcdef",
         hasPty: options.hasPty ?? false,
@@ -963,6 +964,7 @@ describe("PanelHeader", () => {
         canConvert: false,
         extensionId: "acme",
         ...(options.dockable !== undefined ? { dockable: options.dockable } : {}),
+        ...(options.tourId !== undefined ? { tourId: options.tourId } : {}),
       });
     }
 
@@ -973,10 +975,21 @@ describe("PanelHeader", () => {
       };
     }
 
+    const tourCleanups: Array<() => void> = [];
+    function registerPlayableTour(id: string) {
+      tourCleanups.push(
+        registerTour({
+          summary: { id, title: "Acme Tour", minutes: 1, chapterTitles: ["One"] },
+          load: () => Promise.reject(new Error("not under test")),
+        })
+      );
+    }
+
     afterEach(() => {
       // Unmounted first: dropping a kind while a header still listens would
       // notify it outside act().
       cleanup();
+      for (const cleanupTour of tourCleanups.splice(0)) cleanupTour();
       unregisterPanelKind(PLUGIN_KIND);
       unregisterPanelKind(PTY_PLUGIN_KIND);
       __resetPanelCloseGuardsForTests();
@@ -1186,6 +1199,40 @@ describe("PanelHeader", () => {
       );
     });
 
+    it("offers a kind's declared tour in the shared list and plays it by id (#12774)", () => {
+      registerPluginKind(PLUGIN_KIND, { name: "Dashboard", tourId: "acme.dashboard-intro" });
+      registerPlayableTour("acme.dashboard-intro");
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+
+      expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
+      findMenuButton("Dashboard Welcome Tour")!.click();
+
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "help.tour.show",
+        { tourId: "acme.dashboard-intro" },
+        { source: "menu" }
+      );
+    });
+
+    it("offers a declared tour only once it is registered (#12774)", () => {
+      registerPluginKind(PLUGIN_KIND, { name: "Dashboard", tourId: "acme.dashboard-intro" });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+
+      expect(menuRows()).toEqual(sharedRows());
+      act(() => registerPlayableTour("acme.dashboard-intro"));
+      expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
+    });
+
+    it("offers no tour for a kind that declares none", () => {
+      registerPluginKind(PLUGIN_KIND, { name: "Dashboard" });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+
+      const rows = Array.from(screen.getByTestId("overflow-menu").querySelectorAll("button"));
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.some((row) => rowLabel(row).endsWith("Welcome Tour"))).toBe(false);
+    });
+
     it.each(["file", "file-browser", "diff"])("offers no Reload panel on %s panels", (kind) => {
       render(<PanelHeader {...makeProps({ kind })} />);
 
@@ -1241,6 +1288,26 @@ describe("PanelHeader", () => {
       expect(findMenuButton("Lock input")).toBeDefined();
       expect(findMenuButton("Rename panel")).toBeUndefined();
       expect(findMenuButton("Duplicate")).toBeUndefined();
+    });
+
+    it("offers a PTY-backed plugin kind's tour on the terminal menu (#12774)", () => {
+      registerPluginKind(PTY_PLUGIN_KIND, {
+        hasPty: true,
+        name: "Shell",
+        tourId: "acme.shell-intro",
+      });
+      registerPlayableTour("acme.shell-intro");
+      mockHasPty = true;
+      storePanelKind(PTY_PLUGIN_KIND);
+      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+
+      findMenuButton("Shell Welcome Tour")!.click();
+
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "help.tour.show",
+        { tourId: "acme.shell-intro" },
+        { source: "menu" }
+      );
     });
 
     it("switches to the terminal menu when the plugin registers its kind after mount", () => {

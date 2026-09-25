@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import {
   ArrowDownFromLine,
+  CirclePlay,
   Maximize2,
   Minimize2,
   OctagonX,
@@ -22,6 +23,7 @@ export type GenericPanelMenuCommandId =
   | "toggle-maximize"
   | "rename"
   | "reload"
+  | "tour"
   | "background"
   | "trash"
   | "kill";
@@ -43,12 +45,18 @@ export interface GenericPanelMenuInput {
   canMoveToWorktree: boolean;
   /** Whether the panel is a plugin's, whose view the host can remount. */
   canReload: boolean;
+  /** Label of the kind's Welcome Tour item; absent when it declares no tour. */
+  tourLabel?: string;
 }
 
 export interface PanelKindMenuCapabilities {
   hasPty: boolean;
   isDockable: boolean;
+  /** The tour the kind declares, which its menus offer by `label` once it is registered. */
+  tour: { id: string; label: string } | null;
 }
+
+const EMPTY_TOUR_IDS: ReadonlySet<string> = new Set();
 
 /**
  * What the menus need to know about a kind, read from a registry snapshot the
@@ -60,12 +68,19 @@ export interface PanelKindMenuCapabilities {
  */
 export function readPanelKindMenuCapabilities(
   registry: Readonly<Record<string, PanelKindConfig>>,
-  kind: PanelKind
+  kind: PanelKind,
+  registeredTourIds: ReadonlySet<string> = EMPTY_TOUR_IDS
 ): PanelKindMenuCapabilities {
   const config = registry[kind];
+  const tourId = config?.tourId;
   return {
     hasPty: config?.hasPty ?? false,
     isDockable: config !== undefined && config.dockable !== false,
+    // A declared tour nothing has registered would open nothing, so it waits.
+    tour:
+      tourId && registeredTourIds.has(tourId)
+        ? { id: tourId, label: `${config.name} Welcome Tour` }
+        : null,
   };
 }
 
@@ -107,6 +122,7 @@ export function getGenericPanelMenuGroups({
   isDockable,
   canMoveToWorktree,
   canReload,
+  tourLabel,
 }: GenericPanelMenuInput): GenericPanelMenuCommand[][] {
   const layout: GenericPanelMenuCommand[] = [];
   if (canMoveToWorktree) {
@@ -137,6 +153,7 @@ export function getGenericPanelMenuGroups({
       { id: "rename", label: "Rename panel", icon: Pencil },
       ...(canReload ? [{ id: "reload" as const, label: "Reload panel", icon: RotateCw }] : []),
     ],
+    ...(tourLabel ? [[{ id: "tour" as const, label: tourLabel, icon: CirclePlay }]] : []),
     [
       { id: "background", label: "Send to background", icon: ArrowDownFromLine },
       { id: "trash", label: "Trash panel", icon: Trash2 },
@@ -149,10 +166,11 @@ export function getGenericPanelMenuGroups({
  * The action each command dispatches for the panel it was opened on, as
  * `{ terminalId }`. "move-to-worktree" has none of its own: it picks a
  * destination first. "reload" names its panel as `{ panelId }` — see
- * {@link GENERIC_PANEL_RELOAD_ACTION_ID}.
+ * {@link GENERIC_PANEL_RELOAD_ACTION_ID} — and "tour" names a tour, not a
+ * panel — see {@link GENERIC_PANEL_TOUR_ACTION_ID}.
  */
 export const GENERIC_PANEL_MENU_ACTION_IDS: Readonly<
-  Record<Exclude<GenericPanelMenuCommandId, "move-to-worktree" | "reload">, ActionId>
+  Record<Exclude<GenericPanelMenuCommandId, "move-to-worktree" | "reload" | "tour">, ActionId>
 > = {
   "move-to-dock": "terminal.moveToDock",
   "move-to-grid": "terminal.moveToGrid",
@@ -168,3 +186,10 @@ export const GENERIC_PANEL_MENU_ACTION_IDS: Readonly<
  * its argument has no focused-panel fallback to share with the others.
  */
 export const GENERIC_PANEL_RELOAD_ACTION_ID = "plugin.reloadPanel" satisfies ActionId;
+
+/**
+ * The action "tour" dispatches, as `{ tourId }` from the kind's
+ * {@link PanelKindMenuCapabilities.tour}: the same one that plays Daintree's
+ * own tour.
+ */
+export const GENERIC_PANEL_TOUR_ACTION_ID = "help.tour.show" satisfies ActionId;

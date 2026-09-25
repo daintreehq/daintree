@@ -684,7 +684,7 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 
 ## Tours — _Planned_
 
-Welcome tours that play in the same dialog as the Daintree tour. The manifest entry is validated today; loading and playing contributed tours is a follow-up, so a declared tour does not appear anywhere yet.
+Welcome tours that play in the same dialog as the Daintree tour. The manifest entry is validated today; loading and playing contributed tours is a follow-up. A panel kind that names a tour gets a Welcome Tour item in its menus once that tour is registered, so the item never appears with nothing to play.
 
 A tour without `panelKind` is a **plugin tour**, offered from Help and the command palette (for example "SvelteKit Site Builder: Welcome Tour"). A tour with `panelKind` is a **panel tour**, opened from that panel's three-dots menu as "<Panel name> Welcome Tour"; it keeps to a couple of chapters but is held to the same standard as any other tour.
 
@@ -730,7 +730,7 @@ A tour without `panelKind` is a **plugin tour**, offered from Help and the comma
 | `id` | yes | Unique within `contributes.tours`. |
 | `title` | yes | Shown where the tour is offered. |
 | `componentPath` | yes | Plugin-relative module exporting the chapter scenes, same path rules as a view's. |
-| `panelKind` | no | Makes it a panel tour. Must be the `id` of one of this plugin's own `contributes.panels`. |
+| `panelKind` | no | Makes it a panel tour. Must be the `id` of one of this plugin's own `contributes.panels`. That panel's three-dots and right-click menus offer it with no wiring in your view; if two tours name the same panel, the first wins. |
 | `audioHosts` | no | Bare hostnames remote narration is fetched from. No scheme, port, wildcard, IP literal or private host. |
 | `chapters` | yes | 1–32 chapters, played in order. |
 | `chapters[].id` | yes | Unique within the tour. |

@@ -363,6 +363,52 @@ describe("PluginService", () => {
     expect(Object.prototype.hasOwnProperty.call(wideCall![0], "dockable")).toBe(false);
   });
 
+  it("stamps the first tour declared against a panel onto its kind as a qualified tourId (#12774)", async () => {
+    const tour = (id: string, panelKind?: string) => ({
+      id,
+      title: id,
+      componentPath: "dist/tour.js",
+      ...(panelKind !== undefined ? { panelKind } : {}),
+      chapters: [{ id: "intro", duration: 5, audioUrl: null, narrationHash: "0123abcd" }],
+    });
+    await writePlugin("tour-plugin", {
+      name: "acme.tour-plugin",
+      version: "1.0.0",
+      contributes: {
+        panels: [
+          { id: "metrics", name: "Metrics", iconId: "eye", color: "#111" },
+          { id: "plain", name: "Plain", iconId: "eye", color: "#222" },
+        ],
+        tours: [
+          tour("app-wide"),
+          tour("metrics-intro", "metrics"),
+          tour("metrics-again", "metrics"),
+        ],
+      },
+    });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      // The second tour reached the loop rather than being dropped at parse.
+      expect(
+        warnSpy.mock.calls.some((args) => String(args[0]).includes('tours "metrics-again"'))
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+    const callFor = (id: string) =>
+      vi.mocked(registerPanelKind).mock.calls.find((call) => call[0]?.id === id)?.[0];
+    // Qualified like the kind id beside it, so another plugin's "metrics-intro" can't alias.
+    expect(callFor("acme.tour-plugin.metrics")?.tourId).toBe("acme.tour-plugin.metrics-intro");
+    expect(callFor("acme.tour-plugin.plain")).toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(callFor("acme.tour-plugin.plain"), "tourId")).toBe(
+      false
+    );
+  });
+
   it("skips directories without plugin.json", async () => {
     await fs.mkdir(path.join(tmpDir, "empty-dir"));
 

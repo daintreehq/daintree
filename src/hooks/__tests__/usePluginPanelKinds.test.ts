@@ -151,6 +151,36 @@ describe("usePluginPanelKinds", () => {
     clearPanelKindRegistry();
   });
 
+  it("re-registers a kind when a push changes only its tour (#12774)", async () => {
+    let emit: ((payload: { kinds: PanelKindConfig[] }) => void) | null = null;
+    onPanelKindsChangedMock.mockImplementation(
+      (cb: (payload: { kinds: PanelKindConfig[] }) => void) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+
+    const { getPanelKindConfig, clearPanelKindRegistry } =
+      await import("@shared/config/panelKindRegistry");
+    const { usePluginPanelKinds } = await import("../usePluginPanelKinds");
+
+    renderHook(() => usePluginPanelKinds());
+    await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalled());
+
+    const untoured = pluginKind({ id: "acme.viewer", hasPty: false, componentPath: "./v.js" });
+    act(() => emit!({ kinds: [untoured] }));
+    expect(getPanelKindConfig(untoured.id)).toBeDefined();
+    expect(getPanelKindConfig(untoured.id)?.tourId).toBeUndefined();
+
+    act(() => emit!({ kinds: [{ ...untoured, tourId: "acme.viewer-intro" }] }));
+    expect(getPanelKindConfig(untoured.id)?.tourId).toBe("acme.viewer-intro");
+
+    act(() => emit!({ kinds: [untoured] }));
+    expect(getPanelKindConfig(untoured.id)?.tourId).toBeUndefined();
+
+    clearPanelKindRegistry();
+  });
+
   it("does not register a definition for non-PTY plugin kinds without componentPath", async () => {
     const nonPty = pluginKind({ id: "acme.note", hasPty: false });
     getPanelKindsMock.mockResolvedValue([nonPty]);

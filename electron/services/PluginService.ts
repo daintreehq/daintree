@@ -189,6 +189,7 @@ import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeStatus } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import { getPtyClient } from "../window/serviceRefs.js";
 import { getWindowForWebContents } from "../window/webContentsRegistry.js";
+import { makePluginTourId } from "../../shared/utils/tourIds.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
   registerPanelKind,
@@ -2104,6 +2105,20 @@ export class PluginService {
       unmatchedViewIds.add(view.id);
     }
 
+    // A panel kind's menus offer at most one Welcome Tour, so a second tour
+    // naming the same kind is an authoring mistake: keep the first, as views do.
+    const tourIdByPanelId = new Map<string, string>();
+    for (const tour of manifest.contributes.tours) {
+      if (tour.panelKind === undefined) continue;
+      if (tourIdByPanelId.has(tour.panelKind)) {
+        console.warn(
+          `[PluginService] Plugin "${manifest.name}": tours "${tour.id}" is a second tour for panel "${tour.panelKind}"; keeping the first`
+        );
+        continue;
+      }
+      tourIdByPanelId.set(tour.panelKind, makePluginTourId(manifest.name, tour.id));
+    }
+
     for (const panel of manifest.contributes.panels) {
       // A project plugin's panel kinds register under the project-qualified
       // runtime id, so two projects can each contribute `acme.dash/overview`
@@ -2125,6 +2140,7 @@ export class PluginService {
       }
       const view = viewsByBareId.get(panel.id);
       if (view) unmatchedViewIds.delete(panel.id);
+      const tourId = tourIdByPanelId.get(panel.id);
       registerPanelKind({
         id: panelId,
         name: panel.name,
@@ -2143,6 +2159,7 @@ export class PluginService {
         // handed over unjudged, and defaulting to 1 here would start refusing
         // bags on a promise the author never made (#12280).
         ...(panel.stateVersion !== undefined ? { stateVersion: panel.stateVersion } : {}),
+        ...(tourId !== undefined ? { tourId } : {}),
         // Keyed by the INSTANCE, because `unregisterPluginPanelKinds` matches
         // on `extensionId` alone: keying by manifest id would make one
         // project's unload sweep every other project's copies of the same kind.
