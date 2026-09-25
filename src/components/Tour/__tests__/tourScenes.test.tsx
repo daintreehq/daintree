@@ -5,10 +5,11 @@ import { TOUR_SCENES } from "../TourStage";
 import { DAINTREE_MOCK_KIT } from "../daintreeMockKit";
 import { MockKitContext } from "../mockup/MockKitContext";
 import { TOUR_CHAPTERS } from "../tourChapters";
-import { TourPlayer, type TourAudio } from "../TourPlayer";
+import { TourPlayer, type TourAudio } from "@daintreehq/tour";
+import { TourPlayerContext } from "@daintreehq/tour/react";
+import { TourKeyboardContext } from "../tourKeyboardContext";
 import type { TourKeyboard } from "../tourKeys";
 import { resolveChapterTiming } from "../tourTiming";
-import { TourKeyboardContext, TourPlayerContext } from "../useTourPlayer";
 
 class SilentAudio implements TourAudio {
   src: string;

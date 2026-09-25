@@ -1,4 +1,4 @@
-import type { TourCaption, TourChapterTiming } from "./tourTypes";
+import type { TourCaption, TourChapterTiming } from "./tourTypes.js";
 
 /** `[[cue-id]]` marks a scene cue; `[anything else]` is a delivery direction for the voice. */
 const MARKUP_PATTERN = /\[\[([a-z0-9-]+)\]\]|\[([^[\]]+)\]/g;

@@ -27,7 +27,9 @@
     /* Paths */
     "paths": {
       "@/*": ["./src/*"],
-      "@shared/*": ["./shared/*"]
+      "@shared/*": ["./shared/*"],
+      "@daintreehq/tour": ["./packages/tour/src/index.ts"],
+      "@daintreehq/tour/react": ["./packages/tour/src/react.ts"]
     }
   },
   "include": [

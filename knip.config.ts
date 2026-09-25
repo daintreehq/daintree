@@ -265,6 +265,9 @@ const config: KnipConfig = {
     // host-repository development dependencies themselves.
     "@daintreehq/plugin-sdk",
     "@daintreehq/plugin-vite",
+    // The app compiles the tour engine from source through tsconfig, Vite and
+    // Vitest aliases rather than as an installed dependency.
+    "@daintreehq/tour",
     // scripts/ci/electron-builder-config.test.mjs reads the installed
     // electron-builder schema from node_modules/app-builder-lib/scheme.json.
     // electron-builder owns that transitive package; the test must validate

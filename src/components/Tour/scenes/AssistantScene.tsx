@@ -11,7 +11,7 @@ import {
   useMockCursor,
   type CursorStep,
 } from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
+import { useCue } from "@daintreehq/tour/react";
 import { MockSpotlight } from "./sceneParts";
 
 const BUTTON = ANCHOR.assistant;

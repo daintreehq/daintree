@@ -1,7 +1,7 @@
 import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 import { describeChord, parseChord } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
-import type { TourChapter } from "./tourTypes";
+import type { TourChapter } from "@daintreehq/tour";
 
 /**
  * The two keyboards the tour is voiced for. Windows and Linux share every

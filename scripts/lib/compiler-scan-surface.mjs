@@ -13,8 +13,14 @@ import { minimatch } from "minimatch";
 // `plugins/sample/**` is deliberately absent: the sample plugin builds through
 // its own `vite.config.ts`, which never registers the compiler, so scanning it
 // would budget files the compiler never sees. Plugin main-process code is out
-// for the same reason — only `renderer/` is client code.
-export const SCAN_PATTERNS = ["src/**/*.{ts,tsx}", "plugins/builtin/*/renderer/**/*.{ts,tsx}"];
+// for the same reason — only `renderer/` is client code. `packages/tour/src` is
+// in because the renderer aliases it to source, so its React bindings compile
+// with the app.
+export const SCAN_PATTERNS = [
+  "src/**/*.{ts,tsx}",
+  "plugins/builtin/*/renderer/**/*.{ts,tsx}",
+  "packages/tour/src/**/*.{ts,tsx}",
+];
 
 // `*.spec.*` is listed alongside `*.test.*` even though the repo does not use
 // it today: a naming convention arriving later should not quietly widen the

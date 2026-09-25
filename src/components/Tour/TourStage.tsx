@@ -17,7 +17,7 @@ import { ReviewScene } from "./scenes/ReviewScene";
 import { StateScene } from "./scenes/StateScene";
 import { WelcomeScene } from "./scenes/WelcomeScene";
 import { WorktreesScene } from "./scenes/WorktreesScene";
-import { useTourPlayer, useTourPlayerState, useTourTime } from "./useTourPlayer";
+import { useTourPlayer, useTourPlayerState, useTourTime } from "@daintreehq/tour/react";
 
 export const TOUR_SCENES: Record<string, ComponentType> = {
   welcome: WelcomeScene,

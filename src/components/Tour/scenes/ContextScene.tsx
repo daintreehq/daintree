@@ -9,8 +9,9 @@ import {
   useMockCursor,
   type CursorStep,
 } from "../mockup/TourMock";
+import { useCue } from "@daintreehq/tour/react";
+import { useTourKeyboard } from "../tourKeyboardContext";
 import { tourShortcutHint } from "../tourKeys";
-import { useCue, useTourKeyboard } from "../useTourPlayer";
 import { MockMenu, MockSpotlight, MockTooltip } from "./sceneParts";
 
 const COPY = ANCHOR["copy-context"];

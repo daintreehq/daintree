@@ -8,7 +8,7 @@ import {
   reveal,
   type MockAgentId,
 } from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
+import { useCue } from "@daintreehq/tour/react";
 import { MockEmptyGrid } from "./sceneParts";
 
 const PANES: ReadonlyArray<{

@@ -16,7 +16,8 @@ import {
   type MockAgentId,
 } from "../mockup/TourMock";
 import { fleetExitChordLabel } from "@/components/Fleet/fleetKeys";
-import { useCue, useTourKeyboard } from "../useTourPlayer";
+import { useCue } from "@daintreehq/tour/react";
+import { useTourKeyboard } from "../tourKeyboardContext";
 import { MockSpotlight } from "./sceneParts";
 
 const PANES: readonly MockAgentId[] = ["claude", "codex", "antigravity"];

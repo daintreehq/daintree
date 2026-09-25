@@ -1,8 +1,9 @@
 import { CirclePlay, Keyboard, ListChecks, Sparkles } from "lucide-react";
 import { MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import { MockLines, MockPane, MockTyping } from "../mockup/TourMock";
+import { useCue } from "@daintreehq/tour/react";
+import { useTourKeyboard } from "../tourKeyboardContext";
 import { tourKeycaps, tourShortcutHint, type TourKeyboard } from "../tourKeys";
-import { useCue, useTourKeyboard } from "../useTourPlayer";
 import { MockKeys, MockMenu, MockSearchField, type MockMenuItem } from "./sceneParts";
 
 const PALETTE = { x: 170, y: 48, width: 300 } as const;

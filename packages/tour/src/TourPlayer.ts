@@ -1,4 +1,4 @@
-import type { TourChapterTiming, TourPlayerState } from "./tourTypes";
+import type { TourChapterTiming, TourPlayerState } from "./tourTypes.js";
 
 type TourAudioEvent = "canplaythrough" | "playing" | "waiting" | "error" | "ended";
 

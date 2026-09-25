@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
+import { narrationFingerprint, parseNarration, type TourTimingManifest } from "@daintreehq/tour";
 import { describe, expect, it } from "vitest";
 import { TOUR_CHAPTERS } from "../tourChapters";
 import {
@@ -10,11 +11,9 @@ import {
   tourKeycaps,
   tourShortcutHint,
 } from "../tourKeys";
-import { narrationFingerprint, parseNarration } from "../tourNarration";
 import { TOUR_CHAPTER_TITLES, TOUR_MINUTES } from "../tourSummary.generated";
 import { resolveChapterTiming, resolveTourTimings, tourMinutes } from "../tourTiming";
 import { TOUR_TIMING_MANIFEST } from "../tourTiming.generated";
-import type { TourTimingManifest } from "../tourTypes";
 
 const TOUR_DIR = join(__dirname, "..");
 const SCENES_DIR = join(TOUR_DIR, "scenes");
@@ -40,13 +39,21 @@ const ALIASES: Record<string, string> = {
   "@/": join(REPO_ROOT, "src"),
   "@shared/": join(REPO_ROOT, "shared"),
 };
+const TOUR_PACKAGE_SRC = join(REPO_ROOT, "packages", "tour", "src");
+// The app resolves the tour engine to its source, as vite.config.ts does.
+const PACKAGE_ENTRIES: Record<string, string> = {
+  "@daintreehq/tour": join(TOUR_PACKAGE_SRC, "index.ts"),
+  "@daintreehq/tour/react": join(TOUR_PACKAGE_SRC, "react.ts"),
+};
 
 function resolveSource(specifier: string, from: string): string | null {
+  const entry = PACKAGE_ENTRIES[specifier];
+  if (entry) return entry;
   const alias = Object.keys(ALIASES).find((prefix) => specifier.startsWith(prefix));
   const base = alias
     ? join(ALIASES[alias]!, specifier.slice(alias.length))
     : specifier.startsWith(".")
-      ? join(dirname(from), specifier)
+      ? join(dirname(from), specifier.replace(/\.js$/, ""))
       : null;
   if (!base) return null;
   const candidates = ["", ".ts", ".tsx", "/index.ts", "/index.tsx"].map((ext) => base + ext);
@@ -72,10 +79,19 @@ function staticImportGraph(entry: string): Set<string> {
   return seen;
 }
 
+const HEAVY_MODULES = [
+  "src/components/Tour/tourChapters.ts",
+  "src/components/Tour/tourTiming.ts",
+  "src/components/Tour/tourTiming.generated.ts",
+  "packages/tour/src/tourNarration.ts",
+  "packages/tour/src/tourTiming.ts",
+];
+
 function heavyModulesReachedFrom(file: string): string[] {
-  return [...staticImportGraph(join(TOUR_DIR, file))].filter((path) =>
-    /\/Tour\/(tourChapters|tourTiming|tourTiming\.generated|tourNarration)\.ts$/.test(path)
-  );
+  return [...staticImportGraph(join(TOUR_DIR, file))]
+    .map((path) => relative(REPO_ROOT, path).split(sep).join("/"))
+    .filter((path) => HEAVY_MODULES.includes(path))
+    .sort();
 }
 
 /** Every cue id a scene reads, by the two shapes scenes use to name one. */
@@ -213,7 +229,7 @@ describe("tour summary", () => {
   );
 
   it("sees the heavy modules from the lazily loaded player", () => {
-    expect(heavyModulesReachedFrom("TourDialog.tsx")).toHaveLength(4);
+    expect(heavyModulesReachedFrom("TourDialog.tsx")).toEqual([...HEAVY_MODULES].sort());
   });
 });
 

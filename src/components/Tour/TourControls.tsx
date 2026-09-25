@@ -4,8 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { TOUR_CHAPTERS } from "./tourChapters";
-import type { TourPlayer } from "./TourPlayer";
-import { useTourPlayerState, useTourTime } from "./useTourPlayer";
+import type { TourPlayer } from "@daintreehq/tour";
+import { useTourPlayerState, useTourTime } from "@daintreehq/tour/react";
 
 function formatTime(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));

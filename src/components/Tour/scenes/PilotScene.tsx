@@ -11,8 +11,9 @@ import {
   type MockAgentId,
 } from "../mockup/TourMock";
 import { pilotParkKeys } from "@/components/Pilot/pilotKeys";
+import { useCue } from "@daintreehq/tour/react";
+import { useTourKeyboard } from "../tourKeyboardContext";
 import { tourKeycaps } from "../tourKeys";
-import { useCue, useTourKeyboard } from "../useTourPlayer";
 import { MockKeys, MockSearchField, MockSpotlight } from "./sceneParts";
 
 const PALETTE = { x: 150, y: 44, width: 340 } as const;

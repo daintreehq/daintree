@@ -15,7 +15,7 @@ import {
   useMockCursor,
   type CursorStep,
 } from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
+import { useCue } from "@daintreehq/tour/react";
 import { MockEmptyGrid, MockSpotlight } from "./sceneParts";
 
 const DIALOG = { x: GRID_RECT.x + 119, y: 84, width: 230 } as const;

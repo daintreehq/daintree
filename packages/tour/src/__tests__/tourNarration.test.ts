@@ -7,7 +7,7 @@ import {
   narrationFingerprint,
   parseNarration,
   stripDirectionTags,
-} from "../tourNarration";
+} from "../tourNarration.js";
 
 describe("parseNarration", () => {
   it("strips cue markers and records the word each cue fires on", () => {
