@@ -286,6 +286,8 @@ describe("CloneRepoDialog", () => {
       parentPath: "/tmp",
       folderName: "test-repo",
       shallowClone: false,
+      // The clone runs as a named operation so a dropped link can resolve it.
+      opId: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
   });
 
