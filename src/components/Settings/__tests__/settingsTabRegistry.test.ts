@@ -20,12 +20,12 @@ const globalEntries = allEntries.filter((e) => e.scope === "global");
 const projectEntries = allEntries.filter((e) => e.scope === "project");
 
 describe("SETTINGS_REGISTRY", () => {
-  it("has 30 entries (21 global + 9 project)", () => {
-    expect(SETTINGS_REGISTRY).toHaveLength(30);
+  it("has 31 entries (22 global + 9 project)", () => {
+    expect(SETTINGS_REGISTRY).toHaveLength(31);
   });
 
-  it("has 21 global entries", () => {
-    expect(globalEntries).toHaveLength(21);
+  it("has 22 global entries", () => {
+    expect(globalEntries).toHaveLength(22);
   });
 
   it("has 9 project entries", () => {
@@ -78,9 +78,9 @@ describe("SETTINGS_REGISTRY", () => {
     expect(eager[0]!.id).toBe("general");
   });
 
-  it("has 28 lazy entries (19 global + 9 project)", () => {
+  it("has 30 lazy entries (21 global + 9 project)", () => {
     const lazy = SETTINGS_REGISTRY.filter((e) => e.importKind === "lazy");
-    expect(lazy).toHaveLength(29);
+    expect(lazy).toHaveLength(30);
   });
 
   it("all global entries belong to known global groups", () => {
@@ -214,10 +214,10 @@ describe("getSettingsNavGroups", () => {
     ]);
   });
 
-  it("all 21 global entries are distributed across global groups", () => {
+  it("all 22 global entries are distributed across global groups", () => {
     const groups = getSettingsNavGroups("global");
     const totalEntries = groups.reduce((sum, g) => sum + g.entries.length, 0);
-    expect(totalEntries).toBe(21);
+    expect(totalEntries).toBe(22);
   });
 
   it("global groups contain only global-scoped entries", () => {
@@ -265,8 +265,8 @@ describe("settingsTabIds drift guard", () => {
 });
 
 describe("SettingsTab type coverage", () => {
-  it("union of registry IDs equals 30", () => {
+  it("union of registry IDs equals 31", () => {
     const allIds = new Set(SETTINGS_REGISTRY.map((e) => e.id));
-    expect(allIds.size).toBe(30);
+    expect(allIds.size).toBe(31);
   });
 });
