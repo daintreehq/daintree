@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { DAINTREE_MOCK_KIT } from "./daintreeMockKit";
+import { MockKitContext } from "./mockup/MockKitContext";
 import { TourControls } from "./TourControls";
 import { TourPlayer, type TourAudio } from "./TourPlayer";
 import { TourCaption, TourStage } from "./TourStage";
@@ -248,17 +250,19 @@ export function TourDialog({
       data-testid="daintree-tour"
     >
       {player && (
-        <TourPlayerContext.Provider value={player}>
-          <TourKeyboardContext.Provider value={keyboard}>
-            <TourBody
-              player={player}
-              onClose={onClose}
-              onChapterReached={onChapterReached}
-              onCompleted={onCompleted}
-              onMutedChange={onMutedChange}
-            />
-          </TourKeyboardContext.Provider>
-        </TourPlayerContext.Provider>
+        <MockKitContext.Provider value={DAINTREE_MOCK_KIT}>
+          <TourPlayerContext.Provider value={player}>
+            <TourKeyboardContext.Provider value={keyboard}>
+              <TourBody
+                player={player}
+                onClose={onClose}
+                onChapterReached={onChapterReached}
+                onCompleted={onCompleted}
+                onMutedChange={onMutedChange}
+              />
+            </TourKeyboardContext.Provider>
+          </TourPlayerContext.Provider>
+        </MockKitContext.Provider>
       )}
     </AppDialog>
   );

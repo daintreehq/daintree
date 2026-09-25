@@ -1,10 +1,14 @@
-import type { ComponentType, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { MousePointer2, RadioTower } from "lucide-react";
-import { AntigravityIcon, ClaudeIcon, CodexIcon } from "@/components/icons";
-import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
-import { getAgentConfig } from "@/config/agents";
-import { cn } from "@/lib/utils";
-import type { AgentState } from "@/types";
+import { cn } from "./cn";
+import {
+  resolveMockAgent,
+  resolveMockState,
+  useMockKit,
+  type MockAgent,
+  type MockAgentId,
+  type MockStateId,
+} from "./MockKitContext";
 import {
   useSecondsSinceCue,
   useTimelineIndex,
@@ -34,25 +38,24 @@ export function typingRate(
 /** Scenes are authored on a fixed canvas and scaled to fit the stage. */
 export const TOUR_CANVAS = { width: 640, height: 360 } as const;
 
-export type MockAgentId = "claude" | "codex" | "antigravity";
+export type { MockAgent, MockAgentId, MockStateId } from "./MockKitContext";
 
-const AGENT_ICONS: Record<MockAgentId, ComponentType<{ className?: string }>> = {
-  claude: ClaudeIcon,
-  codex: CodexIcon,
-  antigravity: AntigravityIcon,
-};
-
-const AGENT_NAMES: Record<MockAgentId, string> = {
-  claude: "Claude",
-  codex: "Codex",
-  antigravity: "Antigravity",
-};
-
-export function MockAgentIcon({ agent, className }: { agent: MockAgentId; className?: string }) {
-  const Icon = AGENT_ICONS[agent];
+export function MockAgentIcon({
+  agent,
+  className,
+}: {
+  /** A known id, or a full descriptor for an agent the kit hasn't been given. */
+  agent: MockAgentId | MockAgent;
+  className?: string;
+}) {
+  const { Icon, color } = resolveMockAgent(useMockKit(), agent);
   return (
-    <span style={{ color: getAgentConfig(agent)?.color }} className="inline-flex shrink-0">
-      <Icon className={cn("size-3.5", className)} />
+    <span style={{ color }} className="inline-flex shrink-0">
+      {Icon ? (
+        <Icon className={cn("size-3.5", className)} />
+      ) : (
+        <span className={cn("size-3.5", className)} aria-hidden="true" />
+      )}
     </span>
   );
 }
@@ -68,19 +71,15 @@ export function reveal(visible: boolean, from: "below" | "above" | "left" | "non
   );
 }
 
-export function MockStateGlyph({ state }: { state: AgentState | null }) {
+export function MockStateGlyph({ state }: { state: MockStateId | null }) {
+  const kit = useMockKit();
+  const visual = state === null ? undefined : resolveMockState(kit, state);
   // Reserved box, as in the real header: the glyph never shifts the title.
-  if (!state || state === "idle") return <span className="size-3.5 shrink-0" aria-hidden="true" />;
-  const Icon = STATE_ICONS[state];
+  if (!visual?.Icon) return <span className="size-3.5 shrink-0" aria-hidden="true" />;
+  const { Icon, colorClass, iconClassName } = visual;
   return (
-    <span className={cn("inline-flex size-3.5 shrink-0 items-center", STATE_COLORS[state])}>
-      {/* The working spinner turns exactly as it does in a real pane header. */}
-      <Icon
-        className={cn(
-          "size-3.5",
-          state === "working" && "animate-spin-slow motion-reduce:animate-none"
-        )}
-      />
+    <span className={cn("inline-flex size-3.5 shrink-0 items-center", colorClass)}>
+      <Icon className={cn("size-3.5", iconClassName)} />
     </span>
   );
 }
@@ -112,10 +111,11 @@ export function MockLines({
 }
 
 interface MockPaneProps {
-  agent: MockAgentId;
+  /** A known id, or a full descriptor for an agent the kit hasn't been given. */
+  agent: MockAgentId | MockAgent;
   /** Prefix for this pane's spotlight anchors (`<anchor>-glyph`, `-armed`, `-input`). Defaults to the agent. */
   anchor?: string;
-  state?: AgentState | null;
+  state?: MockStateId | null;
   armed?: boolean;
   focused?: boolean;
   /** Text shown in the input bar; the placeholder is used when empty. */
@@ -130,7 +130,7 @@ interface MockPaneProps {
 
 export function MockPane({
   agent,
-  anchor = agent,
+  anchor,
   state = null,
   armed = false,
   focused = false,
@@ -141,7 +141,9 @@ export function MockPane({
   className,
   title,
 }: MockPaneProps) {
-  const name = AGENT_NAMES[agent];
+  const resolved = resolveMockAgent(useMockKit(), agent);
+  const name = resolved.name;
+  const anchorPrefix = anchor ?? resolved.id;
   return (
     <div
       className={cn(
@@ -154,11 +156,11 @@ export function MockPane({
       )}
     >
       <div className="flex h-6 shrink-0 items-center gap-1.5 border-b border-border-subtle bg-surface-panel-elevated px-2">
-        <MockAgentIcon agent={agent} className="size-3" />
+        <MockAgentIcon agent={resolved} className="size-3" />
         <span className="truncate text-2xs font-medium text-text-primary">{title ?? name}</span>
         <span className="flex-1" />
         <span
-          data-tour-anchor={`${anchor}-armed`}
+          data-tour-anchor={`${anchorPrefix}-armed`}
           className={cn(
             "inline-flex text-category-amber-text transition-opacity duration-150 ease-out",
             armed ? "opacity-100" : "opacity-0"
@@ -166,19 +168,19 @@ export function MockPane({
         >
           <RadioTower className="size-3" aria-hidden="true" />
         </span>
-        <span data-tour-anchor={`${anchor}-glyph`} className="inline-flex">
+        <span data-tour-anchor={`${anchorPrefix}-glyph`} className="inline-flex">
           <MockStateGlyph state={state} />
         </span>
       </div>
       <div
-        data-tour-anchor={`${anchor}-body`}
+        data-tour-anchor={`${anchorPrefix}-body`}
         className="min-h-0 flex-1 overflow-hidden px-2.5 py-2"
       >
         {children}
       </div>
       <div className="shrink-0 px-1.5 pb-1.5">
         <div
-          data-tour-anchor={`${anchor}-input`}
+          data-tour-anchor={`${anchorPrefix}-input`}
           className={cn(
             "flex h-5 items-center gap-2 rounded-md border bg-surface-input px-2 transition-[border-color] duration-150 ease-out",
             dragOver ? "border-border-strong bg-overlay-subtle" : "border-border-subtle"

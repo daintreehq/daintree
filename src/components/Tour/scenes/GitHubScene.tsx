@@ -7,10 +7,9 @@ import {
   MoreHorizontal,
 } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
-import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
-import type { CIStatus } from "@shared/types/forge";
 import { cn } from "@/lib/utils";
 import { ANCHOR, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
+import { MockCIGlyph } from "../mockup/MockCIGlyph";
 import {
   MockCursor,
   MockLines,
@@ -52,37 +51,6 @@ const CURSOR: readonly CursorStep[] = [
   { cue: "create", offset: 0.6, at: CREATE_BUTTON, click: true },
 ];
 
-/**
- * The pull request's checks as the real card draws them — the app's own
- * pending dot, then its passing check — just larger, so the change reads.
- */
-const CI_PENDING: CIStatus = {
-  state: "pending",
-  total: 3,
-  passed: 1,
-  failed: 0,
-  pending: 2,
-  rawData: null,
-};
-const CI_PASSED: CIStatus = {
-  state: "success",
-  total: 3,
-  passed: 3,
-  failed: 0,
-  pending: 0,
-  rawData: null,
-};
-
-function CIGlyph({ passed }: { passed: boolean }) {
-  const visual = getCIStatusVisual(passed ? CI_PASSED : CI_PENDING);
-  if (!visual) return null;
-  return visual.kind === "icon" ? (
-    <visual.Icon className={cn("size-3.5!", visual.colorClass)} aria-hidden="true" />
-  ) : (
-    <span className={cn("size-2.5 rounded-full", visual.colorClass)} aria-hidden="true" />
-  );
-}
-
 export function GitHubScene() {
   const pill = useCue("pill");
   const listOpen = useCue("list", 0.6);
@@ -119,7 +87,8 @@ export function GitHubScene() {
               <CornerDownRight aria-hidden="true" />
               <GitPullRequest aria-hidden="true" />
               #57
-              <CIGlyph passed={checksPassed} />
+              {/* The app's own pending dot, then its passing check, just larger so the change reads. */}
+              <MockCIGlyph status={checksPassed ? "success" : "pending"} />
             </span>
           </MockWorktreeCard>
         </>

@@ -2,6 +2,8 @@
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { TOUR_SCENES } from "../TourStage";
+import { DAINTREE_MOCK_KIT } from "../daintreeMockKit";
+import { MockKitContext } from "../mockup/MockKitContext";
 import { TOUR_CHAPTERS } from "../tourChapters";
 import { TourPlayer, type TourAudio } from "../TourPlayer";
 import type { TourKeyboard } from "../tourKeys";
@@ -43,13 +45,15 @@ function sceneAt(chapterId: string, t: number, keyboard: TourKeyboard = "mac"): 
   player.seek(t);
   const Scene = TOUR_SCENES[chapterId]!;
   const { container } = render(
-    <TourPlayerContext.Provider value={player}>
-      <TourKeyboardContext.Provider value={keyboard}>
-        <div data-tour-canvas="">
-          <Scene />
-        </div>
-      </TourKeyboardContext.Provider>
-    </TourPlayerContext.Provider>
+    <MockKitContext.Provider value={DAINTREE_MOCK_KIT}>
+      <TourPlayerContext.Provider value={player}>
+        <TourKeyboardContext.Provider value={keyboard}>
+          <div data-tour-canvas="">
+            <Scene />
+          </div>
+        </TourKeyboardContext.Provider>
+      </TourPlayerContext.Provider>
+    </MockKitContext.Provider>
   );
   return container;
 }
