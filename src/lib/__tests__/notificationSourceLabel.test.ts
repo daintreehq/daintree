@@ -18,4 +18,11 @@ describe("notification source labels", () => {
   it("has nothing to say when there is no place", () => {
     expect(formatNotificationSource(undefined, "  ")).toBeNull();
   });
+
+  it("leads with the host a notification came from when it is another machine", () => {
+    expect(formatNotificationSource(undefined, undefined, "studio-01")).toBe("studio-01");
+    expect(formatNotificationSource("Helios", "feature-x", "studio-01")).toBe(
+      "studio-01 · Helios · feature-x"
+    );
+  });
 });

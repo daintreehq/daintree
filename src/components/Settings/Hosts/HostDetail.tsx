@@ -8,6 +8,7 @@ import type { HostListEntry } from "@shared/types/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { SettingsInput } from "../SettingsInput";
+import { SettingsSwitchCard } from "../SettingsSwitchCard";
 import { AddHostDialog } from "./AddHostDialog";
 import { buildLabel, connectionLabel, platformLabel } from "./hostLabels";
 
@@ -46,6 +47,16 @@ export function HostDetail({ entry, onBack, openUpdate = false }: HostDetailProp
     remoteHostsClient.update({ hostId: descriptor.id, sshTarget: value })
   );
   const agentClis = summary?.agentClis ?? [];
+  const [notifyDraft, setNotifyDraft] = useState<boolean | null>(null);
+  const notificationsEnabled = notifyDraft ?? descriptor.notificationsEnabled;
+  const toggleNotifications = () => {
+    const next = !notificationsEnabled;
+    setNotifyDraft(next);
+    remoteHostsClient.update({ hostId: descriptor.id, notificationsEnabled: next }).then(
+      () => setNotifyDraft(null),
+      () => setNotifyDraft(null)
+    );
+  };
 
   const connect = () => {
     setConnecting(true);
@@ -140,6 +151,12 @@ export function HostDetail({ entry, onBack, openUpdate = false }: HostDetailProp
                 Check for update
               </Button>
             }
+          />
+          <SettingsSwitchCard
+            title="Notify me about this host"
+            subtitle="Agents waiting on this host notify you here even while your windows show another machine. Off by default"
+            isEnabled={notificationsEnabled}
+            onChange={toggleNotifications}
           />
         </SettingsGroup>
       </SettingsSection>

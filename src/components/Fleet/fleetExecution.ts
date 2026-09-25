@@ -14,6 +14,11 @@ import {
   FLEET_LARGE_PASTE_BYTE_THRESHOLD,
   getFleetBroadcastByteLength,
 } from "./fleetBroadcast";
+import {
+  getArmedCrossHostTargets,
+  isCrossHostTargetId,
+  submitCrossHostTarget,
+} from "./crossHostFleet";
 
 export interface FleetTargetPreview {
   terminalId: string;
@@ -86,6 +91,18 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
     }
   }
 
+  // Another host's agent has no panel here and no worktree to resolve
+  // variables against, so its preview is the draft as typed.
+  for (const target of getArmedCrossHostTargets()) {
+    previews.push({
+      terminalId: target.key,
+      title: `${target.title} · ${target.hostName}`,
+      resolvedPayload: draft,
+      unresolvedVars: [],
+      excluded: false,
+    });
+  }
+
   return previews;
 }
 
@@ -97,7 +114,30 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
  */
 export function filterEligibleIds(ids: string[]): string[] {
   const { panelsById } = usePanelStore.getState();
-  return ids.filter((id) => isTerminalFleetEligible(getNarrowPanel(panelsById, id)));
+  // Another host's agent stays eligible while it is armed; the host refuses a dead one.
+  return ids.filter(
+    (id) => isCrossHostTargetId(id) || isTerminalFleetEligible(getNarrowPanel(panelsById, id))
+  );
+}
+
+/** Local submits go through this view's terminal client; another host's go over its link. */
+function submitTarget(terminalId: string, payload: string): Promise<void> {
+  return isCrossHostTargetId(terminalId)
+    ? submitCrossHostTarget(terminalId, payload)
+    : terminalClient.submit(terminalId, payload);
+}
+
+function noteUserInput(terminalId: string, payload: string): void {
+  if (!isCrossHostTargetId(terminalId))
+    terminalInstanceService.notifyUserInput(terminalId, payload);
+}
+
+function noteSubmitted(terminalId: string): void {
+  if (!isCrossHostTargetId(terminalId)) terminalInstanceService.notifyEnterPressed(terminalId);
+}
+
+function noteRejected(terminalId: string): void {
+  if (!isCrossHostTargetId(terminalId)) terminalInstanceService.clearDirectingState(terminalId);
 }
 
 interface ResolvedSubmission {
@@ -111,8 +151,11 @@ function resolveSubmissions(
   perTargetOverrides?: Record<string, string>
 ): ResolvedSubmission[] {
   return targetIds.map((terminalId) => {
-    const ctx = buildFleetBroadcastRecipeContext(terminalId) ?? {};
-    const baseResolved = replaceRecipeVariables(draft, ctx);
+    // Another host's agent has no worktree here to resolve against: it gets the draft as typed,
+    // which is what its preview shows.
+    const baseResolved = isCrossHostTargetId(terminalId)
+      ? draft
+      : replaceRecipeVariables(draft, buildFleetBroadcastRecipeContext(terminalId) ?? {});
     return {
       terminalId,
       payload: perTargetOverrides?.[terminalId] ?? baseResolved,
@@ -222,9 +265,9 @@ export async function executeFleetBroadcast(
         // `directing`), so the user-input call is the load-bearing step
         // that makes the blue indicator render fleet-wide. Real payload
         // (not "") preserves Phase 2 escalation for large pastes — see #3565.
-        for (const r of batch) terminalInstanceService.notifyUserInput(r.terminalId, r.payload);
+        for (const r of batch) noteUserInput(r.terminalId, r.payload);
         const batchResults = await Promise.allSettled(
-          batch.map((r) => terminalClient.submit(r.terminalId, r.payload))
+          batch.map((r) => submitTarget(r.terminalId, r.payload))
         );
         for (let j = 0; j < batchResults.length; j += 1) {
           const r = batchResults[j]!;
@@ -234,12 +277,12 @@ export async function executeFleetBroadcast(
             // Submit landed — close out directing and flip to working.
             // `onEnterPressed` is a no-op if the canonical state machine has
             // already transitioned the terminal to working from PTY echo.
-            terminalInstanceService.notifyEnterPressed(terminalId);
+            noteSubmitted(terminalId);
           } else {
             // Submit rejected — the PTY never received bytes, so revert
             // the synthetic `directing` we set above rather than leaving
             // it to age out on the 1.5s debounce timer.
-            terminalInstanceService.clearDirectingState(terminalId);
+            noteRejected(terminalId);
           }
         }
 
@@ -253,18 +296,18 @@ export async function executeFleetBroadcast(
     } else {
       dispatchedCount = resolved.length;
       // Same ordering rule as the batched path — see comment above.
-      for (const r of resolved) terminalInstanceService.notifyUserInput(r.terminalId, r.payload);
+      for (const r of resolved) noteUserInput(r.terminalId, r.payload);
       const all = await Promise.allSettled(
-        resolved.map((r) => terminalClient.submit(r.terminalId, r.payload))
+        resolved.map((r) => submitTarget(r.terminalId, r.payload))
       );
       for (let j = 0; j < all.length; j += 1) {
         const r = all[j]!;
         results.push(r);
         const terminalId = resolved[j]!.terminalId;
         if (r.status === "fulfilled") {
-          terminalInstanceService.notifyEnterPressed(terminalId);
+          noteSubmitted(terminalId);
         } else {
-          terminalInstanceService.clearDirectingState(terminalId);
+          noteRejected(terminalId);
         }
       }
       const nonBatchedFailures = all.filter((r) => r.status === "rejected").length;

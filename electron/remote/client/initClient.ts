@@ -196,6 +196,9 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   router: RemoteRouterImpl;
   /** The host's open session, whether or not a local view has an endpoint on it. */
   sessionFor(hostId: HostId): LinkSession | null;
+  /** Per-host links and the host list, for session-level services such as host summaries. */
+  manager: RemoteHostManager;
+  registry: HostRegistry;
   dispose(): Promise<void>;
 } {
   const registry = new HostRegistry(store as unknown as RemoteHostsStore);
@@ -278,6 +281,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     hostForView,
     router: remoteRouter,
     sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
+    manager,
+    registry,
     async dispose() {
       unregister();
       unregisterSetup();
