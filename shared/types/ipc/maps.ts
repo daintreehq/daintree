@@ -10,7 +10,7 @@ import type {
   TerminalRecipe,
 } from "../project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
-import type { PushProgressEvent } from "./gitPush.js";
+import type { GitPushPayload, PushProgressEvent } from "./gitPush.js";
 import type { AgentSettings } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
@@ -840,7 +840,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: { hash: string; summary: string };
   };
   "git:push": {
-    args: [payload: { cwd: string; setUpstream?: boolean }];
+    args: [payload: GitPushPayload];
     /**
      * Resolves on success. Throws `GitOperationError` on failure — the renderer
      * reads `caught.gitReason` to surface a classified recovery hint.

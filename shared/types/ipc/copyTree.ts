@@ -120,6 +120,11 @@ export interface CopyTreeGeneratePayload {
    * being attributed to a surface it didn't come from.
    */
   source?: CopyTreeRunSource;
+  /**
+   * Client-minted operation id. A retry with the same id joins the first run
+   * instead of repeating it; absent means the Host mints its own.
+   */
+  opId?: string;
 }
 
 export interface CopyTreeGenerateAndCopyFilePayload {
@@ -129,6 +134,8 @@ export interface CopyTreeGenerateAndCopyFilePayload {
   name?: string;
   /** See {@link CopyTreeGeneratePayload.source}. */
   source?: CopyTreeRunSource;
+  /** See {@link CopyTreeGeneratePayload.opId}. */
+  opId?: string;
 }
 
 /** Payload for injecting CopyTree context to terminal */
@@ -142,6 +149,8 @@ export interface CopyTreeInjectPayload {
   name?: string;
   /** See {@link CopyTreeGeneratePayload.source}. */
   source?: CopyTreeRunSource;
+  /** See {@link CopyTreeGeneratePayload.opId}. */
+  opId?: string;
 }
 
 /** Payload for cancelling a specific injection operation */
@@ -351,6 +360,8 @@ export interface CopyTreeProgress {
   message: string;
   /** Optional trace ID to track event chains */
   traceId?: string;
+  /** The operation this run belongs to. */
+  opId?: string;
 }
 
 /**

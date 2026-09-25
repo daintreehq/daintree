@@ -7,6 +7,7 @@ import { SkeletonHint } from "@/components/ui/Skeleton";
 import { FolderGit2 } from "@/components/icons";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { projectClient, systemClient } from "@/clients";
+import { mintOperationId } from "@/clients/operationsClient";
 import { actionService } from "@/services/ActionService";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -359,6 +360,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
         parentPath,
         folderName: targetFolder,
         shallowClone,
+        opId: mintOperationId(),
       });
 
       setClonedPath(resultPath);
