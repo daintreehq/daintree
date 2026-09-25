@@ -154,6 +154,25 @@ describe("runCodexAppServerSession", () => {
     expect(result).toEqual({ list: { tag: "list" }, read: { tag: "read" } });
   });
 
+  it("permits the quota read and ignores a quota-updated notification (#12797)", async () => {
+    const result = await startSession(async (call) => {
+      const read = call<{ tag: string }>("account/rateLimits/read");
+      await flush();
+      child.emitLines(
+        JSON.stringify({ method: "account/rateLimits/updated", params: { rateLimits: {} } })
+      );
+      child.respondTo("account/rateLimits/read", { tag: "quota" });
+      return read;
+    });
+
+    expect(result).toEqual({ tag: "quota" });
+    expect(child.requests.map((entry) => entry.method)).toEqual([
+      "initialize",
+      "initialized",
+      "account/rateLimits/read",
+    ]);
+  });
+
   it("surfaces a JSON-RPC error as a protocol-error rejection", async () => {
     const error = await startSession(async (call) => {
       const pending = call("thread/list").then(

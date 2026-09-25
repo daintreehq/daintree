@@ -31,6 +31,7 @@ import { AgentHelpOutput } from "./AgentHelpOutput";
 import { AgentInstallSection } from "@/components/agents/AgentCard";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AgentInventorySection } from "./AgentInventorySection";
+import { AgentQuotaSection } from "./AgentQuotaSection";
 import { isAgentLaunchable, isAgentReady } from "../../../shared/utils/agentAvailability";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
 import { KbdChord } from "@/components/ui/Kbd";
@@ -459,6 +460,8 @@ export function AgentSettings({
           </Button>
         )}
       </div>
+
+      {activeAgentId && <AgentQuotaSection agentId={activeAgentId} />}
 
       {isGeneralActive && (
         <AgentInventorySection

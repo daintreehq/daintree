@@ -166,9 +166,17 @@ export interface GeneratedIpcInvokeMap {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;
   };
+  "codex:read-quota": {
+    args: [];
+    result: import("./agentQuota.js").CodexQuotaResult;
+  };
   "codex:read-subagent-transcript": {
     args: [__0: { terminalId: string; subagentId: string }];
     result: import("./agentSubagents.js").AgentSubagentTranscriptResult;
+  };
+  "codex:refresh-quota": {
+    args: [];
+    result: import("./agentQuota.js").CodexQuotaResult;
   };
   "codex:resolve-resume-latest-session": {
     args: [__0: { cwd: string }];

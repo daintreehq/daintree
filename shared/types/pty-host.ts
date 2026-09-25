@@ -709,6 +709,13 @@ export type PtyHostEvent =
       timestamp: number;
     }
   | {
+      /** A rate-limit banner appeared in this pane (#12797). Never carries its text. */
+      type: "agent-rate-limit-observed";
+      terminalId: string;
+      observedAt: number;
+      timestamp: number;
+    }
+  | {
       type: "agent-detected";
       terminalId: string;
       /** Detected agent identity (lowercase built-in agent id) if a known agent is running. */

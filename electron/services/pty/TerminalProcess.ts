@@ -41,6 +41,7 @@ import { HandbackTracker } from "./HandbackTracker.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
+import { hasRateLimitMessage } from "./WaitingReasonClassifier.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
@@ -117,6 +118,8 @@ import {
 // `agentOutputContentSnapshot` baseline makes the skipped chunks' delta
 // accumulate into it rather than being lost.
 const AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS = 50;
+/** Minimum gap between two rate-limit observations from one pane (#12797). */
+const RATE_LIMIT_OBSERVATION_COOLDOWN_MS = 60_000;
 
 export interface TerminalProcessCallbacks {
   /**
@@ -251,6 +254,15 @@ export class TerminalProcess {
   private agentOutputNoteTimer: NodeJS.Timeout | null = null;
   private readonly outputProgress = new OutputProgressTracker();
   private outputProgressTimer: NodeJS.Timeout | null = null;
+  /**
+   * Whether the last viewport read showed a rate-limit banner. An observation
+   * fires on the rising edge only, so a banner that sits on screen is one
+   * observation rather than one per repaint (#12797).
+   */
+  private rateLimitBannerVisible = false;
+  private lastRateLimitObservedAt = Number.NEGATIVE_INFINITY;
+  /** True only while the exit path settles the mirror's last frame. */
+  private samplingFinalFrame = false;
 
   private agentOutputForwarder!: AgentOutputForwarder;
 
@@ -1034,7 +1046,12 @@ export class TerminalProcess {
     // Settle a pending sample against the mirror before it goes: a preserved
     // exit drains its final output first, and that frame is the last change
     // this terminal will ever show.
-    this.flushOutputProgressSample();
+    this.samplingFinalFrame = true;
+    try {
+      this.flushOutputProgressSample();
+    } finally {
+      this.samplingFinalFrame = false;
+    }
     this.analysis.release();
   }
 
@@ -2100,6 +2117,39 @@ export class TerminalProcess {
     if (this.outputProgress.observe(lines, now)) {
       this.terminalInfo.lastOutputChangeAt = now;
     }
+    this.observeRateLimitBanner(lines, now);
+  }
+
+  /**
+   * Report that this pane showed an agent's rate-limit banner. The event is
+   * the fact and its time only — never the matched line, which is terminal
+   * content (#12797).
+   */
+  private observeRateLimitBanner(lines: readonly string[], now: number): void {
+    // A live agent only, so a shell that outlived its agent is never blamed.
+    // The one exception is the exit path's last frame: an agent that prints
+    // its limit and exits at once is already marked exited by then.
+    const t = this.terminalInfo;
+    const hasAgent =
+      this.isAgentLive ||
+      (this.samplingFinalFrame &&
+        (t.detectedAgentId !== undefined || t.launchAgentId !== undefined));
+    const visible = hasAgent && hasRateLimitMessage(lines);
+    // The cooldown absorbs a TUI repaint that blanks the banner for one frame,
+    // which would otherwise read as a fresh appearance each time.
+    if (
+      visible &&
+      !this.rateLimitBannerVisible &&
+      now - this.lastRateLimitObservedAt >= RATE_LIMIT_OBSERVATION_COOLDOWN_MS
+    ) {
+      this.lastRateLimitObservedAt = now;
+      events.emit("agent:rate-limit-observed", {
+        terminalId: this.id,
+        observedAt: now,
+        timestamp: now,
+      });
+    }
+    this.rateLimitBannerVisible = visible;
   }
 
   // In-thread counterpart of the worker's viewport digest: one trailing read

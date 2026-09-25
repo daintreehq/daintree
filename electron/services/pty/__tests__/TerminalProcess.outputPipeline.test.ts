@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
+import { events } from "../../events.js";
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
@@ -299,5 +300,72 @@ describe("TerminalProcess output progress, in-thread (#12428)", () => {
 
     await vi.advanceTimersByTimeAsync(500);
     expect(terminal.getPublicState().lastOutputChangeAt).toBe(settled);
+  });
+});
+
+describe("TerminalProcess rate-limit observation (#12797)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+  });
+
+  const unsubscribers: Array<() => void> = [];
+
+  afterEach(() => {
+    unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe());
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  function collect() {
+    const seen: Array<Record<string, unknown>> = [];
+    unsubscribers.push(
+      events.on("agent:rate-limit-observed", (payload) => seen.push({ ...payload }))
+    );
+    return seen;
+  }
+
+  it("emits once per appearance of a banner, with no terminal text", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "codex" });
+
+    ptyOnDataCallback!("■ You've hit your usage limit. Try again at 3:40 PM.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+    expect(Object.keys(seen[0] ?? {}).sort()).toEqual(["observedAt", "terminalId", "timestamp"]);
+    expect(seen[0]?.terminalId).toBe("t1");
+
+    // Repaints while the banner stays on screen are the same observation.
+    ptyOnDataCallback!("still waiting\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    // A repaint that drops it for a frame and brings it straight back is the
+    // same banner, not a second one.
+    ptyOnDataCallback!("line\r\n".repeat(20));
+    await vi.advanceTimersByTimeAsync(250);
+    ptyOnDataCallback!("■ You've hit your usage limit.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    // Gone for good, then a later limit is a new observation.
+    ptyOnDataCallback!("line\r\n".repeat(20));
+    await vi.advanceTimersByTimeAsync(60_000);
+    ptyOnDataCallback!("■ You've hit your usage limit.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(2);
+
+    terminal.dispose();
+  });
+
+  it("ignores a plain shell with no agent", async () => {
+    const seen = collect();
+    const terminal = createTerminal();
+
+    ptyOnDataCallback!("HTTP 429 Too Many Requests\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(0);
+
+    terminal.dispose();
   });
 });

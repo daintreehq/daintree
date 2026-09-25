@@ -46,12 +46,11 @@ const APPROVAL_PATTERNS: RegExp[] = [
   ),
 ];
 
-// Blocking-error markers. Precision over recall: only phrasings that rarely
-// appear in agent prose while it is working normally. Bare "error:"/"failed"
-// stay out — compiler output scrolling past a settling agent would
-// misclassify an ordinary prompt wait as an error wait.
-const ERROR_PATTERNS: RegExp[] = [
-  // Rate limiting / capacity. A limit phrase only means "blocked" when a
+// Rate-limit depletion banners. Shared with the pane rate-limit observation
+// (#12797), which must not fire on the auth, network and capacity failures
+// the wider error list below also matches.
+const RATE_LIMIT_PATTERNS: RegExp[] = [
+  // A limit phrase only means "blocked" when a
   // depletion verb sits next to it. Bare "usage limit"/"rate limit" is
   // ordinary prose: agent CLIs narrate their own quota in exactly those words
   // ("You have 2 usage limit resets available", "the API rate limits at 50
@@ -72,8 +71,26 @@ const ERROR_PATTERNS: RegExp[] = [
   // last so it reads as a literal.
   /^[\s•●■▪*>❯›⟩│┃╎╭╰─⚠-]*you(?:'ve|'re|\s+(?:have|are))?\s+(?:hit|reached|exceeded|exhausted|(?:ran|run) out of)\s+(?:(?:a|the|your|our)\s+)?(?:(?:\d+[ -]?hour|hourly|daily|weekly|monthly|rolling|session)\s+){0,2}?(?:usage|rate)[ -]?limits?\b/i,
   /^[\s•●■▪*>❯›⟩│┃╎╭╰─⚠-]*you(?:'ve|'re|\s+(?:have|are))\s+(?:being|been)\s+rate[ -]?limited\b/i,
+];
+
+// Error-line shapes of a limit that the CLI itself prints. Unanchored in the
+// error list, where only the settled tail is read; the observation scans a
+// working pane too, where "handle 429 Too Many Requests" is ordinary prose.
+const LIMIT_ERROR_PATTERNS: RegExp[] = [
   /\bquota (?:exceeded|reached)\b/i,
   /\btoo many requests\b/i,
+];
+const LIMIT_ERROR_BANNER_PATTERNS: RegExp[] = [
+  /^[\s•●■▪*>❯›⟩│┃╎╭╰─⚠-]*(?:(?:error|warning)\s*:?\s*)?(?:\(?\d{3}\)?:?\s*)?(?:quota (?:exceeded|reached)|too many requests)\b/i,
+];
+
+// Blocking-error markers. Precision over recall: only phrasings that rarely
+// appear in agent prose while it is working normally. Bare "error:"/"failed"
+// stay out — compiler output scrolling past a settling agent would
+// misclassify an ordinary prompt wait as an error wait.
+const ERROR_PATTERNS: RegExp[] = [
+  ...RATE_LIMIT_PATTERNS,
+  ...LIMIT_ERROR_PATTERNS,
   /\boverloaded\b/i,
   /\bcredit balance is too low\b/i,
   /\bout of credits\b/i,
@@ -173,4 +190,22 @@ export function classifyWaitingReason(lines: string[], isPromptDetected: boolean
 
   // Default: if we're going idle, a prompt is the safest assumption
   return "prompt";
+}
+
+/**
+ * Trailing rows scanned for a rate-limit banner. The same width as the waiting
+ * classifier: a banner sits at the tail when it lands, and one scrolled far up
+ * is old news.
+ */
+const RATE_LIMIT_SCAN_LINES = WAITING_REASON_SCAN_LINE_COUNT;
+
+/** Whether the tail of a viewport shows an agent's rate-limit banner (#12797). */
+export function hasRateLimitMessage(lines: readonly string[]): boolean {
+  const tail = lines.slice(-RATE_LIMIT_SCAN_LINES);
+  for (const line of tail) {
+    const stripped = stripAnsi(line);
+    if (RATE_LIMIT_PATTERNS.some((p) => p.test(stripped))) return true;
+    if (LIMIT_ERROR_BANNER_PATTERNS.some((p) => p.test(stripped))) return true;
+  }
+  return false;
 }
