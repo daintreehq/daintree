@@ -7,6 +7,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { SettingsSection } from "./SettingsSection";
+import { useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { ErrorRetryRow } from "./auditLogParts";
@@ -119,6 +120,9 @@ interface PrivacyDataTabProps {
 }
 
 export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabProps) {
+  // Telemetry, logs and local data are this machine's; agent session history is kept
+  // where the agents run. A remote window names the owner of each section.
+  const ownerMarker = useSettingsOwnerMarker();
   const currentSubtab = activeSubtab ?? "telemetry";
 
   const [telemetryLevel, setTelemetryLevel] = useState<TelemetryLevel>("off");
@@ -364,6 +368,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
             <SettingsSection
               id="privacy-telemetry-level"
               title="Telemetry & diagnostics"
+              badge={ownerMarker("device")}
               description="What Daintree sends off this machine. File contents, prompts and credentials are never sent. Logs and histories kept on this machine are managed under Data & storage."
             >
               {privacyLoadError}
@@ -414,6 +419,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
 
             <SettingsSection
               title="What's collected at each level"
+              badge={ownerMarker("device")}
               description="Exactly what each level sends."
             >
               <SettingsGroup>
@@ -477,6 +483,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           <>
             <SettingsSection
               title="Local data"
+              badge={ownerMarker("device")}
               description="Where Daintree keeps settings, logs, and session data on this machine."
             >
               {privacyLoadError}
@@ -554,6 +561,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
 
             <SettingsSection
               title="Session history"
+              badge={ownerMarker("host")}
               description="Daintree records resumable agent sessions so you can pick up where you left off."
             >
               {sessionRetentionLoad === "error" && (
@@ -600,7 +608,11 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
               </SettingsGroup>
             </SettingsSection>
 
-            <SettingsSection id="privacy-reset-data" title="Factory reset">
+            <SettingsSection
+              id="privacy-reset-data"
+              title="Factory reset"
+              badge={ownerMarker("device")}
+            >
               <SettingsGroup>
                 <SettingsRow
                   label="Reset all app data"

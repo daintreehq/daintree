@@ -2,10 +2,12 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ForgeUser, IssueTooltipData, PRTooltipData } from "@shared/types/forge";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 import {
   IssueTooltipContent,
   PRTooltipContent,
+  TokenMissingTooltip,
   TooltipFallback,
   describeIssueTooltip,
   describePRTooltip,
@@ -512,5 +514,28 @@ describe("TooltipFallback CI", () => {
     };
     render(<TooltipFallback type="pr" number={7} prState="open" ciStatus={ci} status="loading" />);
     expect(screen.getByText(/CI pending/)).toBeTruthy();
+  });
+});
+
+describe("TokenMissingTooltip", () => {
+  it("asks for a token in a local window", () => {
+    render(<TokenMissingTooltip type="pr" />);
+    expect(screen.getByText("Add a forge access token to see pull request details")).toBeTruthy();
+    expect(screen.getByText("Click the badge to open forge settings")).toBeTruthy();
+    cleanup();
+  });
+
+  it("says the forge isn't connected on the host in a window attached to one", () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio" };
+    setHostPlatformInfo({ hostName: "studio-01" });
+    try {
+      render(<TokenMissingTooltip type="issue" />);
+      expect(screen.getByText("Your code forge isn't connected on studio-01")).toBeTruthy();
+      expect(screen.getByText("Click the badge to connect it")).toBeTruthy();
+    } finally {
+      cleanup();
+      delete window.__DAINTREE_HOST_ID__;
+      _resetHostPlatformForTests();
+    }
   });
 });

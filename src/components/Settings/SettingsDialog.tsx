@@ -52,6 +52,7 @@ import {
   preloadAllSettingsTabs,
   scopeForTab,
   contentScopeForTab,
+  ownerForTab,
   isSettingsTab,
   type SettingsTab,
   type SettingsScope,
@@ -77,6 +78,7 @@ import {
   SettingsValidationContext,
 } from "./SettingsValidationRegistry";
 import { SettingsFlushProvider, SettingsFlushContext } from "./SettingsFlushRegistry";
+import { settingsOwnerHeaderLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 
 let rememberedTab: SettingsTab = "general";
 let rememberedProjectTab: SettingsTab = "project:general";
@@ -867,6 +869,8 @@ function SettingsDialogInner({
                   <ScopeChip scope={headerScope} projectLabel={hasProject ? projectLabel : null} />
                 </span>
               )}
+              {/* Search results have no single owner to name. */}
+              {!isSearching && <SettingsOwnerHeaderChip tab={activeTab} />}
             </AppDialog.Title>
             <AppDialog.CloseButton aria-label="Close settings" />
           </AppDialog.Header>
@@ -1785,6 +1789,33 @@ export function ScopeChip({
           <span className="truncate">{entity}</span>
         </>
       )}
+    </span>
+  );
+}
+
+/**
+ * Whose settings the page edits in a window attached to another host ("Settings on
+ * studio-01", "This Mac"). Nothing in a local window, which has one machine and nothing
+ * to tell apart, nor on a mixed page, whose sections each name their own owner.
+ * Neutral like the scope chip: it answers a question, it doesn't ask for attention.
+ * Part of the title's accessible name, after a pause.
+ */
+export function SettingsOwnerHeaderChip({ tab }: { tab: SettingsTab }) {
+  const remoteHostName = useRemoteHostName();
+  const label = settingsOwnerHeaderLabel(ownerForTab(tab), remoteHostName);
+  if (label === null) return null;
+  return (
+    <span className="flex font-normal" data-settings-owner-chip="">
+      <span className="sr-only">, </span>
+      <span
+        className={cn(
+          "inline-flex items-center max-w-[14rem] min-w-0 shrink-0",
+          "text-3xs font-medium leading-none px-1.5 py-0.5 rounded-full",
+          "bg-tint/10 text-text-secondary"
+        )}
+      >
+        <span className="truncate">{label}</span>
+      </span>
     </span>
   );
 }

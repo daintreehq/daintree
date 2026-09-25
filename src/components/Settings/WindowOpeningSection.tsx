@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
 import { SettingsSelect, type SettingsSelectOption } from "@/components/Settings/SettingsSelect";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { SettingsGroup } from "@/components/Settings/SettingsGroup";
@@ -60,6 +61,7 @@ function modeFromResult(result: ActionDispatchResult): OpenFoldersInNewWindow {
  * already known keeps its window whatever this says.
  */
 export function WindowOpeningSection() {
+  const ownerMarker = useSettingsOwnerMarker();
   const [mode, setMode] = useState<OpenFoldersInNewWindow | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadNonce, setLoadNonce] = useState(0);
@@ -125,6 +127,7 @@ export function WindowOpeningSection() {
   return (
     <SettingsSection
       title="Opening folders"
+      badge={ownerMarker("device")}
       description="Where a folder goes when you open it — switching between projects isn't affected"
       id="general-window-opening"
     >
