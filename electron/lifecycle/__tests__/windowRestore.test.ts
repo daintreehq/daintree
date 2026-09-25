@@ -1,5 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  RESTORE_HYDRATION_WAIT_MS,
+  RESTORE_WINDOW_STALL_MS,
   normalizeWindowRecords,
   resolvePrimaryRestoreProjectId,
   restoreWindowFleet,
@@ -216,12 +218,36 @@ describe("restoreWindowFleet", () => {
       expect(events.indexOf("end:a")).toBeLessThan(events.indexOf("start:c"));
     });
 
-    it("runs the background windows together rather than one after another", async () => {
-      const { h, events, peakOf } = traced([record("a"), record("b"), record("c")]);
+    it("brings the background windows up one after another, never together (#12800)", async () => {
+      const { h, events, peakOf } = traced([record("a"), record("b"), record("c"), record("d")]);
       await restoreWindowFleet(h.deps);
 
-      expect(events.indexOf("start:c")).toBeLessThan(events.indexOf("end:b"));
-      expect(peakOf()).toBe(2);
+      expect(events).toEqual([
+        "start:a",
+        "end:a",
+        "start:b",
+        "end:b",
+        "start:c",
+        "end:c",
+        "start:d",
+        "end:d",
+      ]);
+      expect(peakOf()).toBe(1);
+    });
+
+    it("holds each window until it hydrates, except the last, which nothing waits behind", async () => {
+      const h = harness({ records: [record("a"), record("b"), record("c")], hadManifest: true });
+      await restoreWindowFleet(h.deps);
+      const waits = h.createWindow.mock.calls.map(
+        (c) => (c[1] as { awaitHydrationMs?: number } | undefined)?.awaitHydrationMs
+      );
+      expect(waits).toEqual([RESTORE_HYDRATION_WAIT_MS, RESTORE_HYDRATION_WAIT_MS, undefined]);
+    });
+
+    it("never holds a lone primary window for hydration", async () => {
+      const h = harness({ records: [record("a")], hadManifest: true });
+      await restoreWindowFleet(h.deps);
+      expect(h.createWindow.mock.calls[0][1]?.awaitHydrationMs).toBeUndefined();
     });
 
     it("never overlaps anything with the primary when it is the only window", async () => {
@@ -260,6 +286,111 @@ describe("restoreWindowFleet", () => {
     await restoreWindowFleet(h.deps);
     expect(h.openedProjects()).toEqual(["a", undefined, "c"]);
     expect(h.persisted()).toBe(true);
+  });
+
+  it("re-checks ownership as each background window's turn comes, not once up front", async () => {
+    // A sequential restore gives the user time to open a saved project by hand
+    // before its window is reached; it must not get a second view.
+    const owned = new Set<string>();
+    h = harness(
+      {
+        records: [record("a"), record("b"), record("c")],
+        hadManifest: true,
+        isProjectOwned: (projectId) => owned.has(projectId),
+      },
+      async (projectId) => {
+        if (projectId === "b") owned.add("c");
+        return "ok";
+      }
+    );
+    await restoreWindowFleet(h.deps);
+    expect(h.openedProjects()).toEqual(["a", "b"]);
+    expect(h.persisted()).toBe(true);
+  });
+
+  it("stops restoring background windows once one reports the process is exiting", async () => {
+    h = harness(
+      { records: [record("a"), record("b"), record("c")], hadManifest: true },
+      async (projectId) => (projectId === "b" ? "exit-requested" : "ok")
+    );
+    await restoreWindowFleet(h.deps);
+    expect(h.openedProjects()).toEqual(["a", "b"]);
+    expect(h.persisted()).toBe(false);
+    expect(h.resumeSaves).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops before the next window once the app has started shutting down", async () => {
+    let quitting = false;
+    h = harness(
+      {
+        records: [record("a"), record("b"), record("c")],
+        hadManifest: true,
+        isShuttingDown: () => quitting,
+      },
+      async (projectId) => {
+        if (projectId === "b") quitting = true;
+        return "ok";
+      }
+    );
+    await restoreWindowFleet(h.deps);
+    expect(h.openedProjects()).toEqual(["a", "b"]);
+    expect(h.persisted()).toBe(false);
+    expect(h.resumeSaves).toHaveBeenCalledTimes(1);
+  });
+
+  describe("a background window whose setup never settles", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("lets the next window start once it has held the queue too long", async () => {
+      vi.useFakeTimers();
+      h = harness(
+        { records: [record("a"), record("b"), record("c")], hadManifest: true },
+        (projectId) =>
+          projectId === "b"
+            ? new Promise<CreateWindowResult>(() => {})
+            : Promise.resolve<CreateWindowResult>("ok")
+      );
+      const done = restoreWindowFleet(h.deps);
+
+      await vi.advanceTimersByTimeAsync(RESTORE_WINDOW_STALL_MS - 1);
+      expect(h.openedProjects()).toEqual(["a", "b"]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await done;
+      expect(h.openedProjects()).toEqual(["a", "b", "c"]);
+      expect(h.persisted()).toBe(false);
+    });
+
+    it("still reports it if it fails after the queue moved on", async () => {
+      vi.useFakeTimers();
+      let failLate: (error: Error) => void = () => {};
+      h = harness({ records: [record("a"), record("b")], hadManifest: true }, (projectId) =>
+        projectId === "b"
+          ? new Promise<CreateWindowResult>((_, reject) => {
+              failLate = reject;
+            })
+          : Promise.resolve<CreateWindowResult>("ok")
+      );
+      const done = restoreWindowFleet(h.deps);
+      await vi.advanceTimersByTimeAsync(RESTORE_WINDOW_STALL_MS);
+      await done;
+
+      failLate(new Error("host never came up"));
+      await Promise.resolve();
+      expect(h.onBackgroundWindowFailed).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("carries on past a window that is not ok", async () => {
+    h = harness(
+      { records: [record("a"), record("b"), record("c")], hadManifest: true },
+      async (projectId) => (projectId === "b" ? "not-registered" : "ok")
+    );
+    await restoreWindowFleet(h.deps);
+    expect(h.openedProjects()).toEqual(["a", "b", "c"]);
+    expect(h.persisted()).toBe(false);
   });
 
   it("opens one picker window when every saved project was deleted", async () => {

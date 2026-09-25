@@ -9,8 +9,26 @@
 
 import type { OpenWindowRecord } from "../services/persistence/windowManifest.js";
 
-/** What `createWindow` reports back. Anything but "ok" means: stop. */
+/**
+ * What `createWindow` reports back. "exit-requested" stops the restore; any
+ * other non-"ok" result marks it unclean but lets the remaining windows follow.
+ */
 export type CreateWindowResult = "ok" | "exit-requested" | "not-registered";
+
+/**
+ * How long a restoring window may hold up the next one while its renderer
+ * hydrates. Pacing, not a correctness gate: past this the next window starts
+ * anyway, so one stuck renderer cannot strand the rest of the fleet.
+ */
+export const RESTORE_HYDRATION_WAIT_MS = 30_000;
+
+/**
+ * How long one background window may hold the restore queue in total, setup
+ * included. Setup can wait on a workspace host that never reports ready, and
+ * a sequential queue must not let that strand every window behind it: past
+ * this the next window starts while the slow one finishes on its own.
+ */
+export const RESTORE_WINDOW_STALL_MS = 90_000;
 
 export interface RestoreWindowFleetDeps {
   /** Windows to restore, most-recently-focused first. Empty means one window. */
@@ -33,6 +51,11 @@ export interface RestoreWindowFleetDeps {
       revealMode?: "show" | "showInactive";
       /** Further projects this window had live, most-recently-used first (#12320). */
       backgroundProjectIds?: readonly string[];
+      /**
+       * Resolve only once the window's renderer reports it has hydrated, or
+       * this many ms pass. Set for every window another one is queued behind.
+       */
+      awaitHydrationMs?: number;
     }
   ) => Promise<CreateWindowResult>;
   suppressSaves: () => void;
@@ -44,6 +67,11 @@ export interface RestoreWindowFleetDeps {
    * project the user opens there in the meantime must not get a second window.
    */
   isProjectOwned?: (projectId: string) => boolean;
+  /**
+   * Whether the app has begun shutting down. A quit does not surface as a
+   * createWindow result, so the queue checks before starting each window.
+   */
+  isShuttingDown?: () => boolean;
 }
 
 /**
@@ -129,7 +157,7 @@ export function normalizeWindowRecords(records: readonly OpenWindowRecord[]): Op
  *     "initialized" guard synchronously at entry, before its own awaits, so a
  *     concurrent second window sails straight past the guard and races the
  *     first window's migrations and DB open. Once this await returns, global
- *     init has fully settled and the rest are safe to run together.
+ *     init has fully settled and the rest can follow.
  *  2. Saves stay suppressed until the whole fan-out settles, and the manifest
  *     is only rewritten if EVERY window came up. A half-restored fleet must not
  *     overwrite a manifest that is still correct on disk — the next launch would
@@ -150,41 +178,75 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
     // the ones the user was closest to, and the queue that consumes these is
     // global and ordered, so handing them over first is what makes "the project
     // I was in paints first, the rest fill in behind it" hold across windows.
+    const background = records.slice(1);
     const primaryResult = await deps.createWindow(primaryProjectId, {
       backgroundProjectIds: records[0]?.backgroundProjectIds,
+      ...(background.length > 0 ? { awaitHydrationMs: RESTORE_HYDRATION_WAIT_MS } : {}),
     });
     if (primaryResult !== "ok") return;
 
     let backgroundClean = true;
-    if (records.length > 1) {
-      // Checked as the fan-out starts, not when the manifest was read: a window
-      // whose project is live already is one the user has since opened.
-      const pending = records
-        .slice(1)
-        .filter((record) => record.projectId === null || !deps.isProjectOwned?.(record.projectId));
-      // Background windows reveal with showInactive(): they finish loading in
-      // an unpredictable order, and a plain show() would hand focus to
-      // whichever renderer parsed its skeleton last.
-      const results = await Promise.allSettled(
-        pending.map((record) =>
-          deps.createWindow(record.projectId ?? undefined, {
-            revealMode: "showInactive",
-            backgroundProjectIds: record.backgroundProjectIds,
-          })
-        )
-      );
-      for (const result of results) {
-        if (result.status === "rejected") {
-          deps.onBackgroundWindowFailed(result.reason);
-          backgroundClean = false;
-        } else if (result.value !== "ok") {
-          backgroundClean = false;
-        }
+    // Background windows come up one at a time, each waiting for the last to
+    // finish its services and hydrate its renderer. Starting them all at once
+    // put every window's host fork, git scan and terminal restore in the same
+    // burst, competing with the window the user is actually looking at
+    // (#12800). Every window still restores without waiting on focus; the
+    // waits are bounded, so a slow window delays the rest rather than
+    // stranding them.
+    for (const [index, record] of background.entries()) {
+      if (deps.isShuttingDown?.()) {
+        backgroundClean = false;
+        break;
       }
+      // Checked per window, not once up front: a window whose project is live
+      // already is one the user has since opened, and the longer a sequential
+      // restore runs the more likely that becomes.
+      if (record.projectId !== null && deps.isProjectOwned?.(record.projectId)) continue;
+      // Background windows reveal with showInactive(): a plain show() would
+      // pull focus away from the window the user is working in.
+      const created = deps.createWindow(record.projectId ?? undefined, {
+        revealMode: "showInactive",
+        backgroundProjectIds: record.backgroundProjectIds,
+        ...(index < background.length - 1 ? { awaitHydrationMs: RESTORE_HYDRATION_WAIT_MS } : {}),
+      });
+      let result: CreateWindowResult | "stalled";
+      try {
+        result = await settleWithin(created, RESTORE_WINDOW_STALL_MS);
+      } catch (error) {
+        deps.onBackgroundWindowFailed(error);
+        backgroundClean = false;
+        continue;
+      }
+      if (result === "stalled") {
+        // Still coming up, just not in time to hold the queue. Its eventual
+        // outcome no longer decides anything, but a failure is still reported.
+        created.catch(deps.onBackgroundWindowFailed);
+        backgroundClean = false;
+        continue;
+      }
+      if (result === "exit-requested") {
+        // The process is going away; building more windows into it would only
+        // delay the exit.
+        backgroundClean = false;
+        break;
+      }
+      if (result !== "ok") backgroundClean = false;
     }
 
     restoredCleanly = backgroundClean;
   } finally {
     deps.resumeSaves(restoredCleanly);
+  }
+}
+
+async function settleWithin<T>(promise: Promise<T>, ms: number): Promise<T | "stalled"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stalled = new Promise<"stalled">((resolve) => {
+    timer = setTimeout(() => resolve("stalled"), ms);
+  });
+  try {
+    return await Promise.race([promise, stalled]);
+  } finally {
+    clearTimeout(timer);
   }
 }

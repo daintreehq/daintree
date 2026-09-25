@@ -1043,25 +1043,36 @@ describe("restore quota", () => {
     expect(consumeRestoreQuota()).toBe(false);
   });
 
-  it("re-arming resets the quota and TTL", () => {
+  it("re-arming while a quota is live neither refills it nor extends it (#12800)", () => {
+    // Every restored window's init arms the quota; a per-window refill handed
+    // each window of a multi-window restore its own fresh budget.
     armRestoreQuota(2, 5_000);
     expect(consumeRestoreQuota()).toBe(true);
 
-    // Re-arm with longer TTL — old 5s timer should be cleared
-    armRestoreQuota(3, 10_000);
-    expect(consumeRestoreQuota()).toBe(true);
-    expect(consumeRestoreQuota()).toBe(true);
+    armRestoreQuota(50, 60_000);
     expect(consumeRestoreQuota()).toBe(true);
     expect(consumeRestoreQuota()).toBe(false);
 
-    // Advance past the original 5s TTL — quota should still be 0 (not re-expired)
-    armRestoreQuota(5, 20_000);
-    vi.advanceTimersByTime(5_000);
-    // If old timer wasn't cleared, quota would be wiped at 5s. It shouldn't be.
-    expect(consumeRestoreQuota()).toBe(true);
+    armRestoreQuota(50, 60_000);
+    expect(consumeRestoreQuota()).toBe(false);
+  });
 
-    // But advancing to 20s should expire the new TTL
-    vi.advanceTimersByTime(15_000);
+  it("keeps the first arming's TTL when re-armed while live", () => {
+    armRestoreQuota(5, 5_000);
+    armRestoreQuota(5, 60_000);
+
+    vi.advanceTimersByTime(5_000);
+    expect(consumeRestoreQuota()).toBe(false);
+  });
+
+  it("arms a fresh quota once the previous one has expired", () => {
+    armRestoreQuota(1, 5_000);
+    expect(consumeRestoreQuota()).toBe(true);
+    vi.advanceTimersByTime(5_000);
+
+    armRestoreQuota(2, 5_000);
+    expect(consumeRestoreQuota()).toBe(true);
+    expect(consumeRestoreQuota()).toBe(true);
     expect(consumeRestoreQuota()).toBe(false);
   });
 
