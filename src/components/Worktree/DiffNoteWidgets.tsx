@@ -3,8 +3,14 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { AlertTriangle, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { useDiffNotesStore } from "@/store/diffNotesStore";
-import { formatDiffNoteLines, type DiffNote, type DiffNoteAnchor } from "./diffNotes";
+import { useShallow } from "zustand/react/shallow";
+import { selectDiffNotes, useDiffNotesStore } from "@/store/diffNotesStore";
+import {
+  formatDiffNoteLines,
+  sortDiffNotes,
+  type DiffNote,
+  type DiffNoteAnchor,
+} from "./diffNotes";
 
 interface DiffNoteEditorProps {
   initialBody: string;
@@ -12,6 +18,7 @@ interface DiffNoteEditorProps {
   saveLabel: string;
   onSave: (body: string) => void;
   onCancel: () => void;
+  onChange?: (body: string) => void;
 }
 
 /**
@@ -19,7 +26,14 @@ interface DiffNoteEditorProps {
  * across project views, and every keystroke there would reserialize it — and
  * would rebuild the diff's widget map under the caret.
  */
-function DiffNoteEditor({ initialBody, label, saveLabel, onSave, onCancel }: DiffNoteEditorProps) {
+function DiffNoteEditor({
+  initialBody,
+  label,
+  saveLabel,
+  onSave,
+  onCancel,
+  onChange,
+}: DiffNoteEditorProps) {
   const [body, setBody] = useState(initialBody);
   const canSave = body.trim().length > 0;
 
@@ -45,7 +59,10 @@ function DiffNoteEditor({ initialBody, label, saveLabel, onSave, onCancel }: Dif
         rows={3}
         value={body}
         placeholder="Leave a note for the agent"
-        onChange={(event) => setBody(event.target.value)}
+        onChange={(event) => {
+          setBody(event.target.value);
+          onChange?.(event.target.value);
+        }}
         onKeyDown={handleKeyDown}
       />
       <div className="flex items-center justify-end gap-2">
@@ -78,6 +95,17 @@ function nameAnchor(anchor: DiffNoteAnchor): string {
   return anchor.kind === "file" ? "file note" : `note on ${described.toLowerCase()}`;
 }
 
+/**
+ * Unsaved composer text per file. Shift-click moves the draft's widget to a
+ * new row, which remounts the composer, so its text can't live only in the
+ * editor it had. Per project view, like the draft itself.
+ */
+const composerDrafts = new Map<string, string>();
+
+function composerDraftKey(worktreePath: string, filePath: string): string {
+  return `${worktreePath}\0${filePath}`;
+}
+
 interface DiffNoteComposerProps {
   worktreePath: string;
   filePath: string;
@@ -92,18 +120,24 @@ export const DiffNoteComposer = memo(function DiffNoteComposer({
   onDone,
 }: DiffNoteComposerProps) {
   const addNote = useDiffNotesStore((s) => s.addNote);
+  const draftKey = composerDraftKey(worktreePath, filePath);
   return (
     <div className="diff-note" data-testid="diff-note-composer">
       <div className="mb-1.5 text-xs text-text-secondary">{describeAnchor(anchor)}</div>
       <DiffNoteEditor
-        initialBody=""
+        initialBody={composerDrafts.get(draftKey) ?? ""}
         label={`New ${nameAnchor(anchor)}`}
         saveLabel="Add note"
+        onChange={(body) => composerDrafts.set(draftKey, body)}
         onSave={(body) => {
           addNote({ worktreePath, filePath, anchor, body });
+          composerDrafts.delete(draftKey);
           onDone();
         }}
-        onCancel={onDone}
+        onCancel={() => {
+          composerDrafts.delete(draftKey);
+          onDone();
+        }}
       />
     </div>
   );
@@ -199,3 +233,31 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
     </div>
   );
 });
+
+/**
+ * A file's pending notes for a body with no diff table to hang them on. Line
+ * notes can't be placed without rows, so they read as not in view.
+ */
+export function PendingFileNotes({
+  worktreePath,
+  filePath,
+}: {
+  worktreePath: string;
+  filePath: string;
+}) {
+  const notes = useDiffNotesStore(
+    useShallow((state) => selectDiffNotes(state, worktreePath, filePath))
+  );
+  if (notes.length === 0) return null;
+  return (
+    <div className="diff-note-list" data-testid="diff-pending-file-notes">
+      {sortDiffNotes(notes).map((note) => (
+        <DiffNoteCard
+          key={note.id}
+          note={note}
+          placement={note.anchor.kind === "file" ? undefined : "unplaced"}
+        />
+      ))}
+    </div>
+  );
+}

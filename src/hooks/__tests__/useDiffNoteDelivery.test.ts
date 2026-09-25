@@ -92,6 +92,28 @@ describe("deliverDiffNotes", () => {
     expect(writeMock.mock.calls[0]![1]).toContain("File: /repo/src/a.ts");
   });
 
+  it("gives an agent in a subdirectory of the worktree absolute paths", () => {
+    panelState.panelsById.agent = terminal("agent", { cwd: "/repo/src" });
+    deliverDiffNotes("agent", [seedNote()]);
+    expect(writeMock.mock.calls[0]![1]).toContain("File: /repo/src/a.ts");
+  });
+
+  it("refuses an agent pane that is restarting", () => {
+    panelState.panelsById.agent = terminal("agent", { isRestarting: true });
+    const note = seedNote();
+    expect(deliverDiffNotes("agent", [note]).ok).toBe(false);
+    expect(writeMock).not.toHaveBeenCalled();
+    expect(useDiffNotesStore.getState().notes[note.id]).toBeDefined();
+  });
+
+  it("refuses a target pane that closed after the menu opened", () => {
+    delete panelState.panelsById.agent;
+    const note = seedNote();
+    expect(deliverDiffNotes("agent", [note]).ok).toBe(false);
+    expect(writeMock).not.toHaveBeenCalled();
+    expect(useDiffNotesStore.getState().notes[note.id]).toBeDefined();
+  });
+
   it("refuses a plain shell and keeps the notes pending", () => {
     const note = seedNote();
     const result = deliverDiffNotes("shell", [note]);

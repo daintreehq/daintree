@@ -21,14 +21,17 @@ import {
 
 export type DiffNoteSendScope = "file" | "all";
 
+/** Everything a send needs, so a retry re-aims at what failed, not what's on screen now. */
 export interface DiffNoteSendRequest {
   targetId: string;
   scope: DiffNoteSendScope;
+  worktreePath: string;
+  filePath: string;
 }
 
 interface DiffNotesSendMenuProps {
   worktreePath: string;
-  /** Worktree-relative path of the file on screen. */
+  /** Worktree-relative path of the file on screen; "" when none is. */
   filePath: string;
   onResult: (request: DiffNoteSendRequest, result: DiffNoteDeliveryResult) => void;
 }
@@ -45,14 +48,13 @@ export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNote
 
   if (allNotes.length === 0) return null;
 
-  const effectiveScope: DiffNoteSendScope = fileCount === 0 ? "all" : scope;
-  const count = effectiveScope === "file" ? fileCount : allNotes.length;
+  // "All files" is only ever chosen, never fallen back to: it can reach notes
+  // the reviewer can't see from here.
+  const count = scope === "file" ? fileCount : allNotes.length;
 
   const send = (targetId: string) => {
-    onResult(
-      { targetId, scope: effectiveScope },
-      sendDiffNotes(worktreePath, filePath, targetId, effectiveScope)
-    );
+    const request: DiffNoteSendRequest = { targetId, scope, worktreePath, filePath };
+    onResult(request, sendDiffNotes(request));
   };
 
   return (
@@ -76,14 +78,10 @@ export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNote
         <DropdownMenuLabel>Notes to send</DropdownMenuLabel>
         <DropdownMenuRadioGroup
           aria-label="Notes to send"
-          value={effectiveScope}
+          value={scope}
           onValueChange={(value) => setScope(value === "all" ? "all" : "file")}
         >
-          <DropdownMenuRadioItem
-            value="file"
-            disabled={fileCount === 0}
-            onSelect={(event) => event.preventDefault()}
-          >
+          <DropdownMenuRadioItem value="file" onSelect={(event) => event.preventDefault()}>
             <span className="flex flex-1 items-center gap-2">
               This file
               <span className="ml-auto text-3xs tabular-nums text-text-secondary">{fileCount}</span>
@@ -100,9 +98,11 @@ export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNote
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
         <DropdownMenuLabel>
-          Paste {count} {count === 1 ? "note" : "notes"} into
+          {count === 0
+            ? "No notes on this file"
+            : `Paste ${count} ${count === 1 ? "note" : "notes"} into`}
         </DropdownMenuLabel>
-        <DiffNoteTargetItems onSend={send} />
+        <DiffNoteTargetItems disabled={count === 0} onSend={send} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -110,7 +110,13 @@ export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNote
 
 // Mounted only while the menu is open, so a closed pane holds no subscription
 // to the panel map.
-function DiffNoteTargetItems({ onSend }: { onSend: (targetId: string) => void }) {
+function DiffNoteTargetItems({
+  disabled,
+  onSend,
+}: {
+  disabled: boolean;
+  onSend: (targetId: string) => void;
+}) {
   const targets = useDiffNoteTargets();
   if (targets.length === 0) {
     return <DropdownMenuItem disabled>No agents running</DropdownMenuItem>;
@@ -120,7 +126,7 @@ function DiffNoteTargetItems({ onSend }: { onSend: (targetId: string) => void })
       {targets.map((target) => (
         <DropdownMenuItem
           key={target.id}
-          disabled={target.isInputLocked}
+          disabled={disabled || target.isInputLocked}
           onSelect={() => onSend(target.id)}
         >
           <span className="truncate">{target.title}</span>
@@ -131,13 +137,12 @@ function DiffNoteTargetItems({ onSend }: { onSend: (targetId: string) => void })
 }
 
 /** Resolves the scope against the store at send time, not at menu render. */
-export function sendDiffNotes(
-  worktreePath: string,
-  filePath: string,
-  targetId: string,
-  scope: DiffNoteSendScope
-): DiffNoteDeliveryResult {
-  const state = useDiffNotesStore.getState();
-  const notes = selectDiffNotes(state, worktreePath, scope === "file" ? filePath : undefined);
+export function sendDiffNotes(request: DiffNoteSendRequest): DiffNoteDeliveryResult {
+  const { targetId, scope, worktreePath, filePath } = request;
+  const notes = selectDiffNotes(
+    useDiffNotesStore.getState(),
+    worktreePath,
+    scope === "file" ? filePath : undefined
+  );
   return deliverDiffNotes(targetId, notes);
 }

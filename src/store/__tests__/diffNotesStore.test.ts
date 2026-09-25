@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
-import { selectDiffNotes, useDiffNotesStore } from "../diffNotesStore";
+import {
+  mergeDiffNotesPersistedWrite,
+  selectDiffNotes,
+  useDiffNotesStore,
+} from "../diffNotesStore";
 import type { DiffNoteAnchor } from "@/components/Worktree/diffNotes";
 
 const LINE: DiffNoteAnchor = {
@@ -76,13 +80,33 @@ describe("diffNotesStore", () => {
     expect(notes[editedAfter.id]?.body).toBe("Changed my mind");
   });
 
-  it("tracks open editors without persisting them", () => {
+  it("tracks open editors per note without persisting them", () => {
     const note = add();
-    useDiffNotesStore.getState().setEditing(note.id, true);
-    expect(useDiffNotesStore.getState().editingIds[note.id]).toBe(true);
+    const { setEditing } = useDiffNotesStore.getState();
+    setEditing(note.id, true);
+    setEditing(note.id, true);
+    setEditing(note.id, false);
+    // A second pane still has it open, so the guard holds.
+    expect(useDiffNotesStore.getState().editingIds[note.id]).toBe(1);
     const partialize = useDiffNotesStore.persist.getOptions().partialize!;
     expect(Object.keys(partialize(useDiffNotesStore.getState()) as object)).toEqual(["notes"]);
-    useDiffNotesStore.getState().setEditing(note.id, false);
+    setEditing(note.id, false);
     expect(useDiffNotesStore.getState().editingIds[note.id]).toBeUndefined();
+  });
+
+  it("doesn't let a stale view's send erase a sibling's newer revision", () => {
+    const original = add();
+    const rewritten = {
+      ...original,
+      body: "Rewritten elsewhere",
+      updatedAt: original.updatedAt + 1,
+    };
+    const other = add("src/b.ts");
+    const merged = mergeDiffNotesPersistedWrite({
+      baseline: { version: 0, state: { notes: { [original.id]: original, [other.id]: other } } },
+      incoming: { version: 0, state: { notes: {} } },
+      onDisk: { version: 0, state: { notes: { [original.id]: rewritten, [other.id]: other } } },
+    });
+    expect(merged.state.notes).toEqual({ [original.id]: rewritten });
   });
 });

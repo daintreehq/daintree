@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, usePreferencesStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
-import { isPathInside, join } from "@shared/utils/path";
+import { join, normalize } from "@shared/utils/path";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
@@ -39,6 +39,9 @@ function isAgentPasteTarget(panel: PanelInstance | undefined): panel is PtyPanel
     return false;
   }
   if (!isPtyPanel(panel) || panel.hasPty === false) return false;
+  // Mid-restart the pane keeps its agent identity but its instance is gone
+  // and the process is on its way out.
+  if (panel.isRestarting) return false;
   return deriveTerminalChrome(panel).isAgent;
 }
 
@@ -100,14 +103,12 @@ export function deliverDiffNotes(
   if (ordered.length === 0) {
     return { ok: false, message: "Finish editing your notes before sending them." };
   }
-  // Paths stay worktree-relative for an agent working in that worktree; any
-  // other agent would resolve them against its own checkout, so it gets them
-  // absolute.
-  const cwd = panel.cwd;
+  // Paths stay worktree-relative only for an agent sitting at that worktree's
+  // root. One in a subdirectory, or another checkout, would resolve them
+  // against the wrong base, so it gets them absolute.
+  const cwd = panel.cwd ? normalize(panel.cwd) : "";
   const prompt = formatDiffNotesPrompt(ordered, (note) =>
-    cwd && isPathInside(cwd, note.worktreePath)
-      ? note.filePath
-      : join(note.worktreePath, note.filePath)
+    cwd === normalize(note.worktreePath) ? note.filePath : join(note.worktreePath, note.filePath)
   );
   try {
     terminalClient.write(targetId, formatForTerminalPaste(prompt, { bracketedPasteMode: true }));

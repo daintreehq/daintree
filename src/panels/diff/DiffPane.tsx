@@ -59,6 +59,7 @@ import type { DiffViewerAnnotations } from "@/components/Worktree/DiffViewer";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
 import type { DiffNoteDeliveryResult } from "@/hooks/useDiffNoteDelivery";
 import { DiffNotesSendMenu, sendDiffNotes, type DiffNoteSendRequest } from "./DiffNotesSendMenu";
+import { PendingFileNotes } from "@/components/Worktree/DiffNoteWidgets";
 import { IconToggle } from "@/components/FileViewer/IconToggle";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
@@ -153,6 +154,14 @@ const LazyRenderedMarkdownDiff = lazy(() =>
 );
 
 const NOTE_SENT_STATUS_MS = 5000;
+
+// Content values `useDiffContent` returns in place of a patch.
+const DIFF_SENTINEL_CONTENT: ReadonlySet<string> = new Set([
+  "NO_CHANGES",
+  "BINARY_FILE",
+  "FILE_TOO_LARGE",
+  "ERROR",
+]);
 
 function describeNotesSent(result: Extract<DiffNoteDeliveryResult, { ok: true }>): string {
   const sent = `Pasted ${result.sent} ${result.sent === 1 ? "note" : "notes"} into ${result.targetTitle}`;
@@ -410,7 +419,7 @@ export function DiffPane({
   }, [noteSend]);
   useEffect(() => {
     setNoteSend(null);
-  }, [worktreePath]);
+  }, [worktreePath, filePath]);
 
   // Forces a fresh request in video, audio and PDF mode — the diff content hooks
   // don't carry those bytes, so Refresh has to re-request the protocol URL itself.
@@ -709,6 +718,13 @@ export function DiffPane({
   const showRendered =
     renderedRequested && renderedAvailability.visible && renderedAvailability.enabled;
   const layout: DiffPaneLayout = showRendered ? "rendered" : diffViewType;
+  // Whether the diff table (and so its note cards) is what the body shows. A
+  // still-loading diff counts as inline so the fallback list doesn't flash.
+  const notesRenderInline =
+    !isImageMode &&
+    !isMediaMode &&
+    !isPdfMode &&
+    (!content || (!showRendered && !DIFF_SENTINEL_CONTENT.has(content)));
 
   const handleLayoutChange = useCallback(
     (next: DiffPaneLayout) => {
@@ -1328,6 +1344,14 @@ export function DiffPane({
                 />
               ))}
 
+            {/* Line notes live in the diff table. Where there is no table —
+                an empty, binary or failed diff, rendered Markdown, a preview —
+                the file's pending notes are listed here instead, so none of
+                them is sendable without being editable. */}
+            {filePath && worktreePath && !notesRenderInline && (
+              <PendingFileNotes worktreePath={worktreePath} filePath={filePath} />
+            )}
+
             {filePath &&
               subject &&
               !isImageMode &&
@@ -1393,10 +1417,7 @@ export function DiffPane({
             variant: "dangerFilled",
             onClick: () => {
               const { request } = noteSend;
-              handleNoteSendResult(
-                request,
-                sendDiffNotes(worktreePath, filePath ?? "", request.targetId, request.scope)
-              );
+              handleNoteSendResult(request, sendDiffNotes(request));
             },
             ariaLabel: "Retry sending notes",
           }}
@@ -1405,7 +1426,7 @@ export function DiffPane({
         />
       )}
 
-      {(isWorkspace || currentEntry !== undefined || hasPendingNotes) && (
+      {(isWorkspace || currentEntry !== undefined || hasPendingNotes || noteSend !== null) && (
         <div
           data-testid="diff-pane-footer"
           className="flex items-center justify-between gap-3 px-4 py-1.5 border-t border-border-strong bg-surface-panel shrink-0"
@@ -1469,10 +1490,10 @@ export function DiffPane({
                 {describeNotesSent(noteSend.result)}
               </span>
             )}
-            {worktreePath && filePath && (
+            {worktreePath && (
               <DiffNotesSendMenu
                 worktreePath={worktreePath}
-                filePath={filePath}
+                filePath={filePath ?? ""}
                 onResult={handleNoteSendResult}
               />
             )}

@@ -6,6 +6,7 @@ import type { EventMap, HunkData } from "react-diff-view";
 import { DiffViewer, _flushLangLoadsForTests, _resetLangStateForTests } from "../DiffViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
+import { PendingFileNotes } from "../DiffNoteWidgets";
 
 const { captured } = vi.hoisted(() => ({
   captured: {} as {
@@ -159,6 +160,21 @@ describe("DiffViewer review notes", () => {
     expect(screen.getByLabelText("New note on lines 1-3")).toBeTruthy();
   });
 
+  it("keeps typed draft text when shift-click moves the composer to a new row", () => {
+    renderViewer();
+    clickGutter(0, "new");
+    fireEvent.change(screen.getByLabelText("New note on line 1"), {
+      target: { value: "Covers both" },
+    });
+    clickGutter(2, "new", true);
+    const extended = screen.getByLabelText("New note on lines 1-3");
+    expect(extended instanceof HTMLTextAreaElement && extended.value).toBe("Covers both");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    clickGutter(0, "new");
+    const fresh = screen.getByLabelText("New note on line 1");
+    expect(fresh instanceof HTMLTextAreaElement && fresh.value).toBe("");
+  });
+
   it("anchors a removed line to the old side", () => {
     renderViewer();
     clickGutter(3, "new");
@@ -207,7 +223,7 @@ describe("DiffViewer review notes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit note" }));
     const editor = screen.getByLabelText("Edit file note");
     const id = Object.keys(useDiffNotesStore.getState().notes)[0]!;
-    expect(useDiffNotesStore.getState().editingIds[id]).toBe(true);
+    expect(useDiffNotesStore.getState().editingIds[id]).toBe(1);
     fireEvent.change(editor, { target: { value: "Second" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(useDiffNotesStore.getState().notes[id]?.body).toBe("Second");
@@ -215,5 +231,30 @@ describe("DiffViewer review notes", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
     expect(useDiffNotesStore.getState().notes).toEqual({});
+  });
+
+  it("lists a file's notes where there is no diff table to hold them", () => {
+    const { addNote } = useDiffNotesStore.getState();
+    addNote({
+      worktreePath: "/repo",
+      filePath: "src/a.ts",
+      anchor: { kind: "lines", side: "new", startLine: 2, endLine: 2, contentHash: "h" },
+      body: "Still needed",
+    });
+    addNote({
+      worktreePath: "/repo",
+      filePath: "src/b.ts",
+      anchor: { kind: "file" },
+      body: "Other file",
+    });
+    render(
+      <TooltipProvider>
+        <PendingFileNotes worktreePath="/repo" filePath="src/a.ts" />
+      </TooltipProvider>
+    );
+    const list = screen.getByTestId("diff-pending-file-notes");
+    expect(list.textContent).toContain("Still needed");
+    expect(list.textContent).toContain("Not in view");
+    expect(list.textContent).not.toContain("Other file");
   });
 });

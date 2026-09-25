@@ -812,14 +812,21 @@
   white-space: normal;
 }
 
-.diff-viewer .diff-note {
+.diff-note-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.diff-note {
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
   background: var(--color-surface-panel-elevated);
 }
 
-.diff-viewer .diff-note[data-stale] {
+.diff-note[data-stale] {
   border-color: color-mix(in oklab, var(--color-status-warning) 55%, var(--color-border-default));
 }
 

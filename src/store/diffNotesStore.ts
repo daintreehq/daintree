@@ -20,10 +20,12 @@ import type { DiffNote, DiffNoteAnchor } from "@/components/Worktree/diffNotes";
 interface DiffNotesState {
   notes: Record<string, DiffNote>;
   /**
-   * Notes with an editor open in this view. Never persisted: it only exists so
-   * a send can leave a note alone while its reviewer is still rewriting it.
+   * Open editors per note in this view. Never persisted: it only exists so a
+   * send can leave a note alone while its reviewer is still rewriting it. A
+   * count, because two panes can have the same note open and closing one must
+   * not release the other.
    */
-  editingIds: Record<string, true>;
+  editingIds: Record<string, number>;
   setEditing: (id: string, editing: boolean) => void;
   addNote: (input: {
     worktreePath: string;
@@ -51,18 +53,25 @@ function notesOf(value: StorageValue<DiffNotesPersistedState> | null): Record<st
   return notes !== null && typeof notes === "object" ? notes : {};
 }
 
-function mergeDiffNotesPersistedWrite({
+export function mergeDiffNotesPersistedWrite({
   baseline,
   onDisk,
   incoming,
 }: PersistWriteMergeContext<DiffNotesPersistedState>): StorageValue<DiffNotesPersistedState> {
   if (!onDisk) return incoming;
-  return {
-    version: incoming.version,
-    state: {
-      notes: mergeRecordByWriterDelta(notesOf(baseline), notesOf(incoming), notesOf(onDisk)),
-    },
-  };
+  const baselineNotes = notesOf(baseline);
+  const incomingNotes = notesOf(incoming);
+  const onDiskNotes = notesOf(onDisk);
+  const merged = mergeRecordByWriterDelta(baselineNotes, incomingNotes, onDiskNotes);
+  // The generic merge lets a writer's deletion win outright. For a note that
+  // was sent, that would erase a rewrite a sibling view saved after this
+  // writer's baseline, so a deletion only lands on the revision it saw.
+  for (const [id, before] of Object.entries(baselineNotes)) {
+    if (id in incomingNotes) continue;
+    const current = onDiskNotes[id];
+    if (current && current.updatedAt !== before.updatedAt) merged[id] = current;
+  }
+  return { version: incoming.version, state: { notes: merged } };
 }
 
 function newNoteId(): string {
@@ -77,9 +86,9 @@ export const useDiffNotesStore = create<DiffNotesState>()(
 
       setEditing: (id, editing) =>
         set((state) => {
-          if (Boolean(state.editingIds[id]) === editing) return state;
+          const count = (state.editingIds[id] ?? 0) + (editing ? 1 : -1);
           const next = { ...state.editingIds };
-          if (editing) next[id] = true;
+          if (count > 0) next[id] = count;
           else delete next[id];
           return { editingIds: next };
         }),
