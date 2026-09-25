@@ -611,3 +611,26 @@ describe("FileChangeList — diff panel ownership", () => {
     expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("FileChangeList — scroll containment (#12828)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("makes the scroll container itself the paint boundary, stale or not", () => {
+    const changes = [file("src/a.ts"), file("test/b.ts")];
+    const { container, rerender } = render(
+      <FileChangeList changes={changes} rootPath={ROOT} className="p-2 bg-surface-inset" />
+    );
+    const el = container.querySelector<HTMLElement>(".overflow-y-auto");
+    expect(el?.classList.contains("contain-paint")).toBe(true);
+    expect(container.querySelectorAll(".contain-paint").length).toBe(1);
+
+    rerender(
+      <FileChangeList changes={changes} rootPath={ROOT} className="p-2 bg-surface-inset" isStale />
+    );
+    const stale = container.querySelector<HTMLElement>(".surface-stale");
+    expect(stale?.classList.contains("contain-paint")).toBe(true);
+    expect(stale?.classList.contains("overflow-y-auto")).toBe(true);
+  });
+});
