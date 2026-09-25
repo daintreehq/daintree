@@ -561,6 +561,7 @@ export class TerminalNotifyService {
   ): Promise<PendingNotify> {
     const replyLines = options.replyLines ?? NOTIFY_REPLY_LINES_DEFAULT;
     const { owner, notice } = await this.admit(pane, targetId, (owner) => {
+      this.dropUndelivered(owner, targetId);
       const notice = this.addNotice(owner, targetId, "send", undefined, replyLines);
       this.publish(owner);
       return { owner, notice };
@@ -606,6 +607,7 @@ export class TerminalNotifyService {
     const replyLines = options.replyLines ?? NOTIFY_REPLY_LINES_DEFAULT;
     const preparedAt = this.now();
     const { owner, notice } = await this.admit(pane, targetId, (owner) => {
+      this.dropUndelivered(owner, targetId);
       const notice = this.addNotice(owner, targetId, "keys", undefined, replyLines);
       this.publish(owner);
       return { owner, notice };
@@ -971,6 +973,17 @@ export class TerminalNotifyService {
     }
     watchers.add(owner);
     return notice;
+  }
+
+  /**
+   * A new prompt or key press to `targetId` supersedes a notice about it that
+   * fired but has not reached the pane: delivered after the new send, it reads
+   * as the answer to it. A line already in flight is left alone.
+   */
+  private dropUndelivered(owner: PaneOwner, targetId: string): void {
+    owner.fired = owner.fired.filter(
+      (entry) => entry.wakeToken !== undefined || entry.notice.terminalId !== targetId
+    );
   }
 
   private removeNotice(owner: PaneOwner, notice: Notice): void {

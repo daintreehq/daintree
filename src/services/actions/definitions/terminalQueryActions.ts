@@ -329,7 +329,7 @@ export function registerTerminalQueryActions(
           .max(256)
           .optional()
           .describe(
-            "Explicit terminal IDs to query (1-256). When set, `worktreeId`/`location` filters are ignored. Unknown IDs return per-entry `error` rather than aborting the call."
+            "Terminals to query (1-256); overrides `worktreeId` and `location`. An unknown id gets an `error` entry, not a failed call."
           ),
         worktreeId: z
           .string()

@@ -5518,7 +5518,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Press named keys in a terminal to answer a CLI's own dialog (trust, permission, a list). A send can't: it types text then Enter, taking whatever is highlighted.",
+    "description": "Answer a CLI's own dialog in a terminal (trust, permission, a list) by option label or named keys. A send can't: it types text then Enter, taking whatever is highlighted.",
     "examples": undefined,
     "id": "terminal.sendKeys",
     "keywords": [
@@ -5539,7 +5539,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Press named keys in a terminal this connection created or was handed, to answer a CLI's own dialog (trust, permission, a list). Read the screen before and after.",
+    "description": "Answer a CLI's own dialog (trust, permission, a list) by option label or named keys, in a terminal this connection created or was handed.",
     "examples": undefined,
     "id": "terminal.sendKeysOwned",
     "keywords": [

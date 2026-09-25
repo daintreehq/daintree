@@ -561,6 +561,32 @@ describe("TerminalNotifyService", () => {
     });
   });
 
+  describe("superseded notices", () => {
+    it("drops a fired, undelivered notice when the pane prompts that terminal again", async () => {
+      const h = setup();
+      h.client.screens.set("t-a", "Fact: honey never spoils.");
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      // The pane is busy, so the fired notice waits.
+      h.client.terminals.set(OWN, working());
+      h.settle("t-a");
+      await flushNotice();
+      expect(h.client.submitted).toEqual([]);
+
+      const pending = await h.service.prepareSend(PANE, "t-a");
+      pending.complete({ submissionToken: "tok-ballot" });
+      await vi.advanceTimersByTimeAsync(100);
+      h.client.screens.set("t-a", "Vote: B");
+      h.client.terminals.set(OWN, atPrompt(Date.now()));
+      h.stateChange({ terminalId: OWN, state: "waiting", previousState: "working" });
+      h.settle("t-a");
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      const delivered = h.client.submitted.map((s) => s.text).join("\n");
+      expect(delivered).toContain("Vote: B");
+      expect(delivered).not.toContain("honey");
+    });
+  });
+
   describe("notify on keys", () => {
     it("reports the turn the keys unblocked, counted from when they were asked for", async () => {
       const h = setup();

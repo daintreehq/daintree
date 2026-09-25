@@ -1390,7 +1390,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       properties: {
         terminalIds: {
           description:
-            "Explicit terminal IDs to query (1-256). When set, `worktreeId`/`location` filters are ignored. Unknown IDs return per-entry `error` rather than aborting the call.",
+            "Terminals to query (1-256); overrides `worktreeId` and `location`. An unknown id gets an `error` entry, not a failed call.",
           minItems: 1,
           maxItems: 256,
           type: "array",

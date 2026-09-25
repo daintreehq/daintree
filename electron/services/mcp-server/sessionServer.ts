@@ -367,7 +367,7 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     executor: "renderer",
     delegateTo: "terminal.sendKeys",
     idArg: "terminalId",
-    forwardArgs: ["keys"],
+    forwardArgs: ["choose", "keys"],
     releasesOwnership: false,
     acceptsAdoption: true,
   },

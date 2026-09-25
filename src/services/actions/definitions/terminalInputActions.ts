@@ -11,6 +11,7 @@ import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isPtyPanel } from "@shared/types/panel";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 import { tailCapturedOutput } from "@shared/utils/artifactParser";
+import { planChoice } from "@shared/utils/terminalChoice";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
@@ -74,23 +75,32 @@ function keySequence(key: string): string {
 }
 
 const SEND_KEYS_DESCRIPTION =
-  "Press named keys in a terminal to answer a CLI's own dialog (trust, permission, a list). A send can't: it types text then Enter, taking whatever is highlighted.";
+  "Answer a CLI's own dialog in a terminal (trust, permission, a list) by option label or named keys. A send can't: it types text then Enter, taking whatever is highlighted.";
 
 const SendKeysArgsSchema = z.object({
   terminalId: z.string().min(1).describe("The terminal to press keys in."),
+  choose: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      "An option's label as shown; Daintree moves to it and presses Enter. Prefer it to `keys`."
+    ),
   keys: z
     .array(z.string().regex(/^(Up|Down|Left|Right|Enter|Escape|Tab|Space|Backspace|[a-z0-9])$/))
     .min(1)
     .max(16)
+    .optional()
     .describe(
-      'Up to 16: Up, Down, Left, Right, Enter, Escape, Tab, Space, Backspace, or one lowercase letter or digit. Second option of a list: ["Down", "Enter"].'
+      "Or up to 16 of: Up, Down, Left, Right, Enter, Escape, Tab, Space, Backspace, a-z, 0-9."
     ),
   // Acted on in main, like the send's: after answering a dialog, be told when
   // the agent finishes the turn it unblocked.
   notify: z
     .boolean()
     .optional()
-    .describe("As on a send: be told, with its reply, when the turn these keys unblock ends."),
+    .describe("As on a send: hear, with its reply, when the turn these keys unblock ends."),
   replyLines: NotifyReplyLinesSchema,
 });
 
@@ -362,7 +372,7 @@ export function registerTerminalInputActions(
     argsSchema: SendKeysArgsSchema,
     resultSchema: SendKeysResultSchema,
     run: async (args: z.infer<typeof SendKeysArgsSchema>) => {
-      const { terminalId, keys } = args;
+      const { terminalId, choose } = args;
       const state = usePanelStore.getState();
       const panel = Object.hasOwn(state.panelsById, terminalId)
         ? state.panelsById[terminalId]
@@ -372,6 +382,19 @@ export function registerTerminalInputActions(
       }
       if (panel.isInputLocked || terminalInstanceService.get(terminalId)?.isInputLocked) {
         throw new UnactionableTargetError(`Terminal ${terminalId} has its input locked.`);
+      }
+      let keys = args.keys;
+      if (choose !== undefined) {
+        const snapshot = await window.electron.terminal.getSerializedState(terminalId);
+        const plan = planChoice(
+          snapshot === null ? "" : tailCapturedOutput(snapshot.data, 40, true).content,
+          choose
+        );
+        if (!plan.ok) throw new UnactionableTargetError(`${plan.reason} Nothing was pressed.`);
+        keys = plan.keys;
+      }
+      if (keys === undefined) {
+        throw new UnactionableTargetError("Pass `choose` or `keys`. Nothing was pressed.");
       }
       // One write per key, spaced out: a TUI reading a burst as one chunk can
       // take an arrow and an Enter as a single unknown sequence.
@@ -399,7 +422,7 @@ export function registerTerminalInputActions(
     id: "terminal.sendKeysOwned",
     title: "Press keys in owned terminal",
     description:
-      "Press named keys in a terminal this connection created or was handed, to answer a CLI's own dialog (trust, permission, a list). Read the screen before and after.",
+      "Answer a CLI's own dialog (trust, permission, a list) by option label or named keys, in a terminal this connection created or was handed.",
     category: "terminal",
     kind: "command",
     danger: "safe",
