@@ -829,7 +829,7 @@ export default tseslint.config(
           patterns: [
             {
               regex:
-                "^(?!(?:react|lucide-react|@daintreehq/tour(?:/(?:react|kit|mock-app))?)$|\\./)",
+                "^(?!(?:react|lucide-react|@daintreehq/tour(?:/(?:react|kit|mock-app))?)$|\\./(?!\\.))",
               message:
                 "Tour scenes may import only React, lucide-react and @daintreehq/tour's public entries. Hand host data to the kit through MockKitContext or TourShortcutsContext instead. See #12769.",
             },

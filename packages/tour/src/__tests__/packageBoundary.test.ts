@@ -14,8 +14,10 @@ const UI_ENTRIES = ["react.ts", "kit.ts", "mock-app.ts"];
 
 function importsOf(file: string): string[] {
   const source = readFileSync(join(SRC, file), "utf8");
-  // `from "x"`, a bare `import "x"`, and `import("x")` — every way a module can load another.
-  const specifiers = /\sfrom\s+"([^"]+)"|^\s*import\s+"([^"]+)"|\bimport\(\s*"([^"]+)"\s*\)/gm;
+  // `from "x"`, a bare `import "x"`, and `import("x")` — every way a module can
+  // load another, in either quote.
+  const specifiers =
+    /\sfrom\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/gm;
   return [...source.matchAll(specifiers)].map((match) => (match[1] ?? match[2] ?? match[3])!);
 }
 

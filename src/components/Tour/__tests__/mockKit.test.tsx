@@ -5,9 +5,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { STATE_COLORS, STATE_PRIORITY } from "@/components/Worktree/terminalStateConfig";
 import { getAgentConfig } from "@/config/agents";
 import { DAINTREE_MOCK_KIT } from "../daintreeMockKit";
+import { useTourShortcuts } from "@daintreehq/tour/kit";
 import {
+  EMPTY_MOCK_KIT,
+  MockAgentGlyph,
   MockAgentIcon,
   MockApp,
+  MockAppMark,
   MockCIGlyph,
   MockKitContext,
   MockPane,
@@ -192,5 +196,45 @@ describe("Daintree's mock kit", () => {
     const glyph = success.querySelector("svg");
     expect(glyph?.getAttribute("class")).toContain("size-3.5!");
     expect(glyph?.getAttribute("class")).toContain("text-status-success");
+  });
+});
+
+describe("mockup kit glyphs and defaults", () => {
+  it("draws an agent's bare glyph and the app's mark from the kit", () => {
+    const canvas = withKit(
+      PLUGIN_KIT,
+      <>
+        <MockAgentGlyph agent="robot" className="size-2" />
+        <MockAppMark className="size-5" />
+      </>
+    );
+    expect(canvas.querySelector('[data-glyph="robot"]')?.getAttribute("class")).toBe("size-2");
+    expect(canvas.querySelector('[data-glyph="mark"]')?.getAttribute("class")).toBe("size-5");
+  });
+
+  it("draws nothing for a glyph the kit doesn't have", () => {
+    const canvas = withKit(
+      EMPTY_MOCK_KIT,
+      <>
+        <MockAgentGlyph agent="robot" />
+        <MockAppMark />
+      </>
+    );
+    expect(canvas.innerHTML).toBe("");
+  });
+
+  it("names shortcuts as given when no host supplies them", () => {
+    function Probe() {
+      const shortcuts = useTourShortcuts();
+      return (
+        <span data-keyboard={shortcuts.keyboard} data-caps={shortcuts.keycaps("Ctrl+K").join(",")}>
+          {shortcuts.hint("Ctrl+K")}
+        </span>
+      );
+    }
+    const probe = render(<Probe />).container.querySelector("span")!;
+    expect(probe.dataset.keyboard).toBe("pc");
+    expect(probe.dataset.caps).toBe("Ctrl,K");
+    expect(probe.textContent).toBe("Ctrl+K");
   });
 });
