@@ -1,5 +1,6 @@
 import { CHANNELS } from "../ipc/channels.js";
 import { typedBroadcast } from "../ipc/utils.js";
+import type { ClientEndpoint } from "../ipc/endpoint.js";
 import { events } from "./events.js";
 import { classifyRun } from "./projectAgentCounts.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
@@ -135,6 +136,21 @@ export class FleetSnapshotService {
       webContents.send(CHANNELS.FLEET_SNAPSHOT_UPDATED, this.lastBroadcast);
     } catch {
       // Silently ignore send failures during window initialization/disposal.
+    }
+  }
+
+  /** {@link pushSnapshotTo} for a view attached over a link. */
+  pushSnapshotToEndpoint(endpoint: ClientEndpoint): void {
+    if (endpoint.kind !== "remote-view" || endpoint.isClosed()) return;
+    if (this.lastBroadcast === null) return;
+    try {
+      endpoint.send({
+        type: "event",
+        channel: CHANNELS.FLEET_SNAPSHOT_UPDATED,
+        args: [this.lastBroadcast],
+      });
+    } catch {
+      // Silently ignore send failures on a closing link.
     }
   }
 

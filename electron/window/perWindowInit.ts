@@ -18,6 +18,7 @@ import { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
 import { PortalManager } from "../services/PortalManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import { createApplicationMenu } from "../menu.js";
 import { onPluginToursChanged } from "../services/plugin/PluginTourRegistry.js";
 import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
@@ -43,6 +44,23 @@ import {
   setAgentUpdateHandler,
   getWorkspaceClientRef,
 } from "./serviceRefs.js";
+
+/**
+ * Deliver a host event on the `events:push` bus to every view attached over a
+ * link. This machine's windows are reached by the callers' own loops, which
+ * stay as they are; a remote view has no window here to loop over.
+ */
+function pushHostEventToRemoteViews(name: string, payload: unknown): void {
+  const registry = getEndpointRegistry();
+  if (!registry.hasRemote()) return;
+  for (const endpoint of registry.getRemote()) {
+    try {
+      endpoint.send({ type: "event", channel: CHANNELS.EVENTS_PUSH, args: [{ name, payload }] });
+    } catch {
+      // A closing link must not break delivery to the remaining endpoints.
+    }
+  }
+}
 
 /**
  * Run the per-window initialization steps that happen on every
@@ -341,6 +359,12 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
       signal: details.signal,
       timestamp: details.timestamp,
     };
+    pushHostEventToRemoteViews("terminal:backend-recovering", {
+      crashType: details.crashType,
+      code: details.code,
+      signal: details.signal,
+      timestamp: details.timestamp,
+    });
     if (windowRegistry) {
       for (const wCtx of windowRegistry.all()) {
         const w = wCtx.browserWindow;
@@ -374,6 +398,7 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
       timestamp: Date.now(),
     };
     lastCrashDetails = null;
+    pushHostEventToRemoteViews("terminal:backend-crashed", payload);
     if (windowRegistry) {
       for (const wCtx of windowRegistry.all()) {
         const w = wCtx.browserWindow;
@@ -476,6 +501,7 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
   // Sent on every change, the release included, to each window's active view;
   // a cached view pulls the snapshot when it's revealed.
   ptyClient.on("host-memory-pause-changed", (snapshot: HostMemoryPauseSnapshot) => {
+    pushHostEventToRemoteViews("terminal:host-memory-pause", snapshot);
     if (!windowRegistry) return;
     for (const wCtx of windowRegistry.all()) {
       const w = wCtx.browserWindow;
@@ -545,6 +571,7 @@ export function wireWatchdogDisabledBroadcast(
   windowRegistry: WindowRegistry | undefined
 ): void {
   client.onDisabled((payload) => {
+    pushHostEventToRemoteViews("watchdog:disabled", payload);
     if (!windowRegistry) return;
     for (const wCtx of windowRegistry.all()) {
       const w = wCtx.browserWindow;

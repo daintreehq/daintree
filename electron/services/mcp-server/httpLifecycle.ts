@@ -8,6 +8,7 @@ import { webContents as webContentsModule } from "electron";
 import type { WindowRegistry } from "../../window/WindowRegistry.js";
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { summarizeMcpArgs, summarizeMcpResult } from "../../../shared/utils/mcpArgsSummary.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
@@ -82,6 +83,39 @@ import {
   MCP_HANDSHAKE_REJECTED_CODE,
   minimumPermittingTier,
 } from "./shared.js";
+
+/**
+ * Push one event to the view pinned to an MCP session. A positive id is a local
+ * WebContents; a negative one is the handle of a view attached over a link,
+ * which is reached through its endpoint. Returns false when no live view holds
+ * the pin, so a caller scanning several sessions can move on to the next. The
+ * payload is built only once a live target is found.
+ */
+export function sendToPinnedView(
+  id: number,
+  channel: string,
+  buildPayload: () => unknown,
+  label: string
+): boolean {
+  if (id < 0) {
+    const endpoint = getEndpointRegistry().getByHandle(id);
+    if (!endpoint || endpoint.kind !== "remote-view" || endpoint.isClosed()) return false;
+    try {
+      endpoint.send({ type: "event", channel, args: [buildPayload()] });
+    } catch (err) {
+      console.error(`[MCP] ${label} send failed:`, err);
+    }
+    return true;
+  }
+  const wc = webContentsModule.fromId(id);
+  if (!wc || wc.isDestroyed()) return false;
+  try {
+    wc.send(channel, buildPayload());
+  } catch (err) {
+    console.error(`[MCP] ${label} send failed:`, err);
+  }
+  return true;
+}
 
 export interface HttpLifecycleDeps {
   sessionStore: SessionStore;
@@ -807,20 +841,20 @@ export class HttpLifecycle {
       if (helpId !== payload.helpSessionId) continue;
       const pinnedId = this.deps.sessionStore.sessionWebContentsMap.get(transportSessionId);
       if (pinnedId === undefined) continue;
-      const wc = webContentsModule.fromId(pinnedId);
-      // A transport session whose WebContents was LRU-evicted/destroyed is
-      // skipped, not treated as the answer — a reconnect or concurrent
-      // transport for the same help session may still hold a live pin.
-      if (!wc || wc.isDestroyed()) continue;
-      try {
-        wc.send(CHANNELS.MCP_TURN_OUTCOME_ALERT, {
+      // A transport session whose view was LRU-evicted/destroyed is skipped,
+      // not treated as the answer — a reconnect or concurrent transport for
+      // the same help session may still hold a live pin.
+      const sent = sendToPinnedView(
+        pinnedId,
+        CHANNELS.MCP_TURN_OUTCOME_ALERT,
+        () => ({
           helpSessionId: payload.helpSessionId,
           outcome: payload.outcome,
           ...(payload.turnId !== undefined ? { turnId: payload.turnId } : {}),
-        });
-      } catch (err) {
-        console.error("[MCP] turn-outcome-alert send failed:", err);
-      }
+        }),
+        "turn-outcome-alert"
+      );
+      if (!sent) continue;
       return;
     }
   }
@@ -1993,18 +2027,17 @@ export class HttpLifecycle {
         if (!isRendererOwned(payload.sessionId)) return;
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
-        const wc = webContentsModule.fromId(id);
-        if (!wc || wc.isDestroyed()) return;
-        try {
-          wc.send(CHANNELS.MCP_TIER_NOT_PERMITTED, {
+        sendToPinnedView(
+          id,
+          CHANNELS.MCP_TIER_NOT_PERMITTED,
+          () => ({
             sessionId: payload.sessionId,
             toolId: payload.toolId,
             tier: payload.tier,
             targetTier: payload.targetTier,
-          });
-        } catch (err) {
-          console.error("[MCP] tier-not-permitted send failed:", err);
-        }
+          }),
+          "tier-not-permitted"
+        );
       };
 
     const recordDenial: import("./sessionServer.js").SessionServerDeps["recordDenial"] = (
@@ -2027,16 +2060,15 @@ export class HttpLifecycle {
           payload.pinnedWebContentsId ??
           this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
-        const wc = webContentsModule.fromId(id);
-        if (!wc || wc.isDestroyed()) return;
-        try {
-          wc.send(CHANNELS.MCP_SESSION_REVOKED, {
+        sendToPinnedView(
+          id,
+          CHANNELS.MCP_SESSION_REVOKED,
+          () => ({
             sessionId: payload.sessionId,
             denialKind: payload.denialKind,
-          });
-        } catch (err) {
-          console.error("[MCP] session-revoked send failed:", err);
-        }
+          }),
+          "session-revoked"
+        );
       };
 
     const notifyToolCallStarted: import("./sessionServer.js").SessionServerDeps["notifyToolCallStarted"] =
@@ -2048,26 +2080,25 @@ export class HttpLifecycle {
         if (!isRendererOwned(payload.sessionId)) return;
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
-        const wc = webContentsModule.fromId(id);
-        if (!wc || wc.isDestroyed()) return;
         // Redact args with the same pipeline the audit record uses so the strip
         // never shows raw bearer tokens or absolute paths (#9759). The turn id
         // is the snapshot the dispatch took at call-start (#10067) — not a fresh
         // read here, which could disagree with the settled/audit value if the
         // FSM transitioned mid-call.
         const turnId = payload.capturedTurnId;
-        try {
-          wc.send(CHANNELS.MCP_TOOL_CALL_STARTED, {
+        sendToPinnedView(
+          id,
+          CHANNELS.MCP_TOOL_CALL_STARTED,
+          () => ({
             sessionId: payload.sessionId,
             toolId: payload.toolId,
             argsSummary: summarizeMcpArgs(payload.args, (s) => scrubSecrets(sanitizePath(s))),
             startedAt: payload.startedAt,
             danger: payload.danger,
             ...(turnId !== null ? { turnId } : {}),
-          });
-        } catch (err) {
-          console.error("[MCP] tool-call-started send failed:", err);
-        }
+          }),
+          "tool-call-started"
+        );
       };
 
     const notifyToolCallSettled: import("./sessionServer.js").SessionServerDeps["notifyToolCallSettled"] =
@@ -2075,16 +2106,16 @@ export class HttpLifecycle {
         if (!isRendererOwned(payload.sessionId)) return;
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
-        const wc = webContentsModule.fromId(id);
-        if (!wc || wc.isDestroyed()) return;
         // Derive result/errorCode/severity from the same classifier the audit
         // writer uses, so the strip's glyph and red-tint match the audit log.
         const { result, errorCode } = classifyMcpDispatchResult(payload.outcome);
         // Same snapshot the started event carried (#10067) — guarantees the
         // strip's in-flight row and its settled row resolve to one turn group.
         const turnId = payload.capturedTurnId;
-        try {
-          wc.send(CHANNELS.MCP_TOOL_CALL_SETTLED, {
+        sendToPinnedView(
+          id,
+          CHANNELS.MCP_TOOL_CALL_SETTLED,
+          () => ({
             sessionId: payload.sessionId,
             toolId: payload.toolId,
             durationMs: Math.max(0, Math.round(payload.durationMs)),
@@ -2092,10 +2123,9 @@ export class HttpLifecycle {
             ...(errorCode !== undefined ? { errorCode } : {}),
             severity: computeMcpAuditSeverity(result, errorCode),
             ...(turnId !== null ? { turnId } : {}),
-          });
-        } catch (err) {
-          console.error("[MCP] tool-call-settled send failed:", err);
-        }
+          }),
+          "tool-call-settled"
+        );
       };
 
     const notifyDisplayImage: import("./sessionServer.js").SessionServerDeps["notifyDisplayImage"] =
@@ -2108,10 +2138,10 @@ export class HttpLifecycle {
         if (!isRendererOwned(payload.sessionId)) return;
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
-        const wc = webContentsModule.fromId(id);
-        if (!wc || wc.isDestroyed()) return;
-        try {
-          wc.send(CHANNELS.MCP_HELP_DISPLAY_IMAGE, {
+        sendToPinnedView(
+          id,
+          CHANNELS.MCP_HELP_DISPLAY_IMAGE,
+          () => ({
             sessionId: payload.sessionId,
             imageId: payload.imageId,
             figureNumber: payload.figureNumber,
@@ -2119,10 +2149,9 @@ export class HttpLifecycle {
             url: payload.url,
             ...(payload.caption !== undefined ? { caption: payload.caption } : {}),
             ...(payload.altText !== undefined ? { altText: payload.altText } : {}),
-          });
-        } catch (err) {
-          console.error("[MCP] help-display-image send failed:", err);
-        }
+          }),
+          "help-display-image"
+        );
       };
 
     return {

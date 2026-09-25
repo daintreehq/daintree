@@ -3,6 +3,7 @@ import type { RunHistoryRecord } from "../../../shared/types/ipc/runHistory.js";
 import { RUN_HISTORY_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/runHistory.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
+import type { ClientEndpoint } from "../../ipc/endpoint.js";
 import { auditRingStore } from "../persistence/auditRingStore.js";
 import { RunHistoryLog } from "./runHistoryLog.js";
 
@@ -52,5 +53,19 @@ export function pushRunHistorySnapshotTo(webContents: Electron.WebContents): voi
     });
   } catch {
     // Silently ignore send failures during window initialization/disposal.
+  }
+}
+
+/** {@link pushRunHistorySnapshotTo} for a view attached over a link. */
+export function pushRunHistorySnapshotToEndpoint(endpoint: ClientEndpoint): void {
+  if (endpoint.kind !== "remote-view" || endpoint.isClosed()) return;
+  try {
+    endpoint.send({
+      type: "event",
+      channel: CHANNELS.EVENTS_PUSH,
+      args: [{ name: "run-history:update", payload: runHistoryLog.getRecords() }],
+    });
+  } catch {
+    // Silently ignore send failures on a closing link.
   }
 }

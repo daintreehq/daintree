@@ -1,6 +1,5 @@
 // eager-import-allow: reads MCP server settings via store.get synchronously during service init
 import { randomUUID } from "node:crypto";
-import { webContents as webContentsModule } from "electron";
 import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
@@ -43,7 +42,7 @@ import { TerminalWatchService, paneWatchKey } from "./mcp-server/terminalWatch.j
 import type { PaneWatchState } from "../../shared/types/terminalWatch.js";
 import { broadcastToProjectRenderers } from "../ipc/utils.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
-import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
+import { HttpLifecycle, sendToPinnedView } from "./mcp-server/httpLifecycle.js";
 import { AbusePolicy } from "./mcp-server/abusePolicy.js";
 import { WorkspaceViewLeaseRegistry } from "./mcp-server/workspaceViewLease.js";
 import { createPluginMcpRoute } from "./pluginAgentMcp/pluginMcpRoute.js";
@@ -1069,13 +1068,7 @@ export class McpServerService {
     if (!this.sessionStore.isRendererOwnedOrigin(sessionId)) return;
     const id = this.sessionStore.sessionWebContentsMap.get(sessionId);
     if (id === undefined) return;
-    const wc = webContentsModule.fromId(id);
-    if (!wc || wc.isDestroyed()) return;
-    try {
-      wc.send(CHANNELS.MCP_GRANT_LIFECYCLE, payload);
-    } catch (err) {
-      console.error("[MCP] grant lifecycle send failed:", err);
-    }
+    sendToPinnedView(id, CHANNELS.MCP_GRANT_LIFECYCLE, () => payload, "grant lifecycle");
   }
 
   // Delegates for test access — tests call .bind(service) on these.
