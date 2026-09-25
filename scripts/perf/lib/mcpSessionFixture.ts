@@ -827,13 +827,10 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.readLastMessageOwned",
   "worktree.deleteOwned",
   "help.displayImage",
-  // Terminal watches (#12491) answer only a caller with a pane of its own,
-  // which no perf session has. Their admit/refuse grading lives in
+  // Terminal notices answer only a caller with a pane of its own, which no
+  // perf session has. Their admit/refuse grading lives in
   // `sessionServer.test.ts` rather than PERF-283.
-  "terminal.registerWatch",
-  "terminal.listWatches",
-  "terminal.getWatchEvents",
-  "terminal.cancelWatch",
+  "terminal.notifyWhenIdle",
 ]);
 
 /** The workspace a bound session is pinned to in these scenarios. */

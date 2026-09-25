@@ -163,7 +163,7 @@ import type {
 } from "../shared/types/ipc.js";
 import type { SitePreviewPushPayload } from "../shared/types/ipc/sitePreview.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
-import type { PaneWatchState } from "../shared/types/terminalWatch.js";
+import type { PaneNotifyState } from "../shared/types/terminalNotify.js";
 import type {
   TerminalStatusPayload,
   TerminalSubmitStatusPayload,
@@ -1383,8 +1383,8 @@ function buildElectronApi(): ElectronAPI {
       onSubmitStatus: (callback: (data: TerminalSubmitStatusPayload) => void): (() => void) =>
         _eventBusOn("terminal:submit-status", callback),
 
-      onWatchState: (callback: (data: PaneWatchState) => void): (() => void) =>
-        _eventBusOn("terminal:watch-state", callback),
+      onNotifyState: (callback: (data: PaneNotifyState) => void): (() => void) =>
+        _eventBusOn("terminal:notify-state", callback),
 
       onReliabilityMetric: (
         callback: (data: TerminalReliabilityMetricPayload) => void

@@ -39,7 +39,7 @@ const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
     value: "full",
     label: "Full",
     description:
-      "Core + recipes, workflows, project checks, forge and git reads, context tools, diagnostics and terminal watches. Deletes and teardowns ask you first.",
+      "Core + recipes, workflows, project checks, forge and git reads, context tools and diagnostics. Deletes and teardowns ask you first.",
   },
 ];
 

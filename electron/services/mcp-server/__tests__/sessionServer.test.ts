@@ -66,7 +66,10 @@ import {
 } from "../rendererBridge.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
-import { MCP_EXTERNAL_TIER_TOOLS } from "../../../../shared/config/mcpExternalTierAllowlist.js";
+import {
+  MCP_EXTERNAL_OMITTED_ARGS,
+  MCP_EXTERNAL_TIER_TOOLS,
+} from "../../../../shared/config/mcpExternalTierAllowlist.js";
 import {
   OWNED_TWIN_TOOLS,
   RENDERER_OWNED_ORIGIN_ONLY_TOOLS,
@@ -659,7 +662,7 @@ describe("sessionServer prompt handler", () => {
     expect(queue).toMatch(/suggested next prompt[^\n]*never submit or act on it/);
     expect(queue).toMatch(/Waiting alone is not done, only a cue to inspect/);
     expect(queue).toMatch(/approval or question is blocked and keeps its slot/);
-    expect(queue).toMatch(/pane watch[^\n]*after each refill cancel it[^\n]*current running ids/);
+    expect(queue).toMatch(/`notify: true`[^\n]*end your turn[^\n]*Re-arm with every new prompt/);
   });
 
   it("does not dispatch worktree.getCurrent for triage_terminals (static prompt)", async () => {
@@ -824,124 +827,303 @@ describe("skills.search / skills.load short-circuit (#10892)", () => {
   });
 });
 
-describe("terminal watch short-circuit (#12491)", () => {
-  const OWN_PANE = { key: "pane\u0000principal-1", terminalId: "own-pane" };
+describe("terminal notices", () => {
+  const OWN_PANE = { key: "help\u0000lane-1", terminalId: "own-pane" };
 
-  function watchDeps(overrides?: Partial<SessionServerDeps>) {
-    const terminalWatch = {
-      register: vi.fn().mockResolvedValue({
-        watchId: "w_12345678",
-        terminalIds: ["t-a"],
-        conditions: ["state"],
-        maxDeliveries: 25,
-      }),
-      list: vi.fn(() => ({ watches: [], pendingEvents: 0, delivery: { status: "idle" as const } })),
-      readEvents: vi.fn(() => ({ events: [], droppedEvents: 0, remainingEvents: 0 })),
-      cancel: vi.fn((_pane: unknown, watchId: string) => ({ watchId, cancelled: false })),
+  function notifyDeps(
+    options: { tier?: "core" | "full" | "external"; origin?: string } = {},
+    overrides?: Partial<SessionServerDeps>
+  ) {
+    const pending = { complete: vi.fn(), cancel: vi.fn() };
+    const terminalNotify = {
+      whenIdle: vi.fn().mockResolvedValue({ armed: true, terminalId: "t-a" }),
+      prepareSend: vi.fn().mockResolvedValue(pending),
+      prepareLaunch: vi.fn().mockResolvedValue(pending),
     };
-    const dispatchAction = vi.fn();
+    const dispatchAction = vi.fn().mockResolvedValue({
+      result: { ok: true, result: { sent: true, terminalId: "t-a", submissionToken: "tok-1" } },
+    });
+    const sessionStore = fakeSessionStore(options.tier ?? "core");
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("full"),
-      terminalWatch,
+      sessionStore,
+      terminalNotify,
       resolveOwnPane: () => OWN_PANE,
       dispatchAction,
       ...overrides,
     });
-    return { deps, terminalWatch, dispatchAction };
+    const start = async (sessionId: string) => {
+      if (options.origin !== undefined) {
+        (sessionStore as unknown as { sessionOriginMap: Map<string, string> }).sessionOriginMap.set(
+          sessionId,
+          options.origin
+        );
+      }
+      const server = createSessionServer(sessionId, deps);
+      await server.connect(makeMockTransport());
+      return server;
+    };
+    return { deps, terminalNotify, pending, dispatchAction, start };
   }
 
-  it("registers a watch in main for the caller's own pane, never through a renderer", async () => {
-    const { deps, terminalWatch, dispatchAction } = watchDeps();
-    const server = createSessionServer("session-watch", deps);
-    await server.connect(makeMockTransport());
+  describe("terminal.notifyWhenIdle", () => {
+    it("arms in main for the caller's own pane, never through a renderer", async () => {
+      const { terminalNotify, dispatchAction, deps, start } = notifyDeps();
+      const server = await start("session-notify");
 
-    const result = await callTool(server, {
-      name: "terminal.registerWatch",
-      arguments: { terminalIds: ["t-a"], conditions: ["state"] },
+      const result = await callTool(server, {
+        name: "terminal.notifyWhenIdle",
+        arguments: { terminalId: "t-a", note: "next: review" },
+      });
+
+      expect(result.isError).not.toBe(true);
+      expect(terminalNotify.whenIdle).toHaveBeenCalledWith(OWN_PANE, {
+        terminalId: "t-a",
+        note: "next: review",
+      });
+      expect(result.structuredContent).toEqual({ armed: true, terminalId: "t-a" });
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ toolId: "terminal.notifyWhenIdle" })
+      );
     });
 
-    expect(result.isError).not.toBe(true);
-    expect(terminalWatch.register).toHaveBeenCalledWith(OWN_PANE, {
-      terminalIds: ["t-a"],
-      conditions: ["state"],
-    });
-    expect(result.structuredContent).toMatchObject({ watchId: "w_12345678" });
-    expect(dispatchAction).not.toHaveBeenCalled();
-    expect(deps.appendAuditRecord).toHaveBeenCalledWith(
-      expect.objectContaining({ toolId: "terminal.registerWatch" })
-    );
-  });
+    it("refuses a connection with no pane of its own", async () => {
+      const { terminalNotify, start } = notifyDeps({}, { resolveOwnPane: () => null });
+      const server = await start("session-notify-no-pane");
 
-  it.each([
-    ["terminal.listWatches", {}, "list"],
-    ["terminal.getWatchEvents", { clear: false }, "readEvents"],
-    ["terminal.cancelWatch", { watchId: "w_1" }, "cancel"],
-  ] as const)("routes %s to the watch service", async (name, args, handler) => {
-    const { deps, terminalWatch } = watchDeps();
-    const server = createSessionServer("session-watch-route", deps);
-    await server.connect(makeMockTransport());
+      const result = await callTool(server, {
+        name: "terminal.notifyWhenIdle",
+        arguments: { terminalId: "t-a" },
+      });
 
-    const result = await callTool(server, { name, arguments: { ...args } });
-
-    expect(result.isError).not.toBe(true);
-    expect(terminalWatch[handler]).toHaveBeenCalledTimes(1);
-    expect(terminalWatch[handler].mock.calls[0]?.[0]).toEqual(OWN_PANE);
-  });
-
-  it("refuses a connection with no pane of its own", async () => {
-    const { deps, terminalWatch } = watchDeps({ resolveOwnPane: () => null });
-    const server = createSessionServer("session-watch-no-pane", deps);
-    await server.connect(makeMockTransport());
-
-    const result = await callTool(server, {
-      name: "terminal.registerWatch",
-      arguments: { terminalIds: ["t-a"] },
+      expect(result.isError).toBe(true);
+      expect(toolErrorPayload(result).code).toBe("NOTIFY_NOT_ELIGIBLE");
+      expect(terminalNotify.whenIdle).not.toHaveBeenCalled();
     });
 
-    expect(result.isError).toBe(true);
-    expect(toolErrorPayload(result).code).toBe("WATCH_NOT_ELIGIBLE");
-    expect(terminalWatch.register).not.toHaveBeenCalled();
-  });
+    it("keeps the tool from an api-key session altogether", async () => {
+      const { terminalNotify, start } = notifyDeps({ tier: "external" });
+      const server = await start("session-notify-external");
 
-  it("keeps the tools from an api-key session altogether", async () => {
-    const { deps, terminalWatch } = watchDeps({ sessionStore: fakeSessionStore("external") });
-    const server = createSessionServer("session-watch-external", deps);
-    await server.connect(makeMockTransport());
+      const result = await callTool(server, {
+        name: "terminal.notifyWhenIdle",
+        arguments: { terminalId: "t-a" },
+      });
 
-    const result = await callTool(server, { name: "terminal.listWatches", arguments: {} });
-
-    expect(result.isError).toBe(true);
-    expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
-    expect(terminalWatch.list).not.toHaveBeenCalled();
-  });
-
-  it("returns a refusal under its own code", async () => {
-    const { TerminalWatchError } = await import("../terminalWatch.js");
-    const { deps } = watchDeps();
-    (deps.terminalWatch!.register as ReturnType<typeof vi.fn>).mockRejectedValue(
-      new TerminalWatchError("WATCH_WAKE_DISABLED", "Turned off.")
-    );
-    const server = createSessionServer("session-watch-disabled", deps);
-    await server.connect(makeMockTransport());
-
-    const result = await callTool(server, {
-      name: "terminal.registerWatch",
-      arguments: { terminalIds: ["t-a"] },
+      expect(result.isError).toBe(true);
+      expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+      expect(terminalNotify.whenIdle).not.toHaveBeenCalled();
     });
 
-    expect(result.isError).toBe(true);
-    expect(toolErrorPayload(result).code).toBe("WATCH_WAKE_DISABLED");
+    it("returns a refusal under its own code", async () => {
+      const { TerminalNotifyError } = await import("../terminalNotify.js");
+      const { terminalNotify, start } = notifyDeps();
+      terminalNotify.whenIdle.mockRejectedValue(
+        new TerminalNotifyError("NOTIFY_TARGET_UNAVAILABLE", "Not here.")
+      );
+      const server = await start("session-notify-refused");
+
+      const result = await callTool(server, {
+        name: "terminal.notifyWhenIdle",
+        arguments: { terminalId: "t-a" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(toolErrorPayload(result).code).toBe("NOTIFY_TARGET_UNAVAILABLE");
+    });
+
+    it("rejects malformed arguments before the service sees them", async () => {
+      const { terminalNotify, start } = notifyDeps();
+      const server = await start("session-notify-invalid");
+
+      await expect(
+        callTool(server, { name: "terminal.notifyWhenIdle", arguments: {} })
+      ).rejects.toThrow(/terminal\.notifyWhenIdle/);
+      expect(terminalNotify.whenIdle).not.toHaveBeenCalled();
+    });
   });
 
-  it("rejects malformed arguments before the service sees them", async () => {
-    const { deps, terminalWatch } = watchDeps();
-    const server = createSessionServer("session-watch-invalid", deps);
-    await server.connect(makeMockTransport());
+  describe("notify on a send", () => {
+    it("arms before the prompt goes out, strips the flag, and hands the notice the result", async () => {
+      const { terminalNotify, pending, dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-send-notify");
 
-    await expect(
-      callTool(server, { name: "terminal.registerWatch", arguments: { terminalIds: [] } })
-    ).rejects.toThrow(/terminal\.registerWatch/);
-    expect(terminalWatch.register).not.toHaveBeenCalled();
+      const result = await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "plan it", notify: true },
+      });
+
+      expect(result.isError).not.toBe(true);
+      expect(terminalNotify.prepareSend).toHaveBeenCalledWith(OWN_PANE, "t-a");
+      expect(terminalNotify.prepareSend.mock.invocationCallOrder[0]).toBeLessThan(
+        dispatchAction.mock.invocationCallOrder[0]!
+      );
+      expect(dispatchAction.mock.calls[0]?.slice(0, 2)).toEqual([
+        "terminal.sendCommand",
+        { terminalId: "t-a", command: "plan it" },
+      ]);
+      expect(pending.complete).toHaveBeenCalledWith({
+        sent: true,
+        terminalId: "t-a",
+        submissionToken: "tok-1",
+      });
+      expect(pending.cancel).not.toHaveBeenCalled();
+    });
+
+    it("leaves a send without the flag alone", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-send-plain");
+
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "plan it", notify: false },
+      });
+
+      expect(terminalNotify.prepareSend).not.toHaveBeenCalled();
+      expect(dispatchAction.mock.calls[0]?.[1]).toEqual({ terminalId: "t-a", command: "plan it" });
+    });
+
+    it("drops the notice when the send fails", async () => {
+      const { pending, start } = notifyDeps(
+        { origin: "help" },
+        {
+          dispatchAction: vi.fn().mockResolvedValue({
+            result: { ok: false, error: { code: "EXECUTION_ERROR", message: "no pty" } },
+          }),
+        }
+      );
+      const server = await start("session-send-failed");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "plan it", notify: true },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(pending.cancel).toHaveBeenCalledTimes(1);
+      expect(pending.complete).not.toHaveBeenCalled();
+    });
+
+    it("drops the notice when the dispatch throws", async () => {
+      const { pending, start } = notifyDeps(
+        { origin: "help" },
+        { dispatchAction: vi.fn().mockRejectedValue(new Error("bridge gone")) }
+      );
+      const server = await start("session-send-threw");
+
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "plan it", notify: true },
+      });
+
+      expect(pending.cancel).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends nothing when the notice is refused", async () => {
+      const { TerminalNotifyError } = await import("../terminalNotify.js");
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      terminalNotify.prepareSend.mockRejectedValue(
+        new TerminalNotifyError("VALIDATION_ERROR", "Not an agent.")
+      );
+      const server = await start("session-send-refused");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "shell", command: "ls", notify: true },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(toolErrorPayload(result).code).toBe("VALIDATION_ERROR");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("refuses an api-key client before anything is sent: it has no pane", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ tier: "external" });
+      const server = await start("session-launch-external");
+
+      const result = await callTool(server, {
+        name: "agent.launch",
+        arguments: { agentId: "claude", prompt: "plan it", notify: true },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(toolErrorPayload(result).code).toBe("NOTIFY_NOT_ELIGIBLE");
+      expect(terminalNotify.prepareLaunch).not.toHaveBeenCalled();
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("hands a launch's result to its notice", async () => {
+      const launchResult = { launched: true, terminalId: "t-new", spawnStatus: null };
+      const dispatchAction = vi
+        .fn()
+        .mockResolvedValue({ result: { ok: true, result: launchResult } });
+      const { terminalNotify, pending, start } = notifyDeps({}, { dispatchAction });
+      const server = await start("session-launch-notify");
+
+      await callTool(server, {
+        name: "agent.launch",
+        arguments: { agentId: "claude", prompt: "plan it", notify: true },
+      });
+
+      expect(terminalNotify.prepareLaunch).toHaveBeenCalledWith(OWN_PANE);
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      // A launch keeps the flag: the renderer, which knows the agent registry,
+      // is what refuses it for a shell or panel.
+      expect(dispatchAction.mock.calls[0]?.[1]).toMatchObject({ notify: true });
+      expect(pending.complete).toHaveBeenCalledWith(launchResult);
+    });
+
+    it("drops the notice when the launch refuses it", async () => {
+      const { pending, start } = notifyDeps(
+        {},
+        {
+          dispatchAction: vi.fn().mockResolvedValue({
+            result: { ok: false, error: { code: "UNACTIONABLE_TARGET", message: "not an agent" } },
+          }),
+        }
+      );
+      const server = await start("session-launch-refused");
+
+      const result = await callTool(server, {
+        name: "agent.launch",
+        arguments: { agentId: "browser", prompt: "plan it", notify: true },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(pending.cancel).toHaveBeenCalledTimes(1);
+      expect(pending.complete).not.toHaveBeenCalled();
+    });
+
+    it("refuses a launch with no prompt to finish", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps();
+      const server = await start("session-launch-no-prompt");
+
+      const result = await callTool(server, {
+        name: "agent.launch",
+        arguments: { agentId: "claude", notify: true },
+      });
+
+      expect(toolErrorPayload(result).code).toBe("VALIDATION_ERROR");
+      expect(terminalNotify.prepareLaunch).not.toHaveBeenCalled();
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not advertise notify to an api-key client", async () => {
+    const { buildToolInputSchema } = await import("../tierAuth.js");
+    const entry = {
+      id: "agent.launch",
+      inputSchema: {
+        type: "object",
+        properties: { agentId: { type: "string" }, notify: { type: "boolean" } },
+        required: ["agentId"],
+      },
+    } as unknown as Parameters<typeof buildToolInputSchema>[0];
+
+    expect(buildToolInputSchema(entry).properties).toHaveProperty("notify");
+    expect(
+      buildToolInputSchema(entry, MCP_EXTERNAL_OMITTED_ARGS["agent.launch"]).properties
+    ).not.toHaveProperty("notify");
   });
 });
 
@@ -5779,11 +5961,8 @@ describe("workspace-bound external sessions (#11789)", () => {
           handler: "handleTerminalReadLastMessageOwned",
           ownsTerminal: "t-1",
         },
-        // Executed through the injected watch service rather than a named dep.
-        "terminal.registerWatch": { args: { terminalIds: ["t-1"] } },
-        "terminal.listWatches": { args: {} },
-        "terminal.getWatchEvents": { args: {} },
-        "terminal.cancelWatch": { args: { watchId: "w_00000000" } },
+        // Executed through the injected notify service rather than a named dep.
+        "terminal.notifyWhenIdle": { args: { terminalId: "t-1" } },
       };
 
       function viewlessDepsFor(name: string): SessionServerDeps {
@@ -6158,7 +6337,10 @@ describe("workspace-bound external sessions (#11789)", () => {
       for (const tool of tools) {
         const source = MCP_EXTERNAL_BASE_MANIFEST.find((e) => e.id === tool.name);
         expect(source).toBeDefined();
-        expect(tool.inputSchema).toEqual(buildToolInputSchema(source!));
+        // The same projection an api-key session is listed with.
+        expect(tool.inputSchema).toEqual(
+          buildToolInputSchema(source!, MCP_EXTERNAL_OMITTED_ARGS[source!.id])
+        );
         expect(tool.outputSchema).toEqual(buildToolOutputSchema(source!));
       }
       // Premise: the loop is vacuous on an empty listing, and several of these

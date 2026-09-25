@@ -1308,21 +1308,12 @@ describe("McpServerService", () => {
       }),
       waitUntilIdleManifestEntry(),
       waitUntilIdleBatchManifestEntry(),
-      // Terminal watches (#12491), on the full set; the waits are core.
-      ...(
-        [
-          ["terminal.registerWatch", "Watch Terminals"],
-          ["terminal.listWatches", "List Terminal Watches"],
-          ["terminal.getWatchEvents", "Read Terminal Watch Events"],
-          ["terminal.cancelWatch", "Cancel Terminal Watch"],
-        ] as const
-      ).map(([id, title]) =>
-        createManifestEntry({
-          id: id as ActionId,
-          title,
-          description: `${title} for this pane.`,
-        })
-      ),
+      // The waits' asynchronous twin, on the core set beside them.
+      createManifestEntry({
+        id: "terminal.notifyWhenIdle" as ActionId,
+        title: "Notify When Terminal Is Idle",
+        description: "Notify When Terminal Is Idle for this pane.",
+      }),
       // Session continuity + recipe-editor handoffs from #11908. The resume is
       // on the full set; the bookmark and recipe-editor handoffs are on neither
       // set now, which the off-MCP loop below pins. The coverage loops iterate

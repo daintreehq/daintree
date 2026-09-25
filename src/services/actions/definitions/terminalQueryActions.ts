@@ -46,6 +46,7 @@ import {
 } from "@/store/slices/panelRegistry/panelCount";
 import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
 import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
+import { NOTIFY_ARG_DESCRIPTION } from "@shared/types/terminalNotify";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 
@@ -59,6 +60,14 @@ const HANDBACK_ARG_SCHEMA = z
   .describe(
     "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only; a shell refuses it."
   );
+
+/**
+ * The `notify` argument, shared by both submit tools and `agent.launch`. Main
+ * consumes it before dispatch — which prompt to type into is known only from
+ * the caller's MCP credential — so `run()` never acts on it; it is declared so
+ * the tool's input schema advertises it.
+ */
+const NOTIFY_ARG_SCHEMA = z.boolean().optional().describe(NOTIFY_ARG_DESCRIPTION);
 
 /**
  * Cap on the command text echoed back by `terminal.sendCommand` (#12337).
@@ -845,6 +854,7 @@ export function registerTerminalQueryActions(
           "Text to submit. Runs as a shell command in a plain terminal, or is submitted as the next prompt/turn in an agent pane. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit."
         ),
       handback: HANDBACK_ARG_SCHEMA,
+      notify: NOTIFY_ARG_SCHEMA,
     }),
     resultSchema: TerminalSendCommandResultSchema,
     mcpOutputSchema: true,
@@ -962,6 +972,7 @@ export function registerTerminalQueryActions(
           "Text to submit. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit."
         ),
       handback: HANDBACK_ARG_SCHEMA,
+      notify: NOTIFY_ARG_SCHEMA,
     }),
     resultSchema: TerminalSendCommandResultSchema,
     mcpOutputSchema: true,

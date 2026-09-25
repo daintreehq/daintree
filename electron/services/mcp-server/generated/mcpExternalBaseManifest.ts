@@ -231,6 +231,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`. Needs `prompt` and an agent.",
           type: "boolean",
         },
+        notify: {
+          description:
+            "Daintree types one line into your own prompt when this agent next stops working, so end your turn instead of polling. Agent panes and assistants only.",
+          type: "boolean",
+        },
         systemPrompt: {
           description:
             "Standing instruction of at most 2000 characters, appended to the agent's system prompt and kept on resume. Claude and Codex only; others refuse it.",
@@ -2112,6 +2117,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         handback: {
           description:
             "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only; a shell refuses it.",
+          type: "boolean",
+        },
+        notify: {
+          description:
+            "Daintree types one line into your own prompt when this agent next stops working, so end your turn instead of polling. Agent panes and assistants only.",
           type: "boolean",
         },
       },

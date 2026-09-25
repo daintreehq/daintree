@@ -148,7 +148,7 @@ const TIER_CHOICES: { value: HelpAssistantTier; label: string; description: stri
 
 const TIER_DETAILS: Record<HelpAssistantTier, string> = {
   core: "The assistant can create worktrees, launch agents and send them prompts, read and wait on terminals, and move, rename or close them. It can delete a worktree it created, which asks you to confirm. This covers most orchestration and keeps the tool list the model rereads every turn short.",
-  full: "Adds recipes and project checks, starting work on an issue, forge PR, issue and CI reads, git activity, CopyTree context, deleting any worktree and managing its resources, terminal watches, and diagnostics. Deletions and teardowns still ask you to confirm. Git and forge writes and file edits aren't available in either tool set.",
+  full: "Adds recipes and project checks, starting work on an issue, forge PR, issue and CI reads, git activity, CopyTree context, deleting any worktree and managing its resources, and diagnostics. Deletions and teardowns still ask you to confirm. Git and forge writes and file edits aren't available in either tool set.",
 };
 
 const TIER_SHORT_LABEL: Record<HelpAssistantTier, string> = {

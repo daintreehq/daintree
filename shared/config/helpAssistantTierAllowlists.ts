@@ -90,6 +90,10 @@ export const CORE_TIER_TOOLS = [
   "terminal.sendCommand",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
+  // The asynchronous twin of the waits: returns at once, and types one line
+  // into the caller's own prompt when the terminal stops working. The send
+  // tools' `notify` flag does the same for the prompt they carry.
+  "terminal.notifyWhenIdle",
   // Stop a turn without losing the conversation (#12338).
   "terminal.interruptOwned",
   // Swapped for `terminal.closeOwned` outside the assistant, like the send.
@@ -105,7 +109,7 @@ export const CORE_TIER_TOOLS = [
 /**
  * Added on top of `core`. Everything an orchestrator reaches for less often —
  * recipes and workflows, project checks, forge and git reads, context bundles,
- * diagnostics, pane watches, worktree resources, the plugin-authoring loop.
+ * diagnostics, worktree resources, the plugin-authoring loop.
  *
  * Deliberately absent from both sets, and so from MCP entirely: git writes and
  * most git reads, forge writes and browser openers, file reads, UI navigation
@@ -142,12 +146,6 @@ export const FULL_TIER_ADDONS = [
   "terminal.kill",
   "terminal.restart",
   "terminal.closeAll",
-  // The event-driven counterpart to the waits (#12491). Inert unless the user
-  // has turned pane wakes on.
-  "terminal.registerWatch",
-  "terminal.listWatches",
-  "terminal.getWatchEvents",
-  "terminal.cancelWatch",
   // Orchestrator-owned metadata about a panel (#12340). Bounded, invisible in
   // the UI, and confers no ownership.
   "terminal.setClientMetadata",

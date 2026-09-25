@@ -24,6 +24,7 @@ import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrant
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { isAssistantOnlyAgentId } from "../../../shared/config/agentIds.js";
 import { OWNED_TWIN_TOOLS } from "../../../shared/config/helpAssistantTierAllowlists.js";
+import { MCP_EXTERNAL_OMITTED_ARGS } from "../../../shared/config/mcpExternalTierAllowlist.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
 import { onWorkspaceResidencyChanged, readWorkspaceBindingState } from "../workspaceResidency.js";
@@ -122,18 +123,17 @@ import {
 } from "./resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./terminalAdoption.js";
 import {
-  TERMINAL_CANCEL_WATCH_TOOL,
-  TERMINAL_GET_WATCH_EVENTS_TOOL,
-  TERMINAL_LIST_WATCHES_TOOL,
-  TERMINAL_WATCH_TOOL,
-  TERMINAL_WATCH_TOOLS,
-  TerminalWatchError,
-  WATCH_NOT_ELIGIBLE,
-  auditCodeForWatchRefusal,
-  runTerminalWatchTool,
+  NOTIFY_NOT_ELIGIBLE,
+  NOTIFY_SEND_TOOLS,
+  NOTIFY_VALIDATION_ERROR,
+  TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
+  TerminalNotifyError,
+  auditCodeForNotifyRefusal,
+  runNotifyWhenIdleTool,
   type OwnPane,
-  type TerminalWatchHandlers,
-} from "./terminalWatch.js";
+  type PendingNotify,
+  type TerminalNotifyHandlers,
+} from "./terminalNotify.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -188,12 +188,9 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   // agent wrote and dispatches nothing, so a closed workspace is no reason to
   // refuse it.
   TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
-  // Terminal watches (#12491) live in main and read the pty-host. A pane whose
-  // project view was evicted still has to be able to read what woke it.
-  TERMINAL_WATCH_TOOL,
-  TERMINAL_LIST_WATCHES_TOOL,
-  TERMINAL_GET_WATCH_EVENTS_TOOL,
-  TERMINAL_CANCEL_WATCH_TOOL,
+  // Terminal notices live in main and read the pty-host, so arming one needs
+  // no project view.
+  TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
 ]);
 /**
  * The main-process executors an owned tool can name. Kept apart from the rest
@@ -425,6 +422,33 @@ function prepareTerminalListDispatch(
   const { owned, ...rest } = args as Record<string, unknown>;
   if (typeof owned !== "boolean") return { dispatchArgs: args, ownedOnly: false };
   return { dispatchArgs: rest, ownedOnly: owned };
+}
+
+/**
+ * Read a send's or launch's `notify` flag, and take it off the arguments a
+ * send's renderer receives. Whose prompt to type into is main-process state the
+ * renderer never sees, so the flag is acted on here. A launch keeps it: only
+ * the renderer knows the effective agent registry, so `agent.launch` is what
+ * refuses `notify` for a shell or panel, and that refusal cancels the notice.
+ * Only an actual boolean is read; anything else is left for the renderer's own
+ * schema validation to reject. The owned send rebuilds its arguments from
+ * `forwardArgs`, which never names the flag.
+ */
+function prepareNotifyDispatch(
+  actionId: string,
+  args: unknown
+): { dispatchArgs: unknown; notify: boolean } {
+  if (
+    !NOTIFY_SEND_TOOLS.has(actionId) ||
+    args === null ||
+    typeof args !== "object" ||
+    Array.isArray(args)
+  ) {
+    return { dispatchArgs: args, notify: false };
+  }
+  const { notify, ...rest } = args as Record<string, unknown>;
+  if (typeof notify !== "boolean") return { dispatchArgs: args, notify: false };
+  return { dispatchArgs: actionId === AGENT_LAUNCH_TOOL ? args : rest, notify };
 }
 
 /**
@@ -662,14 +686,15 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   isTerminalIdInUse: (terminalId: string) => boolean;
   /**
-   * Terminal watches (#12491). Optional so fixtures that never exercise them
-   * need not stub them; absent, every watch tool answers not-eligible.
+   * Terminal notices. Optional so fixtures that never exercise them need not
+   * stub them; absent, `terminal.notifyWhenIdle` and `notify: true` answer
+   * not-eligible.
    */
-  terminalWatch?: TerminalWatchHandlers;
+  terminalNotify?: TerminalNotifyHandlers;
   /**
    * The caller's own pane, from its credential: a pane bearer's terminal, or
    * the terminal a help session is bound to. Null for everything else — an
-   * api-key client has no pane to wake.
+   * api-key client has no pane to notify.
    */
   resolveOwnPane?: () => OwnPane | null;
   appendAuditRecord: (input: {
@@ -863,7 +888,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifyToolCallSettled,
     notifyDisplayImage,
     workspaceBinding,
-    terminalWatch,
+    terminalNotify,
     resolveOwnPane,
     requestApproval,
   } = deps;
@@ -1013,7 +1038,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         return {
           name: entry.id,
           description: entry.description,
-          inputSchema: buildToolInputSchema(entry),
+          // An api-key client is not shown arguments that need a pane of its
+          // own; it would be refused them anyway.
+          inputSchema: buildToolInputSchema(
+            entry,
+            tier === "external" ? MCP_EXTERNAL_OMITTED_ARGS[entry.id] : undefined
+          ),
           annotations: buildAnnotations(entry),
           ...(outputSchema ? { outputSchema } : {}),
           ...(_meta ? { _meta } : {}),
@@ -1203,7 +1233,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // off the search rewrite above rather than folded into it: the two tools
     // are disjoint, and one rewrite that handled both would have to be re-read
     // whenever either changed. `args` stays untouched for the audit record.
-    const { dispatchArgs, ownedOnly } = prepareTerminalListDispatch(actionId, searchDispatchArgs);
+    const { dispatchArgs: listDispatchArgs, ownedOnly } = prepareTerminalListDispatch(
+      actionId,
+      searchDispatchArgs
+    );
+    // A send's or launch's `notify` is decided here and taken off the forwarded
+    // copy the same way; see `prepareNotifyDispatch`.
+    const { dispatchArgs, notify } = prepareNotifyDispatch(actionId, listDispatchArgs);
+    // The follow-up a `notify: true` call set up before dispatch. Completed
+    // with the envelope once the action returns, and cancelled by the shared
+    // `finally` on every other way out, so a refused or failed call never
+    // leaves a notice behind.
+    let pendingNotify: PendingNotify | undefined;
 
     // Set once the ownership gate inside the IIFE has cleared, and read by the
     // delegated dispatch and the post-cleanup release. Undefined for every
@@ -2194,6 +2235,48 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
+        // `notify: true` on a send or launch: the notice is set up here, before
+        // the prompt goes out, so none of the target's state changes can slip
+        // past it. Refused before anything reaches a renderer when there is no
+        // pane to type into — an api-key client has none — so a caller is
+        // never told its prompt went out with a promise nobody will keep.
+        if (notify) {
+          const refuse = (code: string, message: string) => {
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: auditCodeForNotifyRefusal(code), message } },
+            };
+            return buildToolError({ code, message });
+          };
+          const pane = tier === "external" ? null : (resolveOwnPane?.() ?? null);
+          if (pane === null || terminalNotify === undefined) {
+            return refuse(
+              NOTIFY_NOT_ELIGIBLE,
+              "`notify` types into the caller's own pane, and this connection has none: only an agent pane or an assistant session can ask for it. Nothing was sent."
+            );
+          }
+          try {
+            if (actionId === AGENT_LAUNCH_TOOL) {
+              if ((readStringArg(args, "prompt") ?? "").trim().length === 0) {
+                return refuse(
+                  NOTIFY_VALIDATION_ERROR,
+                  "`notify` needs a `prompt`: there is no work to finish without one. Nothing was launched."
+                );
+              }
+              pendingNotify = await terminalNotify.prepareLaunch(pane);
+            } else {
+              const targetId = ownedResourceId ?? readStringArg(args, "terminalId");
+              if (targetId === undefined || targetId.length === 0) {
+                return refuse(NOTIFY_VALIDATION_ERROR, "`notify` needs a `terminalId`.");
+              }
+              pendingNotify = await terminalNotify.prepareSend(pane, targetId);
+            }
+          } catch (err) {
+            if (err instanceof TerminalNotifyError) return refuse(err.code, err.message);
+            throw err;
+          }
+        }
+
         // Short-circuit: terminal.waitUntilIdle runs in the main process. The
         // action manifest entry handles schema, tier, and audit registration; the
         // execution must bypass renderer dispatch because (a) the MCP AbortSignal
@@ -2326,38 +2409,37 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
-        // Short-circuit: terminal watches (#12491) are session state in main —
-        // which pane a call comes from is known only from its credential, and
-        // the watch it registers outlives the call. Never `danger: "confirm"`;
-        // registering types nothing, and the wake it may later cause is gated
-        // by the user's setting. Audit + strip-settle unify via the shared
-        // `finally`.
-        if (TERMINAL_WATCH_TOOLS.has(actionId)) {
+        // Short-circuit: `terminal.notifyWhenIdle` is session state in main —
+        // which pane to type into is known only from the credential, and the
+        // notice outlives the call. Never `danger: "confirm"`; arming types
+        // nothing, and the line it may later cause goes only to the caller's
+        // own prompt. Audit + strip-settle unify via the shared `finally`.
+        if (actionId === TERMINAL_NOTIFY_WHEN_IDLE_TOOL) {
           emitToolCallStarted(false);
           const refuse = (code: string, message: string) => {
             outcome = {
               kind: "result",
-              value: { ok: false, error: { code: auditCodeForWatchRefusal(code), message } },
+              value: { ok: false, error: { code: auditCodeForNotifyRefusal(code), message } },
             };
             return buildToolError({ code, message });
           };
           // An api-key client has no pane of its own. The external allowlist
-          // already withholds these tools; this keeps it true if that drifts.
+          // already withholds this tool; this keeps it true if that drifts.
           const pane = tier === "external" ? null : (resolveOwnPane?.() ?? null);
-          if (pane === null || terminalWatch === undefined) {
+          if (pane === null || terminalNotify === undefined) {
             return refuse(
-              WATCH_NOT_ELIGIBLE,
-              "Terminal watches wake the caller's own pane, and this connection has none: only an agent pane or an assistant session bound to its terminal can hold one."
+              NOTIFY_NOT_ELIGIBLE,
+              "Notices are typed into the caller's own pane, and this connection has none: only an agent pane or an assistant session can ask for one."
             );
           }
           try {
-            const result = await runTerminalWatchTool(actionId, args, pane, terminalWatch);
+            const result = await runNotifyWhenIdleTool(args, pane, terminalNotify);
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
             });
           } catch (err) {
-            if (err instanceof TerminalWatchError) return refuse(err.code, err.message);
+            if (err instanceof TerminalNotifyError) return refuse(err.code, err.message);
             outcome = { kind: "throw", error: err };
             if (err instanceof McpError) throw err;
             return buildToolError({
@@ -2726,6 +2808,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // — "this session created it" is a fact about the session, not about
           // its privileges.
           recordDispatchOwnership(envelope);
+          // Hand the notice what the action reported: the send's submission
+          // token or the launch's terminal id. A failed dispatch drops it —
+          // the caller already has the error.
+          if (pendingNotify !== undefined) {
+            const follow = pendingNotify;
+            pendingNotify = undefined;
+            if (envelope.result.ok) follow.complete(envelope.result.result);
+            else follow.cancel();
+          }
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
           // "Allow for this session" on the ordinary confirm dialog of a pane's
           // own-tier tool (#12692). The bridge only reports the scope for an
@@ -2865,6 +2956,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           dispatchedWorkspace
         );
       } finally {
+        pendingNotify?.cancel();
+        pendingNotify = undefined;
         const settledOutcome = outcome ?? { kind: "throw" as const, error: new Error("unknown") };
         // Compute the duration once so the audit record and the live strip
         // report the same wall-clock, not two reads a few µs apart (#9759).

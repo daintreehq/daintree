@@ -372,9 +372,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Submit-lane status for one terminal (#11875). Fires only for submits that
      *  cross the slow/stalled threshold or fail. */
     onSubmitStatus(callback: (data: TerminalSubmitStatusPayload) => void): () => void;
-    /** A pane's terminal watches changed (#12491). Callers filter by `terminalId`. */
-    onWatchState(
-      callback: (data: import("../terminalWatch.js").PaneWatchState) => void
+    /** A pane's pending terminal notices changed. Callers filter by `terminalId`. */
+    onNotifyState(
+      callback: (data: import("../terminalNotify.js").PaneNotifyState) => void
     ): () => void;
     onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
     /**

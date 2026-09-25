@@ -107,7 +107,7 @@ Help sessions run one of two tool sets, selected under Settings → Assistant �
 | Tool set | Trigger | Capabilities (categories) |
 | --- | --- | --- |
 | `core` | Default for help sessions | Orchestration: create worktrees (`worktree.createWithRecipe`) and wait for setup or a PR, launch agents (`agent.launch`), send prompts (`terminal.sendCommand`), read terminals and wait on them, interrupt, move, rename or close terminals, delete a worktree the session created (`worktree.deleteOwned`, confirm-gated), and search actions. |
-| `full` | User selects "Full" | Adds recipes, starting work on an issue, project checks, review readiness, forge PR, issue and CI reads, git activity, CopyTree context, the unscoped worktree delete and resource lifecycle, killing or restarting terminals, terminal watches, skills, and diagnostics. |
+| `full` | User selects "Full" | Adds recipes, starting work on an issue, project checks, review readiness, forge PR, issue and CI reads, git activity, CopyTree context, the unscoped worktree delete and resource lifecycle, killing or restarting terminals, skills, and diagnostics. |
 
 Nothing outside `full` is reachable over MCP: no git or forge writes, no file reads or edits, no UI navigation or settings writes. Settings saved before the core/full split are read in place — `workbench` and `action` as `core`, `system` as `full`.
 

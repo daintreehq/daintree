@@ -59,7 +59,7 @@ import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js"
 import { buildMcpClientConfig } from "../../../shared/config/mcpClientConfigs.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
-import { helpWatchKey, paneWatchKey } from "./terminalWatch.js";
+import { helpNotifyKey, paneNotifyKey } from "./terminalNotify.js";
 import type { AbusePolicy } from "./abusePolicy.js";
 import {
   DEFAULT_PORT,
@@ -177,8 +177,8 @@ export interface HttpLifecycleDeps {
   ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
   handleTerminalReadLastMessageOwned: import("./sessionServer.js").OwnedMainExecutors["handleTerminalReadLastMessageOwned"];
   isTerminalIdInUse: (terminalId: string) => boolean;
-  /** Terminal watches (#12491). Absent, every watch tool answers not-eligible. */
-  terminalWatch?: import("./terminalWatch.js").TerminalWatchHandlers;
+  /** Terminal notices. Absent, `terminal.notifyWhenIdle` and `notify: true` answer not-eligible. */
+  terminalNotify?: import("./terminalNotify.js").TerminalNotifyHandlers;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   // Per-WebContents manifest cache read for pinned help sessions (#9887). Lets
   // the pinned `getCachedManifest` closure return the session's own window's
@@ -489,19 +489,19 @@ export class HttpLifecycle {
   }
 
   /**
-   * The pane a pane bearer's watches may wake (#12491): its own terminal,
-   * keyed by the ownership principal so a reconnect finds the same watches.
-   * Null for every other bearer, and for a pane bearer without a principal.
+   * The pane a pane bearer's notices are typed into: its own terminal, keyed
+   * by the ownership principal so a reconnect finds the same notices. Null for
+   * every other bearer, and for a pane bearer without a principal.
    */
   private resolveOwnPane(
     authHeader: string,
     ownershipPrincipal: string | null
-  ): import("./terminalWatch.js").OwnPane | null {
+  ): import("./terminalNotify.js").OwnPane | null {
     if (ownershipPrincipal === null) return null;
     const token = extractBearerToken(authHeader);
     if (!token) return null;
     const terminalId = this.paneTerminalResolver?.(token) ?? null;
-    return terminalId === null ? null : { key: paneWatchKey(ownershipPrincipal), terminalId };
+    return terminalId === null ? null : { key: paneNotifyKey(ownershipPrincipal), terminalId };
   }
 
   /**
@@ -1777,7 +1777,7 @@ export class HttpLifecycle {
     sessionId: string,
     workspaceBinding?: McpWorkspaceBinding,
     paneBinding?: PaneWorkspaceBinding,
-    ownPane?: import("./terminalWatch.js").OwnPane | null
+    ownPane?: import("./terminalNotify.js").OwnPane | null
   ): import("./sessionServer.js").SessionServerDeps {
     const pinnedDispatch = this.deps.dispatchActionForWebContents;
     const pinnedManifest = this.deps.requestManifestForWebContents;
@@ -2144,7 +2144,9 @@ export class HttpLifecycle {
       handleTerminalGetStatusViewless: this.deps.handleTerminalGetStatusViewless,
       handleTerminalReadLastMessageOwned: this.deps.handleTerminalReadLastMessageOwned,
       isTerminalIdInUse: this.deps.isTerminalIdInUse,
-      ...(this.deps.terminalWatch !== undefined ? { terminalWatch: this.deps.terminalWatch } : {}),
+      ...(this.deps.terminalNotify !== undefined
+        ? { terminalNotify: this.deps.terminalNotify }
+        : {}),
       // A pane bearer's own terminal is fixed for the bearer's life and was
       // resolved at handshake; a help lane's is read per call, because its
       // binding follows the PTY that currently serves it.
@@ -2152,7 +2154,7 @@ export class HttpLifecycle {
         if (ownPane) return ownPane;
         if (helpSessionId === null) return null;
         const terminalId = this.helpSessionTerminalResolver?.(helpSessionId) ?? null;
-        return terminalId === null ? null : { key: helpWatchKey(helpSessionId), terminalId };
+        return terminalId === null ? null : { key: helpNotifyKey(helpSessionId), terminalId };
       },
       appendAuditRecord: (input) => {
         // Scrub structural secrets BEFORE the truncation step inside

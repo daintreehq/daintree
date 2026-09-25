@@ -807,9 +807,9 @@ export class HelpSessionService {
   }
 
   /**
-   * The terminal an unrevoked help session is bound to, or null (#12491). The
-   * MCP server reads this when a terminal-watch tool is called, so the pane a
-   * watch may wake is always the PTY currently serving the session.
+   * The terminal an unrevoked help session is bound to, or null. The MCP
+   * server reads this when a terminal notice is asked for, so the pane it is
+   * typed into is the PTY serving the session at the time of asking.
    */
   getTerminalIdForSession(sessionId: string): string | null {
     if (!sessionId) return null;

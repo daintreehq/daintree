@@ -36,6 +36,7 @@ import {
   LAUNCHABLE_AGENT_IDS,
 } from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
+import { NOTIFY_ARG_DESCRIPTION } from "@shared/types/terminalNotify";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import {
   hasSystemPromptOverride,
@@ -363,6 +364,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .describe(
           "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`. Needs `prompt` and an agent."
         ),
+      // Acted on in main, which sets up the notice; `run()` only refuses it for
+      // a launch with no agent to watch.
+      notify: z.boolean().optional().describe(NOTIFY_ARG_DESCRIPTION),
       systemPrompt: z
         .string()
         .max(SYSTEM_PROMPT_MAX_LENGTH)
@@ -467,6 +471,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         worktreeId,
         prompt,
         handback,
+        notify,
         systemPrompt,
         interactive,
         model,
@@ -488,6 +493,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         worktreeId?: string;
         prompt?: string;
         handback?: boolean;
+        notify?: boolean;
         systemPrompt?: string;
         interactive?: boolean;
         model?: string;
@@ -544,6 +550,16 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       ) {
         throw new UnactionableTargetError(
           "handback needs an agent to answer it, and this id is not a registered agent: a plain shell or panel never prints the marker. Launch a registered agent, or launch without handback."
+        );
+      }
+      // `notify` is acted on in main, which cannot see this registry; refusing
+      // here is what cancels the notice it set up for a launch.
+      if (
+        notify === true &&
+        (HANDBACK_PANEL_LAUNCH_IDS.has(agentId) || !isRegisteredAgent(agentId))
+      ) {
+        throw new UnactionableTargetError(
+          "notify waits for an agent to stop working, and this id is not a registered agent: a plain shell or panel never reports working or idle. Launch a registered agent, or launch without notify."
         );
       }
       const handbackCode = handback === true ? mintHandbackCode() : undefined;

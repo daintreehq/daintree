@@ -498,8 +498,8 @@ export class McpPaneConfigService {
 
   /**
    * Resolver consulted at MCP handshake for the terminal a pane bearer was
-   * minted for (#12491) — the pane its terminal watches may wake. Null once
-   * the token is revoked.
+   * minted for — the pane its terminal notices are typed into. Null once the
+   * token is revoked.
    */
   getPaneIdForToken(token: string): string | null {
     if (!token) return null;

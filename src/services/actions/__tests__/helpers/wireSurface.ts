@@ -6,8 +6,11 @@ import {
   FULL_TIER_ADDONS,
   toNonRendererOwnedTools,
 } from "@shared/config/helpAssistantTierAllowlists";
-import { MCP_EXTERNAL_TIER_TOOLS } from "@shared/config/mcpExternalTierAllowlist";
-import { toWireSchema } from "@shared/utils/mcpWireSchema";
+import {
+  MCP_EXTERNAL_OMITTED_ARGS,
+  MCP_EXTERNAL_TIER_TOOLS,
+} from "@shared/config/mcpExternalTierAllowlist";
+import { omitWireSchemaArgs, toWireSchema } from "@shared/utils/mcpWireSchema";
 
 /**
  * Measurement of the bytes an MCP client is actually sent, built from the live
@@ -100,6 +103,11 @@ export interface WireTool {
   /** The advertised input schema, already projected to the wire view. */
   inputSchema: unknown;
   paramsBytes: number;
+  /**
+   * The input schema as an api-key client receives it, with the arguments it
+   * is not advertised left off. Equal to `paramsBytes` for most tools.
+   */
+  externalParamsBytes: number;
   outputBytes: number;
   propertyDescriptions: WirePropertyDescription[];
 }
@@ -134,6 +142,19 @@ function isObjectRooted(schema: unknown): boolean {
     !Array.isArray(schema) &&
     (schema as Record<string, unknown>)["type"] === "object"
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The input schema as production lists it for the external tier. */
+function externalInputSchema(id: string, inputSchema: unknown): unknown {
+  const omitted = MCP_EXTERNAL_OMITTED_ARGS[id];
+  if (omitted === undefined || !isRecord(inputSchema) || inputSchema["type"] !== "object") {
+    return inputSchema;
+  }
+  return omitWireSchemaArgs(inputSchema, omitted);
 }
 
 const bytes = (value: unknown): number =>
@@ -225,6 +246,7 @@ export async function measureWireSurface(): Promise<WireTool[]> {
       descriptionBytes: Buffer.byteLength(def.description ?? "", "utf8"),
       inputSchema,
       paramsBytes: bytes(inputSchema),
+      externalParamsBytes: bytes(externalInputSchema(id, inputSchema)),
       outputBytes: bytes(outputSchema),
       propertyDescriptions,
     });

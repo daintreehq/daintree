@@ -254,7 +254,8 @@ describe("help prompt outputs", () => {
       expect(watching).toContain("### Work through a queue, at most K at a time");
       expect(queue).toMatch(/one pacing owner/);
       expect(queue).toMatch(/Never stack a second timer, background `sleep`/);
-      expect(queue).toMatch(/`terminal\.registerWatch`[^.\n]*if that tool is available/);
+      expect(queue).toMatch(/`notify: true` on every `agent\.launch` and follow-up/);
+      expect(queue).toMatch(/`ScheduleWakeup` if your pane can't take them/);
       expect(queue).toMatch(
         /`worktree\.createWithRecipe`, then `worktree\.waitUntilReady`[^\n]*every job[^\n]*then `agent\.launch`/
       );
@@ -272,11 +273,8 @@ describe("help prompt outputs", () => {
       expect(queue).toMatch(/Waiting alone is not done: it is a cue to inspect/);
       expect(queue).toMatch(/reached the milestone the user named/);
       expect(queue).toMatch(/approval or question is blocked, not done: it keeps its slot/);
-      // A watch holds a fixed id set and a wake budget, so refills escape it.
-      expect(queue).toMatch(
-        /after each refill `terminal\.cancelWatch` the old one and register one over the current running ids/
-      );
-      expect(queue).toMatch(/if it stops, re-register or switch to `ScheduleWakeup`/);
+      // A notice fires once, so a refill that forgets to re-arm goes unheard.
+      expect(queue).toMatch(/A notice fires once, so re-arm with every new prompt/);
       expect(queue).toMatch(/up to K, never past it/);
       expect(queue).toMatch(/Leave finished worktrees and terminals in place unless the user asks/);
       expect(queue).toMatch(/input line is not an instruction/);

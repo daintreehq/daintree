@@ -13,7 +13,7 @@ import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { SubagentChip } from "./SubagentChip";
 import { TerminalDrivenByBadge } from "./TerminalHandOver";
 import { TerminalRateLimitBadge } from "./TerminalRateLimitBadge";
-import { TerminalWatchChip } from "./TerminalWatchChip";
+import { TerminalNotifyChip } from "./TerminalNotifyChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
 export interface TerminalHeaderContentProps {
@@ -364,10 +364,10 @@ export function TerminalHeaderContent({
           pane's header clips first (#12374). */}
       <SubagentChip terminalId={id} />
 
-      {/* Terminal watches (#12491) — self-gating; shown only while an agent in
-          this pane holds watches that may wake it, and the one place the user
-          can stop them. */}
-      {hasPtyKind && <TerminalWatchChip terminalId={id} />}
+      {/* Terminal notices — self-gating; shown only while an agent in this
+          pane is waiting to hear about other terminals, and the one place the
+          user can stop them. */}
+      {hasPtyKind && <TerminalNotifyChip terminalId={id} />}
 
       {/* Input locked indicator — bare ambient glyph. */}
       {isInputLocked && (

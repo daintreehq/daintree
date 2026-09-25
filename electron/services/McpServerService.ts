@@ -39,8 +39,8 @@ import { handleSkillsSearch, handleSkillsLoad } from "./mcp-server/skills.js";
 import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
 import { handleTerminalGetStatusViewless } from "./mcp-server/terminalStatus.js";
 import { handleTerminalReadLastMessageOwned } from "./mcp-server/terminalLastMessage.js";
-import { TerminalWatchService, paneWatchKey } from "./mcp-server/terminalWatch.js";
-import type { PaneWatchState } from "../../shared/types/terminalWatch.js";
+import { TerminalNotifyService, paneNotifyKey } from "./mcp-server/terminalNotify.js";
+import type { PaneNotifyState } from "../../shared/types/terminalNotify.js";
 import { broadcastToProjectRenderers } from "../ipc/utils.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
@@ -96,8 +96,8 @@ export class McpServerService {
   private readonly auditService: AuditService;
   private readonly turnOutcomeService: TurnOutcomeService;
   private readonly httpLifecycle: HttpLifecycle;
-  /** Terminal watches and the pane wakes they cause (#12491). */
-  private readonly terminalWatch: TerminalWatchService;
+  /** Notices an orchestrating pane asked for, and the lines that deliver them. */
+  private readonly terminalNotify: TerminalNotifyService;
   /**
    * Resolver injected by `HelpSessionService` after construction. Returns
    * the help-session id bound to a terminal id, or null when the terminal
@@ -238,8 +238,8 @@ export class McpServerService {
       this.viewLeases
     );
 
-    // Subscribes to the bus and the pty-host only while a pane holds a watch.
-    this.terminalWatch = new TerminalWatchService({
+    // Subscribes to the bus and the pty-host only while a pane has a notice pending.
+    this.terminalNotify = new TerminalNotifyService({
       getPtyClient: () => getPtyClient(),
       onStateChanged: (listener) =>
         events.on("agent:state-changed", (payload) => listener(payload)),
@@ -248,10 +248,10 @@ export class McpServerService {
           if (payload.terminalId) listener(payload.terminalId);
         }),
       onTrashed: (listener) => events.on("terminal:trashed", (payload) => listener(payload.id)),
-      isEnabled: () => this.isEnabled() && this.isPaneWakeEnabled(),
+      isEnabled: () => this.isEnabled(),
       publish: (projectId, state) =>
         broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
-          name: "terminal:watch-state",
+          name: "terminal:notify-state",
           payload: state,
         }),
     });
@@ -333,7 +333,7 @@ export class McpServerService {
       // The pty-host's own spawn tracking spans every view, which is what a
       // collision check needs: a panel store only knows its own (#12407).
       isTerminalIdInUse: (terminalId) => getPtyClient()?.hasTerminal(terminalId) ?? false,
-      terminalWatch: this.terminalWatch,
+      terminalNotify: this.terminalNotify,
       getCachedManifest: () => this.bridge.getCachedManifest(),
       getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
       getCachedManifestForWorkspace: (workspaceId, preferredWebContentsId) =>
@@ -439,7 +439,7 @@ export class McpServerService {
 
   /**
    * Drop every ownership record a revoked pane bearer held (#12487), the
-   * hand-overs it held (#12490), and the watches it registered (#12491).
+   * hand-overs it held (#12490), and the notices it has pending.
    * Called by `McpPaneConfigService` in the same step as the revocation
    * itself.
    */
@@ -448,7 +448,7 @@ export class McpServerService {
     // A relaunched pane gets a new bearer, so a terminal handed to the old one
     // is not silently handed to the new one (#12490).
     this.sessionStore.terminalAdoption.revokePrincipal(principal);
-    this.terminalWatch.revokeOwner(paneWatchKey(principal));
+    this.terminalNotify.revokeOwner(paneNotifyKey(principal));
   }
 
   /**
@@ -582,29 +582,13 @@ export class McpServerService {
     });
   }
 
-  /**
-   * Whether the user lets watches wake their panes (#12491). Off unless the
-   * stored value is exactly `true`: a missing or malformed setting never types
-   * into anyone's prompt.
-   */
-  isPaneWakeEnabled(): boolean {
-    return this.getConfig().paneWakeEnabled === true;
+  getPaneNotifyState(terminalId: string): PaneNotifyState | null {
+    return this.terminalNotify.getPaneState(terminalId);
   }
 
-  setPaneWakeEnabled(enabled: boolean): boolean {
-    this.persistConfig({ paneWakeEnabled: enabled });
-    // Turning it off stops every watch now, not at its next wake.
-    if (!enabled) this.terminalWatch.disposeAll();
-    return this.isPaneWakeEnabled();
-  }
-
-  getPaneWatchState(terminalId: string): PaneWatchState | null {
-    return this.terminalWatch.getPaneState(terminalId);
-  }
-
-  /** The pane's own "stop": every watch it holds goes, and nothing more is typed. */
-  stopPaneWatches(terminalId: string): void {
-    this.terminalWatch.stopPane(terminalId);
+  /** The pane's own "stop": every notice it has pending goes, and nothing more is typed. */
+  stopPaneNotices(terminalId: string): void {
+    this.terminalNotify.stopPane(terminalId);
   }
 
   private emitStatusChange(): void {
@@ -688,7 +672,7 @@ export class McpServerService {
         this.emitRuntimeStateChange();
       }
     } else if (!enabled && (this.isRunning || this.httpLifecycle.isStartInFlight)) {
-      this.terminalWatch.disposeAll();
+      this.terminalNotify.disposeAll();
       // `stop()` awaits any in-flight `start()` before closing, so a disable
       // that races a slow start still tears the server down instead of
       // leaving it listening after the user turned it off.
@@ -757,7 +741,7 @@ export class McpServerService {
 
   async stop(): Promise<void> {
     // Nothing could read the observations a wake would point at.
-    this.terminalWatch.disposeAll();
+    this.terminalNotify.disposeAll();
     await this.httpLifecycle.stop();
     // The stop rejects every pending request, so the leases those requests own
     // have no one left to release them. Holding them would pin their views

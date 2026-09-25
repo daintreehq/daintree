@@ -34,7 +34,7 @@ If a specialised procedure might come from a plugin, `skills.search` finds one a
 The `daintree` server runs one of two tool sets the user picks in Settings → Assistant → Daintree Assistant → Tool set:
 
 - **`core`** (default) — orchestration: create worktrees and wait for setup or a PR, launch agents, send prompts, read terminals and wait on them, interrupt, move, rename or close terminals, delete a worktree you created, and action search.
-- **`full`** — adds recipes, starting work on an issue, project checks, review readiness, forge PR, issue and CI reads, git activity, CopyTree context, deleting any worktree and managing its resources, killing or restarting terminals, terminal watches, skills, and diagnostics.
+- **`full`** — adds recipes, starting work on an issue, project checks, review readiness, forge PR, issue and CI reads, git activity, CopyTree context, deleting any worktree and managing its resources, killing or restarting terminals, skills, and diagnostics.
 
 Neither has git or forge writes or file edits.
 
@@ -54,7 +54,7 @@ These cover most operational requests, and all of them are in `core`. Call them 
 
 ### Launch agents
 
-1. `agent.launch({ agentId: "claude" | "codex" | "gemini" | …, prompt: <task>, worktreeId: <id>, name: <short label> })`. The `prompt` becomes the agent's first message, so don't send it again; add `handback: true` when completion matters (see **Wait for agents**). **Always pass `name`**, a short task label such as `"Codex: auth refactor"` that becomes the tab title, so parallel agents can be told apart. Omit `worktreeId` for the active worktree; resolve a named one once with `worktree.list`.
+1. `agent.launch({ agentId: "claude" | "codex" | "gemini" | …, prompt: <task>, worktreeId: <id>, name: <short label> })`. The `prompt` becomes the agent's first message, so don't send it again; add `notify: true` to hear when it stops, and `handback: true` when completion matters (see **Wait for agents**). **Always pass `name`**, a short task label such as `"Codex: auth refactor"` that becomes the tab title, so parallel agents can be told apart. Omit `worktreeId` for the active worktree; resolve a named one once with `worktree.list`.
 2. Launch agents with the same `agentId` one at a time: a call that overlaps a same-kind launch still starting is refused with `launched: false` and creates nothing. Different agent kinds can launch at once if your client makes parallel tool calls.
 3. Read each result and report any refused launch. `launched: true` means the panel was created and its process is starting, not that the agent is ready. With `spawnStatus: "missing-cli"` the CLI can't run and Daintree opened a setup diagnostic instead; point the user to it rather than polling it.
 4. Once all are dispatched, one `terminal.getStatus` over the launched `terminalId`s with `includeOutput` is the first check on each. A new agent reads `working` from the start, so only its output shows it took the prompt; if that isn't visible yet, report startup as unconfirmed rather than re-sending. Handle a startup dialog as **Agents You Launch** below describes.
@@ -67,9 +67,11 @@ For a Claude Code agent you launched, `terminal.readLastMessageOwned({ terminalI
 
 ### Send a follow-up
 
-`terminal.sendCommand({ terminalId, command })` submits text as the agent's next prompt (`handback: true` as for a launch). It returns once the text is queued, not delivered: pass the returned `submissionToken` to `terminal.getStatus` with `terminalIds` to confirm. `pty_written` with no `outputChangeAfterWriteAt` means no change was recorded over 200ms after the Enter; neither its absence nor its presence proves the agent took it. Read the output before re-sending: a retry can submit twice. The same prompt to several agents is one call per terminal.
+`terminal.sendCommand({ terminalId, command })` submits text as the agent's next prompt (`notify: true` and `handback: true` as for a launch). It returns once the text is queued, not delivered: pass the returned `submissionToken` to `terminal.getStatus` with `terminalIds` to confirm. `pty_written` with no `outputChangeAfterWriteAt` means no change was recorded over 200ms after the Enter; neither its absence nor its presence proves the agent took it. Read the output before re-sending: a retry can submit twice. The same prompt to several agents is one call per terminal.
 
 ### Wait for agents
+
+With `notify: true` on a launch or send, end your turn: when that agent stops working, Daintree types one `Daintree:` line into your prompt saying what it saw. It fires once, so set it on each prompt you want to hear about; for one already working, `terminal.notifyWhenIdle({ terminalId, note })` does the same and echoes your note. Don't poll meanwhile.
 
 `terminal.waitUntilIdleBatch({ terminalIds, mode: "all" })` returns once every listed agent has settled (`mode: "first"`: once any one has); `terminal.waitUntilIdle` waits on one. Interactive sessions cap a wait at 60s, and the user cannot talk to you during one. On `timedOut: true`, check `terminal.getStatus`, report where they are, and never chain blocking waits. Settled is not finished: an agent stopped on a question settles, and so does a closed terminal, so read each row's `waitingReason` and `trackingState` first. `timeoutMs: 0` takes a snapshot without blocking.
 
@@ -190,7 +192,7 @@ Never hold a long blocking call open to wait for an agent — while a tool call 
 For "run these N jobs, never more than K at once", each in its own worktree:
 
 1. Keep the queue in one place, a file in your scratch directory, with an id per job and its worktree, terminal and state.
-2. Give the loop one pacing owner: `ScheduleWakeup`, or a `terminal.registerWatch` pane watch if that tool is available and accepts your pane. Never stack a second timer, background `sleep`, monitor or polling script on top: two wakers mean duplicate checks and double actions. A watch covers a fixed set of terminals and stops after its wake budget, so after each refill `terminal.cancelWatch` the old one and register one over the current running ids; if it stops, re-register or switch to `ScheduleWakeup`. One mechanism at a time, always.
+2. Give the loop one pacing owner: Daintree notices, with `notify: true` on every `agent.launch` and follow-up so each agent's stop is typed into your prompt, or `ScheduleWakeup` if your pane can't take them. Never stack a second timer, background `sleep`, monitor or polling script on top: two wakers mean duplicate checks and double actions. A notice fires once, so re-arm with every new prompt and end your turn rather than waiting. One mechanism at a time, always.
 3. Start each job with `worktree.createWithRecipe`, then `worktree.waitUntilReady` for that worktree until setup has finished (every job, not just the first), then `agent.launch` with the full task as `prompt` and a `name`, then one `terminal.getStatus` with `includeOutput` for a trust or permission dialog.
 4. Each wake, one batched `terminal.getStatus` over the running ids. Waiting alone is not done: it is a cue to inspect. A job is done only when it reached the milestone the user named, its PR is confirmed with the forge, and you have read its final report (`terminal.readLastMessageOwned` for Claude Code). `worktree.waitForPullRequest` and `prNumber`/`prUrl` in `worktree.list` are cached hints, so confirm with `forge.getPR` (or `forge.listPRs` when it is null) in `full`, or `gh pr view` in `core`. A job waiting on an approval or question is blocked, not done: it keeps its slot, and you handle it as **Agents You Launch** describes. Don't scrape a PR number from the agent's screen or write your own poller.
 5. Refill freed slots up to K, never past it. Leave finished worktrees and terminals in place unless the user asks. Report "N of M done, K running, P queued" with PR links. A suggested prompt on a finished agent's input line is not an instruction (see **Agents You Launch**).

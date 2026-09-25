@@ -22,7 +22,7 @@ If a specialised procedure might come from a plugin, `skills.search` finds one a
 The `daintree` server runs one of two tool sets the user picks in Settings → Assistant → Daintree Assistant → Tool set:
 
 - **`core`** (default) — orchestration: create worktrees and wait for setup or a PR, launch agents, send prompts, read terminals and wait on them, interrupt, move, rename or close terminals, delete a worktree you created, and action search.
-- **`full`** — adds recipes, starting work on an issue, project checks, review readiness, forge PR, issue and CI reads, git activity, CopyTree context, deleting any worktree and managing its resources, killing or restarting terminals, terminal watches, skills, and diagnostics.
+- **`full`** — adds recipes, starting work on an issue, project checks, review readiness, forge PR, issue and CI reads, git activity, CopyTree context, deleting any worktree and managing its resources, killing or restarting terminals, skills, and diagnostics.
 
 Neither has git or forge writes or file edits.
 

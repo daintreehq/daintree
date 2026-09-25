@@ -658,13 +658,22 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // headroom would let the surface grow back to its old size without a single
   // raise having to be argued. The external ceiling above does not move — that
   // list is unchanged.
-  const MAX_COHORT_PAYLOAD_BYTES = 133_800;
+  // 133_800 → 129_800 for terminal notices, measured at 129_791 B across 76
+  // tools. The four watch tools and their output schemas left MCP; in their
+  // place are `terminal.notifyWhenIdle` on core and a `notify` argument on the
+  // three submit paths. The external ceiling above does not move: an api-key
+  // client has no pane to notify, so `notify` is not advertised to it.
+  const MAX_COHORT_PAYLOAD_BYTES = 129_800;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
   it("keeps the third-party client surface within budget", async () => {
     const tools = await surface();
-    const total = tools.filter((t) => t.external).reduce((sum, t) => sum + wireBytes(t), 0);
+    // Measured as an api-key client receives it: arguments that need a pane of
+    // the caller's own are not advertised to that tier.
+    const total = tools
+      .filter((t) => t.external)
+      .reduce((sum, t) => sum + t.descriptionBytes + t.externalParamsBytes + t.outputBytes, 0);
 
     expect(total).toBeLessThanOrEqual(MAX_EXTERNAL_PAYLOAD_BYTES);
   });

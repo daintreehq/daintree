@@ -6,7 +6,7 @@ import { getAgentConfig } from "@/config/agents";
 import type { McpToolActivityState } from "@/controllers/HelpSessionController";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import type { TurnOutcomeAlertClass } from "@shared/types/ipc/mcpServer";
-import type { PaneWatchState } from "@shared/types/terminalWatch";
+import type { PaneNotifyState } from "@shared/types/terminalNotify";
 import { installPreviewShims } from "./previewShims";
 import { HelpPanelFooter } from "../HelpPanelFooter";
 import "@/index.css";
@@ -14,7 +14,7 @@ import "@/index.css";
 /**
  * Standalone visual-review harness for the assistant panel's footer status row.
  *
- * The footer's busiest states — a turn-outcome alert beside a live tool call, a watch
+ * The footer's busiest states — a turn-outcome alert beside a live tool call, a notice
  * chip, a diverged worktree — only occur mid-session and rarely together, so this
  * renders the real `HelpPanelFooter` from fixtures that name each state, against the
  * theme's real tokens and at the panel's real widths.
@@ -32,6 +32,7 @@ interface Fixture {
   outcome: TurnOutcomeAlertClass | null;
   pinned: PinnedActionContextSnapshot | null;
   diverged: boolean;
+  /** Terminals the lane is waiting to hear about; drives the notice chip. */
   watching: number;
 }
 
@@ -142,13 +143,12 @@ const fixtureName: FixtureName = isFixtureName(fixtureParam) ? fixtureParam : "r
 const width = Number(params.get("width")) || 380;
 const fixture: Fixture = FIXTURES[fixtureName];
 
-const watchState: PaneWatchState | null =
+const notifyState: PaneNotifyState | null =
   fixture.watching > 0
     ? {
         terminalId: "t-1",
-        watchCount: fixture.watching,
-        watchedTerminalCount: fixture.watching,
-        pendingEvents: 0,
+        pendingCount: fixture.watching,
+        readyCount: 0,
         delivery: { status: "idle" },
         revision: 1,
       }
@@ -159,8 +159,8 @@ installPreviewShims({
     {},
     {
       get: (_target, key) =>
-        key === "getPaneWatchState"
-          ? () => Promise.resolve(watchState)
+        key === "getPaneNotifyState"
+          ? () => Promise.resolve(notifyState)
           : key === "getAuditRecords"
             ? () => Promise.resolve([])
             : () =>

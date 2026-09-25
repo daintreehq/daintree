@@ -352,6 +352,29 @@ describe("agentActions adversarial", () => {
     }
   });
 
+  it("agent.launch refuses notify for a launch that starts no agent", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    for (const agentId of ["terminal", "browser", "dev-preview", "not-an-agent"]) {
+      await expect(
+        callAction(actions, "agent.launch", { agentId, prompt: "do it", notify: true })
+      ).rejects.toBeInstanceOf(UnactionableTargetError);
+    }
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("agent.launch launches an agent asked to notify exactly as it would otherwise", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", { agentId: "claude", prompt: "hi", notify: true });
+
+    const options: unknown = callbacks.onLaunchAgent.mock.calls[0]?.[1];
+    expect(options).toMatchObject({ prompt: "hi" });
+    expect(options).not.toHaveProperty("notify");
+  });
+
   it("agent.launch leaves the prompt alone when handback is not asked for", async () => {
     const callbacks = makeCallbacks();
     const actions = setupActions(callbacks);

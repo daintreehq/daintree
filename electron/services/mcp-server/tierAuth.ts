@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { ActionDispatchResult, ActionManifestEntry } from "../../../shared/types/actions.js";
 import { deriveBand, BAND_OVERRIDES } from "../../../shared/utils/actionRiskBand.js";
-import { toWireSchema } from "../../../shared/utils/mcpWireSchema.js";
+import { omitWireSchemaArgs, toWireSchema } from "../../../shared/utils/mcpWireSchema.js";
 import {
   TERMINAL_LAUNCH_ACTION_ID,
   TERMINAL_LAUNCH_ARGS,
@@ -1046,7 +1046,10 @@ export function readRequestedActionId(args: unknown): string | undefined {
  * See `shared/utils/mcpWireSchema.ts` for the full reasoning and for why
  * `additionalProperties: false` is deliberately not in the stripped set.
  */
-export function buildToolInputSchema(entry: ActionManifestEntry): Record<string, unknown> {
+export function buildToolInputSchema(
+  entry: ActionManifestEntry,
+  omittedArgs?: readonly string[]
+): Record<string, unknown> {
   if (
     entry.inputSchema &&
     typeof entry.inputSchema === "object" &&
@@ -1060,7 +1063,7 @@ export function buildToolInputSchema(entry: ActionManifestEntry): Record<string,
     // MCP already fixes the input schema dialect. Repeating its URI on every
     // tool adds no instruction or validation, but is billed on every turn.
     projected["additionalProperties"] = false;
-    return projected;
+    return omittedArgs === undefined ? projected : omitWireSchemaArgs(projected, omittedArgs);
   }
   return {
     type: "object",

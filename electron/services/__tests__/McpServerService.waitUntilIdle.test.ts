@@ -523,19 +523,19 @@ describe("McpServerService", () => {
       expect(tool?.annotations?.destructiveHint).toBe(false);
     });
 
-    it("listTools filters main-process tools by tier: core lists the wait but not the full-only watch", async () => {
-      // The wait is on both tool sets now, so its full-only sibling stands in
-      // for "a main-process tool this tier does not carry".
+    it("listTools filters main-process tools by tier: core lists the wait but not full-only skills search", async () => {
+      // The wait is on both tool sets now, so a full-only main-process tool
+      // stands in for "a main-process tool this tier does not carry".
       paneTokenTiers.set("token-wait-core-list", "core");
       const { window } = createMockWindow({
         getManifest: () => [
           waitUntilIdleManifestEntry(),
           {
             ...waitUntilIdleManifestEntry(),
-            id: "terminal.registerWatch" as ActionId,
-            name: "terminal.registerWatch",
-            title: "Watch Terminals",
-            description: "Register a terminal watch",
+            id: "skills.search" as ActionId,
+            name: "skills.search",
+            title: "Search Skills",
+            description: "Search the skills plugins contribute",
           },
         ],
       });
@@ -547,7 +547,7 @@ describe("McpServerService", () => {
 
       const ids = (await client.listTools()).tools.map((t) => t.name);
       expect(ids).toContain("terminal.waitUntilIdle");
-      expect(ids).not.toContain("terminal.registerWatch");
+      expect(ids).not.toContain("skills.search");
     });
 
     it("returns immediately for a terminal that is already idle", async () => {
@@ -1003,7 +1003,7 @@ describe("McpServerService", () => {
 
     it("rejects a full-only main-process tool from a core-tier session before invoking the handler", async () => {
       // Every tier carries the wait, so the gate in front of the main-process
-      // short-circuits is exercised with the full-only watch registration.
+      // short-circuits is exercised with the full-only skills search.
       paneTokenTiers.set("token-wait-deny", "core");
       const { window } = createMockWindow({ getManifest: () => [] });
       await service.start(window);
@@ -1013,8 +1013,8 @@ describe("McpServerService", () => {
       transports.push(transport);
 
       const result = (await client.callTool({
-        name: "terminal.registerWatch",
-        arguments: { terminalIds: ["anything"] },
+        name: "skills.search",
+        arguments: { query: "anything" },
       })) as TextToolResult;
 
       expect(result.isError).toBe(true);

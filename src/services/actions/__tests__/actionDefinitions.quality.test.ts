@@ -460,7 +460,10 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // since 29 KB of headroom would let the surface grow back without a single
   // raise being argued. The external total above does not move; that list is
   // unchanged.
-  const MAX_COHORT_TOTAL_BYTES = 27_484;
+  // 27_484 → 26_723 for terminal notices: the four watch descriptions (1_101 B)
+  // left MCP and `terminal.notifyWhenIdle` (340 B) took their place on core.
+  // Lowered to the measured total, as above. The external total does not move.
+  const MAX_COHORT_TOTAL_BYTES = 26_723;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

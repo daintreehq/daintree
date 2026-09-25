@@ -337,12 +337,6 @@ export interface StoreSchema {
     abusePolicyEnabled: boolean;
     abusePolicyMaxDenials: number;
     abusePolicyWindowMs: number;
-    /**
-     * Let terminal watches wake the watching agent's pane by typing one line
-     * into its prompt (#12491). Optional because stores written before it
-     * lack the key; anything but `true` reads as off.
-     */
-    paneWakeEnabled?: boolean;
   };
   /**
    * Help-assistant settings. Includes audit/permission configuration plus
@@ -813,7 +807,6 @@ const storeOptions = {
       abusePolicyEnabled: false,
       abusePolicyMaxDenials: 5,
       abusePolicyWindowMs: 60_000,
-      paneWakeEnabled: false,
     },
     helpAssistant: {
       docSearch: true,

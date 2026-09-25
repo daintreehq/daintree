@@ -505,8 +505,8 @@ export class TerminalInputController {
     ) {
       return;
     }
-    // Its requester took it back — the user stopped the watches, or turned
-    // pane wakes off — while the body waited for its Enter.
+    // Its requester took it back — the user stopped the pane's notices, or
+    // turned the MCP server off — while the body waited for its Enter.
     if (ctx?.isWithdrawn?.() === true) {
       return;
     }
