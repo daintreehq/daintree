@@ -701,6 +701,47 @@ describe("TerminalRestoreController", () => {
       expect(mockTerminal.reset).not.toHaveBeenCalled();
     });
 
+    it("does not count a failed fetch as a failure when live output arrived meanwhile", async () => {
+      const { terminalClient } = await import("@/clients");
+      let rejectFetch!: (err: Error) => void;
+      vi.mocked(terminalClient.getSerializedState).mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectFetch = reject;
+          })
+      );
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.recoverMissingOutput("t1");
+      await flushMicrotasks();
+      managed.deferredOutput.push({ data: "late", chunkCount: 1 });
+      rejectFetch(new Error("host gone"));
+
+      expect(await promise).toBe("live-output");
+      expect(managed.lastScrollbackRestoreError).toBeUndefined();
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "late", 1);
+    });
+
+    it("reports stale, not failed, when a newer restore supersedes a large replay", async () => {
+      const resolveFetch = await deferredFetch();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+      const big = "x".repeat(INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes + 1);
+
+      const promise = controller.recoverMissingOutput("t1");
+      await flushMicrotasks();
+      resolveFetch(snapshot(big));
+      await flushMicrotasks();
+      // A newer restore claims the terminal mid-replay.
+      managed.restoreGeneration += 1;
+      await flushScheduler();
+      await flushMicrotasks();
+
+      expect(await promise).toBe("stale");
+      expect(managed.lastScrollbackRestoreError).toBeUndefined();
+    });
+
     it("reports failed with a classified error when the fetch rejects", async () => {
       const { terminalClient } = await import("@/clients");
       vi.mocked(terminalClient.getSerializedState).mockRejectedValue(new Error("host gone"));

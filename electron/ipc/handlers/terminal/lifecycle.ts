@@ -1138,6 +1138,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
       }
+      // Before any await: a restart's respawn arms a fresh window for this id,
+      // and it must not be the one this kill clears.
+      settleSpawnConfirmation(id);
       // Capture a resume record before tearing down an agent terminal. The info
       // snapshot must precede the kill (it's gone afterward), and gracefulKill —
       // not a bare kill — is what extracts the session id, so route agent

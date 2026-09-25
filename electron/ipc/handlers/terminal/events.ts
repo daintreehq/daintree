@@ -80,7 +80,6 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   handlers.push(() => ptyClient.off("data", handlePtyData));
 
   const handlePtyExit = (id: string, exitCode: number) => {
-    settleSpawnConfirmation(id);
     // Best-effort: revoke any per-pane MCP token + delete the managed config
     // file. Idempotent — no-ops if no pane config was minted for this terminal.
     mcpPaneConfigService.revokePaneConfig(id).catch((err) => {

@@ -23,6 +23,12 @@ function classifyRestoreError(error: unknown): TerminalScrollbackRestoreError {
   return { type: "error", message: String(error), timestamp };
 }
 
+// Read through a function so the checks after an await aren't narrowed by the
+// entry guard: both fields change while the snapshot fetch is in flight.
+function hasBeenFed(managed: ManagedTerminal): boolean {
+  return managed.hasReceivedOutput === true || managed.deferredOutput.length > 0;
+}
+
 export type MissingOutputRecoveryOutcome =
   "recovered" | "no-host-output" | "live-output" | "stale" | "failed";
 
@@ -554,7 +560,7 @@ export class TerminalRestoreController {
         release();
         return "stale";
       }
-      if (managed.hasReceivedOutput || managed.deferredOutput.length > 0) {
+      if (hasBeenFed(managed)) {
         release();
         return "live-output";
       }
@@ -564,16 +570,22 @@ export class TerminalRestoreController {
       }
 
       const restored = await this.restoreFetchedState(id, snapshot.data, snapshot);
-      if (!restored) {
-        release();
-        return "failed";
+      if (restored) return "recovered";
+      release();
+      // The replay took its own generation, so a `false` with no classified
+      // error is a newer restore superseding it, not a replay that broke.
+      if (this.deps.getInstance(id) !== managed || !managed.lastScrollbackRestoreError) {
+        return "stale";
       }
-      return "recovered";
+      return "failed";
     } catch (error) {
-      managed.lastScrollbackRestoreError = classifyRestoreError(error);
+      // Output that arrived while the fetch was failing proves the pane is
+      // being fed; a failed fetch says nothing about lost output then.
+      const fed = hasBeenFed(managed);
+      if (!fed) managed.lastScrollbackRestoreError = classifyRestoreError(error);
       logError(`Failed to fetch state to recover terminal ${id}`, error);
       release();
-      return "failed";
+      return fed ? "live-output" : "failed";
     }
   }
 

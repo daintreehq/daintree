@@ -1183,6 +1183,14 @@ class TerminalInstanceService {
     const unsubData = terminalClient.onData(id, (data: string | Uint8Array) => {
       this.burstController.onEchoData(id);
       if (this.dataBuffer.isPolling()) return;
+      // Receipt is stamped at ingress, not at paint: a chunk still held in the
+      // ingest queue or diverted to the parse worker has reached this pane, and
+      // missing-output recovery must never reset over output that is merely
+      // queued (#12754).
+      const receiving = this.instances.get(id);
+      if (receiving && (typeof data === "string" ? data.length : data.byteLength) > 0) {
+        receiving.hasReceivedOutput = true;
+      }
       // Worker-ingest diversion (issue #10960): while a terminal is in (or
       // transitioning through) worker mode, main-thread chunks route into the
       // controller — it acks them immediately and lands them on the mirror
@@ -2013,6 +2021,14 @@ class TerminalInstanceService {
       }
       Object.assign(managed, addons);
       managed.terminal = terminal;
+      // The receipt flag describes the buffer, and this one is empty. The
+      // replay below restamps it on success; on failure the pane is back to
+      // never-fed, so missing-output recovery may take it on (#12754).
+      managed.hasReceivedOutput = false;
+      managed.outputRecoveryFirstSeenAt = undefined;
+      managed.outputRecoveryNextProbeAt = undefined;
+      managed.outputRecoveryFailures = undefined;
+      managed.outputRecoveryGaveUp = undefined;
       // A replacement Terminal brings a brand-new RenderService with its own
       // pause state. attachGeneration doesn't move here, so without this the
       // fresh renderer inherits the old one's give-up latch and — since it

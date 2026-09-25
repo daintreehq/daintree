@@ -5,7 +5,7 @@
  * has spawned anything, and the renderer marks the pane ready on that return.
  * If the host is wedged or too busy to answer, the pane is a blank xterm with
  * no banner. This arms a per-terminal timer at dispatch; the host's
- * `spawn-result` or an `exit` for the id settles it, and expiry reports what
+ * `spawn-result` or a kill of the id settles it, and expiry reports what
  * was observed — no answer yet — through the renderer's existing spawn-error
  * path. A late real result still arrives and clears the banner on success.
  *
@@ -15,6 +15,10 @@
  */
 
 import type { SpawnError } from "../../../../shared/types/pty-host.js";
+
+// Not settled on `exit`: the public exit event carries no launch generation,
+// and a restart's killed predecessor exits AFTER its successor has armed, which
+// would silently disarm the successor's window.
 
 // Matches the retry path's own spawn wait (errorHandlers.ts): long enough that
 // a cold boot replaying many terminals through a busy host doesn't flash a
