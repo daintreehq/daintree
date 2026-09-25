@@ -11,6 +11,7 @@ import { useFleetEscapeChords } from "./useFleetEscapeChords";
 import { useFleetRibbonFlashes } from "./useFleetRibbonFlashes";
 import { buildConfirmMessage, type FleetConfirmActionId } from "./buildConfirmMessage";
 import { FleetCountChip } from "./FleetCountChip";
+import { fleetExitChordLabel } from "./fleetKeys";
 import { FleetFailureBanner } from "./FleetFailureBanner";
 import { SavedFleetsSection } from "./SavedFleetsSection";
 import { SaveFleetDialog } from "./SaveFleetDialog";
@@ -634,7 +635,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         transition: { type: "spring" as const, duration: 0.2, bounce: 0.12 },
       };
 
-  const exitChordLabel = isMac() ? "⌘Esc" : "Ctrl+Esc";
+  const exitChordLabel = fleetExitChordLabel(isMac());
 
   return (
     <>

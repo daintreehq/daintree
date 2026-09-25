@@ -1,17 +1,32 @@
 import { CirclePlay, Keyboard, ListChecks, Sparkles } from "lucide-react";
 import { MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import { MockLines, MockPane, MockTyping } from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
+import { tourKeycaps, tourShortcutHint, type TourKeyboard } from "../tourKeys";
+import { useCue, useTourKeyboard } from "../useTourPlayer";
 import { MockKeys, MockMenu, MockSearchField, type MockMenuItem } from "./sceneParts";
 
 const PALETTE = { x: 170, y: 48, width: 300 } as const;
 
 // Real palette rows: the action's title, its summary, and its shortcut — no icons.
-const RESULTS: readonly MockMenuItem[] = [
-  { label: "New worktree", detail: "Create a worktree for a new task", hint: "⌘K ⌘N" },
-  { label: "New terminal", detail: "Open a shell in this worktree", hint: "⌘⌥T" },
-  { label: "New window", detail: "Open another Daintree window", hint: "⌘⇧⌥N" },
-];
+function results(keyboard: TourKeyboard): MockMenuItem[] {
+  return [
+    {
+      label: "New worktree",
+      detail: "Create a worktree for a new task",
+      hint: tourShortcutHint("worktree.createDialog.open", keyboard),
+    },
+    {
+      label: "New terminal",
+      detail: "Open a shell in this worktree",
+      hint: tourShortcutHint("terminal.new", keyboard),
+    },
+    {
+      label: "New window",
+      detail: "Open another Daintree window",
+      hint: tourShortcutHint("app.newWindow", keyboard),
+    },
+  ];
+}
 // Help drops from the menu bar, so it hangs from the window's top edge.
 const HELP_MENU = { x: 360, y: 0, width: 180 } as const;
 
@@ -21,6 +36,7 @@ export function PaletteScene() {
   const typed = useCue("type", 0.9);
   const stepped = useCue("type", 2.5);
   const help = useCue("help");
+  const keyboard = useTourKeyboard();
 
   return (
     <MockApp
@@ -43,7 +59,12 @@ export function PaletteScene() {
         </MockGrid>
       }
     >
-      <MockKeys keys={["⌘", "⇧", "P"]} x={320} y={180} visible={keys && !palette} />
+      <MockKeys
+        keys={tourKeycaps("action.palette.open", keyboard)}
+        x={320}
+        y={180}
+        visible={keys && !palette}
+      />
       <MockMenu
         visible={palette && !help}
         active={stepped ? 1 : 0}
@@ -55,7 +76,7 @@ export function PaletteScene() {
             <TypedQuery />
           </MockSearchField>
         }
-        items={typed ? RESULTS : []}
+        items={typed ? results(keyboard) : []}
       />
       <MockMenu
         visible={help}
@@ -69,8 +90,17 @@ export function PaletteScene() {
         items={[
           { icon: <ListChecks />, label: "Getting Started" },
           { icon: <CirclePlay />, label: "Daintree Tour" },
-          { icon: <Keyboard />, label: "Keyboard Shortcuts", hint: "⌘/" },
-          { icon: <Sparkles />, label: "Launch Help Agent", hint: "⌘⇧H", separator: true },
+          {
+            icon: <Keyboard />,
+            label: "Keyboard Shortcuts",
+            hint: tourShortcutHint("help.shortcutsAlt", keyboard),
+          },
+          {
+            icon: <Sparkles />,
+            label: "Launch Help Agent",
+            hint: tourShortcutHint("help.launchAgent", keyboard),
+            separator: true,
+          },
         ]}
       />
     </MockApp>

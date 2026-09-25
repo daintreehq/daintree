@@ -15,13 +15,15 @@ import {
   type CursorStep,
   type MockAgentId,
 } from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
+import { fleetExitChordLabel } from "@/components/Fleet/fleetKeys";
+import { useCue, useTourKeyboard } from "../useTourPlayer";
 import { MockSpotlight } from "./sceneParts";
 
 const PANES: readonly MockAgentId[] = ["claude", "codex", "antigravity"];
 const PROMPT = "Run the tests";
 const SEND = { cue: "send" } as const;
-const SHIFT = "⇧ Shift";
+/** Marks the steps that hold Shift; drawn with the keyboard's own label. */
+const SHIFT = "shift";
 
 const GAP = 6;
 const PANE_WIDTH = (GRID_RECT.width - GAP * 2) / 3;
@@ -50,7 +52,7 @@ const CURSOR: readonly CursorStep[] = [
 ];
 
 /** The fleet ribbon as the app draws it: amber tint, a left stripe, the count, and Exit. */
-function FleetRibbon({ count }: { count: number }) {
+function FleetRibbon({ count, mac }: { count: number; mac: boolean }) {
   return (
     <div className="relative mb-1.5 flex h-6 shrink-0 items-center gap-2 rounded-sm border-b border-border-default bg-category-amber-subtle px-2 text-3xs text-text-primary before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-category-amber-text">
       <X className="size-2.5 text-text-secondary" aria-hidden="true" />
@@ -60,7 +62,7 @@ function FleetRibbon({ count }: { count: number }) {
       </span>
       <span className="flex-1" />
       <span className="rounded-sm bg-overlay-subtle px-1.5 py-px text-text-secondary">
-        Exit ⌘Esc
+        Exit {fleetExitChordLabel(mac)}
       </span>
     </div>
   );
@@ -78,6 +80,7 @@ export function FleetScene() {
   const sent = useCue("send");
   const left = useCue("exit", 0.55);
   const cursor = useMockCursor({ x: 420, y: 300 }, CURSOR);
+  const mac = useTourKeyboard() === "mac";
 
   const antigravityIn = third && (!outAgain || backIn);
   const armed = [firstPair && !left, firstPair && !left, antigravityIn && !left];
@@ -102,7 +105,7 @@ export function FleetScene() {
         // No reserved space: the ribbon appears only once two panels are armed,
         // and the panels give up the room it takes.
         <div className="flex size-full flex-col">
-          {count >= 2 && <FleetRibbon count={count} />}
+          {count >= 2 && <FleetRibbon count={count} mac={mac} />}
           <MockGrid columns={3} className="min-h-0 flex-1">
             {PANES.map((agent, i) => {
               const mirrored = typing && !sent && i > 0 && armed[i];
@@ -156,7 +159,11 @@ export function FleetScene() {
         targets={bolt ? ["sidebar-arm"] : ["claude-armed", "codex-armed", "antigravity-armed"]}
         visible={markers && !typeCue}
       />
-      <MockCursor {...cursor} visible={cursor.visible && !left} />
+      <MockCursor
+        {...cursor}
+        modifier={cursor.modifier === SHIFT ? (mac ? "⇧ Shift" : "Shift") : null}
+        visible={cursor.visible && !left}
+      />
     </MockApp>
   );
 }

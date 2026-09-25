@@ -13,9 +13,13 @@ import type { TourChapter } from "./tourTypes";
  * of register. The current narration uses none: the plain read is the one
  * that's been chosen.
  *
- * Write for the ear: spell out shortcuts ("Command J"), no symbols, no
- * abbreviations the voice would have to guess at. Editing a chapter's words or
- * directions marks its generated timing stale until the audio is regenerated.
+ * Write for the ear: no symbols, no abbreviations the voice would have to guess
+ * at. Shortcuts are `{{tokens}}`, never spelled out: `{{action.id}}` for an
+ * action's default binding, `{{Alt+Enter}}` for a key the app hard-codes. A
+ * chapter with a token is voiced once per keyboard ("Command Option O" on a
+ * Mac, "Control Alt O" on Windows and Linux), each with its own timing.
+ * Editing a chapter's words or directions marks its generated timing stale
+ * until the audio is regenerated.
  */
 export const TOUR_CHAPTERS: readonly TourChapter[] = [
   {
@@ -103,7 +107,7 @@ export const TOUR_CHAPTERS: readonly TourChapter[] = [
     summary:
       "All agents lists every agent across every project, with whatever is waiting on you at the top of each group. Park anything that can wait.",
     narration:
-      "Once you have agents running in more than one project, [[open]] press Command Option O to see all your agents at once. They're grouped by project, with [[sort]] whatever is waiting on you at the top of each group. [[park]] If something can wait, press Option Enter to park it. The agent keeps running, but it stops asking for your attention until you're ready.",
+      "Once you have agents running in more than one project, [[open]] press {{pilot.toggle}} to see all your agents at once. They're grouped by project, with [[sort]] whatever is waiting on you at the top of each group. [[park]] If something can wait, press {{Alt+Enter}} to park it. The agent keeps running, but it stops asking for your attention until you're ready.",
   },
   {
     id: "assistant",
@@ -117,9 +121,9 @@ export const TOUR_CHAPTERS: readonly TourChapter[] = [
     id: "palette",
     title: "Find anything",
     summary:
-      "Command Shift P searches every action in Daintree. The Help menu has this tour, the Getting Started checklist, and every shortcut.",
+      "The command palette searches every action in Daintree. The Help menu has this tour, the Getting Started checklist, and every shortcut.",
     narration:
-      "When you can't remember where something lives, [[palette]] press Command Shift P. [[type]] Type what you want to do, and every action in Daintree is right there. [[help]] The Help menu has this tour, the Getting Started checklist, and all the keyboard shortcuts.",
+      "When you can't remember where something lives, [[palette]] press {{action.palette.open}}. [[type]] Type what you want to do, and every action in Daintree is right there. [[help]] The Help menu has this tour, the Getting Started checklist, and all the keyboard shortcuts.",
   },
   {
     id: "outro",

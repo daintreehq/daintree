@@ -10,7 +10,9 @@ import {
   reveal,
   type MockAgentId,
 } from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
+import { pilotParkKeys } from "@/components/Pilot/pilotKeys";
+import { tourKeycaps } from "../tourKeys";
+import { useCue, useTourKeyboard } from "../useTourPlayer";
 import { MockKeys, MockSearchField, MockSpotlight } from "./sceneParts";
 
 const PALETTE = { x: 150, y: 44, width: 340 } as const;
@@ -83,6 +85,10 @@ export function PilotScene() {
   const enterKey = useCue("park", 1.9);
   const parked = useCue("park", 2.5);
   const editorOpen = editing && !parked;
+  const keyboard = useTourKeyboard();
+  const parkHint = pilotParkKeys(keyboard === "mac");
+  // The same keys the footer hint shows ("⌥↵", "Alt+↵"), one cap each.
+  const parkKeycaps = keyboard === "mac" ? Array.from(parkHint) : parkHint.split("+");
 
   return (
     <MockApp
@@ -107,7 +113,12 @@ export function PilotScene() {
         </MockGrid>
       }
     >
-      <MockKeys keys={["⌘", "⌥", "O"]} x={320} y={180} visible={keys && !open} />
+      <MockKeys
+        keys={tourKeycaps("pilot.toggle", keyboard)}
+        x={320}
+        y={180}
+        visible={keys && !open}
+      />
       <div
         className={cn(
           "absolute z-20 flex flex-col rounded-lg border border-border-strong bg-surface-dialog p-2 shadow-[var(--theme-shadow-ambient)]",
@@ -173,11 +184,11 @@ export function PilotScene() {
             <span className="text-text-primary">↵</span> Open
           </span>
           <span data-tour-anchor="pilot-park">
-            <span className="text-text-primary">⌥↵</span> Park
+            <span className="text-text-primary">{parkHint}</span> Park
           </span>
         </div>
       </div>
-      <MockKeys keys={["⌥", "↵"]} x={320} y={300} visible={parkCue && !parkKeys} />
+      <MockKeys keys={parkKeycaps} x={320} y={300} visible={parkCue && !parkKeys} />
       <MockKeys keys={["↵"]} x={320} y={300} visible={enterKey && !parked} />
       {/* "Whatever is waiting on you" — the top of each group, then the Park hint. */}
       <MockSpotlight

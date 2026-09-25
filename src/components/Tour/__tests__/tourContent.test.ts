@@ -2,6 +2,14 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TOUR_CHAPTERS } from "../tourChapters";
+import {
+  narrationVariant,
+  narrationVariants,
+  resolveKeyTokens,
+  TOUR_KEYBOARDS,
+  tourKeycaps,
+  tourShortcutHint,
+} from "../tourKeys";
 import { narrationFingerprint, parseNarration } from "../tourNarration";
 import { TOUR_CHAPTER_TITLES, TOUR_MINUTES } from "../tourSummary.generated";
 import { resolveChapterTiming, resolveTourTimings, tourMinutes } from "../tourTiming";
@@ -78,6 +86,25 @@ function cuesReadBy(source: string): Set<string> {
   return ids;
 }
 
+/** A modifier then a key, however it's written: "Command J", "Ctrl+Shift+P", "Command-P". "Shift-click" is prose. */
+const SPELLED_OUT_SHORTCUT =
+  /\b(?:cmd|ctrl|command|control|option|alt)-[a-z0-9]\b|\b(?:cmd|ctrl|command|control|option|alt|shift)(?:\s*\+\s*|\s+)(?:[a-z0-9]\b|enter\b|return\b|escape\b|esc\b|tab\b|shift\b|option\b|alt\b|control\b|ctrl\b)/i;
+
+describe("spelled-out shortcut guard", () => {
+  it.each([
+    "press Command J",
+    "Ctrl+Shift+P",
+    "cmd+k",
+    "press Shift Enter",
+    "Option Return",
+    "press Command-P",
+  ])("catches %s", (text) => expect(text).toMatch(SPELLED_OUT_SHORTCUT));
+  it.each(["Shift-click a panel's title bar", "press Enter to send it", "any control you like"])(
+    "leaves %s alone",
+    (text) => expect(text).not.toMatch(SPELLED_OUT_SHORTCUT)
+  );
+});
+
 describe("tour content", () => {
   it("gives every chapter a scene and every scene a chapter", () => {
     expect(new Set(TOUR_CHAPTERS.map((c) => c.id))).toEqual(new Set(Object.keys(SCENE_FILES)));
@@ -91,34 +118,72 @@ describe("tour content", () => {
   it.each(TOUR_CHAPTERS.map((c) => [c.id, c] as const))(
     "%s: the scene only reads cues its narration defines, and uses all of them",
     (id, chapter) => {
-      const defined = new Set(Object.keys(parseNarration(chapter.narration).cueWordIndex));
       const read = cuesReadBy(readFileSync(join(SCENES_DIR, SCENE_FILES[id]!), "utf8"));
-      expect(read).toEqual(defined);
+      // One scene plays every keyboard's reading, so each must define the same cues.
+      for (const variant of narrationVariants(chapter)) {
+        const defined = new Set(Object.keys(parseNarration(variant.narration).cueWordIndex));
+        expect(read, variant.key).toEqual(defined);
+      }
     }
   );
 
   it("writes narration the voice can read without guessing", () => {
     for (const chapter of TOUR_CHAPTERS) {
-      expect(parseNarration(chapter.narration).text).not.toMatch(/[⌘⌥⇧→←/]|\bcmd\b|\bctrl\b/i);
+      for (const variant of narrationVariants(chapter)) {
+        expect(parseNarration(variant.narration).text, variant.key).not.toMatch(
+          /[⌘⌥⇧→←/{}]|\bcmd\b|\bctrl\b/i
+        );
+      }
     }
   });
 
-  it("ships generated timing that matches the current narration", () => {
+  // Prerecorded audio can't follow the viewer's platform, so any shortcut it
+  // names has to be a token, voiced once per keyboard.
+  it("never spells out a shortcut in the narration source", () => {
     for (const chapter of TOUR_CHAPTERS) {
-      const entry = TOUR_TIMING_MANIFEST.chapters[chapter.id];
-      expect(entry, `${chapter.id} has no generated timing — run npm run tour:audio`).toBeDefined();
+      const untokenized = chapter.narration.replace(/\{\{[^{}]*\}\}/g, "");
+      expect(untokenized, chapter.id).not.toMatch(SPELLED_OUT_SHORTCUT);
+      expect(chapter.summary, chapter.id).not.toMatch(SPELLED_OUT_SHORTCUT);
+    }
+  });
+
+  it("speaks each keyboard's own key names", () => {
+    const pilot = TOUR_CHAPTERS.find((c) => c.id === "pilot")!;
+    expect(narrationVariant(pilot, "mac").narration).toContain("press Command Option O");
+    expect(narrationVariant(pilot, "pc").narration).toContain("press Control Alt O");
+    const palette = TOUR_CHAPTERS.find((c) => c.id === "palette")!;
+    expect(narrationVariant(palette, "mac").narration).toContain("press Command Shift P");
+    expect(narrationVariant(palette, "pc").narration).toContain("press Control Shift P");
+    // A chapter with no shortcut is voiced once and shared.
+    const welcome = TOUR_CHAPTERS[0]!;
+    expect(narrationVariants(welcome).map((v) => v.key)).toEqual(["welcome"]);
+  });
+
+  it("ships generated timing that matches the current narration", () => {
+    const keys = TOUR_CHAPTERS.flatMap((chapter) => narrationVariants(chapter));
+    for (const { key, narration } of keys) {
+      const entry = TOUR_TIMING_MANIFEST.chapters[key];
+      expect(entry, `${key} has no generated timing — run npm run tour:audio`).toBeDefined();
       if (!entry) continue;
       // Every cue the narration names was voiced, and lands inside the chapter.
-      expect(Object.keys(entry.cues).sort()).toEqual(
-        Object.keys(parseNarration(chapter.narration).cueWordIndex).sort()
-      );
+      const parsed = parseNarration(narration);
+      expect(Object.keys(entry.cues).sort()).toEqual(Object.keys(parsed.cueWordIndex).sort());
       for (const [cue, at] of Object.entries(entry.cues)) {
-        expect(at >= 0 && at < entry.duration, `${chapter.id}.${cue} at ${at}s`).toBe(true);
+        expect(at >= 0 && at < entry.duration, `${key}.${cue} at ${at}s`).toBe(true);
       }
-      expect(entry.narrationHash, `${chapter.id} is stale — run npm run tour:audio`).toBe(
-        narrationFingerprint(parseNarration(chapter.narration))
+      expect(entry.narrationHash, `${key} is stale — run npm run tour:audio`).toBe(
+        narrationFingerprint(parsed)
+      );
+      // Captions are the narration as voiced, word for word.
+      expect(entry.captions.map((caption) => caption.text).join(" "), key).toBe(parsed.text);
+      expect(entry.audioUrl, `${key} has no published audio`).toMatch(
+        /^https:\/\/cdn\.daintree\.org\//
       );
     }
+    // Nothing left over from a chapter or keyboard that no longer exists.
+    expect(Object.keys(TOUR_TIMING_MANIFEST.chapters).sort()).toEqual(
+      keys.map((v) => v.key).sort()
+    );
   });
 });
 
@@ -127,7 +192,7 @@ describe("tour content", () => {
 describe("tour summary", () => {
   it("quotes the length the player's timings add up to", () => {
     expect(TOUR_MINUTES, "the tour summary is stale — run npm run tour:audio").toBe(
-      tourMinutes(resolveTourTimings())
+      Math.max(...TOUR_KEYBOARDS.map((keyboard) => tourMinutes(resolveTourTimings(keyboard))))
     );
   });
 
@@ -170,16 +235,72 @@ describe("resolveChapterTiming", () => {
   });
 
   it("uses generated timing and audio when it was made from this narration", () => {
-    const timing = resolveChapterTiming(chapter, manifestWith(fingerprint));
+    const timing = resolveChapterTiming(chapter, "mac", manifestWith(fingerprint));
     expect(timing.duration).toBe(99);
     expect(timing.audioUrl).toBe("https://cdn.daintree.org/tour/test.ogg");
   });
 
   it("falls back to an estimate, without audio, when the narration has changed", () => {
-    const timing = resolveChapterTiming(chapter, manifestWith("00000000"));
+    const timing = resolveChapterTiming(chapter, "mac", manifestWith("00000000"));
     expect(timing.audioUrl).toBeNull();
     expect(Object.keys(timing.cues).sort()).toEqual(
       Object.keys(parseNarration(chapter.narration).cueWordIndex).sort()
     );
+  });
+});
+
+describe("resolveChapterTiming on each keyboard", () => {
+  const pilot = TOUR_CHAPTERS.find((c) => c.id === "pilot")!;
+  const manifest: TourTimingManifest = {
+    version: 1,
+    voice: "test",
+    chapters: Object.fromEntries(
+      TOUR_KEYBOARDS.map((keyboard) => {
+        const variant = narrationVariant(pilot, keyboard);
+        return [
+          variant.key,
+          {
+            duration: 50,
+            cues: {},
+            captions: [],
+            audioUrl: `https://cdn.daintree.org/tour/${variant.key}.ogg`,
+            narrationHash: narrationFingerprint(parseNarration(variant.narration)),
+          },
+        ];
+      })
+    ),
+  };
+
+  it("plays the recording voiced for the viewer's keyboard", () => {
+    expect(resolveChapterTiming(pilot, "mac", manifest).audioUrl).toContain("pilot.mac");
+    expect(resolveChapterTiming(pilot, "pc", manifest).audioUrl).toContain("pilot.pc");
+  });
+
+  it("falls back silently, with that keyboard's captions, when its recording is missing", () => {
+    const { ["pilot.pc"]: _missing, ...rest } = manifest.chapters;
+    const timing = resolveChapterTiming(pilot, "pc", { ...manifest, chapters: rest });
+    expect(timing.audioUrl).toBeNull();
+    expect(timing.captions.map((c) => c.text).join(" ")).toContain("Control Alt O");
+  });
+});
+
+describe("tour shortcut tokens", () => {
+  it("rejects a token that is neither an action nor a key combo", () => {
+    expect(() => resolveKeyTokens("press {{Pilot.toggle}}", "mac")).toThrow(/neither/);
+    expect(() => resolveKeyTokens("press {{pilot.toggel}}", "pc")).toThrow(/neither/);
+  });
+
+  it("speaks a literal combo and a chord in each keyboard's words", () => {
+    expect(resolveKeyTokens("{{Alt+Enter}}", "mac")).toBe("Option Return");
+    expect(resolveKeyTokens("{{Alt+Enter}}", "pc")).toBe("Alt Enter");
+    expect(resolveKeyTokens("{{ worktree.createDialog.open }}", "pc")).toBe(
+      "Control K, then Control N"
+    );
+  });
+
+  it("draws keycaps for one step only, and a chord as a hint", () => {
+    expect(() => tourKeycaps("worktree.createDialog.open", "mac")).toThrow(/single-step/);
+    expect(tourShortcutHint("worktree.createDialog.open", "mac")).toBe("⌘K ⌘N");
+    expect(tourShortcutHint("worktree.createDialog.open", "pc")).toBe("Ctrl+K Ctrl+N");
   });
 });

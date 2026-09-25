@@ -35,6 +35,7 @@ import {
 import { BAND_GLYPH, BAND_GLYPH_TONE, PilotRunState } from "./PilotRunState";
 import { PilotFilterBar } from "./PilotFilterBar";
 import { PilotFooterHint } from "./PilotFooterHint";
+import { pilotDrillKeys, pilotParkKeys } from "./pilotKeys";
 import { PilotParkEditor, type PilotGateCandidate, type PilotParkTarget } from "./PilotParkEditor";
 import { isMac } from "@/lib/platform";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -626,7 +627,7 @@ function PilotFooter({
         )}
         {parkLabel !== null && (
           <PilotFooterHint
-            keys={isMac() ? "⌥↵" : "Alt+↵"}
+            keys={pilotParkKeys(isMac())}
             label={parkLabel}
             onClick={onPark}
             testId="pilot-park-hint"
@@ -634,7 +635,7 @@ function PilotFooter({
         )}
         {drillLabel !== null && (
           <PilotFooterHint
-            keys={isMac() ? "⌘↵" : "Ctrl+↵"}
+            keys={pilotDrillKeys(isMac())}
             label={drillLabel}
             onClick={onDrill}
             testId="pilot-drill-hint"
