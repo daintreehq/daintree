@@ -243,6 +243,17 @@ export interface HydrateResult {
    */
   systemTmpDir?: string;
   /**
+   * The machine the view's project lives on: its platform, home and temp
+   * directories. Commands, paths and labels the renderer builds for that
+   * machine use these rather than the client's own. Locally they equal this
+   * process's `process.platform`, `os.homedir()` and `os.tmpdir()`. Optional
+   * for payloads built without them (the switch prefetch), where the renderer
+   * falls back to its own platform and `systemTmpDir`.
+   */
+  hostPlatform?: "darwin" | "linux" | "win32";
+  hostHomeDir?: string;
+  hostTmpDir?: string;
+  /**
    * Per-project layout state folded into the hydrate payload so the renderer
    * skips the standalone `getTabGroups`/`getTerminalSizes`/`getDraftInputs`
    * round-trips on the panel-restore critical path. Populated (with the same

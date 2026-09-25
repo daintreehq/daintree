@@ -7,7 +7,8 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { isMac, isWindows } from "@/lib/platform";
+import { isMac } from "@/lib/platform";
+import { isHostMac, isHostWindows, isRemoteWindow } from "@/hooks/useHostPlatform";
 import type React from "react";
 import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
@@ -190,6 +191,12 @@ interface TerminalContextMenuProps {
    * menu from the keyboard never lands on a row standing in for it.
    */
   proxy?: boolean;
+}
+
+/** Named for the host's file manager, which is where the hovered path lives. */
+function revealInFolderLabel(): string {
+  if (isHostMac()) return "Reveal in Finder";
+  return isHostWindows() ? "Show in Explorer" : "Show in folder";
 }
 
 /**
@@ -709,6 +716,14 @@ function TerminalContextMenuBody({
 
       if (actionId.startsWith("reveal-in-finder:")) {
         const path = actionId.slice("reveal-in-finder:".length);
+        // The path is the host's; a remote host's file manager is on a screen
+        // nobody is looking at, so hand the path over instead.
+        if (isRemoteWindow()) {
+          void navigator.clipboard.writeText(path).catch((error: unknown) => {
+            reportFileLinkFailure("Failed to copy host path", error, path);
+          });
+          return;
+        }
         // Unlike copy-link, guard rejections (OUTSIDE_ROOT) and a since-deleted
         // file (NOT_FOUND) are real, expected failure modes here — surface them
         // rather than fire-and-forget. dispatch wraps the thrown error as
@@ -1670,7 +1685,7 @@ function TerminalContextMenuBody({
                     onSelect={() => handleAction(`reveal-in-finder:${hoveredFilePath}`)}
                   >
                     <FolderOpen className={ICON_CLASS} aria-hidden="true" />
-                    {mac ? "Reveal in Finder" : isWindows() ? "Show in Explorer" : "Show in folder"}
+                    {isRemoteWindow() ? "Copy host path" : revealInFolderLabel()}
                   </ContextMenuItem>
                 </>
               )}

@@ -5,11 +5,12 @@ import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { notify } from "@/lib/notify";
 import { detectCloudSyncService, type Platform } from "@/utils/cloudSyncDetection";
 import { getCloudSyncWarningCopy } from "@/utils/cloudSyncWarningCopy";
-import { isMac, isLinux } from "@/lib/platform";
+import { isHostLinux, isHostMac } from "@/hooks/useHostPlatform";
 
+// The project path and home dir are the host's, so the sync roots are too.
 function getPlatform(): Platform {
-  if (isMac()) return "mac";
-  if (isLinux()) return "linux";
+  if (isHostMac()) return "mac";
+  if (isHostLinux()) return "linux";
   return "windows";
 }
 

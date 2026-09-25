@@ -15,7 +15,8 @@ import {
   getSoundsDirectory,
 } from "../../services/getSoundService.js";
 import { store } from "../../store.js";
-import type { HandlerDependencies } from "../types.js";
+import type { HandlerDependencies, IpcContext } from "../types.js";
+import { getIpcDispatcher } from "../dispatcher.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
 import { typedHandle } from "../utils.js";
 import { sanitizeNotificationSettingsPatch } from "../../utils/notificationSettingsPatch.js";
@@ -49,6 +50,37 @@ async function soundFiles(): Promise<SoundFilesMap> {
     cachedSoundFiles = await getSoundFiles();
   }
   return cachedSoundFiles;
+}
+
+/**
+ * Forwards a Shell-side notification send whose deciding half belongs to the
+ * host the sender is attached to. Returns true when it took the message, so
+ * this machine does not also act on it.
+ */
+export type NotificationHostRelay = (
+  senderWebContentsId: number,
+  channel: string,
+  args: unknown[]
+) => boolean;
+
+let hostRelay: NotificationHostRelay | null = null;
+
+export function setNotificationHostRelay(relay: NotificationHostRelay | null): () => void {
+  hostRelay = relay;
+  return () => {
+    if (hostRelay === relay) hostRelay = null;
+  };
+}
+
+function parseWatchedIds(payload: unknown): string[] | null {
+  if (!Array.isArray(payload)) return null;
+  return payload.filter((v): v is string => typeof v === "string");
+}
+
+function terminalIdOf(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const terminalId = (payload as Record<string, unknown>).terminalId;
+  return typeof terminalId === "string" ? terminalId : null;
 }
 
 export function registerNotificationHandlers(deps: HandlerDependencies): () => void {
@@ -119,8 +151,11 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
   };
 
   const handleSyncWatched = (event: Electron.IpcMainEvent, payload: unknown): void => {
-    if (!Array.isArray(payload)) return;
-    const ids = payload.filter((v): v is string => typeof v === "string");
+    const ids = parseWatchedIds(payload);
+    if (ids === null) return;
+    // The host that runs this view's agents decides when to notify, so it is
+    // the one that needs to know which panels are watched.
+    if (hostRelay?.(event.sender.id, CHANNELS.NOTIFICATION_SYNC_WATCHED, [payload])) return;
     // Pin the sender synchronously: the service import is async, and a view
     // destroyed while it settles would otherwise have its state resurrected by
     // the late sync — a leak no destroy event can clean up.
@@ -202,6 +237,55 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
     );
   };
 
+  // A view on a remote Shell, reached over a link: its handle is the owner, and
+  // its endpoint closing is the purge that a WebContents "destroyed" is locally.
+  const remoteOwners = new Map<number, { dispose(): void }>();
+  const trackRemoteOwner = (ctx: IpcContext): number | null => {
+    if (ctx.event !== null || ctx.endpoint.isClosed()) return null;
+    const ownerId = ctx.webContentsId;
+    if (!remoteOwners.has(ownerId)) {
+      remoteOwners.set(
+        ownerId,
+        ctx.endpoint.onClose(() => {
+          if (!remoteOwners.delete(ownerId)) return;
+          void getAgentNotificationService()
+            .then((svc) => svc.removeOwner(ownerId))
+            .catch((err) => console.error("[notifications] removeOwner failed:", err));
+        })
+      );
+    }
+    return ownerId;
+  };
+
+  const handleRemoteSyncWatched = (ctx: IpcContext, payload: unknown): void => {
+    const ids = parseWatchedIds(payload);
+    if (ids === null) return;
+    const ownerId = trackRemoteOwner(ctx);
+    if (ownerId === null) return;
+    void getAgentNotificationService()
+      .then((svc) => {
+        if (!remoteOwners.has(ownerId)) return;
+        svc.syncWatchedPanels(ownerId, ids);
+      })
+      .catch((err) => console.error("[notifications] syncWatched failed:", err));
+  };
+
+  const handleRemoteWaitingAcknowledge = (_ctx: IpcContext, payload: unknown): void => {
+    const terminalId = terminalIdOf(payload);
+    if (terminalId === null) return;
+    void getAgentNotificationService()
+      .then((svc) => svc.acknowledgeWaiting(terminalId))
+      .catch((err) => console.error("[notifications] acknowledgeWaiting failed:", err));
+  };
+
+  const handleRemoteWorkingPulseAcknowledge = (_ctx: IpcContext, payload: unknown): void => {
+    const terminalId = terminalIdOf(payload);
+    if (terminalId === null) return;
+    void getAgentNotificationService()
+      .then((svc) => svc.acknowledgeWorkingPulse(terminalId))
+      .catch((err) => console.error("[notifications] acknowledgeWorkingPulse failed:", err));
+  };
+
   const handleGetSoundDir = async (): Promise<string> => {
     return getSoundsDirectory();
   };
@@ -214,6 +298,20 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
   ipcMain.on(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, handleWaitingAcknowledge);
   ipcMain.on(CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE, handleWorkingPulseAcknowledge);
   ipcMain.on(CHANNELS.NOTIFICATION_SESSION_MUTE_SET, handleSessionMuteSet);
+
+  // Link sends only: this machine's own views arrive through ipcMain above.
+  const dispatcher = getIpcDispatcher();
+  cleanups.push(
+    dispatcher.registerSend(CHANNELS.NOTIFICATION_SYNC_WATCHED, handleRemoteSyncWatched),
+    dispatcher.registerSend(
+      CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE,
+      handleRemoteWaitingAcknowledge
+    ),
+    dispatcher.registerSend(
+      CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE,
+      handleRemoteWorkingPulseAcknowledge
+    )
+  );
 
   cleanups.push(typedHandle(CHANNELS.NOTIFICATION_SETTINGS_GET, handleSettingsGet));
   cleanups.push(typedHandle(CHANNELS.NOTIFICATION_SETTINGS_SET, handleSettingsSet));
@@ -233,6 +331,8 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
     );
     ipcMain.removeListener(CHANNELS.NOTIFICATION_SESSION_MUTE_SET, handleSessionMuteSet);
     trackedOwners.clear();
+    for (const subscription of remoteOwners.values()) subscription.dispose();
+    remoteOwners.clear();
     cleanups.forEach((c) => c());
   };
 }

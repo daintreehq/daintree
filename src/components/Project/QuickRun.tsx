@@ -26,6 +26,7 @@ import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl
 import { KbdChord } from "@/components/ui/Kbd";
 import { isMac } from "@/lib/platform";
 import { describeChord } from "@/lib/kbdShortcut";
+import { hostScopedKey } from "@/hooks/useHostPlatform";
 
 interface QuickRunProps {
   projectId: string;
@@ -154,7 +155,7 @@ export function useQuickRunExpanded(projectId: string | null): [boolean, () => v
   const read = (id: string | null) => {
     if (id == null) return false;
     try {
-      return localStorage.getItem(`${EXPANDED_KEY_PREFIX}${id}`) === "true";
+      return localStorage.getItem(`${EXPANDED_KEY_PREFIX}${hostScopedKey(id)}`) === "true";
     } catch {
       return false;
     }
@@ -170,7 +171,7 @@ export function useQuickRunExpanded(projectId: string | null): [boolean, () => v
     setState({ projectId, expanded: next });
     if (projectId == null) return;
     try {
-      localStorage.setItem(`${EXPANDED_KEY_PREFIX}${projectId}`, String(next));
+      localStorage.setItem(`${EXPANDED_KEY_PREFIX}${hostScopedKey(projectId)}`, String(next));
     } catch {
       // a session that cannot persist still gets the toggle
     }
@@ -250,7 +251,9 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   const [runAsDocked, setRunAsDocked] = useState(false);
   const [autoRestart, setAutoRestart] = useState(() => {
     try {
-      return localStorage.getItem(`${AUTO_RESTART_KEY_PREFIX}${projectId}`) === "true";
+      return (
+        localStorage.getItem(`${AUTO_RESTART_KEY_PREFIX}${hostScopedKey(projectId)}`) === "true"
+      );
     } catch {
       return false;
     }
@@ -258,7 +261,9 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
 
   useEffect(() => {
     try {
-      setAutoRestart(localStorage.getItem(`${AUTO_RESTART_KEY_PREFIX}${projectId}`) === "true");
+      setAutoRestart(
+        localStorage.getItem(`${AUTO_RESTART_KEY_PREFIX}${hostScopedKey(projectId)}`) === "true"
+      );
     } catch {
       setAutoRestart(false);
     }
@@ -292,7 +297,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   }, []);
 
   useEffect(() => {
-    const saved = localStorage.getItem(`${HISTORY_KEY_PREFIX}${projectId}`);
+    const saved = localStorage.getItem(`${HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
@@ -305,11 +310,11 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
           setHistory(parsed);
         } else {
           console.warn("Invalid history format, resetting");
-          localStorage.removeItem(`${HISTORY_KEY_PREFIX}${projectId}`);
+          localStorage.removeItem(`${HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`);
         }
       } catch (e) {
         logError("Failed to parse command history", e);
-        localStorage.removeItem(`${HISTORY_KEY_PREFIX}${projectId}`);
+        localStorage.removeItem(`${HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`);
       }
     }
   }, [projectId]);
@@ -324,7 +329,10 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         newItem,
         ...prev.filter((h) => normalizeCommand(h.command) !== normalizedNew),
       ].slice(0, MAX_HISTORY);
-      localStorage.setItem(`${HISTORY_KEY_PREFIX}${projectId}`, JSON.stringify(newHistory));
+      localStorage.setItem(
+        `${HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`,
+        JSON.stringify(newHistory)
+      );
       return newHistory;
     });
   };
@@ -481,7 +489,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     setAutoRestart((prev) => {
       const next = !prev;
       try {
-        localStorage.setItem(`${AUTO_RESTART_KEY_PREFIX}${projectId}`, String(next));
+        localStorage.setItem(`${AUTO_RESTART_KEY_PREFIX}${hostScopedKey(projectId)}`, String(next));
       } catch {
         // ignore
       }

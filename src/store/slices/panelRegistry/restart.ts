@@ -70,6 +70,7 @@ import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
+import { resolveHostTmpDir } from "@/hooks/useHostPlatform";
 
 // Lazy accessor to break circular dependency: restart -> projectStore -> panelPersistence -> core.
 let _cachedProjectStore: typeof import("@/store/projectStore").useProjectStore | null = null;
@@ -484,7 +485,7 @@ export const createRestartActions = (
       try {
         const [agentSettings, tmpDir] = await Promise.all([
           agentSettingsClient.get(),
-          systemClient.getTmpDir().catch(() => ""),
+          resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
         ]);
         const entry = (agentSettings?.agents?.[effectiveAgentId] ?? {}) as AgentSettingsEntry;
         const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[effectiveAgentId];
@@ -1401,7 +1402,7 @@ export const createRestartActions = (
     try {
       const [agentSettings, tmpDir] = await Promise.all([
         agentSettingsClient.get(),
-        systemClient.getTmpDir().catch(() => ""),
+        resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
       ]);
       const entry = agentSettings?.agents?.[effectiveAgentId] ?? {};
       const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[effectiveAgentId];
