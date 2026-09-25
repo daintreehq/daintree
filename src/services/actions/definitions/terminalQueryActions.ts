@@ -46,7 +46,7 @@ import {
 } from "@/store/slices/panelRegistry/panelCount";
 import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
 import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
-import { NOTIFY_ARG_DESCRIPTION } from "@shared/types/terminalNotify";
+import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 
@@ -855,6 +855,7 @@ export function registerTerminalQueryActions(
         ),
       handback: HANDBACK_ARG_SCHEMA,
       notify: NOTIFY_ARG_SCHEMA,
+      replyLines: NotifyReplyLinesSchema,
     }),
     resultSchema: TerminalSendCommandResultSchema,
     mcpOutputSchema: true,
@@ -973,6 +974,7 @@ export function registerTerminalQueryActions(
         ),
       handback: HANDBACK_ARG_SCHEMA,
       notify: NOTIFY_ARG_SCHEMA,
+      replyLines: NotifyReplyLinesSchema,
     }),
     resultSchema: TerminalSendCommandResultSchema,
     mcpOutputSchema: true,

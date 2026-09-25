@@ -134,6 +134,7 @@ import {
   type PendingNotify,
   type TerminalNotifyHandlers,
 } from "./terminalNotify.js";
+import { NotifyReplyLinesSchema } from "../../../shared/types/terminalNotify.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -431,13 +432,13 @@ function prepareTerminalListDispatch(
  * the renderer knows the effective agent registry, so `agent.launch` is what
  * refuses `notify` for a shell or panel, and that refusal cancels the notice.
  * Only an actual boolean is read; anything else is left for the renderer's own
- * schema validation to reject. The owned send rebuilds its arguments from
- * `forwardArgs`, which never names the flag.
+ * schema validation to reject; `replyLines` goes with it. The owned send
+ * rebuilds its arguments from `forwardArgs`, which never names the flag.
  */
 function prepareNotifyDispatch(
   actionId: string,
   args: unknown
-): { dispatchArgs: unknown; notify: boolean } {
+): { dispatchArgs: unknown; notify: boolean; replyLines?: number } {
   if (
     !NOTIFY_SEND_TOOLS.has(actionId) ||
     args === null ||
@@ -446,9 +447,19 @@ function prepareNotifyDispatch(
   ) {
     return { dispatchArgs: args, notify: false };
   }
-  const { notify, ...rest } = args as Record<string, unknown>;
+  const { notify, replyLines, ...rest } = args as Record<string, unknown>;
   if (typeof notify !== "boolean") return { dispatchArgs: args, notify: false };
-  return { dispatchArgs: actionId === AGENT_LAUNCH_TOOL ? args : rest, notify };
+  // A malformed `replyLines` stays in the forwarded arguments so the
+  // renderer's schema rejects the call, the same as a malformed `notify`.
+  const parsedLines = NotifyReplyLinesSchema.safeParse(replyLines);
+  const sendArgs = parsedLines.success ? rest : { ...rest, replyLines };
+  return {
+    dispatchArgs: actionId === AGENT_LAUNCH_TOOL ? args : sendArgs,
+    notify,
+    ...(parsedLines.success && parsedLines.data !== undefined
+      ? { replyLines: parsedLines.data }
+      : {}),
+  };
 }
 
 /**
@@ -1239,7 +1250,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     );
     // A send's or launch's `notify` is decided here and taken off the forwarded
     // copy the same way; see `prepareNotifyDispatch`.
-    const { dispatchArgs, notify } = prepareNotifyDispatch(actionId, listDispatchArgs);
+    const { dispatchArgs, notify, replyLines } = prepareNotifyDispatch(actionId, listDispatchArgs);
     // The follow-up a `notify: true` call set up before dispatch. Completed
     // with the envelope once the action returns, and cancelled by the shared
     // `finally` on every other way out, so a refused or failed call never
@@ -2263,13 +2274,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   "`notify` needs a `prompt`: there is no work to finish without one. Nothing was launched."
                 );
               }
-              pendingNotify = await terminalNotify.prepareLaunch(pane);
+              pendingNotify = await terminalNotify.prepareLaunch(pane, { replyLines });
             } else {
               const targetId = ownedResourceId ?? readStringArg(args, "terminalId");
               if (targetId === undefined || targetId.length === 0) {
                 return refuse(NOTIFY_VALIDATION_ERROR, "`notify` needs a `terminalId`.");
               }
-              pendingNotify = await terminalNotify.prepareSend(pane, targetId);
+              pendingNotify = await terminalNotify.prepareSend(pane, targetId, { replyLines });
             }
           } catch (err) {
             if (err instanceof TerminalNotifyError) return refuse(err.code, err.message);

@@ -233,8 +233,15 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         notify: {
           description:
-            "Daintree types one line into your own prompt when this agent next stops working, so end your turn instead of polling. Agent panes and assistants only.",
+            "When this agent next stops working, Daintree types a notice into your own prompt with its last screen lines (its reply), so end your turn instead of polling. Agent panes and assistants only.",
           type: "boolean",
+        },
+        replyLines: {
+          description:
+            "With notify: how many of the agent's last screen lines the notice quotes (default 40, 0 for none). With handback, the quote ends at the marker.",
+          type: "integer",
+          minimum: 0,
+          maximum: 200,
         },
         systemPrompt: {
           description:
@@ -2121,8 +2128,15 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         notify: {
           description:
-            "Daintree types one line into your own prompt when this agent next stops working, so end your turn instead of polling. Agent panes and assistants only.",
+            "When this agent next stops working, Daintree types a notice into your own prompt with its last screen lines (its reply), so end your turn instead of polling. Agent panes and assistants only.",
           type: "boolean",
+        },
+        replyLines: {
+          description:
+            "With notify: how many of the agent's last screen lines the notice quotes (default 40, 0 for none). With handback, the quote ends at the marker.",
+          type: "integer",
+          minimum: 0,
+          maximum: 200,
         },
       },
       required: ["terminalId", "command"],

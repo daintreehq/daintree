@@ -36,7 +36,7 @@ import {
   LAUNCHABLE_AGENT_IDS,
 } from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
-import { NOTIFY_ARG_DESCRIPTION } from "@shared/types/terminalNotify";
+import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import {
   hasSystemPromptOverride,
@@ -367,6 +367,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       // Acted on in main, which sets up the notice; `run()` only refuses it for
       // a launch with no agent to watch.
       notify: z.boolean().optional().describe(NOTIFY_ARG_DESCRIPTION),
+      replyLines: NotifyReplyLinesSchema,
       systemPrompt: z
         .string()
         .max(SYSTEM_PROMPT_MAX_LENGTH)

@@ -7,11 +7,12 @@ import { z } from "zod";
  * Asked for per call — `notify: true` on a send or launch, or
  * `terminal.notifyWhenIdle` for a terminal that is already working — and never
  * on Daintree's own initiative. A notice fires once, at the first settle out
- * of `working`, and Daintree types one self-contained line into the asking
- * pane's own prompt. The line carries only what Daintree observed and, for
- * `terminal.notifyWhenIdle`, the caller's own note; nothing the watched
- * terminal printed ever goes into it. Notices live in main, belong to the
- * asking pane, and go when it exits.
+ * of `working`, and Daintree types one self-contained notice into the asking
+ * pane's own prompt. The first line carries only what Daintree observed and
+ * the caller's own note. Below it, unless the caller asked for none, come the
+ * target's last screen lines in a fenced block labelled as terminal output, so
+ * an orchestrator reads the reply without another call. Notices live in main,
+ * belong to the asking pane, and go when it exits.
  */
 
 /** Notices one pane may have pending at once, launches still in flight included. */
@@ -37,6 +38,14 @@ export const MIN_NOTIFY_INTERVAL_MS = 5_000;
 export const NOTIFY_COALESCE_MS = 2_000;
 /** How long the asking pane must have been settled before it is typed into. */
 export const NOTIFY_SETTLE_GRACE_MS = 1_500;
+/** Screen lines of the target a notice quotes when the caller does not say. */
+export const NOTIFY_REPLY_LINES_DEFAULT = 40;
+/** Most screen lines a notice quotes per terminal. */
+export const NOTIFY_REPLY_LINES_MAX = 200;
+/** Characters of quoted output kept per terminal, newest first. */
+export const NOTIFY_REPLY_MAX_CHARS = 6_000;
+/** Characters of quoted output one delivered notice carries across all terminals. */
+export const NOTIFY_REPLIES_TOTAL_MAX_CHARS = 20_000;
 
 /**
  * Where a pane's next delivery stands.
@@ -93,7 +102,19 @@ const WAITING_REASON_VALUES = ["prompt", "question", "approval", "error"] as con
  * drift apart.
  */
 export const NOTIFY_ARG_DESCRIPTION =
-  "Daintree types one line into your own prompt when this agent next stops working, so end your turn instead of polling. Agent panes and assistants only.";
+  "When this agent next stops working, Daintree types a notice into your own prompt with its last screen lines (its reply), so end your turn instead of polling. Agent panes and assistants only.";
+
+/** Model-facing description of `replyLines`, shared like {@link NOTIFY_ARG_DESCRIPTION}. */
+export const NOTIFY_REPLY_LINES_DESCRIPTION =
+  "With notify: how many of the agent's last screen lines the notice quotes (default 40, 0 for none). With handback, the quote ends at the marker.";
+
+export const NotifyReplyLinesSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(NOTIFY_REPLY_LINES_MAX)
+  .optional()
+  .describe(NOTIFY_REPLY_LINES_DESCRIPTION);
 
 export const TerminalNotifyWhenIdleArgsSchema = z.object({
   terminalId: z
@@ -108,6 +129,7 @@ export const TerminalNotifyWhenIdleArgsSchema = z.object({
     .describe(
       "Echoed back in the notice, such as what to do next. One line, at most 160 characters."
     ),
+  replyLines: NotifyReplyLinesSchema,
 });
 export type TerminalNotifyWhenIdleArgs = z.infer<typeof TerminalNotifyWhenIdleArgsSchema>;
 

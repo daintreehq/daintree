@@ -12,3 +12,7 @@ A desktop application for orchestrating AI coding agents: many agents in paralle
 ## Local Tools
 
 Filesystem and `gh`, for reading only. Apart from the scratch folder a note in this file names, treat everything as read-only: don't edit, create or delete files or settings, and don't use the shell to change anything. This is instruction rather than enforcement — assume nothing stops you, so the restraint is yours.
+
+## Calling Tools from `exec`
+
+If your tools run through `exec`, call them as `tools.mcp__daintree__agent_launch(...)` (the action ID with dots as underscores) and `tools.mcp__daintree_runbooks__search_runbooks(...)`. Don't print `ALL_TOOLS`: every entry repeats the server's instructions, so the list is huge; a runbook's examples give the arguments. From a result print only `r.structuredContent`, since the whole object holds the same data twice. Launch several agents from one script.

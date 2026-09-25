@@ -28,7 +28,7 @@ export function registerTerminalNotifyActions(
     id: "terminal.notifyWhenIdle",
     title: "Notify when terminal is idle",
     description:
-      "Be told when a working agent terminal stops, instead of polling. Returns at once; when it next leaves working, Daintree types one line into your own prompt saying what it saw, with your note. End your turn after calling. A terminal not working comes back unarmed with its state. For a prompt you are sending, set notify on the send instead.",
+      "Be told when a working agent terminal stops, instead of polling. Returns at once; when it next leaves working, Daintree types a notice into your own prompt: what it saw, your note, and its last screen lines. End your turn after calling. A terminal not working comes back unarmed with its state. For a prompt you are sending, set notify on the send instead.",
     category: "terminal",
     kind: "command",
     danger: "safe",

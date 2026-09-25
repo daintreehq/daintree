@@ -954,7 +954,7 @@ describe("terminal notices", () => {
       });
 
       expect(result.isError).not.toBe(true);
-      expect(terminalNotify.prepareSend).toHaveBeenCalledWith(OWN_PANE, "t-a");
+      expect(terminalNotify.prepareSend).toHaveBeenCalledWith(OWN_PANE, "t-a", {});
       expect(terminalNotify.prepareSend.mock.invocationCallOrder[0]).toBeLessThan(
         dispatchAction.mock.invocationCallOrder[0]!
       );
@@ -968,6 +968,32 @@ describe("terminal notices", () => {
         submissionToken: "tok-1",
       });
       expect(pending.cancel).not.toHaveBeenCalled();
+    });
+
+    it("hands the notice the reply length it asked for, and strips it from the send", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-send-reply-lines");
+
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "vote", notify: true, replyLines: 12 },
+      });
+
+      expect(terminalNotify.prepareSend).toHaveBeenCalledWith(OWN_PANE, "t-a", { replyLines: 12 });
+      expect(dispatchAction.mock.calls[0]?.[1]).toEqual({ terminalId: "t-a", command: "vote" });
+    });
+
+    it("forwards a malformed reply length for the send's own schema to reject", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-send-reply-lines-bad");
+
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "vote", notify: true, replyLines: -1 },
+      });
+
+      expect(terminalNotify.prepareSend).toHaveBeenCalledWith(OWN_PANE, "t-a", {});
+      expect(dispatchAction.mock.calls[0]?.[1]).toMatchObject({ replyLines: -1 });
     });
 
     it("leaves a send without the flag alone", async () => {
@@ -1065,7 +1091,7 @@ describe("terminal notices", () => {
         arguments: { agentId: "claude", prompt: "plan it", notify: true },
       });
 
-      expect(terminalNotify.prepareLaunch).toHaveBeenCalledWith(OWN_PANE);
+      expect(terminalNotify.prepareLaunch).toHaveBeenCalledWith(OWN_PANE, {});
       expect(dispatchAction).toHaveBeenCalledTimes(1);
       // A launch keeps the flag: the renderer, which knows the agent registry,
       // is what refuses it for a shell or panel.

@@ -1,6 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- window globals and CLI transcripts are untyped */
 import { test, expect, type Page } from "@playwright/test";
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  appendFileSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
@@ -9,27 +17,108 @@ import { openAndOnboardProject } from "../helpers/project";
 import { getTerminalTextById } from "../helpers/terminal";
 
 /**
- * The Daintree Assistant running a real multi-agent workflow end to end: the
- * assistant (Codex) is asked to poll five real agent CLIs for a fact, have them
- * vote, and tally the result. Nothing is faked — every agent is the installed
- * CLI on its own subscription — so this is opt-in and never part of a suite:
+ * The Daintree Assistant running real workflows end to end. Every agent is the
+ * installed CLI on its own subscription, so this is opt-in and never part of a
+ * suite. Pick scenarios by id, comma separated, or `all`:
  *
- *   DAINTREE_E2E_ASSISTANT_WORKFLOW=1 npx playwright test --project=online assistant-workflow
+ *   DAINTREE_E2E_ASSISTANT_WORKFLOW=facts-vote npx playwright test --project=online assistant-workflow
  *
+ * `DAINTREE_E2E_ASSISTANT_AGENT` picks the assistant CLI (`codex` by default).
  * `DAINTREE_RUNBOOKS_MCP_URL` passes through, so a local runbook server can be
- * exercised. The run writes a timeline, every terminal's final text and the
- * assistant's runbook queries into the test's output folder.
+ * exercised. Each scenario writes a timeline, screenshots, every terminal's
+ * final text, the assistant's transcript and a metrics.json into the test's
+ * output folder.
+ *
+ * Worker CLIs meet a fresh fixture folder and ask whether to trust it. A user
+ * running these in their own project has trusted it long ago, so the harness
+ * answers those dialogs the way that user would, and logs each one.
  */
 
-const ENABLED = process.env.DAINTREE_E2E_ASSISTANT_WORKFLOW === "1";
-const WORKFLOW_TIMEOUT_MS = 30 * 60_000;
-const POLL_MS = 15_000;
-/** How long the whole fleet must sit still, assistant included, to call the run over. */
-const QUIET_MS = 3 * 60_000;
+const SELECTED = (process.env.DAINTREE_E2E_ASSISTANT_WORKFLOW ?? "").trim();
+const ASSISTANT_AGENT = process.env.DAINTREE_E2E_ASSISTANT_AGENT ?? "codex";
+const POLL_MS = 5_000;
+/** How long the assistant and every worker must sit still to call a turn over. */
+const QUIET_MS = 45_000;
+const TRUST_DIALOG =
+  /Trust this folder\?|Trust and continue|do you trust|trust the files in this folder|Is this a project you created or one you trust/i;
 
-const WORKERS = ["claude", "antigravity", "opencode", "grok", "codex"] as const;
+interface ScenarioContext {
+  page: Page;
+  assistantId: string;
+  workers: TerminalInfo[];
+  finalText: string;
+  worktreeCount: number;
+  metrics: TurnMetrics;
+}
 
-const QUERY = `I need you to ask Claude, Anti-Gravity, OpenCode, Grok and Codex each to give you one interesting fact. You don't have to explore the codebase. Just ask each one to give you one interesting fact off the top of its head, not related to the codebase. Specifically say that.
+interface Scenario {
+  id: string;
+  /** Files written into the fixture repo before it is opened. */
+  project: Record<string, string>;
+  /** The user's messages, in order; each waits for the previous turn to settle. */
+  messages: string[];
+  timeoutMs: number;
+  check: (ctx: ScenarioContext) => void | Promise<void>;
+}
+
+const INVENTORY_PROJECT: Record<string, string> = {
+  "README.md": `# stockroom
+
+A small command-line tool that tracks warehouse stock levels. It reads a CSV of
+items, applies receipts and shipments, and warns when an item falls below its
+reorder point.
+
+Run \`node src/cli.js report stock.csv\` to print the current levels.
+`,
+  "package.json": JSON.stringify(
+    { name: "stockroom", version: "0.3.0", private: true, scripts: { test: "node --test" } },
+    null,
+    2
+  ),
+  "src/stock.js": `export function applyMovement(levels, movement) {
+  const current = levels.get(movement.sku) ?? 0;
+  // TODO: shipments larger than stock silently go negative
+  levels.set(movement.sku, current + movement.quantity);
+  return levels;
+}
+
+export function belowReorderPoint(levels, reorderPoints) {
+  return [...levels].filter(([sku, qty]) => qty < (reorderPoints.get(sku) ?? 0));
+}
+`,
+  "src/csv.js": `export function parseCsv(text) {
+  // Naive: breaks on quoted commas.
+  return text.trim().split("\\n").map((line) => line.split(","));
+}
+`,
+  "src/cli.js": `import { readFileSync } from "node:fs";
+import { parseCsv } from "./csv.js";
+import { applyMovement } from "./stock.js";
+
+const [, , command, file] = process.argv;
+if (command !== "report") {
+  console.error("usage: cli.js report <file>");
+  process.exit(1);
+}
+const levels = new Map();
+for (const [sku, quantity] of parseCsv(readFileSync(file, "utf8"))) {
+  applyMovement(levels, { sku, quantity: Number(quantity) });
+}
+for (const [sku, qty] of levels) console.log(sku, qty);
+`,
+  "stock.csv": "A-100,12\nB-200,4\nA-100,-3\nC-300,40\n",
+  "test/stock.test.js": `import { test } from "node:test";
+import assert from "node:assert";
+import { applyMovement } from "../src/stock.js";
+
+test("applies a receipt", () => {
+  const levels = applyMovement(new Map(), { sku: "A", quantity: 5 });
+  assert.equal(levels.get("A"), 5);
+});
+`,
+};
+
+const FACTS_QUERY = `I need you to ask Claude, Anti-Gravity, OpenCode, Grok and Codex each to give you one interesting fact. You don't have to explore the codebase. Just ask each one to give you one interesting fact off the top of its head, not related to the codebase. Specifically say that.
 
 Next you need to:
 
@@ -40,14 +129,102 @@ Next you need to:
 
 Encourage each agent to respond quite quickly and give something that is completely unique that it doesn't think that any of the other agents will give. And have each agent also choose a runner-up and use those runner-ups if you ever need to do a tiebreaker.`;
 
+const FACT_WORKERS = ["claude", "antigravity", "opencode", "grok", "codex"];
+
+const SCENARIOS: Scenario[] = [
+  {
+    id: "question",
+    project: INVENTORY_PROJECT,
+    messages: ["How do I switch Daintree to a light theme?"],
+    timeoutMs: 5 * 60_000,
+    check: ({ workers, metrics }) => {
+      expect(workers, "a question launched agents").toEqual([]);
+      expect(metrics.runbookQueries, "a question searched the runbooks").toEqual([]);
+    },
+  },
+  {
+    id: "ask-one",
+    project: INVENTORY_PROJECT,
+    messages: [
+      "Ask Claude to read this project and tell me in one sentence what it does, then close it.",
+    ],
+    timeoutMs: 10 * 60_000,
+    check: ({ finalText, metrics }) => {
+      expect(metrics.launched, "Claude was never launched").toContain("claude");
+      expect(finalText, "the answer never reached the user").toMatch(/stock|warehouse|inventor/i);
+    },
+  },
+  {
+    id: "same-question",
+    project: INVENTORY_PROJECT,
+    messages: [
+      "Ask Claude and Codex the same question: which function in src/ is the most likely to cause a bug, and why? Bring both answers back side by side.",
+    ],
+    timeoutMs: 12 * 60_000,
+    check: ({ finalText, metrics }) => {
+      expect(metrics.launched).toEqual(expect.arrayContaining(["claude", "codex"]));
+      expect(finalText).toMatch(/applyMovement|parseCsv/);
+    },
+  },
+  {
+    id: "facts-vote",
+    project: INVENTORY_PROJECT,
+    messages: [FACTS_QUERY, "Great. Now close every agent except the winner."],
+    timeoutMs: 30 * 60_000,
+    check: ({ workers, finalText, metrics }) => {
+      for (const agent of FACT_WORKERS) {
+        expect(metrics.launched, `no ${agent} agent was launched`).toContain(agent);
+      }
+      expect(finalText, "the assistant never reported a tally").toMatch(/point/i);
+      expect(
+        workers.filter((t) => !t.isTrashed).length,
+        "more than the winner is still open"
+      ).toBeLessThanOrEqual(2);
+    },
+  },
+  {
+    id: "worktree-task",
+    project: INVENTORY_PROJECT,
+    messages: [
+      "Make a new worktree to stop shipments from taking stock below zero, and start Codex on it. Tell me when it has a fix.",
+    ],
+    timeoutMs: 25 * 60_000,
+    check: ({ worktreeCount, metrics }) => {
+      expect(worktreeCount, "no worktree was created").toBeGreaterThan(1);
+      expect(metrics.launched).toContain("codex");
+    },
+  },
+];
+
 interface TerminalInfo {
   id: string;
   launchAgentId?: string;
+  detectedAgentId?: string;
   title?: string;
   cwd: string;
   agentState?: string;
   hasPty?: boolean;
   isTrashed?: boolean;
+}
+
+interface ToolCall {
+  at: number;
+  name: string;
+  input: string;
+  outputBytes: number;
+}
+
+interface TurnMetrics {
+  seconds: number;
+  turns: number;
+  notices: number;
+  toolCalls: ToolCall[];
+  runbookQueries: string[];
+  launched: string[];
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  largestOutputs: Array<{ name: string; bytes: number }>;
 }
 
 async function allTerminals(page: Page): Promise<TerminalInfo[]> {
@@ -65,9 +242,20 @@ async function dispatch(page: Page, actionId: string, args?: unknown): Promise<a
   );
 }
 
-/** Codex session files written since `since`, newest first. */
-function codexSessionFiles(since: number): string[] {
+function seedProject(dir: string, files: Record<string, string>): void {
+  for (const [rel, content] of Object.entries(files)) {
+    const full = path.join(dir, rel);
+    mkdirSync(path.dirname(full), { recursive: true });
+    writeFileSync(full, content);
+  }
+  execFileSync("git", ["add", "-A"], { cwd: dir });
+  execFileSync("git", ["commit", "-qm", "seed project"], { cwd: dir });
+}
+
+/** Codex session files for `sessionDir` written since `since`. */
+function codexSessionFiles(sessionDir: string, since: number): string[] {
   const root = path.join(process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"), "sessions");
+  const marker = path.basename(sessionDir);
   const found: string[] = [];
   const walk = (dir: string) => {
     let entries: string[];
@@ -80,197 +268,358 @@ function codexSessionFiles(since: number): string[] {
       const full = path.join(dir, name);
       const stat = statSync(full);
       if (stat.isDirectory()) walk(full);
-      else if (name.endsWith(".jsonl") && stat.mtimeMs >= since) found.push(full);
+      else if (name.endsWith(".jsonl") && stat.mtimeMs >= since) {
+        const head = readFileSync(full, "utf8").slice(0, 4000);
+        if (head.includes(marker)) found.push(full);
+      }
     }
   };
   walk(root);
-  return found.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+  return found;
 }
 
-/** Every `search_runbooks` query the assistant's Codex session sent. */
-function runbookQueries(sessionFile: string): string[] {
-  const queries: string[] = [];
-  for (const line of readFileSync(sessionFile, "utf8").split("\n")) {
-    if (!line.includes("search_runbooks")) continue;
-    const match = line.match(/\\?"query\\?"\s*:\s*\\?"((?:[^"\\]|\\.)*?)\\?"/);
-    if (match) queries.push(match[1]);
-  }
-  return [...new Set(queries)];
-}
-
-test.describe("Daintree Assistant: real multi-agent workflow", () => {
-  let ctx: AppContext;
-  let cleanup: (() => void) | undefined;
-
-  test.afterAll(async () => {
-    if (ctx?.app) await closeApp(ctx.app);
-    cleanup?.();
-  });
-
-  test("Codex assistant polls five agents for facts, runs the vote and tallies it", async ({}, testInfo) => {
-    test.skip(!ENABLED, "set DAINTREE_E2E_ASSISTANT_WORKFLOW=1 to run the real-agent workflow");
-    test.setTimeout(WORKFLOW_TIMEOUT_MS + 5 * 60_000);
-
-    const outDir = testInfo.outputPath("workflow");
-    mkdirSync(outDir, { recursive: true });
-    const timeline = path.join(outDir, "timeline.log");
-    const log = (line: string) => {
-      const stamped = `[${new Date().toISOString()}] ${line}`;
-      appendFileSync(timeline, stamped + "\n");
-      console.log(stamped);
-    };
-    const startedAt = Date.now();
-
-    const repo = createFixtureRepo({ name: "assistant-workflow" });
-    cleanup = repo.cleanup;
-    const env: Record<string, string> = {};
-    if (process.env.DAINTREE_RUNBOOKS_MCP_URL) {
-      env.DAINTREE_RUNBOOKS_MCP_URL = process.env.DAINTREE_RUNBOOKS_MCP_URL;
-    }
-    ctx = await launchApp({ env });
-    const page = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, "assistant-workflow");
-    ctx.window = page;
-    log(`app up; runbooks endpoint ${env.DAINTREE_RUNBOOKS_MCP_URL ?? "(production default)"}`);
-
-    await page.evaluate(() => (window as any).electron.mcpServer.setEnabled(true));
-    await expect
-      .poll(async () => (await page.evaluate(() => (window as any).electron.mcpServer.getStatus())).port, {
-        timeout: 30_000,
-      })
-      .toBeTruthy();
-    const settings = await page.evaluate(() => (window as any).electron.helpAssistant.getSettings());
-    log(`assistant settings: ${JSON.stringify(settings)}`);
-    expect(settings.runbookSearch).toBe(true);
-
-    // The assistant runs Codex, stored the way the agent picker stores it.
-    await page.evaluate(() => {
-      const key = "help-panel-storage";
-      let blob: { state?: Record<string, unknown>; version?: number };
+/** Tool calls, tokens and notices from the assistant's Codex transcript since `since`. */
+function readCodexTranscript(
+  sessionDir: string,
+  since: number,
+  outFile: string
+): Omit<TurnMetrics, "seconds" | "launched"> {
+  const metrics: Omit<TurnMetrics, "seconds" | "launched"> = {
+    turns: 0,
+    notices: 0,
+    toolCalls: [],
+    runbookQueries: [],
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    largestOutputs: [],
+  };
+  const lines: string[] = [];
+  const pendingNames = new Map<string, string>();
+  const baseline = { input: 0, cached: 0, output: 0, seen: false };
+  for (const file of codexSessionFiles(sessionDir, since - 60_000)) {
+    for (const raw of readFileSync(file, "utf8").split("\n")) {
+      let entry: any;
       try {
-        blob = JSON.parse(window.localStorage.getItem(key) ?? "{}");
+        entry = JSON.parse(raw);
       } catch {
-        blob = {};
+        continue;
       }
-      blob.state = { ...(blob.state ?? {}), preferredAgentId: "codex" };
-      blob.version = blob.version ?? 6;
-      window.localStorage.setItem(key, JSON.stringify(blob));
-    });
-    await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(page.locator('[aria-label="Toggle Sidebar"]')).toBeVisible({ timeout: 30_000 });
-
-    await dispatch(page, "help.togglePanel");
-    await page.locator('[data-testid="help-start-assistant"]').click({ timeout: 30_000 });
-
-    let assistantId = "";
-    await expect
-      .poll(
-        async () => {
-          const found = (await allTerminals(page)).find(
-            // The session folder lives under userData; compared by its folder
-            // name, since macOS reports temp paths through /private.
-            (t) => t.launchAgentId === "codex" && t.cwd.includes(`${path.sep}help-sessions${path.sep}`)
-          );
-          assistantId = found?.id ?? "";
-          return assistantId;
-        },
-        { timeout: 60_000, intervals: [500, 1000] }
-      )
-      .not.toBe("");
-    log(`assistant terminal ${assistantId}`);
-
-    // The session's instructions must open with the runbook rule.
-    const sessionDir = (await allTerminals(page)).find((t) => t.id === assistantId)!.cwd;
-    const agentsMd = readFileSync(path.join(sessionDir, "AGENTS.md"), "utf8");
-    writeFileSync(path.join(outDir, "session-AGENTS.md"), agentsMd);
-    expect(agentsMd).toContain("## Runbooks First");
-    expect(agentsMd.indexOf("## Runbooks First")).toBeLessThan(agentsMd.indexOf("## What You Can Do"));
-
-    // Codex asks whether to trust a new folder before it reads anything; the
-    // user would accept its highlighted default for the session folder.
-    const trustPrompt = /Trust this folder\?|Trust and continue|do you trust/i;
-    await expect
-      .poll(() => getTerminalTextById(page, assistantId), { timeout: 90_000, intervals: [1000] })
-      .toMatch(/trust|›|OpenAI Codex|Ask Codex/i);
-    if (trustPrompt.test(await getTerminalTextById(page, assistantId))) {
-      log("codex trust prompt shown; accepting 'Trust and continue'");
-      await page.evaluate((id) => (window as any).electron.terminal.write(id, "\r"), assistantId);
-      await expect
-        .poll(async () => trustPrompt.test(await getTerminalTextById(page, assistantId)), {
-          timeout: 30_000,
-          intervals: [500, 1000],
-        })
-        .toBe(false);
-    }
-    await expect
-      .poll(async () => (await allTerminals(page)).find((t) => t.id === assistantId)?.agentState, {
-        timeout: 120_000,
-        intervals: [1000, 2000],
-      })
-      .toMatch(/idle|waiting/);
-    await page.screenshot({ path: path.join(outDir, "01-assistant-ready.png") });
-
-    await page.evaluate(
-      ([id, text]) => (window as any).electron.terminal.submit(id, text),
-      [assistantId, QUERY] as const
-    );
-    log("query submitted");
-
-    // Watch until the whole fleet has been still for QUIET_MS, or time runs out.
-    let lastChange = Date.now();
-    let lastSnapshot = "";
-    let shot = 2;
-    while (Date.now() - startedAt < WORKFLOW_TIMEOUT_MS) {
-      await page.waitForTimeout(POLL_MS);
-      const terminals = (await allTerminals(page)).filter((t) => !t.isTrashed);
-      const snapshot = terminals
-        .map((t) => `${t.id.slice(-8)} ${t.launchAgentId ?? "shell"} ${t.agentState ?? "-"} ${t.title ?? ""}`)
-        .join(" | ");
-      const tail = (await getTerminalTextById(page, assistantId)).trimEnd().split("\n").slice(-3).join(" / ");
-      const fingerprint = snapshot + tail;
-      if (fingerprint !== lastSnapshot) {
-        lastSnapshot = fingerprint;
-        lastChange = Date.now();
-        log(`fleet: ${snapshot}`);
-        log(`assistant: ${tail.slice(0, 400)}`);
-        await page.screenshot({ path: path.join(outDir, `${String(shot++).padStart(2, "0")}-progress.png`) });
+      const at = Date.parse(entry.timestamp);
+      const payload = entry.payload ?? {};
+      if (entry.type === "event_msg" && payload.type === "token_count") {
+        const total = payload.info?.total_token_usage;
+        if (!total) continue;
+        if (at < since) {
+          baseline.input = total.input_tokens ?? 0;
+          baseline.cached = total.cached_input_tokens ?? 0;
+          baseline.output = total.output_tokens ?? 0;
+          continue;
+        }
+        metrics.inputTokens = (total.input_tokens ?? 0) - baseline.input;
+        metrics.cachedInputTokens = (total.cached_input_tokens ?? 0) - baseline.cached;
+        metrics.outputTokens = (total.output_tokens ?? 0) - baseline.output;
+        continue;
       }
-      const workers = terminals.filter((t) => t.id !== assistantId);
-      const assistantState = terminals.find((t) => t.id === assistantId)?.agentState;
-      if (
-        workers.length > 0 &&
-        assistantState !== "working" &&
-        workers.every((t) => t.agentState !== "working") &&
-        Date.now() - lastChange > QUIET_MS
+      if (at < since) continue;
+      const rel = ((at - since) / 1000).toFixed(1).padStart(7);
+      if (entry.type === "event_msg" && payload.type === "task_started") {
+        metrics.turns++;
+        lines.push(`${rel} == turn started`);
+      } else if (
+        entry.type === "response_item" &&
+        (payload.type === "custom_tool_call" || payload.type === "function_call")
       ) {
-        log("fleet quiet; ending the watch");
-        break;
+        const input = String(payload.input ?? payload.arguments ?? "");
+        const name = String(payload.name);
+        pendingNames.set(payload.call_id, name);
+        metrics.toolCalls.push({
+          at: at - since,
+          name,
+          input: input.slice(0, 2000),
+          outputBytes: 0,
+        });
+        for (const match of input.matchAll(
+          /search_runbooks\s*\(\s*\{[^}]*?query\s*:\s*"([^"]+)"/g
+        )) {
+          metrics.runbookQueries.push(match[1]);
+        }
+        if (name.includes("search_runbooks")) {
+          const q = input.match(/"query"\s*:\s*"([^"]+)"/);
+          if (q) metrics.runbookQueries.push(q[1]);
+        }
+        lines.push(`${rel} CALL ${name}: ${input.slice(0, 1500)}`);
+      } else if (
+        entry.type === "response_item" &&
+        (payload.type === "custom_tool_call_output" || payload.type === "function_call_output")
+      ) {
+        const text =
+          typeof payload.output === "string" ? payload.output : JSON.stringify(payload.output);
+        const call = [...metrics.toolCalls].reverse().find((c) => c.outputBytes === 0);
+        if (call) call.outputBytes = text.length;
+        lines.push(`${rel}   OUT ${text.length}B: ${text.slice(0, 600)}`);
+      } else if (entry.type === "event_msg" && payload.type === "item_completed") {
+        const item = payload.item ?? {};
+        if (item.type === "UserMessage" || item.type === "AgentMessage") {
+          const text = (item.content ?? []).map((c: any) => c.text ?? "").join("");
+          if (item.type === "UserMessage" && text.startsWith("Daintree:")) metrics.notices++;
+          lines.push(`${rel} ${item.type}: ${text}`);
+        }
       }
     }
+  }
+  metrics.runbookQueries = [...new Set(metrics.runbookQueries)];
+  metrics.largestOutputs = [...metrics.toolCalls]
+    .sort((a, b) => b.outputBytes - a.outputBytes)
+    .slice(0, 5)
+    .map((c) => ({ name: c.input.slice(0, 80), bytes: c.outputBytes }));
+  writeFileSync(outFile, lines.join("\n") + "\n");
+  return metrics;
+}
 
-    // Evidence, whatever the outcome.
-    const terminals = await allTerminals(page);
-    for (const t of terminals) {
-      const text = await getTerminalTextById(page, t.id);
-      writeFileSync(path.join(outDir, `terminal-${t.launchAgentId ?? "shell"}-${t.id.slice(-8)}.txt`), text);
-    }
-    await page.screenshot({ path: path.join(outDir, "99-final.png") });
-    const sessionFile = codexSessionFiles(startedAt).find((file) =>
-      readFileSync(file, "utf8").includes("search_runbooks")
-    );
-    const queries = sessionFile ? runbookQueries(sessionFile) : [];
-    log(`runbook queries: ${JSON.stringify(queries)}`);
-    writeFileSync(path.join(outDir, "runbook-queries.json"), JSON.stringify(queries, null, 2));
+async function submitViaHybridInput(page: Page, terminalId: string, text: string): Promise<void> {
+  const editor = page.locator(`[data-hybrid-input-root="${terminalId}"] .cm-content`);
+  await expect(editor).toBeVisible({ timeout: 30_000 });
+  await editor.click();
+  await page.keyboard.insertText(text);
+  await expect
+    .poll(() => editor.innerText(), { timeout: 10_000 })
+    .toContain(text.split("\n")[0].slice(0, 40));
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await editor.innerText()).trim(), { timeout: 15_000 }).toBe("");
+}
 
-    const launched = terminals
-      .filter((t) => t.id !== assistantId && t.launchAgentId)
-      .map((t) => t.launchAgentId!);
-    log(`launched agents: ${JSON.stringify(launched)}`);
+for (const scenario of SCENARIOS) {
+  const enabled =
+    SELECTED === "all" ||
+    SELECTED.split(",")
+      .map((s) => s.trim())
+      .includes(scenario.id) ||
+    (SELECTED === "1" && scenario.id === "facts-vote");
 
-    expect(queries.length, "the assistant never searched the runbooks").toBeGreaterThan(0);
-    for (const agent of WORKERS) {
-      expect(launched, `no ${agent} agent was launched`).toContain(agent);
-    }
-    const finalText = await getTerminalTextById(page, assistantId);
-    expect(finalText, "the assistant never reported a tally").toMatch(/point/i);
+  test.describe(`Daintree Assistant workflow: ${scenario.id}`, () => {
+    let ctx: AppContext | undefined;
+    let cleanup: (() => void) | undefined;
+
+    test.afterAll(async () => {
+      if (ctx?.app) await closeApp(ctx.app);
+      cleanup?.();
+    });
+
+    test(`${ASSISTANT_AGENT} assistant runs "${scenario.id}"`, async ({}, testInfo) => {
+      test.skip(!enabled, "set DAINTREE_E2E_ASSISTANT_WORKFLOW to this scenario id or `all`");
+      test.setTimeout(scenario.timeoutMs + 5 * 60_000);
+
+      const outDir = testInfo.outputPath("workflow");
+      mkdirSync(outDir, { recursive: true });
+      const timeline = path.join(outDir, "timeline.log");
+      const log = (line: string) => {
+        const stamped = `[${new Date().toISOString()}] ${line}`;
+        appendFileSync(timeline, stamped + "\n");
+        console.log(`[${scenario.id}] ${stamped}`);
+      };
+
+      const repo = createFixtureRepo({ name: `assistant-${scenario.id}` });
+      cleanup = repo.cleanup;
+      seedProject(repo.dir, scenario.project);
+
+      const env: Record<string, string> = {};
+      if (process.env.DAINTREE_RUNBOOKS_MCP_URL) {
+        env.DAINTREE_RUNBOOKS_MCP_URL = process.env.DAINTREE_RUNBOOKS_MCP_URL;
+      }
+      ctx = await launchApp({ env });
+      const page = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, scenario.id);
+      ctx.window = page;
+      log(`app up; runbooks ${env.DAINTREE_RUNBOOKS_MCP_URL ?? "(production default)"}`);
+
+      await page.evaluate(() => (window as any).electron.mcpServer.setEnabled(true));
+      await expect
+        .poll(
+          async () =>
+            (await page.evaluate(() => (window as any).electron.mcpServer.getStatus())).port,
+          { timeout: 30_000 }
+        )
+        .toBeTruthy();
+      const settings = await page.evaluate(() =>
+        (window as any).electron.helpAssistant.getSettings()
+      );
+      expect(settings.runbookSearch).toBe(true);
+
+      await page.evaluate((agentId) => {
+        const key = "help-panel-storage";
+        let blob: { state?: Record<string, unknown>; version?: number };
+        try {
+          blob = JSON.parse(window.localStorage.getItem(key) ?? "{}");
+        } catch {
+          blob = {};
+        }
+        blob.state = { ...(blob.state ?? {}), preferredAgentId: agentId };
+        blob.version = blob.version ?? 6;
+        window.localStorage.setItem(key, JSON.stringify(blob));
+      }, ASSISTANT_AGENT);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(page.locator('[aria-label="Toggle Sidebar"]')).toBeVisible({ timeout: 30_000 });
+
+      await dispatch(page, "help.togglePanel");
+      await page.locator('[data-testid="help-start-assistant"]').click({ timeout: 30_000 });
+
+      let assistantId = "";
+      await expect
+        .poll(
+          async () => {
+            const found = (await allTerminals(page)).find(
+              // The session folder lives under userData; compared by its folder
+              // name, since macOS reports temp paths through /private.
+              (t) =>
+                t.launchAgentId === ASSISTANT_AGENT &&
+                t.cwd.includes(`${path.sep}help-sessions${path.sep}`)
+            );
+            assistantId = found?.id ?? "";
+            return assistantId;
+          },
+          { timeout: 60_000, intervals: [500, 1000] }
+        )
+        .not.toBe("");
+      const sessionDir = (await allTerminals(page)).find((t) => t.id === assistantId)!.cwd;
+      log(`assistant terminal ${assistantId} in ${sessionDir}`);
+      const instructions = readFileSync(
+        path.join(sessionDir, ASSISTANT_AGENT === "claude" ? "CLAUDE.md" : "AGENTS.md"),
+        "utf8"
+      );
+      writeFileSync(path.join(outDir, "session-instructions.md"), instructions);
+      expect(instructions).toContain("## Runbooks First");
+
+      // Trust dialogs, answered the way a user who trusts their own project would.
+      const trusted = new Set<string>();
+      const answerTrustDialogs = async (terminals: TerminalInfo[]) => {
+        for (const t of terminals) {
+          if (t.isTrashed || trusted.has(t.id)) continue;
+          const text = await getTerminalTextById(page, t.id).catch(() => "");
+          if (!TRUST_DIALOG.test(text.split("\n").slice(-30).join("\n"))) continue;
+          trusted.add(t.id);
+          log(`trust dialog in ${t.launchAgentId ?? "shell"} ${t.id.slice(-8)}; accepting`);
+          await page.evaluate((id) => (window as any).electron.terminal.write(id, "\r"), t.id);
+        }
+      };
+
+      await expect
+        .poll(
+          async () => {
+            await answerTrustDialogs(await allTerminals(page));
+            return (await allTerminals(page)).find((t) => t.id === assistantId)?.agentState;
+          },
+          { timeout: 120_000, intervals: [1000, 2000] }
+        )
+        .toMatch(/idle|waiting/);
+      await page.screenshot({ path: path.join(outDir, "00-assistant-ready.png") });
+
+      const scenarioStarted = Date.now();
+      let finalText = "";
+      let shot = 1;
+      for (const [index, message] of scenario.messages.entries()) {
+        const turnStarted = Date.now();
+        await submitViaHybridInput(page, assistantId, message);
+        log(`message ${index + 1} submitted: ${message.slice(0, 120)}`);
+
+        let lastChange = Date.now();
+        let lastFingerprint = "";
+        let sawWork = false;
+        while (Date.now() - scenarioStarted < scenario.timeoutMs) {
+          await page.waitForTimeout(POLL_MS);
+          const terminals = (await allTerminals(page)).filter((t) => !t.isTrashed);
+          await answerTrustDialogs(terminals);
+          const fleet = terminals
+            .map(
+              (t) =>
+                `${t.id.slice(-8)} ${t.launchAgentId ?? t.detectedAgentId ?? "shell"} ${t.agentState ?? "-"}`
+            )
+            .join(" | ");
+          const tail = (await getTerminalTextById(page, assistantId))
+            .trimEnd()
+            .split("\n")
+            .slice(-4)
+            .join(" / ");
+          const fingerprint = fleet + tail;
+          const busy = terminals.some((t) => t.agentState === "working");
+          if (busy) sawWork = true;
+          if (fingerprint !== lastFingerprint) {
+            lastFingerprint = fingerprint;
+            lastChange = Date.now();
+            log(`fleet: ${fleet}`);
+            log(`assistant: ${tail.slice(0, 400)}`);
+            await page.screenshot({
+              path: path.join(outDir, `${String(shot++).padStart(2, "0")}-progress.png`),
+            });
+          }
+          if (sawWork && !busy && Date.now() - lastChange > QUIET_MS) break;
+        }
+        log(`message ${index + 1} settled after ${Math.round((Date.now() - turnStarted) / 1000)}s`);
+      }
+      const seconds = Math.round((Date.now() - scenarioStarted - QUIET_MS) / 1000);
+
+      const terminals = await allTerminals(page);
+      for (const t of terminals) {
+        const text = await getTerminalTextById(page, t.id);
+        writeFileSync(
+          path.join(outDir, `terminal-${t.launchAgentId ?? "shell"}-${t.id.slice(-8)}.txt`),
+          text
+        );
+      }
+      finalText = await getTerminalTextById(page, assistantId);
+      await page.screenshot({ path: path.join(outDir, "99-final.png") });
+
+      const workers = terminals.filter((t) => t.id !== assistantId);
+      const transcript =
+        ASSISTANT_AGENT === "codex"
+          ? readCodexTranscript(sessionDir, scenarioStarted, path.join(outDir, "transcript.txt"))
+          : {
+              turns: 0,
+              notices: 0,
+              toolCalls: [],
+              runbookQueries: [],
+              inputTokens: 0,
+              cachedInputTokens: 0,
+              outputTokens: 0,
+              largestOutputs: [],
+            };
+      const metrics: TurnMetrics = {
+        ...transcript,
+        seconds,
+        launched: workers.map((t) => t.launchAgentId ?? t.detectedAgentId ?? "shell"),
+      };
+      const summary = {
+        scenario: scenario.id,
+        assistant: ASSISTANT_AGENT,
+        seconds: metrics.seconds,
+        turns: metrics.turns,
+        notices: metrics.notices,
+        toolCallCount: metrics.toolCalls.length,
+        runbookQueries: metrics.runbookQueries,
+        launched: metrics.launched,
+        inputTokens: metrics.inputTokens,
+        cachedInputTokens: metrics.cachedInputTokens,
+        outputTokens: metrics.outputTokens,
+        largestOutputs: metrics.largestOutputs,
+        trustDialogsAnswered: trusted.size,
+      };
+      writeFileSync(path.join(outDir, "metrics.json"), JSON.stringify(summary, null, 2));
+      log(`metrics: ${JSON.stringify(summary)}`);
+
+      const worktrees = await dispatch(page, "worktree.list").catch(() => null);
+      const worktreeCount = Array.isArray(worktrees?.result?.worktrees)
+        ? worktrees.result.worktrees.length
+        : Array.isArray(worktrees?.result)
+          ? worktrees.result.length
+          : 0;
+
+      await scenario.check({
+        page,
+        assistantId,
+        workers: workers.filter((t) => !t.isTrashed),
+        finalText,
+        worktreeCount,
+        metrics,
+      });
+    });
   });
-});
+}

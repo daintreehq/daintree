@@ -689,13 +689,13 @@ export const MCP_SERVER_INSTRUCTIONS_MAX_BYTES =
  * route around its own authorization floor.
  */
 export const MCP_SERVER_INSTRUCTIONS = [
-  "Daintree orchestrates IDE-owned worktrees, recipes, and agent terminals — use it for that coordination. External clients should use their own shell and tooling for repository, file, git, and forge work omitted from `tools/list`; that is not licence to route around an in-app tier.",
+  "Daintree drives IDE-owned worktrees, recipes and agent terminals. Use your own shell for repository, file, git and forge work; that is not licence to route around an in-app tier.",
 
-  "`tools/list` is the advertised baseline; do not invent tool names. When its schemas are too large to reason over, use `actions.search` for a compact ranked shortlist of what this session is already authorized to call, then `actions.getSchema` for one action's manifest entry and whatever schemas it publishes. Neither widens access: discovery reports the surface, it does not extend it.",
+  "Call only listed tools. `actions.search` finds one by intent and `actions.getSchema` gives its arguments; neither widens access.",
 
-  'Resolve worktree and terminal ids before scoped actions. A send returns once queued, not when the work is done. From an agent pane, send with `notify: true` and end your turn; Daintree tells you in your prompt when it stops. Otherwise wait with `terminal.waitUntilIdle` or `terminal.waitUntilIdleBatch`, not polling, then read `idleReason`, `waitingReason` and `exitCode` before an irreversible step. Waits track agents: an untracked terminal returns `idleReason: "unknown"` at once, no proof a command finished.',
+  "Resolve worktree and terminal ids before scoped actions. A send returns once queued, not when the work is done. From an agent pane or the assistant, pass `notify: true` and end your turn: Daintree types the result into your prompt. Otherwise wait with `terminal.waitUntilIdle`, never a polling loop, and read `idleReason` before an irreversible step.",
 
-  "Authorization is tiered: in-app sessions run the `core` or `full` tool set; `external` is a separate allowlist. A call outside the authorized surface returns `TIER_NOT_PERMITTED`, or from an agent pane asks the user first; `USER_REJECTED` means they declined. Honor `retriable`: retry a `false` only once arguments, context, or authorization change.",
+  "In-app sessions run the `core` or `full` tool set; `external` is its own allowlist. A call outside yours returns `TIER_NOT_PERMITTED`, or from an agent pane asks the user; `USER_REJECTED` means they declined. Retry a `retriable: false` only after something changes.",
 ].join("\n\n");
 
 /**
@@ -1064,7 +1064,7 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
         "**Single terminals pace the same way.** Don't hold a blocking `terminal.waitUntilIdle` open to wait out a task — while the call is in flight the user can't talk to you, so an interactive session looks frozen until they cancel it (the server caps interactive waits at 60s for this reason). Kick off the task, then `ScheduleWakeup` → non-blocking check (`terminal.getStatus` or `waitUntilIdle({ timeoutMs: 0 })`) → repeat. A short bounded `waitUntilIdle` long-poll is fine when completion is expected within the minute; on `timedOut: true`, fall back to wakeup pacing instead of re-blocking back-to-back.",
         "",
         "**Queues pace with one owner.** When you work through N jobs at most K at a time, one mechanism wakes the loop — `ScheduleWakeup`, or Daintree notices where your pane has them — never a second timer, background sleep or polling script stacked on it, which only produces duplicate checks.",
-        "- A notice fires once: launch or prompt each job with `notify: true` (or `terminal.notifyWhenIdle` if available, for one already working) and end your turn, and Daintree types a line into your prompt when that agent stops. Re-arm with every new prompt; if your pane cannot take notices, use `ScheduleWakeup` — still one mechanism at a time.",
+        "- A notice fires once: launch or prompt each job with `notify: true` (or `terminal.notifyWhenIdle` if available, for one already working) and end your turn, and when that agent stops Daintree types a notice into your prompt quoting its last screen lines. Re-arm with every new prompt; if your pane cannot take notices, use `ScheduleWakeup` — still one mechanism at a time.",
         "- Launch each job only once its worktree has finished setup (`worktree.waitUntilReady` if available at your tier), then `agent.launch` with the full prompt.",
         "- Waiting alone is not done, only a cue to inspect: refill a slot only once its job reached the milestone the user named, its PR is confirmed and its final report is read. A job waiting on an approval or question is blocked and keeps its slot. `prNumber` in `worktree.list` is a cached hint and null does not prove there is no PR, so confirm with the forge (`forge.getPR` or `forge.listPRs` if available) rather than scraping the agent's screen.",
         "- Text on a finished agent's input line may be its CLI's suggested next prompt, not the user's: never submit or act on it.",
