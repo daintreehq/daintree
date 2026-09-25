@@ -129,7 +129,7 @@ export function normalizeWindowRecords(records: readonly OpenWindowRecord[]): Op
  *     "initialized" guard synchronously at entry, before its own awaits, so a
  *     concurrent second window sails straight past the guard and races the
  *     first window's migrations and DB open. Once this await returns, global
- *     init has fully settled and the rest are safe to run together.
+ *     init has fully settled and the rest can follow.
  *  2. Saves stay suppressed until the whole fan-out settles, and the manifest
  *     is only rewritten if EVERY window came up. A half-restored fleet must not
  *     overwrite a manifest that is still correct on disk — the next launch would
@@ -156,31 +156,37 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
     if (primaryResult !== "ok") return;
 
     let backgroundClean = true;
-    if (records.length > 1) {
-      // Checked as the fan-out starts, not when the manifest was read: a window
-      // whose project is live already is one the user has since opened.
-      const pending = records
-        .slice(1)
-        .filter((record) => record.projectId === null || !deps.isProjectOwned?.(record.projectId));
-      // Background windows reveal with showInactive(): they finish loading in
-      // an unpredictable order, and a plain show() would hand focus to
-      // whichever renderer parsed its skeleton last.
-      const results = await Promise.allSettled(
-        pending.map((record) =>
-          deps.createWindow(record.projectId ?? undefined, {
-            revealMode: "showInactive",
-            backgroundProjectIds: record.backgroundProjectIds,
-          })
-        )
-      );
-      for (const result of results) {
-        if (result.status === "rejected") {
-          deps.onBackgroundWindowFailed(result.reason);
-          backgroundClean = false;
-        } else if (result.value !== "ok") {
-          backgroundClean = false;
-        }
+    // Background windows come up one at a time, each waiting for the last to
+    // finish its services (workspace host, worktree scan). Starting them all at
+    // once put every window's host fork, git scan and terminal restore in the
+    // same burst, competing with the window the user is actually looking at
+    // (#12800). Every window still restores without waiting on focus — only
+    // the overlap is gone.
+    for (const record of records.slice(1)) {
+      // Checked per window, not once up front: a window whose project is live
+      // already is one the user has since opened, and the longer a sequential
+      // restore runs the more likely that becomes.
+      if (record.projectId !== null && deps.isProjectOwned?.(record.projectId)) continue;
+      let result: CreateWindowResult;
+      try {
+        // Background windows reveal with showInactive(): a plain show() would
+        // pull focus away from the window the user is working in.
+        result = await deps.createWindow(record.projectId ?? undefined, {
+          revealMode: "showInactive",
+          backgroundProjectIds: record.backgroundProjectIds,
+        });
+      } catch (error) {
+        deps.onBackgroundWindowFailed(error);
+        backgroundClean = false;
+        continue;
       }
+      if (result === "exit-requested") {
+        // The process is going away; building more windows into it would only
+        // delay the exit.
+        backgroundClean = false;
+        break;
+      }
+      if (result !== "ok") backgroundClean = false;
     }
 
     restoredCleanly = backgroundClean;

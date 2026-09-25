@@ -216,12 +216,21 @@ describe("restoreWindowFleet", () => {
       expect(events.indexOf("end:a")).toBeLessThan(events.indexOf("start:c"));
     });
 
-    it("runs the background windows together rather than one after another", async () => {
-      const { h, events, peakOf } = traced([record("a"), record("b"), record("c")]);
+    it("brings the background windows up one after another, never together (#12800)", async () => {
+      const { h, events, peakOf } = traced([record("a"), record("b"), record("c"), record("d")]);
       await restoreWindowFleet(h.deps);
 
-      expect(events.indexOf("start:c")).toBeLessThan(events.indexOf("end:b"));
-      expect(peakOf()).toBe(2);
+      expect(events).toEqual([
+        "start:a",
+        "end:a",
+        "start:b",
+        "end:b",
+        "start:c",
+        "end:c",
+        "start:d",
+        "end:d",
+      ]);
+      expect(peakOf()).toBe(1);
     });
 
     it("never overlaps anything with the primary when it is the only window", async () => {
@@ -260,6 +269,47 @@ describe("restoreWindowFleet", () => {
     await restoreWindowFleet(h.deps);
     expect(h.openedProjects()).toEqual(["a", undefined, "c"]);
     expect(h.persisted()).toBe(true);
+  });
+
+  it("re-checks ownership as each background window's turn comes, not once up front", async () => {
+    // A sequential restore gives the user time to open a saved project by hand
+    // before its window is reached; it must not get a second view.
+    const owned = new Set<string>();
+    h = harness(
+      {
+        records: [record("a"), record("b"), record("c")],
+        hadManifest: true,
+        isProjectOwned: (projectId) => owned.has(projectId),
+      },
+      async (projectId) => {
+        if (projectId === "b") owned.add("c");
+        return "ok";
+      }
+    );
+    await restoreWindowFleet(h.deps);
+    expect(h.openedProjects()).toEqual(["a", "b"]);
+    expect(h.persisted()).toBe(true);
+  });
+
+  it("stops restoring background windows once one reports the process is exiting", async () => {
+    h = harness(
+      { records: [record("a"), record("b"), record("c")], hadManifest: true },
+      async (projectId) => (projectId === "b" ? "exit-requested" : "ok")
+    );
+    await restoreWindowFleet(h.deps);
+    expect(h.openedProjects()).toEqual(["a", "b"]);
+    expect(h.persisted()).toBe(false);
+    expect(h.resumeSaves).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries on past a window that is not ok", async () => {
+    h = harness(
+      { records: [record("a"), record("b"), record("c")], hadManifest: true },
+      async (projectId) => (projectId === "b" ? "not-registered" : "ok")
+    );
+    await restoreWindowFleet(h.deps);
+    expect(h.openedProjects()).toEqual(["a", "b", "c"]);
+    expect(h.persisted()).toBe(false);
   });
 
   it("opens one picker window when every saved project was deleted", async () => {
