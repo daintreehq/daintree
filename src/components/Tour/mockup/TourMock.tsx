@@ -72,7 +72,8 @@ export function reveal(visible: boolean, from: "below" | "above" | "left" | "non
 }
 
 export function MockStateGlyph({ state }: { state: MockStateId | null }) {
-  const visual = state === null ? undefined : resolveMockState(useMockKit(), state);
+  const kit = useMockKit();
+  const visual = state === null ? undefined : resolveMockState(kit, state);
   // Reserved box, as in the real header: the glyph never shifts the title.
   if (!visual?.Icon) return <span className="size-3.5 shrink-0" aria-hidden="true" />;
   const { Icon, colorClass, iconClassName } = visual;

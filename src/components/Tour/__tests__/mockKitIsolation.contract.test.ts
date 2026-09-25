@@ -13,13 +13,19 @@ import ts from "typescript";
 const TOUR_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MOCKUP_DIR = path.join(TOUR_DIR, "mockup");
 
-const ROOTS = [
-  ...fs
-    .readdirSync(MOCKUP_DIR)
-    .filter((name) => /\.tsx?$/.test(name))
-    .map((name) => path.join(MOCKUP_DIR, name)),
-  path.join(TOUR_DIR, "scenes", "sceneParts.tsx"),
-];
+function kitSources(dir: string, out: string[] = []): string[] {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name !== "__tests__") kitSources(full, out);
+    } else if (/\.tsx?$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name)) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+const ROOTS = [...kitSources(MOCKUP_DIR), path.join(TOUR_DIR, "scenes", "sceneParts.tsx")];
 
 /** The player runtime the kit's timeline hooks read; it travels with the kit. */
 const RUNTIME = new Set(
@@ -27,6 +33,9 @@ const RUNTIME = new Set(
 );
 
 const PACKAGES = new Set(["react", "lucide-react", "clsx", "tailwind-merge"]);
+
+/** Stands in for a module reference no scanner can resolve, e.g. `import(\`@/${x}\`)`. */
+const DYNAMIC = "<non-literal module reference>";
 
 function specifiers(source: string, fileName: string): string[] {
   const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
@@ -45,13 +54,18 @@ function specifiers(source: string, fileName: string): string[] {
     ) {
       found.push(node.argument.literal.text);
     } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
+    ) {
+      const expr = node.moduleReference.expression;
+      found.push(ts.isStringLiteralLike(expr) ? expr.text : DYNAMIC);
+    } else if (
       ts.isCallExpression(node) &&
       (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(node.expression) && node.expression.text === "require")) &&
-      node.arguments[0] &&
-      ts.isStringLiteralLike(node.arguments[0])
+        (ts.isIdentifier(node.expression) && node.expression.text === "require"))
     ) {
-      found.push(node.arguments[0].text);
+      const arg = node.arguments[0];
+      found.push(arg && ts.isStringLiteralLike(arg) ? arg.text : DYNAMIC);
     }
     ts.forEachChild(node, visit);
   };
@@ -69,7 +83,7 @@ function resolveRelative(specifier: string, from: string): string | null {
 }
 
 function isInsideKit(file: string): boolean {
-  return ROOTS.includes(file) || path.dirname(file) === MOCKUP_DIR || RUNTIME.has(file);
+  return ROOTS.includes(file) || RUNTIME.has(file);
 }
 
 /** Offending `file -> specifier` edges across the kit's whole import closure. */
@@ -117,6 +131,9 @@ describe("mockup kit isolation", () => {
       'type D = import("@/d").D;',
       'const e = import("@/e");',
       'const f = require("@/f");',
+      'import g = require("@/g");',
+      "const h = import(`@/${name}`);",
+      "const i = require(name);",
     ].join("\n");
     expect(specifiers(source, "fixture.ts")).toEqual([
       "@/a",
@@ -125,12 +142,16 @@ describe("mockup kit isolation", () => {
       "@/d",
       "@/e",
       "@/f",
+      "@/g",
+      DYNAMIC,
+      DYNAMIC,
     ]);
   });
 
   it("imports nothing from the app", () => {
     const { visited, offenders } = violations();
-    expect(visited.size).toBeGreaterThanOrEqual(ROOTS.length);
     expect(offenders).toEqual([]);
+    // The walk really followed edges out of the roots, into the tour runtime.
+    for (const file of RUNTIME) expect(visited.has(file), path.basename(file)).toBe(true);
   });
 });

@@ -41,7 +41,8 @@ const PLUGIN_KIT: MockKit = {
 };
 
 function withKit(kit: MockKit, children: ReactNode) {
-  return render(<MockKitContext.Provider value={kit}>{children}</MockKitContext.Provider>).container;
+  return render(<MockKitContext.Provider value={kit}>{children}</MockKitContext.Provider>)
+    .container;
 }
 
 afterEach(cleanup);
@@ -51,13 +52,19 @@ describe("mockup kit", () => {
     const canvas = withKit(PLUGIN_KIT, <MockPane agent="robot" state="busy" />);
     const icon = canvas.querySelector('[data-glyph="robot"]');
     expect(icon).not.toBeNull();
-    expect((icon!.parentElement as HTMLElement).style.color).toBe("rgb(1, 2, 3)");
+    expect(icon!.parentElement!.getAttribute("style")).toContain("color: rgb(1, 2, 3)");
     expect(canvas.textContent).toContain("Robot");
     expect(canvas.textContent).toContain("Ask Robot");
     expect(canvas.querySelector('[data-tour-anchor="robot-glyph"]')).not.toBeNull();
     const busy = canvas.querySelector('[data-glyph="busy"]')!;
     expect(busy.getAttribute("class")).toContain("spin");
     expect(busy.parentElement!.className).toContain("text-busy");
+  });
+
+  it("names a pane's anchors after its anchor prop when given", () => {
+    const canvas = withKit(PLUGIN_KIT, <MockPane agent="robot" anchor="left" />);
+    expect(canvas.querySelector('[data-tour-anchor="left-glyph"]')).not.toBeNull();
+    expect(canvas.querySelector('[data-tour-anchor="robot-glyph"]')).toBeNull();
   });
 
   it("takes a full descriptor with no kit at all", () => {
@@ -113,7 +120,11 @@ describe("mockup kit", () => {
         <MockWaitingPill count={2} />
         <MockCIGlyph status="green" />
         <MockCIGlyph status={{ kind: "dot", colorClass: "bg-amber" }} />
-        <MockApp worktrees={null} grid={null} toolbarAgents={["robot"]} />
+        <MockApp
+          worktrees={null}
+          grid={null}
+          toolbarAgents={["robot", { id: "guest", name: "Guest", Icon: BusyIcon }]}
+        />
       </>
     );
     const stuck = canvas.querySelector('[data-tour-anchor="dock-waiting"] [data-glyph="stuck"]');
@@ -124,6 +135,9 @@ describe("mockup kit", () => {
       canvas.querySelector('[data-tour-anchor="assistant"] [data-glyph="mark"]')
     ).not.toBeNull();
     expect(canvas.querySelector('[data-tour-anchor="agent-robot"] [data-glyph="robot"]')).not.toBe(
+      null
+    );
+    expect(canvas.querySelector('[data-tour-anchor="agent-guest"] [data-glyph="busy"]')).not.toBe(
       null
     );
   });
@@ -150,8 +164,25 @@ describe("Daintree's mock kit", () => {
     expect(DAINTREE_MOCK_KIT.states.working!.iconClassName).toContain("animate-spin-slow");
   });
 
-  it("draws pending CI as a dot and passing CI as a glyph", () => {
-    expect(DAINTREE_MOCK_KIT.ci.pending!.kind).toBe("dot");
-    expect(DAINTREE_MOCK_KIT.ci.success!.kind).toBe("icon");
+  it("renders the working spinner as a real pane header does", () => {
+    const canvas = withKit(DAINTREE_MOCK_KIT, <MockStateGlyph state="working" />);
+    const box = canvas.firstElementChild!;
+    expect(box.className).toContain(STATE_COLORS.working);
+    const icon = box.firstElementChild!;
+    expect(icon.getAttribute("class")).toContain("animate-spin-slow");
+    expect(icon.getAttribute("class")).toContain("motion-reduce:animate-none");
+  });
+
+  it("draws pending CI as the app's dot and passing CI as its glyph", () => {
+    const pending = withKit(DAINTREE_MOCK_KIT, <MockCIGlyph status="pending" />);
+    const dot = pending.firstElementChild!;
+    expect(dot.tagName).toBe("SPAN");
+    expect(dot.className).toContain("rounded-full");
+    expect(dot.className).toContain("bg-status-warning");
+    cleanup();
+    const success = withKit(DAINTREE_MOCK_KIT, <MockCIGlyph status="success" />);
+    const glyph = success.querySelector("svg");
+    expect(glyph?.getAttribute("class")).toContain("size-3.5!");
+    expect(glyph?.getAttribute("class")).toContain("text-status-success");
   });
 });

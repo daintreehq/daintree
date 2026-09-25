@@ -19,13 +19,7 @@ export interface MockAgent {
 }
 
 export type MockStateId =
-  | "working"
-  | "waiting"
-  | "directing"
-  | "completed"
-  | "exited"
-  | "idle"
-  | (string & {});
+  "working" | "waiting" | "directing" | "completed" | "exited" | "idle" | (string & {});
 
 export interface MockStateVisual {
   /** Null keeps the glyph's box empty, as the real header does for idle. */
@@ -36,8 +30,7 @@ export interface MockStateVisual {
 }
 
 export type MockCIVisual =
-  | { kind: "icon"; Icon: MockGlyph; colorClass: string }
-  | { kind: "dot"; colorClass: string };
+  { kind: "icon"; Icon: MockGlyph; colorClass: string } | { kind: "dot"; colorClass: string };
 
 export interface MockKit {
   agents: Readonly<Record<string, MockAgent>>;
