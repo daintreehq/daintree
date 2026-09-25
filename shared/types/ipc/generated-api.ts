@@ -388,9 +388,24 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["host-mode:set-enabled"]["result"]>;
   };
   hostSwitch: {
+    cancel(
+      ...args: IpcInvokeMap["host-switch:cancel"]["args"]
+    ): Promise<IpcInvokeMap["host-switch:cancel"]["result"]>;
+    checkDestination(
+      ...args: IpcInvokeMap["host-switch:check-destination"]["args"]
+    ): Promise<IpcInvokeMap["host-switch:check-destination"]["result"]>;
+    execute(
+      ...args: IpcInvokeMap["host-switch:execute"]["args"]
+    ): Promise<IpcInvokeMap["host-switch:execute"]["result"]>;
     plan(
       ...args: IpcInvokeMap["host-switch:plan"]["args"]
     ): Promise<IpcInvokeMap["host-switch:plan"]["result"]>;
+    prepare(
+      ...args: IpcInvokeMap["host-switch:prepare"]["args"]
+    ): Promise<IpcInvokeMap["host-switch:prepare"]["result"]>;
+    status(
+      ...args: IpcInvokeMap["host-switch:status"]["args"]
+    ): Promise<IpcInvokeMap["host-switch:status"]["result"]>;
   };
   keepAwake: {
     getState(
@@ -918,6 +933,15 @@ export interface GeneratedElectronAPI {
     find(
       ...args: IpcInvokeMap["project-match:find"]["args"]
     ): Promise<IpcInvokeMap["project-match:find"]["result"]>;
+    findWorktreeForBranch(
+      ...args: IpcInvokeMap["project-match:find-worktree-for-branch"]["args"]
+    ): Promise<IpcInvokeMap["project-match:find-worktree-for-branch"]["result"]>;
+    scan(
+      ...args: IpcInvokeMap["project-match:scan"]["args"]
+    ): Promise<IpcInvokeMap["project-match:scan"]["result"]>;
+    takePendingSetup(
+      ...args: IpcInvokeMap["project-match:take-pending-setup"]["args"]
+    ): Promise<IpcInvokeMap["project-match:take-pending-setup"]["result"]>;
   };
   projectPresence: {
     getSnapshot(

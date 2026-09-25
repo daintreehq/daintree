@@ -1,5 +1,7 @@
 import { z } from "zod";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
+import { requestHostSwitch } from "@/components/HostSwitch/hostSwitchRequests";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { isSettingsTab } from "@/components/Settings/settingsTabIds";
 import { requestHostMenu } from "@/components/Hosts/hostMenuRequests";
@@ -101,14 +103,14 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     },
   }));
 
-  // Placeholder until the clone dialog lands: the project switcher opens
-  // projects a host already has by switching host directly, and routes every
-  // other host here.
+  // The confirmations live in the dialog: an agent dispatching this gets
+  // exactly what a click does — nothing is pushed or cloned until the user
+  // picks a step there.
   actions.set("project.openOnHost", () => ({
     id: "project.openOnHost",
     title: "Open project on host…",
     description:
-      "Open a project on another host, cloning it there first when the host doesn't have it. Not available yet: cloning a project onto another host arrives with the clone dialog.",
+      "Open this window's project on another host through git: open the host's own copy, or clone it there as the host, then offer a worktree for the current branch. Opens a dialog; every push or clone is confirmed there.",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -116,14 +118,31 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     nonRepeatable: true,
     isVisible: anyRemoteHost,
     argsSchema: openOnHostArgsSchema,
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx: ActionContext) => {
       const parsed = openOnHostArgsSchema.parse(args);
       await assertKnownHost(parsed.hostId);
-      throw new ClientAppError(
-        "UNSUPPORTED",
-        "Opening a project on another host needs the clone dialog, which isn't available yet",
-        "Cloning a project onto another host isn't available yet."
-      );
+      const windowHost = window.__DAINTREE_HOST_ID__?.id ?? LOCAL_HOST_ID;
+      if (parsed.hostId === windowHost) {
+        throw new ClientAppError(
+          "VALIDATION",
+          "The project is already on that host",
+          "This window is already on that host."
+        );
+      }
+      const worktreePath =
+        ctx.projectId === parsed.projectId ? (ctx.activeWorktreePath ?? null) : null;
+      const shown = requestHostSwitch({
+        toHostId: parsed.hostId,
+        projectId: parsed.projectId,
+        worktreePath,
+      });
+      if (!shown) {
+        throw new ClientAppError(
+          "UNSUPPORTED",
+          "No view can show the host switch dialog",
+          "Couldn't open the host switch dialog in this window."
+        );
+      }
     },
   }));
 }

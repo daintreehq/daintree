@@ -1280,9 +1280,17 @@ export const CHANNELS = {
 
   // Remote Hosts: hostSwitch (shell).
   HOST_SWITCH_PLAN: "host-switch:plan",
+  HOST_SWITCH_PREPARE: "host-switch:prepare",
+  HOST_SWITCH_CHECK_DESTINATION: "host-switch:check-destination",
+  HOST_SWITCH_EXECUTE: "host-switch:execute",
+  HOST_SWITCH_STATUS: "host-switch:status",
+  HOST_SWITCH_CANCEL: "host-switch:cancel",
 
   // Remote Hosts: projectMatch (host).
   PROJECT_MATCH_FIND: "project-match:find",
+  PROJECT_MATCH_SCAN: "project-match:scan",
+  PROJECT_MATCH_FIND_WORKTREE_FOR_BRANCH: "project-match:find-worktree-for-branch",
+  PROJECT_MATCH_TAKE_PENDING_SETUP: "project-match:take-pending-setup",
 
   // Remote Hosts: hostMetrics (shell).
   HOST_METRICS_GET_SNAPSHOTS: "host-metrics:get-snapshots",

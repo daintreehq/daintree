@@ -2,6 +2,11 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const HOST_SWITCH_METHOD_CHANNELS = {
   plan: "host-switch:plan",
+  prepare: "host-switch:prepare",
+  checkDestination: "host-switch:check-destination",
+  execute: "host-switch:execute",
+  status: "host-switch:status",
+  cancel: "host-switch:cancel",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof HOST_SWITCH_METHOD_CHANNELS;

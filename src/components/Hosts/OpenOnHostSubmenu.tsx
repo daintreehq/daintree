@@ -17,6 +17,7 @@ import { clientPlatform } from "./hostModel";
 import { findSameNamedProject, useOtherHostTargets, type OtherHostTarget } from "./hostProjects";
 import { isNewWindowClick, switchToHost } from "./hostSwitching";
 
+/** Opens the switch dialog, which shows what the host has and offers the clone. */
 async function openByCloning(
   hostId: string,
   projectId: string,
@@ -34,7 +35,7 @@ async function openByCloning(
     type: "error",
     context: { eventKind: "connectivity" },
     title: "Couldn't open project on host",
-    message: "Cloning a project onto another host isn't available yet.",
+    message: "The host switch dialog couldn't open. Try again from the host menu.",
   });
 }
 

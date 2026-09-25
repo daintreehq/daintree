@@ -19,6 +19,7 @@ import {
   type OperationHandle,
 } from "../../services/operations/index.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
+import { readRemoteBranchTip } from "../../utils/remoteBranchTip.js";
 import type { GitPushPayload, PushProgressEvent } from "../../../shared/types/ipc/gitPush.js";
 import type {
   ConflictedFileEntry,
@@ -174,51 +175,6 @@ async function refExists(
     return out.trim().length > 0;
   } catch {
     return false;
-  }
-}
-
-/** Upper bound on the one network read the push preview is allowed to make. */
-const PUSH_PREVIEW_LS_REMOTE_TIMEOUT_MS = 4000;
-
-/**
- * The destination branch's tip according to the REMOTE, or `undefined` when the
- * remote could not be asked.
- *
- * `null` is a real answer — the remote replied and has no such branch — and is
- * what lets the preview say a push creates a branch instead of guessing from the
- * absence of a local ref. `undefined` is "no answer", which the caller must
- * treat as unverified rather than as absence.
- *
- * Bounded and swallowed on purpose. This runs while a confirm dialog is waiting,
- * so a slow or unreachable remote must degrade the preview's precision, never
- * hold the dialog open — the local approximation is still shown, labelled.
- */
-async function readRemoteBranchTip(
-  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
-  remote: string,
-  branch: string
-): Promise<string | null | undefined> {
-  try {
-    const out = await Promise.race([
-      // `--` before the remote so a remote whose name survived the argv guard
-      // still cannot be read as an option, and the ref given in full.
-      git.raw(["ls-remote", "--heads", "--", remote, `refs/heads/${branch}`]),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error("ls-remote timed out")),
-          PUSH_PREVIEW_LS_REMOTE_TIMEOUT_MS
-        )
-      ),
-    ]);
-    const line = out
-      .split("\n")
-      .map((l) => l.trim())
-      .find((l) => l.length > 0);
-    if (!line) return null;
-    const sha = line.split(/\s+/)[0] ?? "";
-    return /^[0-9a-f]{40,64}$/i.test(sha) ? sha : undefined;
-  } catch {
-    return undefined;
   }
 }
 

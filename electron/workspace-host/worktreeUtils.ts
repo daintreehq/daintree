@@ -91,6 +91,31 @@ export function parseCheckedOutBranches(porcelainOutput: string): Set<string> {
 }
 
 /**
+ * The working tree that has `branch` checked out, read from `git worktree list
+ * --porcelain`, or null. Bare and prunable records are skipped: neither is a
+ * place the branch can be worked on.
+ */
+export function findWorktreeForBranch(porcelainOutput: string, branch: string): string | null {
+  const wanted = branch.replace(/^refs\/heads\//, "");
+  for (const block of porcelainOutput.split(/\n\s*\n/)) {
+    let worktreePath: string | null = null;
+    let checkedOut: string | null = null;
+    let skip = false;
+    for (const line of block.split("\n")) {
+      if (line.startsWith("worktree ")) worktreePath = line.slice("worktree ".length).trim();
+      else if (line.startsWith("branch ")) {
+        checkedOut = line
+          .slice("branch ".length)
+          .trim()
+          .replace(/^refs\/heads\//, "");
+      } else if (line === "bare" || line.startsWith("prunable")) skip = true;
+    }
+    if (!skip && worktreePath && checkedOut === wanted) return worktreePath;
+  }
+  return null;
+}
+
+/**
  * Matches git's refusal when `worktree add -b` names a branch that already
  * exists ("fatal: a branch named 'x' already exists"). Deliberately anchored
  * on "branch named" — `worktree add` reports an existing target *path* with a

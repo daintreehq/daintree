@@ -904,9 +904,29 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./hostMode.js").SetHostModePayload];
     result: import("./hostMode.js").HostModeStatus;
   };
+  "host-switch:cancel": {
+    args: [payload: import("./hostSwitch.js").HostSwitchOpPayload];
+    result: boolean;
+  };
+  "host-switch:check-destination": {
+    args: [payload: import("./hostSwitch.js").HostSwitchCheckDestinationPayload];
+    result: import("./projectMatch.js").DestinationCheck;
+  };
+  "host-switch:execute": {
+    args: [payload: import("./hostSwitch.js").HostSwitchExecutePayload];
+    result: import("./hostSwitch.js").HostSwitchExecuteResult;
+  };
   "host-switch:plan": {
-    args: [_payload: import("./hostSwitch.js").HostSwitchPlanPayload];
+    args: [payload: import("./hostSwitch.js").HostSwitchPlanPayload];
     result: import("./hostSwitch.js").HostSwitchPlan;
+  };
+  "host-switch:prepare": {
+    args: [payload: import("./hostSwitch.js").HostSwitchPlanPayload];
+    result: import("./hostSwitch.js").HostSwitchPreparation;
+  };
+  "host-switch:status": {
+    args: [payload: import("./hostSwitch.js").HostSwitchOpPayload];
+    result: import("./hostSwitch.js").HostSwitchStatus;
   };
   "idle-background:get-config": {
     args: [];
@@ -1635,8 +1655,20 @@ export interface GeneratedIpcInvokeMap {
     result: import("./project.js").ProjectHistoryTarget | null;
   };
   "project-match:find": {
-    args: [_payload: import("./projectMatch.js").FindProjectMatchPayload];
+    args: [payload: import("./projectMatch.js").FindProjectMatchPayload];
     result: import("./projectMatch.js").ProjectMatchCandidate[];
+  };
+  "project-match:find-worktree-for-branch": {
+    args: [payload: import("./projectMatch.js").FindWorktreeForBranchPayload];
+    result: import("./projectMatch.js").WorktreeForBranch;
+  };
+  "project-match:scan": {
+    args: [payload: import("./projectMatch.js").ScanProjectMatchPayload];
+    result: import("./projectMatch.js").ProjectMatchCandidate[];
+  };
+  "project-match:take-pending-setup": {
+    args: [payload: import("./projectMatch.js").TakePendingHostSetupPayload];
+    result: import("./projectMatch.js").PendingHostSetup | null;
   };
   "project-presence:get-snapshot": {
     args: [];
