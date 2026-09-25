@@ -1056,11 +1056,12 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
-    it("replays the drive lease's resize hold to a fresh shard", () => {
+    it("replays the drive lease table to a fresh shard", () => {
       const client = createFabricClient();
-      client.setResizeHeldElsewhere(["project-a"]);
-      expect(messagesOfType(defaultShard().child, "set-resize-held-elsewhere")).toEqual([
-        { type: "set-resize-held-elsewhere", projectIds: ["project-a"] },
+      const leases = [{ projectId: "project-a", leaseId: 2, holderConnection: -5 }];
+      client.setDriveLeases(leases);
+      expect(messagesOfType(defaultShard().child, "set-drive-leases")).toEqual([
+        { type: "set-drive-leases", leases },
       ]);
       client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
       const shardA = projectShard("project-a");
@@ -1068,8 +1069,8 @@ describe("PtyClient fabric", () => {
 
       shardA.child.emit("message", { type: "ready" });
 
-      expect(messagesOfType(shardA.child, "set-resize-held-elsewhere")).toEqual([
-        { type: "set-resize-held-elsewhere", projectIds: ["project-a"] },
+      expect(messagesOfType(shardA.child, "set-drive-leases")).toEqual([
+        { type: "set-drive-leases", leases },
       ]);
       client.dispose();
     });

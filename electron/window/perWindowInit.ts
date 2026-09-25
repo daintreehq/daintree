@@ -368,23 +368,18 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
     if (windowRegistry) {
       for (const wCtx of windowRegistry.all()) {
         const w = wCtx.browserWindow;
+        // Through the helper so a window attached to a remote host never
+        // shows this machine's PTY recovery as its own.
         if (!w.isDestroyed()) {
-          const wc = getAppWebContents(w);
-          if (!wc.isDestroyed()) {
-            try {
-              wc.send(CHANNELS.EVENTS_PUSH, {
-                name: "terminal:backend-recovering",
-                payload: {
-                  crashType: details.crashType,
-                  code: details.code,
-                  signal: details.signal,
-                  timestamp: details.timestamp,
-                },
-              });
-            } catch {
-              // Silently ignore send failures during window disposal.
-            }
-          }
+          sendToRenderer(w, CHANNELS.EVENTS_PUSH, {
+            name: "terminal:backend-recovering",
+            payload: {
+              crashType: details.crashType,
+              code: details.code,
+              signal: details.signal,
+              timestamp: details.timestamp,
+            },
+          });
         }
       }
     }
@@ -403,17 +398,7 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
       for (const wCtx of windowRegistry.all()) {
         const w = wCtx.browserWindow;
         if (!w.isDestroyed()) {
-          const wc = getAppWebContents(w);
-          if (!wc.isDestroyed()) {
-            try {
-              wc.send(CHANNELS.EVENTS_PUSH, {
-                name: "terminal:backend-crashed",
-                payload,
-              });
-            } catch {
-              // Silently ignore send failures during window disposal.
-            }
-          }
+          sendToRenderer(w, CHANNELS.EVENTS_PUSH, { name: "terminal:backend-crashed", payload });
         }
       }
     }
@@ -538,14 +523,10 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
             const wc = getAppWebContents(wCtx.browserWindow);
             if (!wc.isDestroyed()) {
               distributePortsToView(wCtx.browserWindow, wCtx, wc, ptyClient);
-              try {
-                wc.send(CHANNELS.EVENTS_PUSH, {
-                  name: "terminal:backend-ready",
-                  payload: undefined,
-                });
-              } catch {
-                // Silently ignore send failures during window disposal.
-              }
+              sendToRenderer(wCtx.browserWindow, CHANNELS.EVENTS_PUSH, {
+                name: "terminal:backend-ready",
+                payload: undefined,
+              });
             }
           }
         } catch (error) {
@@ -576,16 +557,7 @@ export function wireWatchdogDisabledBroadcast(
     for (const wCtx of windowRegistry.all()) {
       const w = wCtx.browserWindow;
       if (w.isDestroyed()) continue;
-      const wc = getAppWebContents(w);
-      if (wc.isDestroyed()) continue;
-      try {
-        wc.send(CHANNELS.EVENTS_PUSH, {
-          name: "watchdog:disabled",
-          payload,
-        });
-      } catch {
-        // Silently ignore send failures during window disposal.
-      }
+      sendToRenderer(w, CHANNELS.EVENTS_PUSH, { name: "watchdog:disabled", payload });
     }
   });
 }

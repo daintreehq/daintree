@@ -1,12 +1,25 @@
 import type { ClientEndpoint } from "../../ipc/endpoint.js";
 
 /**
- * Names the endpoint that drives a project, or `null` when nobody does. The
- * drive lease is a remote-hosts service, so core code never imports it: the
- * remote boot installs this resolver, and without one MCP routing keeps its
- * focus- and workspace-based resolution.
+ * Who MCP dispatch should reach for a project, as the drive lease sees it.
+ *
+ * - `vacant`: nobody drives it. A local view that shows it is still found the
+ *   usual way; with none, the host may run the action itself.
+ * - `unavailable`: a holder exists but cannot be reached right now — its link
+ *   dropped or its view went, inside the lease's reservation — or the lease
+ *   could not be read. Retriable, and never routed to anyone else meanwhile.
+ * - `live`: the endpoint that drives it.
  */
-export type McpDriveTargetResolver = (projectId: string) => ClientEndpoint | null;
+export type McpDriveTarget =
+  | { state: "vacant" }
+  | { state: "unavailable"; reason: "reserved" | "lookup-failed" }
+  | { state: "live"; endpoint: ClientEndpoint };
+
+/**
+ * The drive lease is a remote-hosts service, so core code never imports it:
+ * the remote boot installs this resolver in Host mode.
+ */
+export type McpDriveTargetResolver = (projectId: string) => McpDriveTarget;
 
 let resolver: McpDriveTargetResolver | null = null;
 
@@ -18,25 +31,36 @@ export function setMcpDriveTargetResolver(next: McpDriveTargetResolver | null): 
 }
 
 /**
- * The live endpoint driving `projectId`, `null` when the lease says nobody is,
- * or `undefined` when no lease is installed and the caller must decide the
- * pre-lease way.
- *
- * A closed endpoint is nobody: a lease can outlive its holder by the moment it
- * takes the host to notice the disconnect, and dispatching into a closed
- * endpoint would only fail later with a less honest error.
+ * Whether Host-mode routing is on: the drive lease decides MCP targets and the
+ * host may run actions with no frontend attached. Off, MCP routes, fails and
+ * describes its surface exactly as it did before Remote Hosts existed.
  */
-export function resolveMcpDriveTarget(projectId: string): ClientEndpoint | null | undefined {
-  if (resolver === null) return undefined;
-  let endpoint: ClientEndpoint | null;
+export function isMcpHostRoutingEnabled(): boolean {
+  return resolver !== null;
+}
+
+/**
+ * Where MCP dispatch for `projectId` goes, or `null` when no lease is installed
+ * and the caller must route the pre-lease way.
+ *
+ * A failed lookup is not "no lease": falling back to legacy routing then could
+ * reach a renderer the lease says is not driving. A live answer whose endpoint
+ * has since closed is a holder that just went, which is what the lease's
+ * reservation covers.
+ */
+export function resolveMcpDriveTarget(projectId: string): McpDriveTarget | null {
+  if (resolver === null) return null;
+  let target: McpDriveTarget;
   try {
-    endpoint = resolver(projectId);
+    target = resolver(projectId);
   } catch (err) {
-    console.warn("[MCP] Drive lease lookup failed; routing as if no lease were installed:", err);
-    return undefined;
+    console.warn("[MCP] Drive lease lookup failed:", err);
+    return { state: "unavailable", reason: "lookup-failed" };
   }
-  if (endpoint === null || endpoint.isClosed()) return null;
-  return endpoint;
+  if (target.state === "live" && target.endpoint.isClosed()) {
+    return { state: "unavailable", reason: "reserved" };
+  }
+  return target;
 }
 
 /** @internal Tests only. */

@@ -96,4 +96,27 @@ describe("terminal input gate", () => {
       driverName: "greg-mbp",
     });
   });
+
+  it("holds input while a remote view doesn't know who drives, as a retriable reason", async () => {
+    gate.setLeaseInputBlock({ kind: "lease-unknown", hostName: "studio-01" });
+    terminalClient.write("t-1", "x");
+    expect(terminal.write).not.toHaveBeenCalled();
+    await expect(terminalClient.submit("t-1", "x")).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+  });
+
+  it("announces input opening only when the last block lifts", () => {
+    const unblocked = vi.fn();
+    gate.onTerminalInputUnblocked(unblocked);
+    gate.setHostInputBlock(null);
+    expect(unblocked).not.toHaveBeenCalled();
+
+    gate.setLeaseInputBlock({ kind: "lease-unknown", hostName: "studio-01" });
+    gate.setHostInputBlock({ kind: "disconnected", hostName: "studio-01" });
+    gate.setLeaseInputBlock(null);
+    expect(unblocked).not.toHaveBeenCalled();
+    gate.setHostInputBlock(null);
+    expect(unblocked).toHaveBeenCalledTimes(1);
+  });
 });

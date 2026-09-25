@@ -65,6 +65,7 @@ import {
   RendererBridgeUnavailableError,
   NoFrontendAttachedError,
 } from "../rendererBridge.js";
+import { setMcpDriveTargetResolver } from "../driveTarget.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
 import { MCP_EXTERNAL_TIER_TOOLS } from "../../../../shared/config/mcpExternalTierAllowlist.js";
@@ -2312,11 +2313,11 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     expect(parsed.details).toEqual({ confirmationChannel: "unavailable" });
   });
 
-  it("answers a retriable NO_FRONTEND_ATTACHED for a non-confirm tool when the bridge is unavailable (#10640)", async () => {
+  it("keeps a retriable EXECUTION_ERROR for a non-confirm tool when the bridge is unavailable (#10640)", async () => {
     // The reclassification is scoped to confirm-gated tools. A safe tool that
     // hits the same RendererBridgeUnavailableError is a genuine "no renderer"
-    // failure (nothing needed confirming), reported with the typed, retriable
-    // no-frontend code rather than an opaque dispatch failure.
+    // failure (nothing needed confirming) and stays a retriable EXECUTION_ERROR
+    // — but with an explicit cause rather than an opaque dispatch failure.
     const manifest = [
       {
         id: "files.search",
@@ -2342,18 +2343,43 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
 
     expect(result.isError).toBe(true);
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.code).toBe(NO_FRONTEND_ATTACHED_CODE);
+    expect(parsed.code).toBe(EXECUTION_ERROR_CODE);
     expect(parsed.retriable).toBe(true);
     expect(parsed.message).toContain("No Daintree window is open");
   });
 
-  it("cold-cache confirm tool with no renderer stays a retriable NO_FRONTEND_ATTACHED — danger is unknowable without a manifest (#10640)", async () => {
+  it("answers NO_FRONTEND_ATTACHED instead when Host-mode routing is on", async () => {
+    const restore = setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    try {
+      const deps = fakeDeps({
+        sessionStore: fakeSessionStore("action"),
+        getCachedManifest: vi.fn(() => null),
+        requestManifest: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+        dispatchAction: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+      });
+      const server = createSessionServer("s-host-mode-no-channel", deps);
+      await server.connect(makeMockTransport());
+
+      const result = (await callTool(server, {
+        name: "recipe.run",
+        arguments: {},
+      })) as { isError: boolean; content: { type: string; text: string }[] };
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.code).toBe(NO_FRONTEND_ATTACHED_CODE);
+      expect(parsed.retriable).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("cold-cache confirm tool with no renderer stays a retriable EXECUTION_ERROR — danger is unknowable without a manifest (#10640)", async () => {
     // Deliberate boundary: when no window is open AND the manifest cache is cold,
     // the manifest fetch itself goes through the renderer and throws, so
     // `lookupManifestEntry` returns undefined and the tool's danger is unknown.
     // We must NOT claim CONFIRMATION_REQUIRED for an unverified confirm tool, so
-    // this stays a retriable NO_FRONTEND_ATTACHED (the renderer may return when
-    // a window opens) rather than the non-retriable confirmation signal the
+    // this stays a retriable EXECUTION_ERROR (the renderer may return when a
+    // window opens) rather than the non-retriable confirmation signal the
     // warm-cache path produces.
     const deps = fakeDeps({
       sessionStore: fakeSessionStore("action"),
@@ -2372,7 +2398,7 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
 
     expect(result.isError).toBe(true);
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.code).toBe(NO_FRONTEND_ATTACHED_CODE);
+    expect(parsed.code).toBe(EXECUTION_ERROR_CODE);
     expect(parsed.retriable).toBe(true);
     expect(parsed.message).toContain("No Daintree window is open");
   });
@@ -4105,7 +4131,7 @@ describe("resolved-workspace result metadata (#11536)", () => {
     // earlier for an unrelated reason.
     expect(dispatchAction).toHaveBeenCalledTimes(1);
     expect(result.isError).toBe(true);
-    expect(JSON.parse(textOf(result)).code).toBe(NO_FRONTEND_ATTACHED_CODE);
+    expect(JSON.parse(textOf(result)).code).toBe(EXECUTION_ERROR_CODE);
     expect(workspaceMetaOf(result)).toBeUndefined();
   });
 

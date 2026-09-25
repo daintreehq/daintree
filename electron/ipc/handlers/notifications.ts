@@ -197,26 +197,30 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
       .catch((err) => console.error("[notifications] acknowledgeWorkingPulse failed:", err));
   };
 
-  const applySessionMute = (payload: unknown): boolean => {
+  const applySessionMute = (payload: unknown, remoteClientId?: string): boolean => {
     if (!payload || typeof payload !== "object") return false;
     const p = payload as Record<string, unknown>;
     if (typeof p.timestampMs !== "number" || !Number.isFinite(p.timestampMs)) return false;
     const ts = p.timestampMs;
     void getAgentNotificationService()
-      .then((svc) => svc.setSessionMuteUntil(ts))
+      .then((svc) => svc.setSessionMuteUntil(ts, remoteClientId))
       .catch((err) => console.error("[notifications] setSessionMuteUntil failed:", err));
     return true;
   };
 
   const handleSessionMuteSet = (event: Electron.IpcMainEvent, payload: unknown): void => {
+    // Muting is about the person at this screen: this machine enforces it
+    // wherever it presents, including notifications a host sends here. The
+    // host hears of it too, so it holds back what it would send this Shell.
     if (!applySessionMute(payload)) return;
-    // Muting is about the person at this screen, so it applies here and also
-    // on the host that decides when this view's agents notify.
     hostRelay?.(event.sender.id, CHANNELS.NOTIFICATION_SESSION_MUTE_SET, [payload]);
   };
 
-  const handleRemoteSessionMuteSet = (_ctx: IpcContext, payload: unknown): void => {
-    applySessionMute(payload);
+  // Scoped to the Shell that sent it: one screen's mute never quiets this
+  // machine's own windows or another Shell's.
+  const handleRemoteSessionMuteSet = (ctx: IpcContext, payload: unknown): void => {
+    if (ctx.event !== null) return;
+    applySessionMute(payload, ctx.client.clientId);
   };
 
   const handleShowNative = (_event: Electron.IpcMainEvent, payload: unknown): void => {

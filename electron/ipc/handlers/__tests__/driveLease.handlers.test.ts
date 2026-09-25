@@ -43,7 +43,7 @@ let registry: EndpointRegistryImpl;
 beforeEach(() => {
   registry = new EndpointRegistryImpl();
   _resetDriveLeaseServiceForTesting(
-    new DriveLeaseService({ registry, applyResizeLease: () => {} })
+    new DriveLeaseService({ registry, applyDriveLeases: () => {} })
   );
 });
 

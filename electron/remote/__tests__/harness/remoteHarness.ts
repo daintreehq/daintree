@@ -15,6 +15,7 @@ import { registerOperationsHandlers } from "../../../ipc/handlers/operations.js"
 import { _resetIpcGuardForTesting } from "../../../ipc/ipcGuard.js";
 import { _resetLocalEndpointsForTesting } from "../../../ipc/localEndpoint.js";
 import type { PtyClient } from "../../../services/PtyClient.js";
+import { _resetDriveLeaseServiceForTesting } from "../../../services/DriveLeaseService.js";
 import { _resetOperationRegistryForTest } from "../../../services/operations/index.js";
 import { enforceIpcSenderValidation } from "../../../setup/security.js";
 import { setPtyClientRef } from "../../../window/serviceRefs.js";
@@ -116,6 +117,9 @@ export async function startRemoteHarness(
   _resetEndpointRegistryForTesting();
   _resetLocalEndpointsForTesting();
   _resetOperationRegistryForTest();
+  // The lease service binds the endpoint registry it was made with, and names
+  // endpoints of the session it last saw: each harness needs its own.
+  _resetDriveLeaseServiceForTesting(null);
   enforceIpcSenderValidation();
 
   const teardowns: Array<() => unknown> = [];
@@ -126,6 +130,7 @@ export async function startRemoteHarness(
     liveViews.clear();
     projectKeys.clear();
     _resetOperationRegistryForTest();
+    _resetDriveLeaseServiceForTesting(null);
   });
 
   const pty = new FakePtyHost();

@@ -225,6 +225,19 @@ export type PluginPtyHostEvent =
  * Requests sent from Main → Host.
  * Each request is a discriminated union type for compile-time safety.
  */
+/**
+ * One project's drive lease as the pty-host enforces it. `holderConnection` is
+ * the port connection id of the remote endpoint that drives, or null when this
+ * machine's own windows do (they arbitrate among themselves exactly as before).
+ * `leaseId` rises with every grant, so a message stamped with an older one is
+ * stale work from a driver that has since been replaced.
+ */
+export interface PtyHostDriveLease {
+  projectId: string;
+  leaseId: number;
+  holderConnection: number | null;
+}
+
 export type PtyHostRequest =
   | PluginPtyHostRequest
   | { type: "spawn"; id: string; options: PtyHostSpawnOptions }
@@ -303,10 +316,10 @@ export type PtyHostRequest =
   // `windowProjectMap` holds one active project per window and says nothing
   // about the views behind it. Main owns the answer and pushes it on change.
   | { type: "set-fallback-eligible-projects"; projectIds: string[] }
-  // Projects whose drive lease another client holds. Resizes from this
-  // machine's own window ports are dropped for their terminals. Main owns the
-  // lease and replaces the whole set on change.
-  | { type: "set-resize-held-elsewhere"; projectIds: string[] }
+  // The drive leases a remote client is party to. Input and resizes from any
+  // port other than the holder's are dropped for their terminals. Main owns
+  // the lease and replaces the whole table on change.
+  | { type: "set-drive-leases"; leases: PtyHostDriveLease[] }
   | { type: "disconnect-port"; windowId: number }
   | { type: "kill-by-project"; projectId: string; requestId: string }
   | { type: "get-project-stats"; projectId: string; requestId: string }

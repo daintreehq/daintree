@@ -1,8 +1,18 @@
+import { randomUUID } from "node:crypto";
 import { clipboard, shell } from "electron";
 import type { AppState, BootResult, HydrateResult } from "../../../shared/types/ipc/app.js";
-import type { ProjectSwitchResult } from "../../../shared/types/ipc/project.js";
+import type {
+  ProjectFocusOnActivateIntent,
+  ProjectSwitchPayload,
+  ProjectSwitchResult,
+  ProjectSwitchTrace,
+} from "../../../shared/types/ipc/project.js";
 import type { EditorConfig, EditorGetConfigResult } from "../../../shared/types/editor.js";
-import type { HostDescriptor, HostId } from "../../../shared/types/remoteHosts.js";
+import {
+  toHostScopedKey,
+  type HostDescriptor,
+  type HostId,
+} from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { HybridSplit } from "../../ipc/endpoint.js";
 import type { IpcContext } from "../../ipc/types.js";
@@ -14,6 +24,14 @@ import {
   TERMINAL_CONFIG_FIELD_OWNERSHIP,
 } from "../../storeOwnership.js";
 import { AppError } from "../../utils/errorTypes.js";
+import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
+import { hasLiveProjectView } from "../../window/projectOwnership.js";
+import {
+  getWindowForWebContents,
+  resolveLiveWebContents,
+} from "../../window/webContentsRegistry.js";
+import { getWindowRegistry } from "../../window/windowRef.js";
+import { isValidSshTarget } from "../client/sshTransport.js";
 import { getRemoteService } from "../runtime.js";
 import { mergeByOwnership, splitByOwnership } from "./fieldOwnership.js";
 import { notificationSettingsGet, notificationSettingsSet } from "./notificationSettings.js";
@@ -137,9 +155,24 @@ function senderContext(webContentsId: number): IpcContext {
   return { webContentsId, senderWindow: null } as unknown as IpcContext;
 }
 
+function projectViewManagerOf(webContentsId: number): ProjectViewManager | null {
+  const wc = resolveLiveWebContents(webContentsId);
+  const win = wc ? getWindowForWebContents(wc) : null;
+  if (!win || win.isDestroyed()) return null;
+  return getWindowRegistry()?.getByWindowId(win.id)?.services.projectViewManager ?? null;
+}
+
+interface SwitchOptions {
+  focusIntent?: ProjectFocusOnActivateIntent;
+  trace?: Partial<ProjectSwitchTrace>;
+}
+
 /**
- * The host activates the project (saves the outgoing layout, wakes the
- * workspace); this Shell then shows it, in a view keyed to that host.
+ * The host activates the project (saves the outgoing layout, starts or wakes
+ * its workspace and holds it for the view); this Shell then shows it, in a
+ * view keyed to that host, and does what a local switch does for the view it
+ * lands on: hands it the focus intent and tells it, and only it, that it was
+ * switched to.
  */
 const projectSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote }) => {
   const result = (await remote()) as ProjectSwitchResult;
@@ -151,11 +184,31 @@ const projectSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote 
       message: "Remote hosts client is not running",
     });
   }
+  const projectId = args[0] as string;
+  const options = (args[2] && typeof args[2] === "object" ? args[2] : {}) as SwitchOptions;
+  const key = toHostScopedKey(hostId, projectId);
+  const pvm = projectViewManagerOf(webContentsId);
+  const cacheHit = hasLiveProjectView(pvm, key);
+  // Before the swap, as a local switch records it: the view consumes it on activation.
+  if (options.focusIntent) pvm?.setPendingFocusIntent(key, options.focusIntent);
   await client.switchWindowHost(senderContext(webContentsId), {
     hostId,
-    projectId: args[0] as string,
+    projectId,
     newWindow: false,
   });
+  const view = pvm?.getActiveProjectId() === key ? pvm.getActiveView() : null;
+  const wc = view?.webContents;
+  if (wc && !wc.isDestroyed()) {
+    wc.send(CHANNELS.PROJECT_ON_SWITCH, {
+      project: result.project,
+      switchId:
+        typeof options.trace?.switchId === "string" && options.trace.switchId
+          ? options.trace.switchId
+          : randomUUID(),
+      entryPoint: options.trace?.entryPoint ?? "api",
+      cacheHit,
+    } satisfies ProjectSwitchPayload);
+  }
   return result;
 };
 
@@ -167,7 +220,19 @@ const REMOTE_EDITOR_SCHEMES: Partial<Record<EditorConfig["id"], string>> = {
   windsurf: "windsurf",
 };
 
-const SSH_TARGET_PATTERN = /^[A-Za-z0-9@._:-]+$/;
+/** Spelled plainly after `ssh-remote+`: nothing the URI or the resolver's own `+` split reads. */
+const PLAIN_AUTHORITY_TARGET = /^[A-Za-z0-9@._-]+$/;
+
+/**
+ * The `ssh-remote+` authority for a target. Anything the transport accepts
+ * beyond the plain set (`+`, `%`, brackets) goes as Remote-SSH's hex-encoded
+ * JSON form, which survives URI parsing untouched.
+ */
+function remoteSshAuthority(sshTarget: string): string {
+  if (PLAIN_AUTHORITY_TARGET.test(sshTarget)) return `ssh-remote+${sshTarget}`;
+  const encoded = Buffer.from(JSON.stringify({ hostName: sshTarget }), "utf8").toString("hex");
+  return `ssh-remote+${encoded}`;
+}
 
 export function buildRemoteEditorUrl(options: {
   editorId: EditorConfig["id"] | null;
@@ -178,7 +243,8 @@ export function buildRemoteEditorUrl(options: {
 }): string | null {
   const scheme = REMOTE_EDITOR_SCHEMES[options.editorId ?? "vscode"];
   if (!scheme) return null;
-  if (!SSH_TARGET_PATTERN.test(options.sshTarget)) return null;
+  // The same grammar the connection itself accepts, so every host that connects can open files.
+  if (!isValidSshTarget(options.sshTarget)) return null;
   if (!options.path.startsWith("/") || /[\0\r\n]/.test(options.path)) return null;
   const isPosition = (n: number | undefined) => n === undefined || (Number.isInteger(n) && n > 0);
   if (!isPosition(options.line) || !isPosition(options.col)) return null;
@@ -188,7 +254,7 @@ export function buildRemoteEditorUrl(options: {
     options.line !== undefined
       ? `:${options.line}${options.col !== undefined ? `:${options.col}` : ""}`
       : "";
-  return `${scheme}://vscode-remote/ssh-remote+${options.sshTarget}${encodedPath}${position}`;
+  return `${scheme}://vscode-remote/${remoteSshAuthority(options.sshTarget)}${encodedPath}${position}`;
 }
 
 function copyHostPathInstead(hostId: HostId, reason: string): AppError {

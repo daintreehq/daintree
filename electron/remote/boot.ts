@@ -23,6 +23,7 @@ import {
   acceptLocalPushForRemoteView,
   admitHybridHostLegs,
   installHybridSplits,
+  ViewVisibilityReporter,
 } from "./hybrid/index.js";
 import { Lane } from "./link/frames.js";
 import { ControlKind } from "./link/messages.js";
@@ -96,6 +97,9 @@ function hostLocation(): HostSocketLocation {
 function startClient(): void {
   let hostForView: (webContentsId: number) => string | null = () => null;
   let activated = false;
+  // Tells each host which of its views a window is actually showing, so its
+  // close and background guards protect exactly those projects.
+  const visibility = new ViewVisibilityReporter();
 
   // Everything a remote view needs beyond the host list, installed the first
   // time a host is actually used so a user who never adds one runs none of it.
@@ -126,12 +130,14 @@ function startClient(): void {
         if (hostForView(webContentsId) !== hostId) return;
         const wc = resolveLiveWebContents(webContentsId);
         if (!wc) return;
+        visibility.noteEndpointOpened({ session, webContentsId, endpointId });
         attachClientTerminalRelay(session, wc, endpointId, hostId);
         attachClientWorktreeRelay(session, wc, endpointId, hostId);
       })
     );
     teardowns.push(
       client.onEndpointClosed((hostId, { webContentsId, endpointId }) => {
+        visibility.noteEndpointClosed(webContentsId, endpointId);
         detachClientTerminalRelayFor(webContentsId, hostId, endpointId);
         detachClientWorktreeRelayFor(webContentsId, hostId, endpointId);
       })
@@ -153,6 +159,7 @@ function startClient(): void {
       const ctx = getWindowRegistry()?.getByWindowId(windowId);
       if (ctx) releaseWindowTerminalPort(ctx, getPtyClient());
       if (!isNew) redeliverClientWorktreePort(wc);
+      visibility.noteViewActivated(windowId, wc.id);
     },
   });
   hostForView = client.hostForView;
@@ -194,9 +201,26 @@ async function startHost(): Promise<void> {
 
   teardowns.push(admitHybridHostLegs());
 
-  // MCP dispatch and the drive lease agree on who drives a project.
+  // MCP dispatch and the drive lease agree on who drives a project. Installing
+  // the resolver is also what lets the host run actions with no frontend
+  // attached: only Host mode does, so a plain local app routes as it always did.
   const lease = getDriveLeaseService();
-  teardowns.push(setMcpDriveTargetResolver((projectId) => lease.getHolderEndpoint(projectId)));
+  teardowns.push(
+    setMcpDriveTargetResolver((projectId) => {
+      const target = lease.getDriveTarget(projectId);
+      if (target.kind === "live") return { state: "live", endpoint: target.endpoint };
+      return target.kind === "vacant"
+        ? { state: "vacant" }
+        : { state: "unavailable", reason: "reserved" };
+    })
+  );
+  // The lease's release grace starts when a holder's link drops, not when its
+  // session finally expires, and a resume inside it keeps the lease.
+  teardowns.push(
+    host.sessionHost.onTransportChange((endpointIds, attached) =>
+      lease.noteEndpointTransport(endpointIds, attached)
+    )
+  );
 
   const endpointsBySession = new Map<string, Map<string, RemoteViewEndpoint>>();
   const linksBySession = new Map<string, () => LinkSession | null>();

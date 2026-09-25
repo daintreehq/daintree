@@ -74,6 +74,7 @@ import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
   MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
+import { isMcpHostRoutingEnabled } from "./driveTarget.js";
 import {
   McpRouteBindingError,
   NoFrontendAttachedError,
@@ -2850,16 +2851,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // entry couldn't be fetched (the manifest itself comes from the
             // renderer, so `entry` is undefined here and the tool's danger is
             // unknowable). We must not claim CONFIRMATION_REQUIRED without
-            // knowing the tool is confirm-gated, so this is the typed, retriable
-            // "no frontend" refusal — a window may open, locally or from another
-            // machine. An unbound session names no workspace, so there is no
-            // project the host could run the action for on its own.
-            return buildToolError({
-              code: NO_FRONTEND_ATTACHED_CODE,
-              message:
-                "No Daintree window is open, so the action surface is unavailable. Retry once a project window is open.",
-              retriable: true,
-            });
+            // knowing the tool is confirm-gated. With Host-mode routing this is
+            // the typed, retriable "no frontend" refusal — a window may open,
+            // locally or from another machine; an unbound session names no
+            // workspace, so there is no project the host could run the action
+            // for on its own. Without it, the retriable EXECUTION_ERROR this
+            // has always been.
+            const message =
+              "No Daintree window is open, so the action surface is unavailable. Retry once a project window is open.";
+            return isMcpHostRoutingEnabled()
+              ? buildToolError({ code: NO_FRONTEND_ATTACHED_CODE, message, retriable: true })
+              : buildToolError({ code: EXECUTION_ERROR_CODE, message });
           }
           return buildToolError({
             code: EXECUTION_ERROR_CODE,

@@ -945,6 +945,9 @@ export interface GeneratedElectronAPI {
     getWindowHost(
       ...args: IpcInvokeMap["remote-hosts:get-window-host"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:get-window-host"]["result"]>;
+    isInUse(
+      ...args: IpcInvokeMap["remote-hosts:is-in-use"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:is-in-use"]["result"]>;
     list(
       ...args: IpcInvokeMap["remote-hosts:list"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:list"]["result"]>;

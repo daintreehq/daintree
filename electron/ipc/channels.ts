@@ -1239,6 +1239,7 @@ export const CHANNELS = {
   REMOTE_HOSTS_DISCOVER: "remote-hosts:discover",
   REMOTE_HOSTS_PROBE: "remote-hosts:probe",
   REMOTE_HOSTS_GET_LOCAL_HANDSHAKE: "remote-hosts:get-local-handshake",
+  REMOTE_HOSTS_IS_IN_USE: "remote-hosts:is-in-use",
   REMOTE_HOSTS_EVENT: "remote-hosts:event",
 
   // Remote Hosts: hostMode (shell).

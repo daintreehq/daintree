@@ -23,12 +23,14 @@ function fakeManager() {
       state: () => HostConnectionState;
       describeProject: ReturnType<typeof vi.fn>;
       whenReady: ReturnType<typeof vi.fn>;
+      boundViews: () => number[];
     }
   >();
   const listeners = new Set<(hostId: string, state: HostConnectionState) => void>();
   const manager = {
     status: "connected" as string,
     readiness: "ready" as string,
+    bound: [] as number[],
     connect: vi.fn((hostId: string) => {
       let connection = connections.get(hostId);
       if (!connection) {
@@ -42,6 +44,7 @@ function fakeManager() {
             name: projectId,
           })),
           whenReady: vi.fn(async () => manager.readiness),
+          boundViews: () => [...manager.bound],
         };
         connections.set(hostId, connection);
       }
@@ -280,5 +283,74 @@ describe("RemoteHostsClient", () => {
       })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(windows.openRemoteProject).not.toHaveBeenCalled();
+  });
+
+  describe("after an explicit disconnect", () => {
+    const connected: HostConnectionState = {
+      status: "connected",
+      rttMs: 1,
+      handshake: {} as never,
+    };
+
+    async function disconnectWithBoundView() {
+      keys.set(9, "studio-01:proj-1");
+      manager.connect("studio-01");
+      manager.bound = [9];
+      await client.disconnect({ hostId: "studio-01" });
+      events.length = 0;
+    }
+
+    function resyncs() {
+      return events.filter((event) => event.type === "resync-required");
+    }
+
+    it("resyncs the views it cut off once a new connection can take calls", async () => {
+      await disconnectWithBoundView();
+      manager.connect("studio-01");
+      manager.emit("studio-01", { status: "connecting", attempt: 1 });
+      manager.emit("studio-01", connected);
+      await vi.waitFor(() =>
+        expect(resyncs()).toEqual([
+          { type: "resync-required", hostId: "studio-01", reason: "reconnected" },
+        ])
+      );
+
+      // Once only: a later reconnect of the same connection is the coordinator's.
+      manager.emit("studio-01", connected);
+      await Promise.resolve();
+      expect(resyncs()).toHaveLength(1);
+    });
+
+    it("tells no one when the views have since moved to another host", async () => {
+      await disconnectWithBoundView();
+      keys.set(9, "proj-1");
+      manager.connect("studio-01");
+      manager.emit("studio-01", connected);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(resyncs()).toHaveLength(0);
+    });
+
+    it("keeps waiting when the connection never became usable", async () => {
+      await disconnectWithBoundView();
+      manager.readiness = "timeout";
+      manager.connect("studio-01");
+      manager.emit("studio-01", connected);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(resyncs()).toHaveLength(0);
+
+      manager.readiness = "ready";
+      manager.emit("studio-01", connected);
+      await vi.waitFor(() => expect(resyncs()).toHaveLength(1));
+    });
+
+    it("drops the views of a forgotten host", async () => {
+      await disconnectWithBoundView();
+      await client.forget({ hostId: "studio-01" });
+      registry.add({ name: "studio-01", sshTarget: "studio.example" });
+      manager.connect("studio-01");
+      manager.emit("studio-01", connected);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(resyncs()).toHaveLength(0);
+    });
   });
 });

@@ -369,6 +369,8 @@ export function sendToRenderer(
     return;
   }
 
+  if (isWithheldFromView(webContents.id, channel, args)) return;
+
   try {
     webContents.send(channel, ...args);
   } catch {
@@ -839,6 +841,7 @@ export function typedBroadcast<K extends keyof IpcEventMap>(
 ): void {
   for (const wc of getAllAppWebContents()) {
     if (!wc.isDestroyed()) {
+      if (isWithheldFromView(wc.id, channel as string, [payload])) continue;
       try {
         wc.send(channel as string, payload);
       } catch {
@@ -867,6 +870,8 @@ export function typedSend<K extends keyof IpcEventMap>(
   if (typeof webContents.isDestroyed === "function" && webContents.isDestroyed()) {
     return;
   }
+
+  if (isWithheldFromView(webContents.id, channel as string, [payload])) return;
 
   try {
     webContents.send(channel as string, payload);

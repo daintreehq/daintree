@@ -57,6 +57,10 @@ vi.mock("../OsDndService.js", () => ({
 
 import { events } from "../events.js";
 import { agentNotificationService } from "../AgentNotificationService.js";
+import {
+  _resetEndpointRegistryForTesting,
+  getEndpointRegistry,
+} from "../../ipc/endpointRegistry.js";
 
 /** Stand-in for a project view's webContents id — the renderer that owns the watched panels. */
 const OWNER = 101;
@@ -213,7 +217,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("finished"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      { silent: true, ownerWebContentsId: OWNER }
+      { silent: true, ownerWebContentsId: OWNER, category: "completed" }
     );
   });
 
@@ -228,7 +232,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("waiting for input"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"], category: "waiting" }
     );
   });
 
@@ -329,7 +333,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("waiting for input"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"], category: "waiting" }
     );
   });
 
@@ -366,7 +370,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("finished"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      { silent: true, ownerWebContentsId: OWNER }
+      { silent: true, ownerWebContentsId: OWNER, category: "completed" }
     );
   });
 
@@ -681,7 +685,12 @@ describe("AgentNotificationService", () => {
         "3 agents waiting for input",
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1", "term-2", "term-3"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1", "term-2", "term-3"],
+          category: "waiting",
+        }
       );
       expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
     });
@@ -698,7 +707,12 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("agent-1 is waiting for input"),
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -716,7 +730,12 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("agent-1 is waiting for approval"),
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -734,7 +753,12 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("agent-1 is waiting for input"),
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -758,7 +782,12 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("is waiting for approval"),
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -780,7 +809,12 @@ describe("AgentNotificationService", () => {
         "3 agents waiting for approval",
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1", "term-2", "term-3"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1", "term-2", "term-3"],
+          category: "waiting",
+        }
       );
     });
 
@@ -804,7 +838,12 @@ describe("AgentNotificationService", () => {
         "2 agents waiting for input",
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1", "term-2"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1", "term-2"],
+          category: "waiting",
+        }
       );
     });
 
@@ -841,7 +880,7 @@ describe("AgentNotificationService", () => {
         "3 agents finished their tasks",
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER }
+        { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
     });
 
@@ -1191,7 +1230,7 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER }
+        { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
     });
 
@@ -1373,7 +1412,7 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("finished"),
         expect.objectContaining({ worktreeId: "wt-B" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER }
+        { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
     });
 
@@ -1403,7 +1442,12 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("waiting"),
         expect.objectContaining({ worktreeId: "wt-B" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -1436,7 +1480,7 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ worktreeId: "wt-fresh" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER }
+        { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
     });
 
@@ -1458,7 +1502,7 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ worktreeId: undefined }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER }
+        { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
     });
   });
@@ -1607,7 +1651,7 @@ describe("AgentNotificationService", () => {
         "2 agents finished their tasks",
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER }
+        { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
     });
 
@@ -1707,7 +1751,7 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("claude"),
         expect.objectContaining({ panelId: "term-1" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER }
+        { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
     });
   });
@@ -1775,7 +1819,12 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
   });
@@ -1862,7 +1911,12 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("agent-2 is waiting for input"),
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-2"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-2"],
+          category: "waiting",
+        }
       );
     });
 
@@ -1927,7 +1981,12 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ panelId: "term-1" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -1945,7 +2004,12 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ panelId: "term-2" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER_B, closeWithPanels: ["term-2"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER_B,
+          closeWithPanels: ["term-2"],
+          category: "waiting",
+        }
       );
     });
 
@@ -1965,7 +2029,12 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ panelId: "term-1" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -1991,7 +2060,12 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ panelId: "term-2" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER_B, closeWithPanels: ["term-2"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER_B,
+          closeWithPanels: ["term-2"],
+          category: "waiting",
+        }
       );
     });
 
@@ -2015,7 +2089,12 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ panelId: "term-2" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER_B, closeWithPanels: ["term-2"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER_B,
+          closeWithPanels: ["term-2"],
+          category: "waiting",
+        }
       );
     });
 
@@ -2054,7 +2133,12 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ panelId: "term-1" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -2201,7 +2285,12 @@ describe("AgentNotificationService", () => {
           expect.any(String),
           expect.objectContaining({ panelId: "term-1" }),
           "notification:watch-navigate",
-          { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+          {
+            silent: true,
+            ownerWebContentsId: OWNER,
+            closeWithPanels: ["term-1"],
+            category: "waiting",
+          }
         );
       }
     );
@@ -2235,7 +2324,12 @@ describe("AgentNotificationService", () => {
         "2 agents waiting for input",
         expect.objectContaining({ panelId: "term-2", worktreeId: "wt-2" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-2", "term-3"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-2", "term-3"],
+          category: "waiting",
+        }
       );
     });
 
@@ -2384,5 +2478,120 @@ describe("AgentNotificationService", () => {
 
       expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("notifications owned by a view on a remote Shell", () => {
+  const REMOTE_OWNER = -7;
+
+  function attachRemoteView(clientId: string) {
+    getEndpointRegistry().add({
+      endpointId: "remote:s1:view-1",
+      clientId,
+      projectId: "p1",
+      kind: "remote-view",
+      handle: REMOTE_OWNER,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => undefined }),
+      isClosed: () => false,
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    _resetEndpointRegistryForTesting();
+    osDndServiceMock.getState.mockReturnValue(undefined);
+    agentNotificationService.initialize();
+    attachRemoteView("client-a");
+  });
+
+  afterEach(() => {
+    agentNotificationService.dispose();
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    _resetEndpointRegistryForTesting();
+  });
+
+  it("sends the category and plays nothing on this machine", () => {
+    mockStore({ waitingEnabled: true, completedEnabled: true, soundEnabled: true });
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+
+    events.emit("agent:state-changed", makePayload("waiting"));
+    vi.advanceTimersByTime(250);
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenLastCalledWith(
+      "Agent waiting",
+      expect.any(String),
+      expect.any(Object),
+      "notification:watch-navigate",
+      {
+        silent: true,
+        ownerWebContentsId: REMOTE_OWNER,
+        closeWithPanels: ["term-1"],
+        category: "waiting",
+      }
+    );
+
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("completed", "waiting"));
+    vi.advanceTimersByTime(2001);
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenLastCalledWith(
+      "Agent completed",
+      expect.any(String),
+      expect.any(Object),
+      "notification:watch-navigate",
+      { silent: true, ownerWebContentsId: REMOTE_OWNER, category: "completed" }
+    );
+    expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+  });
+
+  it("still plays this machine's sound for its own windows", () => {
+    mockStore({ waitingEnabled: true, soundEnabled: true });
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("waiting"));
+    vi.advanceTimersByTime(250);
+    expect(soundServiceMock.playFile).toHaveBeenCalledWith("waiting.wav");
+  });
+
+  it("holds back a completion for the Shell that muted, not for this machine's windows", () => {
+    mockStore({ completedEnabled: true, soundEnabled: false });
+    agentNotificationService.setSessionMuteUntil(Date.now() + 60_000, "client-a");
+
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("completed"));
+    vi.advanceTimersByTime(2001);
+    expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+    expect(agentNotificationService.isSessionMuted()).toBe(false);
+
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, []);
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("working", "completed"));
+    events.emit("agent:state-changed", makePayload("completed"));
+    vi.advanceTimersByTime(2001);
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+      "Agent completed",
+      expect.any(String),
+      expect.any(Object),
+      "notification:watch-navigate",
+      { silent: true, ownerWebContentsId: OWNER, category: "completed" }
+    );
+  });
+
+  it("does not let this machine's own mute silence a remote Shell", () => {
+    mockStore({ completedEnabled: true });
+    agentNotificationService.setSessionMuteUntil(Date.now() + 60_000);
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+
+    events.emit("agent:state-changed", makePayload("completed"));
+    vi.advanceTimersByTime(2001);
+
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+      "Agent completed",
+      expect.any(String),
+      expect.any(Object),
+      "notification:watch-navigate",
+      { silent: true, ownerWebContentsId: REMOTE_OWNER, category: "completed" }
+    );
   });
 });

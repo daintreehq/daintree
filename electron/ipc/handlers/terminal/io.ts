@@ -60,13 +60,26 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     return owner === null || owner !== endpoint.projectId;
   };
 
+  /**
+   * Input from anyone but the project's driver is refused while a drive lease
+   * is being arbitrated, whichever transport it came by. The service exists
+   * only once Remote Hosts started it, so a machine that never used them never
+   * asks. A terminal main cannot place has no lease to consult.
+   */
+  const isDrivenElsewhere = (ctx: IpcContext, id: string): boolean => {
+    const lease = peekDriveLeaseService();
+    if (!lease || !ctx.endpoint) return false;
+    const projectId = ptyClient.getTerminalProjectId(id);
+    return projectId !== null && !lease.isDriving(projectId, ctx.endpoint);
+  };
+
   const handleTerminalInput = (ctx: IpcContext, id: string, data: string) => {
     try {
       if (typeof id !== "string" || typeof data !== "string") {
         console.error("Invalid terminal input parameters");
         return;
       }
-      if (isRefusedForRemoteCaller(ctx, id)) return;
+      if (isRefusedForRemoteCaller(ctx, id) || isDrivenElsewhere(ctx, id)) return;
       ptyClient.write(id, data);
     } catch (error) {
       console.error("Error writing to terminal:", error);
@@ -80,7 +93,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
         console.error("Invalid terminal sendKey parameters");
         return;
       }
-      if (isRefusedForRemoteCaller(ctx, id)) return;
+      if (isRefusedForRemoteCaller(ctx, id) || isDrivenElsewhere(ctx, id)) return;
       ptyClient.sendKey(id, key);
     } catch (error) {
       console.error("Error sending key to terminal:", error);
@@ -96,7 +109,10 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       }
       const validIds = ids.filter(
         (id): id is string =>
-          typeof id === "string" && id.length > 0 && !isRefusedForRemoteCaller(ctx, id)
+          typeof id === "string" &&
+          id.length > 0 &&
+          !isRefusedForRemoteCaller(ctx, id) &&
+          !isDrivenElsewhere(ctx, id)
       );
       if (validIds.length === 0) return;
       ptyClient.batchDoubleEscape(validIds);
@@ -116,7 +132,10 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       }
       const validIds = ids.filter(
         (id): id is string =>
-          typeof id === "string" && id.length > 0 && !isRefusedForRemoteCaller(ctx, id)
+          typeof id === "string" &&
+          id.length > 0 &&
+          !isRefusedForRemoteCaller(ctx, id) &&
+          !isDrivenElsewhere(ctx, id)
       );
       if (validIds.length === 0 || data.length === 0) return;
       ptyClient.broadcastWrite(validIds, data);
@@ -215,6 +234,14 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
           context: { terminalId: id },
         });
       }
+      if (isDrivenElsewhere(ctx, id)) {
+        throw new AppError({
+          code: "DRIVEN_ELSEWHERE",
+          message: `terminal ${id} is driven elsewhere; only its driver may submit to it`,
+          userMessage: "This project is being driven from another screen.",
+          context: { terminalId: id },
+        });
+      }
       if (imagePaths !== undefined && imagePaths.length > 0) {
         ptyClient.submit(id, text, submissionToken, handbackCode, undefined, imagePaths);
       } else {
@@ -238,14 +265,9 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       }
 
       const { id, cols, rows } = parseResult.data;
-      if (isRefusedForRemoteCaller(ctx, id)) return;
       // The port paths gate resizes on the drive lease; this fallback must
       // too, or a view that isn't driving could still set the PTY's grid.
-      const lease = peekDriveLeaseService();
-      if (lease && ctx.endpoint) {
-        const projectId = ptyClient.getTerminalProjectId(id);
-        if (projectId !== null && !lease.isDriving(projectId, ctx.endpoint)) return;
-      }
+      if (isRefusedForRemoteCaller(ctx, id) || isDrivenElsewhere(ctx, id)) return;
       // Defensive backstop at the shared ceiling. The renderer already
       // normalized to the same bound before choosing a transport, so this
       // agrees with what the MessagePort path (which bypasses Main entirely)

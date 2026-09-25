@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../channels.js";
-import { typedHandleWithContext, broadcastToRenderer } from "../../utils.js";
+import { typedHandleWithContext, broadcastToRenderer, sendToRendererContext } from "../../utils.js";
 import {
   getWindowForWebContents,
   getProjectForWebContents,
@@ -18,7 +18,10 @@ import { projectStore } from "../../../services/ProjectStore.js";
 import { probeGitMarker } from "../../../services/projectOpenPreflight.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
-import { ProjectSwitchService } from "../../../services/ProjectSwitchService.js";
+import {
+  ProjectSwitchService,
+  activateProjectOnHost,
+} from "../../../services/ProjectSwitchService.js";
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
 import {
   buildTerminalInventory,
@@ -489,10 +492,12 @@ function captureSwitchOperation(
 
 /**
  * A view on a remote Shell is moving to this project. The Shell swaps its own
- * view; this machine runs only its half: the repository check, saving the
- * layout the view is leaving, and waking the project's workspace. The global
- * current-project pointer and the window history describe this machine's own
- * windows, so they are left alone.
+ * view and tells it it switched; this machine runs only its half: the
+ * repository check, saving the layout the view is leaving, and the shared Host
+ * activation (the project's workspace host started or woken and held for the
+ * view, its status and MRU recorded). The global current-project pointer and
+ * the window history describe this machine's own windows, so they are left
+ * alone.
  */
 async function activateForRemoteShell(
   deps: HandlerDependencies,
@@ -516,9 +521,23 @@ async function activateForRemoteShell(
     await persistOutgoing;
   }
   await awaitPendingOutgoingPersist(project.id);
-  deps.worktreeService?.resumeProject(project.path);
-  if (action === "project:reopen") projectStore.updateProjectStatus(project.id, "active");
-  return { outcome: "switched", project };
+  if (deps.worktreeService) {
+    // Forward-fail, as a local switch does (#8400): the Shell has committed to
+    // the project, so a load failure is the view's recovery banner, not a
+    // refused switch. Null clears a banner left by an earlier failure.
+    let worktreeLoadError: string | null = null;
+    try {
+      await activateProjectOnHost(deps.worktreeService, project, ctx.webContentsId);
+    } catch (err) {
+      console.error(`[${action}] Failed to load worktrees for a remote view:`, err);
+      worktreeLoadError = formatErrorMessage(err, "Failed to load worktrees");
+    }
+    sendToRendererContext(ctx, CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
+      projectId: project.id,
+      worktreeLoadError,
+    });
+  }
+  return { outcome: "switched", project: projectStore.getProjectById(project.id) ?? project };
 }
 
 async function persistOutgoingProjectState(

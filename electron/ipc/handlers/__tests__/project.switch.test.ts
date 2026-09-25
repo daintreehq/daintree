@@ -94,12 +94,17 @@ vi.mock("../../../services/ProjectSwitchStatusTiming.js", () => ({
   projectSwitchStatusTiming: statusTimingMock,
 }));
 
+const activateProjectOnHostMock = vi.hoisted(() =>
+  vi.fn(async (_workspace: unknown, _project: unknown, _residentId: number) => undefined)
+);
+
 vi.mock("../../../services/ProjectSwitchService.js", () => ({
   ProjectSwitchService: class MockProjectSwitchService {
     onSwitch = vi.fn();
     switchProject = vi.fn();
     reopenProject = vi.fn();
   },
+  activateProjectOnHost: activateProjectOnHostMock,
 }));
 
 vi.mock("../../../services/RunCommandDetector.js", () => ({
@@ -2861,7 +2866,11 @@ describe("project switch/reopen from a view on a remote Shell", () => {
     });
     const release = dispatcher.allowHybridOverLink(channel);
     const pvm = { switchTo: vi.fn(), getProjectIdForWebContents: vi.fn() };
-    const worktreeService = { resumeProject: vi.fn(), loadProject: vi.fn() };
+    const worktreeService = {
+      resumeProject: vi.fn(),
+      loadProject: vi.fn(),
+      unregisterWindow: vi.fn(),
+    };
     const deps = {
       projectViewManager: pvm,
       worktreeService,
@@ -2886,33 +2895,41 @@ describe("project switch/reopen from a view on a remote Shell", () => {
     release();
     cleanup?.();
     _resetIpcDispatcherForTesting();
-    return { envelope, pvm, worktreeService };
+    return { envelope, pvm, worktreeService, endpoint };
   }
 
-  it("saves the layout the view leaves and wakes the project, without swapping views here", async () => {
+  it("saves the layout the view leaves and runs the shared Host activation for the view", async () => {
     projectStoreMock.getProjectById.mockReturnValue({
       id: PROJECT_ID,
       name: "Remote",
       path: "/home/greg/remote",
     });
 
-    const { envelope, pvm, worktreeService } = await invokeOverLink(CHANNELS.PROJECT_SWITCH, [
-      PROJECT_ID,
-      { activeWorktreeId: "wt-left" },
-    ]);
+    const { envelope, pvm, worktreeService, endpoint } = await invokeOverLink(
+      CHANNELS.PROJECT_SWITCH,
+      [PROJECT_ID, { activeWorktreeId: "wt-left" }]
+    );
 
     expect(envelope).toMatchObject({ ok: true, data: { outcome: "switched" } });
     expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith(
       OLD_ID,
       expect.objectContaining({ projectId: OLD_ID, activeWorktreeId: "wt-left" })
     );
-    expect(worktreeService.resumeProject).toHaveBeenCalledWith("/home/greg/remote");
+    expect(activateProjectOnHostMock).toHaveBeenCalledWith(
+      worktreeService,
+      expect.objectContaining({ id: PROJECT_ID, path: "/home/greg/remote" }),
+      -7
+    );
+    expect(endpoint.send).toHaveBeenCalledWith({
+      type: "event",
+      channel: CHANNELS.PROJECT_WORKTREE_LOAD_STATUS,
+      args: [{ projectId: PROJECT_ID, worktreeLoadError: null }],
+    });
     expect(pvm.switchTo).not.toHaveBeenCalled();
     expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
-    expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
   });
 
-  it("marks a reopened project active", async () => {
+  it("runs the same activation for a reopen", async () => {
     projectStoreMock.getProjectById.mockReturnValue({
       id: PROJECT_ID,
       name: "Remote",
@@ -2920,10 +2937,34 @@ describe("project switch/reopen from a view on a remote Shell", () => {
       status: "background",
     });
 
-    const { envelope } = await invokeOverLink(CHANNELS.PROJECT_REOPEN, [PROJECT_ID]);
+    const { envelope, worktreeService } = await invokeOverLink(CHANNELS.PROJECT_REOPEN, [
+      PROJECT_ID,
+    ]);
 
     expect(envelope).toMatchObject({ ok: true, data: { outcome: "switched" } });
-    expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith(PROJECT_ID, "active");
+    expect(activateProjectOnHostMock).toHaveBeenCalledWith(
+      worktreeService,
+      expect.objectContaining({ id: PROJECT_ID }),
+      -7
+    );
     expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+  });
+
+  it("forward-fails a workspace load to the view's recovery banner rather than refusing", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: PROJECT_ID,
+      name: "Remote",
+      path: "/home/greg/remote",
+    });
+    activateProjectOnHostMock.mockRejectedValueOnce(new Error("spawn failed"));
+
+    const { envelope, endpoint } = await invokeOverLink(CHANNELS.PROJECT_SWITCH, [PROJECT_ID]);
+
+    expect(envelope).toMatchObject({ ok: true, data: { outcome: "switched" } });
+    expect(endpoint.send).toHaveBeenCalledWith({
+      type: "event",
+      channel: CHANNELS.PROJECT_WORKTREE_LOAD_STATUS,
+      args: [{ projectId: PROJECT_ID, worktreeLoadError: expect.stringContaining("spawn failed") }],
+    });
   });
 });

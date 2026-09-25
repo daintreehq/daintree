@@ -1751,6 +1751,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./remoteHosts.js").WindowHostInfo;
   };
+  "remote-hosts:is-in-use": {
+    args: [];
+    result: boolean;
+  };
   "remote-hosts:list": {
     args: [];
     result: import("../remoteHosts.js").HostListEntry[];

@@ -30,10 +30,13 @@ import {
   broadcastToProjectRenderersExcept,
   broadcastToRenderer,
   broadcastToVisibleRenderers,
+  sendToRenderer,
   sendToRendererContext,
   setRemoteBoundViewFilter,
   typedBroadcast,
+  typedSend,
 } from "../utils.js";
+import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { getEndpointRegistry, _resetEndpointRegistryForTesting } from "../endpointRegistry.js";
 import type { ClientEndpoint, HostFrame } from "../endpoint.js";
 import type { IpcContext } from "../types.js";
@@ -205,6 +208,32 @@ describe("remote-bound view filter", () => {
     uninstall();
     broadcastToRenderer("host:thing", 5);
     expect(remoteBound.send).toHaveBeenLastCalledWith("host:thing", 5);
+  });
+
+  it("applies to the per-window and typed helpers as well", () => {
+    const remoteBound = localView(1);
+    const local = localView(2);
+    localViews.push(remoteBound, local);
+    const windowOf = (view: ReturnType<typeof localView>) => {
+      vi.mocked(getAppWebContents).mockReturnValueOnce(view as never);
+      return { isDestroyed: () => false } as never;
+    };
+    const uninstall = setRemoteBoundViewFilter(
+      (webContentsId, channel) => webContentsId !== 1 || channel === "shell:ok"
+    );
+
+    sendToRenderer(windowOf(remoteBound), "host:thing", 1);
+    sendToRenderer(windowOf(remoteBound), "shell:ok", 2);
+    sendToRenderer(windowOf(local), "host:thing", 3);
+    typedSend(windowOf(remoteBound), "worktree:update" as never, {} as never);
+    typedBroadcast("worktree:update" as never, { n: 4 } as never);
+
+    expect(remoteBound.send.mock.calls).toEqual([["shell:ok", 2]]);
+    expect(local.send.mock.calls).toEqual([
+      ["host:thing", 3],
+      ["worktree:update", { n: 4 }],
+    ]);
+    uninstall();
   });
 
   it("only clears the filter it installed", () => {

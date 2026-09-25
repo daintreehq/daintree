@@ -37,6 +37,13 @@ export interface NotificationNavigation {
   context: WatchNotificationContext;
 }
 
+/**
+ * What a notification is about. The machine that presents it picks the sound
+ * for it from its own settings: for a view on a remote Shell that is the
+ * Shell, never the host that decided to notify.
+ */
+export type NotificationCategory = "completed" | "waiting" | "escalation" | "info";
+
 export interface WatchNotificationOptions {
   silent?: boolean;
   /** Renderer that owns the panel — decides which window a click focuses. */
@@ -47,6 +54,8 @@ export interface WatchNotificationOptions {
    * first member to be handled. Omit it and the banner is never closed early.
    */
   closeWithPanels?: readonly string[];
+  /** Defaults to "info" (no sound of its own) where a remote Shell presents it. */
+  category?: NotificationCategory;
 }
 
 export interface NativeNotificationOptions extends WatchNotificationOptions {
@@ -62,7 +71,7 @@ export interface RemoteNotification {
   ownerHandle: number;
   title: string;
   body: string;
-  silent: boolean;
+  category: NotificationCategory;
   navigation?: NotificationNavigation;
 }
 
@@ -73,8 +82,13 @@ export interface RemoteNotification {
  */
 export type RemoteNotificationSink = (notification: RemoteNotification) => void;
 
-/** Remote endpoint handles are negative; `WebContents` ids never are. */
-function isRemoteOwner(ownerId: NotificationOwnerId | undefined): ownerId is number {
+/**
+ * Whether the owner is a view on a remote Shell. Remote endpoint handles are
+ * negative; `WebContents` ids never are.
+ */
+export function isRemoteNotificationOwner(
+  ownerId: NotificationOwnerId | undefined
+): ownerId is number {
   return typeof ownerId === "number" && ownerId < 0;
 }
 
@@ -397,10 +411,16 @@ class NotificationService {
   }
 
   private showNotification(title: string, body: string, options: NativeNotificationOptions): void {
-    const { silent = true, ownerWebContentsId, navigation, closeWithPanels } = options;
-    if (isRemoteOwner(ownerWebContentsId)) {
+    const {
+      silent = true,
+      ownerWebContentsId,
+      navigation,
+      closeWithPanels,
+      category = "info",
+    } = options;
+    if (isRemoteNotificationOwner(ownerWebContentsId)) {
       try {
-        this.remoteSink?.({ ownerHandle: ownerWebContentsId, title, body, silent, navigation });
+        this.remoteSink?.({ ownerHandle: ownerWebContentsId, title, body, category, navigation });
       } catch (error) {
         console.warn("[NotificationService] remote notification delivery failed:", error);
       }
