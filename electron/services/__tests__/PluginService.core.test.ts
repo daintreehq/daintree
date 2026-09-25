@@ -388,14 +388,17 @@ describe("PluginService", () => {
     });
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const service = new PluginService(tmpDir);
-    await service.initialize();
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
 
-    // The second tour reached the loop rather than being dropped at parse.
-    expect(
-      warnSpy.mock.calls.some((args) => String(args[0]).includes('tours "metrics-again"'))
-    ).toBe(true);
-    warnSpy.mockRestore();
+      // The second tour reached the loop rather than being dropped at parse.
+      expect(
+        warnSpy.mock.calls.some((args) => String(args[0]).includes('tours "metrics-again"'))
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
     const callFor = (id: string) =>
       vi.mocked(registerPanelKind).mock.calls.find((call) => call[0]?.id === id)?.[0];
     // Qualified like the kind id beside it, so another plugin's "metrics-intro" can't alias.
