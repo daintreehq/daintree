@@ -1,4 +1,5 @@
 import { logInfo, logWarn } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 import type { MissingOutputRecoveryOutcome } from "./TerminalRestoreController";
 import type { ManagedTerminal } from "./types";
@@ -17,8 +18,20 @@ export const OUTPUT_RECOVERY_PROBE_INTERVAL_MS = 15000;
 // before the pane is reported as unrecoverable and probing stops.
 export const OUTPUT_RECOVERY_MAX_FAILURES = 2;
 
+/** The slice of a managed terminal this scheduler reads and writes. */
+export type OutputRecoveryPane = Pick<
+  ManagedTerminal,
+  | "hasReceivedOutput"
+  | "lastScrollbackRestoreError"
+  | "outputRecoveryFirstSeenAt"
+  | "outputRecoveryNextProbeAt"
+  | "outputRecoveryInFlight"
+  | "outputRecoveryFailures"
+  | "outputRecoveryGaveUp"
+>;
+
 export interface OutputRecoveryDeps {
-  getInstance: (id: string) => ManagedTerminal | undefined;
+  getInstance: (id: string) => OutputRecoveryPane | undefined;
   recoverMissingOutput: (id: string) => Promise<MissingOutputRecoveryOutcome>;
   reportUnrecoverable: (id: string, error: TerminalScrollbackRestoreError) => void;
 }
@@ -40,7 +53,7 @@ export class TerminalOutputRecovery {
   }
 
   /** Whether this pane still needs watching at all. */
-  isCandidate(managed: ManagedTerminal): boolean {
+  isCandidate(managed: OutputRecoveryPane): boolean {
     return (
       managed.hasReceivedOutput !== true &&
       managed.outputRecoveryGaveUp !== true &&
@@ -52,7 +65,7 @@ export class TerminalOutputRecovery {
    * Start a probe if this pane is due. Returns whether one was started, so the
    * caller can charge it against its IPC budget.
    */
-  maybeProbe(id: string, managed: ManagedTerminal, now: number): boolean {
+  maybeProbe(id: string, managed: OutputRecoveryPane, now: number): boolean {
     if (!this.isCandidate(managed)) return false;
 
     if (managed.outputRecoveryFirstSeenAt === undefined) {
@@ -68,14 +81,14 @@ export class TerminalOutputRecovery {
     return true;
   }
 
-  private async runProbe(id: string, managed: ManagedTerminal): Promise<void> {
+  private async runProbe(id: string, managed: OutputRecoveryPane): Promise<void> {
     let outcome: MissingOutputRecoveryOutcome;
     try {
       outcome = await this.deps.recoverMissingOutput(id);
     } catch (error) {
       managed.lastScrollbackRestoreError = {
         type: "error",
-        message: error instanceof Error ? error.message : String(error),
+        message: formatErrorMessage(error, "Missing-output recovery failed"),
         timestamp: Date.now(),
       };
       outcome = "failed";

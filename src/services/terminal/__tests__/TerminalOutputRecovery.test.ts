@@ -4,9 +4,9 @@ import {
   OUTPUT_RECOVERY_MAX_FAILURES,
   OUTPUT_RECOVERY_PROBE_INTERVAL_MS,
   TerminalOutputRecovery,
+  type OutputRecoveryPane,
 } from "../TerminalOutputRecovery";
 import type { MissingOutputRecoveryOutcome } from "../TerminalRestoreController";
-import type { ManagedTerminal } from "../types";
 import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 
 vi.mock("@/utils/logger", () => ({
@@ -15,7 +15,7 @@ vi.mock("@/utils/logger", () => ({
 }));
 
 describe("TerminalOutputRecovery (#12754)", () => {
-  let instances: Map<string, ManagedTerminal>;
+  let instances: Map<string, OutputRecoveryPane>;
   let recoverMissingOutput: ReturnType<
     typeof vi.fn<(id: string) => Promise<MissingOutputRecoveryOutcome>>
   >;
@@ -35,8 +35,8 @@ describe("TerminalOutputRecovery (#12754)", () => {
     });
   });
 
-  function addPane(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
-    const managed = { ...overrides } as ManagedTerminal;
+  function addPane(overrides: OutputRecoveryPane = {}): OutputRecoveryPane {
+    const managed: OutputRecoveryPane = { ...overrides };
     instances.set("t1", managed);
     return managed;
   }
@@ -149,7 +149,7 @@ describe("TerminalOutputRecovery (#12754)", () => {
 
     recovery.maybeProbe("t1", managed, 0);
     recovery.maybeProbe("t1", managed, OUTPUT_RECOVERY_GRACE_MS);
-    instances.set("t1", {} as ManagedTerminal);
+    instances.set("t1", {});
     resolve("failed");
     await settle();
 
