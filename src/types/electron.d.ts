@@ -64,6 +64,8 @@ declare global {
     __DAINTREE_INITIAL_THEME__?: { colorSchemeId: string };
     /** Destination project id seeded by preload, replacing the `?projectId=` query string (#9162). */
     __DAINTREE_INITIAL_PROJECT__?: { id: string };
+    /** Host of a remote project view, seeded by preload; absent for local views. */
+    __DAINTREE_HOST_ID__?: { id: string };
     /** Instance role seeded by preload — worker instances suppress automatic background GitHub polling (#10123). */
     __DAINTREE_INSTANCE_ROLE__?: { role: "attended" | "worker" };
     /** Paint-fabric surface-host role seeded by preload — non-null surfaceId mounts the minimal surface-host root (Phase 1V). */

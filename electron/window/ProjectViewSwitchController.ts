@@ -24,6 +24,7 @@ import { unfreezeWebContents } from "../utils/webContentsLifecycle.js";
 import { waitForRenderedFrame } from "./renderedFrameProbe.js";
 import {
   createView,
+  isLocalViewKey,
   isViewLoadCancelled,
   loadView,
   updateViewBounds,
@@ -391,7 +392,7 @@ export async function performSwitch(
     } catch (error) {
       console.error("[ProjectViewManager] pruneOrphanedChildren threw:", error);
     }
-    notifyProjectPluginsOpened(projectId, projectPath);
+    if (isLocalViewKey(projectId)) notifyProjectPluginsOpened(projectId, projectPath);
     return { view: cached.view, isNew: false };
   }
 
@@ -422,7 +423,7 @@ export async function performSwitch(
   // history (#12313). Cleared on the way back in rather than only written on
   // the way out: a bound MCP session that subscribes and then reads has to see
   // the reopen, not the loss it already recovered from (lesson #10821).
-  clearWorkspaceEviction(projectId);
+  if (isLocalViewKey(projectId)) clearWorkspaceEviction(projectId);
 
   // Set up security handlers and attach to window
   setupViewHandlers(host, view, entry);
@@ -853,7 +854,7 @@ export async function performSwitch(
   // no contribution broadcast, so a plugin loaded into an unregistered view
   // would stay invisible to it until some unrelated mutation happened to
   // publish a fresh snapshot.
-  notifyProjectPluginsOpened(projectId, projectPath);
+  if (isLocalViewKey(projectId)) notifyProjectPluginsOpened(projectId, projectPath);
 
   return { view, isNew: true };
 }
