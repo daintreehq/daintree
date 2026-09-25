@@ -1117,3 +1117,45 @@ describe("NotificationService", () => {
     });
   });
 });
+
+describe("NotificationService remote owners", () => {
+  afterEach(() => {
+    notificationService.dispose();
+  });
+
+  it("hands a remote view's notification to its Shell instead of this screen", () => {
+    const shown = electronMock.notificationInstances.length;
+    const sink = vi.fn();
+    notificationService.setRemoteNotificationSink(sink);
+    const context = { panelId: "t1", panelTitle: "Claude" };
+
+    notificationService.showWatchNotification("Agent waiting", "b", context, "nav:channel", {
+      ownerWebContentsId: -4,
+    });
+
+    expect(sink).toHaveBeenCalledWith({
+      ownerHandle: -4,
+      title: "Agent waiting",
+      body: "b",
+      silent: true,
+      navigation: { channel: "nav:channel", context },
+    });
+    expect(electronMock.notificationInstances.length).toBe(shown);
+  });
+
+  it("never shows a remote owner's notification here, even with no sink", () => {
+    const shown = electronMock.notificationInstances.length;
+    notificationService.setRemoteNotificationSink(null);
+    notificationService.showNativeNotification("t", "b", { ownerWebContentsId: -1 });
+    expect(electronMock.notificationInstances.length).toBe(shown);
+  });
+
+  it("keeps showing local owners' notifications natively", () => {
+    const shown = electronMock.notificationInstances.length;
+    const sink = vi.fn();
+    notificationService.setRemoteNotificationSink(sink);
+    notificationService.showNativeNotification("t", "b", { ownerWebContentsId: 12 });
+    expect(sink).not.toHaveBeenCalled();
+    expect(electronMock.notificationInstances.length).toBe(shown + 1);
+  });
+});

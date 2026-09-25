@@ -48,8 +48,45 @@ import { ensureHydrationBootstrap } from "./bootstrapGuard";
 import { dispatchRecoveryNotifications } from "./recoveryNotifications";
 import { scheduleScrollbackRestore } from "./scrollbackRestoreScheduler";
 import { restorePanelsPhase } from "./panelRestorePhase";
+import { isRemoteWindow, setHostPlatformInfo } from "@/hooks/useHostPlatform";
+import { isRemoteHostsSupported } from "@/lib/remoteHosts";
 
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
+
+/**
+ * Record which machine this view's project lives on. A remote view also asks
+ * for the host's name and ssh target, which label titles and host paths.
+ */
+function seedHostPlatform(hydrateResult: {
+  hostPlatform?: "darwin" | "linux" | "win32";
+  hostHomeDir?: string;
+  hostTmpDir?: string;
+}): void {
+  const { hostPlatform, hostHomeDir, hostTmpDir } = hydrateResult;
+  if (hostPlatform !== undefined || hostHomeDir !== undefined || hostTmpDir !== undefined) {
+    setHostPlatformInfo({
+      ...(hostPlatform !== undefined && { platform: hostPlatform }),
+      ...(hostHomeDir !== undefined && { homeDir: hostHomeDir }),
+      ...(hostTmpDir !== undefined && { tmpDir: hostTmpDir }),
+    });
+  }
+  if (!isRemoteWindow() || !isRemoteHostsSupported()) return;
+  const getWindowHost = window.electron?.remoteHosts?.getWindowHost;
+  if (typeof getWindowHost !== "function") return;
+  void getWindowHost()
+    .then((host) => {
+      setHostPlatformInfo({
+        hostName: host.descriptor?.name ?? null,
+        sshTarget: host.descriptor?.sshTarget ?? null,
+        ...(hostPlatform === undefined && { platform: host.hostPlatform }),
+        ...(hostHomeDir === undefined && host.hostHomeDir && { homeDir: host.hostHomeDir }),
+        ...(hostTmpDir === undefined && host.hostTmpDir && { tmpDir: host.hostTmpDir }),
+      });
+    })
+    .catch((error: unknown) => {
+      logWarn("[StateHydration] Couldn't read this window's host", { error: String(error) });
+    });
+}
 const VERBOSE_HYDRATION_LOGGING = isDaintreeEnvEnabled("DAINTREE_VERBOSE");
 
 /**
@@ -198,7 +235,14 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     // The system temp dir now rides along in the batched hydrate payload, so the
     // standalone `system:get-tmp-dir` call only fires as a fallback when the
     // field is absent (older main process, or the safe-boot {ok:false} payload).
-    const tmpDir = hydrateResult.systemTmpDir ?? (await systemClient.getTmpDir().catch(() => ""));
+    seedHostPlatform(hydrateResult);
+    // Agents run on the project's host, so the clipboard directory handed to
+    // them lives in the host's temp dir. `systemTmpDir` is this machine's, which
+    // is the same place for a local view but the wrong one for a remote view.
+    const tmpDir =
+      hydrateResult.hostTmpDir ??
+      (isRemoteWindow() ? undefined : hydrateResult.systemTmpDir) ??
+      (await systemClient.getTmpDir().catch(() => ""));
     const {
       appState,
       terminalConfig,

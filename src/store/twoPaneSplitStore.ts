@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { hostScopedKey } from "@/hooks/useHostPlatform";
 import type { StorageValue } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import {
@@ -180,7 +181,10 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
             ? {
                 ratioByWorktreeId: {
                   ...state.ratioByWorktreeId,
-                  [worktreeId]: { ratio: Math.max(0.2, Math.min(0.8, ratio)), panels },
+                  [hostScopedKey(worktreeId)]: {
+                    ratio: Math.max(0.2, Math.min(0.8, ratio)),
+                    panels,
+                  },
                 },
               }
             : state
@@ -189,7 +193,7 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
       commitRatioIfChanged: (worktreeId, pendingRatio, panels) => {
         if (pendingRatio === null || !Number.isFinite(pendingRatio)) return;
         const state = get();
-        const current = state.ratioByWorktreeId[worktreeId];
+        const current = state.ratioByWorktreeId[hostScopedKey(worktreeId)];
         const clampedRatio = Math.max(0.2, Math.min(0.8, pendingRatio));
         if (
           current?.ratio !== clampedRatio ||
@@ -199,7 +203,7 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
           set((state) => ({
             ratioByWorktreeId: {
               ...state.ratioByWorktreeId,
-              [worktreeId]: { ratio: clampedRatio, panels },
+              [hostScopedKey(worktreeId)]: { ratio: clampedRatio, panels },
             },
           }));
         }
@@ -208,7 +212,7 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
       getWorktreeRatio: (worktreeId) => {
         const state = get();
         if (worktreeId) {
-          const entry = state.ratioByWorktreeId[worktreeId];
+          const entry = state.ratioByWorktreeId[hostScopedKey(worktreeId)];
           if (entry) return entry.ratio;
         }
         return state.config.defaultRatio;
@@ -216,7 +220,7 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
 
       resetWorktreeRatio: (worktreeId) =>
         set((state) => {
-          const { [worktreeId]: _, ...rest } = state.ratioByWorktreeId;
+          const { [hostScopedKey(worktreeId)]: _, ...rest } = state.ratioByWorktreeId;
           return { ratioByWorktreeId: rest };
         }),
 

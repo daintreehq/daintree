@@ -23,6 +23,7 @@ import {
   buildAgentLaunchFlagsForRuntimeSettings,
   resolveAgentRuntimeSettings,
 } from "@/utils/agentRuntimeSettings";
+import { resolveHostTmpDir } from "@/hooks/useHostPlatform";
 
 /**
  * Ownership rung for a duplicated panel's title. A duplicate keeps an
@@ -67,7 +68,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
       try {
         const [agentSettings, tmpDir] = await Promise.all([
           agentSettingsClient.get(),
-          systemClient.getTmpDir().catch(() => ""),
+          resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
         ]);
         const entry = agentSettings?.agents?.[panel.launchAgentId] ?? {};
         const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[panel.launchAgentId];

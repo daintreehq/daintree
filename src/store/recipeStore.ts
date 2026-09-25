@@ -57,6 +57,7 @@ import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
+import { resolveHostTmpDir } from "@/hooks/useHostPlatform";
 
 export interface RecipeSpawnResult {
   index: number;
@@ -1102,7 +1103,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       try {
         const [settings, tmpDir] = await Promise.all([
           agentSettingsClient.get(),
-          systemClient.getTmpDir().catch(() => ""),
+          resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
         ]);
         agentSettings = settings;
         clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;

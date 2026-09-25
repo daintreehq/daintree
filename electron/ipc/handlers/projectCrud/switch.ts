@@ -81,6 +81,10 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       throw new Error(`Project not found: ${projectId}`);
     }
 
+    if (ctx.endpoint?.kind === "remote-view") {
+      return activateForRemoteShell(deps, ctx, project, outgoingState, "project:switch");
+    }
+
     const operation = captureSwitchOperation(deps, ctx, projectId, "project:switch");
     const trace = resolveSwitchTrace(options?.trace);
     const requestedAt = Date.now();
@@ -190,6 +194,10 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       throw new Error(
         `Cannot reopen project ${projectId} unless status is "background" or "active" (current: ${project.status ?? "unset"})`
       );
+    }
+
+    if (ctx.endpoint?.kind === "remote-view") {
+      return activateForRemoteShell(deps, ctx, project, outgoingState, "project:reopen");
     }
 
     const operation = captureSwitchOperation(deps, ctx, projectId, "project:reopen");
@@ -477,6 +485,40 @@ function captureSwitchOperation(
     windowId: senderWindow?.id ?? deps.mainWindow?.id,
     projectViewManager,
   });
+}
+
+/**
+ * A view on a remote Shell is moving to this project. The Shell swaps its own
+ * view; this machine runs only its half: the repository check, saving the
+ * layout the view is leaving, and waking the project's workspace. The global
+ * current-project pointer and the window history describe this machine's own
+ * windows, so they are left alone.
+ */
+async function activateForRemoteShell(
+  deps: HandlerDependencies,
+  ctx: IpcContext,
+  project: Project,
+  outgoingState: ProjectSwitchOutgoingState | undefined,
+  action: SwitchOperation["action"]
+): Promise<ProjectSwitchResult> {
+  await assertProjectRepositoryIntact(project);
+  const operation: SwitchOperation = Object.freeze({
+    action,
+    incomingProjectId: project.id,
+    outgoingProjectId: ctx.projectId,
+    senderWindow: null,
+    windowId: undefined,
+    projectViewManager: undefined,
+  });
+  if (operation.outgoingProjectId !== project.id) {
+    const persistOutgoing = persistOutgoingProjectState(outgoingState, operation);
+    trackOutgoingPersist(operation.outgoingProjectId, persistOutgoing);
+    await persistOutgoing;
+  }
+  await awaitPendingOutgoingPersist(project.id);
+  deps.worktreeService?.resumeProject(project.path);
+  if (action === "project:reopen") projectStore.updateProjectStatus(project.id, "active");
+  return { outcome: "switched", project };
 }
 
 async function persistOutgoingProjectState(
