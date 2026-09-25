@@ -9,12 +9,14 @@ import { getWindowRegistry } from "../window/windowRef.js";
 import { initRemoteHostsClient } from "./client/initClient.js";
 import { installViewReverseRequests } from "./client/viewRequests.js";
 import { installHostFileClient } from "./files/clientInstall.js";
+import { installHostUploadClient } from "./files/uploadClient.js";
 import { createHostModeService } from "./host/hostModeDefaults.js";
 import {
   acceptLocalPushForRemoteView,
   installHybridSplits,
   ViewVisibilityReporter,
 } from "./hybrid/index.js";
+import { installClipboardSplits } from "./hybrid/clipboard.js";
 import { installPickerSplits } from "./hybrid/pickers.js";
 import { installPluginClient } from "./plugins/install.js";
 import { installPortForwardClient } from "./ports/clientInstall.js";
@@ -76,19 +78,17 @@ function startClient(): void {
     teardowns.push(installClientWorktreePortOverride(hostForView));
     teardowns.push(installHybridSplits({ router: client.router }));
     teardowns.push(installPickerSplits());
-    teardowns.push(
-      installHostFileClient(
-        { onEndpointOpened: client.onEndpointOpened, onEndpointClosed: client.onEndpointClosed },
-        hostForView
-      )
-    );
+    // Replaces the base splits' refusals for paste and attach, so it must follow them.
+    teardowns.push(installClipboardSplits());
+    const endpointFeed = {
+      onEndpointOpened: client.onEndpointOpened,
+      onEndpointClosed: client.onEndpointClosed,
+    };
+    teardowns.push(installHostFileClient(endpointFeed, hostForView));
+    // Dropped, pasted and attached files, sent from this machine to the view's host.
+    teardowns.push(installHostUploadClient(endpointFeed, hostForView));
     // Host plugins' prompts, consent and view bundles for the views driving their projects.
-    teardowns.push(
-      installPluginClient({
-        onEndpointOpened: client.onEndpointOpened,
-        onEndpointClosed: client.onEndpointClosed,
-      })
-    );
+    teardowns.push(installPluginClient(endpointFeed));
     // This machine's agents, terminals and projects are not a remote view's.
     teardowns.push(
       setRemoteBoundViewFilter(

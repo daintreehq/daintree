@@ -8,6 +8,7 @@ import { getDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { setMcpDriveTargetResolver } from "../../services/mcp-server/driveTarget.js";
 import type { AttachedClientInfo } from "../../../shared/types/ipc/hostMode.js";
 import { attachHostFiles, installHostFileService } from "../files/hostInstall.js";
+import { attachHostUploads, installHostUploadService } from "../files/uploadHostInstall.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
 import { admitHybridHostLegs } from "../hybrid/index.js";
 import { Lane } from "../link/frames.js";
@@ -67,6 +68,7 @@ function attachHostStreams(session: LinkSession, endpoint: RemoteViewEndpoint): 
   attachTerminalBridge(session, endpoint);
   attachWorktreePortBridge(session, endpoint);
   attachHostFiles(session, endpoint);
+  attachHostUploads(session, endpoint);
   attachHostPluginAssets(session, endpoint);
 }
 
@@ -148,6 +150,9 @@ async function buildHostListener(
   // Previews, downloads and host pickers for remote views; revoked with the listener.
   const files = installHostFileService();
   teardowns.push(() => files.dispose());
+  // Files dropped, pasted or attached in remote windows, into the inbox or a project.
+  const uploads = installHostUploadService();
+  teardowns.push(() => uploads.dispose());
   // Port forwards and project moves are per session, not per endpoint.
   teardowns.push(installHostPortService(server));
   teardowns.push(installProjectsHost(server));
