@@ -28,6 +28,8 @@ export const HOST_IMPORTMAP_SPECIFIERS = [
   "react-dom/client",
   "@daintreehq/tour",
   "@daintreehq/tour/react",
+  "@daintreehq/tour/kit",
+  "@daintreehq/tour/mock-app",
 ] as const;
 
 /**

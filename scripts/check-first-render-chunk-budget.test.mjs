@@ -69,7 +69,7 @@ function makeManifest(extra = {}) {
 }
 
 // vite.config.ts emits `host-react-*` and `host-daintreehq-tour*` facade entry
-// chunks for the plugin import map (#11208, #12771). They are `isEntry: true` but are not the app, and
+// chunks for the plugin import map (#11208, #12771, #12769). They are `isEntry: true` but are not the app, and
 // manifest key order is not specified — so the gate must identify the app entry
 // by more than "first entry wins" or it silently measures a re-export shim.
 describe("findEntryKey", () => {
@@ -111,6 +111,26 @@ describe("findEntryKey", () => {
       },
       "\0virtual:daintree-host/@daintreehq/tour/react": {
         file: "assets/host-daintreehq-tour-react-Cd4ef5Gh.js",
+        isEntry: true,
+        imports: ["_tour.js"],
+        dynamicImports: [],
+      },
+      ...makeManifest(),
+    };
+    expect(findEntryKey(manifest)).toBe("index.html");
+  });
+
+  it("skips the kit and mock-app tour facade entries", () => {
+    const manifest = {
+      "\0virtual:daintree-host/@daintreehq/tour/kit": {
+        file: "assets/host-daintreehq-tour-kit-Ef6gh7Ij.js",
+        name: "host-daintreehq-tour-kit",
+        isEntry: true,
+        imports: ["_tour.js"],
+        dynamicImports: [],
+      },
+      "\0virtual:daintree-host/@daintreehq/tour/mock-app": {
+        file: "assets/host-daintreehq-tour-mock-app-Kl8mn9Op.js",
         isEntry: true,
         imports: ["_tour.js"],
         dynamicImports: [],
