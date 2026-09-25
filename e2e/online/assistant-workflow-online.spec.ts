@@ -377,6 +377,94 @@ function readCodexTranscript(
   return metrics;
 }
 
+/** Tool calls, tokens and notices from the assistant's Claude Code transcript since `since`. */
+function readClaudeTranscript(
+  sessionDir: string,
+  since: number,
+  outFile: string
+): Omit<TurnMetrics, "seconds" | "launched"> {
+  const metrics: Omit<TurnMetrics, "seconds" | "launched"> = {
+    turns: 0,
+    notices: 0,
+    toolCalls: [],
+    runbookQueries: [],
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    largestOutputs: [],
+  };
+  const root = path.join(os.homedir(), ".claude", "projects");
+  const marker = path.basename(sessionDir);
+  const lines: string[] = [];
+  let dirs: string[] = [];
+  try {
+    dirs = readdirSync(root).filter((name) => name.includes(marker));
+  } catch {
+    dirs = [];
+  }
+  for (const dir of dirs) {
+    for (const name of readdirSync(path.join(root, dir))) {
+      if (!name.endsWith(".jsonl")) continue;
+      for (const raw of readFileSync(path.join(root, dir, name), "utf8").split("\n")) {
+        let entry: any;
+        try {
+          entry = JSON.parse(raw);
+        } catch {
+          continue;
+        }
+        const at = Date.parse(entry.timestamp);
+        if (!(at >= since)) continue;
+        const rel = ((at - since) / 1000).toFixed(1).padStart(7);
+        const content = entry.message?.content;
+        if (entry.type === "assistant") {
+          const usage = entry.message?.usage;
+          if (usage) {
+            metrics.inputTokens +=
+              (usage.input_tokens ?? 0) +
+              (usage.cache_read_input_tokens ?? 0) +
+              (usage.cache_creation_input_tokens ?? 0);
+            metrics.cachedInputTokens += usage.cache_read_input_tokens ?? 0;
+            metrics.outputTokens += usage.output_tokens ?? 0;
+          }
+          for (const part of Array.isArray(content) ? content : []) {
+            if (part.type === "tool_use") {
+              const input = JSON.stringify(part.input ?? {});
+              metrics.toolCalls.push({ at: at - since, name: part.name, input, outputBytes: 0 });
+              if (String(part.name).includes("search_runbooks") && part.input?.query) {
+                metrics.runbookQueries.push(part.input.query);
+              }
+              lines.push(`${rel} CALL ${part.name}: ${input.slice(0, 1500)}`);
+            } else if (part.type === "text" && part.text) {
+              lines.push(`${rel} AgentMessage: ${part.text}`);
+            }
+          }
+        } else if (entry.type === "user") {
+          const parts = typeof content === "string" ? [{ type: "text", text: content }] : content;
+          for (const part of Array.isArray(parts) ? parts : []) {
+            if (part.type === "tool_result") {
+              const text = JSON.stringify(part.content ?? "");
+              const call = [...metrics.toolCalls].reverse().find((c) => c.outputBytes === 0);
+              if (call) call.outputBytes = text.length;
+              lines.push(`${rel}   OUT ${text.length}B: ${text.slice(0, 600)}`);
+            } else if (part.type === "text" && part.text) {
+              metrics.turns++;
+              if (part.text.startsWith("Daintree:")) metrics.notices++;
+              lines.push(`${rel} UserMessage: ${part.text}`);
+            }
+          }
+        }
+      }
+    }
+  }
+  metrics.runbookQueries = [...new Set(metrics.runbookQueries)];
+  metrics.largestOutputs = [...metrics.toolCalls]
+    .sort((a, b) => b.outputBytes - a.outputBytes)
+    .slice(0, 5)
+    .map((c) => ({ name: c.input.slice(0, 80), bytes: c.outputBytes }));
+  writeFileSync(outFile, lines.join("\n") + "\n");
+  return metrics;
+}
+
 async function submitViaHybridInput(page: Page, terminalId: string, text: string): Promise<void> {
   const editor = page.locator(`[data-hybrid-input-root="${terminalId}"] .cm-content`);
   await expect(editor).toBeVisible({ timeout: 30_000 });
@@ -386,7 +474,11 @@ async function submitViaHybridInput(page: Page, terminalId: string, text: string
     .poll(() => editor.innerText(), { timeout: 10_000 })
     .toContain(text.split("\n")[0].slice(0, 40));
   await page.keyboard.press("Enter");
-  await expect.poll(async () => (await editor.innerText()).trim(), { timeout: 15_000 }).toBe("");
+  // Submitted once the draft is gone; the empty editor shows its placeholder.
+  const prefix = text.split("\n")[0].slice(0, 40);
+  await expect
+    .poll(async () => (await editor.innerText()).includes(prefix), { timeout: 15_000 })
+    .toBe(false);
 }
 
 for (const scenario of SCENARIOS) {
@@ -502,15 +594,22 @@ for (const scenario of SCENARIOS) {
         }
       };
 
+      // Ready means the CLI's own composer is on screen with no dialog over it;
+      // agent state alone reads a dialog as waiting.
+      const composer = ASSISTANT_AGENT === "claude" ? /\? for shortcuts|╭─|> $/m : /Ask Codex|›/;
       await expect
         .poll(
           async () => {
             await answerTrustDialogs(await allTerminals(page));
-            return (await allTerminals(page)).find((t) => t.id === assistantId)?.agentState;
+            const text = await getTerminalTextById(page, assistantId);
+            const state = (await allTerminals(page)).find((t) => t.id === assistantId)?.agentState;
+            return (
+              /idle|waiting/.test(state ?? "") && composer.test(text) && !TRUST_DIALOG.test(text)
+            );
           },
           { timeout: 120_000, intervals: [1000, 2000] }
         )
-        .toMatch(/idle|waiting/);
+        .toBe(true);
       await page.screenshot({ path: path.join(outDir, "00-assistant-ready.png") });
 
       const scenarioStarted = Date.now();
@@ -568,24 +667,19 @@ for (const scenario of SCENARIOS) {
       finalText = await getTerminalTextById(page, assistantId);
       await page.screenshot({ path: path.join(outDir, "99-final.png") });
 
-      const workers = terminals.filter((t) => t.id !== assistantId);
+      // Agents only: the project opens with a plain shell nobody launched.
+      const workers = terminals.filter(
+        (t) => t.id !== assistantId && (t.launchAgentId ?? t.detectedAgentId) !== undefined
+      );
+      const transcriptFile = path.join(outDir, "transcript.txt");
       const transcript =
-        ASSISTANT_AGENT === "codex"
-          ? readCodexTranscript(sessionDir, scenarioStarted, path.join(outDir, "transcript.txt"))
-          : {
-              turns: 0,
-              notices: 0,
-              toolCalls: [],
-              runbookQueries: [],
-              inputTokens: 0,
-              cachedInputTokens: 0,
-              outputTokens: 0,
-              largestOutputs: [],
-            };
+        ASSISTANT_AGENT === "claude"
+          ? readClaudeTranscript(sessionDir, scenarioStarted, transcriptFile)
+          : readCodexTranscript(sessionDir, scenarioStarted, transcriptFile);
       const metrics: TurnMetrics = {
         ...transcript,
         seconds,
-        launched: workers.map((t) => t.launchAgentId ?? t.detectedAgentId ?? "shell"),
+        launched: workers.map((t) => (t.launchAgentId ?? t.detectedAgentId)!),
       };
       const summary = {
         scenario: scenario.id,

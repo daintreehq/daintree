@@ -143,7 +143,7 @@ vi.mock("../AssistantUserConfig.js", async (importOriginal) => {
   };
 });
 
-import { HelpSessionService } from "../HelpSessionService.js";
+import { HelpSessionService, codexTrustArgs } from "../HelpSessionService.js";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
   const helpDir = path.join(root, "help");
@@ -3027,12 +3027,14 @@ describe("HelpSessionService", () => {
       expect(mockProbeMcpSseServer).not.toHaveBeenCalled();
     });
 
-    it("getCodexLaunchArgs returns -c flags for the daintree, docs and runbook servers", async () => {
+    it("getCodexLaunchArgs trusts the session folder, then adds the daintree, docs and runbook servers", async () => {
       const result = await service.provisionSession(codexInput());
       if (!result) throw new Error("expected result");
 
       const args = service.getCodexLaunchArgs(result.token);
-      expect(args).toEqual([
+      expect(args!.slice(0, 2)).toEqual(await codexTrustArgs(result.sessionPath));
+      expect(args![1]).toContain(`'${result.sessionPath}' = { trust_level = "trusted" }`);
+      expect(args!.slice(2)).toEqual([
         "-c",
         'mcp_servers.daintree.transport="http"',
         "-c",
@@ -3040,13 +3042,19 @@ describe("HelpSessionService", () => {
         "-c",
         'mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"',
         "-c",
+        'mcp_servers.daintree.default_tools_approval_mode="approve"',
+        "-c",
         'mcp_servers.daintree-docs.transport="http"',
         "-c",
         'mcp_servers.daintree-docs.url="https://daintree.org/api/mcp"',
         "-c",
+        'mcp_servers.daintree-docs.default_tools_approval_mode="approve"',
+        "-c",
         'mcp_servers.daintree-runbooks.transport="http"',
         "-c",
         'mcp_servers.daintree-runbooks.url="https://assistant.daintree.org/v1/daintree/mcp"',
+        "-c",
+        'mcp_servers.daintree-runbooks.default_tools_approval_mode="approve"',
       ]);
       // Token must NEVER appear in argv — Codex reads it from PTY env via
       // `bearer_token_env_var`.
@@ -3092,13 +3100,19 @@ describe("HelpSessionService", () => {
       }
     });
 
-    it("getCodexLaunchArgs returns [] when both server toggles are off", async () => {
+    it("getCodexLaunchArgs names no servers when both server toggles are off", async () => {
       mockStoreGet.mockReturnValue({ daintreeControl: false, docSearch: false });
 
       const result = await service.provisionSession(codexInput());
       if (!result) throw new Error("expected result");
 
-      expect(service.getCodexLaunchArgs(result.token)).toEqual([]);
+      expect(service.getCodexLaunchArgs(result.token)).toEqual(
+        await codexTrustArgs(result.sessionPath)
+      );
+    });
+
+    it("trusts nothing for a folder path a TOML literal string cannot hold", async () => {
+      expect(await codexTrustArgs("/tmp/it's here")).toEqual([]);
     });
 
     it("getCodexLaunchArgs returns null for a Claude session (defense against cross-agent leakage)", async () => {

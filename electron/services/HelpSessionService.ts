@@ -129,6 +129,28 @@ function userInstructionsSidecarName(content: string): string {
  * Runbooks are procedures for Daintree's own tools, so they ride on Daintree
  * control: with it off there is nothing for a runbook to drive.
  */
+/**
+ * Mark the session folder trusted for this Codex process only, so the
+ * assistant opens at its prompt instead of asking whether to trust a folder
+ * Daintree created. Codex keys trust by the canonical path, and only the
+ * inline-table form survives a path with dots in it, so the override replaces
+ * `projects` in memory for this launch; `~/.codex/config.toml` is untouched.
+ * A path that cannot sit in a TOML literal string is left to the dialog.
+ */
+export async function codexTrustArgs(sessionPath: string): Promise<string[]> {
+  const paths = new Set([sessionPath]);
+  try {
+    paths.add(await fs.realpath(sessionPath));
+  } catch {
+    // The folder is created before launch; if it cannot be resolved, the
+    // path as given is the best key there is.
+  }
+  const entries = [...paths]
+    .filter((p) => !/['\r\n]/.test(p))
+    .map((p) => `'${p}' = { trust_level = "trusted" }`);
+  return entries.length > 0 ? ["-c", `projects={ ${entries.join(", ")} }`] : [];
+}
+
 function runbooksEnabled(settings: { daintreeControl: boolean; runbookSearch: boolean }): boolean {
   return settings.daintreeControl && settings.runbookSearch;
 }
@@ -1247,6 +1269,7 @@ export class HelpSessionService {
     const codexLaunchArgs =
       input.agentId === "codex"
         ? [
+            ...(await codexTrustArgs(sessionPath)),
             ...this.buildCodexLaunchArgs(settings, port),
             ...toCodexMcpServerArgs(
               userConfig.mcpServers,
@@ -1362,6 +1385,14 @@ export class HelpSessionService {
     port: number | null
   ): string[] {
     const args: string[] = [];
+    // Daintree's own servers skip Codex's per-call approval prompt, as the
+    // Claude lane's allow list does: the `daintree` tier and its confirmation
+    // dialogs are the gate, and docs and runbooks only read. Asked on every
+    // call, the prompt stalls each step of a task until the user clicks.
+    const approve = (name: string) => [
+      "-c",
+      `mcp_servers.${name}.default_tools_approval_mode="approve"`,
+    ];
     if (settings.daintreeControl && port) {
       args.push(
         "-c",
@@ -1369,7 +1400,8 @@ export class HelpSessionService {
         "-c",
         `mcp_servers.daintree.url="http://127.0.0.1:${port}/mcp"`,
         "-c",
-        `mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"`
+        `mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"`,
+        ...approve("daintree")
       );
     }
     if (settings.docSearch) {
@@ -1377,7 +1409,8 @@ export class HelpSessionService {
         "-c",
         `mcp_servers.daintree-docs.transport="http"`,
         "-c",
-        `mcp_servers.daintree-docs.url="${DAINTREE_DOCS_MCP_URL}"`
+        `mcp_servers.daintree-docs.url="${DAINTREE_DOCS_MCP_URL}"`,
+        ...approve("daintree-docs")
       );
     }
     if (runbooksEnabled(settings)) {
@@ -1385,7 +1418,8 @@ export class HelpSessionService {
         "-c",
         `mcp_servers.${RUNBOOKS_MCP_SERVER_NAME}.transport="http"`,
         "-c",
-        `mcp_servers.${RUNBOOKS_MCP_SERVER_NAME}.url="${resolveRunbooksMcpUrl()}"`
+        `mcp_servers.${RUNBOOKS_MCP_SERVER_NAME}.url="${resolveRunbooksMcpUrl()}"`,
+        ...approve(RUNBOOKS_MCP_SERVER_NAME)
       );
     }
     return args;
