@@ -77,6 +77,10 @@ function harness(hosts: HostDescriptor[]) {
   const emitted: HostMetricsEvent[] = [];
   const attention: HostAttentionEvent[] = [];
   const localListeners = new Set<(summary: HostMetricsSummary) => void>();
+  const hook: {
+    call: ((hostId: string, method: string, payload: unknown) => Promise<unknown>) | null;
+    down: Set<string>;
+  } = { call: null, down: new Set() };
   const local = {
     listFleetTargets: vi.fn(async () => []),
     submitFleet: vi.fn(async () => {}),
@@ -86,10 +90,11 @@ function harness(hosts: HostDescriptor[]) {
     manager: {
       connect,
       get: (hostId) =>
-        list.some((h) => h.id === hostId)
+        list.some((h) => h.id === hostId) && !hook.down.has(hostId)
           ? {
               callHost: async (method, payload) => {
                 calls.push({ hostId, method, payload });
+                if (hook.call) return hook.call(hostId, method, payload);
                 return method === MetricsLinkMethod.LIST_FLEET_TARGETS
                   ? [
                       {
@@ -132,6 +137,7 @@ function harness(hosts: HostDescriptor[]) {
     },
     local,
     ringSize: 3,
+    fleetReconcileMs: 200,
   };
   const client = new HostMetricsClient(options);
   return {
@@ -143,6 +149,7 @@ function harness(hosts: HostDescriptor[]) {
     local,
     states,
     localListeners,
+    hook,
     setHosts(next: HostDescriptor[]) {
       list = next;
       for (const listener of registryListeners) listener();
@@ -213,7 +220,13 @@ describe("HostMetricsClient", () => {
     open.push(quiet.host, quiet.client, loud.host, loud.client);
     h.openSession("quiet", quiet.client);
     h.openSession("loud", loud.client);
-    const payload = { kind: "waiting", terminalId: "t1", projectName: "app", agentName: "Claude" };
+    const payload = {
+      kind: "waiting",
+      terminalId: "t1",
+      projectName: "app",
+      agentName: "Claude",
+      quiet: true,
+    };
     await quiet.host.call(MetricsLinkMethod.ATTENTION, payload);
     await loud.host.call(MetricsLinkMethod.ATTENTION, payload);
     expect(h.attention).toEqual([
@@ -225,8 +238,31 @@ describe("HostMetricsClient", () => {
         terminalId: "t1",
         projectName: "app",
         agentName: "Claude",
+        quiet: true,
       },
     ]);
+    h.client.dispose();
+  });
+
+  it("gives the update gate unknown, not zero, when the host couldn't observe every agent", async () => {
+    const h = harness([descriptor("studio-01")]);
+    h.client.start();
+    const p = await openSessionPair(dir);
+    open.push(p.host, p.client);
+    h.openSession("studio-01", p.client);
+    h.states.set("studio-01", {
+      status: "connected",
+      rttMs: 3,
+      handshake: { version: "1", commit: "c", protocolVersion: 1, platform: "linux", arch: "x64" },
+    });
+    p.host.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.HOST_SUMMARY,
+      body: { ...summary(1, 0), agentsObserved: null, projectCount: null, worktreeCount: null },
+    });
+    await waitFor(() => h.emitted.length === 1);
+    expect(h.client.latest("studio-01")?.agentsObserved).toBeNull();
+    expect(h.client.workingAgents("studio-01")).toBeNull();
     h.client.dispose();
   });
 
@@ -239,16 +275,79 @@ describe("HostMetricsClient", () => {
     expect(h.calls.at(-1)).toEqual({
       hostId: "studio-01",
       method: MetricsLinkMethod.SUBMIT_FLEET,
-      payload: { terminalId: "t1", text: "hello" },
+      payload: { terminalId: "t1", text: "hello", opId: null },
     });
-    await h.client.submitFleet({ hostId: "local", terminalId: "t9", text: "here" });
-    expect(h.local.submitFleet).toHaveBeenCalledWith("t9", "here", { kind: "local" });
+    await h.client.submitFleet({ hostId: "local", terminalId: "t9", text: "here", opId: "op-9" });
+    expect(h.local.submitFleet).toHaveBeenCalledWith("t9", "here", { kind: "local" }, "op-9");
     await expect(
       h.client.submitFleet({ hostId: "nowhere", terminalId: "t1", text: "x" })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(
       h.client.submitFleet({ hostId: "studio-01", terminalId: "t1", text: "" })
     ).rejects.toMatchObject({ code: "VALIDATION" });
+    h.client.dispose();
+  });
+
+  it("asks again under the same opId when a submit's answer is lost, once the host is back", async () => {
+    const h = harness([descriptor("studio-01")]);
+    h.client.start();
+    let attempts = 0;
+    h.hook.call = async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        // The link dropped after the request went out: the host may have run it.
+        h.hook.down.add("studio-01");
+        setTimeout(() => {
+          h.hook.down.delete("studio-01");
+          h.openSession("studio-01", {
+            on: () => () => {},
+            registerCallHandler: () => {},
+          } as unknown as LinkSession);
+        }, 10);
+        throw Object.assign(new Error("Link closed"), { code: "OUTCOME_UNKNOWN" });
+      }
+      return null;
+    };
+    await h.client.submitFleet({
+      hostId: "studio-01",
+      terminalId: "t1",
+      text: "hello",
+      opId: "op-1",
+    });
+    const submits = h.calls.filter((c) => c.method === MetricsLinkMethod.SUBMIT_FLEET);
+    expect(submits.map((c) => c.payload)).toEqual([
+      { terminalId: "t1", text: "hello", opId: "op-1" },
+      { terminalId: "t1", text: "hello", opId: "op-1" },
+    ]);
+    h.client.dispose();
+  });
+
+  it("reports the outcome unknown when the host doesn't come back, and never re-asks without an opId", async () => {
+    const h = harness([descriptor("studio-01")]);
+    h.client.start();
+    h.hook.call = async () => {
+      h.hook.down.add("studio-01");
+      throw Object.assign(new Error("Link closed"), { code: "OUTCOME_UNKNOWN" });
+    };
+    await expect(
+      h.client.submitFleet({ hostId: "studio-01", terminalId: "t1", text: "x", opId: "op-2" })
+    ).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+    h.hook.down.delete("studio-01");
+    h.calls.length = 0;
+    await expect(
+      h.client.submitFleet({ hostId: "studio-01", terminalId: "t1", text: "x" })
+    ).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+    expect(h.calls).toHaveLength(1);
+    // A refusal is an answer: it is not asked again.
+    h.hook.down.delete("studio-01");
+    h.calls.length = 0;
+    h.hook.call = async () => {
+      throw Object.assign(new Error("driven"), { code: "DRIVEN_ELSEWHERE" });
+    };
+    await expect(
+      h.client.submitFleet({ hostId: "studio-01", terminalId: "t1", text: "x", opId: "op-3" })
+    ).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    expect(h.calls).toHaveLength(1);
     h.client.dispose();
   });
 

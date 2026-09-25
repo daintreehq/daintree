@@ -2,9 +2,15 @@ import { lazy, Suspense } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { isRemoteHostsSupported } from "@/lib/remoteHosts";
 
-const LazyHostsOverviewHost = lazy(() =>
-  import("./HostsOverviewHost").then((m) => ({ default: m.HostsOverviewHost }))
-);
+function loadHostsOverviewHost() {
+  // Tested directly so a build without Remote Hosts (Windows) drops the overview.
+  if (__DAINTREE_REMOTE_HOSTS__) {
+    return import("./HostsOverviewHost").then((m) => ({ default: m.HostsOverviewHost }));
+  }
+  return Promise.resolve({ default: () => null });
+}
+
+const LazyHostsOverviewHost = lazy(loadHostsOverviewHost);
 
 /**
  * The per-view home of the hosts overview and the host summary feed behind

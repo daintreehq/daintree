@@ -113,14 +113,23 @@ export function subscribeFleetFailureAutoClear(): () => void {
   // can miss a drain or partial disarm during the torn-down window. This
   // pass recovers that invariant on re-registration — mirrors the initial
   // pass in `subscribeFleetArmingPanelPruning` (#9923).
-  const initialArmed = useFleetArmingStore.getState().armedIds;
-  reconcileFleetFailures(initialArmed);
+  // Agents on other hosts are fleet members too: their failures clear as a
+  // pane's do, and toggling a pane must not drop them.
+  const members = (state: ReturnType<typeof useFleetArmingStore.getState>): Set<string> => {
+    if (state.crossHostTargets.length === 0) return state.armedIds;
+    const all = new Set(state.armedIds);
+    for (const target of state.crossHostTargets) all.add(target.key);
+    return all;
+  };
+  const initial = useFleetArmingStore.getState();
+  reconcileFleetFailures(members(initial));
 
-  let prevArmed = initialArmed;
+  let prevArmed = initial.armedIds;
+  let prevCrossHost = initial.crossHostTargets;
   return useFleetArmingStore.subscribe((state) => {
-    const nextArmed = state.armedIds;
-    if (prevArmed === nextArmed) return;
-    reconcileFleetFailures(nextArmed);
-    prevArmed = nextArmed;
+    if (prevArmed === state.armedIds && prevCrossHost === state.crossHostTargets) return;
+    prevArmed = state.armedIds;
+    prevCrossHost = state.crossHostTargets;
+    reconcileFleetFailures(members(state));
   });
 }

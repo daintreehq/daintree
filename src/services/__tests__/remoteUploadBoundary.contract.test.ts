@@ -8,8 +8,9 @@ import { describe, expect, it } from "vitest";
  * Windows builds leave Remote Hosts out (`__DAINTREE_REMOTE_HOSTS__` is
  * false). The bundler only drops a module when the one dynamic import that
  * reaches it sits directly under `if (__DAINTREE_REMOTE_HOSTS__)`, and only
- * while nothing imports it statically. This walks the renderer's static
- * import graph from its entry and holds both halves for the upload modules.
+ * while nothing imports it statically. This walks every module a build ships
+ * regardless — static imports from the renderer's entry plus ungated lazy
+ * chunks — and holds both halves for the remote-only modules.
  */
 
 const ROOT = path.resolve(__dirname, "../../..");
@@ -18,6 +19,14 @@ const REMOTE_ONLY = [
   "src/services/remoteMaterializer.ts",
   "src/components/Terminal/uploads/uploadConfirm.ts",
   "src/components/Terminal/uploads/UploadConfirmHost.tsx",
+  // The hosts overview, the new-worktree placement row and other hosts' worktrees.
+  "src/components/Hosts/Overview/HostsOverviewHost.tsx",
+  "src/components/Hosts/Overview/HostsOverviewDialog.tsx",
+  "src/components/Hosts/Overview/HostCard.tsx",
+  "src/components/Hosts/Overview/HostFleetTargets.tsx",
+  "src/components/Hosts/Overview/HostSparkline.tsx",
+  "src/components/Hosts/Overview/WorktreePlacementRow.tsx",
+  "src/components/Hosts/Overview/OtherHostsWorktrees.tsx",
 ].map((file) => path.join(ROOT, file));
 
 const EXTENSIONS = [".ts", ".tsx", "/index.ts", "/index.tsx"];
@@ -99,7 +108,12 @@ function scanGraph(): Scan {
         ts.isStringLiteral(node.arguments[0])
       ) {
         const target = resolveSpecifier(file, node.arguments[0].text);
-        if (target) dynamicSites.push({ from: file, target, gated: underBuildGate(node) });
+        if (target) {
+          const gated = underBuildGate(node);
+          dynamicSites.push({ from: file, target, gated });
+          // An ungated lazy chunk ships in every build, so its imports count as core too.
+          if (!gated) queue.push(target);
+        }
       }
       ts.forEachChild(node, visit);
     };
@@ -108,7 +122,7 @@ function scanGraph(): Scan {
   return { statics, dynamicSites };
 }
 
-describe("remote upload modules stay out of builds without Remote Hosts", () => {
+describe("remote-only renderer modules stay out of builds without Remote Hosts", () => {
   const scan = scanGraph();
   const rel = (file: string) => path.relative(ROOT, file);
 
@@ -118,15 +132,21 @@ describe("remote upload modules stay out of builds without Remote Hosts", () => 
     expect(
       scan.statics.has(path.join(ROOT, "src/components/Terminal/uploads/LazyUploadConfirmHost.tsx"))
     ).toBe(true);
+    for (const entry of ["HostsOverviewMount.tsx", "LazyHostOverviewParts.tsx"]) {
+      expect(scan.statics.has(path.join(ROOT, "src/components/Hosts/Overview", entry))).toBe(true);
+    }
   });
 
-  it("never imports them statically from core code", () => {
+  it("never reaches them from code every build ships", () => {
     expect(REMOTE_ONLY.filter((file) => scan.statics.has(file)).map(rel)).toEqual([]);
   });
 
   it("loads them only behind a direct build-define gate", () => {
     const sites = scan.dynamicSites.filter((site) => REMOTE_ONLY.includes(site.target));
     expect(sites.map((site) => rel(site.target)).sort()).toEqual([
+      "src/components/Hosts/Overview/HostsOverviewHost.tsx",
+      "src/components/Hosts/Overview/OtherHostsWorktrees.tsx",
+      "src/components/Hosts/Overview/WorktreePlacementRow.tsx",
       "src/components/Terminal/uploads/UploadConfirmHost.tsx",
       "src/services/remoteMaterializer.ts",
     ]);

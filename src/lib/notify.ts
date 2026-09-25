@@ -303,6 +303,14 @@ interface NotifyPayloadBase {
   transient?: boolean;
   /** When true, the notification bypasses the startup quiet period gate */
   urgent?: boolean;
+  /**
+   * Set when another host already applied its own policy (on/off, quiet
+   * hours) to this event. This window's notification settings can belong to
+   * a third host, so they must not decide it again: only this screen's focus
+   * and session mute still apply. `quiet` routes it to the inbox, as quiet
+   * hours would for a local event.
+   */
+  sourceHostPolicy?: { quiet: boolean };
   /** Fires exactly once when the user explicitly dismisses the toast via the close or action button */
   onDismiss?: () => void;
   /**
@@ -788,6 +796,19 @@ export function muteUntilNextMorning(morningMin = 8 * 60): number {
   return until;
 }
 
+/**
+ * Whether notifications are on and whether this one is held back as quiet. A
+ * cross-host event carries its source host's verdict in place of this
+ * window's schedule and on/off switch; the session mute is always this
+ * screen's.
+ */
+function deliveryGates(payload: NotifyPayload): { enabled: boolean; quiet: boolean } {
+  const hostPolicy = payload.sourceHostPolicy;
+  const enabled = hostPolicy ? true : useNotificationSettingsStore.getState().enabled;
+  const scheduledQuiet = hostPolicy ? hostPolicy.quiet : isScheduledQuietHours();
+  return { enabled, quiet: !payload.urgent && (Date.now() < _quietUntil || scheduledQuiet) };
+}
+
 export function isScheduledQuietHours(now: Date = new Date()): boolean {
   const state = useNotificationSettingsStore.getState();
   return isScheduledQuietNow(
@@ -910,8 +931,7 @@ export function notify(payload: NotifyPayload): string {
       variant: a.variant,
     }));
 
-  const notificationsEnabled = useNotificationSettingsStore.getState().enabled;
-  const isQuiet = !payload.urgent && (Date.now() < _quietUntil || isScheduledQuietHours());
+  const { enabled: notificationsEnabled, quiet: isQuiet } = deliveryGates(payload);
 
   if (placement === "grid-bar") {
     // Auto-resurface: grid-bar bypasses the toast gate but still mutates
@@ -1171,8 +1191,8 @@ function scheduleSuppressionGrace(
     // Re-read state at callback time to avoid the stale-closure trap (#5087).
     if (isOriginSurfaceVisible(context)) return;
     cleanup();
-    if (!useNotificationSettingsStore.getState().enabled) return;
-    if (!payload.urgent && (Date.now() < _quietUntil || isScheduledQuietHours())) return;
+    const gates = deliveryGates(payload);
+    if (!gates.enabled || gates.quiet) return;
     useNotificationStore.getState().addNotification({
       ...payload,
       priority,

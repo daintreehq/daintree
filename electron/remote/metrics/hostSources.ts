@@ -60,15 +60,20 @@ export function openProjects() {
  * What this host's agents are doing, as its FSM observed them: the same
  * per-project tallies the project switcher shows, summed across projects.
  * Idle counts agent runs that are neither working nor waiting.
+ *
+ * Null when the terminals can't all be seen — no PTY client, or a shard that
+ * didn't answer. The updater's restart guard reads these counts, and a tally
+ * missing a shard would read a busy host as idle.
  */
-export async function observeAgents(): Promise<ObservedAgents> {
+export async function observeAgents(): Promise<ObservedAgents | null> {
   const pty = getPtyClient();
-  if (!pty) return { working: 0, waiting: 0, idle: 0 };
+  if (!pty) return null;
   const projectIds = [
     ...projectStore.getAllProjects().map((p) => p.id),
     ...scratchStore.getAllScratches().map((s) => s.id),
   ];
-  const terminals = await pty.getAllTerminalsAsync();
+  const { terminals, degraded } = await pty.getAllTerminalsWithCompletenessAsync();
+  if (degraded) return null;
   const counts = computeProjectAgentCounts(
     projectIds,
     terminals,
@@ -92,6 +97,30 @@ export async function observeAgents(): Promise<ObservedAgents> {
     if (terminal.agentState === "idle" || terminal.agentState === "completed") idle += 1;
   }
   return { working, waiting, idle };
+}
+
+/**
+ * Worktrees across the open projects, or null when any project's workspace
+ * couldn't answer: a partial sum would read as fewer worktrees than there are.
+ */
+async function countWorktrees(
+  projects: ReadonlyArray<{ id: string; path: string }>
+): Promise<number | null> {
+  const client = getWorkspaceClientRef();
+  if (!client) return null;
+  try {
+    const results = await Promise.all(
+      projects.map((project) => client.getAllStatesForProjectResultAsync(project.path, project.id))
+    );
+    let count = 0;
+    for (const result of results) {
+      if (result.status !== "ok") return null;
+      count += result.states.length;
+    }
+    return count;
+  } catch {
+    return null;
+  }
 }
 
 /** The most recent holder across this host's projects, when anyone drives one. */
@@ -129,8 +158,9 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
     async projects() {
       const open = openProjects();
       if (!worktrees || now() - worktrees.at > WORKTREE_COUNT_TTL_MS) {
-        const client = getWorkspaceClientRef();
-        const count = client ? (await client.getAllStatesAsync()).length : 0;
+        const count = await countWorktrees(open);
+        // An incomplete count is unknown, and isn't cached: the next sample asks again.
+        if (count === null) return { projectCount: open.length, worktreeCount: null };
         worktrees = { count, at: now() };
       }
       return { projectCount: open.length, worktreeCount: worktrees.count };

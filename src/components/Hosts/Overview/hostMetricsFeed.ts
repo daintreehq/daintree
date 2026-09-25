@@ -6,8 +6,9 @@ import { logWarn } from "@/utils/logger";
 
 /**
  * Present an opted-in host's "agent waiting" through the ordinary tiers:
- * toast when this window is focused, inbox otherwise, held back by quiet
- * hours and session mute like any other waiting notification. Main already
+ * toast when this window is focused, inbox otherwise. The source host already
+ * applied its own policy (off, quiet hours); this window's settings may be a
+ * third host's, so only its focus and session mute apply here. Main already
  * checked the opt-in and chose this view.
  */
 export function presentHostAttention(event: HostAttentionEvent): void {
@@ -19,6 +20,7 @@ export function presentHostAttention(event: HostAttentionEvent): void {
     message: `${who}${where} is waiting for input`,
     correlationId: `host-attention:${event.hostId}:${event.terminalId}`,
     context: { eventKind: "waiting", hostName: event.hostName },
+    sourceHostPolicy: { quiet: event.quiet },
   });
 }
 

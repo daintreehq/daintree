@@ -1,95 +1,107 @@
-import { useSyncExternalStore } from "react";
 import type { HostId } from "@shared/types/remoteHosts";
+import { useFleetArmingStore, type CrossHostFleetTarget } from "@/store/fleetArmingStore";
+import { isClientAppError } from "@/utils/clientAppError";
+
+export type { CrossHostFleetTarget };
 
 /**
- * Agents on other hosts armed into this view's fleet. The panel store only
- * knows this view's own terminals, so these ride beside the armed set under
- * host-qualified ids, and their submits go over each host's link.
+ * Agents on other hosts armed into this view's fleet. Their membership lives
+ * in `useFleetArmingStore` beside this view's own panes, so exiting the fleet
+ * or replacing its selection drops them with everything else.
  */
-export interface CrossHostFleetTarget {
-  /** Host-qualified id used wherever the fleet lists targets. */
-  key: string;
-  hostId: HostId;
-  hostName: string;
-  terminalId: string;
-  title: string;
-}
 
 const PREFIX = "host-fleet:";
-
-let armed = new Map<string, CrossHostFleetTarget>();
-let snapshot: CrossHostFleetTarget[] = [];
-const listeners = new Set<() => void>();
-
-function publish(next: Map<string, CrossHostFleetTarget>): void {
-  armed = next;
-  snapshot = [...next.values()];
-  for (const listener of [...listeners]) listener();
-}
 
 export function crossHostTargetKey(hostId: HostId, terminalId: string): string {
   return `${PREFIX}${hostId}:${terminalId}`;
 }
 
+/** Whether `id` names another host's agent: never a local pane, armed or not. */
+export function isHostQualifiedTargetId(id: string): boolean {
+  return id.startsWith(PREFIX);
+}
+
 export function isCrossHostTargetId(id: string): boolean {
-  return armed.has(id);
+  return getCrossHostTarget(id) !== null;
 }
 
 export function getCrossHostTarget(id: string): CrossHostFleetTarget | null {
-  return armed.get(id) ?? null;
+  return useFleetArmingStore.getState().crossHostTargets.find((t) => t.key === id) ?? null;
 }
 
-export function getArmedCrossHostTargets(): CrossHostFleetTarget[] {
-  return snapshot;
+export function getArmedCrossHostTargets(): readonly CrossHostFleetTarget[] {
+  return useFleetArmingStore.getState().crossHostTargets;
 }
 
 export function armCrossHostTarget(target: Omit<CrossHostFleetTarget, "key">): void {
-  const key = crossHostTargetKey(target.hostId, target.terminalId);
-  if (armed.has(key)) return;
-  const next = new Map(armed);
-  next.set(key, { ...target, key });
-  publish(next);
+  useFleetArmingStore
+    .getState()
+    .armCrossHostTarget({ ...target, key: crossHostTargetKey(target.hostId, target.terminalId) });
 }
 
 export function disarmCrossHostTarget(key: string): void {
-  if (!armed.has(key)) return;
-  const next = new Map(armed);
-  next.delete(key);
-  publish(next);
+  useFleetArmingStore.getState().disarmCrossHostTarget(key);
 }
 
 /** Keep only targets on hosts still in the host list. */
 export function retainCrossHostTargetsFor(hostIds: ReadonlySet<HostId>): void {
-  const next = new Map([...armed].filter(([, target]) => hostIds.has(target.hostId)));
-  if (next.size !== armed.size) publish(next);
+  useFleetArmingStore.getState().retainCrossHostTargetsFor(hostIds);
+  for (const key of [...unresolved.keys()]) {
+    if (!getCrossHostTarget(key)) unresolved.delete(key);
+  }
 }
 
-export function clearCrossHostTargets(): void {
-  if (armed.size > 0) publish(new Map());
+export function useArmedCrossHostTargets(): readonly CrossHostFleetTarget[] {
+  return useFleetArmingStore((s) => s.crossHostTargets);
 }
 
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+/**
+ * Submits whose outcome the host never confirmed, by target key: the opId
+ * and the prompt it carried. A retry of the same prompt reuses the opId, so a
+ * host that did run it answers from its record instead of running it again.
+ */
+const unresolved = new Map<string, { opId: string; text: string }>();
+
+function isUnknownOutcome(error: unknown): boolean {
+  return (
+    isClientAppError(error) &&
+    (error.code === "OUTCOME_UNKNOWN" || error.code === "HOST_DISCONNECTED")
+  );
 }
 
-export function useArmedCrossHostTargets(): CrossHostFleetTarget[] {
-  return useSyncExternalStore(subscribe, getArmedCrossHostTargets, getArmedCrossHostTargets);
-}
-
-/** Submit over the target host's link. Rejections carry the host's errno-led message. */
-export async function submitCrossHostTarget(key: string, text: string): Promise<void> {
-  const target = armed.get(key);
+/**
+ * Submit over the target host's link, under an opId minted for this one
+ * submit. `retry` reuses the opId of an earlier submit of the same prompt
+ * whose outcome was never confirmed. Rejections carry the host's errno-led message.
+ */
+export async function submitCrossHostTarget(
+  key: string,
+  text: string,
+  options: { retry?: boolean } = {}
+): Promise<void> {
+  const target = getCrossHostTarget(key);
   if (!target) throw new Error(`EBADF: fleet target ${key} is no longer armed`);
-  await window.electron.hostMetrics.submitFleet({
-    hostId: target.hostId,
-    terminalId: target.terminalId,
-    text,
-  });
+  const earlier = unresolved.get(key);
+  const opId =
+    options.retry === true && earlier !== undefined && earlier.text === text
+      ? earlier.opId
+      : crypto.randomUUID();
+  try {
+    await window.electron.hostMetrics.submitFleet({
+      hostId: target.hostId,
+      terminalId: target.terminalId,
+      text,
+      opId,
+    });
+    unresolved.delete(key);
+  } catch (error) {
+    if (isUnknownOutcome(error)) unresolved.set(key, { opId, text });
+    else unresolved.delete(key);
+    throw error;
+  }
 }
 
 export function _resetCrossHostFleetForTesting(): void {
-  armed = new Map();
-  snapshot = [];
-  listeners.clear();
+  unresolved.clear();
+  useFleetArmingStore.setState({ crossHostTargets: [] });
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { PluginParityRow } from "@shared/types/ipc/pluginParity";
 import type { HostId } from "@shared/types/remoteHosts";
+import { pluginParityErrorText } from "./pluginParityCopy";
 
 export type PluginParityState =
   | { status: "idle" }
@@ -12,10 +12,12 @@ export type PluginParityState =
 /**
  * This machine's plugins against `hostId`'s, read while `enabled` (the host is
  * connected). Only reads: installing or updating is a separate, explicit call.
+ * `hostName` names the host in a failure.
  */
 export function usePluginParity(
   hostId: HostId | null,
-  enabled: boolean
+  enabled: boolean,
+  hostName = "the host"
 ): { state: PluginParityState; refresh: () => void } {
   const [state, setState] = useState<PluginParityState>({ status: "idle" });
   const [generation, setGeneration] = useState(0);
@@ -38,7 +40,11 @@ export function usePluginParity(
         if (!cancelled) {
           setState({
             status: "error",
-            message: formatErrorMessage(err, "Couldn't compare plugins"),
+            message: pluginParityErrorText(
+              err,
+              hostName,
+              `Couldn't compare plugins with ${hostName}`
+            ),
           });
         }
       }
@@ -46,7 +52,7 @@ export function usePluginParity(
     return () => {
       cancelled = true;
     };
-  }, [hostId, enabled, generation]);
+  }, [hostId, enabled, generation, hostName]);
 
   const refresh = useCallback(() => setGeneration((value) => value + 1), []);
   const current: PluginParityState =

@@ -21,6 +21,7 @@ const attention: HostAttentionEvent = {
   terminalId: "t1",
   projectName: "helios",
   agentName: "Claude",
+  quiet: false,
 };
 
 function summary(hostId: string, sampledAt: number): HostMetricsSummary {
@@ -110,16 +111,33 @@ describe("presentHostAttention", () => {
     expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
   });
 
-  it("holds the toast back during quiet hours", () => {
+  it("files it in the inbox without a toast when the source host is in its quiet hours", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    presentHostAttention({ ...attention, quiet: true });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    const entry = useNotificationHistoryStore.getState().entries[0];
+    expect(entry?.seenAsToast).toBe(false);
+  });
+
+  it("ignores this window's quiet hours and on/off switch, which can be another host's", () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     useNotificationSettingsStore.setState({
+      enabled: false,
       quietHoursEnabled: true,
       quietHoursStartMin: 0,
       quietHoursEndMin: 24 * 60 - 1,
       quietHoursWeekdays: [],
     });
     presentHostAttention(attention);
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("still honours this screen's session mute", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    _setQuietUntil(Date.now() + 60_000);
+    presentHostAttention(attention);
     expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
   });
 });
 
@@ -128,12 +146,15 @@ describe("startHostMetricsFeed", () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     const stop = startHostMetricsFeed();
     await vi.waitFor(() =>
-      expect(useHostMetricsStore.getState().history["studio-01"]).toHaveLength(1)
+      expect(useHostMetricsStore.getState().history.get("studio-01")).toHaveLength(1)
     );
     emit?.({ type: "summary", summary: summary("studio-01", 2) });
-    expect(useHostMetricsStore.getState().history["studio-01"]!.map((s) => s.sampledAt)).toEqual([
-      2, 1,
-    ]);
+    expect(
+      useHostMetricsStore
+        .getState()
+        .history.get("studio-01")!
+        .map((s) => s.sampledAt)
+    ).toEqual([2, 1]);
     emit?.(attention);
     expect(useNotificationStore.getState().notifications).toHaveLength(1);
     stop();

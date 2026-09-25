@@ -1393,3 +1393,140 @@ describe("installPlugin — reviewed-update binding (#12612)", () => {
     service.dispose();
   });
 });
+
+// A package sent from another machine may only replace what is installed when
+// the person asked for exactly that — decided under the install lock, against
+// what is installed at that moment, not before queueing (#11158).
+describe("installPluginFromAnotherMachine — replacement decided under the lock", () => {
+  type InstallerView = { installer: { installPlugin: (...args: unknown[]) => unknown } };
+
+  function installedVersion(service: PluginService, pluginId: string): string | undefined {
+    return service.listPlugins().find((p) => p.manifest.name === pluginId)?.manifest.version;
+  }
+
+  async function onDiskVersion(pluginId: string): Promise<string> {
+    const raw = await fs.readFile(path.join(pluginsRoot, pluginId, "plugin.json"), "utf-8");
+    return (JSON.parse(raw) as { version: string }).version;
+  }
+
+  /** Initialized with the startup activation gate open, as after boot. */
+  async function started(service: PluginService): Promise<PluginService> {
+    await service.initialize();
+    (service as unknown as { resolveInit: (() => void) | null }).resolveInit?.();
+    return service;
+  }
+
+  function spyInstaller(service: PluginService) {
+    return vi.spyOn((service as unknown as InstallerView).installer, "installPlugin");
+  }
+
+  /** Holds the first install's swap until released, so a second request queues behind it. */
+  async function holdFirstSwap(): Promise<() => void> {
+    const real = (await vi.importActual<typeof import("../../utils/fs.js")>("../../utils/fs.js"))
+      .resilientRename;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(resilientRename).mockImplementationOnce(async (s, d) => {
+      await gate;
+      return real(s, d);
+    });
+    return release;
+  }
+
+  it("never lets a queued older update replace a newer one that landed first", async () => {
+    const service = await started(
+      new PluginService(pluginsRoot, "0.0.0", { blocklistService: fakeBlocklist([]) })
+    );
+    await service.installPlugin(await makeArchive({ name: "acme.race", version: "1.0.0" }));
+    const v3 = await makeArchive({ name: "acme.race", version: "3.0.0" });
+    const v2 = await makeArchive({ name: "acme.race", version: "2.0.0" });
+
+    const spy = spyInstaller(service);
+    const release = await holdFirstSwap();
+    const first = service.installPluginFromAnotherMachine(v3, {
+      pluginId: "acme.race",
+      update: true,
+    });
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    // v1 is still what's installed when this one is asked for.
+    const second = service.installPluginFromAnotherMachine(v2, {
+      pluginId: "acme.race",
+      update: true,
+    });
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    release();
+
+    await expect(first).resolves.toEqual({ status: "installed", pluginId: "acme.race" });
+    await expect(second).resolves.toMatchObject({
+      status: "failed",
+      errors: [{ code: "archive_mismatch" }],
+    });
+    expect(await onDiskVersion("acme.race")).toBe("3.0.0");
+    expect(installedVersion(service, "acme.race")).toBe("3.0.0");
+
+    service.dispose();
+  });
+
+  it("lets only the first of two concurrent installs of one plugin land", async () => {
+    const service = await started(
+      new PluginService(pluginsRoot, "0.0.0", { blocklistService: fakeBlocklist([]) })
+    );
+    const a = await makeArchive({ name: "acme.twice", version: "1.0.0" });
+    const b = await makeArchive({ name: "acme.twice", version: "1.1.0" });
+
+    const spy = spyInstaller(service);
+    const release = await holdFirstSwap();
+    const first = service.installPluginFromAnotherMachine(a, { pluginId: "acme.twice" });
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    const second = service.installPluginFromAnotherMachine(b, { pluginId: "acme.twice" });
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    release();
+
+    await expect(first).resolves.toEqual({ status: "installed", pluginId: "acme.twice" });
+    await expect(second).resolves.toMatchObject({
+      status: "failed",
+      errors: [{ code: "archive_mismatch", message: expect.stringContaining("already installed") }],
+    });
+    expect(await onDiskVersion("acme.twice")).toBe("1.0.0");
+
+    service.dispose();
+  });
+
+  it("updates a plugin the blocklist refused at launch to a version it doesn't name", async () => {
+    await fs.mkdir(path.join(pluginsRoot, "acme.blocked"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginsRoot, "acme.blocked", "plugin.json"),
+      JSON.stringify({ name: "acme.blocked", version: "1.0.0" })
+    );
+    const service = new PluginService(pluginsRoot, "0.0.0", {
+      blocklistService: fakeBlocklist([
+        { name: "acme.blocked", ranges: ["<2.0.0"], reason: "cve" },
+      ]),
+    });
+    await started(service);
+    expect(service.listPlugins().find((p) => p.manifest.name === "acme.blocked")?.blocklisted).toBe(
+      true
+    );
+
+    // The incoming package is still checked against the blocklist first.
+    const stillBlocked = await makeArchive({ name: "acme.blocked", version: "1.5.0" });
+    await expect(
+      service.installPluginFromAnotherMachine(stillBlocked, {
+        pluginId: "acme.blocked",
+        update: true,
+      })
+    ).rejects.toMatchObject({ code: "PLUGIN_INCOMPATIBLE" });
+
+    const fixed = await makeArchive({ name: "acme.blocked", version: "2.0.0" });
+    await expect(
+      service.installPluginFromAnotherMachine(fixed, { pluginId: "acme.blocked", update: true })
+    ).resolves.toEqual({ status: "installed", pluginId: "acme.blocked" });
+    const info = service.listPlugins().find((p) => p.manifest.name === "acme.blocked");
+    expect(info?.blocklisted).toBe(false);
+    expect(info?.manifest.version).toBe("2.0.0");
+
+    service.dispose();
+  });
+});

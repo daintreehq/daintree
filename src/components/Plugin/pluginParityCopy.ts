@@ -1,5 +1,7 @@
 import type { PluginParityRow } from "@shared/types/ipc/pluginParity";
 import type { PluginIncompatibleReason } from "@shared/types/remoteHosts";
+import { isClientAppError } from "@/utils/clientAppError";
+import { boundedErrorText } from "@/utils/errorText";
 
 const PLATFORM_NAMES: Record<string, string> = { darwin: "macOS", linux: "Linux" };
 
@@ -40,4 +42,37 @@ export function summarizePluginParity(rows: readonly PluginParityRow[]): string 
     incompatible > 0 ? `${incompatible} can't run` : null,
   ].filter((part): part is string => part !== null);
   return parts.length > 0 ? `plugins: ${parts.join(" · ")}` : null;
+}
+
+// An absolute path in a message would show this machine's or the host's
+// folders; the person needs what happened, not where.
+const ABSOLUTE_PATH = /(^|[\s("'`])(?:file:\/\/|\/|[A-Za-z]:[\\/]|\\\\)[^\s"'`)]+/gi;
+
+function readableUserMessage(text: string): string {
+  return boundedErrorText(text.replace(ABSOLUTE_PATH, "$1a file"), 300).trim();
+}
+
+/**
+ * What to tell the person when a plugin comparison or install with `host`
+ * failed. Only the typed parts of the error are read: its code, the details a
+ * typed plugin refusal carries, and the message main wrote for people. The raw
+ * message, which can carry transport text or a path, is never shown.
+ */
+export function pluginParityErrorText(error: unknown, host: string, fallback: string): string {
+  if (!isClientAppError(error)) return fallback;
+  switch (error.code) {
+    case "HOST_DISCONNECTED":
+      return `Not connected to ${host}. Connect to it and try again.`;
+    case "OUTCOME_UNKNOWN":
+      return `The connection to ${host} dropped before it answered. Check its plugin list before trying again.`;
+    case "RATE_LIMITED":
+      return `${host} is busy with other plugin installs. Try again in a moment.`;
+  }
+  const user = error.userMessage ? readableUserMessage(error.userMessage) : "";
+  if (user.length > 0) return user;
+  const details = error.details;
+  if (details?.code === "PLUGIN_INCOMPATIBLE" && typeof details.reason?.kind === "string") {
+    return describeIncompatibility(details.reason, host);
+  }
+  return fallback;
 }

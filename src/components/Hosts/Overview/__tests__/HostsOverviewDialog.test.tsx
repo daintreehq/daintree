@@ -14,8 +14,8 @@ vi.mock("../../hostList", () => ({
   useHostList: () => ({ hosts: h.hosts, localSummary: null }),
 }));
 vi.mock("@/store/hostMetricsStore", () => ({
-  useHostMetricsStore: (select: (state: { history: Record<string, never[]> }) => unknown) =>
-    select({ history: {} }),
+  useHostMetricsStore: (select: (state: { history: Map<string, never[]> }) => unknown) =>
+    select({ history: new Map() }),
 }));
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (select: (state: { openCloneRepoDialog: () => void }) => unknown) =>
