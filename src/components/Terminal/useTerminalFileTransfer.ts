@@ -242,11 +242,11 @@ export function useTerminalFileTransfer(
       onInput?.(text);
     };
 
-    // A gesture that lands while an earlier one is still pacing its images
-    // queues behind it, so the two cannot interleave their bytes. With nothing
-    // pacing, a write still goes out synchronously as it always has.
+    // A gesture that lands while earlier ones are still queued or pacing goes
+    // behind them, so no two can interleave or reorder their bytes. With
+    // nothing pending, a write still goes out synchronously as it always has.
     let writeChain: Promise<void> = Promise.resolve();
-    let pacingCount = 0;
+    let pendingGestures = 0;
 
     /**
      * Whether images go to this terminal as attachments (#12792): the agent
@@ -262,6 +262,9 @@ export function useTerminalFileTransfer(
       }
       return terminalInstanceService.get(terminalId)?.terminal.modes.bracketedPasteMode === true;
     };
+
+    const joinText = (segments: readonly ImageInputSegment[]): string =>
+      segments.map((segment) => (segment.kind === "text" ? segment.text : segment.path)).join("");
 
     /**
      * Build what one gesture writes: each file in order, separated by a space
@@ -295,36 +298,34 @@ export function useTerminalFileTransfer(
      * the CLIs turn into an attachment — spaced so the CLI neither drops a
      * same-tick write nor folds the pastes back into one.
      */
-    const writeSegments = (segments: readonly ImageInputSegment[], isAgent: boolean) => {
-      const lockEpoch = lockEpochRef.current;
+    const writeSegments = (
+      segments: readonly ImageInputSegment[],
+      isAgent: boolean,
+      lockEpoch: number = lockEpochRef.current
+    ) => {
+      const hasImage = segments.some((segment) => segment.kind === "image");
+      if (!hasImage && pendingGestures === 0) {
+        writeToTerminal(joinText(segments), isAgent);
+        return;
+      }
       const isStale = () =>
         cancelled ||
         !isMountedRef.current ||
         isInputLockedRef.current ||
         lockEpochRef.current !== lockEpoch;
-      // Anything queued behind a paced gesture waits one gap first, so its
-      // first write cannot land in the same tick as the previous gesture's last.
-      const queued = pacingCount > 0;
+      // Anything queued behind another gesture waits one gap first, so its
+      // first write cannot land in the same tick as that gesture's last.
+      const queued = pendingGestures > 0;
       const gap = () => new Promise((resolve) => setTimeout(resolve, IMAGE_PASTE_GAP_MS));
 
-      if (!segments.some((segment) => segment.kind === "image")) {
-        const text = segments
-          .map((segment) => (segment.kind === "text" ? segment.text : ""))
-          .join("");
-        if (!queued) {
-          writeToTerminal(text, isAgent);
-        } else {
-          writeChain = writeChain.then(async () => {
-            await gap();
-            if (isStale()) return;
-            writeToTerminal(text, isAgent);
-          });
-        }
-        return;
-      }
-      pacingCount++;
+      pendingGestures++;
       writeChain = writeChain
         .then(async () => {
+          if (!hasImage) {
+            await gap();
+            if (!isStale()) writeToTerminal(joinText(segments), isAgent);
+            return;
+          }
           for (let index = 0; index < segments.length; index++) {
             if (index > 0 || queued) await gap();
             if (isStale()) return;
@@ -336,7 +337,7 @@ export function useTerminalFileTransfer(
           }
         })
         .finally(() => {
-          pacingCount--;
+          pendingGestures--;
         });
     };
 
@@ -347,15 +348,19 @@ export function useTerminalFileTransfer(
       // Prevent xterm from processing the image paste as text
       event.preventDefault();
       event.stopPropagation();
+      // Taken before the save: a lock that comes and goes while the image is
+      // written to disk still cancels this paste.
+      const lockEpoch = lockEpochRef.current;
 
       try {
         const { filePath } = await window.electron.clipboard.saveImage();
         // Re-check after the await: the pane may have unmounted or locked, and
         // the running agent may have changed, while the image was being saved.
         if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
+        if (lockEpochRef.current !== lockEpoch) return;
         if (!filePath || !isDeliverablePath(filePath)) return;
         const isAgent = isAgentTerminal();
-        writeSegments(buildSegments([filePath], isAgent), isAgent);
+        writeSegments(buildSegments([filePath], isAgent), isAgent, lockEpoch);
       } catch {
         // Empty clipboard, IPC failure during window close, etc. — nothing to do.
       }

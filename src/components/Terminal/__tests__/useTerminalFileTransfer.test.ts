@@ -918,6 +918,28 @@ describe("useTerminalFileTransfer hook", () => {
       expect(payloads()[2]).toBe(formatWithBracketedPaste("/Users/test/b.png"));
     });
 
+    it("keeps three queued drops in order across a plain-file drop", async () => {
+      renderFileTransferHook({ detectedAgentId: "claude" });
+      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      dropFiles([fileAt("b.ts", "/Users/test/b.ts")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      // a.png has finished pacing; b.ts is still waiting its gap.
+      dropFiles([fileAt("c.png", "/Users/test/c.png")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(payloads()).toEqual([
+        formatWithBracketedPaste("/Users/test/a.png"),
+        formatWithBracketedPaste(" "),
+        formatWithBracketedPaste(`${formatAtFileToken("/Users/test/b.ts")} `),
+        formatWithBracketedPaste("/Users/test/c.png"),
+        formatWithBracketedPaste(" "),
+      ]);
+    });
+
     it("drops the rest of a paced drop once input locks, even if it unlocks again", async () => {
       const { rerender } = renderFileTransferHook({ detectedAgentId: "claude" });
       dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);

@@ -54,6 +54,11 @@ async function isRegularFile(filePath: string): Promise<boolean> {
   }
 }
 
+interface AgentOwner {
+  agentId: string | undefined;
+  incarnation: number;
+}
+
 export interface TerminalInputControllerHost {
   readonly id: string;
   readonly terminalInfo: TerminalInfo;
@@ -429,16 +434,23 @@ export class TerminalInputController {
     // baseline and the recipient are taken before it, so input or an agent
     // exit during the stat or between pastes is seen rather than absorbed.
     const carriesImages = ctx?.imagePaths !== undefined && ctx.imagePaths.length > 0;
-    const agentAtStart = terminal.detectedAgentId;
+    const owner = this.captureOwner();
     const typedBeforeBody = terminal.lastTypedInputAt;
     const imageSegments = carriesImages
       ? await this.resolveImageSegments(body, ctx?.imagePaths ?? [])
       : null;
-    if (carriesImages && !this.isStillOwnedBy(generation, agentAtStart)) return;
+    if (carriesImages) {
+      if (!this.isStillOwnedBy(generation, owner)) return;
+      // A guarded line whose composer was typed into while the stat ran is
+      // abandoned before any of it is written, as it would be before its Enter.
+      if (ctx?.abandonEnterOnInput === true && terminal.lastTypedInputAt !== typedBeforeBody) {
+        return;
+      }
+    }
 
     let bodyWritten: boolean;
     if (imageSegments) {
-      const outcome = await this.writeImageSegments(imageSegments, generation, agentAtStart);
+      const outcome = await this.writeImageSegments(imageSegments, generation, owner);
       if (outcome === "abandoned") return;
       bodyWritten = outcome === "written";
     } else if (useBracketedPaste && supportsBracketedPaste(terminal)) {
@@ -460,7 +472,7 @@ export class TerminalInputController {
     if (!bodyWritten) {
       return;
     }
-    const typedAtBodyWrite = imageSegments ? typedBeforeBody : terminal.lastTypedInputAt;
+    const typedAtBodyWrite = carriesImages ? typedBeforeBody : terminal.lastTypedInputAt;
 
     if (this.isInputLocked || this.inputGeneration !== generation) {
       return;
@@ -499,7 +511,7 @@ export class TerminalInputController {
       return;
     }
 
-    if (imageSegments && this.host.terminalInfo.detectedAgentId !== agentAtStart) {
+    if (carriesImages && !this.isStillOwnedBy(generation, owner)) {
       return;
     }
 
@@ -549,7 +561,7 @@ export class TerminalInputController {
   private async writeImageSegments(
     segments: readonly ImageInputSegment[],
     generation: number,
-    agentAtStart: string | undefined
+    owner: AgentOwner
   ): Promise<"written" | "declined" | "abandoned"> {
     const gapMs = getSubmitEnterDelay(this.host.terminalInfo);
     let first = true;
@@ -558,7 +570,7 @@ export class TerminalInputController {
       if (payload.length === 0) continue;
       if (!first) {
         await delay(gapMs);
-        if (!this.isStillOwnedBy(generation, agentAtStart)) return "abandoned";
+        if (!this.isStillOwnedBy(generation, owner)) return "abandoned";
       }
       if (!this.writeStrict(formatWithBracketedPaste(payload))) {
         return first ? "declined" : "abandoned";
@@ -574,11 +586,20 @@ export class TerminalInputController {
    * addressed to still owns the terminal. An agent that exited into its shell
    * mid-sequence must not receive the rest of the pastes, let alone the Enter.
    */
-  private isStillOwnedBy(generation: number, agentAtStart: string | undefined): boolean {
+  private isStillOwnedBy(generation: number, owner: AgentOwner): boolean {
     const terminal = this.host.terminalInfo;
     if (!terminal.ptyProcess || terminal.isExited) return false;
     if (this.isInputLocked || this.inputGeneration !== generation) return false;
-    return terminal.detectedAgentId === agentAtStart;
+    // The incarnation as well as the id: the same agent relaunched in this pty
+    // is a new session that did not ask for the rest of these pastes.
+    return (
+      terminal.detectedAgentId === owner.agentId && terminal.agentIncarnation === owner.incarnation
+    );
+  }
+
+  private captureOwner(): AgentOwner {
+    const terminal = this.host.terminalInfo;
+    return { agentId: terminal.detectedAgentId, incarnation: terminal.agentIncarnation };
   }
 
   // Side-effects shared by both PTY write paths when xterm forwards a CSI I/O

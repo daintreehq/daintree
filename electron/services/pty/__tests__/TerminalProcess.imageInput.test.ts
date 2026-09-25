@@ -225,6 +225,34 @@ describe("TerminalProcess.submit with image paths (#12792)", () => {
     expect(writes()).toEqual([paste(shot)]);
   });
 
+  it("stops once the same agent is relaunched mid-sequence", async () => {
+    const terminal = createAgentTerminal("claude");
+    const info = (terminal as unknown as { terminalInfo: { agentIncarnation: number } })
+      .terminalInfo;
+
+    terminal.submit(`${shot} ${other}`, undefined, undefined, undefined, [shot, other]);
+    await vi.advanceTimersByTimeAsync(0);
+    info.agentIncarnation += 1;
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writes()).toEqual([paste(shot)]);
+  });
+
+  it("never submits the text fallback once the agent exits during the stat", async () => {
+    const terminal = createAgentTerminal("claude");
+    const stuck = "/Volumes/dead/shot.png";
+    hangingFiles.add(stuck);
+
+    terminal.submit(`see ${stuck}`, undefined, undefined, undefined, [stuck]);
+    await vi.advanceTimersByTimeAsync(500);
+    (
+      terminal as unknown as { terminalInfo: { detectedAgentId: string | undefined } }
+    ).terminalInfo.detectedAgentId = undefined;
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writes()).toEqual([]);
+  });
+
   it("submits an image-only body as the paste and one Enter", async () => {
     const terminal = createAgentTerminal("codex");
 
