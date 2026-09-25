@@ -109,6 +109,7 @@ vi.mock("../ProcessMemoryMonitor.js", () => ({
   getBlinkSamples: () => renderer.blink,
   getEluSamples: () => renderer.elu,
   getTrendSnapshot: () => [],
+  getSessionPeakSnapshot: () => [],
 }));
 
 vi.mock("../HibernationService.js", () => ({
@@ -653,7 +654,7 @@ describe("DiagnosticsCollector adversarial", () => {
         blink: Array<{ webContentsId: number; allocatedKb: number; totalKb?: number }>;
         elu: Array<{ webContentsId: number; ratio: number }>;
       };
-      memoryTrends: { processes: unknown };
+      memoryTrends: { processes: unknown; sessionPeaks: unknown };
       resourceState: {
         hibernation: { isRunning: boolean };
         resourceProfile: { profile: string };
@@ -683,6 +684,7 @@ describe("DiagnosticsCollector adversarial", () => {
     // memoryTrends — wiring/shape only; EMA content is covered by the
     // ProcessMemoryMonitor unit tests (the real getTrendSnapshot runs here).
     expect(Array.isArray(payload.memoryTrends.processes)).toBe(true);
+    expect(Array.isArray(payload.memoryTrends.sessionPeaks)).toBe(true);
 
     // resourceState — both singletons surfaced.
     expect(payload.resourceState.hibernation.isRunning).toBe(true);
@@ -905,13 +907,14 @@ describe("DiagnosticsCollector adversarial", () => {
 
     const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
       projectViews: unknown[];
-      memoryTrends: { processes: unknown };
+      memoryTrends: { processes: unknown; sessionPeaks: unknown };
       resourceState: { resourceProfile: unknown; hibernation: { isRunning: boolean } };
       counts: { windows: number; openProjects: number; terminals: { total: number } };
     };
 
     expect(payload.projectViews).toEqual([]);
     expect(Array.isArray(payload.memoryTrends.processes)).toBe(true);
+    expect(Array.isArray(payload.memoryTrends.sessionPeaks)).toBe(true);
     expect(payload.resourceState.resourceProfile).toBeNull();
     expect(payload.resourceState.hibernation.isRunning).toBe(false);
     expect(payload.counts.windows).toBe(0);

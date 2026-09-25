@@ -614,11 +614,12 @@ async function collectRendererMemory() {
 // Bounded rolling main/utility memory trend — the EMA history the monitor
 // already maintains, capped at BUCKET_WINDOW entries per pid. PID-keyed:
 // Electron's ProcessMetric carries no webContentsId, so trends can't be joined
-// to a renderer directly.
+// to a renderer directly. `sessionPeaks` is the per-type high-water mark, which
+// outlives the pids that set it.
 async function collectMemoryTrends() {
   try {
-    const { getTrendSnapshot } = await import("./ProcessMemoryMonitor.js");
-    return { processes: getTrendSnapshot() };
+    const { getTrendSnapshot, getSessionPeakSnapshot } = await import("./ProcessMemoryMonitor.js");
+    return { processes: getTrendSnapshot(), sessionPeaks: getSessionPeakSnapshot() };
   } catch {
     return { error: "Failed to collect memory trends" };
   }
