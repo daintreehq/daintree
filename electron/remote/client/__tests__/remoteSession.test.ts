@@ -567,6 +567,9 @@ describe("remote session wiring", () => {
     expect(opened).toEqual([VIEW_A]);
     expect(closed).toEqual([{ hostId: HOST_ID, webContentsId: VIEW_B, endpointId: "view-12" }]);
     await waitFor(() => getEndpointRegistry().getRemote().length === 1);
+    // The host starts over on a fresh session and can't say what the view
+    // missed, so the Shell tells the reopened view itself, once.
+    expect(h.sink.resyncs).toEqual([{ webContentsId: VIEW_A, reason: "reconnected" }]);
 
     h.sink.gone(VIEW_A);
     expect(closed.at(-1)).toEqual({

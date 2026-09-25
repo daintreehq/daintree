@@ -28,6 +28,7 @@ import { HOST_MEMORY_PAUSE_COPY } from "@/lib/hostMemoryPauseCopy";
 import { getCloudSyncWarningCopy } from "@/utils/cloudSyncWarningCopy";
 import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
 import { useGlobalBannerDismissalStore } from "@/store/globalBannerDismissalStore";
+import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import type { PrerequisiteCheckResult } from "@shared/types";
 
 function missingGit(overrides: Partial<PrerequisiteCheckResult> = {}): PrerequisiteCheckResult {
@@ -135,6 +136,30 @@ describe("GlobalBannerCoordinator", () => {
   it("renders nothing when no recovery state is active", () => {
     const { container } = render(<GlobalBannerCoordinator />);
     expect(container.firstChild).toBeNull();
+  });
+
+  it("puts a remote window's lost host link above a backend crash", () => {
+    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: null });
+    useHostConnectionStore.setState({
+      hostId: "studio-01",
+      hostName: "studio-01",
+      everConnected: true,
+      connection: { status: "unreachable", lastSeenAt: null, detail: null },
+    });
+    render(<GlobalBannerCoordinator />);
+    expect(screen.getByText("studio-01 is unreachable")).toBeTruthy();
+    expect(screen.queryByText("Terminal service crashed")).toBeNull();
+    useHostConnectionStore.getState().reset();
+  });
+
+  it("never shows a host banner in a window that runs on this machine", () => {
+    useHostConnectionStore.setState({
+      hostId: null,
+      connection: { status: "unreachable", lastSeenAt: null, detail: null },
+    });
+    const { container } = render(<GlobalBannerCoordinator />);
+    expect(container.firstChild).toBeNull();
+    useHostConnectionStore.getState().reset();
   });
 
   it("leaves global chrome empty when project plugins need a trust decision", () => {
