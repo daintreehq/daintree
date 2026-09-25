@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   isAbsolute,
   isPathInside,
+  isPathStrictlyInside,
   normalize,
   basename,
   dirname,
@@ -396,5 +397,33 @@ describe("resolveWorktreePathScope", () => {
   // normalize("") is ".", which would otherwise match unpredictably.
   it("skips a worktree with an empty path", () => {
     expect(resolveWorktreePathScope("/repo/src/a.ts", [{ id: "wt-blank", path: "" }])).toBeNull();
+  });
+});
+
+describe("isPathStrictlyInside", () => {
+  const sensitive = { caseInsensitive: false };
+  const insensitive = { caseInsensitive: true };
+
+  it("is true only strictly below the parent", () => {
+    expect(isPathStrictlyInside("/repo/wt/nested", "/repo/wt", sensitive)).toBe(true);
+    expect(isPathStrictlyInside("/repo/wt", "/repo/wt", sensitive)).toBe(false);
+    expect(isPathStrictlyInside("/repo/wt/", "/repo/wt", sensitive)).toBe(false);
+    expect(isPathStrictlyInside("/repo/wt", "/repo/wt/nested", sensitive)).toBe(false);
+  });
+
+  it("does not treat a sibling whose name extends the parent's as nested", () => {
+    expect(isPathStrictlyInside("/repo/wt-other/x", "/repo/wt", insensitive)).toBe(false);
+  });
+
+  it("folds separators and case only when asked to", () => {
+    expect(isPathStrictlyInside("c:/REPO/wt/nested", "C:\\repo\\WT", insensitive)).toBe(true);
+    expect(isPathStrictlyInside("C:\\repo\\WT", "c:/REPO/wt", insensitive)).toBe(false);
+    expect(isPathStrictlyInside("/Repo/wt/nested", "/repo/wt", sensitive)).toBe(false);
+  });
+
+  it("matches NFD and NFC spellings of the same name", () => {
+    const nfd = "/repo/cafe\u0301/nested";
+    const nfc = "/repo/caf\u00e9";
+    expect(isPathStrictlyInside(nfd, nfc, sensitive)).toBe(true);
   });
 });

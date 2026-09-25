@@ -5,6 +5,9 @@ import { notify } from "@/lib/notify";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isPathStrictlyInside } from "@shared/utils/path";
+import { nestedWorktreeDeleteRefusal } from "@/lib/nestedWorktreeDelete";
+import { isMac, isWindows } from "@/lib/platform";
 import {
   buildWorktreeDeletePreview,
   fetchWorktreeTeardownPreview,
@@ -466,52 +469,104 @@ export function useWorktreeBulkRemove({
     const total = targets.length;
 
     try {
+      const removeOne = (target: BulkRemoveTarget) =>
+        queue.add<BulkRemoveResult>(async () => {
+          try {
+            // Stop dev preview BEFORE `git worktree remove` (#9084). On
+            // Windows the dev server's directory lock would otherwise block
+            // the removal outright. A stop failure is folded into the
+            // partial-failure path so the bulk run can continue with other
+            // targets. Call `stopByWorktree` unconditionally — it filters
+            // every session itself and no-ops cleanly when none match, so
+            // it survives the case where `getByWorktree` only reports one
+            // panel's session of several sharing the worktreeId.
+            const existing = await withDeadline(
+              window.electron.devPreview.getByWorktree({ worktreeId: target.id }),
+              DEV_PREVIEW_STEP_TIMEOUT_MS,
+              "Timed out checking for a running dev server"
+            );
+            const hadDevPreview = existing !== null;
+            await withDeadline(
+              window.electron.devPreview.stopByWorktree({ worktreeId: target.id }),
+              DEV_PREVIEW_STEP_TIMEOUT_MS,
+              "Timed out stopping the dev server"
+            );
+            await worktreeClient.delete(target.id, { force: true, deleteBranch: false });
+            return {
+              ok: true,
+              name: target.branch ?? target.name,
+              reason: null,
+              stoppedDevServer: hadDevPreview,
+            };
+          } catch (err) {
+            const reason = formatErrorMessage(err, "Removal failed");
+            logError(`Bulk remove failed for ${target.id}`, err);
+            return {
+              ok: false,
+              name: target.branch ?? target.name,
+              reason,
+              stoppedDevServer: false,
+            };
+          }
+        });
+
+      // Removing a worktree deletes everything under its directory, and the
+      // host refuses while a registered worktree is still nested inside. So a
+      // selected nested worktree has to be gone before its ancestor starts,
+      // and an ancestor whose nested worktree failed is kept. The wait happens
+      // BEFORE `queue.add`, never inside a task: an ancestor parked in a queue
+      // slot could fill every slot while its descendants wait behind it.
+      //
+      // A nested worktree outside the run — unselected, or excluded by its
+      // preview — will still be there when the ancestor's turn comes, so the
+      // host would refuse it. Refuse here instead, before its dev server stops.
+      const caseInsensitive = isMac() || isWindows();
+      const targetIds = new Set(targets.map((target) => target.id));
+      const outsideRun = [...worktreeMap.values()].filter(
+        (worktree) => !targetIds.has(worktree.id)
+      );
+      const runs = new Map<string, Promise<BulkRemoveResult>>();
+      const run = (target: BulkRemoveTarget): Promise<BulkRemoveResult> => {
+        const existing = runs.get(target.id);
+        if (existing) return existing;
+        const outsideRefusal = nestedWorktreeDeleteRefusal(target.path, outsideRun);
+        if (outsideRefusal) {
+          const refused = Promise.resolve<BulkRemoveResult>({
+            ok: false,
+            name: target.branch ?? target.name,
+            reason: outsideRefusal,
+            stoppedDevServer: false,
+          });
+          runs.set(target.id, refused);
+          return refused;
+        }
+        const nested = targets.filter(
+          (other) =>
+            other.id !== target.id &&
+            isPathStrictlyInside(other.path, target.path, { caseInsensitive })
+        );
+        const pending = Promise.allSettled(nested.map(run)).then((nestedResults) => {
+          const kept = nested.filter((_, index) => {
+            const entry = nestedResults[index];
+            return entry?.status !== "fulfilled" || !entry.value.ok;
+          });
+          if (kept.length === 0) return removeOne(target);
+          const keptNames = kept.map((other) => other.branch ?? other.name).join(", ");
+          return {
+            ok: false,
+            name: target.branch ?? target.name,
+            reason: `Kept because ${keptNames} inside it wasn't removed`,
+            stoppedDevServer: false,
+          };
+        });
+        runs.set(target.id, pending);
+        return pending;
+      };
+
       // `allSettled` over individual `add()` calls, never `addAll`: that is
       // `Promise.all` underneath, so one rejected submission discards every
       // sibling's result.
-      const settled = await Promise.allSettled(
-        targets.map((target) =>
-          queue.add<BulkRemoveResult>(async () => {
-            try {
-              // Stop dev preview BEFORE `git worktree remove` (#9084). On
-              // Windows the dev server's directory lock would otherwise block
-              // the removal outright. A stop failure is folded into the
-              // partial-failure path so the bulk run can continue with other
-              // targets. Call `stopByWorktree` unconditionally — it filters
-              // every session itself and no-ops cleanly when none match, so
-              // it survives the case where `getByWorktree` only reports one
-              // panel's session of several sharing the worktreeId.
-              const existing = await withDeadline(
-                window.electron.devPreview.getByWorktree({ worktreeId: target.id }),
-                DEV_PREVIEW_STEP_TIMEOUT_MS,
-                "Timed out checking for a running dev server"
-              );
-              const hadDevPreview = existing !== null;
-              await withDeadline(
-                window.electron.devPreview.stopByWorktree({ worktreeId: target.id }),
-                DEV_PREVIEW_STEP_TIMEOUT_MS,
-                "Timed out stopping the dev server"
-              );
-              await worktreeClient.delete(target.id, { force: true, deleteBranch: false });
-              return {
-                ok: true,
-                name: target.branch ?? target.name,
-                reason: null,
-                stoppedDevServer: hadDevPreview,
-              };
-            } catch (err) {
-              const reason = formatErrorMessage(err, "Removal failed");
-              logError(`Bulk remove failed for ${target.id}`, err);
-              return {
-                ok: false,
-                name: target.branch ?? target.name,
-                reason,
-                stoppedDevServer: false,
-              };
-            }
-          })
-        )
-      );
+      const settled = await Promise.allSettled(targets.map(run));
 
       let successCount = 0;
       let stoppedDevServerCount = 0;
@@ -610,7 +665,7 @@ export function useWorktreeBulkRemove({
       resetSnapshot();
       clearSelection();
     }
-  }, [clearSelection, resetSnapshot]);
+  }, [clearSelection, resetSnapshot, worktreeMap]);
 
   const eligibleCount = displayTargets.filter(isBulkRemoveEligible).length;
   const hasRetryablePreviews = displayTargets.some(isBulkRemoveRetryable);

@@ -969,3 +969,58 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     expect(store.getState().worktrees.has("wt-1")).toBe(false);
   });
 });
+
+describe("createWorktreeStore — nested worktree refusal (#12789)", () => {
+  beforeEach(() => {
+    worktreeClientDeleteMock.mockReset().mockResolvedValue();
+    captureWorktreeTerminalSnapshotMock.mockReset().mockReturnValue([]);
+    closeTerminalsForWorktreeMock.mockReset().mockResolvedValue();
+    devPreviewGetByWorktreeMock.mockReset().mockResolvedValue(null);
+    devPreviewStopByWorktreeMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function nested(id: string, path: string, isPrunable = false) {
+    return Object.assign(makeSnapshot(id), { path, isPrunable });
+  }
+
+  it("refuses before closing terminals or stopping the dev server, as a permanent failure", async () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applySnapshot(
+        [nested("parent", "/repo/parent"), nested("child", "/repo/parent/child")],
+        nextV()
+      );
+
+    store.getState().startDelete("parent", { closeTerminals: true, force: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(closeTerminalsForWorktreeMock).not.toHaveBeenCalled();
+    expect(devPreviewStopByWorktreeMock).not.toHaveBeenCalled();
+    expect(worktreeClientDeleteMock).not.toHaveBeenCalled();
+    expect(store.getState().deleteErrors.get("parent")).toContain("/repo/parent/child");
+    const entry = [...store.getState().mutationOutbox.values()][0];
+    expect(entry?.status).toBe("failed");
+  });
+
+  it("does not let a prunable nested entry block the delete", async () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applySnapshot(
+        [nested("parent", "/repo/parent"), nested("child", "/repo/parent/child", true)],
+        nextV()
+      );
+
+    store.getState().startDelete("parent", { force: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(worktreeClientDeleteMock).toHaveBeenCalledWith("parent", expect.anything());
+  });
+});
