@@ -31,7 +31,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
-import type { AgentModelConfig } from "@shared/config/agentRegistry";
+import { resolveAssistantModelId, type AgentModelConfig } from "@shared/config/agentRegistry";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import type {
   HelpAssistantIdleHibernateMinutes,
@@ -121,7 +121,7 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   tier: "action",
   bypassPermissions: false,
   auditRetention: 7,
-  modelId: "",
+  modelId: null,
   customArgs: "",
   idleHibernateMinutes: 5,
   debugLogging: false,
@@ -437,6 +437,15 @@ export function DaintreeAssistantSettingsTab() {
     };
   }, [preferredAgentId, modelCatalogAttempt]);
 
+  // Nothing saved means the agent's recommended model, shown as that model —
+  // or as the CLI default when the installed CLI doesn't offer it, matching
+  // what the launch path resolves.
+  const savedModelId = settings.modelId ?? null;
+  const catalogIds = useMemo(() => resolvedModels?.map((m) => m.id), [resolvedModels]);
+  const effectiveModelId = preferredAgentId
+    ? resolveAssistantModelId(preferredAgentId, savedModelId, catalogIds)
+    : (savedModelId ?? "");
+
   const modelOptions = useMemo(() => {
     const models = resolvedModels ?? [];
     const options = [
@@ -444,14 +453,15 @@ export function DaintreeAssistantSettingsTab() {
       ...models.map((m) => ({ value: m.id, label: m.name })),
     ];
     // A persisted model that's no longer in the catalog (custom CLI, renamed
-    // model) still needs a matching option or Radix shows a blank trigger.
-    if (settings.modelId && !models.some((m) => m.id === settings.modelId)) {
-      options.push({ value: settings.modelId, label: settings.modelId });
+    // model), or the recommendation while the catalog read has failed, still
+    // needs a matching option or Radix shows a blank trigger.
+    if (effectiveModelId && !models.some((m) => m.id === effectiveModelId)) {
+      options.push({ value: effectiveModelId, label: effectiveModelId });
     }
     return options;
-  }, [resolvedModels, settings.modelId]);
+  }, [resolvedModels, effectiveModelId]);
 
-  const modelSelectValue = settings.modelId || MODEL_DEFAULT_SENTINEL;
+  const modelSelectValue = effectiveModelId || MODEL_DEFAULT_SENTINEL;
   const showModelPicker =
     Boolean(resolvedModels && resolvedModels.length > 0) ||
     (modelCatalogFailed && Boolean(preferredAgentId));
@@ -826,12 +836,18 @@ export function DaintreeAssistantSettingsTab() {
   const handleAgentChange = (value: string) => {
     setPreferredAgent(value || null);
     // Model IDs are agent-specific — a Claude model passed to Gemini's --model
-    // would break the launch — so clear any stale selection on agent change.
-    if (settings.modelId) void persist({ modelId: "" });
+    // would break the launch — so drop back to the new agent's recommended model.
+    if (savedModelId !== null) void persist({ modelId: null });
   };
 
   const handleModelChange = (value: string) => {
-    void persist({ modelId: value === MODEL_DEFAULT_SENTINEL ? "" : value });
+    const modelId = value === MODEL_DEFAULT_SENTINEL ? "" : value;
+    // Picking the recommended model stores "no choice", so it keeps tracking
+    // the recommendation and doesn't read as modified.
+    const recommended = preferredAgentId
+      ? resolveAssistantModelId(preferredAgentId, null, catalogIds)
+      : null;
+    void persist({ modelId: modelId !== "" && modelId === recommended ? null : modelId });
   };
 
   const handleCustomArgsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1053,8 +1069,8 @@ export function DaintreeAssistantSettingsTab() {
               options={modelOptions}
               controlWidth="wide"
               disabled={settingsUnavailable}
-              isModified={settings.modelId !== DEFAULT_SETTINGS.modelId}
-              onReset={() => handleModelChange(MODEL_DEFAULT_SENTINEL)}
+              isModified={savedModelId !== DEFAULT_SETTINGS.modelId}
+              onReset={() => void persist({ modelId: DEFAULT_SETTINGS.modelId })}
             />
           )}
         </SettingsGroup>

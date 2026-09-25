@@ -20,6 +20,7 @@ import {
 import { logError } from "@/utils/logger";
 import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
+import { loadCustomLaunchFlags } from "@/lib/assistantLaunchFlags";
 import { openTour } from "@/components/Tour/tourEvents";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { getAssistantSupportedAgentIds } from "@shared/config/agentRegistry";
@@ -263,6 +264,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         DAINTREE_PROJECT_ID: workspace.id,
       };
 
+      const agentLaunchFlags = await loadCustomLaunchFlags(agentId);
       const result = await actionService.dispatch<{ terminalId: string | null }>(
         "agent.launch",
         {
@@ -273,6 +275,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           excludeFromPersistence: true,
           removeOnExit: true,
           ...(env && { env }),
+          ...(agentLaunchFlags.length > 0 && { agentLaunchFlags }),
         },
         { source: "user" }
       );

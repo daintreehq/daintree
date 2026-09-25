@@ -36,7 +36,7 @@ const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   tier: "action",
   bypassPermissions: false,
   auditRetention: 7,
-  modelId: "",
+  modelId: null,
   customArgs: "",
   idleHibernateMinutes: 5,
   debugLogging: false,
@@ -80,14 +80,16 @@ function sanitizeCustomArgs(value: unknown): string | undefined {
   return collapsed.slice(0, CUSTOM_ARGS_MAX_LEN);
 }
 
-// A valid model ID is a single shell-safe token. The empty string is valid and
-// means "use the CLI default" (no `--model` injected). Anything with internal
+// A valid model ID is a single shell-safe token. `null` means "the agent's
+// recommended model" and the empty string means "use the CLI default" (no
+// `--model` injected). Anything with internal
 // whitespace, control characters, a leading `-` (would inject a bare flag), or
 // shell metacharacters is rejected outright rather than coerced — the picker
 // only ever emits clean IDs, so a dirty value is corruption, not a near-miss to
 // salvage. Whitespace/control chars are checked, not stripped, so a tab or
 // newline can't be silently collapsed into a bogus token.
-function sanitizeModelId(value: unknown): string | undefined {
+function sanitizeModelId(value: unknown): string | null | undefined {
+  if (value === null) return null;
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   if (trimmed === "") return "";

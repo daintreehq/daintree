@@ -26,6 +26,7 @@ import { migration026 } from "./026-remove-full-tool-surface.js";
 import { migration027 } from "./027-upgrade-voice-transcription-model.js";
 import { migration028 } from "./028-quiet-sound-and-flash-defaults.js";
 import { migration029 } from "./029-store-tour-progress-per-tour.js";
+import { migration030 } from "./030-assistant-recommended-model-default.js";
 
 export const migrations: Migration[] = [
   migration002,
@@ -56,4 +57,5 @@ export const migrations: Migration[] = [
   migration027,
   migration028,
   migration029,
+  migration030,
 ];

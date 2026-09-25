@@ -25,6 +25,7 @@ import {
 } from "@shared/types/agentSettings";
 import { getAgentSettingsEntrySnapshot } from "@/store/storeAccessors";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
+import { loadCustomLaunchFlags } from "@/lib/assistantLaunchFlags";
 import {
   type HelpSessionRef,
   provisionHelpSession,
@@ -287,25 +288,6 @@ export interface HelpLaunchOptions {
    * nothing-to-resume case — no user-facing launch error.
    */
   resumeOnly?: boolean;
-}
-
-// Exported for unit coverage of the model/customArgs flag composition.
-export async function loadCustomLaunchFlags(): Promise<string[]> {
-  try {
-    const settings = await window.electron.helpAssistant.getSettings();
-    const flags: string[] = [];
-    // The model picker injects `--model <id>` first so a `--model` typed into
-    // custom args still wins (CLIs are last-flag-wins on repeated `--model`),
-    // keeping custom args the advanced override.
-    const modelId = settings.modelId?.trim();
-    if (modelId) flags.push("--model", modelId);
-    const raw = settings.customArgs?.trim();
-    if (raw) flags.push(...raw.split(/\s+/).filter(Boolean));
-    return flags;
-  } catch (err) {
-    logError("Failed to load helpAssistant launch flags", err);
-    return [];
-  }
 }
 
 // Help sessions keep their own bypass and model settings, but a CLI's
@@ -1161,7 +1143,10 @@ export class HelpSessionController {
     folderPath: string,
     launchProject: HelpProjectRef
   ): Promise<ResumeSpawnResult | null> {
-    const customLaunchFlags = withDecorationChoice(await loadCustomLaunchFlags(), launchAgentId);
+    const customLaunchFlags = withDecorationChoice(
+      await loadCustomLaunchFlags(launchAgentId),
+      launchAgentId
+    );
     const flags = customLaunchFlags.length > 0 ? customLaunchFlags : undefined;
     const hasSpecificSessionId = hibernated.sessionId.length > 0;
     // "Resume the latest session in this cwd" is only meaningful when this lane
@@ -1517,7 +1502,7 @@ export class HelpSessionController {
       // generation already applies the decorations choice — adding it here
       // too would double the pair. Only the resume path (which builds its own
       // command) needs `withDecorationChoice`.
-      const customLaunchFlags = await loadCustomLaunchFlags();
+      const customLaunchFlags = await loadCustomLaunchFlags(launchAgentId);
       if (gen !== this._launchGen) {
         this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
         return;

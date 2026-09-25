@@ -45,6 +45,7 @@ const {
     tier: "action" as const,
     bypassPermissions: false,
     auditRetention: 7,
+    modelId: "",
     customArgs: "",
   }),
   mockGetAgentVersion: vi.fn().mockResolvedValue({
@@ -545,6 +546,7 @@ function resetState() {
     tier: "action" as const,
     bypassPermissions: false,
     auditRetention: 7,
+    modelId: "",
     customArgs: "",
   });
   mockGetAgentVersion.mockReset();
@@ -970,6 +972,7 @@ describe("HelpPanel — + New session destructive reset", () => {
       tier: "action" as const,
       bypassPermissions: false,
       auditRetention: 7,
+      modelId: "",
       customArgs: "--model sonnet",
     });
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "fresh-term" } });

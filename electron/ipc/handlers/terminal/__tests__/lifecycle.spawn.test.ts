@@ -1496,14 +1496,14 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
-  // Workbench on purpose (#11907): auto-approve rides the bypassPermissions
-  // snapshot, never the MCP capability tier. The assistant is no longer pinned
-  // to `system`, so a low-tier session must still inject the env var.
-  it("injects DAINTREE_ASSISTANT_AUTO_APPROVE=1 when the Daintree Assistant launches with bypassPermissions on at the workbench tier", async () => {
+  // The Daintree Assistant is retired as a backend (deprecated tier), so even
+  // an installed CLI carrying a valid bearer never gets the assistant env.
+  it("treats a retired Daintree Assistant launch as a plain spawn, even with bypass and debug on", async () => {
     mockValidateToken.mockImplementation((token) =>
       token === "assistant-bypass" ? "workbench" : false
     );
     mockGetBypassPermissions.mockImplementation((token) => token === "assistant-bypass");
+    mockGetDebugLogging.mockImplementation((token) => token === "assistant-bypass");
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -1522,9 +1522,8 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     );
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.env?.DAINTREE_ASSISTANT_AUTO_APPROVE).toBe("1");
-    // The assistant is not Claude Code — no CLI permission flag is appended.
-    expect(spawnArgs.command).not.toContain("--dangerously-skip-permissions");
+    expect(spawnArgs.env?.DAINTREE_ASSISTANT_AUTO_APPROVE).toBeUndefined();
+    expect(spawnArgs.env?.DAINTREE_ASSISTANT_DEBUG_LOG).toBeUndefined();
   });
 
   it("does NOT inject DAINTREE_ASSISTANT_AUTO_APPROVE when the assistant launches with bypassPermissions off", async () => {
@@ -1551,32 +1550,6 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.env?.DAINTREE_ASSISTANT_AUTO_APPROVE).toBeUndefined();
-  });
-
-  it("injects DAINTREE_ASSISTANT_DEBUG_LOG=1 when the Daintree Assistant launches with debugLogging on", async () => {
-    mockValidateToken.mockImplementation((token) =>
-      token === "assistant-debug" ? "action" : false
-    );
-    mockGetDebugLogging.mockImplementation((token) => token === "assistant-debug");
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "daintree-assistant",
-        launchAgentId: "daintree-assistant",
-        env: { DAINTREE_MCP_TOKEN: "assistant-debug" },
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.env?.DAINTREE_ASSISTANT_DEBUG_LOG).toBe("1");
   });
 
   it("does NOT inject DAINTREE_ASSISTANT_DEBUG_LOG when debugLogging is off", async () => {

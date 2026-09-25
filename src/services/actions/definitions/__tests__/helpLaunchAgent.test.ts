@@ -126,6 +126,12 @@ describe("help.launchAgent", () => {
             revokeSession: vi.fn().mockResolvedValue(undefined),
             markTerminal: vi.fn().mockResolvedValue(undefined),
           },
+          helpAssistant: {
+            getSettings: vi.fn().mockResolvedValue({ modelId: null, customArgs: "" }),
+          },
+          agentCapabilities: {
+            getResolvedModelList: vi.fn().mockResolvedValue(null),
+          },
         },
       },
       writable: true,
@@ -189,6 +195,42 @@ describe("help.launchAgent", () => {
       expect.objectContaining({ agentId: "codex", cwd: "/mock/help" }),
       { source: "user" }
     );
+  });
+
+  it("launches with the assistant's recommended model and custom args", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    (window.electron.helpAssistant.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
+      modelId: null,
+      customArgs: "--verbose",
+    });
+
+    await action.run({ agentId: "codex" }, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({
+        agentId: "codex",
+        agentLaunchFlags: ["--model", "gpt-6-luna", "--verbose"],
+      }),
+      { source: "user" }
+    );
+  });
+
+  it("adds no launch flags for an explicit CLI default", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    (window.electron.helpAssistant.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
+      modelId: "",
+      customArgs: "",
+    });
+
+    await action.run({ agentId: "claude" }, stubCtx);
+
+    const payload = mockDispatch.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("agentLaunchFlags");
   });
 
   it("uses the user's preferred default agent when available", async () => {

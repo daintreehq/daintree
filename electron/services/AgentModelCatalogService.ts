@@ -213,10 +213,13 @@ export class AgentModelCatalogService {
    * The IDs this agent's picker is allowed to offer, in display order, or
    * `null` to keep the plain union of every source.
    *
-   * A live CLI catalog is the strongest signal there is — it's the binary
-   * that will receive the `--model` flag answering for itself — so it wins
-   * outright. Failing that, an agent whose bundled list is marked
-   * {@link AgentConfig.curatedModels} answers for itself. Everyone else keeps
+   * An agent whose bundled list is marked {@link AgentConfig.curatedModels}
+   * answers for itself — the curated set is a product decision, and a live CLI
+   * catalog still lists previous generations we deliberately stopped offering.
+   * The live CLI catalog (the binary that will receive `--model`) then prunes
+   * curated IDs it doesn't know, unless it knows none of them, in which case
+   * an older CLI's own list is the only set that will launch. Without a
+   * curated list the live catalog wins outright; everyone else keeps
    * discovering new models from the remote catalog.
    */
   private authoritativeIds(
@@ -224,10 +227,16 @@ export class AgentModelCatalogService {
     bundled: AgentResolved,
     codex: AgentResolved | null
   ): string[] | null {
-    if (codex && codex.models.length > 0) return codex.models.map((m) => m.id);
+    const liveIds = codex && codex.models.length > 0 ? codex.models.map((m) => m.id) : null;
     const curated = getEffectiveAgentConfig(agentId)?.curatedModels === true;
-    if (curated && bundled.models.length > 0) return bundled.models.map((m) => m.id);
-    return null;
+    if (curated && bundled.models.length > 0) {
+      const curatedIds = bundled.models.map((m) => m.id);
+      if (!liveIds) return curatedIds;
+      const live = new Set(liveIds);
+      const known = curatedIds.filter((id) => live.has(id));
+      return known.length > 0 ? known : liveIds;
+    }
+    return liveIds;
   }
 
   private merge(

@@ -598,6 +598,12 @@ export interface AgentConfig {
    * `debug models --bundled`) still outranks a curated list.
    */
   curatedModels?: boolean;
+  /**
+   * Model the Daintree assistant launches this agent with until the user picks
+   * one (a `null` `HelpAssistantSettings.modelId`). Unset means the CLI's own
+   * default.
+   */
+  assistantDefaultModel?: string;
   supportsContextInjection: boolean;
   /**
    * Per-concern wiring shape for the Daintree assistant overlay. Replaces the
@@ -1162,6 +1168,27 @@ export function getAssistantWiredAgentIds(): string[] {
     }
   }
   return [...wired];
+}
+
+/**
+ * The model the assistant launches `agentId` with: the saved choice, or — when
+ * nothing is saved (`null`) — the agent's recommended assistant model. An
+ * empty string means the CLI's own default (no `--model` flag). Pass the
+ * resolved catalog's IDs when known: a recommendation the installed CLI
+ * doesn't offer (an older Codex without GPT-6) falls back to the CLI default
+ * rather than launching with a model it can't serve.
+ */
+export function resolveAssistantModelId(
+  agentId: string,
+  modelId: string | null,
+  availableIds?: readonly string[]
+): string {
+  if (modelId !== null) return modelId;
+  const recommended = getEffectiveAgentConfig(agentId)?.assistantDefaultModel ?? "";
+  if (recommended && availableIds && availableIds.length > 0) {
+    return availableIds.includes(recommended) ? recommended : "";
+  }
+  return recommended;
 }
 
 export function getAgentDisplayTitle(agentId: string, modelId?: string): string {

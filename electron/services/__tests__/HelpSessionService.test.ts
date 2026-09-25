@@ -398,8 +398,10 @@ describe("HelpSessionService", () => {
       });
     });
 
-    it("never reads the folder for an agent that reads nothing from its cwd", async () => {
-      await service.provisionSession({ ...provisionInput(), agentId: "daintree-assistant" });
+    it("never reads the folder for an agent the assistant refuses", async () => {
+      await expect(
+        service.provisionSession({ ...provisionInput(), agentId: "daintree-assistant" })
+      ).rejects.toThrow("not assistant-supported");
       expect(mockLoadAssistantUserConfig).not.toHaveBeenCalled();
     });
 
@@ -864,25 +866,13 @@ describe("HelpSessionService", () => {
     expect(settings.defaultMode).toBeUndefined();
   });
 
-  // #11907: agent identity must never widen the MCP surface. The Daintree
-  // Assistant used to be pinned to `system` here regardless of the stored
-  // setting, which made the Settings tier selector promise a narrower surface
-  // than it handed out. Assert the bearer too, not just the returned payload —
-  // `validateToken` is what the MCP auth layer actually reads.
-  it.each(["workbench", "action", "system"] as const)(
-    "provisions the Daintree Assistant at the stored %s tier",
-    async (tier) => {
-      mockStoreGet.mockReturnValue({ tier, bypassPermissions: false });
+  it("refuses to provision the retired Daintree Assistant even when installed", async () => {
+    mockStoreGet.mockReturnValue({ tier: "system", bypassPermissions: false });
 
-      const result = await service.provisionSession({
-        ...provisionInput(),
-        agentId: "daintree-assistant",
-      });
-      if (!result) throw new Error("expected result");
-      expect(result.tier).toBe(tier);
-      expect(service.validateToken(result.token)).toBe(tier);
-    }
-  );
+    await expect(
+      service.provisionSession({ ...provisionInput(), agentId: "daintree-assistant" })
+    ).rejects.toThrow('agentId "daintree-assistant" is not assistant-supported');
+  });
 
   it.each(["workbench", "action", "system"] as const)(
     "provisions a non-assistant help agent at the stored %s tier",
