@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
 
 vi.mock("electron", () => ({
   app: {
@@ -55,6 +55,8 @@ import {
   TIER1_REPRIEVE_MS,
   TIER1_MITIGATION_COOLDOWN_MS,
   MITIGATION_BACKOFF_MAX_MS,
+  KERNEL_PRESSURE_WINDOW,
+  KERNEL_WARN_RECLAIM_COOLDOWN_MS,
   recordBlinkSample,
   forgetBlinkSample,
   getBlinkSamples,
@@ -72,6 +74,7 @@ import {
   type MemoryPressureActions,
 } from "../ProcessMemoryMonitor.js";
 import type { TrimStateSummary } from "../../../shared/types/pty-host.js";
+import type { KernelPressureLevel } from "../SystemMemoryPressureMonitor.js";
 
 const EIGHT_GB = 8 * 1024 * 1024 * 1024;
 
@@ -894,6 +897,222 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
       expect(mockActions.evictCachedProjectViews).toHaveBeenCalledTimes(1);
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("kernel memory pressure (#12799)", () => {
+    let mockActions: MemoryPressureActions;
+    let level: KernelPressureLevel | null;
+    let readKernelPressureLevel: Mock<() => Promise<KernelPressureLevel | null>>;
+
+    beforeEach(() => {
+      level = 1;
+      readKernelPressureLevel = vi.fn(async () => {
+        if (level === null) throw new Error("spawn ENOMEM");
+        return level;
+      });
+      mockActions = {
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(0),
+        evictCachedProjectViews: vi.fn().mockResolvedValue(0),
+        releaseRendererMemory: vi.fn(),
+        readKernelPressureLevel,
+      };
+      // Neither footprint nor available memory reports anything: the kernel
+      // level is the only signal in play.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+    });
+
+    async function advancePolls(n: number): Promise<void> {
+      for (let i = 0; i < n; i++) {
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
+    }
+
+    const tier1Calls = () =>
+      vi.mocked(mockActions.destroyHiddenWebviews).mock.calls.filter(([tier]) => tier === 1).length;
+
+    /** Footprint pressure tier 1 visibly eases but does not clear. */
+    function arrangeReprievedFootprint(onTier1?: () => void): void {
+      let postTier1 = false;
+      mockGetAppMetrics.mockImplementation(() => {
+        const mb = postTier1 ? 330 : 400;
+        return [makeMetric("Browser", mb * 1024, 100)];
+      });
+      vi.mocked(mockActions.destroyHiddenWebviews).mockImplementation(async (tier) => {
+        if (tier === 1) {
+          postTier1 = true;
+          onTier1?.();
+        }
+        return 0;
+      });
+    }
+
+    it("runs the ladder on a critical level with healthy footprint and available memory", async () => {
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(1);
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+
+      await advancePolls(PRESSURE_COUNT_TIER2 - 1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
+      expect(mockActions.evictCachedProjectViews).toHaveBeenCalledTimes(1);
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+    });
+
+    it("pulls only the cheap lever on a warning, after warmup and on its own cooldown", async () => {
+      level = 2;
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS);
+      expect(mockActions.releaseRendererMemory).not.toHaveBeenCalled();
+      await advancePolls(1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(1);
+
+      const pollsPerCooldown = KERNEL_WARN_RECLAIM_COOLDOWN_MS / 30_000;
+      await advancePolls(pollsPerCooldown - 1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(1);
+      await advancePolls(1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(2);
+
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+      expect(mockActions.evictCachedProjectViews).not.toHaveBeenCalled();
+    });
+
+    it("does nothing on a normal level", async () => {
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 5);
+
+      expect(readKernelPressureLevel).toHaveBeenCalled();
+      expect(mockActions.releaseRendererMemory).not.toHaveBeenCalled();
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+    });
+
+    it("does not re-run tier 1 on every dip of a flapping level", async () => {
+      let reads = 0;
+      readKernelPressureLevel.mockImplementation(async () => (reads++ % 2 === 0 ? 4 : 1));
+      stop = startAppMetricsMonitor(mockActions);
+
+      // Stays inside tier 1's cooldown; without the window each normal reading
+      // would clear the episode and re-arm tier 1 for the next critical one.
+      await advancePolls(WARMUP_INTERVALS + 8);
+
+      expect(tier1Calls()).toBe(1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(1);
+    });
+
+    it("holds the episode through fewer lower readings than the window", async () => {
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + 1);
+      expect(tier1Calls()).toBe(1);
+
+      level = 1;
+      await advancePolls(KERNEL_PRESSURE_WINDOW - 1);
+      level = 4;
+      await advancePolls(2);
+
+      // Still inside tier 1's cooldown, so a second run could only come from
+      // the episode having cleared and re-armed it.
+      expect(tier1Calls()).toBe(1);
+    });
+
+    it("stands down once a full window of lower readings is in", async () => {
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + 1);
+      expect(tier1Calls()).toBe(1);
+
+      level = 1;
+      await advancePolls(KERNEL_PRESSURE_WINDOW + 1);
+      level = 4;
+      await advancePolls(2);
+
+      // Inside the cooldown too: the clear re-armed tier 1.
+      expect(tier1Calls()).toBe(2);
+    });
+
+    it("lets a failed read neither engage pressure nor count toward recovery", async () => {
+      level = null;
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + 2);
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+      expect(mockActions.releaseRendererMemory).not.toHaveBeenCalled();
+
+      level = 4;
+      await advancePolls(2);
+      expect(tier1Calls()).toBe(1);
+
+      // Every read fails from here, the post-settle recheck's included. The
+      // critical readings already in keep the count building to tier 2.
+      level = null;
+      await advancePolls(PRESSURE_COUNT_TIER2 - 1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
+    });
+
+    it("treats a reader that throws synchronously as a failed read, not a stuck one", async () => {
+      let throwSync = true;
+      readKernelPressureLevel.mockImplementation(() => {
+        if (throwSync) throw new Error("spawn EAGAIN");
+        return Promise.resolve(4);
+      });
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS);
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+
+      throwSync = false;
+      await advancePolls(2);
+      expect(tier1Calls()).toBe(1);
+    });
+
+    it("discards readings taken before a suspend", async () => {
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+      const sleepService = vi.mocked(getSystemSleepService)();
+      const onSuspend = vi.mocked(sleepService.onSuspend).mock.calls.at(-1)![0];
+      const onWake = vi.mocked(sleepService.onWake).mock.calls.at(-1)![0];
+      await advancePolls(WARMUP_INTERVALS - 1);
+
+      // Wakes into a healthy machine with the critical readings still young
+      // enough to count, had suspend kept them.
+      level = 1;
+      onSuspend();
+      onWake(0);
+      await advancePolls(3);
+
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+      expect(mockActions.releaseRendererMemory).not.toHaveBeenCalled();
+    });
+
+    it("rechecks the kernel after tier 1, overriding a reprieve its reclaim earned", async () => {
+      arrangeReprievedFootprint();
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
+    });
+
+    it("keeps the reprieve when the fresh recheck reads normal", async () => {
+      // Critical until tier 1 acts: the window still holds critical readings,
+      // so only the fresh post-settle read can know the kernel recovered.
+      arrangeReprievedFootprint(() => {
+        level = 1;
+      });
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+
+      expect(tier1Calls()).toBe(1);
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalledWith(2);
     });
   });
 

@@ -28,12 +28,14 @@ const DEGRADED: SystemMemoryPressurePayload = {
   swapUsedPercent: 91,
   swapKind: "swap",
   fseventsdRssMb: 36 * 1024,
+  kernelPressureLevel: null,
 };
 const NORMAL: SystemMemoryPressurePayload = {
   status: "normal",
   swapUsedPercent: null,
   swapKind: "swap",
   fseventsdRssMb: null,
+  kernelPressureLevel: null,
 };
 
 function load() {
@@ -70,6 +72,25 @@ describe("formatSystemMemoryPressureMessage", () => {
         false
       )
     ).toBe("Committed memory is at 91% of its limit. Restarting your computer clears this.");
+  });
+
+  it("states the kernel's reported level first, without the restart note when alone (#12799)", async () => {
+    const { formatSystemMemoryPressureMessage } = await load();
+
+    expect(
+      formatSystemMemoryPressureMessage(
+        { ...NORMAL, status: "degraded", kernelPressureLevel: "critical" },
+        true
+      )
+    ).toBe("macOS reports memory pressure at its critical level.");
+    expect(
+      formatSystemMemoryPressureMessage(
+        { ...DEGRADED, fseventsdRssMb: null, kernelPressureLevel: "warn" },
+        true
+      )
+    ).toBe(
+      "macOS reports memory pressure at its warning level and swap is 91% full. Restarting your Mac clears this."
+    );
   });
 
   it("returns null when no figure was over threshold", async () => {
