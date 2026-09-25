@@ -1,3 +1,4 @@
+import { HostConnectionBanner } from "./HostConnectionBanner";
 import { HostCrashBanner } from "./HostCrashBanner";
 import { WatchdogDisabledBanner } from "./WatchdogDisabledBanner";
 import { HostMemoryStallBanner } from "./HostMemoryStallBanner";
@@ -24,6 +25,8 @@ function reportBannerSeverity(severity: BannerSeverity | null): void {
 
 function activeBanner(slot: ReturnType<typeof useGlobalBannerPriority>) {
   switch (slot) {
+    case "host-connection":
+      return <HostConnectionBanner />;
     case "host-crash":
       return <HostCrashBanner />;
     case "watchdog-disabled":

@@ -38,6 +38,9 @@ export function useActiveGlobalCause(): GlobalBannerSlot {
  *  without classifying it here is a compile error (TS2741) — the suppression
  *  domain can never silently widen to a new advisory slot. */
 const SLOT_IS_RECOVERY: Record<Exclude<GlobalBannerSlot, null>, boolean> = {
+  // The window's host is out of reach: a pane's spawn/reconnect error can't be
+  // acted on until the link is back.
+  "host-connection": true,
   "host-crash": true,
   "watchdog-disabled": true,
   "safe-mode": true,
