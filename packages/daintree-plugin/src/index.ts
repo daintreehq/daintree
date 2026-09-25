@@ -26,6 +26,9 @@ export type {
   TourCommandResult,
   TourVoiceOptions,
 } from "./commands/tour.js";
+export { runTourPreview } from "./commands/tourPreview.js";
+export type { TourPreviewOptions, TourPreviewResult } from "./commands/tourPreview.js";
+export type { CaptureChapter, CaptureFrame, CaptureManifest } from "./tour/preview/capture.js";
 export { runInstall } from "./commands/install.js";
 export { runUninstall } from "./commands/uninstall.js";
 export { TEMPLATE_KINDS, type TemplateKind } from "./scaffold/templates.js";

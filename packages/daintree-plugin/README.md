@@ -24,6 +24,7 @@ A plugin scaffolded with `daintree-plugin new` already lists this package as a d
 | `schema` | Print the JSON Schema for `plugin.json`, generated from the same Zod schema the host loads with |
 | `tour voice` | Voice each chapter of a `contributes.tours` entry with Inworld TTS (`--voice`, default `Simon`; key from `INWORLD_API_KEY`), write the audio to `tours/<tourId>/` and the cue and caption timing into `plugin.json`. Narration is read from `tours/<tourId>.narration.json` (`{ "chapters": [{ "id", "narration" }] }`); only chapters whose narration or voice changed are re-voiced |
 | `tour align --recordings <dir>` | Time your own recordings (`<chapter-id>.wav`/`mp3`/`m4a`/`ogg`/`flac`/`aac`) instead: each is encoded to Ogg Opus in the plugin (needs `ffmpeg`), transcribed with word timestamps by Inworld, and aligned back to the narration's `[[cue]]` markers |
+| `tour preview` | Play and scrub the built tour in a browser without Daintree, with cue markers on the timeline and outlines on every `data-tour-anchor`; warns about stale or missing timing and about cues a scene waits on that the narration never marks. `--headless --out <dir>` captures a frame at each cue and writes `capture.json` with the anchor rectangles (needs `playwright-core`) |
 
 ## The usual loop
 

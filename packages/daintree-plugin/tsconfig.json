@@ -14,7 +14,14 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
-    "noEmit": true
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@daintreehq/tour": ["../tour/src/index.ts"],
+      "@daintreehq/tour/react": ["../tour/src/react.ts"],
+      "@daintreehq/tour/kit": ["../tour/src/kit.ts"],
+      "@daintreehq/tour/mock-app": ["../tour/src/mock-app.ts"]
+    }
   },
-  "include": ["src/**/*.ts", "../../electron/types/archiver.d.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "../../electron/types/archiver.d.ts"]
 }
