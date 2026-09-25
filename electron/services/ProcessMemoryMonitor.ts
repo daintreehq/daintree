@@ -541,21 +541,30 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
   const thresholdExceededPids = new Set<number>();
   const trendWarnedPids = new Set<number>();
   /** Newest last; at most {@link KERNEL_PRESSURE_WINDOW} valid readings. */
-  const kernelReadings: Array<{ level: KernelPressureLevel; at: number }> = [];
+  const kernelReadings: Array<{ level: KernelPressureLevel; at: number; maxAgeMs: number }> = [];
   let kernelReadInFlight = false;
   /** Bumped on suspend so a read that straddles sleep cannot land after it. */
   let kernelReadEpoch = 0;
   let lastKernelWarnReclaimAt = 0;
 
+  const kernelMaxAgeMs = (): number =>
+    (KERNEL_PRESSURE_WINDOW + 1) * currentAppMetricsPollIntervalMs;
+
   /**
    * The highest recent reading, or null with none. A reading older than the
-   * window at the current cadence is dropped: it no longer describes the
-   * machine, and it must not hold a pressure episode open on its own.
+   * window is dropped: it no longer describes the machine, and it must not
+   * hold a pressure episode open on its own. Aged against the slower of its
+   * own cadence and the current one, so a focus regain that shortens the
+   * interval cannot expire a throttled episode's readings in one step and
+   * clear it before a new reading has had a chance to land.
    */
   const effectiveKernelLevel = (): KernelPressureLevel | null => {
-    const maxAgeMs = (KERNEL_PRESSURE_WINDOW + 1) * currentAppMetricsPollIntervalMs;
     const now = Date.now();
-    while (kernelReadings.length > 0 && now - kernelReadings[0]!.at > maxAgeMs) {
+    const currentMaxAgeMs = kernelMaxAgeMs();
+    while (
+      kernelReadings.length > 0 &&
+      now - kernelReadings[0]!.at > Math.max(kernelReadings[0]!.maxAgeMs, currentMaxAgeMs)
+    ) {
       kernelReadings.shift();
     }
     let level: KernelPressureLevel | null = null;
@@ -565,16 +574,23 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
     return level;
   };
 
+  /** Never rejects; a reader that throws synchronously is a failed read too. */
+  const readKernelLevel = (
+    read: () => Promise<KernelPressureLevel | null>
+  ): Promise<KernelPressureLevel | null> =>
+    Promise.resolve()
+      .then(read)
+      .catch(() => null);
+
   const sampleKernelPressure = (): void => {
     const read = actions?.readKernelPressureLevel;
     if (!read || kernelReadInFlight) return;
     kernelReadInFlight = true;
     const epoch = kernelReadEpoch;
-    void read()
-      .catch(() => null)
+    void readKernelLevel(read)
       .then((level) => {
         if (epoch !== kernelReadEpoch || level === null) return;
-        kernelReadings.push({ level, at: Date.now() });
+        kernelReadings.push({ level, at: Date.now(), maxAgeMs: kernelMaxAgeMs() });
         if (kernelReadings.length > KERNEL_PRESSURE_WINDOW) kernelReadings.shift();
       })
       .finally(() => {
@@ -931,6 +947,22 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             pressureRemains: boolean;
             systemPressureRemains: boolean;
           }> => {
+            // The kernel is read first so every figure below is sampled after
+            // the probe returns: a slow spawn must not leave the footprint and
+            // available memory it is judged beside seconds out of date, nor
+            // hand tier 2 a baseline that bills this wait's reclaim to it.
+            let kernelCriticalRemains = false;
+            const readKernel = actions.readKernelPressureLevel;
+            if (readKernel) {
+              const epoch = kernelReadEpoch;
+              const fresh = await readKernelLevel(readKernel);
+              // A read that straddled a suspend describes the machine before
+              // it slept; the episode it belonged to was cleared with it.
+              if (epoch === kernelReadEpoch) {
+                kernelCriticalRemains =
+                  (fresh ?? effectiveKernelLevel()) === KERNEL_PRESSURE_CRITICAL;
+              }
+            }
             let totalMb = 0;
             let remains = false;
             let systemRemains = false;
@@ -962,13 +994,9 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             // fresh reading is the present tense; without one, the recent
             // readings stand. Kept out of the window so a re-measure cannot
             // hurry the recovery the window exists to slow down.
-            const readKernel = actions.readKernelPressureLevel;
-            if (readKernel) {
-              const fresh = await readKernel().catch(() => null);
-              if ((fresh ?? effectiveKernelLevel()) === KERNEL_PRESSURE_CRITICAL) {
-                remains = true;
-                systemRemains = true;
-              }
+            if (kernelCriticalRemains) {
+              remains = true;
+              systemRemains = true;
             }
             return { totalMb, pressureRemains: remains, systemPressureRemains: systemRemains };
           };
