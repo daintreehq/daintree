@@ -5,6 +5,8 @@ import type { SpawnContext } from "../terminalSpawn.js";
 
 let ptyWriteMock: ReturnType<typeof vi.fn<(data: string) => void>>;
 const existingFiles = new Set<string>();
+// Paths whose stat never settles, as on a dead network mount.
+const hangingFiles = new Set<string>();
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
@@ -15,6 +17,7 @@ vi.mock("fs/promises", async (importOriginal) => {
   return {
     ...actual,
     stat: vi.fn(async (filePath: string) => {
+      if (hangingFiles.has(filePath)) await new Promise(() => {});
       if (!existingFiles.has(filePath)) throw new Error("ENOENT");
       return { isFile: () => true };
     }),
@@ -80,6 +83,7 @@ describe("TerminalProcess.submit with image paths (#12792)", () => {
     vi.useFakeTimers();
     ptyWriteMock = vi.fn<(data: string) => void>();
     existingFiles.clear();
+    hangingFiles.clear();
     existingFiles.add(shot);
     existingFiles.add(other);
   });
@@ -173,6 +177,61 @@ describe("TerminalProcess.submit with image paths (#12792)", () => {
     await vi.advanceTimersByTimeAsync(5000);
 
     expect(writes()).toEqual([paste(shot)]);
+  });
+
+  it("gives up on a stat that never settles and sends the text as it was", async () => {
+    const terminal = createAgentTerminal("claude");
+    const stuck = "/Volumes/dead/shot.png";
+    hangingFiles.add(stuck);
+
+    terminal.submit(`see ${stuck}`, undefined, undefined, undefined, [stuck]);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(writes()).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(writes()).toEqual([`see ${stuck}`]);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(writes()).toEqual([`see ${stuck}`, "\r"]);
+  });
+
+  it("writes nothing when a shutdown lock comes and goes while the stat is pending", async () => {
+    const terminal = createAgentTerminal("claude");
+    const stuck = "/Volumes/dead/shot.png";
+    hangingFiles.add(stuck);
+
+    terminal.submit(`see ${stuck}`, undefined, undefined, undefined, [stuck]);
+    await vi.advanceTimersByTimeAsync(500);
+    const release = (
+      terminal as unknown as { inputController: { acquireShutdownInputLock: () => () => void } }
+    ).inputController.acquireShutdownInputLock();
+    release();
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writes()).toEqual([]);
+  });
+
+  it("stops pasting and never submits once the agent exits mid-sequence", async () => {
+    const terminal = createAgentTerminal("claude");
+
+    terminal.submit(`${shot} ${other}`, undefined, undefined, undefined, [shot, other]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(writes()).toEqual([paste(shot)]);
+
+    (
+      terminal as unknown as { terminalInfo: { detectedAgentId: string | undefined } }
+    ).terminalInfo.detectedAgentId = undefined;
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writes()).toEqual([paste(shot)]);
+  });
+
+  it("submits an image-only body as the paste and one Enter", async () => {
+    const terminal = createAgentTerminal("codex");
+
+    terminal.submit(`${shot}\n`, undefined, undefined, undefined, [shot]);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writes()).toEqual([paste(shot), "\r"]);
   });
 
   it("serialises a following submission behind the paced one", async () => {

@@ -178,8 +178,13 @@ export function useTerminalFileTransfer(
   // and re-register all five DOM listeners that often.
   const onDropSelectRef = useRef(onDropSelect);
 
+  // Bumped each time input locks, so paced writes queued before a lock stay
+  // cancelled even if the lock lifts again before their next timer fires.
+  const lockEpochRef = useRef(0);
+
   useLayoutEffect(() => {
     identityRef.current = { launchAgentId, detectedAgentId, agentState };
+    if (isInputLocked && !isInputLockedRef.current) lockEpochRef.current++;
     isInputLockedRef.current = isInputLocked;
     cwdProviderRef.current = cwdProvider;
     onDropSelectRef.current = onDropSelect;
@@ -291,15 +296,27 @@ export function useTerminalFileTransfer(
      * same-tick write nor folds the pastes back into one.
      */
     const writeSegments = (segments: readonly ImageInputSegment[], isAgent: boolean) => {
+      const lockEpoch = lockEpochRef.current;
+      const isStale = () =>
+        cancelled ||
+        !isMountedRef.current ||
+        isInputLockedRef.current ||
+        lockEpochRef.current !== lockEpoch;
+      // Anything queued behind a paced gesture waits one gap first, so its
+      // first write cannot land in the same tick as the previous gesture's last.
+      const queued = pacingCount > 0;
+      const gap = () => new Promise((resolve) => setTimeout(resolve, IMAGE_PASTE_GAP_MS));
+
       if (!segments.some((segment) => segment.kind === "image")) {
         const text = segments
           .map((segment) => (segment.kind === "text" ? segment.text : ""))
           .join("");
-        if (pacingCount === 0) {
+        if (!queued) {
           writeToTerminal(text, isAgent);
         } else {
-          writeChain = writeChain.then(() => {
-            if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
+          writeChain = writeChain.then(async () => {
+            await gap();
+            if (isStale()) return;
             writeToTerminal(text, isAgent);
           });
         }
@@ -309,10 +326,8 @@ export function useTerminalFileTransfer(
       writeChain = writeChain
         .then(async () => {
           for (let index = 0; index < segments.length; index++) {
-            if (index > 0) {
-              await new Promise((resolve) => setTimeout(resolve, IMAGE_PASTE_GAP_MS));
-            }
-            if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
+            if (index > 0 || queued) await gap();
+            if (isStale()) return;
             const segment = segments[index]!;
             const text = segment.kind === "image" ? segment.path : segment.text;
             terminalClient.write(terminalId, formatWithBracketedPaste(text));

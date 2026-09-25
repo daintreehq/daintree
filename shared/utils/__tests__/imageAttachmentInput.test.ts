@@ -65,6 +65,30 @@ describe("splitImageInputSegments", () => {
     ]);
   });
 
+  it("treats punctuation as a boundary only where the path ends", () => {
+    expect(splitImageInputSegments("see /tmp/a.png.backup /tmp/a.png.", ["/tmp/a.png"])).toEqual([
+      { kind: "text", text: "see /tmp/a.png.backup " },
+      { kind: "image", path: "/tmp/a.png" },
+      { kind: "text", text: "." },
+    ]);
+  });
+
+  it("finds a quoted path", () => {
+    expect(splitImageInputSegments('the file "/a/one.png" here', ["/a/one.png"])).toEqual([
+      { kind: "text", text: 'the file "' },
+      { kind: "image", path: "/a/one.png" },
+      { kind: "text", text: '" here' },
+    ]);
+  });
+
+  it("splits Windows paths the same way", () => {
+    const shot = "C:\\Users\\me\\Screen Shot.png";
+    expect(splitImageInputSegments(`look ${shot}`, [shot])).toEqual([
+      { kind: "text", text: "look " },
+      { kind: "image", path: shot },
+    ]);
+  });
+
   it("skips paths that are not in the text", () => {
     expect(splitImageInputSegments("just text", ["/a/gone.png"])).toEqual([
       { kind: "text", text: "just text" },

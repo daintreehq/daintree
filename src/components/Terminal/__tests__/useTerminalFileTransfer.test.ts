@@ -767,8 +767,8 @@ describe("useTerminalFileTransfer hook", () => {
       fileAt("my file.ts", "/Users/test/my file.ts"),
     ]);
 
-    // Images take the same @ token as any other path — the terminal has no
-    // thumbnail-chip surface to justify the hybrid input's image branch.
+    // With bracketed-paste mode off, images take the same @ token as any other
+    // path: a lone raw-path paste, the only form that attaches, is unavailable.
     expect(lastWrittenPayload()).toBe(
       `${formatAtFileToken("/Users/test/notes.md")} ${formatAtFileToken("/Users/test/shot.png")} ${formatAtFileToken("/Users/test/my file.ts")} `
     );
@@ -879,8 +879,9 @@ describe("useTerminalFileTransfer hook", () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
 
-      expect(payloads()).toHaveLength(1);
-      expect(payloads()[0]).not.toBe(formatWithBracketedPaste("//server/share/a.png"));
+      expect(payloads()).toEqual([
+        formatWithBracketedPaste(`${formatAtFileToken("//server/share/a.png")} `),
+      ]);
     });
 
     it("queues a second drop behind images still being paced", async () => {
@@ -896,6 +897,40 @@ describe("useTerminalFileTransfer hook", () => {
         formatWithBracketedPaste(" "),
         formatWithBracketedPaste(`${formatAtFileToken("/Users/test/b.ts")} `),
       ]);
+    });
+
+    it("waits a gap before a queued image drop's first paste", async () => {
+      renderFileTransferHook({ detectedAgentId: "claude" });
+      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      dropFiles([fileAt("b.png", "/Users/test/b.png")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      // a.png, then its trailing space one gap later — b.png must not share that tick.
+      expect(payloads()).toEqual([
+        formatWithBracketedPaste("/Users/test/a.png"),
+        formatWithBracketedPaste(" "),
+      ]);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(payloads()[2]).toBe(formatWithBracketedPaste("/Users/test/b.png"));
+    });
+
+    it("drops the rest of a paced drop once input locks, even if it unlocks again", async () => {
+      const { rerender } = renderFileTransferHook({ detectedAgentId: "claude" });
+      dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      rerender({ detectedAgentId: "claude", isInputLocked: true });
+      rerender({ detectedAgentId: "claude", isInputLocked: false });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(payloads()).toEqual([formatWithBracketedPaste("/Users/test/a.png")]);
     });
 
     it("stops pacing once the pane unmounts", async () => {

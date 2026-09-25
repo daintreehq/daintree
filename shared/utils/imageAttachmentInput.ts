@@ -38,10 +38,19 @@ export function isImageAttachmentPath(filePath: string): boolean {
 export type ImageInputSegment = { kind: "text"; text: string } | { kind: "image"; path: string };
 
 const isBoundaryBefore = (char: string | undefined): boolean =>
-  char === undefined || /[\s([{]/.test(char);
+  char === undefined || /[\s([{"'`]/.test(char);
 
-const isBoundaryAfter = (char: string | undefined): boolean =>
-  char === undefined || /[\s)\]}.,;:!?]/.test(char);
+/**
+ * Sentence punctuation ends a path only when the path itself ends there:
+ * `/a/shot.png.` is the image, `/a/shot.png.bak` is some other file.
+ */
+const isBoundaryAfter = (text: string, index: number): boolean => {
+  const char = text[index];
+  if (char === undefined || /[\s)\]}"'`]/.test(char)) return true;
+  if (!/[.,;:!?]/.test(char)) return false;
+  const next = text[index + 1];
+  return next === undefined || /\s/.test(next);
+};
 
 /**
  * Split `text` into ordered text and image segments, locating each of
@@ -71,7 +80,7 @@ export function splitImageInputSegments(
       index !== -1 &&
       !(
         isBoundaryBefore(index === 0 ? undefined : text[index - 1]) &&
-        isBoundaryAfter(text[index + imagePath.length])
+        isBoundaryAfter(text, index + imagePath.length)
       )
     ) {
       index = text.indexOf(imagePath, index + 1);

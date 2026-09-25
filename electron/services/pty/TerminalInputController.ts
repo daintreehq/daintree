@@ -425,19 +425,20 @@ export class TerminalInputController {
     const useBracketedPaste = body.includes("\n") || body.length > PASTE_THRESHOLD_CHARS;
     const useOutputSettle = !supportsBracketedPaste(terminal);
     // Only a submission carrying images pays the await: every other body is
-    // still written in the same tick it reached the lane.
-    const imageSegments =
-      ctx?.imagePaths !== undefined && ctx.imagePaths.length > 0
-        ? await this.resolveImageSegments(body, ctx.imagePaths)
-        : null;
-    if (imageSegments) {
-      if (!terminal.ptyProcess) return;
-      if (this.isInputLocked || this.inputGeneration !== generation) return;
-    }
+    // still written in the same tick it reached the lane. Both the typing
+    // baseline and the recipient are taken before it, so input or an agent
+    // exit during the stat or between pastes is seen rather than absorbed.
+    const carriesImages = ctx?.imagePaths !== undefined && ctx.imagePaths.length > 0;
+    const agentAtStart = terminal.detectedAgentId;
+    const typedBeforeBody = terminal.lastTypedInputAt;
+    const imageSegments = carriesImages
+      ? await this.resolveImageSegments(body, ctx?.imagePaths ?? [])
+      : null;
+    if (carriesImages && !this.isStillOwnedBy(generation, agentAtStart)) return;
 
     let bodyWritten: boolean;
     if (imageSegments) {
-      const outcome = await this.writeImageSegments(imageSegments, generation);
+      const outcome = await this.writeImageSegments(imageSegments, generation, agentAtStart);
       if (outcome === "abandoned") return;
       bodyWritten = outcome === "written";
     } else if (useBracketedPaste && supportsBracketedPaste(terminal)) {
@@ -459,7 +460,7 @@ export class TerminalInputController {
     if (!bodyWritten) {
       return;
     }
-    const typedAtBodyWrite = terminal.lastTypedInputAt;
+    const typedAtBodyWrite = imageSegments ? typedBeforeBody : terminal.lastTypedInputAt;
 
     if (this.isInputLocked || this.inputGeneration !== generation) {
       return;
@@ -498,6 +499,10 @@ export class TerminalInputController {
       return;
     }
 
+    if (imageSegments && this.host.terminalInfo.detectedAgentId !== agentAtStart) {
+      return;
+    }
+
     identityWatcher.armSuppressSignal();
     identityWatcher.onShellSubmit(body);
     if (this.writeStrict(enterSuffix)) ctx?.markPtyWritten();
@@ -518,10 +523,13 @@ export class TerminalInputController {
     imagePaths: readonly string[]
   ): Promise<ImageInputSegment[] | null> {
     if (!supportsImagePathInput(this.host.terminalInfo)) return null;
-    const candidates = imagePaths.filter(isImageAttachmentPath);
+    const candidates = [...new Set(imagePaths.filter(isImageAttachmentPath))];
     if (candidates.length === 0) return null;
     const exists = await Promise.all(candidates.map(isRegularFile));
-    const deliverable = candidates.filter((_, index) => exists[index]);
+    const existing = new Set(candidates.filter((_, index) => exists[index]));
+    // Filtered from the original list, not the deduplicated one: two chips for
+    // the same image are two attachments.
+    const deliverable = imagePaths.filter((imagePath) => existing.has(imagePath));
     if (deliverable.length === 0) return null;
     const segments = splitImageInputSegments(body, deliverable);
     return segments.some((segment) => segment.kind === "image") ? segments : null;
@@ -540,7 +548,8 @@ export class TerminalInputController {
    */
   private async writeImageSegments(
     segments: readonly ImageInputSegment[],
-    generation: number
+    generation: number,
+    agentAtStart: string | undefined
   ): Promise<"written" | "declined" | "abandoned"> {
     const gapMs = getSubmitEnterDelay(this.host.terminalInfo);
     let first = true;
@@ -549,8 +558,7 @@ export class TerminalInputController {
       if (payload.length === 0) continue;
       if (!first) {
         await delay(gapMs);
-        if (!this.host.terminalInfo.ptyProcess) return "abandoned";
-        if (this.isInputLocked || this.inputGeneration !== generation) return "abandoned";
+        if (!this.isStillOwnedBy(generation, agentAtStart)) return "abandoned";
       }
       if (!this.writeStrict(formatWithBracketedPaste(payload))) {
         return first ? "declined" : "abandoned";
@@ -558,6 +566,19 @@ export class TerminalInputController {
       first = false;
     }
     return first ? "declined" : "written";
+  }
+
+  /**
+   * Whether a paced image submission may keep writing: the pty is still there,
+   * no shutdown or newer generation has taken the input, and the agent it was
+   * addressed to still owns the terminal. An agent that exited into its shell
+   * mid-sequence must not receive the rest of the pastes, let alone the Enter.
+   */
+  private isStillOwnedBy(generation: number, agentAtStart: string | undefined): boolean {
+    const terminal = this.host.terminalInfo;
+    if (!terminal.ptyProcess || terminal.isExited) return false;
+    if (this.isInputLocked || this.inputGeneration !== generation) return false;
+    return terminal.detectedAgentId === agentAtStart;
   }
 
   // Side-effects shared by both PTY write paths when xterm forwards a CSI I/O
