@@ -28,6 +28,9 @@ import {
   SurfaceContributionsSchema,
   SurfaceViewSlotSchema,
   ToolbarButtonContributionSchema,
+  TourCaptionSchema,
+  TourChapterSchema,
+  TourContributionSchema,
   ViewContributionSchema,
 } from "../plugin.js";
 
@@ -124,12 +127,15 @@ const SWEPT_SCHEMAS = {
   settings: SettingDefinitionObjectSchema,
   recipes: RecipeContributionSchema,
   agentMcp: AgentMcpContributionSchema,
+  tours: TourContributionSchema,
   surfaces: SurfaceContributionsSchema,
   "agents.detection": AgentDetectionConfigSchema,
   "surfaces.emptyCanvas": SurfaceViewSlotSchema,
   "recipes.terminals": RecipeContributionTerminalSchema,
   "forgeProviders.credentialFields": CredentialFieldSchema,
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
+  "tours.chapters": TourChapterSchema,
+  "tours.chapters.captions": TourCaptionSchema,
 } as const;
 
 type SweptGroup = keyof typeof SWEPT_SCHEMAS;
@@ -159,6 +165,7 @@ const TOP_LEVEL_GROUPS = [
   "settings",
   "recipes",
   "agentMcp",
+  "tours",
   "surfaces",
 ] as const;
 
@@ -217,6 +224,9 @@ type FieldConsumerCoverage = {
     ConsumerDescriptor
   >;
   "forgeProviders.slots": Record<keyof ForgeSlots, ConsumerDescriptor>;
+  tours: Record<keyof z.infer<typeof TourContributionSchema>, ConsumerDescriptor>;
+  "tours.chapters": Record<keyof z.infer<typeof TourChapterSchema>, ConsumerDescriptor>;
+  "tours.chapters.captions": Record<keyof z.infer<typeof TourCaptionSchema>, ConsumerDescriptor>;
 };
 
 const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
@@ -1087,6 +1097,140 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: PLUGIN_SERVICE, symbol: "loadPlugin (toRuntimePanelKindId → claimProjectSurface)" },
       ],
       note: "Cross-checked against declared contributes.views, then resolved to the runtime panel-kind id the surface mounts.",
+    },
+  },
+  tours: {
+    id: {
+      mode: "intentional-metadata",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (reportDuplicateIds tours)",
+        },
+      ],
+      note: "Unique within contributes.tours. Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+    },
+    title: {
+      mode: "intentional-metadata",
+      consumers: [{ file: PLUGIN_SCHEMA, symbol: "TourContributionSchema" }],
+      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+    },
+    componentPath: {
+      mode: "intentional-metadata",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "TourContributionSchema (isSafePluginAssetPath)" },
+      ],
+      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+    },
+    panelKind: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (tour_panel_kind_unknown)",
+        },
+      ],
+      note: "Must name one of this manifest's own contributes.panels ids.",
+    },
+    audioHosts: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "TourContributionSchema superRefine (tour_audio_host_undeclared)",
+        },
+      ],
+      note: "Every remote chapter audioUrl hostname must appear here.",
+    },
+    chapters: {
+      mode: "intentional-metadata",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "TourContributionSchema superRefine (tour_chapter_duplicate_id)",
+        },
+      ],
+      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+    },
+  },
+  "tours.chapters": {
+    id: {
+      mode: "intentional-metadata",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "TourContributionSchema superRefine (tour_chapter_duplicate_id)",
+        },
+      ],
+      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+    },
+    duration: {
+      mode: "intentional-metadata",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "TourChapterSchema superRefine (cue/caption range)" },
+      ],
+      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+    },
+    cues: {
+      mode: "intentional-metadata",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "TourChapterSchema superRefine (tour_cue_out_of_range)" },
+      ],
+      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+    },
+    captions: {
+      mode: "intentional-metadata",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "TourChapterSchema superRefine (tour_caption_out_of_range)",
+        },
+      ],
+      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+    },
+    audioUrl: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "TourContributionSchema superRefine (tour_audio_host_undeclared)",
+        },
+      ],
+      note: "A remote URL's hostname is checked against the tour's audioHosts; a bundled path must be a safe asset path.",
+    },
+    narrationHash: {
+      mode: "intentional-metadata",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "TourChapterSchema (TOUR_NARRATION_HASH_PATTERN)" },
+      ],
+      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+    },
+  },
+  "tours.chapters.captions": {
+    start: {
+      mode: "intentional-metadata",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "TourChapterSchema superRefine (tour_caption_out_of_range)",
+        },
+      ],
+      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+    },
+    end: {
+      mode: "intentional-metadata",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "TourChapterSchema superRefine (tour_caption_out_of_range)",
+        },
+      ],
+      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+    },
+    text: {
+      mode: "intentional-metadata",
+      consumers: [{ file: PLUGIN_SCHEMA, symbol: "TourCaptionSchema" }],
+      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
     },
   },
 } satisfies FieldConsumerCoverage;

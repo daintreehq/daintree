@@ -961,6 +961,232 @@ const PluginAuthorUrlSchema = z.string().superRefine((value, ctx) => {
 });
 
 /**
+ * Upper bounds inside one `contributes.tours` entry. Like
+ * {@link MANIFEST_CONTRIBUTION_CAPS} these reject pathological manifests rather
+ * than shape authoring; a panel tour is expected to use a couple of chapters.
+ * Exported so tests reference the values without magic numbers.
+ */
+export const TOUR_CONTRIBUTION_LIMITS = {
+  chapters: 32,
+  captionsPerChapter: 128,
+  cuesPerChapter: 128,
+  audioHosts: 8,
+  chapterDurationSeconds: 600,
+} as const;
+
+/** Same shape the built-in tour's `narrationFingerprint` produces. */
+const TOUR_NARRATION_HASH_PATTERN = /^[0-9a-f]{8}$/;
+
+/** A string that opens with a URL scheme is remote audio; anything else is a bundled asset. */
+const URL_SCHEME_PREFIX = /^[a-z][a-z0-9+.-]*:/i;
+
+/**
+ * A declared narration host is a bare, exact DNS hostname — the list is a
+ * disclosure the user reads, so it must say precisely where audio comes from.
+ * Round-tripping through `URL` rejects ports, paths, credentials and non-ASCII
+ * spellings (their `host` differs from the input); IP literals and empty
+ * labels (a leading, doubled or trailing dot) are rejected so matching stays a
+ * plain case-insensitive string compare.
+ * Every private/loopback literal is single-label or an IP, so those rules also
+ * cover the SSRF check; `isPrivateOrLoopbackHostname` stays as a backstop.
+ */
+const TourAudioHostSchema = z
+  .string()
+  .min(1)
+  .max(253)
+  .superRefine((value, ctx) => {
+    let host: string | null;
+    try {
+      host = new URL(`https://${value}/`).hostname;
+    } catch {
+      host = null;
+    }
+    const lower = value.toLowerCase();
+    if (
+      host !== lower ||
+      value.includes("*") ||
+      !value.includes(".") ||
+      value.split(".").some((label) => label === "") ||
+      value.startsWith("[") ||
+      /^[\d.]+$/.test(value) ||
+      isPrivateOrLoopbackHostname(lower)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `audioHosts entries must be bare public multi-label hostnames such as "cdn.example.com" (no scheme, port, path, wildcard or IP literal): "${value}"`,
+        params: { errorCode: "tour_audio_host_invalid" },
+      });
+    }
+  });
+
+/**
+ * A chapter's narration audio: a plugin-relative asset path, or an https URL
+ * whose hostname the tour lists in `audioHosts` (checked on the tour, which
+ * holds the list).
+ */
+const TourAudioUrlSchema = z
+  .string()
+  .min(1)
+  .max(4096)
+  .superRefine((value, ctx) => {
+    // URL parsing strips leading/trailing C0 controls and spaces (<= U+0020),
+    // so " //host/a.mp3" would resolve remotely past the host declaration and a
+    // padded https URL would not be the string the declaration was checked on.
+    if (value.charCodeAt(0) <= 0x20 || value.charCodeAt(value.length - 1) <= 0x20) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "audioUrl must not start or end with whitespace or control characters",
+        params: { errorCode: "tour_audio_url_padded" },
+      });
+      return;
+    }
+    if (URL_SCHEME_PREFIX.test(value)) {
+      refinePluginHttpsUrl(value, ctx, "tours[].chapters[].audioUrl");
+      return;
+    }
+    if (!isSafePluginAssetPath(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "audioUrl must be an https URL or a relative plugin asset path (no leading /, backslash, NUL, or .. segments)",
+        params: { errorCode: "tour_audio_path_unsafe" },
+      });
+    }
+  });
+
+/** One caption line, in seconds from the start of its chapter. */
+export const TourCaptionSchema = z
+  .object({
+    start: z.number().min(0),
+    end: z.number().positive(),
+    text: z.string().min(1).max(500),
+  })
+  .strict();
+
+/**
+ * Timing for one tour chapter, mirroring the built-in tour's
+ * `TourChapterTiming` plus its `narrationHash`. Cues are named scene triggers in
+ * seconds; every cue and caption must fall inside the chapter's duration.
+ */
+export const TourChapterSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    duration: z.number().positive().max(TOUR_CONTRIBUTION_LIMITS.chapterDurationSeconds),
+    cues: z.record(z.string().min(1).max(64).regex(SAFE_ID_PATTERN), z.number().min(0)).default({}),
+    captions: z
+      .array(TourCaptionSchema)
+      .max(TOUR_CONTRIBUTION_LIMITS.captionsPerChapter)
+      .default([]),
+    audioUrl: TourAudioUrlSchema.nullable(),
+    narrationHash: z.string().regex(TOUR_NARRATION_HASH_PATTERN, {
+      message: "narrationHash must be the 8-character lowercase hex narration fingerprint",
+    }),
+  })
+  .strict()
+  .superRefine((chapter, ctx) => {
+    const cues = Object.entries(chapter.cues);
+    if (cues.length > TOUR_CONTRIBUTION_LIMITS.cuesPerChapter) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["cues"],
+        message: `A chapter may declare at most ${TOUR_CONTRIBUTION_LIMITS.cuesPerChapter} cues.`,
+        params: { errorCode: "tour_cues_too_many" },
+      });
+    }
+    for (const [name, at] of cues) {
+      if (at > chapter.duration) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["cues", name],
+          message: `Cue "${name}" at ${at}s falls after the chapter's ${chapter.duration}s duration.`,
+          params: { errorCode: "tour_cue_out_of_range" },
+        });
+      }
+    }
+    chapter.captions.forEach((caption, index) => {
+      if (caption.end <= caption.start || caption.end > chapter.duration) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["captions", index],
+          message: `Caption ${index} must end after it starts and within the chapter's ${chapter.duration}s duration.`,
+          params: { errorCode: "tour_caption_out_of_range" },
+        });
+      }
+    });
+  });
+
+/**
+ * One `contributes.tours` entry (#12768): a welcome tour that plays in the same
+ * dialog as the Daintree tour. Without `panelKind` it is a plugin tour offered
+ * from Help and the command palette; with one it is a panel tour opened from
+ * that panel's menu, and the manifest-level `superRefine` requires the kind to
+ * be one of this plugin's own `contributes.panels`. `componentPath` is the
+ * module exporting the chapter scenes, validated like a view's.
+ *
+ * Declaration only for now — loading and playback are a follow-up.
+ */
+export const TourContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    title: z.string().min(1).max(120),
+    componentPath: z.string().min(1).refine(isSafePluginAssetPath, {
+      message:
+        "componentPath must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
+    }),
+    panelKind: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
+    audioHosts: z.array(TourAudioHostSchema).max(TOUR_CONTRIBUTION_LIMITS.audioHosts).default([]),
+    chapters: z.array(TourChapterSchema).min(1).max(TOUR_CONTRIBUTION_LIMITS.chapters),
+  })
+  .strict()
+  .superRefine((tour, ctx) => {
+    const hosts = new Set<string>();
+    tour.audioHosts.forEach((host, index) => {
+      const lower = host.toLowerCase();
+      if (hosts.has(lower)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["audioHosts", index],
+          message: `Duplicate audio host "${host}".`,
+          params: { errorCode: "tour_audio_host_duplicate" },
+        });
+      }
+      hosts.add(lower);
+    });
+
+    const chapterIds = new Set<string>();
+    tour.chapters.forEach((chapter, index) => {
+      if (chapterIds.has(chapter.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["chapters", index, "id"],
+          message: `Duplicate chapter id "${chapter.id}" in tour "${tour.id}".`,
+          params: { errorCode: "tour_chapter_duplicate_id" },
+        });
+      }
+      chapterIds.add(chapter.id);
+
+      // Remote narration may only come from a host the tour declared, so the
+      // list the user sees is the whole story. Malformed URLs were already
+      // reported on the field itself.
+      if (chapter.audioUrl === null || !URL_SCHEME_PREFIX.test(chapter.audioUrl)) return;
+      let hostname: string;
+      try {
+        hostname = new URL(chapter.audioUrl).hostname;
+      } catch {
+        return;
+      }
+      if (!hosts.has(hostname)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["chapters", index, "audioUrl"],
+          message: `audioUrl host "${hostname}" is not declared in this tour's audioHosts.`,
+          params: { errorCode: "tour_audio_host_undeclared" },
+        });
+      }
+    });
+  });
+
+/**
  * A single attribution entry in the plugin manifest's `authors` array. `name`
  * is required; `url`, `email`, and `role` are optional. `strictObject` rejects
  * unknown keys so manifest typos surface loudly.
@@ -1313,6 +1539,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   settings: 200,
   recipes: 50,
   agentMcp: AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
+  tours: 10,
 } as const;
 
 /**
@@ -1364,6 +1591,33 @@ function normalizeDeprecatedContributionAliases(raw: unknown): unknown {
 }
 
 /**
+ * `z.record` skips an own `__proto__` key before validating it, so a cue named
+ * that would vanish from `contributes.tours[].chapters[].cues` without a word.
+ * Refuse it while the raw JSON still carries it. This runs in the `contributes`
+ * preprocess rather than on the `cues` field because a preprocess below a
+ * `.default()` makes the JSON Schema emitter drop every default above it.
+ */
+function reportReservedTourCueNames(raw: unknown, ctx: z.RefinementCtx): void {
+  const tours = (raw as { tours?: unknown } | null)?.tours;
+  if (!Array.isArray(tours)) return;
+  tours.forEach((tour, tourIndex) => {
+    const chapters = (tour as { chapters?: unknown } | null)?.chapters;
+    if (!Array.isArray(chapters)) return;
+    chapters.forEach((chapter, chapterIndex) => {
+      const cues = (chapter as { cues?: unknown } | null)?.cues;
+      if (typeof cues === "object" && cues !== null && Object.hasOwn(cues, "__proto__")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["tours", tourIndex, "chapters", chapterIndex, "cues"],
+          message: 'Cue name "__proto__" is reserved.',
+          params: { errorCode: "tour_cue_name_reserved" },
+        });
+      }
+    });
+  });
+}
+
+/**
  * `contributes.*` groups a `scope: "project"` plugin may not declare, each with
  * the structural reason it cannot yet be narrowed to one project.
  *
@@ -1412,6 +1666,10 @@ export const PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS = [
     "mcpServers",
     "contributed MCP servers run under one app-wide supervisor whose tools Daintree and its in-app Assistant call with no project binding to check the contribution against. To serve tools to this project's agents, declare contributes.agentMcp instead.",
   ],
+  [
+    "tours",
+    "plugin tours are offered from the app-wide Help menu and command palette with no project axis, and tour playback has no per-project visibility to narrow a panel tour to the owning project's views either.",
+  ],
 ] as const satisfies ReadonlyArray<readonly [string, string]>;
 
 /** The schema {@link getPluginManifestSchema} hands back, for the overloads. */
@@ -1437,6 +1695,53 @@ export function getPluginManifestSchema(origin: PluginOrigin | boolean): PluginM
   return buildPluginManifestSchema(
     typeof origin === "boolean" ? (origin ? "builtin" : "user") : origin
   );
+}
+
+/**
+ * Parse a manifest for loading, isolating malformed `contributes.tours` entries
+ * (#12768): a tour is optional polish, so a bad one is dropped and its issues
+ * returned as `droppedTourIssues` rather than refusing the whole plugin. Only
+ * issues addressed to a single tour entry are isolated — a cap overflow or the
+ * project-scope refusal sits on the array itself and still fails the parse, as
+ * does any other issue. Authoring surfaces (`daintree-plugin validate`, the
+ * installer) keep the strict parse so the author still sees every error.
+ */
+export function parsePluginManifestForLoad(
+  origin: PluginOrigin,
+  json: unknown
+): {
+  result: ReturnType<PluginManifestSchema["safeParse"]>;
+  droppedTourIssues: z.core.$ZodIssue[];
+} {
+  const schema = getPluginManifestSchema(origin);
+  const result = schema.safeParse(json);
+  const raw = json as { contributes?: { tours?: unknown } } | null;
+  if (result.success || !Array.isArray(raw?.contributes?.tours)) {
+    return { result, droppedTourIssues: [] };
+  }
+
+  // Manifest-level refinements (duplicate ids, panelKind) may be withheld while
+  // an entry is still malformed, so a drop can surface another round. Each
+  // round removes at least one entry, which bounds the loop by the array length.
+  let tours: unknown[] = raw.contributes.tours;
+  let originalIndex = tours.map((_tour, index) => index);
+  let current: ReturnType<PluginManifestSchema["safeParse"]> = result;
+  const dropped: z.core.$ZodIssue[] = [];
+  while (!current.success) {
+    const bad = new Set<number>();
+    for (const issue of current.error.issues) {
+      const [root, group, index, ...rest] = issue.path;
+      if (root !== "contributes" || group !== "tours" || typeof index !== "number") {
+        return { result, droppedTourIssues: [] };
+      }
+      bad.add(index);
+      dropped.push({ ...issue, path: ["contributes", "tours", originalIndex[index], ...rest] });
+    }
+    tours = tours.filter((_tour, index) => !bad.has(index));
+    originalIndex = originalIndex.filter((_original, index) => !bad.has(index));
+    current = schema.safeParse({ ...raw, contributes: { ...raw.contributes, tours } });
+  }
+  return { result: current, droppedTourIssues: dropped };
 }
 
 /**
@@ -1588,7 +1893,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       scopes: PluginManifestScopesSchema.optional(),
       activationEvents: z.array(z.literal("onStartupFinished")).default([]),
       contributes: z.preprocess(
-        normalizeDeprecatedContributionAliases,
+        (raw, ctx) => {
+          reportReservedTourCueNames(raw, ctx);
+          return normalizeDeprecatedContributionAliases(raw);
+        },
         z
           .strictObject({
             panels: z
@@ -1667,6 +1975,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(AgentMcpContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.agentMcp)
               .default([]),
+            tours: z
+              .array(TourContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.tours)
+              .default([]),
             // Not an array, so it carries no MANIFEST_CONTRIBUTION_CAPS entry —
             // three optional fixed slots are structurally bounded already.
             surfaces: SurfaceContributionsSchema.default({}),
@@ -1691,6 +2003,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             settings: [],
             recipes: [],
             agentMcp: [],
+            tours: [],
             surfaces: {},
           })
       ),
@@ -2068,6 +2381,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("settings", manifest.contributes.settings);
       reportDuplicateIds("recipes", manifest.contributes.recipes);
       reportDuplicateIds("agentMcp", manifest.contributes.agentMcp);
+      reportDuplicateIds("tours", manifest.contributes.tours);
 
       // Cross-reference integrity — a contribution that names another by id must
       // point at one that exists in the same manifest, else the reference dangles
@@ -2135,6 +2449,19 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // A view renders into a `contributes.panels` entry with a matching id; a
       // view whose id matches no panel can never be shown (#10620). This is a
       // hard error now — it previously silently no-op'd at load.
+      // A panel tour opens from its panel's menu, so it may only name a panel
+      // kind this plugin declares — never a built-in or another plugin's kind.
+      manifest.contributes.tours.forEach((tour, index) => {
+        if (tour.panelKind !== undefined && !panelIds.has(tour.panelKind)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "tours", index, "panelKind"],
+            message: `Tour "${tour.id}" panelKind "${tour.panelKind}" matches no contributes.panels[].id — a panel tour can only attach to one of this plugin's own panels.`,
+            params: { errorCode: "tour_panel_kind_unknown" },
+          });
+        }
+      });
+
       manifest.contributes.views.forEach((view, index) => {
         if (!panelIds.has(view.id)) {
           ctx.addIssue({

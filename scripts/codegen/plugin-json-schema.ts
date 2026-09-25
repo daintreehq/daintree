@@ -37,7 +37,7 @@ const TARGETS: Target[] = [
     origin: "project",
     title: "Daintree project plugin manifest",
     intro:
-      'Manifest for a Daintree plugin committed into a project\'s .daintree/plugins/ directory. Such a plugin must declare "scope": "project", and eight contribution types available to installed plugins are refused here.',
+      'Manifest for a Daintree plugin committed into a project\'s .daintree/plugins/ directory. Such a plugin must declare "scope": "project", and ten contribution types available to installed plugins are refused here.',
   },
 ];
 
@@ -49,10 +49,11 @@ const TARGETS: Target[] = [
 // like a host bug.
 const UNENCODED_RULES = [
   "A view's id must equal the id of a declared panel, and a surface's viewId must name a declared view whose panel is not a PTY panel.",
-  'Under project scope, menuItems, agents, skills, recipes, fileDecorationProviders, fileEditors, processTools, mcpServers and forgeProviders are refused, and "scope": "project" is required.',
+  'Under project scope, menuItems, agents, skills, recipes, fileDecorationProviders, fileEditors, processTools, mcpServers, tours and forgeProviders are refused, and "scope": "project" is required.',
   "The reserved daintree.* publisher namespace is accepted only for built-in plugins.",
   "previewTools and guestAdapters are accepted only for built-in plugins, each id must be namespaced under the plugin's own name, and a preview tool's guestAdapter must name an adapter the same manifest declares.",
   "A command id may not collide with a built-in action id, and some built-in ids refuse plugin dispatch outright.",
+  "A tour's panelKind must name a declared panel; its chapter ids must be unique; every cue and caption must fall inside its chapter's duration; and a remote chapter audioUrl must be https on a host listed in that tour's audioHosts.",
 ];
 
 function build({ file, origin, title, intro }: Target): string {

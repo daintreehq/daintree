@@ -32,6 +32,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `fileDecorationProviders` | Rejected — decoration requests carry a resource path with no owning-project routing |
 | `processTools` | Rejected — detections are mirrored into the shared pty-host as one table for every terminal |
 | `mcpServers` | Rejected — the plugin-MCP IPC surface is app-global: servers are addressed by plugin and server id alone, and a tool call carries no project to check the contribution against |
+| `tours` | Rejected — plugin tours are offered from the app-wide Help menu and command palette, and tour playback has no per-project visibility yet |
 | `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
 | `previewTools` | Rejected — built-in only; the tool's components resolve out of the host bundle, which no other origin's renderer reaches |
 | `guestAdapters` | Rejected — built-in only; the bundle is emitted by Daintree's own build and runs with full DOM access inside the previewed site |
@@ -680,6 +681,66 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 **Referencing your own agent.** A recipe terminal may name an agent id from the same plugin's `contributes.agents`. Ownership is resolved against the live registry, not the manifest: if another plugin already claimed that agent id, the terminal is dropped rather than silently launching someone else's agent.
 
 **Agent-initiated runs are confirmation-gated.** Any agent or MCP dispatch that carries a `recipeId` — through `recipe.run` or a composite like `worktree.createWithRecipe` — pauses for a single human approval showing the resolved recipe, its origin, and the commands each terminal will run (env keys are listed, values are not). This applies to every recipe tier, not just plugin-contributed ones. An external MCP session bound to one workspace has no one watching that view to answer the dialog, so there the dispatch is refused outright rather than paused (#11789).
+
+## Tours — _Planned_
+
+Welcome tours that play in the same dialog as the Daintree tour. The manifest entry is validated today; loading and playing contributed tours is a follow-up, so a declared tour does not appear anywhere yet.
+
+A tour without `panelKind` is a **plugin tour**, offered from Help and the command palette (for example "SvelteKit Site Builder: Welcome Tour"). A tour with `panelKind` is a **panel tour**, opened from that panel's three-dots menu as "<Panel name> Welcome Tour"; it keeps to a couple of chapters but is held to the same standard as any other tour.
+
+```json
+{
+  "contributes": {
+    "panels": [
+      { "id": "site-builder", "name": "Site Builder", "iconId": "globe", "color": "#336699" }
+    ],
+    "tours": [
+      {
+        "id": "site-builder-welcome",
+        "title": "Site Builder Welcome Tour",
+        "componentPath": "dist/tours/site-builder.js",
+        "panelKind": "site-builder",
+        "audioHosts": ["cdn.example.com"],
+        "chapters": [
+          {
+            "id": "intro",
+            "duration": 8.4,
+            "cues": { "open-preview": 2.1 },
+            "captions": [{ "start": 0, "end": 4.2, "text": "This is the site builder." }],
+            "audioUrl": "https://cdn.example.com/tours/intro.mp3",
+            "narrationHash": "3fa9c21e"
+          },
+          {
+            "id": "publish",
+            "duration": 6,
+            "audioUrl": "tours/publish.mp3",
+            "narrationHash": "0b7d1c44"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Unique within `contributes.tours`. |
+| `title` | yes | Shown where the tour is offered. |
+| `componentPath` | yes | Plugin-relative module exporting the chapter scenes, same path rules as a view's. |
+| `panelKind` | no | Makes it a panel tour. Must be the `id` of one of this plugin's own `contributes.panels`. |
+| `audioHosts` | no | Bare hostnames remote narration is fetched from. No scheme, port, wildcard, IP literal or private host. |
+| `chapters` | yes | 1–32 chapters, played in order. |
+| `chapters[].id` | yes | Unique within the tour. |
+| `chapters[].duration` | yes | Seconds, up to 600. |
+| `chapters[].cues` | no | Named scene cues in seconds; each must fall within `duration`. |
+| `chapters[].captions` | no | `{ start, end, text }` in seconds; each must end after it starts and within `duration`. |
+| `chapters[].audioUrl` | yes | A plugin-relative audio file, an `https://` URL on a host listed in `audioHosts`, or `null` for a silent chapter. |
+| `chapters[].narrationHash` | yes | The 8-character lowercase hex fingerprint of the narration the timing was generated from. |
+
+A malformed tour is reported with the offending path, like any other malformed contribution: `daintree-plugin validate` and the installer refuse it, and at load Daintree logs the issues and drops only that tour, so the rest of the plugin still loads. Exceeding the tour cap is still a whole-manifest error. `audioHosts` entries are ASCII (punycode) hostnames. Tours are refused under `scope: "project"`.
 
 ## Surfaces — _Shipped (project scope only)_
 
