@@ -68,6 +68,7 @@ import {
   getTrendSnapshot,
   getSessionPeakSnapshot,
   setAppMetricsMonitorPollInterval,
+  refreshAppMetricsMonitor,
   type MemoryPressureActions,
 } from "../ProcessMemoryMonitor.js";
 import type { TrimStateSummary } from "../../../shared/types/pty-host.js";
@@ -481,17 +482,35 @@ describe("ProcessMemoryMonitor", () => {
       expect(warnings[0]!.peakMb).toBe(900);
     });
 
-    it("does not warn when the wall clock steps back past the window start", () => {
-      let mb = 100;
-      mockGetAppMetrics.mockImplementation(() => [makeMetric("Tab", mb * 1024, 500)]);
+    it("ignores wall-clock steps when measuring the span", () => {
+      let tick = 0;
+      mockGetAppMetrics.mockImplementation(() => {
+        tick++;
+        // ~2 MB/hr at the 30s cadence.
+        return [makeMetric("Tab", (100 + tick / 60) * 1024, 500)];
+      });
       stop = startAppMetricsMonitor();
       vi.advanceTimersByTime(200 * 30_000);
 
-      // Memory falls while the clock jumps back 40 min: a falling EMA over a
-      // negative span would divide out to a positive rate.
-      vi.setSystemTime(Date.now() - 40 * 60_000);
-      mb = 90;
+      // A 25-minute correction would make the 29-minute window look 4 minutes
+      // long on the wall clock, inflating 2 MB/hr past the threshold.
+      vi.setSystemTime(Date.now() - 25 * 60_000);
       vi.advanceTimersByTime(4 * 30_000);
+
+      expect(trendWarnings()).toHaveLength(0);
+    });
+
+    it("does not warn after slow polling speeds back up", () => {
+      setAppMetricsMonitorPollInterval(300_000);
+      growByWallClock(2);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(72 * 300_000);
+
+      // A fixed per-bucket EMA alpha carries 10x the lag out of slow polling
+      // and sheds it once polling speeds up, reading as a growth spurt.
+      setAppMetricsMonitorPollInterval(30_000);
+      refreshAppMetricsMonitor();
+      vi.advanceTimersByTime(120 * 30_000);
 
       expect(trendWarnings()).toHaveLength(0);
     });

@@ -39,6 +39,8 @@ const MONITORED_TYPES = new Set(["Browser", "Tab", "Utility"]);
 const BUCKET_TICKS = 2;
 const BUCKET_WINDOW = 30;
 const EMA_ALPHA = 2 / (BUCKET_WINDOW + 1);
+/** Bucket spacing at the nominal poll cadence; EMA_ALPHA is defined per this span. */
+const NOMINAL_BUCKET_MS = BUCKET_TICKS * POLL_INTERVAL_MS;
 const STARTUP_SUPPRESSION_MS = 15 * 60 * 1000;
 const TREND_WARN_MB_PER_HOUR = 5;
 
@@ -131,7 +133,10 @@ interface PidTrendState {
   bucketMin: number;
   ema: number;
   emaHistory: number[];
-  /** Epoch ms each {@link emaHistory} entry was committed, index-aligned. */
+  /**
+   * Monotonic ms (performance.now) each {@link emaHistory} entry was committed,
+   * index-aligned. Monotonic so a wall-clock correction can't distort a span.
+   */
   emaHistoryAt: number[];
   latestMb: number;
   peakMb: number;
@@ -650,9 +655,17 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
         state.tickInBucket++;
 
         if (state.tickInBucket === BUCKET_TICKS) {
-          state.ema = EMA_ALPHA * state.bucketMin + (1 - EMA_ALPHA) * state.ema;
+          const committedAt = performance.now();
+          const prevCommittedAt = state.emaHistoryAt[state.emaHistoryAt.length - 1];
+          const bucketMs =
+            prevCommittedAt === undefined ? NOMINAL_BUCKET_MS : committedAt - prevCommittedAt;
+          // Scale the smoothing to the bucket's real duration. A fixed per-bucket
+          // alpha lags further behind during stretched polling and then catches
+          // up when polling speeds back up, which reads as a growth spurt.
+          const alpha = 1 - (1 - EMA_ALPHA) ** (Math.max(bucketMs, 0) / NOMINAL_BUCKET_MS);
+          state.ema = alpha * state.bucketMin + (1 - alpha) * state.ema;
           state.emaHistory.push(state.ema);
-          state.emaHistoryAt.push(sampledAt);
+          state.emaHistoryAt.push(committedAt);
           if (state.emaHistory.length > BUCKET_WINDOW) {
             state.emaHistory.shift();
             state.emaHistoryAt.shift();
@@ -669,21 +682,23 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             // early, so the nominal span misstates the rate (#12802).
             const windowHours =
               (state.emaHistoryAt[BUCKET_WINDOW - 1]! - state.emaHistoryAt[0]!) / 3_600_000;
-            // A span that didn't move forward (wall-clock adjustment) has no rate.
-            const growthMbPerHour = windowHours > 0 ? (newest - oldest) / windowHours : 0;
-            if (growthMbPerHour > TREND_WARN_MB_PER_HOUR) {
-              if (!trendWarnedPids.has(proc.pid)) {
-                trendWarnedPids.add(proc.pid);
-                logWarn("process-memory-trend-warning", {
-                  pid: proc.pid,
-                  type: proc.type,
-                  growthMbPerHour: Math.round(growthMbPerHour),
-                  mb: Math.round(mb),
-                  peakMb: Math.round(state.peakMb),
-                });
+            // No measurable span is no evidence either way, so the latch is left alone.
+            if (windowHours > 0) {
+              const growthMbPerHour = (newest - oldest) / windowHours;
+              if (growthMbPerHour > TREND_WARN_MB_PER_HOUR) {
+                if (!trendWarnedPids.has(proc.pid)) {
+                  trendWarnedPids.add(proc.pid);
+                  logWarn("process-memory-trend-warning", {
+                    pid: proc.pid,
+                    type: proc.type,
+                    growthMbPerHour: Math.round(growthMbPerHour),
+                    mb: Math.round(mb),
+                    peakMb: Math.round(state.peakMb),
+                  });
+                }
+              } else if (growthMbPerHour <= 0) {
+                trendWarnedPids.delete(proc.pid);
               }
-            } else if (growthMbPerHour <= 0) {
-              trendWarnedPids.delete(proc.pid);
             }
           }
 
