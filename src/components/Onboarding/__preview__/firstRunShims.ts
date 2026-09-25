@@ -3,6 +3,7 @@ import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import { DEFAULT_AGENT_SETTINGS, type AgentSettings } from "@shared/types/agentSettings";
 import type { CliAvailability, OnboardingState, PrerequisiteSpec } from "@shared/types";
 import type { ChecklistItemId, ChecklistState } from "@shared/types/ipc/maps";
+import { tourProgressFor } from "@shared/utils/tourIds";
 
 /**
  * Bridge answers for the first-run journey harness.
@@ -65,7 +66,8 @@ const onboarding: OnboardingState = {
     celebrationShown: false,
     items: checklistItems(),
   },
-  tour: { completed: false, dismissed: false, muted: false, lastChapter: 0 },
+  tours: {},
+  tourMuted: false,
 };
 
 const checklistListeners = new Set<(next: ChecklistState) => void>();
@@ -171,9 +173,9 @@ installPreviewShims({
       onboarding.checklist.items[item] = true;
       pushChecklist();
     },
-    dismissTourInvite: async () => structuredClone(onboarding.tour),
-    setTourProgress: async () => structuredClone(onboarding.tour),
-    setTourMuted: async () => structuredClone(onboarding.tour),
+    dismissTourInvite: async (tourId: string) => tourProgressFor(onboarding.tours, tourId),
+    setTourProgress: async (tourId: string) => tourProgressFor(onboarding.tours, tourId),
+    setTourMuted: async () => onboarding.tourMuted,
     markAgentsSeen: async () => structuredClone(onboarding),
     recordAgentFirstSeen: async () => structuredClone(onboarding),
     onChecklistPush: (callback: (next: ChecklistState) => void) => {

@@ -27,7 +27,8 @@ const defaultOnboardingState: OnboardingState = {
       ranSecondParallelAgent: false,
     },
   },
-  tour: { completed: false, dismissed: false, muted: false, lastChapter: 0 },
+  tours: {},
+  tourMuted: false,
 };
 
 const onboardingMock = {

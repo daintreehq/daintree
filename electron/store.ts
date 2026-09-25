@@ -404,12 +404,19 @@ export interface StoreSchema {
         ranSecondParallelAgent: boolean;
       };
     };
+    /**
+     * @deprecated Single-tour record from before progress was kept per tour.
+     * Migration 029 moves it into `tours` and `tourMuted`; kept optional so
+     * `clearInvalidConfig` doesn't strip it before that migration runs.
+     */
     tour?: {
       completed: boolean;
       dismissed: boolean;
       muted: boolean;
       lastChapter: number;
     };
+    tours?: Record<string, { completed: boolean; dismissed: boolean; lastChapter: number }>;
+    tourMuted?: boolean;
   };
   orchestrationMilestones: Record<string, boolean>;
   shortcutHintCounts: Record<string, number>;
@@ -845,12 +852,8 @@ const storeOptions = {
           ranSecondParallelAgent: false,
         },
       },
-      tour: {
-        completed: false,
-        dismissed: false,
-        muted: false,
-        lastChapter: 0,
-      },
+      tours: {},
+      tourMuted: false,
     },
     orchestrationMilestones: {},
     shortcutHintCounts: {},

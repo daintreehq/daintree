@@ -27,6 +27,10 @@ describe("PERF-080 heavy migration fixture", () => {
     expect("checklist" in fixture.onboarding).toBe(false);
     expect(fixture.notificationSettings.soundFile).toBe("ping.wav");
     expect(fixture.agentSettings.agents["agent-0"]!.flavorId).toBe("preset-0");
+    // 029 moves the single tour record into `tours` and `tourMuted`.
+    expect(fixture.onboarding.tour).toBeDefined();
+    expect("tours" in fixture.onboarding).toBe(false);
+    expect("tourMuted" in fixture.onboarding).toBe(false);
   });
 
   it("carries every legacy key a later migration is written to consume", () => {
@@ -67,7 +71,7 @@ describe("PERF-080 drives the real migration chain", () => {
       expect(metrics[name], name).toBe(0);
     }
 
-    expect(metrics.schemaVersion).toBe(28);
+    expect(metrics.schemaVersion).toBe(29);
     expect(metrics.terminalCount).toBe(HEAVY_FIXTURE_COUNTS.terminals);
     expect(metrics.recipeCount).toBe(HEAVY_FIXTURE_COUNTS.recipes);
     expect(metrics.agentCount).toBe(HEAVY_FIXTURE_COUNTS.survivingAgents);
@@ -82,6 +86,6 @@ describe("PERF-080 drives the real migration chain", () => {
     const sample = await scenario.run(context);
     const metrics = sample.metrics as Record<string, number>;
     expect(metrics.migrationMisses).toBe(0);
-    expect(metrics.schemaVersion).toBe(28);
+    expect(metrics.schemaVersion).toBe(29);
   }, 120_000);
 });

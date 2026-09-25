@@ -173,11 +173,11 @@ export interface ChecklistState {
   items: ChecklistItems;
 }
 
+/** One tour's progress. Keyed by tour id in `OnboardingState.tours`. */
 export interface TourOnboardingState {
   completed: boolean;
   /** The user turned down the tour's invitation; it is never offered again unasked. */
   dismissed: boolean;
-  muted: boolean;
   /** Chapter the user last reached, so a reopened tour resumes there. */
   lastChapter: number;
 }
@@ -200,7 +200,10 @@ export interface OnboardingState {
   welcomeCardDismissed: boolean;
   setupBannerDismissed: boolean;
   checklist: ChecklistState;
-  tour: TourOnboardingState;
+  /** Progress per tour id; a tour with no entry has never been started. */
+  tours: Record<string, TourOnboardingState>;
+  /** One narration preference across every tour. */
+  tourMuted: boolean;
 }
 
 /**

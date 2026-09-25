@@ -1102,15 +1102,15 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "onboarding:tour-dismiss-invite": {
-    args: [];
+    args: [tourId: string];
     result: import("./maps.js").TourOnboardingState;
   };
   "onboarding:tour-set-muted": {
     args: [muted: boolean];
-    result: import("./maps.js").TourOnboardingState;
+    result: boolean;
   };
   "onboarding:tour-set-progress": {
-    args: [update: import("./maps.js").TourProgressUpdate];
+    args: [tourId: string, update: import("./maps.js").TourProgressUpdate];
     result: import("./maps.js").TourOnboardingState;
   };
   "os-dnd:get-state": {

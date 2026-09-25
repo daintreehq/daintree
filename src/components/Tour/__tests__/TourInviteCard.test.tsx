@@ -2,6 +2,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TourOnboardingState } from "@shared/types";
+import { DAINTREE_TOUR_ID, makePluginTourId } from "@shared/utils/tourIds";
 
 const { getOnboardingStateMock } = vi.hoisted(() => ({ getOnboardingStateMock: vi.fn() }));
 vi.mock("@/clients/onboardingClient", () => ({ getOnboardingState: getOnboardingStateMock }));
@@ -13,16 +14,23 @@ import { inviteStateFor, TourInviteCard, TourWelcomeLink } from "../TourInviteCa
 const tour = (patch: Partial<TourOnboardingState> = {}): TourOnboardingState => ({
   completed: false,
   dismissed: false,
-  muted: false,
   lastChapter: 0,
   ...patch,
 });
 
+const stored = (
+  daintree: TourOnboardingState,
+  others: Record<string, TourOnboardingState> = {}
+) => ({
+  tours: { ...others, [DAINTREE_TOUR_ID]: daintree },
+  tourMuted: false,
+});
+
 let dismissInvite: ReturnType<typeof vi.fn>;
 
-function setup(stored: TourOnboardingState) {
-  getOnboardingStateMock.mockResolvedValue({ tour: stored });
-  dismissInvite = vi.fn().mockResolvedValue({ ...stored, dismissed: true });
+function setup(daintree: TourOnboardingState, others: Record<string, TourOnboardingState> = {}) {
+  getOnboardingStateMock.mockResolvedValue(stored(daintree, others));
+  dismissInvite = vi.fn().mockResolvedValue({ ...daintree, dismissed: true });
   Reflect.set(window, "electron", { onboarding: { dismissTourInvite: dismissInvite } });
 }
 
@@ -72,6 +80,7 @@ describe("TourInviteCard", () => {
     vi.useFakeTimers();
     fireEvent.click(notNow);
     expect(dismissInvite).toHaveBeenCalledTimes(1);
+    expect(dismissInvite).toHaveBeenCalledWith(DAINTREE_TOUR_ID);
     expect(screen.getByRole("status").textContent).toContain("Help › Daintree Tour");
     act(() => {
       vi.advanceTimersByTime(5000);
@@ -93,11 +102,36 @@ describe("TourInviteCard", () => {
     setup(tour());
     render(<TourInviteCard />);
     await screen.findByRole("button", { name: "Start tour" });
-    getOnboardingStateMock.mockResolvedValue({ tour: tour({ completed: true }) });
+    getOnboardingStateMock.mockResolvedValue(stored(tour({ completed: true })));
     act(() => {
       window.dispatchEvent(new Event("focus"));
     });
     await waitFor(() => expect(screen.queryByTestId("tour-invite-card")).toBeNull());
+  });
+});
+
+describe("TourInviteCard with other tours", () => {
+  beforeEach(() => {
+    getOnboardingStateMock.mockReset();
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(window, "electron");
+  });
+
+  it("keeps inviting to the Daintree tour when a plugin tour is finished or turned down", async () => {
+    setup(tour(), {
+      [makePluginTourId("acme.tools", "welcome")]: tour({ completed: true, lastChapter: 3 }),
+      [makePluginTourId("other.plugin", "welcome")]: tour({ dismissed: true }),
+    });
+    render(<TourInviteCard />);
+    expect(await screen.findByRole("button", { name: "Start tour" })).toBeTruthy();
+  });
+
+  it("invites to the Daintree tour when no progress has been stored for it", async () => {
+    getOnboardingStateMock.mockResolvedValue({ tours: {}, tourMuted: false });
+    Reflect.set(window, "electron", { onboarding: { dismissTourInvite: vi.fn() } });
+    render(<TourInviteCard />);
+    expect(await screen.findByRole("button", { name: "Start tour" })).toBeTruthy();
   });
 });
 
