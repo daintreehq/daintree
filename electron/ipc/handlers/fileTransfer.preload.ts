@@ -5,6 +5,7 @@ export const FILE_TRANSFER_METHOD_CHANNELS = {
   uploadBytes: "file-transfer:upload-bytes",
   download: "file-transfer:download",
   cancel: "file-transfer:cancel",
+  answerHostPick: "file-transfer:answer-host-pick",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof FILE_TRANSFER_METHOD_CHANNELS;
