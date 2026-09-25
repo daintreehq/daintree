@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyWaitingReason } from "../WaitingReasonClassifier.js";
+import { classifyWaitingReason, hasRateLimitMessage } from "../WaitingReasonClassifier.js";
 
 describe("classifyWaitingReason", () => {
   describe("prompt detection", () => {
@@ -273,5 +273,40 @@ describe("classifyWaitingReason", () => {
       const lines = ["  ", "  ", "  "];
       expect(classifyWaitingReason(lines, false)).toBe("prompt");
     });
+  });
+});
+
+describe("hasRateLimitMessage (#12797)", () => {
+  it.each([
+    "■ You've hit your usage limit. Upgrade to Pro or try again at 3:40 PM.",
+    "Claude usage limit reached. Your limit will reset at 5pm.",
+    "\x1b[31m⚠ You've been rate limited\x1b[0m",
+    "Error: 429 Too Many Requests",
+    "quota exceeded for this model",
+  ])("sees a rate-limit banner: %s", (line) => {
+    expect(hasRateLimitMessage(["some output", line, "> "])).toBe(true);
+  });
+
+  it.each([
+    "the API rate limits at 50 rpm",
+    "Have you hit your usage limit?",
+    "You have 2 usage limit resets available",
+    "Error: unauthorized",
+    "API overloaded, retrying",
+    "Credit balance is too low",
+  ])("does not treat other failures or prose as a rate limit: %s", (line) => {
+    expect(hasRateLimitMessage([line])).toBe(false);
+  });
+
+  it("only looks at the tail of the viewport", () => {
+    const lines = [
+      "You've hit your usage limit.",
+      ...Array.from({ length: 12 }, (_, i) => `row ${i}`),
+    ];
+    expect(hasRateLimitMessage(lines)).toBe(false);
+  });
+
+  it("keeps classifying a rate-limit banner as an error wait", () => {
+    expect(classifyWaitingReason(["You've hit your usage limit."], true)).toBe("error");
   });
 });

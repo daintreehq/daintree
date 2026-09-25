@@ -31,6 +31,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "agent:state-transition-dropped": "external",
   "agent:all-clear": "bus",
   "agent:detected": "bus",
+  // Pane-attributed rate-limit observation (#12797); timestamps only.
+  "agent:rate-limit-observed": "bus",
   "agent:exited": "bus",
   "agent:fallback-triggered": "bus",
 

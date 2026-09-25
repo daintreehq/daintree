@@ -12,6 +12,7 @@ import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { SubagentChip } from "./SubagentChip";
 import { TerminalDrivenByBadge } from "./TerminalHandOver";
+import { TerminalRateLimitBadge } from "./TerminalRateLimitBadge";
 import { TerminalWatchChip } from "./TerminalWatchChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
@@ -321,6 +322,9 @@ export function TerminalHeaderContent({
       {/* Driven-by badge — ambient cue that the user handed this terminal to
           an orchestrating pane (#12490), naming which one. Self-gating. */}
       {hasPtyKind && <TerminalDrivenByBadge terminalId={id} />}
+
+      {/* Pane-observed rate-limit banner (#12797). Self-gating and expiring. */}
+      {hasPtyKind && <TerminalRateLimitBadge terminalId={id} />}
 
       {/* Command Pill - shows currently running command (inline with title).
           Slimmed to px-2 py-0.5 to match the row's other small badges. */}

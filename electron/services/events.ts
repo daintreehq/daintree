@@ -222,6 +222,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "All concurrent agents finished — workspace fully quiet",
   },
+  "agent:rate-limit-observed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A pane's output showed an agent rate-limit banner",
+  },
   "agent:detected": {
     category: "agent",
     requiresContext: false,
@@ -675,6 +681,17 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * A pane's agent output showed a rate-limit banner (#12797). An observation,
+   * attributed to the pane: it says an agent hit a limit, not how close the
+   * account is to one. Carries no terminal text, by design.
+   */
+  "agent:rate-limit-observed": {
+    terminalId: string;
+    observedAt: number;
+    timestamp: number;
+  };
+
+  /**
    * Emitted when an agent CLI (or a recognised plain process) is detected
    * running in a terminal. `defaultTitle` lets the renderer sync its default
    * title to the live chrome identity in lockstep with the store update.
@@ -1061,6 +1078,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "agent:state-changed",
   "agent:state-transition-dropped",
   "agent:all-clear",
+  "agent:rate-limit-observed",
   "agent:detected",
   "agent:exited",
   "agent:output",

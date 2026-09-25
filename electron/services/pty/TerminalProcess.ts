@@ -41,6 +41,7 @@ import { HandbackTracker } from "./HandbackTracker.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
+import { hasRateLimitMessage } from "./WaitingReasonClassifier.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
@@ -251,6 +252,12 @@ export class TerminalProcess {
   private agentOutputNoteTimer: NodeJS.Timeout | null = null;
   private readonly outputProgress = new OutputProgressTracker();
   private outputProgressTimer: NodeJS.Timeout | null = null;
+  /**
+   * Whether the last viewport read showed a rate-limit banner. An observation
+   * fires on the rising edge only, so a banner that sits on screen is one
+   * observation rather than one per repaint (#12797).
+   */
+  private rateLimitBannerVisible = false;
 
   private agentOutputForwarder!: AgentOutputForwarder;
 
@@ -2100,6 +2107,24 @@ export class TerminalProcess {
     if (this.outputProgress.observe(lines, now)) {
       this.terminalInfo.lastOutputChangeAt = now;
     }
+    this.observeRateLimitBanner(lines, now);
+  }
+
+  /**
+   * Report that this pane showed an agent's rate-limit banner. The event is
+   * the fact and its time only — never the matched line, which is terminal
+   * content (#12797).
+   */
+  private observeRateLimitBanner(lines: readonly string[], now: number): void {
+    const visible = this.isAgentLive && hasRateLimitMessage(lines);
+    if (visible && !this.rateLimitBannerVisible) {
+      events.emit("agent:rate-limit-observed", {
+        terminalId: this.id,
+        observedAt: now,
+        timestamp: now,
+      });
+    }
+    this.rateLimitBannerVisible = visible;
   }
 
   // In-thread counterpart of the worker's viewport digest: one trailing read

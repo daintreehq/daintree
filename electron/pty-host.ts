@@ -1521,6 +1521,15 @@ events.on("agent:state-transition-dropped", (payload) => {
   }
 });
 
+events.on("agent:rate-limit-observed", (payload) => {
+  sendEvent({
+    type: "agent-rate-limit-observed",
+    terminalId: payload.terminalId,
+    observedAt: payload.observedAt,
+    timestamp: payload.timestamp,
+  });
+});
+
 events.on("agent:detected", (payload) => {
   sendEvent({
     type: "agent-detected",

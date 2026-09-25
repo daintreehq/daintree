@@ -1,11 +1,12 @@
 import { z } from "zod";
-import { defineIpcNamespace, opValidated } from "../define.js";
+import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { CODEX_METHOD_CHANNELS } from "./codex.preload.js";
 import type {
   AgentSubagentsResult,
   AgentSubagentTranscriptResult,
   CodexFolderSessionsResult,
 } from "../../../shared/types/ipc/agentSubagents.js";
+import type { CodexQuotaResult } from "../../../shared/types/ipc/agentQuota.js";
 
 // The renderer names a terminal, never a folder or a bare thread id. Main
 // resolves the cwd and the owning Codex thread from the pty-host record and
@@ -98,6 +99,12 @@ export const codexNamespace = defineIpcNamespace({
         return listCodexSessionsForCwd(cwd, codexHome);
       }
     ),
+    // Account-wide and argument-free: main's own Codex profile, never a pane's
+    // or Claude's (#12797).
+    readQuota: op(CODEX_METHOD_CHANNELS.readQuota, async (): Promise<CodexQuotaResult> => {
+      const { readCodexQuota } = await import("../../services/codex/CodexQuotaService.js");
+      return readCodexQuota();
+    }),
   },
 });
 

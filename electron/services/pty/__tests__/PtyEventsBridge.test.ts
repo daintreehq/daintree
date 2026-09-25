@@ -33,6 +33,21 @@ describe("bridgePtyEvent", () => {
     });
   });
 
+  it("forwards a rate-limit observation with its timestamps only (#12797)", () => {
+    const payloads: unknown[] = [];
+    events.on("agent:rate-limit-observed", (payload) => payloads.push(payload));
+
+    const handled = bridgePtyEvent({
+      type: "agent-rate-limit-observed",
+      terminalId: "term-1",
+      observedAt: 1_000,
+      timestamp: 1_000,
+    });
+
+    expect(handled).toBe(true);
+    expect(payloads).toEqual([{ terminalId: "term-1", observedAt: 1_000, timestamp: 1_000 }]);
+  });
+
   it("forwards waitingReason from agent-state events", () => {
     const payloads: Array<{ waitingReason?: string }> = [];
     events.on("agent:state-changed", (payload) => {

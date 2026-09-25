@@ -12,6 +12,7 @@ import { setupTerminalStoreListeners } from "../../store/panelStore";
 import { setupProjectStatsListeners } from "../../store/projectStatsStore";
 import { setupFleetSnapshotListeners } from "../../store/fleetSnapshotStore";
 import { setupTerminalAdoptionListeners } from "../../store/terminalAdoptionStore";
+import { setupRateLimitObservationListeners } from "../../store/rateLimitObservationStore";
 import { setupSystemWakeListeners } from "../../store/systemWakeStore";
 import { useCachedProjectViewsStore } from "../../store/cachedProjectViewsStore";
 import { useResourceMonitoringStore } from "../../store/resourceMonitoringStore";
@@ -38,6 +39,7 @@ export function usePanelStoreBootstrap(terminalConfig?: TerminalConfig | null) {
     const cleanupProjectStats = setupProjectStatsListeners();
     const cleanupFleetSnapshot = setupFleetSnapshotListeners();
     const cleanupTerminalAdoptions = setupTerminalAdoptionListeners();
+    const cleanupRateLimitObservations = setupRateLimitObservationListeners();
     const cleanupSystemWake = setupSystemWakeListeners();
 
     return () => {
@@ -45,6 +47,7 @@ export function usePanelStoreBootstrap(terminalConfig?: TerminalConfig | null) {
       cleanupProjectStats();
       cleanupFleetSnapshot();
       cleanupTerminalAdoptions();
+      cleanupRateLimitObservations();
       cleanupSystemWake();
     };
   }, []);

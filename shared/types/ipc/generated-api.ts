@@ -84,6 +84,9 @@ export interface GeneratedElectronAPI {
     listSubagents(
       ...args: IpcInvokeMap["codex:list-subagents"]["args"]
     ): Promise<IpcInvokeMap["codex:list-subagents"]["result"]>;
+    readQuota(
+      ...args: IpcInvokeMap["codex:read-quota"]["args"]
+    ): Promise<IpcInvokeMap["codex:read-quota"]["result"]>;
     readSubagentTranscript(
       ...args: IpcInvokeMap["codex:read-subagent-transcript"]["args"]
     ): Promise<IpcInvokeMap["codex:read-subagent-transcript"]["result"]>;
