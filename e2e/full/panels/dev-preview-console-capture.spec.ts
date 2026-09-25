@@ -102,6 +102,13 @@ server.listen(0, '127.0.0.1', () => {
       timeout: T_SHORT,
     });
 
+    // The list is virtualized and multi-line rows (Electron's CSP warning) render in full,
+    // so filter to the marker rather than relying on them landing inside the viewport.
+    await window
+      .getByRole("searchbox", { name: "Filter console messages" })
+      .or(window.getByLabel("Filter console messages"))
+      .first()
+      .fill(`${CAPTURE_MARKER}-runtime`);
     await expect(window.locator(`text=${CAPTURE_MARKER}-runtime`).first()).toBeVisible({
       timeout: T_LONG,
     });
