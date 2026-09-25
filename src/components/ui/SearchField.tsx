@@ -42,6 +42,13 @@ export interface SearchFieldProps extends Omit<
  * The whole field is the pointer target — pressing the magnifier or the
  * padding puts the caret in the text rather than doing nothing, which is what
  * a field drawn as one box has to mean.
+ *
+ * This is the inset well: a field that sits inside padding and shares its
+ * header with other things (a rail, a palette header, a toolbar dropdown with
+ * refresh and sort beside it). When the search box is itself the top edge of
+ * a simple picker popover, use `PopoverSearchField` instead. A non-interactive
+ * stand-in (a loading skeleton) draws `.search-field` with `data-size` directly
+ * rather than copying the look, so it cannot drift from the live field.
  */
 export function SearchField({
   size = "compact",

@@ -3723,3 +3723,36 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     });
   });
 });
+
+describe("GitHubResourceList — the search field (#12752)", () => {
+  // The field moved from hand-built chrome onto the shared SearchField. The
+  // combobox wiring has to land on the real input, not the field wrapper, or
+  // the row cursor and the Shift+F10 row menu go quiet.
+  it.each(["issue", "pr"] as const)(
+    "renders the shared field for %s with its combobox wiring",
+    async (type) => {
+      const fetcher = type === "issue" ? mockListIssues : mockListPRs;
+      fetcher.mockResolvedValue(makeResponse([makeIssue(7)]));
+      render(<GitHubResourceList type={type} projectPath="/test/proj" />);
+
+      const input = screen.getByRole("combobox") as HTMLInputElement;
+      expect(input.tagName).toBe("INPUT");
+      expect(input.classList.contains("search-field-input")).toBe(true);
+      expect(input.closest(".search-field")?.getAttribute("data-size")).toBe("compact");
+      expect(input.hasAttribute("data-row-menu")).toBe(true);
+      expect(input.getAttribute("aria-haspopup")).toBe("grid");
+      expect(input.getAttribute("aria-controls")).toBeTruthy();
+      expect(input.getAttribute("aria-keyshortcuts")).toContain("Shift+F10");
+      expect(document.activeElement).toBe(input);
+
+      fireEvent.change(input, { target: { value: "bug" } });
+      const clear = input
+        .closest(".search-field")
+        ?.querySelector<HTMLButtonElement>('button[aria-label="Clear search"]');
+      expect(clear).toBeTruthy();
+      fireEvent.click(clear!);
+      expect(input.value).toBe("");
+      expect(document.activeElement).toBe(input);
+    }
+  );
+});

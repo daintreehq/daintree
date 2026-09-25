@@ -8,21 +8,12 @@ import {
   type KeyboardEvent,
 } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import {
-  Search,
-  ExternalLink,
-  RefreshCw,
-  WifiOff,
-  Plus,
-  Settings,
-  X,
-  ArrowUpDown,
-  Clock,
-} from "lucide-react";
+import { ExternalLink, RefreshCw, WifiOff, Plus, Settings, ArrowUpDown, Clock } from "lucide-react";
 import { ListChecks } from "@/components/icons";
 import { GitHubIcon } from "@/components/icons/brands";
 import { isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors";
 import { Button } from "@/components/ui/button";
+import { SearchField } from "@/components/ui/SearchField";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -1062,58 +1053,31 @@ export function GitHubResourceList({
     <div ref={rootRef} className="relative w-[450px] flex flex-col h-[500px]">
       <div className="p-3 border-b border-[var(--border-divider)] space-y-2 shrink-0">
         <div className="flex items-center gap-2">
-          <div
-            className={cn(
-              "flex items-center gap-1.5 px-2.5 h-8 rounded-[var(--radius-md)] flex-1 min-w-0",
-              "bg-overlay-soft border border-[var(--border-overlay)]",
-              // Full-strength accent, and only here: the search input is the
-              // single focus anchor for this region, so it gets the whole
-              // accent budget rather than two washed-out fractions of it.
-              "transition-[border-color] duration-150 ease-out",
-              "focus-within:border-accent-primary"
-            )}
-          >
-            <Search
-              className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none"
-              aria-hidden="true"
-            />
-            <input
-              ref={inputRef}
-              type="text"
-              placeholder={`Search ${type === "issue" ? "issues" : "pull requests"}…`}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={handleInputKeyDown}
-              autoFocus
-              role="combobox"
-              aria-autocomplete="list"
-              aria-expanded={true}
-              aria-haspopup="grid"
-              aria-controls={listId}
-              aria-activedescendant={activeItemId}
-              aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
-              aria-keyshortcuts="ArrowDown ArrowUp Enter Meta+Enter Control+Enter Shift+Space Shift+F10"
-              /* Claims Shift+F10 / ContextMenu for the row under the cursor.
-                 Without this the app's capture-phase global handler consumes
-                 them first and the row menu stays pointer-only. */
-              data-row-menu=""
-              className="flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={handleClearSearch}
-                aria-label="Clear search"
-                className={cn(
-                  "flex items-center justify-center w-5 h-5 rounded shrink-0",
-                  "text-text-secondary hover:text-text-primary",
-                  "transition-colors duration-150 ease-out"
-                )}
-              >
-                <X className="w-3 h-3" />
-              </button>
-            )}
-          </div>
+          <SearchField
+            size="compact"
+            // Keeps the dropdown header's 32px, text-sm field rather than the
+            // rail's 28px, matching the commits dropdown beside it.
+            fieldClassName="h-8 text-sm flex-1"
+            inputRef={inputRef}
+            placeholder={`Search ${type === "issue" ? "issues" : "pull requests"}…`}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={handleInputKeyDown}
+            autoFocus
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={true}
+            aria-haspopup="grid"
+            aria-controls={listId}
+            aria-activedescendant={activeItemId}
+            aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
+            aria-keyshortcuts="ArrowDown ArrowUp Enter Meta+Enter Control+Enter Shift+Space Shift+F10"
+            /* Claims Shift+F10 / ContextMenu for the row under the cursor.
+               Without this the app's capture-phase global handler consumes
+               them first and the row menu stays pointer-only. */
+            data-row-menu=""
+            onClear={handleClearSearch}
+          />
           <Tooltip>
             <TooltipTrigger asChild>
               <button

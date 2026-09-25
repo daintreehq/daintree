@@ -145,17 +145,12 @@ export function GitHubResourceListSkeleton({
       {/* Header — matches GitHubResourceList */}
       <div className="p-3 border-b border-[var(--border-divider)] space-y-2 shrink-0">
         <div className="flex items-center gap-2">
-          <div
-            className={cn(
-              "flex items-center gap-1.5 px-2.5 h-8 rounded-[var(--radius-md)] flex-1 min-w-0",
-              "bg-overlay-soft border border-[var(--border-overlay)]"
-            )}
-          >
-            <Search
-              className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none"
-              aria-hidden="true"
-            />
-            <span className="flex-1 min-w-0 text-sm text-text-secondary select-none">
+          {/* The shared field's own classes, not a copy of its look: the live
+              header renders SearchField, so drawing the same CSS here keeps the
+              swap from loading to loaded seamless. */}
+          <div className="search-field h-8 text-sm flex-1 cursor-default" data-size="compact">
+            <Search className="search-field-icon" aria-hidden="true" />
+            <span className="flex-1 min-w-0 truncate text-text-secondary select-none">
               Search {type === "issue" ? "issues" : "pull requests"}…
             </span>
           </div>

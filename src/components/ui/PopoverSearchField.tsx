@@ -40,6 +40,10 @@ export const POPOVER_SEARCH_INPUT_CLASS = cn(
  * deliberately not the global accent ring: this field is autofocused whenever
  * its popover opens, so an accent ring would spend the region's one
  * load-bearing accent on chrome that is always lit.
+ *
+ * Only for a picker whose search box is the panel's full-width top strip, with
+ * nothing else in that row. A search box inset in a header that also holds
+ * other controls, or anywhere outside a picker popover, is `SearchField`.
  */
 export const PopoverSearchField = forwardRef<HTMLInputElement, PopoverSearchFieldProps>(
   function PopoverSearchField({ className, fieldClassName, ...inputProps }, ref) {

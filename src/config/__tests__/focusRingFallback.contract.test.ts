@@ -615,16 +615,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     reason: "PRE-EXISTING #8940: command picker trigger button has no focus indicator — follow-up",
   },
   {
-    file: "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
-    fragment:
-      "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden",
-    reason:
-      "RESOLVED, not deferred: the input is a bare transparent field inside a bordered shell, " +
-      "and the shell owns the indicator — `focus-within:border-accent-primary` at full strength, " +
-      "the one accent signal this focus region is allowed. A same-element ring would draw a second " +
-      "indicator inside the first. Was the #8940 follow-up.",
-  },
-  {
     file: "src/components/Layout/ChordIndicator.tsx",
     fragment: "focus:outline-hidden",
     reason:
