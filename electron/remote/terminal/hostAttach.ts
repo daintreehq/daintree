@@ -1,6 +1,7 @@
 import { MessageChannelMain } from "electron";
 import type { ClientEndpoint } from "../../ipc/endpoint.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
+import { getDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { getLifecycleLedger } from "../../services/pty/lifecycleLedger.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
@@ -83,6 +84,9 @@ export function attachTerminalBridge(
       // Main's spawn records are written before any output exists and dropped
       // when the terminal goes, so they decide what this endpoint may touch.
       ownerOf: (id) => getPtyClient()?.getTerminalProjectId(id) ?? null,
+      mayResize: () =>
+        endpoint.projectId !== null &&
+        getDriveLeaseService().isDriving(endpoint.projectId, endpoint),
       ...overrides,
     });
     const created = bridge;

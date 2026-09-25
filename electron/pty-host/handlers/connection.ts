@@ -140,6 +140,9 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
             typeof portMsg.cols === "number" &&
             typeof portMsg.rows === "number"
           ) {
+            // A remote endpoint's port (negative id) is gated by its own
+            // bridge; this machine's windows yield to another client's lease.
+            if (windowId > 0 && ptyManager.isResizeHeldElsewhere(portMsg.id)) return;
             ptyManager.resize(portMsg.id, portMsg.cols, portMsg.rows, "renderer-message-port");
           } else if (
             portMsg.type === "ack" &&
@@ -395,6 +398,20 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       }
       fallbackEligibleProjects.clear();
       for (const projectId of projectIds as string[]) fallbackEligibleProjects.add(projectId);
+    },
+
+    // Authoritative replace from Main's drive lease; validated before it is applied.
+    "set-resize-held-elsewhere": (msg) => {
+      const projectIds: unknown = msg.projectIds;
+      if (
+        !Array.isArray(projectIds) ||
+        projectIds.length !== Object.keys(projectIds).length ||
+        projectIds.some((projectId) => typeof projectId !== "string" || !projectId)
+      ) {
+        console.warn("[PtyHost] set-resize-held-elsewhere payload is not a list of project ids");
+        return;
+      }
+      ptyManager.setResizeHeldElsewhere(projectIds as string[]);
     },
 
     "disconnect-port": (msg) => {

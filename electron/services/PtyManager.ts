@@ -114,6 +114,8 @@ export class PtyManager extends EventEmitter {
     string,
     { cols: number; rows: number; generation: number | null }
   >();
+  // Projects whose drive lease another client holds (pushed by Main).
+  private resizeHeldElsewhere = new Set<string>();
   // Output the TerminalProcess constructor emits before `registry.add` — the
   // pooled-shell prelude and any chunks the data handoff buffered while the
   // shell sat in the pool. `emitData` routes by registry entry, so without this
@@ -765,6 +767,25 @@ export class PtyManager extends EventEmitter {
    * its own call site before sending, so between the two the next occurrence
    * names its origin.
    */
+  /**
+   * Replace the set of projects another client drives (the drive lease). Their
+   * terminals keep the driver's grid: see {@link isResizeHeldElsewhere}.
+   */
+  setResizeHeldElsewhere(projectIds: Iterable<string>): void {
+    this.resizeHeldElsewhere = new Set(projectIds);
+  }
+
+  /**
+   * True when a resize from one of this machine's own windows must be ignored
+   * because another client holds the terminal's project lease. A terminal not
+   * yet spawned has no known project and is never held.
+   */
+  isResizeHeldElsewhere(id: string): boolean {
+    if (this.resizeHeldElsewhere.size === 0) return false;
+    const projectId = this.registry.get(id)?.getInfo().projectId;
+    return projectId !== undefined && projectId !== null && this.resizeHeldElsewhere.has(projectId);
+  }
+
   resize(id: string, cols: number, rows: number, transport = "unknown"): void {
     const terminal = this.registry.get(id);
     if (!isUsableTerminalGeometry({ cols, rows })) {

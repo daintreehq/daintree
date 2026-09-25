@@ -59,6 +59,11 @@ export interface TerminalStreamBridgeOptions {
    * arriving from the client are never trusted on their own.
    */
   ownerOf(terminalId: string): string | null;
+  /**
+   * Whether this endpoint may resize its project's terminals right now (its
+   * client holds the drive lease). Absent means always.
+   */
+  mayResize?(): boolean;
   budget?: RingBudget;
   ringBytesPerTerminal?: number;
   /**
@@ -729,6 +734,8 @@ export class TerminalStreamBridge {
       this.ackPty(message.id, bytes);
       return;
     }
+    // Only the driver sizes the PTY; anyone else's grid would fight it.
+    if (message.type === "resize" && this.opts.mayResize && !this.opts.mayResize()) return;
     safePost(this.port, message);
   }
 
