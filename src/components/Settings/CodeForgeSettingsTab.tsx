@@ -20,6 +20,7 @@ import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { ForgeAuditLogViewer } from "./ForgeAuditLogViewer";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
+import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { ErrorRetryRow } from "@/components/Settings/auditLogParts";
 import { logError } from "@/utils/logger";
 
@@ -423,6 +424,8 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   const [credentialKnown, setCredentialKnown] = useState(false);
   const [statusFailed, setStatusFailed] = useState(false);
   const [statusAttempt, setStatusAttempt] = useState(0);
+  // Credentials belong to the host the window works on, and each host signs in on its own.
+  const remoteHostName = useRemoteHostName();
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   // Synchronous in-flight guard: `isSaving` state updates are batched and the
@@ -556,7 +559,13 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
               control={
                 <span className="flex items-center gap-1 text-xs text-text-secondary">
                   {hasCredential && <Check className="w-3 h-3" aria-hidden="true" />}
-                  {hasCredential ? "Credentials saved" : "No credentials saved"}
+                  {remoteHostName === null
+                    ? hasCredential
+                      ? "Credentials saved"
+                      : "No credentials saved"
+                    : hasCredential
+                      ? `Connected on ${remoteHostName}`
+                      : forgeNotConnectedLabel(providerName, remoteHostName)}
                 </span>
               }
             />

@@ -4,6 +4,7 @@ import { render, screen, waitFor, fireEvent, within } from "@testing-library/rea
 import { CodeForgeSettingsTab } from "../CodeForgeSettingsTab";
 import type { ForgeProviderEntry } from "@shared/types";
 import type { AuthValidation } from "@shared/types/forge";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -202,6 +203,27 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
     await waitFor(() => {
       expect(clearCredential).toHaveBeenCalledWith("acme.gitea");
     });
+  });
+
+  it("says whether the host is signed in, in a window attached to another host", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio" };
+    setHostPlatformInfo({ hostName: "studio-01" });
+    try {
+      installForgeMocks({
+        providers: [
+          makeProvider("acme", "gitea", "Gitea", [
+            { id: "token", label: "API token", type: "password" },
+          ]),
+        ],
+        hasCredential: false,
+      });
+      render(<CodeForgeSettingsTab activeSubtab="acme.gitea" onSubtabChange={vi.fn()} />);
+      expect(await screen.findByText("Gitea isn't connected on studio-01")).toBeTruthy();
+      expect(screen.queryByText("No credentials saved")).toBeNull();
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+      _resetHostPlatformForTests();
+    }
   });
 
   it("says a provider with no credentialFields needs none", async () => {
