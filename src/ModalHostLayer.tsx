@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { DaintreeTourHost } from "@/components/Tour/DaintreeTourHost";
+import { TourHost } from "@/components/Tour/TourHost";
 import type { WorktreeState, Project, ProjectCreationIdentity } from "@shared/types";
 import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
@@ -954,7 +954,7 @@ export function ModalHostLayer({
           </Suspense>
         </ErrorBoundary>
       )}
-      {isStateLoaded && <DaintreeTourHost />}
+      {isStateLoaded && <TourHost />}
       {currentProject !== null && gettingStarted.visible && gettingStarted.checklist && (
         <ErrorBoundary
           variant="component"

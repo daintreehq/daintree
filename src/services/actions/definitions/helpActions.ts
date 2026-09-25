@@ -20,7 +20,7 @@ import {
 import { logError } from "@/utils/logger";
 import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
-import { openDaintreeTour } from "@/components/Tour/tourEvents";
+import { openTour } from "@/components/Tour/tourEvents";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { getAssistantSupportedAgentIds } from "@shared/config/agentRegistry";
 
@@ -370,8 +370,15 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     nonRepeatable: true,
     scope: "renderer",
     keywords: ["tour", "tutorial", "walkthrough", "onboarding", "intro", "video"],
-    run: async () => {
-      openDaintreeTour();
+    // Optional so every existing zero-argument caller (menu, palette, MCP) keeps working.
+    // An id no tour is registered under is the host's to handle, not a validation error.
+    argsSchema: z
+      .object({
+        tourId: z.string().optional().describe("Tour to play; defaults to the Daintree tour"),
+      })
+      .optional(),
+    run: async (args: { tourId?: string } | undefined) => {
+      openTour(args?.tourId);
     },
   }));
 

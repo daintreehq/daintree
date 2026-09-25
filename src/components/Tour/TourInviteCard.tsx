@@ -6,10 +6,11 @@ import { Button } from "@/components/ui/button";
 import { getOnboardingState } from "@/clients/onboardingClient";
 import { cn } from "@/lib/utils";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-// The summary, not tourChapters/tourTiming: this card renders at startup, and
-// those pull the narration, cue manifest and parser in with them.
-import { TOUR_CHAPTER_TITLES, TOUR_MINUTES } from "./tourSummary.generated";
-import { DAINTREE_TOUR_COMPLETED_EVENT, openDaintreeTour } from "./tourEvents";
+import type { TourSummary } from "./tourDefinition";
+import { openDaintreeTour, TOUR_COMPLETED_EVENT, tourIdOf } from "./tourEvents";
+// The registry hands out summaries only: this card renders at startup, and the
+// full definition pulls the narration, cue manifest and parser in with it.
+import { getTour } from "./tourRegistry";
 
 /** How long the "find it in Help" note stays after the invitation is turned down. */
 const DISMISSED_NOTE_MS = 4000;
@@ -20,9 +21,14 @@ type InviteState =
   | { kind: "resume"; chapter: number }
   | { kind: "dismissed-note" };
 
+/** The Daintree tour is built in, so its registration is always there. */
+function daintreeSummary(): TourSummary {
+  return getTour(DAINTREE_TOUR_ID)!.summary;
+}
+
 export function inviteStateFor(tour: TourOnboardingState): InviteState {
   if (tour.completed || tour.dismissed) return { kind: "hidden" };
-  if (tour.lastChapter > 0 && tour.lastChapter < TOUR_CHAPTER_TITLES.length) {
+  if (tour.lastChapter > 0 && tour.lastChapter < daintreeSummary().chapterTitles.length) {
     return { kind: "resume", chapter: tour.lastChapter };
   }
   return { kind: "invite" };
@@ -54,17 +60,20 @@ function useTourOffer() {
           }),
         { context: "Reading tour invitation state" }
       );
-    const onCompleted = () => setState({ kind: "hidden" });
+    // Another tour finishing leaves this one's offer where it was.
+    const onCompleted = (event: Event) => {
+      if (tourIdOf(event) === DAINTREE_TOUR_ID) setState({ kind: "hidden" });
+    };
     const onVisible = () => {
       if (document.visibilityState === "visible") refresh();
     };
     refresh();
-    window.addEventListener(DAINTREE_TOUR_COMPLETED_EVENT, onCompleted);
+    window.addEventListener(TOUR_COMPLETED_EVENT, onCompleted);
     window.addEventListener("focus", onVisible);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       active = false;
-      window.removeEventListener(DAINTREE_TOUR_COMPLETED_EVENT, onCompleted);
+      window.removeEventListener(TOUR_COMPLETED_EVENT, onCompleted);
       window.removeEventListener("focus", onVisible);
       document.removeEventListener("visibilitychange", onVisible);
     };
@@ -107,6 +116,7 @@ export function TourInviteCard({ className }: { className?: string }) {
     });
   };
   const resuming = state.kind === "resume";
+  const summary = daintreeSummary();
 
   return (
     <div className={cn("w-full", className)} data-testid="tour-invite-card">
@@ -123,12 +133,12 @@ export function TourInviteCard({ className }: { className?: string }) {
           <CirclePlay className="mt-0.5 h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
           <div className="min-w-0 flex-1 text-left">
             <h3 className="text-sm font-semibold text-text-primary">
-              {resuming ? "Pick up the Daintree Tour" : "Take the Daintree Tour"}
+              {resuming ? `Pick up the ${summary.title}` : `Take the ${summary.title}`}
             </h3>
             <p className="mt-1 text-xs leading-relaxed text-text-secondary">
               {resuming
-                ? `You stopped at chapter ${state.chapter + 1} of ${TOUR_CHAPTER_TITLES.length}: ${TOUR_CHAPTER_TITLES[state.chapter]!}.`
-                : `A narrated walkthrough of worktrees, agents, the Assistant and more, about ${TOUR_MINUTES} minutes. Skip any chapter.`}
+                ? `You stopped at chapter ${state.chapter + 1} of ${summary.chapterTitles.length}: ${summary.chapterTitles[state.chapter]!}.`
+                : `A narrated walkthrough of worktrees, agents, the Assistant and more, about ${summary.minutes} minutes. Skip any chapter.`}
             </p>
             <div className="mt-4 flex items-center gap-2">
               {/* Outline, not a fill: the launcher above is this surface's lead action. */}
@@ -168,7 +178,7 @@ export function TourWelcomeLink({ enabled }: { enabled: boolean }) {
     >
       {state.kind === "resume"
         ? "Pick up where you left off in the Daintree Tour"
-        : `New here? Take the ${TOUR_MINUTES}-minute tour`}
+        : `New here? Take the ${daintreeSummary().minutes}-minute tour`}
     </button>
   );
 }

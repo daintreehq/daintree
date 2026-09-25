@@ -6,6 +6,7 @@ import { resolveAppTheme } from "@shared/theme/themes";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TOUR_CHAPTERS } from "../tourChapters";
+import { DAINTREE_TOUR } from "../daintreeTour";
 import { TourDialog } from "../TourDialog";
 import type { TourPlayer } from "@daintreehq/tour";
 import { TOUR_KEYBOARDS, type TourKeyboard } from "../tourKeys";
@@ -70,6 +71,7 @@ createRoot(document.getElementById("root")!).render(
     <TooltipProvider>
       <TourDialog
         isOpen
+        tour={DAINTREE_TOUR}
         onClose={() => {}}
         initialChapter={chapterIndex}
         initialMuted={params.get("muted") === "1"}

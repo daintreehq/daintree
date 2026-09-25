@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -41,6 +41,12 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: () => null,
 }));
 
+// The scene boundary reports what it catches; keep that local to the test.
+vi.mock("@/utils/rendererSentry", () => ({
+  captureRendererException: vi.fn(),
+  getRendererSentryConsent: vi.fn(() => ({ level: "off", hasSeenPrompt: false })),
+}));
+
 class SilentAudio {
   src: string;
   preload = "";
@@ -57,13 +63,16 @@ class SilentAudio {
   removeEventListener() {}
 }
 
+import { DAINTREE_TOUR } from "../daintreeTour";
 import { TOUR_CHAPTERS } from "../tourChapters";
+import type { TourDefinition } from "../tourDefinition";
 import { TourDialog, type TourDialogProps } from "../TourDialog";
-import type { TourPlayer } from "@daintreehq/tour";
+import type { TourChapterTiming, TourPlayer } from "@daintreehq/tour";
 
 function renderDialog(overrides: Partial<TourDialogProps> = {}) {
   const props: TourDialogProps = {
     isOpen: true,
+    tour: DAINTREE_TOUR,
     onClose: vi.fn(),
     initialChapter: 0,
     initialMuted: false,
@@ -290,5 +299,83 @@ describe("TourDialog", () => {
     const slider = screen.getByRole("slider", { name: "Chapter position" });
     expect(slider.getAttribute("aria-valuenow")).toBe("7");
     expect(slider.getAttribute("aria-valuetext")).toMatch(/^7 seconds of \d+ seconds$/);
+  });
+
+  describe("any tour", () => {
+    const timing = (text: string): TourChapterTiming => ({
+      duration: 4,
+      cues: {},
+      captions: [{ text, start: 0, end: 4 }],
+      audioUrl: null,
+    });
+    const Plain = () => <div data-testid="plain-scene" />;
+    const Broken = (): never => {
+      throw new Error("scene exploded");
+    };
+
+    function tourWith(overrides: Partial<TourDefinition> = {}): TourDefinition {
+      return {
+        id: "plugin:acme.tools/welcome",
+        title: "Acme Tour",
+        chapters: [
+          { id: "one", title: "First steps", scene: Plain },
+          { id: "two", title: "Next steps", scene: Plain },
+        ],
+        resolveTimings: () => [timing("Hello from Acme"), timing("Onwards")],
+        ...overrides,
+      };
+    }
+
+    it("plays from its own definition: title, chapters, scenes and captions", () => {
+      renderDialog({ tour: tourWith() });
+      expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Acme Tour");
+      expect(screen.getByTestId("tour-chapter-count").textContent).toBe("Chapter 1 of 2");
+      expect(screen.getByRole("heading", { level: 3 }).textContent).toBe("First steps");
+      expect(screen.getByTestId("plain-scene")).toBeTruthy();
+      expect(screen.getByText("Hello from Acme")).toBeTruthy();
+    });
+
+    it("finishes without handing over to Getting Started unless it asks to", () => {
+      const run = vi.fn();
+      const gettingStarted = vi.fn();
+      window.addEventListener("daintree:show-getting-started", gettingStarted);
+      const { props } = renderDialog({ tour: tourWith(), initialChapter: 1 });
+      fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+      expect(props.onCompleted).toHaveBeenCalled();
+      expect(props.onClose).toHaveBeenCalled();
+      expect(gettingStarted).not.toHaveBeenCalled();
+
+      cleanup();
+      renderDialog({ tour: tourWith({ finish: { hint: "Then build", run } }), initialChapter: 1 });
+      fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+      window.removeEventListener("daintree:show-getting-started", gettingStarted);
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("fails only the chapter whose scene throws", () => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      let player: TourPlayer | null = null;
+      renderDialog({
+        tour: tourWith({
+          chapters: [
+            { id: "one", title: "First steps", scene: Broken },
+            { id: "two", title: "Next steps", scene: Plain },
+          ],
+        }),
+        onPlayer: (p) => (player = p),
+      });
+      // The dialog, its controls and navigation survive; the stage shows the fallback.
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(screen.getByRole("heading", { level: 3 }).textContent).toBe("First steps");
+      expect(screen.getByText(/First steps stopped working/)).toBeTruthy();
+      // Nothing to narrate over a broken scene.
+      expect(player!.getState().status).not.toBe("playing");
+
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      expect(screen.getByRole("heading", { level: 3 }).textContent).toBe("Next steps");
+      expect(screen.getByTestId("plain-scene")).toBeTruthy();
+      expect(screen.queryByText(/stopped working/)).toBeNull();
+      consoleError.mockRestore();
+    });
   });
 });
