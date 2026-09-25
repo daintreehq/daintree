@@ -1,4 +1,5 @@
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
+import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import type {
   DriveLeaseState,
   HostHandshakeInfo,
@@ -186,8 +187,8 @@ export interface TerminalResetMessage {
   endpointId: string;
   terminalId: string;
   incarnation: number;
-  /** Serialized terminal state to repaint from, or null to clear. */
-  snapshot: string | null;
+  /** Serialized terminal state and the grid it was captured at, or null to clear. */
+  snapshot: SerializedTerminalSnapshot | null;
   /** Output with seq > this follows the snapshot. */
   seq: number;
 }

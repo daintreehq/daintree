@@ -40,6 +40,7 @@ import {
 import type { ConflictedFileEntry, StagingFileEntry } from "@shared/types/git";
 import type { CommitItem, HeatCell } from "@shared/types/pulse";
 import { z } from "zod";
+import { mintRemoteOperationId } from "@/clients/operationsClient";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(Math.trunc(value) || min, min), max);
@@ -770,7 +771,10 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       const forcePush = useGitForcePushStore.getState();
       forcePush.clearRecovery(resolvedCwd);
       try {
-        return await window.electron.git.push(resolvedCwd, setUpstream);
+        const opId = mintRemoteOperationId();
+        return await (opId
+          ? window.electron.git.push(resolvedCwd, setUpstream, opId)
+          : window.electron.git.push(resolvedCwd, setUpstream));
       } catch (error) {
         if (isClientGitError(error) && error.gitReason === "push-rejected-outdated") {
           // `recordRejection` stores nothing when either field is missing, so a

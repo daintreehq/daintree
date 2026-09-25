@@ -412,15 +412,18 @@ describe("projectHistory IPC", () => {
       wrapSuccess(await call())
     );
     try {
-      const envelope = await getIpcDispatcher().invokeForEndpoint(
-        {
-          endpoint,
-          client: { clientId: "client-b", clientName: "b", platform: "darwin", kind: "remote" },
-        },
-        "project-history:peek",
-        []
-      );
-      expect(envelope).toMatchObject({ ok: true, data: null });
+      // The history lives on the Shell's window, so the channel is shell-local
+      // and a link call is refused before any handler here could run.
+      await expect(
+        getIpcDispatcher().invokeForEndpoint(
+          {
+            endpoint,
+            client: { clientId: "client-b", clientName: "b", platform: "darwin", kind: "remote" },
+          },
+          "project-history:peek",
+          []
+        )
+      ).rejects.toMatchObject({ code: "CHANNEL_NOT_REMOTABLE" });
     } finally {
       getIpcDispatcher().setInvokeEnveloper(null);
     }

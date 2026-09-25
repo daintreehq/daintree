@@ -43,7 +43,8 @@ export interface RestoreControllerDeps {
     id: string,
     data: string | Uint8Array,
     chunkCount: number,
-    range?: StreamRange
+    range?: StreamRange,
+    ackGeneration?: number
   ) => void;
 }
 
@@ -234,7 +235,9 @@ export class TerminalRestoreController {
     const deferred = managed.deferredOutput;
     managed.deferredOutput = [];
     for (const entry of deferred) {
-      if (entry.range) this.deps.writeData(id, entry.data, entry.chunkCount, entry.range);
+      if (entry.ackGeneration !== undefined)
+        this.deps.writeData(id, entry.data, entry.chunkCount, entry.range, entry.ackGeneration);
+      else if (entry.range) this.deps.writeData(id, entry.data, entry.chunkCount, entry.range);
       else this.deps.writeData(id, entry.data, entry.chunkCount);
     }
   }

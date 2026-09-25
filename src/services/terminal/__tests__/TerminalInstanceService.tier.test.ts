@@ -14,6 +14,7 @@ const mockTerminalClient = {
     capturedTierChangedCb = cb;
     return vi.fn();
   }),
+  onReset: vi.fn(() => vi.fn()),
   setActivityTier: vi.fn(),
   // The background→active foreground transition now runs a plain repaint whose
   // handlePostWake reaches resize() for default-strategy panes.
@@ -22,6 +23,7 @@ const mockTerminalClient = {
   getSerializedState: vi.fn(),
   getSharedBuffer: vi.fn(() => null),
   acknowledgePortData: vi.fn(),
+  getPortAckGeneration: vi.fn(() => 0),
   discardPortAcks: vi.fn(),
   acknowledgeData: vi.fn(),
 };

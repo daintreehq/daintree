@@ -5,7 +5,10 @@ import { OperationRegistry } from "./OperationRegistry.js";
 export {
   OperationRegistry,
   normalizeOperationId,
+  untrackedOperationHandle,
   OPERATION_RETENTION_MS,
+  OPERATION_MAX_RUNNING,
+  OPERATION_MAX_ALIASES,
   OPERATION_MAX_SETTLED,
   type OperationHandle,
   type OperationStartInput,

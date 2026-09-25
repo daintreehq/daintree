@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
+import { MAX_TERMINAL_GRID_DIMENSION } from "../../../shared/types/terminal.js";
 import { BULK_CHUNK_BYTES, Lane, type LinkFrame } from "./frames.js";
 import {
   BulkKind,
@@ -145,7 +146,13 @@ const TerminalResetSchema = z.object({
   endpointId: id,
   terminalId: id,
   incarnation: u32,
-  snapshot: z.string().nullable(),
+  snapshot: z
+    .object({
+      data: z.string(),
+      cols: z.number().int().min(1).max(MAX_TERMINAL_GRID_DIMENSION),
+      rows: z.number().int().min(1).max(MAX_TERMINAL_GRID_DIMENSION),
+    })
+    .nullable(),
   seq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
 });
 

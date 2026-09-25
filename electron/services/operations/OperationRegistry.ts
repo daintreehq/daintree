@@ -9,13 +9,16 @@ import type {
 import type { OperationsEvent } from "../../../shared/types/ipc/operations.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
+import { AppError } from "../../utils/errorTypes.js";
 
 export const OPERATION_RETENTION_MS = 10 * 60_000;
 export const OPERATION_MAX_SETTLED = 200;
 export const OPERATION_PROGRESS_INTERVAL_MS = 100;
+/** Every running operation holds work (a git process, a bundle); unbounded, a client could pile them up. */
+export const OPERATION_MAX_RUNNING = 64;
 const OPERATION_ID_MAX_LENGTH = 128;
-/** Joiners beyond this still share the work; only their own ids stop answering status. */
-const OPERATION_MAX_ALIASES = 32;
+/** Every joiner's own id must answer status, so a join past this is refused rather than left unanswerable. */
+export const OPERATION_MAX_ALIASES = 32;
 const OPERATION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
 
 export type OperationEventEmitter = (projectId: string | null, event: OperationsEvent) => void;
@@ -36,6 +39,12 @@ export interface OperationStartInput {
    * of launching a second copy.
    */
   dedupKey?: string | null;
+  /**
+   * The request's own parameters (e.g. a clone's shallow flag). A retry by
+   * opId or a join by dedupKey must match it, so a caller never receives the
+   * outcome of work it did not ask for.
+   */
+  fingerprint?: string | null;
 }
 
 export interface OperationProgressUpdate {
@@ -46,6 +55,8 @@ export interface OperationProgressUpdate {
 
 export interface OperationHandle {
   readonly opId: OperationId;
+  /** False for a caller that named no operation: nothing is recorded or published. */
+  readonly tracked: boolean;
   readonly signal: AbortSignal;
   progress(update: OperationProgressUpdate): void;
   /**
@@ -77,6 +88,7 @@ interface Entry {
   record: OperationRecord;
   scope: string | null;
   dedupKey: string | null;
+  fingerprint: string | null;
   controller: AbortController;
   cancelListeners: Array<() => void>;
   cancellable: boolean;
@@ -92,6 +104,7 @@ export interface OperationRegistryOptions {
   retentionMs?: number;
   maxSettled?: number;
   progressIntervalMs?: number;
+  maxRunning?: number;
 }
 
 /** A client-minted opId, or null when absent or not a well-formed id. */
@@ -124,6 +137,7 @@ export class OperationRegistry {
   private readonly retentionMs: number;
   private readonly maxSettled: number;
   private readonly progressIntervalMs: number;
+  private readonly maxRunning: number;
 
   constructor(options: OperationRegistryOptions = {}) {
     this.emit = options.emit ?? (() => {});
@@ -131,6 +145,7 @@ export class OperationRegistry {
     this.retentionMs = options.retentionMs ?? OPERATION_RETENTION_MS;
     this.maxSettled = options.maxSettled ?? OPERATION_MAX_SETTLED;
     this.progressIntervalMs = options.progressIntervalMs ?? OPERATION_PROGRESS_INTERVAL_MS;
+    this.maxRunning = options.maxRunning ?? OPERATION_MAX_RUNNING;
   }
 
   /**
@@ -145,6 +160,13 @@ export class OperationRegistry {
     this.prune();
     const existing = this.findDuplicate(input);
     if (existing) return { record: existing.record, handle: null };
+    if (this.runningCount() >= this.maxRunning) {
+      throw new AppError({
+        code: "RATE_LIMITED",
+        message: `Too many operations are running (limit ${this.maxRunning})`,
+        userMessage: "Too many operations are running on this host. Try again when some finish.",
+      });
+    }
 
     const opId = normalizeOperationId(input.opId) ?? randomUUID();
     const entry: Entry = {
@@ -157,6 +179,7 @@ export class OperationRegistry {
       },
       scope: input.scope ?? null,
       dedupKey: input.dedupKey ?? null,
+      fingerprint: input.fingerprint ?? null,
       controller: new AbortController(),
       cancelListeners: [],
       cancellable: false,
@@ -342,9 +365,18 @@ export class OperationRegistry {
     return this.resolve(opId)?.record.outcome.status === "running";
   }
 
+  private runningCount(): number {
+    let count = 0;
+    for (const entry of this.entries.values()) {
+      if (entry.record.outcome.status === "running") count++;
+    }
+    return count;
+  }
+
   private createHandle(entry: Entry): OperationHandle {
     return {
       opId: entry.record.opId,
+      tracked: true,
       signal: entry.controller.signal,
       progress: (update) => this.progress(entry.record.opId, update),
       onCancel: (listener) => {
@@ -366,7 +398,8 @@ export class OperationRegistry {
         if (
           byId.record.kind !== input.kind ||
           byId.scope !== (input.scope ?? null) ||
-          byId.record.projectId !== (input.projectId ?? null)
+          byId.record.projectId !== (input.projectId ?? null) ||
+          byId.fingerprint !== (input.fingerprint ?? null)
         ) {
           throw new Error(`Operation id ${requested} belongs to another operation`);
         }
@@ -377,8 +410,28 @@ export class OperationRegistry {
       const runningId = this.running.get(input.dedupKey);
       const running = runningId ? this.entries.get(runningId) : undefined;
       if (running) {
+        if (
+          running.record.kind !== input.kind ||
+          running.scope !== (input.scope ?? null) ||
+          running.record.projectId !== (input.projectId ?? null) ||
+          running.fingerprint !== (input.fingerprint ?? null)
+        ) {
+          throw new AppError({
+            code: "VALIDATION",
+            message: "A different request for the same work is already running",
+            userMessage:
+              "The same target is already busy with a request that has different options. Try again when it finishes.",
+          });
+        }
         // The joiner's own id must answer status queries for the shared work.
-        if (requested && running.aliases.size < OPERATION_MAX_ALIASES) {
+        if (requested) {
+          if (running.aliases.size >= OPERATION_MAX_ALIASES) {
+            throw new AppError({
+              code: "RATE_LIMITED",
+              message: `Operation ${running.record.opId} has too many joined callers`,
+              userMessage: "Too many callers are waiting on this operation. Try again shortly.",
+            });
+          }
           running.aliases.add(requested);
           this.aliases.set(requested, running.record.opId);
         }
@@ -422,6 +475,22 @@ export class OperationRegistry {
     this.entries.delete(entry.record.opId);
     for (const alias of entry.aliases) this.aliases.delete(alias);
   }
+}
+
+/**
+ * A handle for work whose caller named no operation. It carries the same
+ * surface so the work runs unchanged, but nothing is recorded, published or
+ * joinable: the call behaves exactly as it did before operations existed.
+ */
+export function untrackedOperationHandle(): OperationHandle {
+  const controller = new AbortController();
+  return {
+    opId: randomUUID(),
+    tracked: false,
+    signal: controller.signal,
+    progress: () => {},
+    onCancel: () => {},
+  };
 }
 
 function settledAtOf(entry: Entry): number {
