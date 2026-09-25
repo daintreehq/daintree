@@ -3,7 +3,7 @@
  * (window.electron.demo) to record a short WebM screencast of a real
  * Daintree feature.
  *
- * Unlike store-reel.spec.ts (still PNGs), this launches the app with
+ * This launches the app with
  * `--demo-mode` so the DemoCursor / DemoOverlay / DemoCaptureBridge
  * components mount, then choreographs cursor motion, a spotlight, and
  * annotations over the worktree dashboard while MediaRecorder captures the
@@ -137,7 +137,7 @@ async function bootDemoProject(repo: DemoRepo): Promise<{
 
   // The project view can reload once after open as state hydrates, which
   // invalidates the first page handle. addStyleTag is the canary; on a closed
-  // target, re-acquire the active window (mirrors store-reel's bootProject).
+  // target, re-acquire the active window.
   try {
     await page.addStyleTag({ content: VIDEO_POLISH_CSS });
   } catch (error) {

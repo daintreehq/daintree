@@ -120,30 +120,17 @@ This framing is the difference between a clean review and a back-and-forth on th
 
 ## Screenshots
 
-Microsoft Store screenshots and the website hero are produced by the [`Marketing Screenshots`](../../.github/workflows/screenshots.yml) workflow on a `macos-14` GitHub-hosted runner. The capture spec is [`e2e/screenshots/store-reel.spec.ts`](../../e2e/screenshots/store-reel.spec.ts) — it boots Daintree against a different demo repo per scene (surge-checkout, brush-cms, daintree-site, launchpad-analytics, orbital-sync, mise-en-place) so each shot has its own title-bar identity.
+There is no automated capture pipeline — the `Marketing Screenshots` workflow was retired. Store screenshots are produced by hand and uploaded in Partner Center.
 
-**Capture pipeline.** Electron launches with `--force-device-scale-factor=2` (configurable via the workflow's `scale` input). The renderer paints at 2× device pixels, Playwright's `page.screenshot()` captures the framebuffer, and each PNG lands at `3840×1940` — at the Microsoft Store maximum. Scale `3` is also wired and produces a tighter zoom; use it when the UI fits the smaller logical viewport.
+**Submission requirements.** PNG only; sRGB; 16:9 landscape preferred; 1 minimum and 10 maximum per submission; 6–9 is typical for the developer-tools category. 4K (3840×2160) is supported.
 
-macOS is the only GitHub-hosted runner OS whose virtual display honors the scale flag (Windows + Linux runners cap at the OS display's physical pixels, ~1080p). Since Daintree's window is frameless, no OS chrome is captured — screenshots are content-identical across platforms, only resolution differs — so we capture only on macOS.
+**Sanitization rules:**
 
-**Outputs.** PNGs land at `screenshots/<version>/` (e.g. `screenshots/0.9.2/01-hero-surge-checkout.png`) for tagged releases. Re-runs of the same version overwrite. The same set mirrors to `screenshots/latest/` on every push — the website pins to the `latest/` URLs and never needs to know the current version. PNGs are also attached as a workflow artifact for 90 days. The workflow fires automatically on every `v*` tag push (same trigger as the per-OS release workflows).
+- No API-key-shaped strings anywhere in the rendered window.
+- No real-user paths.
+- No third-party code excerpts.
 
-Stable URLs:
-
-- Versioned: `https://updates.daintree.org/screenshots/<version>/<scene>.png`
-- Latest: `https://updates.daintree.org/screenshots/latest/<scene>.png`
-
-**Submission requirements (recap).** PNG only; sRGB; 16:9 landscape preferred; 1 minimum and 10 maximum per submission; 6–9 is typical for the developer-tools category. The reel ships exactly 6 scenes (scene 1 doubles as the Microsoft Store hero — earlier 7-shot attempts hit resource exhaustion on the cold 7th launch).
-
-**Sanitization rules** that the demo repos enforce automatically:
-
-- No API-key-shaped strings anywhere in the rendered window (`ANTHROPIC_API_KEY` is set via IPC and never appears in UI).
-- No real-user paths — folder basenames are the project slugs, not tmpdir randomness.
-- No third-party code excerpts — all demo content is original.
-
-Pair the screenshots with the Policy 11.16 AI disclosure in the listing metadata; the listing copy in [`docs/distribution/microsoft-store.md#listing-copy`](#listing-copy) already covers it.
-
-**Local iteration.** `npm run screenshots:dev` runs the same spec locally (on macOS or Linux). The PNGs land in `artifacts/screenshots/`. Local output is for layout iteration only — the canonical store assets are always the `macos-14` `Marketing Screenshots` workflow's output.
+Pair the screenshots with the Policy 11.16 AI disclosure in the listing metadata; the [Listing copy](#listing-copy) already covers it.
 
 ## References
 

@@ -8,11 +8,11 @@ import { OPENCODE_PACKAGE_SPEC, buildInstallArgs, runInstall } from "./install-o
 
 // Guards the #11476 pin. The online E2E suite gates release publishes, so the
 // OpenCode CLI version it runs against must not change because someone
-// unrelated published to npm that day. Three workflows install this CLI, and
-// the failure mode is silent: a fourth install site added later, or one of the
-// three reverted to a bare `opencode-ai`, still passes CI and still runs the
+// unrelated published to npm that day. Two workflows install this CLI, and
+// the failure mode is silent: a third install site added later, or one of the
+// two reverted to a bare `opencode-ai`, still passes CI and still runs the
 // gate against a moving target. These assertions are the only enforcement —
-// screenshots.yml and the release-gated online runs never fire on a PR.
+// the release-gated online runs never fire on a PR.
 //
 // Two things have to hold for the pin to actually pin, and each fails in a way
 // that looks fine in the YAML:
@@ -33,12 +33,10 @@ const workflowsDir = path.resolve(ciDir, "../../.github/workflows");
 const INSTALLER = "scripts/ci/install-opencode.mjs";
 
 // The install sites, and the condition each must keep. e2e.yml and
-// e2e-single.yml install only for the online suite; screenshots.yml always
-// needs the CLI. Spelled out here so changing one is a deliberate edit.
+// e2e-single.yml install only for the online suite. Spelled out here so changing one is a deliberate edit.
 const EXPECTED_SITES = {
   "e2e.yml": "inputs.suite == 'online'",
   "e2e-single.yml": "inputs.suite == 'online'",
-  "screenshots.yml": null,
 };
 
 function workflowFiles() {
