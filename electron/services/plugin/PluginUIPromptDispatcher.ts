@@ -9,10 +9,14 @@ import type {
   PluginUiPromptWhenNoFrontend,
 } from "../../../shared/types/pluginUiPrompt.js";
 import {
+  currentPluginInvocation,
+  isPluginFrontendRoutingEnabled,
   noFrontendAttached,
   onPluginFrontendChange,
   resolvePluginFrontend,
+  runWithPluginInvocation,
   type PluginFrontend,
+  type PluginInvocationScope,
 } from "./pluginFrontendRouting.js";
 import { coercePromptAnswer, PluginFrontendMethod } from "./pluginFrontendRequests.js";
 
@@ -64,11 +68,13 @@ interface PendingPrompt {
   cleanup?: () => void;
 }
 
-/** A prompt that asked to wait until someone attaches. */
+/** A prompt routed by Host mode: shown somewhere, parked, or about to be. */
 interface ParkedPrompt {
   pluginId: string;
   params: PluginUiPromptParams;
   projectId: string | null;
+  /** The invocation that asked, so re-routing it later reaches the same caller. */
+  scope: PluginInvocationScope | null;
   signal?: AbortSignal;
   options: PromptRequestOptions;
   askedAt: number;
@@ -76,6 +82,29 @@ interface ParkedPrompt {
   reject: (error: Error) => void;
   cancelValue: PluginUiPromptResultValue;
   cleanup: () => void;
+}
+
+/** Where a routed prompt is showing: this machine, or one driver under one lease. */
+type PromptDelivery =
+  { kind: "local" } | { kind: "remote"; endpoint: ClientEndpoint; leaseId: number | undefined };
+
+/**
+ * A routed prompt on someone's screen. `moveTo` takes it down there and asks
+ * whoever answers for the project now.
+ */
+interface ShownPrompt {
+  prompt: ParkedPrompt;
+  delivery: PromptDelivery;
+  moveTo: (frontend: PluginFrontend) => void;
+}
+
+function stillDelivers(delivery: PromptDelivery, frontend: PluginFrontend): boolean {
+  if (delivery.kind === "local") return frontend.kind === "local";
+  return (
+    frontend.kind === "remote" &&
+    frontend.endpoint === delivery.endpoint &&
+    frontend.leaseId === delivery.leaseId
+  );
 }
 
 export interface PromptRequestOptions {
@@ -115,6 +144,14 @@ export class PluginUIPromptDispatcher {
   private pending = new Map<string, PendingPrompt>();
   private parked = new Map<string, ParkedPrompt>();
   private parkedSubscription: (() => void) | null = null;
+  /**
+   * Routed prompts on someone's screen. A prompt belongs to whoever drives its
+   * project under the lease it was asked under: when that changes (a takeover,
+   * the driver leaving) it is taken down there and asked of the new driver, and
+   * an answer from the old one is never returned to the plugin.
+   */
+  private shown = new Map<string, ShownPrompt>();
+  private shownSubscription: (() => void) | null = null;
   /** Removes the lazily-registered `ipcMain` response listener. */
   private responseListenerCleanup: (() => void) | null = null;
 
@@ -194,7 +231,7 @@ export class PluginUIPromptDispatcher {
         return;
       }
       const frontend = resolvePluginFrontend(projectId ?? null, pluginId);
-      if (frontend.kind === "local") {
+      if (!isPluginFrontendRoutingEnabled()) {
         // Unbound: deliberately ambient — an installed plugin's prompt belongs in
         // front of whoever is looking, which is the focused project view.
         const target = resolveTargetWebContents(projectId, `Plugin ${params.kind} prompt`);
@@ -213,6 +250,7 @@ export class PluginUIPromptDispatcher {
         pluginId,
         params,
         projectId: projectId ?? null,
+        scope: currentPluginInvocation(),
         signal,
         options,
         askedAt: this.now(),
@@ -313,23 +351,17 @@ export class PluginUIPromptDispatcher {
 
   /** A remote driver, or nobody: send it there, park it, or fail it. */
   private deliverElsewhere(frontend: PluginFrontend, prompt: ParkedPrompt): void {
+    // A prompt moving between frontends may have been cancelled on the way.
+    if (this.deps.isDisposed() || prompt.signal?.aborted) {
+      prompt.resolve(prompt.cancelValue);
+      return;
+    }
     if (frontend.kind === "remote") {
-      this.sendRemote(frontend.endpoint, prompt);
+      this.sendRemote(frontend.endpoint, prompt, frontend.leaseId);
       return;
     }
     if (frontend.kind === "local") {
-      const target = resolveTargetWebContents(
-        prompt.projectId,
-        `Plugin ${prompt.params.kind} prompt`
-      );
-      if (!target) {
-        prompt.resolve(prompt.cancelValue);
-        return;
-      }
-      this.showInWebContents(target, prompt.pluginId, prompt.params, prompt.signal).then(
-        prompt.resolve,
-        prompt.reject
-      );
+      this.showLocal(prompt);
       return;
     }
     if (prompt.options.whenNoFrontend === "queue") {
@@ -339,14 +371,139 @@ export class PluginUIPromptDispatcher {
     prompt.reject(noFrontendAttached(prompt.pluginId, `${prompt.params.kind} prompt`));
   }
 
-  private sendRemote(endpoint: ClientEndpoint, prompt: ParkedPrompt): void {
+  /** Who answers for the prompt's project now, as seen by the invocation that asked. */
+  private frontendFor(prompt: ParkedPrompt): PluginFrontend {
+    return runWithPluginInvocation(prompt.scope, () =>
+      resolvePluginFrontend(prompt.projectId, prompt.pluginId)
+    );
+  }
+
+  private trackShown(id: string, entry: ShownPrompt): () => void {
+    this.shown.set(id, entry);
+    this.shownSubscription ??= onPluginFrontendChange(() => this.recheckShown());
+    return () => {
+      if (this.shown.get(id) !== entry) return;
+      this.shown.delete(id);
+      if (this.shown.size === 0 && this.shownSubscription) {
+        this.shownSubscription();
+        this.shownSubscription = null;
+      }
+    };
+  }
+
+  /** A driver attached, left, or took over: move every prompt that is now someone else's. */
+  private recheckShown(): void {
+    if (this.deps.isDisposed()) return;
+    for (const entry of [...this.shown.values()]) {
+      const now = this.frontendFor(entry.prompt);
+      if (!stillDelivers(entry.delivery, now)) entry.moveTo(now);
+    }
+  }
+
+  /**
+   * An answer only counts from whoever still drives the project under the
+   * same lease. A dismissal is always safe to take; anything else from a
+   * driver that has lost the project is not an answer, and the question goes
+   * to whoever answers for it now.
+   */
+  private answerIsCurrent(
+    prompt: ParkedPrompt,
+    delivery: PromptDelivery,
+    value: PluginUiPromptResultValue
+  ): PluginFrontend | null {
+    if (value === prompt.cancelValue || this.deps.isDisposed() || prompt.signal?.aborted) {
+      return null;
+    }
+    const now = this.frontendFor(prompt);
+    return stillDelivers(delivery, now) ? null : now;
+  }
+
+  /** A routed prompt shown in this machine's own window. */
+  private showLocal(prompt: ParkedPrompt): void {
+    let target: Electron.WebContents | null;
+    try {
+      // An app-global plugin's prompt belongs to the project of the call that
+      // asked: that project's view, never whichever window is in front.
+      target = resolveTargetWebContents(
+        prompt.projectId ?? prompt.scope?.projectId ?? null,
+        `Plugin ${prompt.params.kind} prompt`
+      );
+    } catch (error) {
+      prompt.reject(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    if (!target) {
+      prompt.resolve(prompt.cancelValue);
+      return;
+    }
+    const local = new AbortController();
+    const onAbort = () => local.abort();
+    prompt.signal?.addEventListener("abort", onAbort, { once: true });
+    const delivery: PromptDelivery = { kind: "local" };
+    let moved = false;
+    const untrack = this.trackShown(randomUUID(), {
+      prompt,
+      delivery,
+      moveTo: (frontend) => move(frontend),
+    });
+    const settle = () => {
+      untrack();
+      prompt.signal?.removeEventListener("abort", onAbort);
+    };
+    const move = (frontend: PluginFrontend) => {
+      if (moved) return;
+      moved = true;
+      settle();
+      // Takes the dialog down and frees this plugin's prompt slot at once.
+      local.abort();
+      this.deliverElsewhere(frontend, prompt);
+    };
+    this.showInWebContents(target, prompt.pluginId, prompt.params, local.signal).then(
+      (value) => {
+        if (moved) return;
+        const elsewhere = this.answerIsCurrent(prompt, delivery, value);
+        if (elsewhere) {
+          move(elsewhere);
+          return;
+        }
+        settle();
+        prompt.resolve(value);
+      },
+      (error: unknown) => {
+        if (moved) return;
+        settle();
+        prompt.reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    );
+  }
+
+  private sendRemote(
+    endpoint: ClientEndpoint,
+    prompt: ParkedPrompt,
+    leaseId: number | undefined
+  ): void {
     const promptId = randomUUID();
     const { pluginId, signal, cancelValue } = prompt;
-    const onAbort = () => {
+    const delivery: PromptDelivery = { kind: "remote", endpoint, leaseId };
+    const untrack = this.trackShown(promptId, {
+      prompt,
+      delivery,
+      moveTo: (frontend) => {
+        if (!release()) return;
+        this.sendRemoteCancel(endpoint, pluginId, promptId);
+        this.deliverElsewhere(frontend, prompt);
+      },
+    });
+    /** Claims the prompt for exactly one terminal path. */
+    const release = (): boolean => {
       const pending = this.pending.get(promptId);
-      if (!pending) return;
+      if (!pending) return false;
       pending.cleanup?.();
       this.pending.delete(promptId);
+      return true;
+    };
+    const onAbort = () => {
+      if (!release()) return;
       this.sendRemoteCancel(endpoint, pluginId, promptId);
       prompt.resolve(cancelValue);
     };
@@ -357,7 +514,10 @@ export class PluginUIPromptDispatcher {
       endpoint,
       pluginId,
       cancelValue,
-      cleanup: () => signal?.removeEventListener("abort", onAbort),
+      cleanup: () => {
+        signal?.removeEventListener("abort", onAbort);
+        untrack();
+      },
     });
     const parkedFor = this.now() - prompt.askedAt;
     endpoint
@@ -376,17 +536,20 @@ export class PluginUIPromptDispatcher {
       )
       .then(
         (answer) => {
-          const pending = this.pending.get(promptId);
-          if (!pending) return;
-          pending.cleanup?.();
-          this.pending.delete(promptId);
-          prompt.resolve(coercePromptAnswer(prompt.params, answer));
+          if (!this.pending.has(promptId)) return;
+          const value = coercePromptAnswer(prompt.params, answer);
+          const elsewhere = this.answerIsCurrent(prompt, delivery, value);
+          if (!release()) return;
+          if (elsewhere) {
+            // Answered by a driver that no longer holds the project: ask the one that does.
+            this.sendRemoteCancel(endpoint, pluginId, promptId);
+            this.deliverElsewhere(elsewhere, prompt);
+            return;
+          }
+          prompt.resolve(value);
         },
         (error: unknown) => {
-          const pending = this.pending.get(promptId);
-          if (!pending) return;
-          pending.cleanup?.();
-          this.pending.delete(promptId);
+          if (!release()) return;
           const code = (error as { code?: unknown } | null)?.code;
           const gone =
             endpoint.isClosed() || (typeof code === "string" && FRONTEND_GONE_CODES.has(code));
@@ -400,7 +563,7 @@ export class PluginUIPromptDispatcher {
           }
           // The person left before answering. A plugin that asked to wait keeps
           // waiting for the next one; any other plugin learns nobody is there.
-          this.deliverElsewhere(resolvePluginFrontend(prompt.projectId, pluginId), prompt);
+          this.deliverElsewhere(this.frontendFor(prompt), prompt);
         }
       );
   }
@@ -420,7 +583,7 @@ export class PluginUIPromptDispatcher {
 
   private drainParked(): void {
     for (const [parkId, prompt] of [...this.parked]) {
-      const frontend = resolvePluginFrontend(prompt.projectId, prompt.pluginId);
+      const frontend = this.frontendFor(prompt);
       if (frontend.kind === "none") continue;
       this.parked.delete(parkId);
       prompt.cleanup();
@@ -535,5 +698,8 @@ export class PluginUIPromptDispatcher {
     this.parked.clear();
     this.parkedSubscription?.();
     this.parkedSubscription = null;
+    this.shown.clear();
+    this.shownSubscription?.();
+    this.shownSubscription = null;
   }
 }

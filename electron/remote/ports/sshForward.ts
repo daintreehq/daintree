@@ -20,9 +20,10 @@ function isPort(value: number): boolean {
 }
 
 /**
- * `ssh -O forward|cancel -L localhost:<local>:localhost:<remote>` through the
- * master. The local side binds loopback only; the remote side is the Host's
- * own `localhost`, resolved by its sshd.
+ * `ssh -O forward|cancel -L 127.0.0.1:<local>:localhost:<remote>` through the
+ * master. The local side binds IPv4 loopback alone, so exactly what it holds
+ * is known (the IPv6 side is held by a relay here); the remote side is the
+ * Host's own `localhost`, resolved by its sshd.
  */
 export function buildPortForwardArgs(
   mux: SshMuxTarget,
@@ -40,7 +41,7 @@ export function buildPortForwardArgs(
     "-O",
     operation,
     "-L",
-    `localhost:${localPort}:localhost:${remotePort}`,
+    `127.0.0.1:${localPort}:localhost:${remotePort}`,
     "--",
     mux.target,
   ];

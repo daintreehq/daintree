@@ -32,7 +32,6 @@ import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
-import { tryFleetBroadcastFromEditor } from "@/components/Fleet/fleetEnterBroadcast";
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
@@ -62,6 +61,7 @@ import { useDragDrop } from "./hooks/useDragDrop";
 import { useAttachFiles, useAttachFromHost } from "./hooks/useAttachFiles";
 import { fileAttachmentEntryFromSource, insertFileAttachments } from "./fileAttachments";
 import { composerUploadSurface, hasPendingUploads } from "./uploads/pendingUploads";
+import { tryComposerFleetBroadcast } from "./composerFleetBroadcast";
 import { PendingUploadChips } from "./uploads/PendingUploadChips";
 import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
 import { registerComposerDropTarget } from "./uploads/composerRouting";
@@ -660,17 +660,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const latest = latestRef.current;
       const text = view?.state.doc.toString() ?? latest?.value ?? "";
 
-      if (
-        isFocusedTerminal &&
-        useFleetArmingStore.getState().armedIds.has(terminalId) &&
-        useFleetArmingStore.getState().armedIds.size >= 2
-      ) {
-        const intercepted = tryFleetBroadcastFromEditor(terminalId, text, () => {
-          clearDraftInput(terminalId, projectId);
-          resetEditorDoc();
-        });
-        if (intercepted) return;
-      }
+      const intercepted = tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text, () => {
+        clearDraftInput(terminalId, projectId);
+        resetEditorDoc();
+      });
+      if (intercepted) return;
 
       sendText(text, { imagePaths: readImageChipPaths(view) });
     };

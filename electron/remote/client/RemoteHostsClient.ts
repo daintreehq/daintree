@@ -19,6 +19,7 @@ import type {
 import type { IpcContext } from "../../ipc/types.js";
 import type { RemoteRouter } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { getRemoteService } from "../runtime.js";
 import type { HostRegistry } from "./HostRegistry.js";
 import type { HostReadiness, RemoteHostManager } from "./RemoteHostManager.js";
 import type { SenderLookup } from "./RemoteRouter.js";
@@ -118,7 +119,8 @@ export class RemoteHostsClient {
     return this.options.registry.list().map((descriptor) => ({
       descriptor,
       connection: this.options.manager.connectionState(descriptor.id),
-      summary: null,
+      // The last summary frame, so a refreshed list isn't blank until the next one.
+      summary: getRemoteService("hostMetrics")?.latest(descriptor.id) ?? null,
     }));
   }
 

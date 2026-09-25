@@ -3337,3 +3337,32 @@ describe("NotificationCenter — row menu triage", () => {
     expect(screen.queryByRole("menuitem", { name: /Mark as/ })).toBeNull();
   });
 });
+
+describe("NotificationCenter — another host's notifications", () => {
+  it("names the host on rows and grouped headers that came from one, and leaves local rows as they were", () => {
+    setEntries([
+      makeEntry({
+        id: "remote",
+        title: "studio-01: agent waiting",
+        message: "Claude is waiting.",
+        context: { eventKind: "waiting", hostName: "studio-01" },
+      }),
+      makeEntry({ id: "local", title: "Idle", message: "Terminals idle." }),
+    ]);
+    const { unmount } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const sources = screen.getAllByTestId("notification-source").map((s) => s.textContent ?? "");
+    expect(sources).toEqual(["studio-01", "Daintree"]);
+    unmount();
+
+    useNotificationSettingsStore.setState({ groupByContext: true });
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    const headers = screen.getAllByTestId("context-section-header").map((h) => h.textContent ?? "");
+    expect(headers).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("studio-01"),
+        expect.stringContaining("Daintree"),
+      ])
+    );
+    expect(headers.some((h) => h.includes("studio-01") && h.includes("Daintree"))).toBe(false);
+  });
+});

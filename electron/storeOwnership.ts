@@ -24,7 +24,9 @@ export const STORE_KEY_OWNERSHIP = {
   hibernation: "host",
   sessionRestore: "host",
   windowOpening: "device",
-  keepAwake: "host",
+  // Each machine holds its own power assertion for its own agents; a remote
+  // window's keep-awake split answers from this machine, so it edits this one.
+  keepAwake: "device",
   idleTerminalNotify: "host",
   idleTerminalDismissals: "host",
   idleTerminalNotifiedAt: "host",
@@ -90,6 +92,8 @@ export const STORE_KEY_OWNERSHIP = {
   remoteHosts: "device",
   hostMode: "device",
   remoteHostsPreferences: "device",
+  // What this machine lets a host's plugins do with its clipboard.
+  remoteHostPluginClipboardGrants: "device",
 } as const satisfies Record<keyof StoreSchema, SettingOwner | "split">;
 
 /** terminalConfig: behaviour runs where the terminals run; appearance is how this screen draws them. */

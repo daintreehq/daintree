@@ -120,7 +120,7 @@ import { getLocalEndpoint } from "../localEndpoint.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import {
   isPluginFrontendRoutingEnabled,
-  notePluginInvokeOrigin,
+  runInPluginInvocation,
 } from "../../services/plugin/pluginFrontendRouting.js";
 import { resolveActiveWorktreeIdForProject } from "../../services/plugin/pluginInvokeContext.js";
 import {
@@ -2165,41 +2165,43 @@ export function registerPluginHandlers(): () => void {
         });
         throw new Error(`plugin:invoke rejected: untrusted sender (url=${senderUrl ?? "unknown"})`);
       }
-      // With Host-mode routing on, remember who called so an app-global
-      // plugin's prompt finds this person. Off, no endpoint is ever built here.
-      if (isPluginFrontendRoutingEnabled()) {
-        notePluginInvokeOrigin(pluginId, getLocalEndpoint(event.sender));
-      }
-      return runPluginInvoke(
-        {
-          projectId: senderProjectId,
-          webContentsId: senderWebContentsId,
-          start,
-          resolveWorktreeId: async (service) => {
-            // No trustworthy window means no worktree — short-circuit rather
-            // than query, so the invariant holds here regardless of what the
-            // service would answer.
-            if (senderWindowId === undefined) return null;
-            // Resolving the worktree needs a round-trip to the workspace host,
-            // so it can't be pinned synchronously like the ids above.
-            // `getActiveWorktreeIdForWindow` swallows its own failures — a
-            // wedged workspace host degrades the context rather than failing
-            // the invocation it sits in front of.
-            const worktreeId = await service.getActiveWorktreeIdForWindow(senderWindowId);
-            // The window id survives a project switch, so a rebind during the
-            // await would pair the sender's projectId with the *replacement*
-            // project's worktree. Snapshots carry no project id to filter on, so
-            // re-check the binding instead and drop to null on a mismatch: a null
-            // worktree is honest, a cross-project one is the bug this fixes.
-            return getProjectForWebContents(senderWebContentsId) !== senderProjectId
-              ? null
-              : worktreeId;
+      const invoke = () =>
+        runPluginInvoke(
+          {
+            projectId: senderProjectId,
+            webContentsId: senderWebContentsId,
+            start,
+            resolveWorktreeId: async (service) => {
+              // No trustworthy window means no worktree — short-circuit rather
+              // than query, so the invariant holds here regardless of what the
+              // service would answer.
+              if (senderWindowId === undefined) return null;
+              // Resolving the worktree needs a round-trip to the workspace host,
+              // so it can't be pinned synchronously like the ids above.
+              // `getActiveWorktreeIdForWindow` swallows its own failures — a
+              // wedged workspace host degrades the context rather than failing
+              // the invocation it sits in front of.
+              const worktreeId = await service.getActiveWorktreeIdForWindow(senderWindowId);
+              // The window id survives a project switch, so a rebind during the
+              // await would pair the sender's projectId with the *replacement*
+              // project's worktree. Snapshots carry no project id to filter on, so
+              // re-check the binding instead and drop to null on a mismatch: a null
+              // worktree is honest, a cross-project one is the bug this fixes.
+              return getProjectForWebContents(senderWebContentsId) !== senderProjectId
+                ? null
+                : worktreeId;
+            },
           },
-        },
-        pluginId,
-        channel,
-        args
-      );
+          pluginId,
+          channel,
+          args
+        );
+      // With Host-mode routing on, the call carries who made it, so an
+      // app-global plugin's prompt finds this person. Off, no endpoint is
+      // ever built here.
+      return isPluginFrontendRoutingEnabled()
+        ? runInPluginInvocation(pluginId, getLocalEndpoint(event.sender), invoke)
+        : invoke();
     }
   );
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.PLUGIN_INVOKE));
@@ -2239,27 +2241,28 @@ export function registerPluginHandlers(): () => void {
           throw remoteUnsupportedError(pluginId);
         }
       }
-      notePluginInvokeOrigin(pluginId, endpoint);
-      return runPluginInvoke(
-        {
-          projectId,
-          webContentsId: ctx.webContentsId,
-          start,
-          origin: {
-            kind: remote ? "remote" : "local",
-            clientId: endpoint.clientId,
-            endpointId: endpoint.endpointId,
+      return runInPluginInvocation(pluginId, endpoint, () =>
+        runPluginInvoke(
+          {
+            projectId,
+            webContentsId: ctx.webContentsId,
+            start,
+            origin: {
+              kind: remote ? "remote" : "local",
+              clientId: endpoint.clientId,
+              endpointId: endpoint.endpointId,
+            },
+            resolveWorktreeId: async () => {
+              if (projectId === null) return null;
+              const worktreeId = await resolveActiveWorktreeIdForProject(projectId);
+              // The endpoint may have been rebound to another project meanwhile.
+              return endpoint.projectId === projectId ? worktreeId : null;
+            },
           },
-          resolveWorktreeId: async () => {
-            if (projectId === null) return null;
-            const worktreeId = await resolveActiveWorktreeIdForProject(projectId);
-            // The endpoint may have been rebound to another project meanwhile.
-            return endpoint.projectId === projectId ? worktreeId : null;
-          },
-        },
-        pluginId,
-        channel,
-        args
+          pluginId,
+          channel,
+          args
+        )
       );
     })
   );

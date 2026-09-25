@@ -124,6 +124,10 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // fire-and-forget — renderer→main perf timeline flush.
   "perf:flush-renderer-marks",
 
+  // fire-and-forget — preload→main record of the Files the person dropped or
+  // pasted in a remote view; deliberately not on the page's bridge.
+  "file-transfer:grant-local-sources",
+
   // fire-and-forget — high-frequency renderer→main terminal input / control
   // path. Typing through IpcInvokeMap would force a Promise round-trip per
   // keystroke; the send-only contract is deliberate.

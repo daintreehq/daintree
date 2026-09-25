@@ -1011,6 +1011,9 @@ export interface GeneratedElectronAPI {
     list(
       ...args: IpcInvokeMap["remote-hosts:list"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:list"]["result"]>;
+    listClipboardGrants(
+      ...args: IpcInvokeMap["remote-hosts:list-clipboard-grants"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:list-clipboard-grants"]["result"]>;
     listHostProjects(
       ...args: IpcInvokeMap["remote-hosts:list-host-projects"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:list-host-projects"]["result"]>;
@@ -1020,6 +1023,9 @@ export interface GeneratedElectronAPI {
     probe(
       ...args: IpcInvokeMap["remote-hosts:probe"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:probe"]["result"]>;
+    resetClipboardGrants(
+      ...args: IpcInvokeMap["remote-hosts:reset-clipboard-grants"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:reset-clipboard-grants"]["result"]>;
     startHostMode(
       ...args: IpcInvokeMap["remote-hosts:start-host-mode"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:start-host-mode"]["result"]>;

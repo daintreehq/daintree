@@ -1246,6 +1246,8 @@ export const CHANNELS = {
   REMOTE_HOSTS_CANCEL_INSTALL: "remote-hosts:cancel-install",
   REMOTE_HOSTS_START_HOST_MODE: "remote-hosts:start-host-mode",
   REMOTE_HOSTS_LIST_HOST_PROJECTS: "remote-hosts:list-host-projects",
+  REMOTE_HOSTS_LIST_CLIPBOARD_GRANTS: "remote-hosts:list-clipboard-grants",
+  REMOTE_HOSTS_RESET_CLIPBOARD_GRANTS: "remote-hosts:reset-clipboard-grants",
   REMOTE_HOSTS_EVENT: "remote-hosts:event",
 
   // Remote Hosts: hostMode (shell).
@@ -1280,6 +1282,8 @@ export const CHANNELS = {
   FILE_TRANSFER_GET_UPLOAD_PREFERENCES: "file-transfer:get-upload-preferences",
   FILE_TRANSFER_SET_UPLOAD_PREFERENCES: "file-transfer:set-upload-preferences",
   FILE_TRANSFER_EVENT: "file-transfer:event",
+  // preload → main only: the paths of Files the person dropped or pasted in a remote view.
+  FILE_TRANSFER_GRANT_LOCAL_SOURCES: "file-transfer:grant-local-sources",
 
   // Remote Hosts: hostSwitch (shell).
   HOST_SWITCH_PLAN: "host-switch:plan",

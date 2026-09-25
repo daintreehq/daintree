@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 
 /**
@@ -7,16 +8,21 @@ import fs from "node:fs/promises";
  * chain; across processes (a dev and a packaged build share the Linux runtime
  * directory) they take an exclusive lock file next to the socket.
  *
- * A lock whose owner is gone, or that is older than any real holder would keep
- * it, is broken by one waiter at a time (an O_EXCL breaker file), which
- * re-checks it is still the inode judged stale before unlinking it, so a fresh
- * lock is never the one removed.
+ * A lock is broken only when its owner is verifiably gone: its pid no longer
+ * exists, or (where the platform says cheaply) that pid now belongs to a
+ * process started after the one that wrote the lock. Age never revokes a live
+ * owner, since a suspended holder that resumes would then share the section
+ * with whoever broke in. Age matters only for a lock that names no readable
+ * owner at all (a writer that died between creating and filling it). Breaking
+ * is done by one waiter at a time (an O_EXCL breaker file), which re-checks it
+ * is still the inode judged stale before unlinking it, so a fresh lock is never
+ * the one removed.
  */
 
 export interface HostSocketLockOptions {
   /** How long to wait for another holder before giving up. */
   timeoutMs?: number;
-  /** A lock file older than this is abandoned whatever its pid says. */
+  /** A lock file naming no readable owner is abandoned once older than this. */
   staleMs?: number;
   retryMs?: number;
 }
@@ -78,7 +84,9 @@ async function acquire(lockPath: string, options: HostSocketLockOptions): Promis
       let ino: number | null = null;
       try {
         ino = (await handle.stat()).ino;
-        await handle.writeFile(JSON.stringify({ pid: process.pid }));
+        await handle.writeFile(
+          JSON.stringify({ pid: process.pid, start: processStartTime(process.pid) })
+        );
         return ino;
       } catch (err) {
         // Never leave a lock nobody holds for others to wait out.
@@ -106,17 +114,43 @@ async function release(lockPath: string, ino: number): Promise<void> {
   }
 }
 
-function pidIsGone(pid: unknown): boolean {
-  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false;
+/**
+ * When `pid` started, as the kernel counts it, where that is cheap to read
+ * (Linux's /proc). Null elsewhere: the pid alone then decides.
+ */
+export function processStartTime(pid: number): string | null {
+  if (process.platform !== "linux") return null;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    // Field 22 counts from after the parenthesised command name, which may
+    // itself contain spaces or parentheses.
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return fields[19] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the lock's recorded owner is verifiably gone. Unknown (no usable
+ * pid) is not gone: the caller decides that case by age.
+ */
+function ownerIsGone(pid: unknown, start: unknown): boolean | null {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return null;
   // Our own pid can only be on a lock this process no longer holds: holders in
   // this process are queued on the chain, so the file outlived its holder.
   if (pid === process.pid) return true;
   try {
     process.kill(pid, 0);
-    return false;
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === "ESRCH";
   }
+  // Alive under that pid. It is still the owner unless the pid was reused.
+  if (typeof start === "string") {
+    const now = processStartTime(pid);
+    if (now !== null && now !== start) return true;
+  }
+  return false;
 }
 
 async function breakIfStale(lockPath: string, staleMs: number): Promise<void> {
@@ -154,6 +188,7 @@ async function breakIfStale(lockPath: string, staleMs: number): Promise<void> {
 async function readStaleLock(lockPath: string, staleMs: number): Promise<{ ino: number } | null> {
   let ino: number;
   let pid: unknown;
+  let start: unknown;
   let mtimeMs: number;
   try {
     const handle = await fs.open(lockPath, "r");
@@ -162,7 +197,12 @@ async function readStaleLock(lockPath: string, staleMs: number): Promise<{ ino: 
       ino = stat.ino;
       mtimeMs = stat.mtimeMs;
       try {
-        pid = (JSON.parse(await handle.readFile("utf8")) as { pid?: unknown }).pid;
+        const owner = JSON.parse(await handle.readFile("utf8")) as {
+          pid?: unknown;
+          start?: unknown;
+        };
+        pid = owner?.pid;
+        start = owner?.start;
       } catch {
         pid = undefined;
       }
@@ -172,6 +212,7 @@ async function readStaleLock(lockPath: string, staleMs: number): Promise<{ ino: 
   } catch {
     return null;
   }
-  const old = Date.now() - mtimeMs > staleMs;
-  return old || pidIsGone(pid) ? { ino } : null;
+  const gone = ownerIsGone(pid, start);
+  if (gone === null) return Date.now() - mtimeMs > staleMs ? { ino } : null;
+  return gone ? { ino } : null;
 }

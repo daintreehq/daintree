@@ -11,6 +11,7 @@ import type {
   HostProbeResult,
   InstallHostPayload,
   InstallHostResult,
+  HostPluginClipboardGrant,
   PlanInstallPayload,
   RemoteHostsEvent,
   UpdateHostPayload,
@@ -38,6 +39,12 @@ export const remoteHostsClient = {
     window.electron.remoteHosts.cancelInstall({ opId }),
   startHostMode: (sshTarget: string): Promise<HostProbeResult> =>
     window.electron.remoteHosts.startHostMode({ sshTarget }),
+  listClipboardGrants: (hostId: string): Promise<HostPluginClipboardGrant[]> =>
+    window.electron.remoteHosts.listClipboardGrants({ hostId }),
+  resetClipboardGrants: (hostId: string, pluginId?: string): Promise<void> =>
+    window.electron.remoteHosts.resetClipboardGrants(
+      pluginId === undefined ? { hostId } : { hostId, pluginId }
+    ),
   onEvent: (callback: (event: RemoteHostsEvent) => void): (() => void) =>
     window.electron.remoteHosts.onEvent(callback),
 };

@@ -79,6 +79,7 @@ import { CHANNELS } from "../../../ipc/channels.js";
 import { IpcDispatcherImpl } from "../../../ipc/dispatcher.js";
 import type { HybridSplit, RemoteRouter } from "../../../ipc/endpoint.js";
 import { buildRemoteEditorUrl, HYBRID_HOST_LEGS, HYBRID_SPLITS } from "../splits.js";
+import { STORE_KEY_OWNERSHIP } from "../../../storeOwnership.js";
 
 type MergedHydrate = Record<string, unknown> & { appState: Record<string, unknown> };
 
@@ -354,6 +355,8 @@ describe("settings splits", () => {
     const { invoke } = setup(forward, () => ({ enabled: true }));
     await expect(invoke(CHANNELS.KEEP_AWAKE_GET_STATE, [])).resolves.toEqual({ enabled: true });
     expect(forward).not.toHaveBeenCalled();
+    // A remote window edits this machine's value, so the key is this machine's.
+    expect(STORE_KEY_OWNERSHIP.keepAwake).toBe("device");
   });
 });
 

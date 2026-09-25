@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS,
+  PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS,
+} from "../../../shared/types/pluginCapabilityConsent.js";
 import { BUILT_IN_PLUGIN_CAPABILITIES } from "../../../shared/types/plugin.js";
 import type { PluginQuickPickItem } from "../../../shared/types/plugin.js";
 import type {
@@ -26,6 +30,26 @@ export const PluginFrontendMethod = {
 } as const;
 
 /** A remote clipboard image must fit one link frame with room to spare. */
+/** The clipboard call itself, once the person has said yes. */
+const REMOTE_CLIPBOARD_CALL_MS = 15_000;
+
+/**
+ * How long a host waits for a Shell's clipboard answer. A plugin's first use
+ * waits on the Shell's consent dialog (its delivery receipt plus the person's
+ * decision), so the wait covers that whole exchange and the call after it.
+ */
+export const REMOTE_CLIPBOARD_TIMEOUT_MS =
+  PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS +
+  PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS +
+  REMOTE_CLIPBOARD_CALL_MS;
+
+/**
+ * How long a Shell may take before touching its clipboard for a host's call:
+ * the host's wait less a margin, so it never acts on a call the host has
+ * already given up on.
+ */
+export const REMOTE_CLIPBOARD_SHELL_BUDGET_MS = REMOTE_CLIPBOARD_TIMEOUT_MS - 5_000;
+
 export const REMOTE_CLIPBOARD_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 export const REMOTE_CLIPBOARD_TEXT_MAX_BYTES = 8 * 1024 * 1024;
 

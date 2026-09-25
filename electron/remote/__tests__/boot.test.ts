@@ -57,6 +57,7 @@ const m = vi.hoisted(() => {
       return () => clientClosedListeners.delete(l);
     }),
     hostForView: (id: number) => viewHosts.get(id) ?? null,
+    manager: { onSessionOpened: vi.fn((_l: unknown) => () => {}) },
     router: { name: "router" },
     dispose: vi.fn(async () => record("client.dispose")),
   };
@@ -547,7 +548,7 @@ describe("startRemoteHosts", () => {
       hostForView(id: number): unknown;
       isKnownHost(hostId: string): boolean;
       sessionFor(hostId: string): unknown;
-      hostIds(): string[];
+      onSessionOpened(listener: unknown): () => void;
       sshTargetFor(hostId: string): string | null;
       clientDir: string;
     };
@@ -560,7 +561,9 @@ describe("startRemoteHosts", () => {
     m.hostEntries.push({ descriptor: { id: "studio-01", sshTarget: "greg@studio" } });
     expect(deps.isKnownHost("studio-01")).toBe(true);
     expect(deps.isKnownHost("studio-02")).toBe(false);
-    expect(deps.hostIds()).toEqual(["studio-01"]);
+    const onSession = () => {};
+    deps.onSessionOpened(onSession);
+    expect(m.client.manager.onSessionOpened).toHaveBeenCalledWith(onSession);
     expect(deps.sshTargetFor("studio-01")).toBe("greg@studio");
     expect(deps.sshTargetFor("studio-02")).toBeNull();
 

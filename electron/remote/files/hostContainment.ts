@@ -92,6 +92,97 @@ async function readLinkTarget(linkPath: string): Promise<string | null> {
   }
 }
 
+interface WalkStep {
+  path: string;
+  handle: OpenedHostFile;
+}
+
+type WalkResult =
+  { steps: WalkStep[]; canonicalPath: string; viaProc: boolean } | "wrong-kind" | null;
+
+/**
+ * The walk both entry points share. It ends on a regular file (`want:
+ * "file"`) or a directory, and hands back the descriptors it holds: only the
+ * last one via /proc, where each step was an openat, and otherwise every step
+ * from the anchor down, so a caller can re-check the whole chain later.
+ */
+async function walkBeneath(
+  anchor: string,
+  components: readonly string[],
+  anchorSpellings: readonly string[],
+  want: "file" | "directory"
+): Promise<WalkResult> {
+  if (!validComponents(components)) return null;
+  const viaProc = await openatThroughProc();
+  let remaining = [...components];
+  let hops = 0;
+  let steps: WalkStep[] = [];
+  const release = async (held: WalkStep[]) => {
+    await Promise.all(held.map((step) => step.handle.close().catch(() => {})));
+  };
+  try {
+    for (;;) {
+      await release(steps.splice(0));
+      try {
+        // The anchor is the project folder itself, already canonical, so it is
+        // opened without following a symlink too: one swapped in after the
+        // realpath can't move the walk's starting point.
+        steps.push({ path: anchor, handle: await fs.open(anchor, DIR_FLAGS) });
+      } catch {
+        return null;
+      }
+      let dirPath = anchor;
+      let restart = false;
+      while (remaining.length > 0) {
+        const current = steps[steps.length - 1]!.handle;
+        const name = remaining[0]!;
+        const last = remaining.length === 1;
+        const entryPath = path.join(dirPath, name);
+        const stepPath = viaProc ? `/proc/self/fd/${current.fd}/${name}` : entryPath;
+        let child: OpenedHostFile;
+        try {
+          child = await fs.open(stepPath, last && want === "file" ? FILE_FLAGS : DIR_FLAGS);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (last && want === "file" && (code === "EISDIR" || code === "ENXIO")) {
+            return "wrong-kind";
+          }
+          const target = await readLinkTarget(stepPath);
+          if (target === null) {
+            if (last && want === "directory" && code === "ENOTDIR") return "wrong-kind";
+            return null;
+          }
+          if (++hops > MAX_LINK_HOPS) return null;
+          // dirPath is the real directory reached so far (every step was verified
+          // not to be a link), so resolving `..` lexically matches the filesystem.
+          const below = linkTargetBelow(anchor, anchorSpellings, path.resolve(dirPath, target));
+          if (below === null || !validComponents(below)) return null;
+          remaining = [...below, ...remaining.slice(1)];
+          restart = true;
+          break;
+        }
+        if (!viaProc && !(await isSameEntry(child, entryPath))) {
+          await child.close().catch(() => {});
+          return null;
+        }
+        if (viaProc) await release(steps.splice(0));
+        steps.push({ path: entryPath, handle: child });
+        dirPath = entryPath;
+        remaining = remaining.slice(1);
+      }
+      if (restart) continue;
+      const end = steps[steps.length - 1]!.handle;
+      const stat = await end.stat();
+      if (want === "file" ? !stat.isFile() : !stat.isDirectory()) return "wrong-kind";
+      const held = steps;
+      steps = [];
+      return { steps: held, canonicalPath: dirPath, viaProc };
+    }
+  } finally {
+    await release(steps);
+  }
+}
+
 /**
  * Open the regular file `components` names beneath the directory `anchor`,
  * resolving any symlink below it only while it stays inside `anchor`. Returns
@@ -108,60 +199,82 @@ export async function openBeneath(
   anchorSpellings: readonly string[] = []
 ): Promise<{ handle: OpenedHostFile; canonicalPath: string } | "not-a-file" | null> {
   if (components.length === 0) return "not-a-file";
-  if (!validComponents(components)) return null;
-  const viaProc = await openatThroughProc();
-  let remaining = [...components];
-  let hops = 0;
-  let current: OpenedHostFile | null = null;
-  try {
-    for (;;) {
-      await current?.close().catch(() => {});
-      current = null;
-      try {
-        // The anchor is the project folder itself, already canonical; only what lies below it is walked.
-        current = await fs.open(anchor, DIR_FLAGS & ~O_NOFOLLOW);
-      } catch {
-        return null;
+  const walked = await walkBeneath(anchor, components, anchorSpellings, "file");
+  if (walked === null) return null;
+  if (walked === "wrong-kind") return "not-a-file";
+  const handle = walked.steps.pop()!.handle;
+  await Promise.all(walked.steps.map((step) => step.handle.close().catch(() => {})));
+  return { handle, canonicalPath: walked.canonicalPath };
+}
+
+/**
+ * A directory reached by {@link openDirectoryBeneath}, held open so that what
+ * is created, replaced or removed in it lands in that directory and not in
+ * whatever its path names by then.
+ */
+export interface HeldDirectory {
+  /** The real path the walk reached it by. */
+  readonly canonicalPath: string;
+  readonly dev: bigint;
+  readonly ino: bigint;
+  /**
+   * A path for `name` inside the held directory. On Linux it goes through the
+   * held descriptor (/proc/self/fd), which is openat: no swap of any ancestor
+   * can redirect it. Elsewhere it is the canonical path, which {@link verify}
+   * pins down immediately before and after each use.
+   */
+  entry(name: string): string;
+  /**
+   * Throws unless every component from the anchor down still names the very
+   * directory the walk opened there (same device and inode, not a symlink).
+   * Nothing to check through /proc.
+   */
+  verify(): Promise<void>;
+  close(): Promise<void>;
+}
+
+/**
+ * Walk to the directory `components` names beneath `anchor`, under the same
+ * rules as {@link openBeneath}, and hold it. "not-a-directory" when the walk
+ * ends on something else; null when a step is missing, leaves the anchor,
+ * loops, or is not what its path names.
+ */
+export async function openDirectoryBeneath(
+  anchor: string,
+  components: readonly string[],
+  anchorSpellings: readonly string[] = []
+): Promise<HeldDirectory | "not-a-directory" | null> {
+  const walked = await walkBeneath(anchor, components, anchorSpellings, "directory");
+  if (walked === null) return null;
+  if (walked === "wrong-kind") return "not-a-directory";
+  const { steps, canonicalPath, viaProc } = walked;
+  const held = steps[steps.length - 1]!.handle;
+  const stat = await held.stat({ bigint: true });
+  const fdPath = `/proc/self/fd/${held.fd}`;
+  let closed = false;
+  return {
+    canonicalPath,
+    dev: stat.dev,
+    ino: stat.ino,
+    entry: (name) => {
+      if (!validComponents([name]) || name.includes("/") || name.includes(path.sep)) {
+        throw new Error("Invalid entry name");
       }
-      let dirPath = anchor;
-      let restart = false;
-      while (remaining.length > 0) {
-        const name = remaining[0]!;
-        const last = remaining.length === 1;
-        const entryPath = path.join(dirPath, name);
-        const stepPath = viaProc ? `/proc/self/fd/${current.fd}/${name}` : entryPath;
-        let child: OpenedHostFile;
-        try {
-          child = await fs.open(stepPath, last ? FILE_FLAGS : DIR_FLAGS);
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (last && (code === "EISDIR" || code === "ENXIO")) return "not-a-file";
-          const target = await readLinkTarget(stepPath);
-          if (target === null || ++hops > MAX_LINK_HOPS) return null;
-          // dirPath is the real directory reached so far (every step was verified
-          // not to be a link), so resolving `..` lexically matches the filesystem.
-          const below = linkTargetBelow(anchor, anchorSpellings, path.resolve(dirPath, target));
-          if (below === null || !validComponents(below)) return null;
-          remaining = [...below, ...remaining.slice(1)];
-          restart = true;
-          break;
+      return viaProc ? `${fdPath}/${name}` : path.join(canonicalPath, name);
+    },
+    async verify() {
+      if (closed) throw new Error("The folder is no longer held");
+      if (viaProc) return;
+      for (const step of steps) {
+        if (!(await isSameEntry(step.handle, step.path))) {
+          throw new Error("The folder changed during the upload");
         }
-        if (!viaProc && !(await isSameEntry(child, entryPath))) {
-          await child.close().catch(() => {});
-          return null;
-        }
-        await current.close().catch(() => {});
-        current = child;
-        dirPath = entryPath;
-        remaining = remaining.slice(1);
       }
-      if (restart) continue;
-      if (!(await current.stat()).isFile()) return "not-a-file";
-      const handle = current;
-      current = null;
-      return { handle, canonicalPath: dirPath };
-    }
-  } finally {
-    await current?.close().catch(() => {});
-  }
+    },
+    async close() {
+      if (closed) return;
+      closed = true;
+      await Promise.all(steps.map((step) => step.handle.close().catch(() => {})));
+    },
+  };
 }

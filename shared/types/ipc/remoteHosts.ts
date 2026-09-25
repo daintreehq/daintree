@@ -55,6 +55,20 @@ export interface ListHostProjectsPayload {
   hostId: HostId;
 }
 
+/** This machine's answer about one host plugin reaching its clipboard. */
+export interface HostPluginClipboardGrant {
+  /** The plugin's instance id on that host. */
+  pluginId: string;
+  read?: "allow" | "deny";
+  write?: "allow" | "deny";
+}
+
+export interface ResetClipboardGrantsPayload {
+  hostId: HostId;
+  /** One plugin's answers; omitted, every plugin's on that host. */
+  pluginId?: string;
+}
+
 /** A machine discovery saw. Reachability only; whether Daintree runs there is learned by connecting. */
 export interface DiscoveredHost {
   name: string;

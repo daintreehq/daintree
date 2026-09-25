@@ -681,6 +681,16 @@ export interface StoreSchema {
   hostMode?: { enabled: boolean; startAtLogin: boolean };
   /** Client-side behaviour while a window is attached to a remote host. */
   remoteHostsPreferences?: { interceptCtrlVImages: boolean };
+  /**
+   * The person's answers, on this machine, about a host's plugin reading or
+   * writing this machine's clipboard: host id → plugin instance id → access →
+   * decision. Additive key with no numbered migration; a missing entry means
+   * the question has not been asked.
+   */
+  remoteHostPluginClipboardGrants?: Record<
+    string,
+    Record<string, Partial<Record<"read" | "write", "allow" | "deny">>>
+  >;
 }
 
 const storeOptions = {

@@ -185,6 +185,7 @@ export const PluginWorkerToHostMessageSchema = z.union([
       requestId: CorrelationId,
       method: HostCallMethodSchema,
       params: OpaquePayload,
+      invocationId: CorrelationId.optional(),
     }),
     z.object({ type: z.literal("host-cancel"), requestId: CorrelationId }),
     z.object({

@@ -304,10 +304,18 @@ describe("host.clipboard.writeImage", () => {
 
 import {
   _resetPluginFrontendRoutingForTesting,
+  runInPluginInvocation,
   setPluginFrontendRouter,
   type PluginFrontend,
 } from "../plugin/pluginFrontendRouting.js";
-import { PluginFrontendMethod } from "../plugin/pluginFrontendRequests.js";
+import {
+  PluginFrontendMethod,
+  REMOTE_CLIPBOARD_TIMEOUT_MS,
+} from "../plugin/pluginFrontendRequests.js";
+import {
+  PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS,
+  PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS,
+} from "../../../shared/types/pluginCapabilityConsent.js";
 import type { ClientEndpoint } from "../../ipc/endpoint.js";
 
 describe("host.clipboard with a driver on another machine", () => {
@@ -344,6 +352,34 @@ describe("host.clipboard with a driver on another machine", () => {
     expect(mockClipboard.writeText).not.toHaveBeenCalled();
     expect(mockClipboard.writeImage).not.toHaveBeenCalled();
     expect(mockClipboard.readText).not.toHaveBeenCalled();
+  });
+
+  it("uses nobody's clipboard for a caller on another machine who has gone", async () => {
+    const host = registerPlugin(["clipboard:write", "clipboard:read"]);
+    frontend = { kind: "none", reason: "reserved" };
+    await expect(host.clipboard.writeText("x")).rejects.toMatchObject({
+      code: "NO_FRONTEND_ATTACHED",
+    });
+    frontend = { kind: "none", reason: "vacant" };
+    const gone = { kind: "remote-view", projectId: null, isClosed: () => true };
+    await expect(
+      runInPluginInvocation("acme.clip", gone as unknown as ClientEndpoint, () =>
+        host.clipboard.readText()
+      )
+    ).rejects.toMatchObject({ code: "NO_FRONTEND_ATTACHED" });
+    expect(mockClipboard.writeText).not.toHaveBeenCalled();
+    expect(mockClipboard.readText).not.toHaveBeenCalled();
+  });
+
+  it("waits long enough for the driver's first-use consent dialog", async () => {
+    const host = registerPlugin(["clipboard:write"]);
+    await host.clipboard.writeText("hello");
+    const call = request.mock.calls[0] as unknown as [string, unknown, { timeoutMs: number }];
+    const timeoutMs = call[2].timeoutMs;
+    expect(timeoutMs).toBe(REMOTE_CLIPBOARD_TIMEOUT_MS);
+    expect(timeoutMs).toBeGreaterThan(
+      PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS + PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS
+    );
   });
 
   it("keeps the capability gate in front of the remote clipboard", async () => {

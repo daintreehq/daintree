@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
+import { onWithContext } from "../utils.js";
 import { getRemoteService, requireRemoteService } from "../../remote/runtime.js";
 import { store } from "../../store.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -24,17 +24,6 @@ function readUploadPreferences(): UploadPreferences {
   };
 }
 
-/** Size and kind of a local file about to be uploaded, or null when there is none. */
-async function statLocalFile(payload: { localPath: string }): Promise<LocalFileStat | null> {
-  const localPath = payload?.localPath;
-  if (typeof localPath !== "string" || !path.isAbsolute(localPath) || localPath.includes("\0")) {
-    throw new AppError({ code: "VALIDATION", message: "Invalid local path" });
-  }
-  const stat = await fs.stat(localPath).catch(() => null);
-  if (!stat) return null;
-  return { size: stat.size, isDirectory: stat.isDirectory() };
-}
-
 export const fileTransferNamespace = defineIpcNamespace({
   name: "fileTransfer",
   ops: {
@@ -50,7 +39,17 @@ export const fileTransferNamespace = defineIpcNamespace({
         requireRemoteService("hostUploadClient").uploadBytes(ctx.webContentsId, payload),
       { withContext: true }
     ),
-    statLocalFile: op(FILE_TRANSFER_METHOD_CHANNELS.statLocalFile, statLocalFile),
+    // Size and kind of a local file about to be uploaded: only one the person
+    // chose in this same view (a drop, paste or attach), never any path a page names.
+    statLocalFile: op(
+      FILE_TRANSFER_METHOD_CHANNELS.statLocalFile,
+      async (ctx, payload: { localPath: string }): Promise<LocalFileStat | null> =>
+        requireRemoteService("hostUploadClient").statLocalSource(
+          ctx.webContentsId,
+          payload?.localPath
+        ),
+      { withContext: true }
+    ),
     getUploadPreferences: op(
       FILE_TRANSFER_METHOD_CHANNELS.getUploadPreferences,
       async (): Promise<UploadPreferences> => readUploadPreferences()
@@ -76,12 +75,14 @@ export const fileTransferNamespace = defineIpcNamespace({
     ),
     cancel: op(
       FILE_TRANSFER_METHOD_CHANNELS.cancel,
-      async (payload: { opId: string }): Promise<void> => {
+      async (ctx, payload: { opId: string }): Promise<void> => {
         if (typeof payload?.opId !== "string") return;
-        // Uploads and downloads share the operation id space; whichever owns it stops.
-        if (getRemoteService("hostUploadClient")?.cancel(payload.opId)) return;
-        requireRemoteService("hostFileClient").cancel(payload.opId);
-      }
+        // Uploads and downloads share the operation id space; whichever owns it
+        // stops, and only for the view that started it.
+        if (getRemoteService("hostUploadClient")?.cancel(payload.opId, ctx.webContentsId)) return;
+        requireRemoteService("hostFileClient").cancel(payload.opId, ctx.webContentsId);
+      },
+      { withContext: true }
     ),
     answerHostPick: op(
       FILE_TRANSFER_METHOD_CHANNELS.answerHostPick,
@@ -100,6 +101,20 @@ export const fileTransferNamespace = defineIpcNamespace({
   },
 });
 
+/**
+ * Local files the person chose in a remote-bound view: the preload reports
+ * each dropped or pasted File's path as it resolves it, over a channel the
+ * page itself can't reach. Only these are ever read for an upload.
+ */
+function registerLocalSourceGrants(): () => void {
+  return onWithContext(CHANNELS.FILE_TRANSFER_GRANT_LOCAL_SOURCES, (ctx, paths: unknown) => {
+    getRemoteService("hostUploadClient")?.grantLocalSources(ctx.webContentsId, paths);
+  });
+}
+
 export function registerFileTransferHandlers(): () => void {
-  return fileTransferNamespace.register();
+  const disposers = [fileTransferNamespace.register(), registerLocalSourceGrants()];
+  return () => {
+    for (const dispose of disposers.splice(0).reverse()) dispose();
+  };
 }

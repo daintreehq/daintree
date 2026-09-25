@@ -25,10 +25,15 @@ import type { PluginPanelLifecycleBroker } from "./PluginPanelLifecycleBroker.js
 import type { PluginRendererDispatcher } from "./PluginRendererDispatcher.js";
 import type { PluginPanelReloadDispatcher } from "./PluginPanelReloadDispatcher.js";
 import type { PluginUIPromptDispatcher, PromptRequestOptions } from "./PluginUIPromptDispatcher.js";
-import { resolvePluginFrontend } from "./pluginFrontendRouting.js";
+import {
+  getPluginInvokeOrigin,
+  noFrontendAttached,
+  resolvePluginFrontend,
+} from "./pluginFrontendRouting.js";
 import {
   PluginFrontendMethod,
   REMOTE_CLIPBOARD_IMAGE_MAX_BYTES,
+  REMOTE_CLIPBOARD_TIMEOUT_MS,
 } from "./pluginFrontendRequests.js";
 import { assertSettingsKey, type PluginSettingsManager } from "./PluginSettingsManager.js";
 import {
@@ -2911,9 +2916,6 @@ async function containToDeclaredRoots(
   throw lastErr instanceof Error ? lastErr : new PluginPathNotAllowedError(pluginId, targetPath);
 }
 
-/** A clipboard on another machine answers quickly or not at all. */
-const REMOTE_CLIPBOARD_TIMEOUT_MS = 15_000;
-
 /**
  * Host-mediated OS clipboard surface backing the `clipboard:read` /
  * `clipboard:write` tokens. Text reads/writes plus bounded PNG writes
@@ -2942,11 +2944,21 @@ function buildClipboardApi(
     }
   };
   // The clipboard is the person's: when another machine drives the project,
-  // theirs is the one the plugin means. With nobody attached, or a window on
-  // this machine, it stays this machine's, as it always was.
-  const remoteDriver = () => {
+  // theirs is the one the plugin means. A window on this machine, or a project
+  // nobody drives, keeps this machine's, as it always was. A call made for a
+  // person on another machine who has since gone, or a driver away inside its
+  // grace, has nobody's clipboard to use: this one isn't theirs.
+  const remoteDriver = (op: string) => {
     const frontend = resolvePluginFrontend(boundProjectId, pluginId);
-    return frontend.kind === "remote" ? frontend.endpoint : null;
+    if (frontend.kind === "remote") return frontend.endpoint;
+    if (
+      frontend.kind === "none" &&
+      (frontend.reason !== "vacant" ||
+        getPluginInvokeOrigin(pluginId)?.endpoint.kind === "remote-view")
+    ) {
+      throw noFrontendAttached(pluginId, `clipboard.${op}`);
+    }
+    return null;
   };
   return {
     writeText: async (text): Promise<void> => {
@@ -2964,7 +2976,7 @@ function buildClipboardApi(
           `PAYLOAD_TOO_LARGE: plugin "${pluginId}" clipboard.writeText text exceeds the ${MAX_TEXT_BYTES} byte limit`
         );
       }
-      const remote = remoteDriver();
+      const remote = remoteDriver("writeText");
       if (remote) {
         await remote.request(
           PluginFrontendMethod.CLIPBOARD,
@@ -3004,7 +3016,7 @@ function buildClipboardApi(
           `VALIDATION: plugin "${pluginId}" clipboard.writeImage could not decode the data as an image`
         );
       }
-      const remote = remoteDriver();
+      const remote = remoteDriver("writeImage");
       if (remote) {
         if (pngData.byteLength > REMOTE_CLIPBOARD_IMAGE_MAX_BYTES) {
           throw new Error(
@@ -3040,7 +3052,7 @@ function buildClipboardApi(
           `PERMISSION_REQUIRED: plugin "${pluginId}" clipboard.readText requires the "clipboard:read" capability, which is not declared in manifest.capabilities`
         );
       }
-      const remote = remoteDriver();
+      const remote = remoteDriver("readText");
       if (remote) {
         const text = await remote.request(
           PluginFrontendMethod.CLIPBOARD,

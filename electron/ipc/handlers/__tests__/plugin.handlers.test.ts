@@ -3503,22 +3503,28 @@ describe("plugin:invoke over the link", () => {
     warn.mockRestore();
   });
 
-  it("remembers the calling frontend for prompts only while routing is on", async () => {
-    mockDispatchHandler.mockResolvedValue(undefined);
+  it("carries the calling frontend with the call only while routing is on", async () => {
+    const seen: unknown[] = [];
+    mockDispatchHandler.mockImplementation(async () => {
+      await Promise.resolve();
+      seen.push(getPluginInvokeOrigin("acme.graph")?.endpoint ?? null);
+    });
     registerPluginHandlers();
     const endpoint = remoteEndpoint();
     await getIpcDispatcher().invokeForEndpoint({ endpoint, client }, "plugin:invoke", [
       "acme.graph",
       "x",
     ]);
-    expect(getPluginInvokeOrigin("acme.graph")).toBeNull();
+    expect(seen).toEqual([null]);
 
     setPluginFrontendRouter({ resolve: () => ({ kind: "local" }), onChange: () => () => {} });
     await getIpcDispatcher().invokeForEndpoint({ endpoint, client }, "plugin:invoke", [
       "acme.graph",
       "x",
     ]);
-    expect(getPluginInvokeOrigin("acme.graph")).toBe(endpoint);
+    expect(seen).toEqual([null, endpoint]);
+    // Nothing outlives the call for a later one to inherit.
+    expect(getPluginInvokeOrigin("acme.graph")).toBeNull();
   });
 
   it("activate-for-view refuses a remote-unsupported plugin with a typed error", async () => {

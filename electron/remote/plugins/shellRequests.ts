@@ -11,10 +11,12 @@ import {
   PluginPromptPayloadSchema,
   PluginToastPayloadSchema,
   REMOTE_CLIPBOARD_IMAGE_MAX_BYTES,
+  REMOTE_CLIPBOARD_SHELL_BUDGET_MS,
   REMOTE_CLIPBOARD_TEXT_MAX_BYTES,
 } from "../../services/plugin/pluginFrontendRequests.js";
 import {
   isSafePluginInstanceId,
+  pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
 } from "../../services/plugin/projectPluginIdentity.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -23,11 +25,18 @@ import { AppError } from "../../utils/errorTypes.js";
 import {
   getProjectForWebContents,
   getWindowForWebContents,
+  isCachedViewWebContents,
   resolveLiveWebContents,
 } from "../../window/webContentsRegistry.js";
 import type { ViewReverseRequest } from "../client/RemoteHostManager.js";
 import { registerReverseRequestMethod } from "../client/reverseRequests.js";
 import { getRemoteService } from "../runtime.js";
+import {
+  persistedClipboardGrants,
+  type ClipboardAccess,
+  type ClipboardGrantStore,
+} from "./clipboardGrants.js";
+import type { PluginCapabilityConsentOutcome } from "../../../shared/types/pluginCapabilityConsent.js";
 
 export interface PluginShellRequestDeps {
   /** How the person at this screen knows a host. */
@@ -47,6 +56,14 @@ export interface PluginShellRequestDeps {
   onEndpointClosed?: (
     listener: (hostId: HostId, info: { webContentsId: number; endpointId: string }) => void
   ) => () => void;
+  /** The person's clipboard answers per host and plugin. Defaults to this machine's settings. */
+  clipboardGrants?: ClipboardGrantStore;
+  now?: () => number;
+  /** Puts a clipboard question to the person in `wc`. Defaults to the capability consent dialog. */
+  askClipboardGrant?: (
+    wc: Electron.WebContents,
+    question: { hostId: HostId; pluginId: string; access: ClipboardAccess }
+  ) => Promise<PluginCapabilityConsentOutcome>;
 }
 
 function refuse(message: string): AppError {
@@ -92,6 +109,34 @@ function scopeView(request: ViewReverseRequest, pluginId: string): Electron.WebC
   return wc;
 }
 
+function refuseClipboard(message: string): AppError {
+  return new AppError({ code: "PERMISSION", message });
+}
+
+/**
+ * A host's plugin reaches this machine's clipboard only through the view the
+ * person is looking at: its window focused and the view the one it shows.
+ */
+function requireFrontView(wc: Electron.WebContents): void {
+  if (getWindowForWebContents(wc)?.isFocused() !== true || isCachedViewWebContents(wc.id)) {
+    throw refuseClipboard(
+      "The host's window isn't in front, so its plugins can't use this computer's clipboard"
+    );
+  }
+}
+
+function defaultAskClipboardGrant(
+  wc: Electron.WebContents,
+  question: { hostId: HostId; pluginId: string; access: ClipboardAccess }
+): Promise<PluginCapabilityConsentOutcome> {
+  return requestConsentInWebContents(wc, {
+    pluginId: question.pluginId,
+    pluginDisplayName: pluginManifestIdFromInstanceKey(question.pluginId),
+    capability: question.access === "read" ? "clipboard:read" : "clipboard:write",
+    declaredCapabilities: [],
+  });
+}
+
 /**
  * Shell side of a host plugin's person-facing calls, for the view that drives
  * the plugin's project: its prompts, first-use consent and clipboard. Each is
@@ -100,6 +145,11 @@ function scopeView(request: ViewReverseRequest, pluginId: string): Electron.WebC
  */
 export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): () => void {
   const hostName = deps.hostName ?? defaultHostName;
+  const clipboardGrants = deps.clipboardGrants ?? persistedClipboardGrants;
+  const askClipboardGrant = deps.askClipboardGrant ?? defaultAskClipboardGrant;
+  const now = deps.now ?? Date.now;
+  /** One question per host, plugin and access at a time; callers behind it share its answer. */
+  const openGrantQuestions = new Map<string, Promise<boolean>>();
   let disposed = false;
   const prompts = new PluginUIPromptDispatcher({ isDisposed: () => disposed });
   const openPrompts = new Map<
@@ -167,11 +217,74 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
     return requestConsentInWebContents(wc, parsed.data);
   };
 
-  const useClipboard = (request: ViewReverseRequest): unknown => {
+  /**
+   * Whether the person lets this host's plugin have `access` to this
+   * machine's clipboard. Asked once per host and plugin, in this machine's own
+   * dialog, and remembered here; the host has no say in the answer.
+   */
+  const clipboardGranted = async (
+    wc: Electron.WebContents,
+    hostId: HostId,
+    pluginId: string,
+    access: ClipboardAccess
+  ): Promise<boolean> => {
+    const known = clipboardGrants.get(hostId, pluginId, access);
+    if (known !== null) return known === "allow";
+    const key = `${hostId}\0${pluginId}\0${access}`;
+    let question = openGrantQuestions.get(key);
+    if (!question) {
+      question = (async () => {
+        let outcome: PluginCapabilityConsentOutcome;
+        try {
+          outcome = await askClipboardGrant(wc, { hostId, pluginId, access });
+        } catch {
+          outcome = "undeliverable";
+        }
+        if (outcome === "approved-and-pin") {
+          clipboardGrants.set(hostId, pluginId, access, "allow");
+          return true;
+        }
+        if (outcome === "approved-once") return true;
+        if (outcome === "rejected") clipboardGrants.set(hostId, pluginId, access, "deny");
+        // A dialog that never reached anyone, or timed out, decided nothing.
+        return false;
+      })().finally(() => openGrantQuestions.delete(key));
+      openGrantQuestions.set(key, question);
+    }
+    return question;
+  };
+
+  const useClipboard = async (request: ViewReverseRequest): Promise<unknown> => {
     const parsed = PluginClipboardPayloadSchema.safeParse(request.payload);
     if (!parsed.success) throw malformed("clipboard");
     const payload = parsed.data;
     const wc = scopeView(request, payload.pluginId);
+    requireFrontView(wc);
+    const access: ClipboardAccess = payload.op === "readText" ? "read" : "write";
+    const arrivedAt = now();
+    if (!(await clipboardGranted(wc, request.hostId, payload.pluginId, access))) {
+      throw refuseClipboard(
+        access === "read"
+          ? `A plugin on ${hostName(request.hostId)} isn't allowed to read this computer's clipboard`
+          : `A plugin on ${hostName(request.hostId)} isn't allowed to write to this computer's clipboard`
+      );
+    }
+    // The question may have taken a while: the view must still be the one in
+    // front, on the same host, when the clipboard is actually touched.
+    if (disposed || wc.isDestroyed()) {
+      throw new AppError({ code: "HOST_DISCONNECTED", message: "The view has gone away" });
+    }
+    scopeView(request, payload.pluginId);
+    requireFrontView(wc);
+    // The host's wait covers the consent dialog's own lifetime, so this only
+    // trips on a call whose answer came after the host had given up on it.
+    if (now() - arrivedAt > REMOTE_CLIPBOARD_SHELL_BUDGET_MS) {
+      // The answer is remembered; this call is not carried out after its caller gave up.
+      throw new AppError({
+        code: "STALE_GENERATION",
+        message: "The clipboard call outlived the host's wait; the plugin can try again",
+      });
+    }
     switch (payload.op) {
       case "writeText":
         if (Buffer.byteLength(payload.text, "utf8") > REMOTE_CLIPBOARD_TEXT_MAX_BYTES) {
@@ -191,17 +304,8 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
         clipboard.writeImage(image);
         return null;
       }
-      case "readText": {
-        // Reading hands this machine's clipboard to another one, so only while
-        // the person is actually in that host's window.
-        if (getWindowForWebContents(wc)?.isFocused() !== true) {
-          throw new AppError({
-            code: "PERMISSION",
-            message: "The host's window isn't focused, so its plugins can't read this clipboard",
-          });
-        }
+      case "readText":
         return clipboard.readText();
-      }
     }
   };
 

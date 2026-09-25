@@ -30,7 +30,11 @@ import { resolveHtmlPreviewRoot } from "./htmlPreviewTokens.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { formatDialogOrigin } from "../../shared/utils/urlUtils.js";
 import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
-import { isGuestNavigationAllowed } from "../window/webviewSrcGate.js";
+import {
+  guardRemoteGuestRequests,
+  isGuestNavigationAllowed,
+  isGuestPopupAllowed,
+} from "../window/webviewSrcGate.js";
 import {
   parsePluginTourAudioPath,
   stripPluginViewGeneration,
@@ -2181,8 +2185,17 @@ export function setupWebviewCSP(): void {
       }
     });
 
+    // A guest in a remote-bound view reaches this machine's localhost only
+    // through its host's forwards, for every request and not just navigations.
+    contents.on("did-attach-webview", (_event, guest) => {
+      guardRemoteGuestRequests(contents.id, guest);
+    });
+
     // Route target="_blank" links and window.open() from webview guests to the system browser
     if (contents.getType() === "webview") {
+      const embedder = contents.hostWebContents;
+      if (embedder) guardRemoteGuestRequests(embedder.id, contents);
+
       contents.setWindowOpenHandler(({ url }) => {
         // If this is an OAuth URL from a dev-preview webview, route it through
         // the blocked-nav banner so the user can use "Sign in via Browser" (loopback flow).
@@ -2191,6 +2204,11 @@ export function setupWebviewCSP(): void {
         const isDevPreview = !isBrowserPanelContents(contents);
         if (url && isDevPreview && looksLikeOAuthUrl(url)) {
           notifyBlockedNavigation(url);
+          return { action: "deny" };
+        }
+
+        if (url && !isGuestPopupAllowed((contents.hostWebContents ?? contents).id, url)) {
+          console.warn(`[MAIN] Blocked a remote view's popup to this machine's localhost: ${url}`);
           return { action: "deny" };
         }
 

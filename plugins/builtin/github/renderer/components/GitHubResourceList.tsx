@@ -34,6 +34,7 @@ import {
   type PRStateFilter,
 } from "../stores/githubFilterStore";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
+import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import type { Issue, PR } from "@shared/types/forge";
 import type { Worktree } from "@shared/types/worktree";
 import type { GitHubSortOrder } from "../../shared/types.js";
@@ -240,6 +241,7 @@ export function GitHubResourceList({
   const githubConfig = useGitHubConfigStore((s) => s.config);
   const showNoTokenEmptyState =
     githubConfigInitialized && githubConfig !== null && !githubConfig.hasToken;
+  const remoteHostName = useRemoteHostName();
 
   // Self-init the GitHub config store so the no-token empty state can render
   // before any other code path has triggered initialization. This mirrors the
@@ -1035,7 +1037,11 @@ export function GitHubResourceList({
           variant="zero-data"
           scale="canvas"
           icon={<GitHubIcon />}
-          title="GitHub not connected"
+          title={
+            remoteHostName === null
+              ? "GitHub not connected"
+              : forgeNotConnectedLabel("GitHub", remoteHostName)
+          }
           description="Add a personal access token to browse issues and pull requests for this project."
           action={
             <Button variant="outline" size="sm" onClick={handleOpenGitHubSettings}>

@@ -145,6 +145,9 @@ export function HostSwitchDialog({
   const [destinationCheck, setDestinationCheck] = useState<DestinationCheck | null>(null);
   // The input the check answered; a check for an earlier input never enables a clone.
   const [checkedInput, setCheckedInput] = useState<string | null>(null);
+  // Why the last check couldn't run (the host dropped, say); Retry bumps the attempt.
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const [checkAttempt, setCheckAttempt] = useState(0);
   const [submodules, setSubmodules] = useState(false);
   const [depth, setDepth] = useState<HostCloneDepth>("full");
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -201,6 +204,7 @@ export function HostSwitchDialog({
   useEffect(() => {
     if (!prep || view === "existing") return;
     const target = destination.trim();
+    setCheckError(null);
     if (target.length === 0) {
       setDestinationCheck(null);
       return;
@@ -214,13 +218,19 @@ export function HostSwitchDialog({
           setDestinationCheck(check);
           setCheckedInput(target);
         })
-        .catch(() => {});
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          // An earlier answer no longer vouches for the folder.
+          setDestinationCheck(null);
+          setCheckedInput(null);
+          setCheckError(formatErrorMessage(error, "The host didn't answer."));
+        });
     }, DESTINATION_CHECK_DELAY_MS);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [destination, prep, view, remoteUrls, request.toHostId]);
+  }, [destination, prep, view, remoteUrls, request.toHostId, targetName, checkAttempt]);
 
   const handoff = prep ? describeBranchHandoff(prep, sourceName) : null;
   const destinationReady =
@@ -401,6 +411,19 @@ export function HostSwitchDialog({
           setCheckedInput(null);
         }}
       />
+      {checkError && (
+        <p role="alert" className="mt-1 text-xs text-status-error">
+          Couldn't check this folder on {targetName}: {checkError}{" "}
+          <button
+            type="button"
+            className="underline underline-offset-2 text-text-primary"
+            disabled={busy}
+            onClick={() => setCheckAttempt((n) => n + 1)}
+          >
+            Retry
+          </button>
+        </p>
+      )}
       {destinationCheck && destinationCheck.status !== "free" && (
         <p className="mt-1 text-xs text-status-warning">
           {destinationCheck.detail}

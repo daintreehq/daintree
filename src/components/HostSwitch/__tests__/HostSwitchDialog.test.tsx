@@ -266,4 +266,35 @@ describe("HostSwitchDialog destination", () => {
     expect(execute).not.toHaveBeenCalled();
     await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
   });
+  it("won't clone on an earlier free answer once a recheck of the same folder fails", async () => {
+    prepare.mockResolvedValue(preparation());
+    checkDestination.mockRejectedValueOnce(new Error("Couldn't reach this host."));
+    render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    const button = await screen.findByRole("button", { name: "Clone and open" });
+    // The mount-time recheck of the prepared folder is the one that fails.
+    await screen.findByRole("alert");
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("says why a destination check failed and retries it", async () => {
+    prepare.mockResolvedValue(preparation());
+    checkDestination.mockRejectedValueOnce(new Error("Couldn't reach this host."));
+    render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    const button = await screen.findByRole("button", { name: "Clone and open" });
+    fireEvent.change(screen.getByLabelText("Folder on studio-01"), {
+      target: { value: "/home/greg/elsewhere" },
+    });
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't check this folder on studio-01");
+    expect(alert.textContent).toContain("Couldn't reach this host.");
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(checkDestination).toHaveBeenLastCalledWith(
+      expect.objectContaining({ path: "/home/greg/elsewhere" })
+    );
+  });
 });

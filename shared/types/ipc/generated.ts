@@ -1839,6 +1839,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../remoteHosts.js").HostListEntry[];
   };
+  "remote-hosts:list-clipboard-grants": {
+    args: [payload: import("./remoteHosts.js").ListHostProjectsPayload];
+    result: import("./remoteHosts.js").HostPluginClipboardGrant[];
+  };
   "remote-hosts:list-host-projects": {
     args: [payload: import("./remoteHosts.js").ListHostProjectsPayload];
     result: import("./remoteHosts.js").HostProjectSummary[];
@@ -1850,6 +1854,10 @@ export interface GeneratedIpcInvokeMap {
   "remote-hosts:probe": {
     args: [payload: { sshTarget: string }];
     result: import("./remoteHosts.js").HostProbeResult;
+  };
+  "remote-hosts:reset-clipboard-grants": {
+    args: [payload: import("./remoteHosts.js").ResetClipboardGrantsPayload];
+    result: void;
   };
   "remote-hosts:start-host-mode": {
     args: [payload: { sshTarget: string }];

@@ -13,6 +13,13 @@ vi.mock("../../../utils/logger.js", () => ({
 }));
 
 import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
+import {
+  _resetPluginFrontendRoutingForTesting,
+  getPluginInvokeOrigin,
+  runInPluginInvocation,
+  setPluginFrontendRouter,
+} from "../pluginFrontendRouting.js";
+import type { ClientEndpoint } from "../../../ipc/endpoint.js";
 
 class FakeWorkerHost extends EventEmitter {
   sent: any[] = [];
@@ -1980,5 +1987,91 @@ describe("PluginDevWorkerMainBridge manifest commands (#12274)", () => {
     workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
     void bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {}).catch(() => undefined);
     expect(workerHost.sent.filter((m: any) => m.kind === "command")).toHaveLength(2);
+  });
+});
+
+describe("PluginDevWorkerMainBridge invocation scope", () => {
+  afterEach(() => _resetPluginFrontendRoutingForTesting());
+
+  function fakeEndpoint(id: string, projectId: string): ClientEndpoint {
+    return {
+      endpointId: id,
+      clientId: `client-${id}`,
+      projectId,
+      kind: "remote-view",
+      handle: -1,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => {} }),
+      isClosed: () => false,
+    };
+  }
+
+  it("answers each worker host call for the invocation that made it, even interleaved", async () => {
+    setPluginFrontendRouter({ resolve: () => ({ kind: "local" }), onChange: () => () => {} });
+    const { host, workerHost } = makeBridge({ capabilities: [] });
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerHandler",
+      params: { channel: "go", hasSchema: false },
+    });
+    await flush();
+    const wrapper = (host.registerHandler as any).mock.calls[0][1] as (...a: any[]) => unknown;
+    const seen: Record<string, string | null> = {};
+    (host.showConfirm as any).mockImplementation(async (options: { title: string }) => {
+      seen[options.title] = getPluginInvokeOrigin("acme.demo")?.endpoint.endpointId ?? null;
+      return true;
+    });
+
+    const a = fakeEndpoint("a", "project-a");
+    const b = fakeEndpoint("b", "project-b");
+    void runInPluginInvocation("acme.demo", a, () => wrapper({}, {}));
+    void runInPluginInvocation("acme.demo", b, () => wrapper({}, {}));
+    await flush();
+    const invokes = workerHost.sent.filter((m) => m.type === "invoke");
+    expect(invokes).toHaveLength(2);
+    const [invokeA, invokeB] = invokes;
+
+    // B's handler asks first, then A's: each answer belongs to its own caller.
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c1",
+      method: "showConfirm",
+      params: { options: { title: "from-b" } },
+      invocationId: invokeB.requestId,
+    });
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c2",
+      method: "showConfirm",
+      params: { options: { title: "from-a" } },
+      invocationId: invokeA.requestId,
+    });
+    // Background work of the worker carries no invocation.
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c3",
+      method: "showConfirm",
+      params: { options: { title: "background" } },
+    });
+    await flush();
+    expect(seen).toEqual({ "from-b": "b", "from-a": "a", background: null });
+
+    // Once A's invocation settles, a late call naming it belongs to nobody.
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: invokeA.requestId,
+      ok: true,
+      result: null,
+    });
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c4",
+      method: "showConfirm",
+      params: { options: { title: "late-a" } },
+      invocationId: invokeA.requestId,
+    });
+    await flush();
+    expect(seen["late-a"]).toBeNull();
   });
 });

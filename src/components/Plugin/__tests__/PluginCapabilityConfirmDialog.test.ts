@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capabilityAction, titleFor } from "../PluginCapabilityConfirmDialog";
+import { capabilityAction, reachesThisComputer, titleFor } from "../PluginCapabilityConfirmDialog";
 import { CAPABILITY_META } from "../capabilityMeta";
 import { BUILT_IN_PLUGIN_CAPABILITIES, type BuiltInPluginCapability } from "@shared/types/plugin";
 
@@ -40,5 +40,16 @@ describe("PluginCapabilityConfirmDialog microcopy", () => {
       expect(capabilityAction(cap).length).toBeGreaterThan(0);
       expect(CAPABILITY_META[cap].description.length).toBeGreaterThan(0);
     }
+  });
+
+  it("names the host and this computer when a host's plugin asks for the clipboard", () => {
+    expect(titleFor("acme.snippets", "clipboard:read", "devbox")).toBe(
+      "Allow 'acme.snippets' on devbox to read this computer's clipboard?"
+    );
+    expect(titleFor("acme.snippets", "clipboard:write", "devbox")).toBe(
+      "Allow 'acme.snippets' on devbox to write to this computer's clipboard?"
+    );
+    expect(reachesThisComputer("clipboard:read")).toBe(true);
+    expect(reachesThisComputer("shell:exec")).toBe(false);
   });
 });

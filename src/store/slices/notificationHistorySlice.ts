@@ -44,6 +44,8 @@ export interface NotificationHistoryEntry {
     worktreeId?: string;
     panelId?: string;
     eventKind?: NotificationEventKind;
+    /** The other machine this came from; its project ids mean nothing here. */
+    hostName?: string;
   };
   actions?: NotificationHistoryAction[];
 }

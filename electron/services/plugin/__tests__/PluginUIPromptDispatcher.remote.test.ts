@@ -19,6 +19,8 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
 import { PluginUIPromptDispatcher } from "../PluginUIPromptDispatcher.js";
 import {
   _resetPluginFrontendRoutingForTesting,
+  getPluginInvokeOrigin,
+  runInPluginInvocation,
   setPluginFrontendRouter,
   type PluginFrontend,
 } from "../pluginFrontendRouting.js";
@@ -43,13 +45,13 @@ interface Deferred {
   reject: (error: unknown) => void;
 }
 
-function makeEndpoint() {
+function makeEndpoint(endpointId = "s1:ep", projectId: string = PROJECT) {
   const requests: Array<{ method: string; payload: unknown; deferred: Deferred }> = [];
   let closed = false;
   const endpoint: ClientEndpoint = {
-    endpointId: "s1:ep",
+    endpointId,
     clientId: "client-mbp",
-    projectId: PROJECT,
+    projectId,
     kind: "remote-view",
     handle: -3,
     send: vi.fn(),
@@ -227,5 +229,177 @@ describe("PluginUIPromptDispatcher with a remote driver", () => {
       code: "PROJECT_VIEW_UNAVAILABLE",
     });
     await expect(dispatcher.requestPrompt("acme.deploy", CONFIRM, null)).resolves.toBe(false);
+  });
+
+  it("moves an open prompt to whoever takes the project over", async () => {
+    const a = makeEndpoint("a");
+    const b = makeEndpoint("b");
+    frontend = { kind: "remote", endpoint: a.endpoint, leaseId: 1 };
+    const answer = dispatcher.requestPrompt("acme.deploy", CONFIRM, PROJECT);
+    await flush();
+    expect(a.requests).toHaveLength(1);
+    const promptId = (a.requests[0]!.payload as { promptId: string }).promptId;
+
+    frontend = { kind: "remote", endpoint: b.endpoint, leaseId: 2 };
+    changeListener?.();
+    await flush();
+    expect(a.requests[1]).toMatchObject({
+      method: PluginFrontendMethod.PROMPT_CANCEL,
+      payload: { pluginId: "acme.deploy", promptId },
+    });
+    expect(b.requests).toHaveLength(1);
+    expect(b.requests[0]!.method).toBe(PluginFrontendMethod.PROMPT);
+
+    // The old driver's approval arrives late: it is nobody's answer now.
+    a.requests[0]!.deferred.resolve(true);
+    let settled = false;
+    void answer.then(() => (settled = true));
+    await flush();
+    expect(settled).toBe(false);
+    b.requests[0]!.deferred.resolve(false);
+    await expect(answer).resolves.toBe(false);
+  });
+
+  it("never returns an approval from a driver whose lease has gone, even unannounced", async () => {
+    const a = makeEndpoint("a");
+    const b = makeEndpoint("b");
+    frontend = { kind: "remote", endpoint: a.endpoint, leaseId: 1 };
+    const answer = dispatcher.requestPrompt("acme.deploy", CONFIRM, PROJECT);
+    await flush();
+    frontend = { kind: "remote", endpoint: b.endpoint, leaseId: 2 };
+    a.requests[0]!.deferred.resolve(true);
+    await flush();
+    expect(b.requests).toHaveLength(1);
+    b.requests[0]!.deferred.resolve(true);
+    await expect(answer).resolves.toBe(true);
+  });
+
+  it("refuses the same driver's approval once it has lost and retaken the lease", async () => {
+    const a = makeEndpoint("a");
+    frontend = { kind: "remote", endpoint: a.endpoint, leaseId: 1 };
+    const answer = dispatcher.requestPrompt("acme.deploy", CONFIRM, PROJECT);
+    await flush();
+    frontend = { kind: "remote", endpoint: a.endpoint, leaseId: 3 };
+    a.requests[0]!.deferred.resolve(true);
+    await flush();
+    expect(a.requests.map((r) => r.method)).toEqual([
+      PluginFrontendMethod.PROMPT,
+      PluginFrontendMethod.PROMPT_CANCEL,
+      PluginFrontendMethod.PROMPT,
+    ]);
+    a.requests[2]!.deferred.resolve(true);
+    await expect(answer).resolves.toBe(true);
+  });
+
+  it("takes a stale driver's dismissal as it is", async () => {
+    const a = makeEndpoint("a");
+    const b = makeEndpoint("b");
+    frontend = { kind: "remote", endpoint: a.endpoint, leaseId: 1 };
+    const answer = dispatcher.requestPrompt("acme.deploy", CONFIRM, PROJECT);
+    await flush();
+    frontend = { kind: "remote", endpoint: b.endpoint, leaseId: 2 };
+    a.requests[0]!.deferred.resolve(false);
+    await expect(answer).resolves.toBe(false);
+    expect(b.requests).toHaveLength(0);
+  });
+
+  it("re-routes a queued app-global prompt to the caller whose invocation asked", async () => {
+    const a = makeEndpoint("a", PROJECT);
+    const b = makeEndpoint("b", "b".repeat(64));
+    let attached = false;
+    setPluginFrontendRouter({
+      resolve: ({ pluginId }) => {
+        const origin = getPluginInvokeOrigin(pluginId);
+        if (!attached || !origin) return { kind: "none", reason: "vacant" };
+        return { kind: "remote", endpoint: origin.endpoint };
+      },
+      onChange: (listener) => {
+        changeListener = listener;
+        return () => (changeListener = null);
+      },
+    });
+    const answer = runInPluginInvocation("acme.global", a.endpoint, () =>
+      dispatcher.requestPrompt("acme.global", CONFIRM, null, undefined, {
+        whenNoFrontend: "queue",
+      })
+    );
+    // B calls the same plugin meanwhile; it must not inherit A's question.
+    await runInPluginInvocation("acme.global", b.endpoint, async () => {
+      await flush();
+    });
+    attached = true;
+    changeListener?.();
+    await flush();
+    expect(a.requests).toHaveLength(1);
+    expect(b.requests).toHaveLength(0);
+    a.requests[0]!.deferred.resolve(true);
+    await expect(answer).resolves.toBe(true);
+  });
+
+  it("takes a local prompt down when a remote driver takes the project over", async () => {
+    const send = vi.fn();
+    const wc = {
+      id: 7,
+      isDestroyed: () => false,
+      once: vi.fn(),
+      removeListener: vi.fn(),
+      send,
+    };
+    registryMock.getWebContentsForProject.mockReturnValue([wc]);
+    const { webContents } = await import("electron");
+    vi.mocked(webContents.fromId).mockReturnValue(wc as never);
+    frontend = { kind: "local" };
+    const answer = dispatcher.requestPrompt("acme.deploy", CONFIRM, PROJECT);
+    await flush();
+    expect(send).toHaveBeenCalledTimes(1);
+
+    const b = makeEndpoint("b");
+    frontend = { kind: "remote", endpoint: b.endpoint, leaseId: 2 };
+    changeListener?.();
+    await flush();
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[1]![1]).toMatchObject({ pluginId: "acme.deploy" });
+    expect(b.requests).toHaveLength(1);
+    b.requests[0]!.deferred.resolve(true);
+    await expect(answer).resolves.toBe(true);
+    registryMock.getWebContentsForProject.mockReturnValue([]);
+  });
+
+  it("does not hand a prompt cancelled mid-move to the next driver", async () => {
+    const a = makeEndpoint("a");
+    const b = makeEndpoint("b");
+    frontend = { kind: "remote", endpoint: a.endpoint, leaseId: 1 };
+    const controller = new AbortController();
+    const answer = dispatcher.requestPrompt("acme.deploy", CONFIRM, PROJECT, controller.signal);
+    await flush();
+    frontend = { kind: "remote", endpoint: b.endpoint, leaseId: 2 };
+    // A's approval lands stale, and the caller cancels in the same turn.
+    a.requests[0]!.deferred.resolve(true);
+    controller.abort();
+    await expect(answer).resolves.toBe(false);
+    await flush();
+    expect(b.requests).toHaveLength(0);
+  });
+
+  it("shows a local app-global prompt in the view of the caller's project, not the front window", async () => {
+    const wc = {
+      id: 9,
+      isDestroyed: () => false,
+      once: vi.fn(),
+      removeListener: vi.fn(),
+      send: vi.fn(),
+    };
+    registryMock.getWebContentsForProject.mockImplementation((projectId: string) =>
+      projectId === PROJECT ? [wc] : []
+    );
+    frontend = { kind: "local" };
+    const caller = makeEndpoint("caller", PROJECT).endpoint;
+    void runInPluginInvocation("acme.global", caller, () =>
+      dispatcher.requestPrompt("acme.global", CONFIRM, null)
+    );
+    await flush();
+    expect(registryMock.getWebContentsForProject).toHaveBeenCalledWith(PROJECT);
+    expect(wc.send).toHaveBeenCalledTimes(1);
+    registryMock.getWebContentsForProject.mockReset().mockReturnValue([]);
   });
 });

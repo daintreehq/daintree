@@ -109,7 +109,9 @@ const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityC
     projectIdFromPluginInstanceKey(request.pluginId),
     request.pluginId
   );
-  if (frontend.kind === "remote") return requestRemoteConsent(frontend.endpoint, request);
+  if (frontend.kind === "remote") {
+    return requestRemoteConsent(frontend.endpoint, frontend.leaseId, request);
+  }
   if (frontend.kind === "none") {
     console.warn(
       `[plugin-capability] Nobody is attached to answer the consent prompt for plugin "${request.pluginId}" capability "${request.capability}" — denying it`
@@ -135,6 +137,7 @@ const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityC
  */
 async function requestRemoteConsent(
   endpoint: ClientEndpoint,
+  leaseId: number | undefined,
   request: PluginCapabilityConsentRequest
 ): Promise<PluginCapabilityConsentOutcome> {
   try {
@@ -160,7 +163,9 @@ async function requestRemoteConsent(
         projectIdFromPluginInstanceKey(request.pluginId),
         request.pluginId
       );
-      if (now.kind !== "remote" || now.endpoint !== endpoint) return "undeliverable";
+      if (now.kind !== "remote" || now.endpoint !== endpoint || now.leaseId !== leaseId) {
+        return "undeliverable";
+      }
     }
     return parsed.data;
   } catch (error) {
