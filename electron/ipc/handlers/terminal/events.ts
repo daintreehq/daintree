@@ -25,6 +25,10 @@ import type {
   TerminalSubmitStatusPayload,
 } from "../../../../shared/types/pty-host.js";
 import type { PtyDataRouting } from "../../../services/pty/types.js";
+import {
+  setSpawnConfirmationTimeoutHandler,
+  settleSpawnConfirmation,
+} from "./spawnConfirmation.js";
 import type { HandlerDependencies } from "../../types.js";
 
 export function registerTerminalEventHandlers(deps: HandlerDependencies): () => void {
@@ -76,6 +80,7 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   handlers.push(() => ptyClient.off("data", handlePtyData));
 
   const handlePtyExit = (id: string, exitCode: number) => {
+    settleSpawnConfirmation(id);
     // Best-effort: revoke any per-pane MCP token + delete the managed config
     // file. Idempotent — no-ops if no pane config was minted for this terminal.
     mcpPaneConfigService.revokePaneConfig(id).catch((err) => {
@@ -113,6 +118,7 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // Spawn result events (success or failure)
   const handleSpawnResult = (id: string, result: SpawnResult) => {
+    settleSpawnConfirmation(id);
     // A hand-over is of one process (#12490): a later launch under the id, or
     // the handed-over launch failing to start, ends it.
     getMcpServerServiceRef()?.handleTerminalSpawnResult(id, result);
@@ -135,6 +141,21 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   };
   ptyClient.on("spawn-result", handleSpawnResult);
   handlers.push(() => ptyClient.off("spawn-result", handleSpawnResult));
+
+  // No answer from the host at all (#12754). Same renderer event as a real
+  // rejection so the pane gets the spawn-error banner, but deliberately not
+  // routed through handleSpawnResult: the spawn may still land, so nothing
+  // main-side may act on it as a final failure.
+  handlers.push(
+    setSpawnConfirmationTimeoutHandler((id, error) => {
+      logWarn("[TerminalSpawn] pty-host has not confirmed spawn", { id, error: error.message });
+      const result: SpawnResult = { success: false, id, error };
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+        name: "terminal:spawn-result",
+        payload: [id, result],
+      });
+    })
+  );
 
   // Geometry the PTY actually holds after a resize. The renderer compares it
   // against its own xterm grid to detect a split the two sides cannot otherwise

@@ -32,6 +32,7 @@ import {
 import { store } from "../../../store.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { withTimeout } from "../../../utils/withTimeout.js";
+import { armSpawnConfirmation, settleSpawnConfirmation } from "./spawnConfirmation.js";
 import type {
   AgentSessionBookmarkMetadata,
   AgentSessionRecord,
@@ -989,6 +990,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       safeCommand.length > 0 && !commandLaunchShell ? `${safeCommand}\r` : undefined;
 
     try {
+      armSpawnConfirmation(id);
       // Every terminal is an interactive shell. Agent launches inject their
       // command after the shell's first prompt renders — never `exec`'d over
       // the shell, so when the agent exits the shell reclaims the foreground.
@@ -1042,6 +1044,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
       return id;
     } catch (error) {
+      settleSpawnConfirmation(id);
       // If we minted an MCP pane config above and the PTY spawn never landed,
       // revoke it now so we don't leak per-pane tokens or config files.
       mcpPaneConfigService.revokePaneConfig(id).catch(() => {

@@ -43,6 +43,7 @@ import {
 import { resumeXtermRender, suspendXtermRender } from "./xtermRenderSuspension";
 import { guardOverviewRulerRefresh } from "./xtermOverviewRulerGuard";
 import { TerminalReconciliationWatchdog } from "./TerminalReconciliationWatchdog";
+import { TerminalOutputRecovery } from "./TerminalOutputRecovery";
 import { TerminalWriteController } from "./TerminalWriteController";
 import { TerminalSettleWaiterRegistry } from "./TerminalSettleWaiterRegistry";
 import { TerminalBurstController } from "./TerminalBurstController";
@@ -368,6 +369,13 @@ class TerminalInstanceService {
       cancelWebGLHideTimer: (managed) => this.cancelWebGLHideTimer(managed),
     });
 
+    const outputRecovery = new TerminalOutputRecovery({
+      getInstance: (id) => this.instances.get(id),
+      recoverMissingOutput: (id) => this.restoreController.recoverMissingOutput(id),
+      reportUnrecoverable: (id, error) =>
+        usePanelStore.getState().setScrollbackRestoreError(id, error),
+    });
+
     // Constructed last — its deps reach every other controller. The watchdog
     // self-starts (interval + visibilitychange + pointerdown diagnostic) and
     // is torn down in dispose().
@@ -396,6 +404,7 @@ class TerminalInstanceService {
       isStoreBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
       isStoreHidden: (id) => usePanelStore.getState().panelsById[id]?.isVisible === false,
       repairStoreVisibility: (id) => usePanelStore.getState().updateVisibility(id, true),
+      probeMissingOutput: (id, managed, now) => outputRecovery.maybeProbe(id, managed, now),
     });
 
     // If JetBrains Mono loads after the startup timeout already opened terminals

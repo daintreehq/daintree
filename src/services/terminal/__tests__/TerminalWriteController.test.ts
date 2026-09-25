@@ -115,6 +115,22 @@ describe("TerminalWriteController.write", () => {
     expect(deps.notifyWriteComplete).not.toHaveBeenCalled();
   });
 
+  it("marks the pane as having received output on the first non-empty chunk (#12754)", () => {
+    controller.write("t1", "");
+    controller.write("t1", new Uint8Array(0));
+    expect(managed.hasReceivedOutput).toBeUndefined();
+
+    controller.write("t1", "$ ");
+    expect(managed.hasReceivedOutput).toBe(true);
+  });
+
+  it("marks receipt even for a chunk deferred behind a restore window (#12754)", () => {
+    managed.isSerializedRestoreInProgress = true;
+    controller.write("t1", new Uint8Array([0x24]));
+    expect(managed.hasReceivedOutput).toBe(true);
+    expect(managed.deferredOutput).toHaveLength(1);
+  });
+
   it("serialized-restore path: defers output without settling ANY ledger", () => {
     managed.isSerializedRestoreInProgress = true;
     controller.write("t1", "abc");

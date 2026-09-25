@@ -87,6 +87,7 @@ export class TerminalWorkerIngestController {
             callback?.();
             return;
           }
+          if (data.length > 0) current.hasReceivedOutput = true;
           // Direct write — snapshot applies and replays are pre-acked, so the
           // write controller's ack bookkeeping must never see them. Unseen
           // tracking still counts each repaint as output activity, once it has

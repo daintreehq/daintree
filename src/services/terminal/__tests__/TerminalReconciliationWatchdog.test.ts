@@ -2060,3 +2060,91 @@ describe("TerminalReconciliationWatchdog — fit diagnostic in production (#1164
     expect(fitWarnings()).toHaveLength(1);
   });
 });
+
+describe("TerminalReconciliationWatchdog missing-output probe (#12754)", () => {
+  let watchdog: TerminalReconciliationWatchdog | undefined;
+  let instances: Map<string, ManagedTerminal>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    instances = new Map();
+    setDocumentVisibility("visible");
+    __resetSidebarLayoutTransitionLockForTests();
+    __resetSidebarHydrationLockForTests();
+    unlockSidebarHydration();
+  });
+
+  afterEach(() => {
+    watchdog?.dispose();
+    watchdog = undefined;
+    document.body.innerHTML = "";
+    __resetProjectViewCacheStateForTests();
+    vi.useRealTimers();
+  });
+
+  it("offers a never-fed on-screen pane to the probe", () => {
+    const managed = makeManaged();
+    instances.set("t1", managed);
+    const probeMissingOutput = vi.fn(() => true);
+    watchdog = new TerminalReconciliationWatchdog(makeDeps(instances, { probeMissingOutput }));
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    expect(probeMissingOutput).toHaveBeenCalledWith("t1", managed, expect.any(Number));
+  });
+
+  it("never probes a pane that has received output", () => {
+    instances.set("t1", makeManaged({ hasReceivedOutput: true }));
+    const probeMissingOutput = vi.fn(() => true);
+    watchdog = new TerminalReconciliationWatchdog(makeDeps(instances, { probeMissingOutput }));
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 3);
+    expect(probeMissingOutput).not.toHaveBeenCalled();
+  });
+
+  it("holds the probe while output is still queued, pending, or being hydrated", () => {
+    instances.set("queued", makeManaged());
+    instances.set("writing", makeManaged({ pendingWrites: 1 }));
+    instances.set("hydrating", makeManaged({ scrollbackRestoreState: "in-progress" }));
+    instances.set("restoring", makeManaged({ isSerializedRestoreInProgress: true }));
+    const probeMissingOutput = vi.fn(() => true);
+    watchdog = new TerminalReconciliationWatchdog(
+      makeDeps(instances, {
+        probeMissingOutput,
+        getQueuedBytes: vi.fn((id: string) => (id === "queued" ? 512 : 0)),
+      })
+    );
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    expect(probeMissingOutput).not.toHaveBeenCalled();
+  });
+
+  it("leaves off-screen panes to be probed once they are revealed", () => {
+    instances.set("t1", makeManaged({ onScreen: false }));
+    const probeMissingOutput = vi.fn(() => true);
+    watchdog = new TerminalReconciliationWatchdog(makeDeps(instances, { probeMissingOutput }));
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    expect(probeMissingOutput).not.toHaveBeenCalled();
+  });
+
+  it("charges started probes against the heavy-repair budget", () => {
+    const count = WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK + 2;
+    for (let i = 0; i < count; i++) instances.set(`t${i}`, makeManaged());
+    const probeMissingOutput = vi.fn(() => true);
+    watchdog = new TerminalReconciliationWatchdog(makeDeps(instances, { probeMissingOutput }));
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    expect(probeMissingOutput).toHaveBeenCalledTimes(WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK);
+  });
+
+  it("repairs a broken rendering layer before probing for missing output", () => {
+    instances.set("t1", makeManaged({ isVisible: false }));
+    const probeMissingOutput = vi.fn(() => true);
+    const deps = makeDeps(instances, { probeMissingOutput });
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    expect(deps.setVisible).toHaveBeenCalledWith("t1");
+    expect(probeMissingOutput).not.toHaveBeenCalled();
+  });
+});
