@@ -1,6 +1,11 @@
 import { Terminal, IBufferRange } from "@xterm/xterm";
 import { isMac } from "@/lib/platform";
-import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
+import {
+  isProjectViewCached,
+  isProjectViewObservable,
+  subscribeProjectViewLifecycle,
+  subscribeProjectViewObservability,
+} from "@/lib/viewCacheState";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import type { AgentState } from "@/types";
@@ -107,15 +112,20 @@ function canAutoInitializeTerminalIngest(): boolean {
 }
 
 /**
- * How long a cached view keeps its WebGL contexts (#12514). Rendering stops the
- * moment the view is cached, but the contexts are what make a switch back
- * paint at full fidelity on the first frame; releasing them at once would make
- * every quick A→B→A switch repaint on the DOM renderer while they re-attach.
- * Past the dwell the view is unlikely to be the next target, and its GPU
- * memory is worth more than the warm switch. Matches the first cached-view
- * memory purge in main (`CACHED_VIEW_PURGE_DELAY_MS`) for the same reason.
+ * How long a cached view, or a view in a hidden window, keeps its WebGL
+ * contexts (#12514, #12798). The contexts are what make a switch back paint at
+ * full fidelity on the first frame; releasing them at once would make every
+ * quick A→B→A project or Space switch repaint on the DOM renderer while they
+ * re-attach. Past the dwell the view is unlikely to be the next target, and
+ * its GPU memory is worth more than the warm switch. Matches the first
+ * cached-view memory purge in main (`CACHED_VIEW_PURGE_DELAY_MS`) for the same
+ * reason.
  */
-const CACHED_VIEW_WEBGL_RELEASE_DELAY_MS = 20_000;
+const SUPPRESSED_VIEW_WEBGL_RELEASE_DELAY_MS = 20_000;
+
+// Cached (#12514) or in a hidden window (#12798): either way nobody can see
+// these terminals, so no foreground tier, burst or WebGL context is earned.
+const isViewSuppressed = (): boolean => !isProjectViewObservable();
 
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
@@ -182,7 +192,8 @@ class TerminalInstanceService {
   private unsubTierChanged: (() => void) | null = null;
   private unsubResizeResult: (() => void) | null = null;
   private offViewLifecycle: () => void;
-  private cachedWebGLReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+  private offViewObservability: () => void;
+  private suppressedWebGLReleaseTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     // Subscribed before the reflow controller and watchdog so it runs first:
@@ -196,6 +207,17 @@ class TerminalInstanceService {
         this.handleViewCached();
       } else {
         this.handleViewReactivated();
+      }
+    });
+    // After the lifecycle listener, so a cache edge suspends painting before
+    // this demotes. Fires only when the combined answer flips: caching a view
+    // in a hidden window, or revealing a window whose view is still cached,
+    // is no transition here.
+    this.offViewObservability = subscribeProjectViewObservability((observable) => {
+      if (observable) {
+        this.restoreViewResources();
+      } else {
+        this.suppressViewResources();
       }
     });
 
@@ -231,7 +253,7 @@ class TerminalInstanceService {
     this.burstController = new TerminalBurstController({
       getInstance: (id) => this.instances.get(id),
       applyRendererPolicy: (id, tier) => this.rendererPolicy.applyRendererPolicy(id, tier),
-      isViewCached: isProjectViewCached,
+      isViewSuppressed,
       holdWebGLForScroll: (id, durationMs) => this.webGLManager.holdForScroll(id, durationMs),
     });
 
@@ -269,7 +291,7 @@ class TerminalInstanceService {
       getMode: () => this.webGLManager.getMode(),
       getPinnedId: () => this.webGLManager.getPinnedId(),
       isAltBufferPinned: (id) => this.webGLManager.isAltBufferPinned(id),
-      isViewCached: isProjectViewCached,
+      isViewSuppressed,
     });
 
     this.rendererPolicy = new TerminalRendererPolicy({
@@ -277,7 +299,7 @@ class TerminalInstanceService {
       onPostWake: (id) => this.handlePostWake(id),
       onResumeFlush: (id) => this.dataBuffer.resumeFlush(id),
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
-      isViewCached: isProjectViewCached,
+      isViewSuppressed,
       onTierApplied: (id, tier, managed) => {
         // A backgrounded pane stays fully live in the renderer — it keeps full
         // scrollback, keeps its image/link addons, and is never suspended. The
@@ -291,11 +313,10 @@ class TerminalInstanceService {
           // bulk worktree activity) can dedup-suppress the corrective resize
           // that re-syncs xterm and the PTY on wake (issue #7741).
           //
-          // Not for a cache-driven demotion (#12514): background window
-          // resizes scale a cached view's panes from these measurements
-          // (`applyBackgroundWindowResize`), and its reveal reconciles
-          // geometry dedup-exempt anyway.
-          if (!isProjectViewCached()) {
+          // Not for a cache- or hidden-window-driven demotion (#12514,
+          // #12798): background window resizes scale those panes from these
+          // measurements (`applyBackgroundWindowResize`).
+          if (isProjectViewObservable()) {
             managed.lastWidth = 0;
             managed.lastHeight = 0;
           }
@@ -415,11 +436,13 @@ class TerminalInstanceService {
   }
 
   /**
-   * The view was cached (#12514): stop painting and demote every terminal to
-   * BACKGROUND, which also moves the pty-host's activity polling to the
-   * background cadence. Parsing, acknowledgements and ledgers keep running —
-   * this view still receives its bytes over the project-scoped IPC fallback,
-   * so reactivation is a repaint of an already-current buffer, never a resync.
+   * The view was cached (#12514): stop painting. Demotion and the WebGL
+   * release belong to {@link suppressViewResources}, which the observability
+   * edge runs next — unless the window was already hidden, in which case the
+   * view is already demoted. Parsing, acknowledgements and ledgers keep
+   * running — this view still receives its bytes over the project-scoped IPC
+   * fallback, so reactivation is a repaint of an already-current buffer, never
+   * a resync.
    *
    * That holds for a duplicate of a project open in another window too, but
    * only since #12557: the host used to suppress the fallback as soon as the
@@ -436,46 +459,70 @@ class TerminalInstanceService {
         // are dropped while it is visible). Now that this view is cached too,
         // say so again.
         this.rendererPolicy.reassertBackgroundTier(id);
-      } else {
-        this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
       }
     }
-    this.clearCachedWebGLReleaseTimer();
-    this.cachedWebGLReleaseTimer = setTimeout(() => {
-      this.cachedWebGLReleaseTimer = null;
-      // Guarded in the body: a timer the event loop already picked up survives
-      // the clearTimeout on reactivation.
-      if (!isProjectViewCached()) return;
-      for (const [id, managed] of this.instances) {
-        // The BACKGROUND demotion only releases off-screen panes, and a cached
-        // view's panes are all still laid out as visible.
-        this.cancelWebGLHideTimer(managed);
-        this.webGLManager.releaseContext(id);
-      }
-    }, CACHED_VIEW_WEBGL_RELEASE_DELAY_MS);
   }
 
   /**
-   * Resume painting and re-derive every tier from its provider. The tier
-   * upgrade runs the ordinary background→active path (deferred resize,
-   * repaint, resume flush, WebGL reacquire); the reveal controller still owns
-   * geometry reconciliation once the view is presented.
+   * Resume painting. Tiers and WebGL come back through
+   * {@link restoreViewResources} once the window is visible too — a view
+   * reactivated in a hidden window stays demoted until it is shown.
    */
   private handleViewReactivated(): void {
-    this.clearCachedWebGLReleaseTimer();
-    for (const [id, managed] of this.instances) {
+    for (const managed of this.instances.values()) {
       resumeXtermRender(managed.terminal);
+    }
+  }
+
+  /**
+   * Nobody can see this view any more — it was cached, or its window was
+   * hidden (another Space, minimized, fully covered; #12798). Demote every
+   * terminal to BACKGROUND, which also moves the pty-host's activity polling
+   * to the background cadence, and release WebGL once the dwell lapses.
+   *
+   * A hidden window is not a cached view: painting is left alone (Chromium
+   * already stops rAF for a hidden page) and ingest is untouched, so agents
+   * there keep streaming and MCP keeps reading current buffers.
+   */
+  private suppressViewResources(): void {
+    for (const id of this.instances.keys()) {
+      this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+    }
+    this.clearSuppressedWebGLReleaseTimer();
+    this.suppressedWebGLReleaseTimer = setTimeout(() => {
+      this.suppressedWebGLReleaseTimer = null;
+      // Guarded in the body: a timer the event loop already picked up survives
+      // the clearTimeout on restore.
+      if (isProjectViewObservable()) return;
+      for (const [id, managed] of this.instances) {
+        // The BACKGROUND demotion only releases off-screen panes, and a
+        // suppressed view's panes are all still laid out as visible.
+        this.cancelWebGLHideTimer(managed);
+        this.webGLManager.releaseContext(id);
+      }
+    }, SUPPRESSED_VIEW_WEBGL_RELEASE_DELAY_MS);
+  }
+
+  /**
+   * Re-derive every tier from its provider. The tier upgrade runs the ordinary
+   * background→active path (deferred resize, repaint, resume flush, WebGL
+   * reacquire); the reveal controller still owns geometry reconciliation once
+   * a cached view is presented.
+   */
+  private restoreViewResources(): void {
+    this.clearSuppressedWebGLReleaseTimer();
+    for (const [id, managed] of this.instances) {
       this.rendererPolicy.applyRendererPolicy(id, managed.getRefreshTier());
       // Releasing a context drops the focus pin, and nothing re-fires focus
-      // for a pane that was already focused when the view was cached.
+      // for a pane that was already focused when the view was suppressed.
       if (managed.isFocused) this.webGLManager.pinFocus(id, managed);
     }
   }
 
-  private clearCachedWebGLReleaseTimer(): void {
-    if (this.cachedWebGLReleaseTimer === null) return;
-    clearTimeout(this.cachedWebGLReleaseTimer);
-    this.cachedWebGLReleaseTimer = null;
+  private clearSuppressedWebGLReleaseTimer(): void {
+    if (this.suppressedWebGLReleaseTimer === null) return;
+    clearTimeout(this.suppressedWebGLReleaseTimer);
+    this.suppressedWebGLReleaseTimer = null;
   }
 
   // Reconcile our renderer-side dedupe baseline when the PTY host rewrites a
@@ -3613,7 +3660,8 @@ class TerminalInstanceService {
 
   dispose(): void {
     this.offViewLifecycle();
-    this.clearCachedWebGLReleaseTimer();
+    this.offViewObservability();
+    this.clearSuppressedWebGLReleaseTimer();
     this.stopPolling();
     this.unsubTierChanged?.();
     this.unsubTierChanged = null;

@@ -22,7 +22,9 @@ vi.mock("@/store/viewWorkspaceId", () => ({
 const viewCached = vi.hoisted(() => ({ current: false }));
 vi.mock("@/lib/viewCacheState", () => ({
   isProjectViewCached: () => viewCached.current,
+  isProjectViewObservable: () => !viewCached.current,
   subscribeProjectViewLifecycle: () => () => {},
+  subscribeProjectViewObservability: () => () => {},
 }));
 
 const suppressPaletteFocusRestore = vi.hoisted(() => vi.fn());

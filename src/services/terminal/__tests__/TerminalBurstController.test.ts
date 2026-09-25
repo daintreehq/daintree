@@ -30,7 +30,7 @@ describe("TerminalBurstController write burst", () => {
     controller = new TerminalBurstController({
       getInstance: () => managed,
       applyRendererPolicy,
-      isViewCached: () => cached,
+      isViewSuppressed: () => cached,
       holdWebGLForScroll: vi.fn(),
     });
   });

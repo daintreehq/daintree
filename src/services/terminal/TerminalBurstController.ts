@@ -14,8 +14,11 @@ const ECHO_PENDING_HOLD_MAX_MS = 150;
 export interface TerminalBurstControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
   applyRendererPolicy: (id: string, tier: TerminalRefreshTier) => void;
-  /** Whether this project view is cached — output there earns no burst (#12514). */
-  isViewCached?: () => boolean;
+  /**
+   * Whether nobody can see this view — cached (#12514) or its window hidden
+   * (#12798). Output there earns no burst.
+   */
+  isViewSuppressed?: () => boolean;
   // Keep this pane's existing WebGL context through a DOM-mode flip while it
   // is being scrolled (TerminalWebGLManager.holdForScroll).
   holdWebGLForScroll: (id: string, durationMs: number) => void;
@@ -173,9 +176,9 @@ export class TerminalBurstController {
    * stranding the terminal at FOCUSED/VISIBLE/BACKGROUND mid-stream.
    */
   onPtyWrite(id: string): void {
-    // A streaming agent in a cached view would otherwise re-request BURST and
+    // A streaming agent nobody can see would otherwise re-request BURST and
     // re-arm the decay timer on every chunk, only for the policy to clamp it.
-    if (this.deps.isViewCached?.() === true) return;
+    if (this.deps.isViewSuppressed?.() === true) return;
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 
