@@ -43,7 +43,7 @@ function isInside(root: string, candidate: string): boolean {
  * Split a git-reported relative path into segments, or null when it could
  * address anything outside the worktree or inside git's own storage.
  */
-function safeSegments(relPath: string): string[] | null {
+export function safeSegments(relPath: string): string[] | null {
   if (relPath.length === 0 || relPath.endsWith("/") || isAbsolute(relPath)) return null;
   const segments = relPath.split("/");
   for (const segment of segments) {
@@ -54,6 +54,16 @@ function safeSegments(relPath: string): string[] | null {
     if (segment.toLowerCase() === ".git") return null;
   }
   return segments;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
+  }
 }
 
 /**
@@ -126,7 +136,13 @@ export async function copyWorktreeIncludeFiles(
       });
       return result;
     }
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      logWarn(`[WorktreeInclude] could not read ${WORKTREE_INCLUDE_FILE}; nothing copied`, {
+        srcRoot,
+        error: formatErrorMessage(err, "stat failed"),
+      });
+    }
     return result;
   }
 
@@ -159,6 +175,7 @@ export async function copyWorktreeIncludeFiles(
   }
 
   const oversized: string[] = [];
+  const failed: string[] = [];
   let totalBytes = 0;
   for (const [index, rel] of copyList.entries()) {
     if (result.copied >= maxFiles) {
@@ -193,8 +210,20 @@ export async function copyWorktreeIncludeFiles(
         continue;
       }
 
-      // COPYFILE_EXCL: an existing destination, including a dangling
-      // symlink, is left exactly as the worktree has it.
+      // Anything already at the destination, including a dangling symlink
+      // the checkout carries, is left exactly as the worktree has it. The
+      // explicit lstat matters on Windows, where CopyFileW follows a
+      // destination link despite fail-if-exists; COPYFILE_EXCL then covers a
+      // file appearing in between.
+      //
+      // These checks are path-based, so a concurrent process swapping a path
+      // component for a symlink between check and copy is not defended
+      // against. Such a process already runs as this user with write access
+      // to both trees, so it gains nothing it did not already have.
+      if (await pathExists(dest)) {
+        result.skippedExisting++;
+        continue;
+      }
       await copyFile(src, dest, fsConstants.COPYFILE_EXCL);
       totalBytes += stats.size;
       result.copied++;
@@ -203,13 +232,15 @@ export async function copyWorktreeIncludeFiles(
         result.skippedExisting++;
         continue;
       }
-      logWarn(`[WorktreeInclude] failed to copy file`, {
-        path: rel,
-        error: formatErrorMessage(err, "copy failed"),
-      });
+      failed.push(`${rel}: ${formatErrorMessage(err, "copy failed")}`);
     }
   }
 
+  if (failed.length > 0) {
+    logWarn(`[WorktreeInclude] failed to copy ${failed.length} file(s)`, {
+      errors: failed.slice(0, 20),
+    });
+  }
   if (oversized.length > 0) {
     logWarn(`[WorktreeInclude] skipped ${oversized.length} oversized file(s)`, {
       paths: oversized.slice(0, 20),

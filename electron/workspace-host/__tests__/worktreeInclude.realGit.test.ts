@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { copyWorktreeIncludeFiles } from "../worktreeInclude.js";
+import { copyWorktreeIncludeFiles, safeSegments } from "../worktreeInclude.js";
 
 /**
  * Runs real git: the "matches a pattern AND git ignores it" rule rests on how
@@ -69,7 +69,17 @@ function listFiles(root: string, prefix = ""): string[] {
   return out.sort();
 }
 
+// The helper spawns git under the hardened env, which strips
+// GIT_CONFIG_GLOBAL, so an empty HOME is what keeps the developer's global
+// excludes file out of these assertions.
+beforeEach(() => {
+  const home = tempDir("daintree-wtinclude-home-");
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("XDG_CONFIG_HOME", home);
+});
+
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -77,7 +87,7 @@ describe("copyWorktreeIncludeFiles", () => {
   it("copies only files that match an include pattern and are gitignored", async () => {
     const src = makeRepo(
       {
-        ".gitignore": ".env\n*.local.json\ncerts/\nbuild/\n",
+        ".gitignore": ".env\n*.local.json\ncerts/\nbuild/\ntracked.env\n",
         ".worktreeinclude":
           "# local config\n.env\n**/*.local.json\ncerts/*\n!certs/skip.pem\nnotes.txt\ntracked.env\n",
         ".env": "SECRET=1",
@@ -97,6 +107,26 @@ describe("copyWorktreeIncludeFiles", () => {
     expect(listFiles(dest)).toEqual([".env", "app/settings.local.json", "certs/dev.pem"]);
     expect(readFileSync(join(dest, ".env"), "utf8")).toBe("SECRET=1");
     expect(result.copied).toBe(3);
+  });
+
+  it("follows anchoring, nested .gitignore files and unusual filenames", async () => {
+    const src = makeRepo(
+      {
+        ".gitignore": "*.env\n",
+        "pkg/.gitignore": "local.json\n",
+        ".worktreeinclude": "/root.env\npkg/local.json\nsp ace *.env\n",
+        "root.env": "root",
+        "nested/root.env": "anchored away",
+        "pkg/local.json": "{}",
+        "sp ace é.env": "unicode",
+      },
+      [".gitignore", "pkg/.gitignore"]
+    );
+    const dest = tempDir("daintree-wtinclude-dest-");
+
+    await copyWorktreeIncludeFiles(src, dest);
+
+    expect(listFiles(dest)).toEqual(["pkg/local.json", "root.env", "sp ace é.env"]);
   });
 
   it("does nothing when the repo has no .worktreeinclude", async () => {
@@ -247,6 +277,23 @@ describe("copyWorktreeIncludeFiles", () => {
   });
 
   it.skipIf(process.platform === "win32")(
+    "leaves a dangling destination symlink alone",
+    async () => {
+      const outside = tempDir("daintree-wtinclude-outside-");
+      const src = makeRepo({ ".gitignore": ".env\n", ".worktreeinclude": ".env\n", ".env": "x" }, [
+        ".gitignore",
+      ]);
+      const dest = tempDir("daintree-wtinclude-dest-");
+      symlinkSync(join(outside, "missing.env"), join(dest, ".env"));
+
+      const result = await copyWorktreeIncludeFiles(src, dest);
+
+      expect(readdirSync(outside)).toEqual([]);
+      expect(result).toMatchObject({ copied: 0, skippedExisting: 1 });
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
     "does not write through a symlinked directory in the new worktree",
     async () => {
       const outside = tempDir("daintree-wtinclude-outside-");
@@ -286,5 +333,26 @@ describe("copyWorktreeIncludeFiles", () => {
 
     expect(listFiles(dest)).toEqual(["vendor/plain.txt"]);
     expect(existsSync(join(dest, "vendor", "lib", ".git"))).toBe(false);
+  });
+});
+
+describe("safeSegments", () => {
+  it.each([
+    ".git/config",
+    "sub/.git/HEAD",
+    "sub/.GIT/config",
+    "../x",
+    "a/../b",
+    "a//b",
+    "/abs",
+    "dir/",
+    "",
+  ])("rejects %j", (rel) => {
+    expect(safeSegments(rel)).toBeNull();
+  });
+
+  it("accepts ordinary relative paths, including dot-prefixed names", () => {
+    expect(safeSegments("..settings/a.env")).toEqual(["..settings", "a.env"]);
+    expect(safeSegments(".vscode/settings.json")).toEqual([".vscode", "settings.json"]);
   });
 });
