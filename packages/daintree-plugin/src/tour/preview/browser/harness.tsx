@@ -5,6 +5,7 @@ import {
   Component,
   Suspense,
   useEffect,
+  useLayoutEffect,
   useState,
   useSyncExternalStore,
   type ComponentType,
@@ -123,6 +124,36 @@ function nextFrame(): Promise<void> {
 async function rendered(): Promise<void> {
   await nextFrame();
   await nextFrame();
+}
+
+/** The chapter whose scene last committed; a suspended (lazy) scene hasn't yet. */
+let mountedChapter: string | null = null;
+const SCENE_MOUNT_TIMEOUT_MS = 10_000;
+
+/** Placed after the scene inside its Suspense boundary, so it commits with it. */
+function SceneMounted({ chapterId }: { chapterId: string }) {
+  useLayoutEffect(() => {
+    mountedChapter = chapterId;
+    return () => {
+      if (mountedChapter === chapterId) mountedChapter = null;
+    };
+  }, [chapterId]);
+  return null;
+}
+
+/** Resolve once `chapterId`'s scene has committed and been laid out. */
+async function sceneRendered(chapterId: string): Promise<void> {
+  const deadline = performance.now() + SCENE_MOUNT_TIMEOUT_MS;
+  while (mountedChapter !== chapterId) {
+    if (observations.report(chapterId).error) break;
+    if (performance.now() > deadline) {
+      throw new Error(
+        `Chapter "${chapterId}"'s scene didn't render within ${SCENE_MOUNT_TIMEOUT_MS / 1000}s`
+      );
+    }
+    await nextFrame();
+  }
+  await rendered();
 }
 
 function canvasElement(): HTMLElement | null {
@@ -301,6 +332,7 @@ function Preview({
       >
         <Suspense fallback={null}>
           <Scene />
+          <SceneMounted chapterId={chapter.id} />
         </Suspense>
         {outlines && <AnchorOutlines key={chapter.id} player={player} />}
       </TourCanvas>
@@ -411,7 +443,7 @@ async function main(): Promise<void> {
       const index = config.chapters.findIndex((c) => c.id === chapterId);
       if (index < 0) throw new Error(`No chapter "${chapterId}"`);
       player.goTo(index, { autoplay: false });
-      await rendered();
+      await sceneRendered(chapterId);
     },
     async seek(seconds: number) {
       player.pause();
@@ -431,7 +463,7 @@ async function main(): Promise<void> {
   } satisfies Partial<TourPreviewHandle>);
 
   root.render(<Preview player={player} views={views} scenes={scenes} />);
-  await rendered();
+  await sceneRendered(config.chapters[player.getState().chapterIndex]!.id);
   handle.ready = true;
 }
 

@@ -66,6 +66,8 @@ async function writePlugin(chapters: unknown[], { built = true } = {}) {
     path.join(tmpDir, "tours", "welcome.narration.json"),
     JSON.stringify(NARRATION)
   );
+  await fs.mkdir(path.join(tmpDir, "tours", "welcome"), { recursive: true });
+  await fs.writeFile(path.join(tmpDir, "tours", "welcome", "intro a.ogg"), "ogg");
   if (built) {
     await fs.mkdir(path.join(tmpDir, "dist"), { recursive: true });
     await fs.writeFile(
@@ -135,6 +137,14 @@ describe("loadTourPreview", () => {
     const { config } = await loadTourPreview({ dir: tmpDir, only: ["intro"] });
     expect(config.chapters.map((c) => c.id)).toEqual(["intro"]);
     expect(config.warnings).toEqual([]);
+  });
+
+  it("warns when a chapter's local audio file is missing", async () => {
+    await writePlugin([{ ...INTRO_TIMING, audioUrl: "tours/welcome/gone.ogg" }]);
+    const { config } = await loadTourPreview({ dir: tmpDir, only: ["intro"] });
+    expect(config.warnings).toEqual([
+      `Chapter "intro": its audio tours/welcome/gone.ogg is missing, so it plays silently`,
+    ]);
   });
 
   it("asks for a build when the tour module doesn't exist yet", async () => {
@@ -250,6 +260,8 @@ describe("preview page", () => {
     // Preflight, which the host document carries and a plugin sheet never does.
     expect(css).toContain("box-sizing: border-box");
     expect(css).toContain(".tour-click-ring");
+    // Host-derived variables tokens like bg-surface-dialog resolve through.
+    expect(css).toMatch(/\.light \{[^}]*--theme-surface-dialog: var\(--theme-surface-panel-elevated\)/);
   });
 
   it("names the built-in themes when given an unknown one", () => {
@@ -262,18 +274,36 @@ interface FakeCall {
   arg?: unknown;
 }
 
-function fakePlaywright(options: { pageError?: string; launchError?: Error } = {}) {
+function fakePlaywright(
+  options: {
+    pageError?: string;
+    launchError?: Error;
+    /** The page never becomes ready, after this module failed to load. */
+    failedModule?: string;
+    sceneError?: string;
+    onSeek?: (time: number) => void;
+  } = {}
+) {
   const calls: FakeCall[] = [];
+  const listeners = new Map<string, (value: never) => void>();
   let chapter = "";
   let time = 0;
   const page: CapturePage = {
+    on: (event, listener) => {
+      listeners.set(event, listener);
+    },
     goto: async (url) => {
       calls.push({ kind: "goto", arg: url });
       // The page is real: fetch it so the server is proven to serve it.
       const res = await fetch(url);
       calls.push({ kind: "status", arg: res.status });
     },
-    waitForFunction: async () => {},
+    waitForFunction: async () => {
+      if (!options.failedModule) return;
+      const url = options.failedModule;
+      (listeners.get("response") as (r: unknown) => void)({ url: () => url, status: () => 404 });
+      throw new Error("page.waitForFunction: Timeout 30000ms exceeded.");
+    },
     waitForTimeout: async (ms) => {
       calls.push({ kind: "wait", arg: ms });
     },
@@ -289,6 +319,7 @@ function fakePlaywright(options: { pageError?: string; launchError?: Error } = {
       if (seek) {
         time = Number(seek[1]);
         calls.push({ kind: "seek", arg: time });
+        options.onSeek?.(time);
         return;
       }
       if (fn.endsWith(".snapshot()")) {
@@ -297,7 +328,11 @@ function fakePlaywright(options: { pageError?: string; launchError?: Error } = {
           time,
           canvas: { width: 640, height: 360 },
           anchors: { button: { x: time, y: 0, width: 10, height: 10 } },
-          report: { chapterId: chapter, undefinedCues: chapter === "intro" ? ["ghost"] : [] },
+          report: {
+            chapterId: chapter,
+            undefinedCues: chapter === "intro" ? ["ghost"] : [],
+            ...(options.sceneError && chapter === "intro" ? { error: options.sceneError } : {}),
+          },
         };
       }
       throw new Error(`unexpected evaluate: ${fn}`);
@@ -403,29 +438,32 @@ describe("runTourPreview", () => {
     await writePlugin([INTRO_TIMING]);
     const controller = new AbortController();
     const log = vi.fn();
-    let pageHtml = "";
-    let css = "";
+    let listening!: (url: string) => void;
+    const started = new Promise<string>((resolve) => (listening = resolve));
     const done = runTourPreview({
       dir: tmpDir,
       harnessDir,
       signal: controller.signal,
       log,
-      onListening: (url) => {
-        void (async () => {
-          pageHtml = await (await fetch(url)).text();
-          css = await (await fetch(new URL("/_preview/styles.css", url))).text();
-          const harness = await fetch(new URL("/_preview/harness/harness.js", url));
-          expect(harness.status).toBe(200);
-          const vendor = await fetch(new URL("/_preview/vendor/react.js", url));
-          expect(await vendor.text()).toBe("export const useState = 1;");
-          await fetch(new URL("/_preview/report", url), {
-            method: "POST",
-            body: JSON.stringify({ chapterId: "intro", undefinedCues: ["ghost"] }),
-          });
-          controller.abort();
-        })();
-      },
+      onListening: (url) => listening(url),
     });
+    let pageHtml: string;
+    let css: string;
+    try {
+      const url = await started;
+      pageHtml = await (await fetch(url)).text();
+      css = await (await fetch(new URL("/_preview/styles.css", url))).text();
+      const harness = await fetch(new URL("/_preview/harness/harness.js", url));
+      expect(harness.status).toBe(200);
+      const vendor = await fetch(new URL("/_preview/vendor/react.js", url));
+      expect(await vendor.text()).toBe("export const useState = 1;");
+      await fetch(new URL("/_preview/report", url), {
+        method: "POST",
+        body: JSON.stringify({ chapterId: "intro", undefinedCues: ["ghost"] }),
+      });
+    } finally {
+      controller.abort();
+    }
     const result = await done;
     expect(pageHtml).toContain('"componentUrl":"/plugin/dist/tour.js"');
     // Classes found in the plugin's built module are compiled.
@@ -439,7 +477,94 @@ describe("runTourPreview", () => {
   it("refuses to start without the built preview page", async () => {
     await writePlugin([INTRO_TIMING]);
     await expect(
-      runTourPreview({ dir: tmpDir, harnessDir: path.join(tmpDir, "missing") })
+      runTourPreview({
+        dir: tmpDir,
+        harnessDir: path.join(tmpDir, "missing"),
+        signal: new AbortController().signal,
+      })
     ).rejects.toThrow(/The preview page is missing from/);
+  });
+
+  it("won't serve an interactive preview nothing can stop", async () => {
+    await writePlugin([INTRO_TIMING]);
+    await expect(runTourPreview({ dir: tmpDir, harnessDir })).rejects.toThrow(
+      "An interactive preview needs a signal to stop it"
+    );
+  });
+
+  it("refuses an --out that is a file before starting a browser", async () => {
+    await writePlugin([INTRO_TIMING]);
+    const file = path.join(tmpDir, "frames.txt");
+    await fs.writeFile(file, "");
+    const { playwright, calls } = fakePlaywright();
+    await expect(
+      runTourPreview({ dir: tmpDir, headless: true, out: file, harnessDir, playwright })
+    ).rejects.toThrow(`--out ${file} is a file; it must name a directory`);
+    expect(calls).toEqual([]);
+  });
+
+  it("replaces frames an earlier capture left behind, and only those", async () => {
+    await writePlugin([INTRO_TIMING]);
+    const out = path.join(tmpDir, "frames");
+    await fs.mkdir(path.join(out, "intro"), { recursive: true });
+    await fs.writeFile(path.join(out, "intro", "03-renamed-cue.png"), "old");
+    await fs.writeFile(path.join(out, "intro", "notes.md"), "mine");
+    const { playwright } = fakePlaywright();
+    await runTourPreview({ dir: tmpDir, headless: true, out, settleMs: 0, harnessDir, playwright });
+    expect((await fs.readdir(path.join(out, "intro"))).sort()).toEqual([
+      "00-start.png",
+      "01-close.png",
+      "02-panel.png",
+      "notes.md",
+    ]);
+  });
+
+  it("stops between frames when aborted, and closes the browser", async () => {
+    await writePlugin([INTRO_TIMING]);
+    const controller = new AbortController();
+    const { playwright, calls, close } = fakePlaywright({
+      onSeek: (time) => {
+        if (time > 0) controller.abort();
+      },
+    });
+    await expect(
+      runTourPreview({
+        dir: tmpDir,
+        headless: true,
+        out: path.join(tmpDir, "frames"),
+        settleMs: 0,
+        harnessDir,
+        playwright,
+        signal: controller.signal,
+      })
+    ).rejects.toThrow("Capture stopped");
+    expect(calls.filter((c) => c.kind === "shot")).toHaveLength(2);
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("says which request failed when the page never loads", async () => {
+    await writePlugin([INTRO_TIMING]);
+    const { playwright } = fakePlaywright({ failedModule: "http://127.0.0.1/plugin/dist/tour.js" });
+    await expect(
+      runTourPreview({ dir: tmpDir, headless: true, out: tmpDir, harnessDir, playwright })
+    ).rejects.toThrow(
+      "The preview page didn't load:\nhttp://127.0.0.1/plugin/dist/tour.js: HTTP 404"
+    );
+  });
+
+  it("records a scene that threw against its chapter", async () => {
+    await writePlugin([INTRO_TIMING]);
+    const out = path.join(tmpDir, "frames");
+    const { playwright } = fakePlaywright({ sceneError: "boom" });
+    const result = await runTourPreview({
+      dir: tmpDir,
+      headless: true,
+      out,
+      settleMs: 0,
+      harnessDir,
+      playwright,
+    });
+    expect(result.capture!.manifest.chapters[0]!.error).toBe("boom");
+    expect(result.warnings).toContain(`Chapter "intro": the scene threw: boom`);
   });
 });

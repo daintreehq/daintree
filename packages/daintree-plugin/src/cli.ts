@@ -296,7 +296,15 @@ tour
           },
         });
         if (result.capture) {
-          const frames = result.capture.manifest.chapters.reduce((n, c) => n + c.frames.length, 0);
+          const { chapters } = result.capture.manifest;
+          const frames = chapters.reduce((n, c) => n + c.frames.length, 0);
+          const failed = chapters.filter((c) => c.error).map((c) => c.id);
+          // The frames of a scene that threw show its error, not the scene.
+          if (failed.length > 0) {
+            fail(
+              `Captured ${frames} frames, but the scene threw in ${failed.join(", ")}; see ${result.capture.manifestPath}`
+            );
+          }
           console.log(`✓ Captured ${frames} frames to ${result.capture.manifestPath}`);
         }
       } catch (err) {

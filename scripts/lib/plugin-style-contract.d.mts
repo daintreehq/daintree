@@ -15,3 +15,6 @@ export function pluginStyleContract(): Plugin;
 
 /** esbuild plugin exposing the same module, for the `daintree-plugin` CLI build. */
 export function pluginStyleContractEsbuild(): EsbuildPlugin;
+
+/** The custom properties `src/index.css` declares on `:root`, `.light` and `.dark`, as those rules only. */
+export function hostRootVariablesCss(css: string): string;

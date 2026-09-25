@@ -31,7 +31,7 @@ export interface TourPreviewOptions extends Pick<
   out?: string;
   /** Milliseconds to let a scene settle after each seek before capturing (default 750). */
   settleMs?: number;
-  /** Interactive mode serves until this aborts. */
+  /** Interactive mode serves until this aborts, so it is required there; headless capture stops at the next frame. */
   signal?: AbortSignal;
   /** Called once the server is listening. */
   onListening?: (url: string) => void;
@@ -63,15 +63,30 @@ function chapterWarnings(chapter: PreviewChapter): string[] {
   return [];
 }
 
+function isRemote(url: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(url);
+}
+
 function pageAudioUrl(audioUrl: string | null): string | null {
-  if (audioUrl === null || /^[a-z][a-z0-9+.-]*:/i.test(audioUrl)) return audioUrl;
+  if (audioUrl === null || isRemote(audioUrl)) return audioUrl;
   return `${PLUGIN_PATH}${audioUrl.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+/** A regular file inside the plugin, which is all the preview server will serve. */
+async function isPluginFile(dir: string, file: string): Promise<boolean> {
+  try {
+    const [root, real] = await Promise.all([fs.realpath(dir), fs.realpath(file)]);
+    const relative = path.relative(root, real);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) return false;
+    return (await fs.stat(real)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /** What the page plays: each chapter's committed timing, or an estimate, with what's wrong with it. */
 export async function loadTourPreview(opts: TourPreviewOptions): Promise<{
   dir: string;
-  componentFile: string;
   config: TourPreviewConfig;
 }> {
   const ctx = await loadTour(opts);
@@ -80,9 +95,7 @@ export async function loadTourPreview(opts: TourPreviewOptions): Promise<{
     throw new Error(`Tour "${ctx.tour.id}" has no componentPath in plugin.json`);
   }
   const componentFile = path.resolve(ctx.dir, componentPath);
-  try {
-    await fs.access(componentFile);
-  } catch {
+  if (!(await isPluginFile(ctx.dir, componentFile))) {
     throw new Error(
       `The tour's componentPath ${componentPath} doesn't exist yet; build the plugin first (npm run build)`
     );
@@ -115,17 +128,31 @@ export async function loadTourPreview(opts: TourPreviewOptions): Promise<{
       };
     });
 
+  const warnings = chapters.flatMap(chapterWarnings);
+  for (const chapter of chapters) {
+    const entry = ctx.entries.get(chapter.id);
+    const audioUrl = typeof entry?.audioUrl === "string" ? entry.audioUrl : null;
+    if (
+      audioUrl &&
+      !isRemote(audioUrl) &&
+      !(await isPluginFile(ctx.dir, path.resolve(ctx.dir, audioUrl)))
+    ) {
+      warnings.push(
+        `Chapter "${chapter.id}": its audio ${audioUrl} is missing, so it plays silently`
+      );
+    }
+  }
+
   const title = typeof ctx.tour.title === "string" ? ctx.tour.title : ctx.tour.id;
   return {
     dir: ctx.dir,
-    componentFile,
     config: {
       version: 1,
       tourId: ctx.tour.id,
       title,
       componentUrl: `${PLUGIN_PATH}${componentPath.split("/").map(encodeURIComponent).join("/")}`,
       chapters,
-      warnings: chapters.flatMap(chapterWarnings),
+      warnings,
     },
   };
 }
@@ -158,6 +185,17 @@ async function harnessAssets(dir: string): Promise<Map<string, PreviewAsset>> {
   return assets;
 }
 
+/** `--out` must be a directory, or not exist yet; checked before a browser is started. */
+async function requireDirectory(dir: string): Promise<void> {
+  try {
+    if (!(await fs.stat(dir)).isDirectory()) {
+      throw new Error(`--out ${dir} is a file; it must name a directory`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
 function waitForAbort(signal: AbortSignal | undefined): Promise<void> {
   if (!signal || signal.aborted) return Promise.resolve();
   return new Promise((resolve) =>
@@ -173,14 +211,21 @@ function waitForAbort(signal: AbortSignal | undefined): Promise<void> {
  */
 export async function runTourPreview(opts: TourPreviewOptions = {}): Promise<TourPreviewResult> {
   if (opts.headless && !opts.out) throw new Error("--headless needs --out <dir> for the frames");
+  if (!opts.headless && !opts.signal) {
+    throw new Error("An interactive preview needs a signal to stop it; pass one, or use headless");
+  }
+  if (opts.out) await requireDirectory(path.resolve(opts.out));
   const log = opts.log ?? (() => {});
-  const { dir, componentFile, config } = await loadTourPreview(opts);
+  const { dir, config } = await loadTourPreview(opts);
   const theme = previewTheme(opts.theme ?? "daintree");
   const playwright = opts.headless ? (opts.playwright ?? (await loadPlaywright(dir))) : undefined;
 
   const vendor = await buildVendorGraph(dir);
   const assets = await harnessAssets(opts.harnessDir ?? defaultHarnessDir());
-  const sources = [...(await listScripts(path.dirname(componentFile))), ...vendor.tourFiles];
+  // The whole plugin rather than the module's folder: a scene module imports
+  // chunks from wherever the build put them, and there's no DOM observer here
+  // to catch a class the scan missed.
+  const sources = [...(await listScripts(dir)), ...vendor.tourFiles];
   assets.set(STYLES_PATH, {
     body: await compilePreviewCss(sources, theme),
     type: "text/css; charset=utf-8",
@@ -227,6 +272,7 @@ export async function runTourPreview(opts: TourPreviewOptions = {}): Promise<Tou
       settleMs: opts.settleMs ?? 750,
       playwright,
       log,
+      signal: opts.signal,
     });
     for (const line of manifest.warnings) {
       if (!warnings.includes(line)) warnings.push(line);

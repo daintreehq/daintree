@@ -135,6 +135,8 @@ export async function buildVendorGraph(pluginDir: string): Promise<VendorGraph> 
     },
   };
 
+  // Nothing is written; esbuild only needs somewhere to name the outputs.
+  const outdir = path.join(pluginDir, ".tour-preview-vendor");
   let result;
   try {
     result = await build({
@@ -148,7 +150,7 @@ export async function buildVendorGraph(pluginDir: string): Promise<VendorGraph> 
       format: "esm",
       platform: "browser",
       target: "es2022",
-      outdir: "/vendor",
+      outdir,
       entryNames: "[name]",
       chunkNames: "chunk-[hash]",
       define: { "process.env.NODE_ENV": JSON.stringify("development") },
@@ -167,7 +169,7 @@ export async function buildVendorGraph(pluginDir: string): Promise<VendorGraph> 
 
   const files = new Map<string, string>();
   for (const file of result.outputFiles) {
-    files.set(path.posix.relative("/vendor", file.path.split(path.sep).join("/")), file.text);
+    files.set(path.relative(outdir, file.path).split(path.sep).join("/"), file.text);
   }
   for (const [specifier, required] of Object.entries(REQUIRED_EXPORTS)) {
     const output = Object.entries(result.metafile.outputs).find(([file]) =>

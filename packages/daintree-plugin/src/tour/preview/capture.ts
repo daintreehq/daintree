@@ -22,6 +22,16 @@ export interface CapturePage {
   evaluate<R>(fn: string): Promise<R>;
   waitForTimeout(ms: number): Promise<void>;
   $(selector: string): Promise<CaptureElement | null>;
+  on(event: "pageerror" | "requestfailed" | "response", listener: (value: never) => void): unknown;
+}
+
+interface PageRequest {
+  url(): string;
+  failure(): { errorText: string } | null;
+}
+interface PageResponse {
+  url(): string;
+  status(): number;
 }
 export interface CaptureBrowser {
   newPage(options: {
@@ -91,6 +101,8 @@ export interface CaptureOptions {
   settleMs: number;
   playwright: Playwright;
   log?: (line: string) => void;
+  /** Stops capture between frames. */
+  signal?: AbortSignal;
 }
 
 const LOAD_TIMEOUT_MS = 30_000;
@@ -101,6 +113,29 @@ function call(method: keyof TourPreviewHandle, arg?: unknown): string {
 
 function frameName(index: number, cue: string | null): string {
   return `${String(index).padStart(2, "0")}-${cue ?? "start"}.png`;
+}
+
+const FRAME_FILE = /^\d{2}-[A-Za-z0-9._-]+\.png$/;
+
+/**
+ * Remove frames an earlier capture left in this chapter's folder, so a cue that
+ * was renamed or removed can't pass for a fresh frame. Only files named like a
+ * frame are touched.
+ */
+async function clearFrames(dir: string): Promise<void> {
+  let names: string[];
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (FRAME_FILE.test(name)) await fs.rm(path.join(dir, name), { force: true });
+  }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new Error("Capture stopped");
 }
 
 /**
@@ -130,12 +165,27 @@ export async function captureTour(opts: CaptureOptions): Promise<CaptureManifest
       deviceScaleFactor: 1,
       reducedMotion: "no-preference",
     });
-    await page.goto(`${opts.url}?capture=1`);
-    await page.waitForFunction(
-      `window.${PREVIEW_HANDLE}?.ready || window.${PREVIEW_HANDLE}?.error`,
-      undefined,
-      { timeout: LOAD_TIMEOUT_MS }
+    // What went wrong if the page never becomes ready: a module that didn't
+    // load, or a script that threw before the preview could say so itself.
+    const problems: string[] = [];
+    page.on("pageerror", (error: Error) => problems.push(error.message));
+    page.on("requestfailed", (request: PageRequest) =>
+      problems.push(`${request.url()}: ${request.failure()?.errorText ?? "failed"}`)
     );
+    page.on("response", (response: PageResponse) => {
+      if (response.status() >= 400) problems.push(`${response.url()}: HTTP ${response.status()}`);
+    });
+    await page.goto(`${opts.url}?capture=1`);
+    try {
+      await page.waitForFunction(
+        `window.${PREVIEW_HANDLE}?.ready || window.${PREVIEW_HANDLE}?.error`,
+        undefined,
+        { timeout: LOAD_TIMEOUT_MS }
+      );
+    } catch (error) {
+      const detail = problems.length > 0 ? `:\n${problems.join("\n")}` : "";
+      throw new Error(`The preview page didn't load${detail}`, { cause: error });
+    }
     const error = await page.evaluate<string | null>(`window.${PREVIEW_HANDLE}.error`);
     if (error) throw new Error(error);
 
@@ -143,18 +193,22 @@ export async function captureTour(opts: CaptureOptions): Promise<CaptureManifest
     const chapters: CaptureChapter[] = [];
     let canvas = { width: 0, height: 0 };
     for (const chapter of opts.config.chapters) {
+      throwIfAborted(opts.signal);
       log(`→ ${chapter.id}: capturing`);
+      const chapterDir = path.join(opts.outDir, chapter.id);
+      await clearFrames(chapterDir);
+      await fs.mkdir(chapterDir, { recursive: true });
       await page.evaluate(call("goTo", chapter.id));
       const stops = [{ cue: null, time: 0 }, ...cuesInOrder(chapter.timing.cues)];
       const frames: CaptureFrame[] = [];
       let snapshot: PreviewSnapshot | null = null;
       for (const [index, stop] of stops.entries()) {
+        throwIfAborted(opts.signal);
         await page.evaluate(call("seek", stop.time));
         await page.waitForTimeout(opts.settleMs);
         snapshot = await page.evaluate<PreviewSnapshot>(call("snapshot"));
         canvas = snapshot.canvas;
         const file = path.posix.join(chapter.id, frameName(index, stop.cue));
-        await fs.mkdir(path.join(opts.outDir, chapter.id), { recursive: true });
         const stage = await page.$(".tp-stage");
         if (!stage) throw new Error(`Chapter "${chapter.id}" rendered no tour stage`);
         await stage.screenshot({ path: path.join(opts.outDir, file) });

@@ -56,6 +56,51 @@ const STANDALONE_SOURCES = {
   tailwindPreflightCss: "node_modules/tailwindcss/preflight.css",
 };
 
+/** The host stylesheet whose root-level variables the standalone preview needs. */
+const HOST_STYLESHEET = "src/index.css";
+
+/**
+ * The custom properties the host stylesheet declares on `:root`, `.light` and
+ * `.dark`, as those three rules and nothing else. The design contract's tokens
+ * read some of them (`--theme-surface-dialog`, the shadcn aliases), so a page
+ * without the host's stylesheet needs them to draw those tokens at all.
+ */
+export function hostRootVariablesCss(css) {
+  const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const blocks = new Map([
+    [":root", []],
+    [".light", []],
+    [".dark", []],
+  ]);
+  const opener = /^(:root|\.light|\.dark)\s*\{/gm;
+  for (let match = opener.exec(source); match; match = opener.exec(source)) {
+    let depth = 1;
+    let index = opener.lastIndex;
+    while (index < source.length && depth > 0) {
+      if (source[index] === "{") depth++;
+      else if (source[index] === "}") depth--;
+      index++;
+    }
+    const body = source.slice(opener.lastIndex, index - 1);
+    // Only top-level declarations of this rule, not ones nested in a child block.
+    let flat = "";
+    let nested = 0;
+    for (const char of body) {
+      if (char === "{") nested++;
+      else if (char === "}") nested--;
+      else if (nested === 0) flat += char;
+    }
+    for (const decl of flat.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+      blocks.get(match[1]).push(`  ${decl[1]}: ${decl[2].trim().replace(/\s+/g, " ")};`);
+    }
+    opener.lastIndex = index;
+  }
+  return [...blocks]
+    .filter(([, decls]) => decls.length > 0)
+    .map(([selector, decls]) => `${selector} {\n${decls.join("\n")}\n}`)
+    .join("\n");
+}
+
 /** The virtual module's source: one string export per stylesheet. */
 function renderModule(onFile) {
   const exports = [];
@@ -70,6 +115,11 @@ function renderModule(onFile) {
     onFile?.(absolute);
     exports.push(`export const ${name} = ${JSON.stringify(readFileSync(absolute, "utf-8"))};`);
   }
+  const host = path.join(REPO_ROOT, HOST_STYLESHEET);
+  onFile?.(host);
+  exports.push(
+    `export const hostRootVariablesCss = ${JSON.stringify(hostRootVariablesCss(readFileSync(host, "utf-8")))};`
+  );
   return exports.join("\n");
 }
 

@@ -6,4 +6,5 @@ declare module "virtual:daintree-plugin-style-contract" {
   export const tailwindUtilitiesCss: string;
   export const twAnimateCss: string;
   export const tailwindPreflightCss: string;
+  export const hostRootVariablesCss: string;
 }

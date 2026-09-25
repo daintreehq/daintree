@@ -30,4 +30,6 @@ declare module "virtual:daintree-plugin-style-contract" {
   export const twAnimateCss: string;
   /** Tailwind's preflight. Not plugin vocabulary: only the standalone tour preview uses it. */
   export const tailwindPreflightCss: string;
+  /** The host stylesheet's own root variables. Only the standalone tour preview uses it. */
+  export const hostRootVariablesCss: string;
 }

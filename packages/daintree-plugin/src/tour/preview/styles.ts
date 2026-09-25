@@ -3,6 +3,7 @@ import path from "node:path";
 import { compile, type Polyfills } from "tailwindcss";
 import {
   designContractCss,
+  hostRootVariablesCss,
   tailwindPreflightCss,
   tailwindThemeCss,
   tailwindUtilitiesCss,
@@ -55,7 +56,7 @@ const HARNESS_CSS = `body { margin: 0; background: var(--theme-surface-canvas); 
 .tp-header, .tp-controls { display: flex; align-items: center; gap: 12px; }
 .tp-controls label { display: flex; align-items: center; gap: 4px; }
 .tp-header strong { font-size: 15px; }
-.tp-root button, .tp-root select { font: inherit; color: inherit; background: var(--theme-surface-panel); border: 1px solid var(--theme-border-default); border-radius: 6px; padding: 4px 10px; }
+.tp-header select, .tp-controls button { font: inherit; color: inherit; background: var(--theme-surface-panel); border: 1px solid var(--theme-border-default); border-radius: 6px; padding: 4px 10px; }
 .tp-stage { border: 1px solid var(--theme-border-default); border-radius: 8px; }
 .tp-capture { width: ${CAPTURE_WIDTH}px; }
 .tp-capture .tp-stage { border: 0; border-radius: 0; }
@@ -63,9 +64,9 @@ const HARNESS_CSS = `body { margin: 0; background: var(--theme-surface-canvas); 
 .tp-timeline { display: flex; flex-direction: column; gap: 4px; }
 .tp-timeline input[type="range"] { width: 100%; margin: 0; }
 .tp-cues { position: relative; height: 34px; margin: 0 8px; }
-.tp-root .tp-cue { position: absolute; top: 0; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; background: none; border: 0; padding: 0; color: var(--theme-text-secondary); font: 11px/1.2 ui-monospace, monospace; cursor: pointer; }
-.tp-root .tp-cue::before { content: ""; width: 2px; height: 10px; margin-bottom: 2px; background: currentColor; }
-.tp-root .tp-cue-passed { color: var(--theme-accent-primary); }
+.tp-cues .tp-cue { position: absolute; top: 0; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; background: none; border: 0; padding: 0; color: var(--theme-text-secondary); font: 11px/1.2 ui-monospace, monospace; cursor: pointer; }
+.tp-cues .tp-cue::before { content: ""; width: 2px; height: 10px; margin-bottom: 2px; background: currentColor; }
+.tp-cues .tp-cue-passed { color: var(--theme-accent-primary); }
 .tp-caption { min-height: 1.4em; color: var(--theme-text-secondary); }
 .tp-warnings { margin: 0; padding: 8px 8px 8px 24px; border: 1px solid var(--theme-status-warning); border-radius: 6px; color: var(--theme-status-warning); }
 .tp-anchors { position: absolute; inset: 0; pointer-events: none; z-index: 9999; }
@@ -101,13 +102,14 @@ export function previewTheme(themeId: string): PreviewTheme {
   };
 }
 
-/** Every `.js`/`.mjs` file under `dir`, skipping `node_modules`. */
+/** Every `.js`/`.mjs` file under `dir`, skipping `node_modules` and hidden folders. */
 export async function listScripts(dir: string): Promise<string[]> {
   const out: string[] = [];
   for (const entry of await fs.readdir(dir, { withFileTypes: true, recursive: true })) {
     if (!entry.isFile() || !/\.m?js$/.test(entry.name)) continue;
     const full = path.join(entry.parentPath, entry.name);
-    if (full.split(path.sep).includes("node_modules")) continue;
+    const parts = path.relative(dir, full).split(path.sep);
+    if (parts.some((part) => part === "node_modules" || part.startsWith("."))) continue;
     out.push(full);
   }
   return out.sort();
@@ -135,5 +137,5 @@ export async function compilePreviewCss(sources: string[], theme: PreviewTheme):
       return { path: id, base, content };
     },
   });
-  return `${theme.css}${compiler.build([...candidates])}\n${HOST_TOUR_CSS}${HARNESS_CSS}`;
+  return `${theme.css}${hostRootVariablesCss}\n${compiler.build([...candidates])}\n${HOST_TOUR_CSS}${HARNESS_CSS}`;
 }

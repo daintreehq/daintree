@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { REPORT_PATH, type PreviewChapterReport } from "./protocol.js";
 
 /** URL prefix the plugin's own files are served under. */
@@ -137,9 +138,9 @@ async function servePluginFile(
     res.end();
     return;
   }
-  createReadStream(file, { start, end })
-    .on("error", () => res.destroy())
-    .pipe(res);
+  // pipeline() closes the file when the page abandons a request mid-stream,
+  // which scrubbing audio does constantly.
+  await pipeline(createReadStream(file, { start, end }), res).catch(() => {});
 }
 
 async function readReport(req: http.IncomingMessage): Promise<PreviewChapterReport | null> {
@@ -225,7 +226,9 @@ export async function startTourPreviewServer(
   });
   const { address, port } = server.address() as AddressInfo;
   const host = address.includes(":") ? `[${address}]` : address;
-  allowedHosts = new Set([`${host}:${port}`, `localhost:${port}`]);
+  // Browsers leave the default port out of `Host`.
+  const bare = port === 80 ? [host, "localhost"] : [];
+  allowedHosts = new Set([`${host}:${port}`, `localhost:${port}`, ...bare]);
 
   let closing: Promise<void> | null = null;
   return {
