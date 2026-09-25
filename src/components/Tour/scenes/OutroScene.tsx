@@ -2,7 +2,7 @@ import { Eye, GitBranch, GitCommitHorizontal, LayoutGrid } from "lucide-react";
 import { DaintreeIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { reveal } from "../mockup/TourMock";
-import { useCue, useTimelineIndex, type TimelinePoint } from "../useTourPlayer";
+import { useCue, useTimelineIndex, type TimelinePoint } from "@daintreehq/tour/react";
 
 // Each idea lands as it's spoken.
 const WHY = [

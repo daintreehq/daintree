@@ -10,7 +10,7 @@ import {
   useTimelineIndex,
   useTourPlayer,
   type TimelinePoint,
-} from "../useTourPlayer";
+} from "@daintreehq/tour/react";
 
 /** Breathing room between the last typed character and the moment it's acted on. */
 const TYPING_MARGIN_S = 0.15;

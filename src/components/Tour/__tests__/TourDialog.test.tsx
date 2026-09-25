@@ -59,7 +59,7 @@ class SilentAudio {
 
 import { TOUR_CHAPTERS } from "../tourChapters";
 import { TourDialog, type TourDialogProps } from "../TourDialog";
-import type { TourPlayer } from "../TourPlayer";
+import type { TourPlayer } from "@daintreehq/tour";
 
 function renderDialog(overrides: Partial<TourDialogProps> = {}) {
   const props: TourDialogProps = {

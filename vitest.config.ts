@@ -13,6 +13,10 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src"),
       "@shared": path.resolve(__dirname, "./shared"),
+      // Same source aliases as vite.config.ts; `/react` first so the root entry
+      // alias doesn't swallow it.
+      "@daintreehq/tour/react": path.resolve(__dirname, "./packages/tour/src/react.ts"),
+      "@daintreehq/tour": path.resolve(__dirname, "./packages/tour/src/index.ts"),
     },
   },
   test: {

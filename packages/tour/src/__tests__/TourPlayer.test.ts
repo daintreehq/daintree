@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { AUDIO_WAIT_MS, TourPlayer, type TourAudio, type TourPlayerDeps } from "../TourPlayer";
-import type { TourChapterTiming } from "../tourTypes";
+import { AUDIO_WAIT_MS, TourPlayer, type TourAudio, type TourPlayerDeps } from "../TourPlayer.js";
+import type { TourChapterTiming } from "../tourTypes.js";
 
 class FakeAudio implements TourAudio {
   src: string;

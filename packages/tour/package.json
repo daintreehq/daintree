@@ -1,0 +1,64 @@
+{
+  "name": "@daintreehq/tour",
+  "version": "0.1.0",
+  "description": "The Daintree welcome-tour engine — narration cues, timing, a playback clock with a silent fallback, and React bindings for scenes.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/daintreehq/daintree.git",
+    "directory": "packages/tour"
+  },
+  "homepage": "https://github.com/daintreehq/daintree/tree/develop/packages/tour",
+  "bugs": {
+    "url": "https://github.com/daintreehq/daintree/issues"
+  },
+  "keywords": [
+    "daintree",
+    "daintree-plugin",
+    "tour",
+    "onboarding"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js",
+      "default": "./dist/react.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepare": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsup"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "react": "^19.3.0",
+    "tsup": "^8.5.1"
+  }
+}

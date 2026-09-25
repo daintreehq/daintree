@@ -10,7 +10,7 @@ import {
   useMockCursor,
   type CursorStep,
 } from "../mockup/TourMock";
-import { useCue, useTimelineIndex, type TimelinePoint } from "../useTourPlayer";
+import { useCue, useTimelineIndex, type TimelinePoint } from "@daintreehq/tour/react";
 import { MockSpotlight, MockTooltip } from "./sceneParts";
 
 const FILES = [

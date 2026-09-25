@@ -1,5 +1,5 @@
 /**
- * A chapter of the Daintree Tour as authored: narration text with inline cue
+ * A chapter of a tour as authored: narration text with inline cue
  * markers (`[[cue-id]]`) placed immediately before the word the cue fires on.
  * Scenes animate off cue times, never off wall-clock literals, so re-recording
  * the narration re-times every animation for free.

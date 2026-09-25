@@ -20,7 +20,7 @@ import {
   useMockCursor,
   type CursorStep,
 } from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
+import { useCue } from "@daintreehq/tour/react";
 import { MockMenu, MockPanel, MockSearchField, MockSpotlight } from "./sceneParts";
 
 const LAUNCHER = ANCHOR.launcher;

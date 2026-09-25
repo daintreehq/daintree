@@ -1422,6 +1422,11 @@ export default defineConfig(({ command, mode }) => {
           : {}),
         "@": path.resolve(__dirname, "./src"),
         "@shared": path.resolve(__dirname, "./shared"),
+        // The app compiles the tour engine from source, so an edit shows up
+        // without rebuilding the package's `dist/` (which only exists for
+        // publishing). `/react` first so the root entry alias doesn't swallow it.
+        "@daintreehq/tour/react": path.resolve(__dirname, "./packages/tour/src/react.ts"),
+        "@daintreehq/tour": path.resolve(__dirname, "./packages/tour/src/index.ts"),
         // refractor/core eagerly imports parse-entities, whose browser-condition
         // decode-named-character-reference touches `document` at module scope —
         // that crashes the diff-tokenize Web Worker at startup. Pin the package's

@@ -19,7 +19,7 @@ import {
   useMockCursor,
   type CursorStep,
 } from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
+import { useCue } from "@daintreehq/tour/react";
 import { MockEmptyGrid, MockMenu, MockSearchField, MockSpotlight } from "./sceneParts";
 
 const ISSUES = ANCHOR["forge-issues"];

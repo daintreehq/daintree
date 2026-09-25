@@ -20,7 +20,7 @@ import {
   type CursorStep,
   type MockAgentId,
 } from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
+import { useCue } from "@daintreehq/tour/react";
 import { MockLegend, MockMenu, MockSpotlight } from "./sceneParts";
 
 // Claude holds the check: Antigravity never reports finishing (its config has

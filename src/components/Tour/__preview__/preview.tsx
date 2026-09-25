@@ -7,8 +7,8 @@ import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TOUR_CHAPTERS } from "../tourChapters";
 import { TourDialog } from "../TourDialog";
+import type { TourPlayer } from "@daintreehq/tour";
 import { TOUR_KEYBOARDS, type TourKeyboard } from "../tourKeys";
-import type { TourPlayer } from "../TourPlayer";
 import "@/index.css";
 
 /**

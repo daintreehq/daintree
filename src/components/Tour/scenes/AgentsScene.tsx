@@ -16,7 +16,7 @@ import {
   useMockCursor,
   type CursorStep,
 } from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
+import { useCue } from "@daintreehq/tour/react";
 import { MockEmptyGrid, MockMenu, MockSearchField, MockSpotlight } from "./sceneParts";
 
 const LAUNCHER = ANCHOR.launcher;

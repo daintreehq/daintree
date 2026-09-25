@@ -1,4 +1,4 @@
-import type { TourChapter } from "./tourTypes";
+import type { TourChapter } from "@daintreehq/tour";
 
 /**
  * The narration source of truth. `[[cue]]` markers sit immediately before the

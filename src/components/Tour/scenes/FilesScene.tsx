@@ -8,7 +8,7 @@ import {
   useMockCursor,
   type CursorStep,
 } from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
+import { useCue } from "@daintreehq/tour/react";
 import { MockPanel, MockSpotlight } from "./sceneParts";
 
 const TREE: ReadonlyArray<{ name: string; depth: number; folder?: boolean }> = [

@@ -3,10 +3,11 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { TOUR_SCENES } from "../TourStage";
 import { TOUR_CHAPTERS } from "../tourChapters";
-import { TourPlayer, type TourAudio } from "../TourPlayer";
+import { TourPlayer, type TourAudio } from "@daintreehq/tour";
+import { TourPlayerContext } from "@daintreehq/tour/react";
+import { TourKeyboardContext } from "../tourKeyboardContext";
 import type { TourKeyboard } from "../tourKeys";
 import { resolveChapterTiming } from "../tourTiming";
-import { TourKeyboardContext, TourPlayerContext } from "../useTourPlayer";
 
 class SilentAudio implements TourAudio {
   src: string;

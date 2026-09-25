@@ -2,12 +2,13 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { TourControls } from "./TourControls";
-import { TourPlayer, type TourAudio } from "./TourPlayer";
+import { TourPlayer, type TourAudio } from "@daintreehq/tour";
 import { TourCaption, TourStage } from "./TourStage";
 import { TOUR_CHAPTERS } from "./tourChapters";
 import { currentTourKeyboard, type TourKeyboard } from "./tourKeys";
 import { resolveTourTimings } from "./tourTiming";
-import { TourKeyboardContext, TourPlayerContext, useTourPlayerState } from "./useTourPlayer";
+import { TourPlayerContext, useTourPlayerState } from "@daintreehq/tour/react";
+import { TourKeyboardContext } from "./tourKeyboardContext";
 
 export interface TourDialogProps {
   isOpen: boolean;
