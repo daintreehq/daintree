@@ -50,11 +50,14 @@ export interface CrashFleetRestoreDeps extends Pick<
   /** The user's session-restore setting — whether windows get their background projects. */
   restoreLiveProjects: boolean;
   /**
-   * Hand background projects to the live window that already shows `projectId`.
-   * The recovery window opened on its own, so the saved record it stands in for
-   * never had its background list queued.
+   * Hand background projects to the live windows that already show their saved
+   * foreground projects. The recovery window opened on its own, so the saved
+   * record it stands in for never had its background list queued. Called once
+   * with every handoff, so one window's projects become one queue job.
    */
-  adoptBackgroundProjects: (projectId: string, projectIds: readonly string[]) => void;
+  adoptBackgroundProjects: (
+    handoffs: ReadonlyArray<{ projectId: string; backgroundProjectIds: readonly string[] }>
+  ) => void;
   /** Lifts the recovery launch's read-only manifest hold. */
   enableSaves: () => void;
   isShuttingDown: () => boolean;
@@ -80,15 +83,14 @@ export async function restoreFleetAfterCrash(deps: CrashFleetRestoreDeps): Promi
   // The fleet skips a record whose project is already open, which would drop
   // the projects that window had warm — and a clean finish would then persist
   // the manifest without them.
-  for (const record of fleetRecords) {
-    if (
-      record.projectId !== null &&
-      record.backgroundProjectIds?.length &&
-      deps.isProjectOwned?.(record.projectId)
-    ) {
-      deps.adoptBackgroundProjects(record.projectId, record.backgroundProjectIds);
-    }
-  }
+  const handoffs = fleetRecords.flatMap((record) =>
+    record.projectId !== null &&
+    record.backgroundProjectIds?.length &&
+    deps.isProjectOwned?.(record.projectId)
+      ? [{ projectId: record.projectId, backgroundProjectIds: record.backgroundProjectIds }]
+      : []
+  );
+  if (handoffs.length > 0) deps.adoptBackgroundProjects(handoffs);
 
   await restoreWindowFleet({
     records: fleetRecords,

@@ -162,8 +162,32 @@ describe("restoreFleetAfterCrash", () => {
 
     await restoreFleetAfterCrash(deps);
 
-    expect(deps.adoptBackgroundProjects).toHaveBeenCalledWith("recovered", ["x", "y"]);
+    expect(deps.adoptBackgroundProjects).toHaveBeenCalledWith([
+      { projectId: "recovered", backgroundProjectIds: ["x", "y"] },
+    ]);
     expect(createWindow.mock.calls.map((c) => c[0])).toEqual(["b"]);
+  });
+
+  it("hands every owned record over in one call", async () => {
+    const { deps } = harness({
+      readManifest: () => ({
+        hadManifest: true,
+        records: [
+          { projectId: "a", backgroundProjectIds: ["x"] },
+          { projectId: "b", backgroundProjectIds: ["y"] },
+          { projectId: "c", backgroundProjectIds: ["z"] },
+        ],
+      }),
+      isProjectOwned: (id) => id !== "c",
+    });
+
+    await restoreFleetAfterCrash(deps);
+
+    expect(deps.adoptBackgroundProjects).toHaveBeenCalledTimes(1);
+    expect(deps.adoptBackgroundProjects).toHaveBeenCalledWith([
+      { projectId: "a", backgroundProjectIds: ["x"] },
+      { projectId: "b", backgroundProjectIds: ["y"] },
+    ]);
   });
 
   it("hands nothing over when session restore is off", async () => {

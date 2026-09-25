@@ -68,7 +68,7 @@ import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
 import { distributePortsToView } from "./window/portDistribution.js";
-import { findOtherProjectOwner } from "./window/projectOwnership.js";
+import { findOtherProjectOwner, type ProjectOwner } from "./window/projectOwnership.js";
 import { openFolderInNewWindow } from "./window/newWindowOpen.js";
 import { deliverOpenSystemMemoryPressure } from "./window/systemMemoryPressureDelivery.js";
 import { toDisposable } from "./utils/lifecycle.js";
@@ -991,16 +991,26 @@ if (!gotTheLock) {
               });
               return outcome !== "cancelled" && !ctx.browserWindow.isDestroyed();
             },
-            adoptBackgroundProjects: (projectId, projectIds) => {
-              const owner = findOtherProjectOwner(windowRegistry, projectId, {});
-              if (!owner) return;
-              queueWindowBackgroundProjects({
-                windowId: owner.context.windowId,
-                getManager: () => owner.context.services.projectViewManager,
-                projectViewManager: owner.projectViewManager,
-                windowRegistry,
-                projectIds,
-              });
+            adoptBackgroundProjects: (handoffs) => {
+              // One job per window: the queue tracks one pending list per
+              // window, so a second job would overwrite the first's intent.
+              const byWindow = new Map<number, { owner: ProjectOwner; ids: string[] }>();
+              for (const { projectId, backgroundProjectIds } of handoffs) {
+                const owner = findOtherProjectOwner(windowRegistry, projectId, {});
+                if (!owner) continue;
+                const entry = byWindow.get(owner.context.windowId) ?? { owner, ids: [] };
+                entry.ids.push(...backgroundProjectIds.filter((id) => !entry.ids.includes(id)));
+                byWindow.set(owner.context.windowId, entry);
+              }
+              for (const { owner, ids } of byWindow.values()) {
+                queueWindowBackgroundProjects({
+                  windowId: owner.context.windowId,
+                  getManager: () => owner.context.services.projectViewManager,
+                  projectViewManager: owner.projectViewManager,
+                  windowRegistry,
+                  projectIds: ids,
+                });
+              }
             },
             readManifest: readOpenWindowsManifestSync,
             restoreLiveProjects: store.get("sessionRestore")?.enabled !== false,
