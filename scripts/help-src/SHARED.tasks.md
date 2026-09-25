@@ -1,6 +1,6 @@
 ## Common Tasks
 
-These cover most operational requests. Reads are `workbench`; launching, sending, waiting, and closing need `action`. Call them directly, without `actions.search`.
+These cover most operational requests, and all of them are in `core`. Call them directly, without `actions.search`.
 
 ### Launch agents
 
@@ -11,7 +11,7 @@ These cover most operational requests. Reads are `workbench`; launching, sending
 
 ### Check on agents
 
-`terminal.getStatus({ terminalIds: [<id>, …], includeOutput: { lines: 20 } })` returns each terminal's `agentState`, `waitingReason`, and recent output in one call; don't fan out one read per terminal. Find ids you don't have with `terminal.list`. Prefer terminal ids over `agent.getState` when more than one agent of a kind is running. Group a summary by whatever `agentState` values come back rather than dropping ones you didn't expect.
+`terminal.getStatus({ terminalIds: [<id>, …], includeOutput: { lines: 20 } })` returns each terminal's `agentState`, `waitingReason`, and recent output in one call; don't fan out one read per terminal. Find ids you don't have with `terminal.list`. Group a summary by whatever `agentState` values come back rather than dropping ones you didn't expect.
 
 For a Claude Code agent you launched, `terminal.readLastMessageOwned({ terminalId })` returns its last reply and any unanswered tool calls, such as a question with its options. Read it before replying for the agent, and check for a null `message`, `message.truncated`, or a question missing its `input`. It reads the transcript, not the screen, so a dialog is never in it.
 
@@ -27,10 +27,11 @@ With `handback: true`, Daintree appends the instruction and code; never write th
 
 ### Close terminals
 
-`terminal.close({ terminalId })` usually moves a panel to the trash, where it is briefly recoverable before its process is killed; remove-on-exit and dialog panels are discarded outright. Always name the panel. `terminal.kill` destroys a panel and its process permanently, needs the user's confirmation, and is only for a terminal that close didn't stop. Confirm with the user before closing several terminals, including via `terminal.closeAll` (active worktree) or `terminal.killAll` (whole project).
+`terminal.close({ terminalId })` usually moves a panel to the trash, where it is briefly recoverable before its process is killed; remove-on-exit and dialog panels are discarded outright. Always name the panel. `terminal.kill` (`full`) destroys a panel and its process permanently, needs the user's confirmation, and is only for a terminal that close didn't stop. Confirm with the user before closing several terminals, including via `terminal.closeAll` (`full`, active worktree).
 
 ### Picking between similar tools
 
-- An AI agent working on a task → `agent.launch`. `terminal.new` and `agent.terminal` open plain shells, not agents.
+- An AI agent working on a task → `agent.launch`. `terminal.new` (`full`) opens a plain shell, not an agent.
 - A prompt for an agent that is already running → `terminal.sendCommand`.
-- Project context into a terminal → `terminal.inject({ terminalId })`, only when the user asks for it.
+- An agent to another worktree → `terminal.moveToWorktree({ terminalId, worktreeId })`.
+- Project context into a terminal → `terminal.inject({ terminalId })` (`full`), only when the user asks for it.

@@ -3177,7 +3177,7 @@ function buildElectronApi(): ElectronAPI {
           sessionId: string;
           toolId: string;
           tier: string;
-          targetTier: "workbench" | "action" | "system" | null;
+          targetTier: "core" | "full" | null;
         }) => void
       ) => _typedOn(CHANNELS.MCP_TIER_NOT_PERMITTED, callback),
       onGrantLifecycle: (callback: (payload: McpGrantLifecyclePayload) => void) =>

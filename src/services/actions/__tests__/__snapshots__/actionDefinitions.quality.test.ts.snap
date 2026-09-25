@@ -4945,7 +4945,12 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "description": "Snapshot agent and process state across many terminals, with optional output tails, and confirm a submission landed. The batched polling path: prefer it over listing terminals for agent state, or reading each one's output. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the fetch failed. Use the blocking wait to catch an agent finishing.",
     "examples": undefined,
     "id": "terminal.getStatus",
-    "keywords": undefined,
+    "keywords": [
+      "agent",
+      "state",
+      "waiting",
+      "working",
+    ],
     "kind": "query",
     "requiresArgs": false,
     "title": "Get terminal status",

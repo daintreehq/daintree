@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { findWireStrippedKeywords } from "@shared/utils/mcpWireSchema";
+import { HELP_TIER_CUMULATIVE } from "@shared/config/helpAssistantTierAllowlists";
 import { measureWireSurface, type WireTool } from "./helpers/wireSurface";
 import { TerminalSubmissionRecordSchema } from "../definitions/schemas";
 
@@ -59,8 +60,15 @@ const MAX_PROPERTY_DESCRIPTION_BYTES = 320;
  * already carries, reused verbatim rather than worded afresh. Bringing that under
  * would mean cutting its unknown-id caveat from every tool that shares it — the
  * protected content the target is not allowed to buy back.
+ *
+ * 50 → 42 for the core/full split, measured at 42. Nothing was trimmed: eight
+ * over-target descriptions left with the tools that carried them, which are on
+ * no in-app tool set any more — `forge.openRepo`'s `projectId` above and its
+ * three `forge.open*` siblings, `agent.terminal`'s `focusPolicy`,
+ * `git.getFileDiff`'s `status`, `terminal.killAll`'s `confirmed` and
+ * `terminal.killBatch`'s `terminalIds`.
  */
-const MAX_PROPERTIES_OVER_TARGET = 50;
+const MAX_PROPERTIES_OVER_TARGET = 42;
 
 /**
  * Total bytes spent above {@link PROPERTY_DESCRIPTION_TARGET_BYTES}, summed over
@@ -69,8 +77,13 @@ const MAX_PROPERTIES_OVER_TARGET = 50;
  * Paired with the count because the count alone is gameable: the same thirty
  * descriptions can each grow from 161 B to 319 B without moving it. Together
  * they bound both how many descriptions run long and how far they run.
+ *
+ * 3_000 → 2_200 for the core/full split, measured at 2_170 B (2_557 B before
+ * it). The same eight descriptions as the count above took 387 B of excess off
+ * the surface with them, which would otherwise have been left as headroom for
+ * the next long description to spend without anyone deciding it should.
  */
-const MAX_EXCESS_PROPERTY_BYTES = 3_000;
+const MAX_EXCESS_PROPERTY_BYTES = 2_200;
 
 /** Above this a tool is almost always polymorphic and wants splitting. */
 const MAX_TOOL_PARAMS_BYTES = 1_500;
@@ -635,7 +648,17 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // In-app only, on the action tier, so the external ceiling above does not
   // move. The spend is its 257 B description, the `panelId` argument, and the
   // output schema: the scheduling outcome is read back as structured content.
-  const MAX_COHORT_PAYLOAD_BYTES = 227_300;
+  // 227_300 → 133_800 for the core/full split, measured at 133_792 B across 79
+  // tools (227_075 B across 181 before it). The workbench/action/system ladder
+  // became two tool sets, and every tool on neither — git, forge writes and the
+  // `forge.open*` family, file reads, portal, theme and settings writes, session
+  // bookmarks, the recipe editor, fleet arming and the bulk kills — is off MCP
+  // entirely, so the cohort is the `full` set plus the owned twins an agent pane
+  // is served in place of the unscoped ids. Lowered rather than left: 93 KB of
+  // headroom would let the surface grow back to its old size without a single
+  // raise having to be argued. The external ceiling above does not move — that
+  // list is unchanged.
+  const MAX_COHORT_PAYLOAD_BYTES = 133_800;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
@@ -655,9 +678,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
 
   it("measures a surface that is actually there", async () => {
     // Guards the guard: a harness that silently returned nothing would satisfy
-    // every ceiling above while proving the opposite of what it claims.
+    // every ceiling above while proving the opposite of what it claims. The
+    // floor is the `full` tool set, since the cohort is that set plus the owned
+    // twins and the external roster, both of which may overlap it.
     const tools = await surface();
-    expect(tools.length).toBeGreaterThan(100);
+    expect(tools.length).toBeGreaterThanOrEqual(HELP_TIER_CUMULATIVE.full.length);
     expect(tools.filter((t) => t.external).length).toBeGreaterThan(15);
   });
 });

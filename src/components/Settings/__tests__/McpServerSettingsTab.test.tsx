@@ -1149,10 +1149,10 @@ describe("McpServerSettingsTab", () => {
         auth401Count: 0,
         anomalySignals: [
           {
-            id: "first-seen:flaky.tool:action",
+            id: "first-seen:flaky.tool:core",
             kind: "first-seen-combination",
             toolId: "flaky.tool",
-            tier: "action",
+            tier: "core",
             severity: "info",
             timestamp: now,
             recordIds: ["r1"],

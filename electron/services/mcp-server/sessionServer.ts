@@ -23,12 +23,14 @@ import {
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { isAssistantOnlyAgentId } from "../../../shared/config/agentIds.js";
+import { OWNED_TWIN_TOOLS } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
 import { onWorkspaceResidencyChanged, readWorkspaceBindingState } from "../workspaceResidency.js";
 import type { AuditOutcome } from "./auditLog.js";
 import type { McpDispatchAuthorization } from "../../../shared/types/ipc/mcpServer.js";
 import type {
+  HelpAssistantTier,
   McpTier,
   ParsedResourceUri,
   PromptDefinition,
@@ -60,7 +62,6 @@ import {
   SESSION_GONE,
   INVALID_URL_CODE,
   RESOURCE_NOT_OWNED_CODE,
-  RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS,
   buildToolError,
   buildMcpErrorPayload,
   withResolvedWorkspace,
@@ -91,7 +92,6 @@ import {
   type SessionSurfacePolicy,
   isTierPermitted,
   isApprovalRequestable,
-  isTierAutoConfirmed,
   buildToolInputSchema,
   buildAnnotations,
   buildToolOutputSchema,
@@ -144,7 +144,6 @@ const MAX_LIST_PAGE_WALK = 20;
 const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
 const TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL = "terminal.waitUntilIdleBatch";
 const HELP_DISPLAY_IMAGE_TOOL = "help.displayImage";
-const BROWSER_CAPTURE_SCREENSHOT_TOOL = "browser.captureScreenshot";
 const SKILLS_SEARCH_TOOL = "skills.search";
 const SKILLS_LOAD_TOOL = "skills.load";
 const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
@@ -505,26 +504,6 @@ function readOwnedResourceId(args: unknown, key: string): string | undefined {
   return value.trim().length === 0 ? undefined : value;
 }
 
-/**
- * Narrow a `browser.captureScreenshot` result to its base64-PNG payload so the
- * tool response can carry a real MCP `image` content block (the generic path
- * only ever text-serializes results). Guarded structurally rather than trusting
- * the action id alone.
- */
-function asScreenshotResult(
-  result: unknown
-): { pngBase64: string; width: number; height: number } | null {
-  if (
-    result !== null &&
-    typeof result === "object" &&
-    typeof (result as { pngBase64?: unknown }).pngBase64 === "string" &&
-    typeof (result as { width?: unknown }).width === "number" &&
-    typeof (result as { height?: unknown }).height === "number"
-  ) {
-    return result as { pngBase64: string; width: number; height: number };
-  }
-  return null;
-}
 import type { SessionStore } from "./sessionStore.js";
 
 /**
@@ -721,6 +700,8 @@ export interface SessionServerDeps extends OwnedMainExecutors {
      * across two groupings.
      */
     capturedTurnId?: string | null;
+    /** The caller's origin, so an unauthorized row's tier hint reads its own surface. */
+    rendererOwnedOrigin?: boolean;
   }) => void;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   /**
@@ -741,7 +722,7 @@ export interface SessionServerDeps extends OwnedMainExecutors {
      * the denied tool without changing the session tier at all. A `null`
      * withholds both affordances — the denial isn't actionable.
      */
-    targetTier: "workbench" | "action" | "system" | null;
+    targetTier: HelpAssistantTier | null;
   }) => void;
   /**
    * Feed a denial into the abuse policy — both 401s and tier-mismatches
@@ -1052,7 +1033,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // request arrived on a live session" and this handler, so an idle-timer
     // expiry or an abuse trip on a concurrent call can revoke the session in
     // between. Refusing here, before the tier gate, keeps a revoked external
-    // bearer off the workbench surface its own allowlist withholds.
+    // bearer off the core surface its own allowlist withholds.
     //
     // Returns before anything observable happens: no audit record (there is no
     // honest tier to record it under), no denial counter, no tier-mismatch
@@ -1067,7 +1048,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // across two turn groupings in the Assistant panel.
     const capturedTurnId: string | null = getCurrentTurnId?.() ?? null;
     // Asked of the ORIGIN, never inferred from the tier: an unrecognised bearer
-    // resolves to `workbench` while its origin still defaults to `external`,
+    // resolves to `core` while its origin still defaults to `external`,
     // and an agent pane's bearer holds a ladder tier with an `external` origin.
     // Captured once so discovery, the tier gate and `mcp.surface` all describe
     // the same session (#12407).
@@ -1388,8 +1369,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     };
 
     // Layered authorization (#8442):
-    //   1. Static tier floor (`TIER_ALLOWLISTS`) — workbench/action/system
-    //      membership stays the default. The "Always allow" project setting
+    //   1. Static tier floor (`TIER_ALLOWLISTS`) — core/full membership
+    //      stays the default. The "Always allow" project setting
     //      elevates the session tier so this check passes for everything
     //      below the chosen tier.
     //   2. Per-`(sessionId, toolId)` grant cache — the "Approve once" flow
@@ -1428,7 +1409,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // session", so beyond widening the floor it also stands in for the
     // confirmation that approval replaced (#12692). That second job is why a
     // pane consults it even for a tool its tier already permits — the
-    // `action`-tier `worktree.delete` a user has allowed for the session.
+    // `full`-tier `worktree.delete` a user has allowed for the session.
     if (!tierPermitted || paneApproval) {
       const grant = sessionStore.grantCache.check(sessionId, actionId);
       if (grant.granted) {
@@ -1446,7 +1427,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // (#11878). It used to sit inside the tier-denied branch, behind the
     // per-tool check — which left the grant unreachable both for a tool the
     // tier already permitted (`worktree.delete` is `danger: "confirm"` and sits
-    // on the `action` floor since #12116) and for one a per-tool grant had just
+    // in `full`) and for one a per-tool grant had just
     // admitted.
     // Either way the modal still fired on every call despite an explicit
     // Settings pre-authorisation.
@@ -1492,6 +1473,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           outcome: { kind: "unauthorized" },
           bannerSuppressed: suppressBanner ? true : undefined,
           capturedTurnId,
+          rendererOwnedOrigin,
         });
       } catch (err) {
         console.error("[MCP] Failed to append audit record:", err);
@@ -1502,7 +1484,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             sessionId,
             toolId: actionId,
             tier,
-            targetTier: minimumPermittingTier(actionId),
+            targetTier: minimumPermittingTier(actionId, rendererOwnedOrigin),
           });
         } catch (err) {
           console.error("[MCP] Failed to notify tier-mismatch:", err);
@@ -1531,18 +1513,23 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
       }
       // A tool the tier admits but the origin does not would otherwise be
-      // refused "for the 'action' tier" while the session holds exactly that
+      // refused "for the 'full' tier" while the session holds exactly that
       // tier — true of the gate, and useless to a caller deciding what to do
-      // next (#12407).
+      // next (#12407). An unscoped tool with an owned twin names the twin,
+      // which is the call that would have worked.
       const withheldByOrigin =
-        !rendererOwnedOrigin &&
-        RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS.has(actionId) &&
-        isTierPermitted(tier, actionId, true);
+        !rendererOwnedOrigin && tier !== "external" && isTierPermitted(tier, actionId, true);
+      const ownedTwin = withheldByOrigin
+        ? (OWNED_TWIN_TOOLS as Readonly<Record<string, string>>)[actionId]
+        : undefined;
       return buildToolError({
         code: TIER_NOT_PERMITTED_CODE,
-        message: withheldByOrigin
-          ? `action '${actionId}' can reach any terminal, so it is reserved for Daintree's own assistant. This connection may only send input to terminals it created.`
-          : `action '${actionId}' is not permitted for the '${tier}' tier.`,
+        message:
+          ownedTwin !== undefined
+            ? `action '${actionId}' can reach any terminal or worktree, so it is reserved for Daintree's own assistant. Use '${ownedTwin}', which acts on what this connection created.`
+            : withheldByOrigin
+              ? `action '${actionId}' can reach any terminal, so it is reserved for Daintree's own assistant. This connection may only act on terminals it created.`
+              : `action '${actionId}' is not permitted for the '${tier}' tier.`,
       });
     }
 
@@ -1763,8 +1750,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // When the grant WAS the authorization, losing it fails closed. When the
     // floor or a per-tool grant already admitted it, the grant only bought a
     // confirmation bypass — so drop the bypass and let the normal modal
-    // decide. Refusing there would answer an `action`-tier `worktree.delete`
-    // with "not permitted for the 'action' tier", which is simply untrue.
+    // decide. Refusing there would answer a `full`-tier `worktree.delete`
+    // with "not permitted for the 'full' tier", which is simply untrue.
     //
     // Accounting note: a matching call spends a use even when the tool is not
     // confirm-gated, so the grant buys it nothing. Charging only where the
@@ -1904,20 +1891,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // What pre-authorizes this dispatch's `danger: "confirm"` modal, if
     // anything. A native automation grant is an explicit user approval of the
     // tool's scope, so it authorizes the dispatch without surfacing a per-call
-    // modal — exactly as if the user had just approved it. For an agent pane
-    // the `system` tier does the same, as does a session approval the user gave
-    // from the dialog (#12692); neither ever covers a tool whose dialog is also
-    // where the user picks its targets. An above-tier approval, granted below,
-    // sets this too. The D3 typed-name gate is outside all of them: the bridge
+    // modal — exactly as if the user had just approved it. For an agent pane a
+    // session approval the user gave from the dialog does the same (#12692),
+    // but never for a tool whose dialog is also where the user picks its
+    // targets. No tier pre-authorizes on its own. An above-tier approval,
+    // granted below, sets this too. The D3 typed-name gate is outside all of them: the bridge
     // re-derives it for any preconfirmed force delete (#12115).
     let dispatchAuthorization: McpDispatchAuthorization | undefined =
       nativeGrantId !== undefined
         ? "native-grant"
-        : isTierAutoConfirmed(tier, actionId, paneApproval)
-          ? "tier"
-          : paneApproval && grantIssuedAt !== undefined && isGenericNativeGrantEligible(actionId)
-            ? "session-grant"
-            : undefined;
+        : paneApproval && grantIssuedAt !== undefined && isGenericNativeGrantEligible(actionId)
+          ? "session-grant"
+          : undefined;
     let dispatchConfirmed = dispatchAuthorization !== undefined;
     // Tracks whether a live "tool-call-started" push fired for this dispatch so
     // the shared `finally` only emits the matching "settled" push for calls the
@@ -2220,7 +2205,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // so the strip shows a plain in-flight row (no "awaiting confirmation").
           emitToolCallStarted(false);
           try {
-            // Interactive help sessions (workbench/action/system tiers) have a
+            // Interactive help sessions (core/full tiers) have a
             // human waiting on the conversation — a tool call held open blocks
             // the whole session, so the wait is clamped to the interactive cap
             // and the agent re-polls on `timedOut: true`. External (api-key)
@@ -2522,7 +2507,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           emitToolCallStarted(false);
           try {
             // Help-session bearers only. A pane-token session can also resolve
-            // to the workbench tier and clear the static allowlist gate above,
+            // to the core tier and clear the static allowlist gate above,
             // but it has no pinned panel to render the figure and no public
             // help-session id to key the counter, so reject it here.
             const helpSessionId = sessionStore.sessionHelpIdMap.get(sessionId);
@@ -2856,26 +2841,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               sessionStore.resetIdleTimer(sessionId);
             } else if (sessionStore.httpSessions.has(sessionId)) {
               sessionStore.resetHttpIdleTimer(sessionId);
-            }
-          }
-          // browser.captureScreenshot returns PNG bytes — surface them as a real
-          // MCP image content block so the model receives a usable image, not a
-          // base64 blob text-serialized into the transcript.
-          if (actionId === BROWSER_CAPTURE_SCREENSHOT_TOOL) {
-            const shot = asScreenshotResult(outcome.value.result);
-            if (shot) {
-              return withResolvedWorkspace(
-                {
-                  content: [
-                    { type: "image" as const, data: shot.pngBase64, mimeType: "image/png" },
-                    {
-                      type: "text" as const,
-                      text: `Screenshot captured (${shot.width}×${shot.height})`,
-                    },
-                  ],
-                },
-                dispatchedWorkspace
-              );
             }
           }
           const structuredContent = buildStructuredContent(entry, outcome.value.result);

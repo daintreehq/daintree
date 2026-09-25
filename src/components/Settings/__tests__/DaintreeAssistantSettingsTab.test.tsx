@@ -178,6 +178,11 @@ import {
   formatGrantRemaining,
 } from "../DaintreeAssistantSettingsTab";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
+import {
+  HELP_TIER_CUMULATIVE,
+  HELP_TIER_INCREMENTAL,
+} from "@shared/config/helpAssistantTierAllowlists";
+import type { HelpAssistantTier } from "@shared/types";
 
 const writeText = vi.fn().mockResolvedValue(undefined);
 
@@ -217,7 +222,7 @@ function installApi(
     getSettings: vi.fn().mockResolvedValue({
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
       customArgs: "",
@@ -225,7 +230,7 @@ function installApi(
     setSettings: vi.fn().mockResolvedValue(undefined),
     getLiveSessionStatus: vi
       .fn()
-      .mockResolvedValue({ connected: false, tier: "workbench", activeGrants: [] }),
+      .mockResolvedValue({ connected: false, tier: "core", activeGrants: [] }),
   };
   const mcpDefaults: McpServerApi = {
     getStatus: vi.fn().mockResolvedValue({
@@ -342,7 +347,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       getSettings: vi.fn().mockResolvedValue({
         docSearch: false,
         daintreeControl: false,
-        tier: "action" as const,
+        tier: "core" as const,
         bypassPermissions: false,
         auditRetention: 7,
       }),
@@ -497,13 +502,13 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
-  // #11907: with the confirmation sheet off, the tier carries most of the
+  // #11907: with the confirmation sheet off, the tool set carries most of the
   // remaining boundary, so the warning has to name it — and keep naming the
   // right one when the selector moves (a missing memo dependency would freeze
-  // the old tier in the copy while the selector reads the new one). #12119
+  // the old set in the copy while the selector reads the new one). #12119
   // stopped it claiming to be the *entire* boundary, so the assertions below
-  // pin both halves: the tier-named limit and the confirmation exception.
-  it("names the configured tier in the auto-approve warning and follows the selector", async () => {
+  // pin both halves: the set-named limit and the confirmation exception.
+  it("names the configured tool set in the auto-approve warning and follows the selector", async () => {
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex", "daintree-assistant"]);
     helpPanelState.preferredAgentId = "daintree-assistant";
 
@@ -525,16 +530,16 @@ describe("DaintreeAssistantSettingsTab", () => {
 
     await waitForContent(
       container,
-      "New sessions are limited to the Daintree actions the Action capability tier allows"
+      "New sessions are limited to the Daintree actions in the Core tool set"
     );
 
-    fireEvent.click(screen.getByRole("radio", { name: /^System/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /^Full/ }));
 
     await waitForContent(
       container,
-      "New sessions are limited to the Daintree actions the System capability tier allows"
+      "New sessions are limited to the Daintree actions in the Full tool set"
     );
-    expect(container.textContent).not.toContain("the Action capability tier");
+    expect(container.textContent).not.toContain("in the Core tool set");
   });
 
   // The gate is what keeps a switch off agents where flipping it does nothing.
@@ -547,7 +552,7 @@ describe("DaintreeAssistantSettingsTab", () => {
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Capability tier");
+    await waitForContent(container, "Tool set");
 
     expect(screen.queryByRole("switch", { name: /bypass|auto-approve/i })).toBeNull();
   });
@@ -561,7 +566,7 @@ describe("DaintreeAssistantSettingsTab", () => {
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Capability tier");
+    await waitForContent(container, "Tool set");
 
     // A dangerous flag exists for this agent, so only the supports declaration
     // keeps the switch away — and the launch path honours the same declaration.
@@ -599,7 +604,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       getSettings: vi.fn().mockResolvedValue({
         docSearch: true,
         daintreeControl: true,
-        tier: "action" as const,
+        tier: "core" as const,
         bypassPermissions: true,
         auditRetention: 7,
         customArgs: "",
@@ -611,7 +616,7 @@ describe("DaintreeAssistantSettingsTab", () => {
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Capability tier");
+    await waitForContent(container, "Tool set");
 
     expect(screen.queryByRole("switch", { name: /bypass|auto-approve/i })).toBeNull();
     expect(container.textContent).not.toContain("unless an automation grant covers them");
@@ -659,7 +664,7 @@ describe("DaintreeAssistantSettingsTab", () => {
         getSettings: vi.fn().mockResolvedValue({
           docSearch: true,
           daintreeControl: true,
-          tier: "action" as const,
+          tier: "core" as const,
           bypassPermissions: false,
           auditRetention: 7,
           modelId,
@@ -686,7 +691,7 @@ describe("DaintreeAssistantSettingsTab", () => {
         getSettings: vi.fn().mockResolvedValue({
           docSearch: true,
           daintreeControl: true,
-          tier: "action" as const,
+          tier: "core" as const,
           bypassPermissions: false,
           auditRetention: 7,
           modelId: null,
@@ -731,37 +736,67 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
-  it("changing the capability tier persists tier=system", async () => {
+  it("changing the tool set persists tier=full", async () => {
     const { container } = render(
       <SettingsValidationProvider>
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Capability tier");
+    await waitForContent(container, "Tool set");
 
-    fireEvent.click(screen.getByRole("radio", { name: /^System/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /^Full/ }));
 
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
-        tier: "system",
+        tier: "full",
       });
     });
   });
 
-  it("keeps one sentence of tier consequence visible and the full account behind the disclosure", async () => {
+  it("keeps one sentence of tool-set consequence visible and the full account behind the disclosure", async () => {
     const { container } = render(
       <SettingsValidationProvider>
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Capability tier");
+    await waitForContent(container, "Tool set");
 
-    expect(container.textContent).toContain("Full in-app orchestration");
-    expect(container.textContent).not.toContain("Most assistance tasks need this");
+    expect(container.textContent).toContain(
+      "Create worktrees, launch and prompt agents, and move, rename or close terminals"
+    );
+    expect(container.textContent).not.toContain("This covers most orchestration");
 
-    fireEvent.click(screen.getByRole("button", { name: /what this tier allows/i }));
+    fireEvent.click(screen.getByRole("button", { name: /what this tool set allows/i }));
 
-    expect(container.textContent).toContain("Most assistance tasks need this");
+    expect(container.textContent).toContain("This covers most orchestration");
+  });
+
+  // The disclosure header is the only place the size of each set is stated, and
+  // `full` is additive — its count has to be the cumulative one with the delta
+  // over core beside it, not the addon count alone.
+  it("counts the previewed tool set's actions and, for full, how many it adds over core", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Tool set");
+
+    const disclosure = screen.getByRole("button", { name: /what this tool set allows/i });
+    expect(disclosure.textContent).toContain(
+      `What this tool set allows · ${HELP_TIER_CUMULATIVE.core.length} actions`
+    );
+    expect(disclosure.textContent).not.toContain("more than core");
+
+    fireEvent.click(screen.getByRole("radio", { name: /^Full/ }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /what this tool set allows/i }).textContent
+      ).toContain(
+        `What this tool set allows · ${HELP_TIER_CUMULATIVE.full.length} actions (${HELP_TIER_INCREMENTAL.full.length} more than core)`
+      );
+    });
   });
 
   it("rotate key opens confirm dialog; confirming calls mcpServer.rotateApiKey", async () => {
@@ -1028,7 +1063,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       getSettings: vi.fn().mockResolvedValue({
         docSearch: true,
         daintreeControl: false,
-        tier: "action" as const,
+        tier: "core" as const,
         bypassPermissions: false,
         auditRetention: 7,
         customArgs: "",
@@ -1133,7 +1168,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     const loaded = {
       docSearch: false,
       daintreeControl: true,
-      tier: "action" as const,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
       customArgs: "",
@@ -1173,7 +1208,7 @@ describe("DaintreeAssistantSettingsTab", () => {
         getSettings: vi.fn().mockResolvedValue({
           docSearch: false,
           daintreeControl: true,
-          tier: "action" as const,
+          tier: "core" as const,
           bypassPermissions: false,
           auditRetention: 7,
         }),
@@ -1227,7 +1262,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       alert.compareDocumentPosition(behaviorSwitch) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
     expect(
-      alert.compareDocumentPosition(screen.getByLabelText("Capability tier")) &
+      alert.compareDocumentPosition(screen.getByLabelText("Tool set")) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
 
@@ -1279,7 +1314,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       getSettings: vi.fn().mockResolvedValue({
         docSearch: true,
         daintreeControl: true,
-        tier: "action" as const,
+        tier: "core" as const,
         bypassPermissions: true,
         auditRetention: 7,
         modelId: "",
@@ -1695,7 +1730,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       getSettings: vi.fn().mockResolvedValue({
         docSearch: true,
         daintreeControl: true,
-        tier: "action" as const,
+        tier: "core" as const,
         bypassPermissions: false,
         auditRetention: 7,
         customArgs: "--model sonnet",
@@ -1736,7 +1771,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       getSettings: vi.fn().mockResolvedValue({
         docSearch: true,
         daintreeControl: true,
-        tier: "action" as const,
+        tier: "core" as const,
         bypassPermissions: false,
         auditRetention: 7,
         customArgs: "--model sonnet",
@@ -1779,7 +1814,7 @@ describe("SessionLiveStatusCard (live help session)", () => {
     helpPanelState.sessionId = null;
   });
 
-  const settingsWithTier = (tier: "workbench" | "action" | "system") => ({
+  const settingsWithTier = (tier: HelpAssistantTier) => ({
     docSearch: true,
     daintreeControl: true,
     tier,
@@ -1789,13 +1824,13 @@ describe("SessionLiveStatusCard (live help session)", () => {
     idleHibernateMinutes: 30 as const,
   });
 
-  it("reports the live tier as elevated above the configured default", async () => {
+  it("reports the live tool set as elevated above the configured default", async () => {
     installApi(
       {
-        getSettings: vi.fn().mockResolvedValue(settingsWithTier("action")),
+        getSettings: vi.fn().mockResolvedValue(settingsWithTier("core")),
         getLiveSessionStatus: vi
           .fn()
-          .mockResolvedValue({ connected: true, tier: "system", activeGrants: [] }),
+          .mockResolvedValue({ connected: true, tier: "full", activeGrants: [] }),
       },
       {}
     );
@@ -1806,16 +1841,17 @@ describe("SessionLiveStatusCard (live help session)", () => {
     );
 
     await waitFor(() => expect(container.textContent).toContain("Live session"), { timeout: 5000 });
-    expect(container.textContent).toContain("elevated above the configured action default");
+    expect(container.textContent).toContain("Running the full tool set");
+    expect(container.textContent).toContain("elevated above the configured core default");
   });
 
-  it("reports a live tier below the configured default without claiming a match", async () => {
+  it("reports a live tool set below the configured default without claiming a match", async () => {
     installApi(
       {
-        getSettings: vi.fn().mockResolvedValue(settingsWithTier("system")),
+        getSettings: vi.fn().mockResolvedValue(settingsWithTier("full")),
         getLiveSessionStatus: vi
           .fn()
-          .mockResolvedValue({ connected: true, tier: "action", activeGrants: [] }),
+          .mockResolvedValue({ connected: true, tier: "core", activeGrants: [] }),
       },
       {}
     );
@@ -1826,20 +1862,21 @@ describe("SessionLiveStatusCard (live help session)", () => {
     );
 
     await waitFor(() => expect(container.textContent).toContain("Live session"), { timeout: 5000 });
-    expect(container.textContent).toContain("below the configured system default");
+    expect(container.textContent).toContain("Running the core tool set");
+    expect(container.textContent).toContain("below the configured full default");
     expect(container.textContent).not.toContain("matches the configured default");
   });
 
-  // The equality branch is the one a default (action-tier) assistant session
-  // lands on now that agent identity no longer forces `system` (#11907). The
+  // The equality branch is the one a default (core) assistant session lands on
+  // now that agent identity no longer forces the largest set (#11907). The
   // copy was previously unasserted — only the two drift directions were.
-  it("reports a live tier equal to the configured default as a match", async () => {
+  it("reports a live tool set equal to the configured default as a match", async () => {
     installApi(
       {
-        getSettings: vi.fn().mockResolvedValue(settingsWithTier("action")),
+        getSettings: vi.fn().mockResolvedValue(settingsWithTier("core")),
         getLiveSessionStatus: vi
           .fn()
-          .mockResolvedValue({ connected: true, tier: "action", activeGrants: [] }),
+          .mockResolvedValue({ connected: true, tier: "core", activeGrants: [] }),
       },
       {}
     );
@@ -1858,9 +1895,9 @@ describe("SessionLiveStatusCard (live help session)", () => {
   it("passes the public help-session id to the live-status bridge call", async () => {
     const getLiveSessionStatus = vi
       .fn()
-      .mockResolvedValue({ connected: true, tier: "action", activeGrants: [] });
+      .mockResolvedValue({ connected: true, tier: "core", activeGrants: [] });
     installApi(
-      { getSettings: vi.fn().mockResolvedValue(settingsWithTier("action")), getLiveSessionStatus },
+      { getSettings: vi.fn().mockResolvedValue(settingsWithTier("core")), getLiveSessionStatus },
       {}
     );
     render(

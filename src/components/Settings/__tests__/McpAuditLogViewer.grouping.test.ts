@@ -24,7 +24,7 @@ function makeAudit(overrides: Partial<McpAuditRecord>): McpAuditRecord {
     timestamp: overrides.timestamp ?? 0,
     toolId: overrides.toolId ?? "t",
     sessionId: overrides.sessionId ?? "s",
-    tier: overrides.tier ?? "action",
+    tier: overrides.tier ?? "core",
     argsSummary: overrides.argsSummary ?? "{}",
     result: overrides.result ?? "success",
     durationMs: overrides.durationMs ?? 0,

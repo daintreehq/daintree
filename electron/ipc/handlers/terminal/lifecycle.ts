@@ -503,8 +503,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // the per-pane MCP config injection (the help session owns its own) and let
     // Claude's normal cwd discovery do the rest. The CLI bypass flag is
     // gated on the session's snapshotted `bypassPermissions` (independent
-    // of `tier`), so an `action`-tier session can still skip permission
-    // prompts and a `system`-tier session can still respect them.
+    // of `tier`), so a `core` session can still skip permission prompts and a
+    // `full` session can still respect them.
     //
     // The Daintree Assistant is the exception to the session-dir cwd: it is
     // env-only (MCP via DAINTREE_MCP_* env vars, reads no cwd config) so the

@@ -299,10 +299,7 @@ describe("extractOwnedResources", () => {
     expect(drafts).toEqual([{ kind: "terminal", id: "terminal-1" }]);
   });
 
-  it("attributes the plain shell and the issue agent a ladder-tier session opened (#12407)", () => {
-    expect(extractOwnedResources("agent.terminal", { terminalId: "terminal-1" })).toEqual([
-      { kind: "terminal", id: "terminal-1" },
-    ]);
+  it("attributes the issue agent a ladder-tier session opened, not its worktree (#12407)", () => {
     // The worktree the workflow created is deliberately not attributed.
     expect(
       extractOwnedResources("workflow.startWorkOnIssue", {
@@ -311,7 +308,12 @@ describe("extractOwnedResources", () => {
         spawnedTerminalCount: 2,
       })
     ).toEqual([{ kind: "terminal", id: "terminal-2" }]);
-    expect(extractOwnedResources("agent.terminal", { terminalId: null })).toEqual([]);
+    expect(
+      extractOwnedResources("workflow.startWorkOnIssue", {
+        worktreeId: "/tmp/wt",
+        terminalId: null,
+      })
+    ).toEqual([]);
   });
 
   it("attributes nothing for a failed agent launch", () => {
@@ -499,7 +501,6 @@ describe("ownership recording coverage", () => {
   const EXPECTED_RECORDING_TOOLS = [
     "terminal.new",
     "agent.launch",
-    "agent.terminal",
     "workflow.startWorkOnIssue",
     "recipe.run",
     "worktree.createWithRecipe",
@@ -517,7 +518,8 @@ describe("ownership recording coverage", () => {
     for (const id of EXPECTED_RECORDING_TOOLS) {
       expect(
         NON_RENDERER_OWNED_TIER_ALLOWLISTS.external.has(id) ||
-          NON_RENDERER_OWNED_TIER_ALLOWLISTS.system.has(id)
+          NON_RENDERER_OWNED_TIER_ALLOWLISTS.full.has(id),
+        `${id} is attributed but no non-assistant session can call it`
       ).toBe(true);
     }
   });

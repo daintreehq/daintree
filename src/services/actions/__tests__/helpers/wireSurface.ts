@@ -2,9 +2,9 @@ import { z } from "zod";
 import type { ActionId } from "@shared/types/actions";
 import type { ActionRegistry, ActionCallbacks } from "../../actionTypes";
 import {
-  WORKBENCH_TIER_TOOLS,
-  ACTION_TIER_ADDONS,
-  SYSTEM_TIER_ADDONS,
+  CORE_TIER_TOOLS,
+  FULL_TIER_ADDONS,
+  toNonRendererOwnedTools,
 } from "@shared/config/helpAssistantTierAllowlists";
 import { MCP_EXTERNAL_TIER_TOOLS } from "@shared/config/mcpExternalTierAllowlist";
 import { toWireSchema } from "@shared/utils/mcpWireSchema";
@@ -143,15 +143,18 @@ const bytes = (value: unknown): number =>
  * Every tool reachable at any MCP tier, measured as the wire view.
  *
  * The cohort is derived from the live allowlists rather than restated, so a tool
- * added to a tier is held to these budgets the moment it is exposed.
+ * added to a tier is held to these budgets the moment it is exposed. The owned
+ * twins are named by no tool set — an agent pane is served them in place of the
+ * unscoped ids — so they come in through the same projection production uses,
+ * or a pane's surface would go unmeasured.
  */
 export async function measureWireSurface(): Promise<WireTool[]> {
   const registry = await createActionRegistry();
   const external = new Set<string>(MCP_EXTERNAL_TIER_TOOLS);
+  const inApp = [...CORE_TIER_TOOLS, ...FULL_TIER_ADDONS];
   const cohort = new Set<string>([
-    ...WORKBENCH_TIER_TOOLS,
-    ...ACTION_TIER_ADDONS,
-    ...SYSTEM_TIER_ADDONS,
+    ...inApp,
+    ...toNonRendererOwnedTools(inApp),
     ...MCP_EXTERNAL_TIER_TOOLS,
   ]);
 

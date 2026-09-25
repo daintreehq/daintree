@@ -966,12 +966,12 @@ describe("DiagnosticsCollector adversarial", () => {
     function append(
       audit: AuditServiceInstance,
       toolId: string,
-      opts: { tier?: "action" | "external"; failed?: boolean } = {}
+      opts: { tier?: "core" | "external"; failed?: boolean } = {}
     ) {
       audit.appendRecord({
         toolId,
         sessionId: "SESSION_SENTINEL",
-        tier: opts.tier ?? "action",
+        tier: opts.tier ?? "core",
         args: { prompt: "ARGS_SENTINEL" },
         durationMs: 10,
         outcome: opts.failed

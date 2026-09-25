@@ -34,8 +34,8 @@ export interface McpSurfaceTool {
   /**
    * The lowest tier on the CALLER'S OWN ladder that permits this tool. Always
    * `external` for an external caller, since that allowlist is flat. For an
-   * in-app caller this is the minimum of workbench/action/system, so a `system`
-   * session can see which of its tools would survive a demotion.
+   * in-app caller this is the minimum of core/full, so a `full` session can
+   * see which of its tools would survive a demotion.
    */
   tier: McpSurfaceTier;
   kind: ActionKind;
@@ -89,7 +89,7 @@ export interface McpSurfaceManifest {
   tools: McpSurfaceTool[];
 }
 
-const TIER_VALUES = ["workbench", "action", "system", "external"] as const;
+const TIER_VALUES = ["core", "full", "external"] as const;
 
 /**
  * Published as the `mcp.surface` tool's `outputSchema`. A plain top-level

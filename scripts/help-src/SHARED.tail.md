@@ -23,9 +23,9 @@
 
 1. Search existing issues to avoid a duplicate, and check the request passes the guidelines; if it wouldn't be accepted, explain why and stop.
 2. Draft the title and body in the guidelines' format, show the user the full draft with labels and target repository, and get explicit approval of that exact text.
-3. Hand the approved draft to the user to file at `https://github.com/daintreehq/daintree/issues/new`, unless you can file it directly.
+3. Hand the approved draft to the user to file at `https://github.com/daintreehq/daintree/issues/new`.
 
-`forge.createIssue` takes no repository: it files against a worktree's repository, the active worktree unless you name another, which is usually the user's own project. Call it only when that worktree is a checkout of `daintreehq/daintree` and the user approved filing there. It is `system`-tier and confirm-gated. Never fall back to a forge CLI write (`gh issue create` and friends).
+No `daintree` tool files issues, and a forge CLI write (`gh issue create` and friends) is off limits, so the user always files it.
 
 ## When You Cannot Answer
 

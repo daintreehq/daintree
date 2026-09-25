@@ -47,7 +47,7 @@ type BearerTestHandle = {
     authHeader: string,
     userAgent: string,
     sessionId: string,
-    tier: "workbench" | "action" | "system" | "external"
+    tier: "core" | "full" | "external"
   ) => void;
   detachBearerSession: (sessionId: string) => void;
 };
@@ -134,7 +134,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
         return bound !== undefined && bound === digest;
       },
       drain: vi.fn(),
-      getTier: vi.fn(() => "workbench" as const),
+      getTier: vi.fn(() => "core" as const),
       createIdleTimer: vi.fn(() => setTimeout(() => {}, 1_000_000)),
       createHttpIdleTimer: vi.fn(() => setTimeout(() => {}, 1_000_000)),
       resetIdleTimer: vi.fn(),
@@ -397,30 +397,30 @@ describe("HttpLifecycle", () => {
 
     it("elevates a help-session tier and updates sessionTierMap", () => {
       const deps = fakeDeps();
-      deps.sessionStore.sessionTierMap.set("sess-1", "workbench");
+      deps.sessionStore.sessionTierMap.set("sess-1", "core");
       pinnedSession(deps, "sess-1", 42);
 
       const lc = new HttpLifecycle(deps);
-      const result = lc.setSessionTier("sess-1", "system");
+      const result = lc.setSessionTier("sess-1", "full");
 
-      expect(result).toEqual({ sessionId: "sess-1", tier: "system" });
-      expect(deps.sessionStore.sessionTierMap.get("sess-1")).toBe("system");
+      expect(result).toEqual({ sessionId: "sess-1", tier: "full" });
+      expect(deps.sessionStore.sessionTierMap.get("sess-1")).toBe("full");
       // The elevation must arm the decay timer with the pre-elevation tier
       // as the baseline (#8462) — otherwise the elevation is unbounded.
       expect(deps.sessionStore.armTierElevationTimer).toHaveBeenCalledWith(
         "sess-1",
-        "system",
-        "workbench"
+        "full",
+        "core"
       );
     });
 
     it("writes a tier.elevated audit record with from/to tier and the bounded window (#9151)", () => {
       const deps = fakeDeps();
-      deps.sessionStore.sessionTierMap.set("sess-aud", "workbench");
+      deps.sessionStore.sessionTierMap.set("sess-aud", "core");
       pinnedSession(deps, "sess-aud", 42);
 
       const lc = new HttpLifecycle(deps);
-      lc.setSessionTier("sess-aud", "action");
+      lc.setSessionTier("sess-aud", "full");
 
       expect(deps.auditService.appendGrantRecord).toHaveBeenCalledTimes(1);
       const record = (deps.auditService.appendGrantRecord as ReturnType<typeof vi.fn>).mock
@@ -429,8 +429,8 @@ describe("HttpLifecycle", () => {
         type: "tier.elevated",
         sessionId: "sess-aud",
         toolId: "*",
-        tier: "action",
-        previousTier: "workbench",
+        tier: "full",
+        previousTier: "core",
       });
       expect(record.ttlMs).toBeGreaterThan(0);
       expect(record.expiresAt).toBeGreaterThan(0);
@@ -438,28 +438,28 @@ describe("HttpLifecycle", () => {
 
     it("does not audit a same-tier re-elevation (no actual privilege change, #9151)", () => {
       const deps = fakeDeps();
-      deps.sessionStore.sessionTierMap.set("sess-same", "action");
+      deps.sessionStore.sessionTierMap.set("sess-same", "full");
       pinnedSession(deps, "sess-same", 42);
 
       const lc = new HttpLifecycle(deps);
-      const result = lc.setSessionTier("sess-same", "action");
+      const result = lc.setSessionTier("sess-same", "full");
 
-      expect(result.tier).toBe("action");
+      expect(result.tier).toBe("full");
       // Same tier in → nothing elevated → no audit row (would be a misleading
-      // action→action entry).
+      // full→full entry).
       expect(deps.auditService.appendGrantRecord).not.toHaveBeenCalled();
     });
 
     it("refuses downgrades silently and keeps current tier without auditing", () => {
       const deps = fakeDeps();
-      deps.sessionStore.sessionTierMap.set("sess-2", "system");
+      deps.sessionStore.sessionTierMap.set("sess-2", "full");
       pinnedSession(deps, "sess-2", 42);
 
       const lc = new HttpLifecycle(deps);
-      const result = lc.setSessionTier("sess-2", "workbench");
+      const result = lc.setSessionTier("sess-2", "core");
 
-      expect(result.tier).toBe("system");
-      expect(deps.sessionStore.sessionTierMap.get("sess-2")).toBe("system");
+      expect(result.tier).toBe("full");
+      expect(deps.sessionStore.sessionTierMap.get("sess-2")).toBe("full");
       // No mutation, no audit row — only accepted elevations are logged.
       expect(deps.auditService.appendGrantRecord).not.toHaveBeenCalled();
     });
@@ -467,38 +467,38 @@ describe("HttpLifecycle", () => {
     it("throws for unknown sessions", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
-      expect(() => lc.setSessionTier("nonexistent", "system")).toThrow(/Unknown session/);
+      expect(() => lc.setSessionTier("nonexistent", "full")).toThrow(/Unknown session/);
     });
 
     it("throws when caller WebContents id doesn't match the pinned id", () => {
       const deps = fakeDeps();
-      deps.sessionStore.sessionTierMap.set("sess-pin", "workbench");
+      deps.sessionStore.sessionTierMap.set("sess-pin", "core");
       pinnedSession(deps, "sess-pin", 42);
 
       const lc = new HttpLifecycle(deps);
-      expect(() => lc.setSessionTier("sess-pin", "system", 99)).toThrow(/not the pinned renderer/);
+      expect(() => lc.setSessionTier("sess-pin", "full", 99)).toThrow(/not the pinned renderer/);
       // Tier must remain unchanged on rejection.
-      expect(deps.sessionStore.sessionTierMap.get("sess-pin")).toBe("workbench");
+      expect(deps.sessionStore.sessionTierMap.get("sess-pin")).toBe("core");
     });
 
     it("accepts caller WebContents id when it matches the pinned id", () => {
       const deps = fakeDeps();
-      deps.sessionStore.sessionTierMap.set("sess-ok", "workbench");
+      deps.sessionStore.sessionTierMap.set("sess-ok", "core");
       pinnedSession(deps, "sess-ok", 42);
 
       const lc = new HttpLifecycle(deps);
-      const result = lc.setSessionTier("sess-ok", "action", 42);
-      expect(result.tier).toBe("action");
+      const result = lc.setSessionTier("sess-ok", "full", 42);
+      expect(result.tier).toBe("full");
     });
 
     it("throws when the session's transport has already closed (idle/torn down)", () => {
       const deps = fakeDeps();
-      deps.sessionStore.sessionTierMap.set("sess-dead", "workbench");
+      deps.sessionStore.sessionTierMap.set("sess-dead", "core");
       deps.sessionStore.sessionWebContentsMap.set("sess-dead", 42);
       // Don't add to sessions/httpSessions — transport is dead.
 
       const lc = new HttpLifecycle(deps);
-      expect(() => lc.setSessionTier("sess-dead", "system")).toThrow(/no longer active/);
+      expect(() => lc.setSessionTier("sess-dead", "full")).toThrow(/no longer active/);
     });
 
     it("throws for sessions without a pinned WebContents (api-key/external)", () => {
@@ -511,24 +511,41 @@ describe("HttpLifecycle", () => {
       // No sessionWebContentsMap entry — this is an api-key session.
 
       const lc = new HttpLifecycle(deps);
-      expect(() => lc.setSessionTier("ext-1", "system")).toThrow(
+      expect(() => lc.setSessionTier("ext-1", "full")).toThrow(
         /not eligible for renderer tier elevation/
       );
     });
 
     it("throws for invalid tier values", () => {
       const deps = fakeDeps();
-      deps.sessionStore.sessionTierMap.set("sess-3", "workbench");
+      deps.sessionStore.sessionTierMap.set("sess-3", "core");
       pinnedSession(deps, "sess-3", 42);
 
       const lc = new HttpLifecycle(deps);
       expect(() => lc.setSessionTier("sess-3", "external" as never)).toThrow(/Invalid tier/);
+      expect(deps.sessionStore.sessionTierMap.get("sess-3")).toBe("core");
+    });
+
+    it("rejects the pre-split ladder names rather than normalizing a write", () => {
+      // Legacy names are mapped only where stored settings are read. A live
+      // elevation request carrying one comes from a stale renderer, and
+      // guessing its rung would let it pick up `full` by asking for `system`.
+      const deps = fakeDeps();
+      deps.sessionStore.sessionTierMap.set("sess-legacy", "core");
+      pinnedSession(deps, "sess-legacy", 42);
+
+      const lc = new HttpLifecycle(deps);
+      for (const legacy of ["workbench", "action", "system"]) {
+        expect(() => lc.setSessionTier("sess-legacy", legacy as never, 42)).toThrow(/Invalid tier/);
+      }
+      expect(deps.sessionStore.sessionTierMap.get("sess-legacy")).toBe("core");
+      expect(deps.sessionStore.armTierElevationTimer).not.toHaveBeenCalled();
     });
 
     it("throws for blank session ids", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
-      expect(() => lc.setSessionTier("", "system")).toThrow(/Invalid sessionId/);
+      expect(() => lc.setSessionTier("", "full")).toThrow(/Invalid sessionId/);
     });
   });
 
@@ -614,17 +631,21 @@ describe("HttpLifecycle", () => {
       grantCacheOf(deps).issueGrant.mockReturnValue({ ttlMs: 900_000, expiresAt: 1_000_000 });
       const lc = new HttpLifecycle(deps);
 
-      // Ground truth: git.commit is genuinely reachable at the system tier, so
-      // the rejections below are a real boundary rather than an unknown string.
-      expect(minimumPermittingTier("git.commit")).not.toBeNull();
-      expect(lc.issueGrant("sess-1", "git.commit", 42).toolId).toBe("git.commit");
-      expect(grantCacheOf(deps).issueGrant).toHaveBeenCalledWith("sess-1", "git.commit");
+      // Ground truth: project.runCheck is genuinely reachable in the full tool
+      // set, so the rejections below are a real boundary rather than an
+      // unknown string.
+      expect(minimumPermittingTier("project.runCheck")).not.toBeNull();
+      expect(lc.issueGrant("sess-1", "project.runCheck", 42).toolId).toBe("project.runCheck");
+      expect(grantCacheOf(deps).issueGrant).toHaveBeenCalledWith("sess-1", "project.runCheck");
     });
 
     it.each([
       // In no tier allowlist at all — the case the new hidden marking documents.
       "actions.persistedStores",
       "totally.notatool",
+      // A real tool that left MCP with the core/full split: a grant must not be
+      // a way back onto the surface for it.
+      "git.commit",
     ])("refuses to grant %s", (toolId) => {
       const deps = pinnedDeps();
       const lc = new HttpLifecycle(deps);
@@ -664,12 +685,12 @@ describe("HttpLifecycle", () => {
     it("resolves the transport session and mints a grant for valid input", () => {
       const deps = fakeDeps();
       resolverOf(deps).mockReturnValue("transport-1");
-      grantCacheOf(deps).issueNativeGrant.mockReturnValue(mintEntry(["git.commit"], 5));
+      grantCacheOf(deps).issueNativeGrant.mockReturnValue(mintEntry(["project.runCheck"], 5));
       const lc = new HttpLifecycle(deps);
 
       const result = lc.issueNativeGrant(
         "help-1",
-        { allowedTools: ["git.commit"], maxUses: 5 },
+        { allowedTools: ["project.runCheck"], maxUses: 5 },
         42
       );
 
@@ -679,7 +700,7 @@ describe("HttpLifecycle", () => {
           sessionId: "transport-1",
           actorId: "help-1",
           actorType: "help-session",
-          allowedTools: ["git.commit"],
+          allowedTools: ["project.runCheck"],
           maxUses: 5,
         })
       );
@@ -689,7 +710,7 @@ describe("HttpLifecycle", () => {
     it("requires a caller WebContents id (fails closed)", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
-      expect(() => lc.issueNativeGrant("help-1", { allowedTools: ["git.commit"] })).toThrow(
+      expect(() => lc.issueNativeGrant("help-1", { allowedTools: ["project.runCheck"] })).toThrow(
         /Caller WebContents id is required/
       );
     });
@@ -698,9 +719,9 @@ describe("HttpLifecycle", () => {
       const deps = fakeDeps();
       resolverOf(deps).mockReturnValue(null);
       const lc = new HttpLifecycle(deps);
-      expect(() => lc.issueNativeGrant("help-gone", { allowedTools: ["git.commit"] }, 42)).toThrow(
-        /No live pinned session/
-      );
+      expect(() =>
+        lc.issueNativeGrant("help-gone", { allowedTools: ["project.runCheck"] }, 42)
+      ).toThrow(/No live pinned session/);
     });
 
     it("rejects an empty tool allowlist", () => {
@@ -727,16 +748,29 @@ describe("HttpLifecycle", () => {
       const deps = fakeDeps();
       resolverOf(deps).mockReturnValue("transport-1");
       const lc = new HttpLifecycle(deps);
-      for (const toolId of ["terminal.killAll", "terminal.closeAll"]) {
-        // Both are real, tier-reachable tools — so it is the fan-out policy
-        // refusing them here, not the unknown-tool check above.
-        expect(minimumPermittingTier(toolId)).not.toBe(null);
-        // Names the offender AND the reason: `/cannot cover/` alone would also
-        // pass if the tool had merely fallen out of every tier allowlist.
-        expect(() => lc.issueNativeGrant("help-1", { allowedTools: [toolId] }, 42)).toThrow(
-          new RegExp(`cannot cover ${toolId.replaceAll(".", "\\.")}\\b.*every target it finds`)
-        );
-      }
+      const toolId = "terminal.closeAll";
+      // A real, tier-reachable tool — so it is the fan-out policy refusing it
+      // here, not the unknown-tool check above.
+      expect(minimumPermittingTier(toolId)).not.toBe(null);
+      // Names the offender AND the reason: `/cannot cover/` alone would also
+      // pass if the tool had merely fallen out of every tier allowlist.
+      expect(() => lc.issueNativeGrant("help-1", { allowedTools: [toolId] }, 42)).toThrow(
+        /cannot cover terminal\.closeAll\b.*every target it finds/
+      );
+      expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
+    });
+
+    it("refuses a fan-out tool that left MCP as non-grantable before weighing its fan-out", () => {
+      // `terminal.killAll` is on neither tool set since the core/full split, so
+      // the grant fails on the tool itself — a grant never names a tool the
+      // session could not otherwise reach, whatever its use policy.
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      const lc = new HttpLifecycle(deps);
+      expect(minimumPermittingTier("terminal.killAll")).toBeNull();
+      expect(() =>
+        lc.issueNativeGrant("help-1", { allowedTools: ["terminal.killAll"] }, 42)
+      ).toThrow(/non-grantable tool\(s\): terminal\.killAll$/);
       expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
     });
 
@@ -745,17 +779,17 @@ describe("HttpLifecycle", () => {
       resolverOf(deps).mockReturnValue("transport-1");
       const lc = new HttpLifecycle(deps);
       // The minted scope must be exactly the scope the user approved: dropping
-      // the offenders would hand back a grant card that reads as approved-in-full.
-      // Two of them, so this also pins the plural branch of the message — with
-      // one offender the singular wording passes either way.
+      // the offender would hand back a grant card that reads as approved-in-full.
+      // `terminal.closeAll` is the only fan-out tool left on either tool set,
+      // so the offender list has one entry and the message is singular.
       const attempt = () =>
         lc.issueNativeGrant(
           "help-1",
-          { allowedTools: ["git.commit", "terminal.killAll", "terminal.closeAll"] },
+          { allowedTools: ["project.runCheck", "terminal.closeAll"] },
           42
         );
-      expect(attempt).toThrow(/cannot cover terminal\.killAll, terminal\.closeAll\b/);
-      expect(attempt).toThrow(/Remove them\b/);
+      expect(attempt).toThrow(/cannot cover terminal\.closeAll:/);
+      expect(attempt).toThrow(/Remove it\b/);
       expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
     });
 
@@ -764,17 +798,17 @@ describe("HttpLifecycle", () => {
       resolverOf(deps).mockReturnValue("transport-1");
       const lc = new HttpLifecycle(deps);
       expect(() =>
-        lc.issueNativeGrant("help-1", { allowedTools: ["git.commit"], maxUses: 0 }, 42)
+        lc.issueNativeGrant("help-1", { allowedTools: ["project.runCheck"], maxUses: 0 }, 42)
       ).toThrow(/maxUses/);
       expect(() =>
-        lc.issueNativeGrant("help-1", { allowedTools: ["git.commit"], maxUses: 9999 }, 42)
+        lc.issueNativeGrant("help-1", { allowedTools: ["project.runCheck"], maxUses: 9999 }, 42)
       ).toThrow(/maxUses/);
     });
 
     it("revokeNativeGrant enforces caller-pin against the grant's session", () => {
       const deps = fakeDeps();
       deps.sessionStore.sessionWebContentsMap.set("transport-1", 42);
-      grantCacheOf(deps).getNativeGrant.mockReturnValue(mintEntry(["git.commit"], 5));
+      grantCacheOf(deps).getNativeGrant.mockReturnValue(mintEntry(["project.runCheck"], 5));
       const lc = new HttpLifecycle(deps);
       expect(() => lc.revokeNativeGrant("grant-uuid", 99)).toThrow(/not the pinned renderer/);
       expect(grantCacheOf(deps).revokeNativeGrant).not.toHaveBeenCalled();
@@ -794,7 +828,7 @@ describe("HttpLifecycle", () => {
     it("revokeNativeGrant drops the grant when the caller is the pinned renderer", () => {
       const deps = fakeDeps();
       deps.sessionStore.sessionWebContentsMap.set("transport-1", 42);
-      grantCacheOf(deps).getNativeGrant.mockReturnValue(mintEntry(["git.commit"], 5));
+      grantCacheOf(deps).getNativeGrant.mockReturnValue(mintEntry(["project.runCheck"], 5));
       grantCacheOf(deps).revokeNativeGrant.mockReturnValue(true);
       const lc = new HttpLifecycle(deps);
       expect(lc.revokeNativeGrant("grant-uuid", 42)).toEqual({
@@ -906,9 +940,9 @@ describe("HttpLifecycle", () => {
       const deps_ = buildDeps(lc, "session-1");
       (deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<typeof vi.fn>).mockClear();
       deps_.appendAuditRecord({
-        toolId: "agent.terminal",
+        toolId: "agent.launch",
         sessionId: "session-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 5,
         startedAt: 1_767_225_600_000,
@@ -942,9 +976,9 @@ describe("HttpLifecycle", () => {
       const deps_ = buildDeps(lc, "session-1");
       const startedAt = 1_767_225_600_123;
       deps_.appendAuditRecord({
-        toolId: "agent.terminal",
+        toolId: "agent.launch",
         sessionId: "session-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 5,
         startedAt,
@@ -962,9 +996,9 @@ describe("HttpLifecycle", () => {
       const lc = new HttpLifecycle(deps);
       const deps_ = buildDeps(lc, "session-1");
       deps_.appendAuditRecord({
-        toolId: "agent.terminal",
+        toolId: "agent.launch",
         sessionId: "session-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 5,
         startedAt: 1_767_225_600_000,
@@ -985,9 +1019,9 @@ describe("HttpLifecycle", () => {
       expect(deps_.getCurrentTurnId?.()).toBeNull();
       expect(deps.turnOutcomeService.getCurrentTurnIdForSession).not.toHaveBeenCalled();
       deps_.appendAuditRecord({
-        toolId: "agent.terminal",
+        toolId: "agent.launch",
         sessionId: "session-external",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 5,
         startedAt: 1_767_225_600_000,
@@ -1019,9 +1053,9 @@ describe("HttpLifecycle", () => {
       liveTurn.mockReturnValue(null);
 
       deps_.appendAuditRecord({
-        toolId: "agent.terminal",
+        toolId: "agent.launch",
         sessionId: "session-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 5,
         startedAt: 1_767_225_600_000,
@@ -1049,9 +1083,9 @@ describe("HttpLifecycle", () => {
         }
       ).buildSessionServerDeps("session-rl");
       deps_.appendAuditRecord({
-        toolId: "agent.terminal",
+        toolId: "agent.launch",
         sessionId: "session-rl",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 0,
         outcome: { kind: "rate_limited", retryAfter: 5 },
@@ -1076,9 +1110,9 @@ describe("HttpLifecycle", () => {
       ).buildSessionServerDeps("session-gate");
       for (const outcome of [{ kind: "unauthorized" }, { kind: "dedup" }, { kind: "collision" }]) {
         deps_.appendAuditRecord({
-          toolId: "agent.terminal",
+          toolId: "agent.launch",
           sessionId: "session-gate",
-          tier: "action",
+          tier: "core",
           args: {},
           durationMs: 0,
           outcome,
@@ -1103,9 +1137,9 @@ describe("HttpLifecycle", () => {
         }
       ).buildSessionServerDeps("session-ok");
       deps_.appendAuditRecord({
-        toolId: "agent.terminal",
+        toolId: "agent.launch",
         sessionId: "session-ok",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 5,
         outcome: { kind: "result", value: { ok: true, result: null } },
@@ -1231,8 +1265,8 @@ describe("HttpLifecycle", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
       const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer(authA, "Help/1", "sess-help", "action");
-      handle.touchBearer(authB, "Pane/1", "sess-pane", "workbench");
+      handle.touchBearer(authA, "Help/1", "sess-help", "core");
+      handle.touchBearer(authB, "Pane/1", "sess-pane", "full");
       // Filtered out of the External-clients settings row...
       expect(lc.listActiveBearers()).toHaveLength(0);
       // ...but tracked in the register so eager teardown can find them.
@@ -1246,8 +1280,8 @@ describe("HttpLifecycle", () => {
     it("surfaces help-session bearers in listHelpSessionBearers with display fields only (#10036)", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer(authA, "Daintree Assistant/1", "sess-help-1", "action");
-      handle.touchBearer(authA, "Daintree Assistant/1", "sess-help-2", "action");
+      handle.touchBearer(authA, "Daintree Assistant/1", "sess-help-1", "core");
+      handle.touchBearer(authA, "Daintree Assistant/1", "sess-help-2", "core");
       handle.touchBearer("Bearer external-cccc", "Claude/1", "sess-ext", "external");
 
       const help = lc.listHelpSessionBearers();
@@ -1279,8 +1313,8 @@ describe("HttpLifecycle", () => {
       const handle = lc as unknown as BearerTestHandle;
       // In-panel agent (pane) tokens are non-external too — they belong in the
       // Internal connections row alongside the help-chat assistant.
-      handle.touchBearer(authA, "Help/1", "sess-help", "action");
-      handle.touchBearer(authB, "Pane/1", "sess-pane", "workbench");
+      handle.touchBearer(authA, "Help/1", "sess-help", "core");
+      handle.touchBearer(authB, "Pane/1", "sess-pane", "full");
       handle.touchBearer("Bearer external-cccc", "Claude/1", "sess-ext", "external");
 
       const help = lc.listHelpSessionBearers();
@@ -1292,7 +1326,7 @@ describe("HttpLifecycle", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
       const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer(authA, "Daintree Assistant/1", "sess-help", "action");
+      handle.touchBearer(authA, "Daintree Assistant/1", "sess-help", "core");
       expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(1);
       handle.detachBearerSession("sess-help");
       expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(2);
@@ -1303,7 +1337,7 @@ describe("HttpLifecycle", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const handle = lc as unknown as BearerTestHandle;
       // Raw tokens are the part after "Bearer ".
-      handle.touchBearer("Bearer help-token-xyz", "Help/1", "sess-help", "action");
+      handle.touchBearer("Bearer help-token-xyz", "Help/1", "sess-help", "core");
       handle.touchBearer("Bearer ext-token-abc", "Claude/1", "sess-ext", "external");
 
       expect(lc.findHelpBearerHash("help-token-xyz")).toBe(hashOf("Bearer help-token-xyz"));
@@ -1316,7 +1350,7 @@ describe("HttpLifecycle", () => {
     it("findHelpBearerHash returns null after the help session detaches (#9151)", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer("Bearer help-token-xyz", "Help/1", "sess-help", "action");
+      handle.touchBearer("Bearer help-token-xyz", "Help/1", "sess-help", "core");
       handle.detachBearerSession("sess-help");
       expect(lc.findHelpBearerHash("help-token-xyz")).toBeNull();
     });
@@ -1325,7 +1359,7 @@ describe("HttpLifecycle", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const handle = lc as unknown as BearerTestHandle;
       const auth = "Bearer help-token-xyz";
-      handle.touchBearer(auth, "Help/1", "sess-help", "action");
+      handle.touchBearer(auth, "Help/1", "sess-help", "core");
       lc.clearBearer(hashOf(auth));
       expect(lc.findHelpBearerHash("help-token-xyz")).toBeNull();
     });
@@ -1414,7 +1448,7 @@ describe("HttpLifecycle", () => {
     it("returns null for help-session bearers — the assistant's own panel stays provenance-free", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const handle = lc as unknown as BearerInfoHandle;
-      handle.touchBearer("Bearer help-token-9999", "Help/1", "sess-help", "action");
+      handle.touchBearer("Bearer help-token-9999", "Help/1", "sess-help", "core");
 
       expect(handle.getBearerInfoForSession("sess-help")).toBeNull();
     });
@@ -1810,7 +1844,7 @@ describe("HttpLifecycle", () => {
     function lifecycle(deps: HttpLifecycleDeps): { lc: HttpLifecycle; handle: RequestHandler } {
       const lc = new HttpLifecycle(deps);
       lc.setApiKey("test-api-key");
-      lc.setHelpTokenValidator((token) => (token === "elevated-tok" ? "system" : false));
+      lc.setHelpTokenValidator((token) => (token === "elevated-tok" ? "full" : false));
       (lc as unknown as { port: number }).port = 45454;
       const handle = (lc as unknown as { handleRequest: RequestHandler }).handleRequest.bind(lc);
       return { lc, handle };
@@ -1875,7 +1909,7 @@ describe("HttpLifecycle", () => {
         transport: { handleRequest },
         idleTimer: setTimeout(() => {}, 1_000_000),
       } as never);
-      deps.sessionStore.sessionTierMap.set(sessionId, "system");
+      deps.sessionStore.sessionTierMap.set(sessionId, "full");
       if (auth !== null) {
         deps.sessionStore.bindSessionCredential(sessionId, sessionCredentialDigest(auth));
       }
@@ -1913,7 +1947,7 @@ describe("HttpLifecycle", () => {
         expect(handlePostMessage).not.toHaveBeenCalled();
         expect(deps.sessionStore.resetIdleTimer).not.toHaveBeenCalled();
         expect(deps.sessionStore.sessions.has(sessionId)).toBe(true);
-        expect(deps.sessionStore.sessionTierMap.get(sessionId)).toBe("system");
+        expect(deps.sessionStore.sessionTierMap.get(sessionId)).toBe("full");
         expect(
           deps.sessionStore.isSessionCredential(sessionId, sessionCredentialDigest(ELEVATED_AUTH))
         ).toBe(true);
@@ -2035,7 +2069,7 @@ describe("HttpLifecycle", () => {
           expect(handleRequest).not.toHaveBeenCalled();
           expect(deps.sessionStore.resetHttpIdleTimer).not.toHaveBeenCalled();
           expect(deps.sessionStore.httpSessions.has("elevated")).toBe(true);
-          expect(deps.sessionStore.sessionTierMap.get("elevated")).toBe("system");
+          expect(deps.sessionStore.sessionTierMap.get("elevated")).toBe("full");
         }
       );
 
@@ -2782,7 +2816,7 @@ describe("HttpLifecycle", () => {
       ) {
         const lc = new HttpLifecycle(deps);
         lc.setApiKey("test-api-key");
-        lc.setHelpTokenValidator((token) => (token === PANE_TOKEN ? "action" : false));
+        lc.setHelpTokenValidator((token) => (token === PANE_TOKEN ? "core" : false));
         const paneResolver = vi.fn((token: string) => (token === PANE_TOKEN ? binding : null));
         lc.setPaneWorkspaceBindingResolver(paneResolver);
         (lc as unknown as { port: number }).port = 45454;
@@ -2846,7 +2880,7 @@ describe("HttpLifecycle", () => {
         // tier it was minted with, so nothing it may call has changed (#12407).
         expect(deps.sessionStore.getOrigin(sessionId)).toBe("external");
         expect(deps.sessionStore.isRendererOwnedOrigin(sessionId)).toBe(false);
-        expect(deps.sessionStore.sessionTierMap.get(sessionId)).toBe("action");
+        expect(deps.sessionStore.sessionTierMap.get(sessionId)).toBe("core");
         // Not a WebContents pin: that route dies with the view for good.
         expect(deps.sessionStore.sessionWebContentsMap.has(sessionId)).toBe(false);
       });
@@ -2897,11 +2931,11 @@ describe("HttpLifecycle", () => {
         const { sessionId, sessionDeps } = await openSseWithDeps(lc, deps, PANE_AUTH);
 
         deps.sessionStore.clearSessionBinding(sessionId);
-        await sessionDeps.dispatchAction("git.stageAll", {}, false);
+        await sessionDeps.dispatchAction("worktree.resource.provision", {}, false);
 
         expect(deps.dispatchActionForWorkspace).toHaveBeenCalledWith(
           WS_A,
-          "git.stageAll",
+          "worktree.resource.provision",
           {},
           false,
           "external",
@@ -2948,12 +2982,12 @@ describe("HttpLifecycle", () => {
         const { sessionDeps } = await openSseWithDeps(lc, deps, PANE_AUTH);
 
         expect(sessionDeps.requestApproval).toBeTypeOf("function");
-        await sessionDeps.requestApproval!("git.push", { remote: "origin" });
+        await sessionDeps.requestApproval!("project.runCheck", { runnerId: "test" });
 
         expect(deps.dispatchActionForWorkspace).toHaveBeenCalledWith(
           WS_A,
-          "git.push",
-          { remote: "origin" },
+          "project.runCheck",
+          { runnerId: "test" },
           false,
           "external",
           {
@@ -3068,7 +3102,7 @@ describe("HttpLifecycle", () => {
       ) {
         const lc = new HttpLifecycle(deps);
         lc.setApiKey("test-api-key");
-        lc.setHelpTokenValidator((token) => (token === PANE_TOKEN ? "action" : false));
+        lc.setHelpTokenValidator((token) => (token === PANE_TOKEN ? "core" : false));
         const resolver = vi.fn((token: string) => (token === PANE_TOKEN ? principal : null));
         lc.setPaneOwnershipPrincipalResolver(resolver);
         (lc as unknown as { port: number }).port = 45454;
@@ -3213,7 +3247,7 @@ describe("HttpLifecycle", () => {
         boundExternal(deps, "bound", 42);
         const lc = new HttpLifecycle(deps);
 
-        expect(() => lc.issueGrant("bound", "git.commit", 42)).toThrow(/not eligible/);
+        expect(() => lc.issueGrant("bound", "project.runCheck", 42)).toThrow(/not eligible/);
       });
 
       it("refuses setSessionTier for a bound external session", () => {
@@ -3221,7 +3255,7 @@ describe("HttpLifecycle", () => {
         boundExternal(deps, "bound", 42);
         const lc = new HttpLifecycle(deps);
 
-        expect(() => lc.setSessionTier("bound", "system", 42)).toThrow(/not eligible/);
+        expect(() => lc.setSessionTier("bound", "full", 42)).toThrow(/not eligible/);
         expect(deps.sessionStore.sessionTierMap.get("bound")).toBe("external");
       });
 
@@ -3247,9 +3281,9 @@ describe("HttpLifecycle", () => {
           } else {
             sessionDeps.notifyTierMismatch?.({
               sessionId: "bound",
-              toolId: "git.push",
+              toolId: "project.runCheck",
               tier: "external",
-              targetTier: "system",
+              targetTier: "full",
             });
           }
 
@@ -3304,9 +3338,9 @@ describe("HttpLifecycle", () => {
 
         sessionDepsFor(lc, "help").notifyTierMismatch?.({
           sessionId: "help",
-          toolId: "git.push",
-          tier: "workbench",
-          targetTier: "system",
+          toolId: "project.runCheck",
+          tier: "core",
+          targetTier: "full",
         });
 
         expect(wc.send).toHaveBeenCalledTimes(1);

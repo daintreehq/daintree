@@ -105,7 +105,7 @@ const VOICE_BASE = {
 const ASSISTANT_BASE = {
   docSearch: true,
   daintreeControl: true,
-  tier: "action",
+  tier: "core",
   bypassPermissions: false,
   auditRetention: 7,
   modelId: "",
@@ -264,7 +264,7 @@ const STATES: ShotState[] = [
     stubs: {
       [CH.assistantGet]: {
         ...ASSISTANT_BASE,
-        tier: "system",
+        tier: "full",
         bypassPermissions: true,
         customArgs: "--verbose",
         idleHibernateMinutes: 30,
@@ -276,7 +276,7 @@ const STATES: ShotState[] = [
     sweep: true,
   },
   {
-    // The tier's action inventory open.
+    // The tool set's action inventory open.
     slug: "a03-disclosures-open",
     tab: "assistant",
     preferredAgent: "claude",
@@ -286,7 +286,7 @@ const STATES: ShotState[] = [
       [CH.mcpStatus]: MCP_STATUS,
     },
     act: async (page) => {
-      await page.getByRole("button", { name: /What this tier allows/ }).click();
+      await page.getByRole("button", { name: /What this tool set allows/ }).click();
     },
   },
   {

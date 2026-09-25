@@ -15,6 +15,10 @@ import {
   hasAssistantMcpImplementation,
 } from "../../shared/config/agentRegistry.js";
 import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
+import {
+  DEFAULT_HELP_ASSISTANT_TIER,
+  normalizeHelpAssistantTier,
+} from "../../shared/config/helpAssistantTierAllowlists.js";
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
 import { ASSISTANT_SCRATCH_ENV_VAR, getScratchDirForSession } from "./AssistantScratchService.js";
@@ -83,19 +87,16 @@ const COPILOT_BEARER_PLACEHOLDER = "$DAINTREE_MCP_TOKEN";
 // might grow to ship.
 const TEMPLATE_HASH_FILE = ".template-hash";
 
-// `action` is the deliberate default tier for assistant sessions, including the
-// headless Daintree Assistant CLI (#10640): it covers orchestration, terminal
-// driving, branch setup, recipes, reads, and — since #12116 — the confirm-gated
-// worktree cleanup that follows them, while leaving git and forge writes above
-// the floor. What the promotion rests on is that admission and approval are
-// separate gates: a `danger: "confirm"` tool admitted here still goes to the
-// renderer for a native ConfirmDialog, so the tier hands the agent nothing it
-// could not have asked a human for. (An explicit native automation grant does
-// pre-authorise that modal, but issuing one is itself a user decision and was
-// never tier-gated.) What the tier permits vs. withholds is locked by the
-// policy guard in `mcp-server/__tests__/tierAuth.test.ts`; this constant
-// selects it as the provisioning default.
-const DEFAULT_TIER: HelpAssistantTier = "action";
+// `core` is the default tool set for assistant sessions: orchestration —
+// worktrees, agent launches, prompts, terminal reads and waits, moves and
+// closes — which is what the assistant is almost always asked to do, while
+// every other tool stays out of the per-turn tool list until the user picks
+// `full`. Admission and approval are separate gates: a `danger: "confirm"` tool
+// admitted here still goes to the renderer for a native ConfirmDialog. What
+// each set permits vs. withholds is locked by the policy guard in
+// `mcp-server/__tests__/tierAuth.test.ts`; this constant selects the
+// provisioning default.
+const DEFAULT_TIER: HelpAssistantTier = DEFAULT_HELP_ASSISTANT_TIER;
 const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
 const DEFAULT_BYPASS_PERMISSIONS = false;
@@ -141,10 +142,6 @@ const ORPHAN_SESSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 // the assistant launch hostage — past this bound the block is written without
 // the facts the reader would have supplied.
 const PROJECT_METADATA_READ_TIMEOUT_MS = 5000;
-
-function isHelpAssistantTier(value: unknown): value is HelpAssistantTier {
-  return value === "workbench" || value === "action" || value === "system";
-}
 
 interface ProvisionInput {
   projectId: string;
@@ -932,12 +929,11 @@ export class HelpSessionService {
   ): Promise<ProvisionResult | null> {
     const settings = this.readSettings();
     // Every help agent — the Daintree Assistant included — provisions at the
-    // tier the user configured. Agent identity never widens the MCP surface,
-    // which restores the #10640/#10647 safety model: `action` is the default
-    // floor, git and forge writes sit above it and need a human-approved scoped
-    // grant, and `workbench` / `system` stay explicit user choices. An identity
-    // override here would make the Settings tier selector lie about the surface
-    // it hands out (#11907). What each tier permits is locked in
+    // tool set the user configured. Agent identity never widens the MCP
+    // surface: `core` is the default, `full` is an explicit user choice, and
+    // anything outside `full` needs a human-approved scoped grant or is off MCP
+    // entirely. An identity override here would make the Settings selector lie
+    // about the surface it hands out (#11907). What each tier permits is locked in
     // `mcp-server/__tests__/tierAuth.test.ts`.
     const tier: HelpAssistantTier = settings.tier;
     const slot = input.slot ?? 0;
@@ -2114,13 +2110,9 @@ export class HelpSessionService {
     // lockstep so a session provisioned during the same boot as a renderer
     // settings load reads identical values from the store.
     const legacySkip = typeof stored.skipPermissions === "boolean" ? stored.skipPermissions : null;
-    const tier: HelpAssistantTier = isHelpAssistantTier(stored.tier)
-      ? stored.tier
-      : legacySkip !== null
-        ? legacySkip
-          ? "system"
-          : "action"
-        : DEFAULT_TIER;
+    const tier: HelpAssistantTier =
+      normalizeHelpAssistantTier(stored.tier) ??
+      (legacySkip !== null ? (legacySkip ? "full" : "core") : DEFAULT_TIER);
     const bypassPermissions =
       typeof stored.bypassPermissions === "boolean"
         ? stored.bypassPermissions

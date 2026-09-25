@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Image, Upload, Check, FolderInput, Copy, Palette, AlertTriangle } from "lucide-react";
+import { Image, Upload, Check, FolderInput, Copy, Palette } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RadioChoiceRow } from "@/components/ui/RadioChoice";
@@ -30,22 +30,16 @@ const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
     description: "No Daintree MCP access. Default for new projects.",
   },
   {
-    value: "workbench",
-    label: "Workbench",
+    value: "core",
+    label: "Core",
     description:
-      "Read-only: worktree status, terminal output, file search, project history. Anything more asks you first.",
+      "Create worktrees, launch agents, read, wait on and move terminals, and prompt or close the ones the agent opened. Deleting a worktree the agent created asks you first.",
   },
   {
-    value: "action",
-    label: "Action",
+    value: "full",
+    label: "Full",
     description:
-      "Workbench + create worktrees, open terminals and run commands in them. Destructive actions such as worktree deletes, and anything above this tier, ask you first. Over MCP, an agent can only type into terminals it opened.",
-  },
-  {
-    value: "system",
-    label: "System",
-    description:
-      "Action + git commits and pushes, forge and file writes, terminal arming, worktree creation anywhere on disk. Runs all of it, destructive actions included, without asking.",
+      "Core + recipes, workflows, project checks, forge and git reads, context tools, diagnostics and terminal watches. Deletes and teardowns ask you first.",
   },
 ];
 
@@ -700,11 +694,11 @@ export function GeneralTab({
       <SettingsSection
         id="project-agent-integrations"
         title="Agent integrations"
-        description="How much of Daintree the Claude Code agents launched in this project's worktrees can do without asking you. Anything beyond the tier asks for your approval first. Newly launched agents pick up the change."
+        description="Which Daintree tools the Claude Code agents launched in this project's worktrees can call. At Core, a Full tool asks for your approval first. Newly launched agents pick up the change."
       >
         <SettingsGroup className="checkbox-neutral">
           <fieldset className="divide-y divide-border-subtle">
-            <legend className="sr-only">Daintree MCP access tier</legend>
+            <legend className="sr-only">Daintree MCP tool set</legend>
             {DAINTREE_MCP_TIER_OPTIONS.map((option) => (
               <RadioChoiceRow
                 key={option.value}
@@ -719,19 +713,6 @@ export function GeneralTab({
               />
             ))}
           </fieldset>
-          {daintreeMcpTier === "system" && (
-            <div className="flex items-start gap-2 px-4 py-3">
-              <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-px" />
-              <p className="text-xs text-text-secondary leading-relaxed select-text">
-                System tier adds git commits and pushes, forge issue/PR writes, clipboard and file
-                writes, terminal arming, and worktree creation anywhere on disk — some of these are
-                irreversible or visible to teammates. It also removes the approval step for
-                destructive actions: agents delete worktrees and run the rest without asking you. A
-                force delete that would discard changes still asks you to type its name. Only enable
-                it for projects where you trust the agent to take that kind of action.
-              </p>
-            </div>
-          )}
         </SettingsGroup>
         <SettingsGroup>
           <SettingsSwitchCard

@@ -305,6 +305,9 @@ export function registerTerminalQueryActions(
     title: "Get terminal status",
     description:
       "Snapshot agent and process state across many terminals, with optional output tails, and confirm a submission landed. The batched polling path: prefer it over listing terminals for agent state, or reading each one's output. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the fetch failed. Use the blocking wait to catch an agent finishing.",
+    // The MCP answer to "what state is this agent in" since `agent.getState`
+    // left the tool sets, so search has to find it by those words.
+    keywords: ["agent", "state", "waiting", "working"],
     category: "terminal",
     kind: "query",
     danger: "safe",

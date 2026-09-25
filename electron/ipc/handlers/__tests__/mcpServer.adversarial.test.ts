@@ -34,6 +34,7 @@ const serviceMock = vi.hoisted(() => ({
   listActiveBearers: vi.fn(() => []),
   disconnectBearer: vi.fn((tokenHash: string) => ({ tokenHash, disconnected: true })),
   resetDenialCounts: vi.fn(),
+  setSessionTier: vi.fn((sessionId: string, tier: string) => ({ sessionId, tier })),
   onTerminalAdoptionsChange: vi.fn(() => () => {}),
   adoptTerminal: vi.fn(() => ({ status: "refused" as const, reason: "self" as const })),
   releaseTerminalAdoption: vi.fn(() => true),
@@ -49,10 +50,10 @@ const serviceMock = vi.hoisted(() => ({
 
 const paneConfigMock = vi.hoisted(() => ({
   getOrchestratorPane: vi.fn((paneId: string) =>
-    paneId === "pane-orchestrator" ? { principalId: "principal-1", tier: "action" as const } : null
+    paneId === "pane-orchestrator" ? { principalId: "principal-1", tier: "core" as const } : null
   ),
   listOrchestratorPanes: vi.fn(() => [
-    { paneId: "pane-orchestrator", principalId: "principal-1", tier: "action" as const },
+    { paneId: "pane-orchestrator", principalId: "principal-1", tier: "core" as const },
   ]),
 }));
 
@@ -357,6 +358,29 @@ describe("mcpServer IPC adversarial", () => {
     expect(serviceMock.resetDenialCounts).toHaveBeenCalledWith("sess-7", 77);
   });
 
+  it("setSessionTier rejects the pre-split ladder names and anything else outside core/full", async () => {
+    // Stored settings are normalized on read, but a write is a fresh choice:
+    // a renderer still sending `workbench`/`action`/`system` is a stale caller.
+    for (const tier of ["workbench", "action", "system", "external", "off", "", 1, null]) {
+      await expect(
+        getHandler(CHANNELS.MCP_SERVER_SET_SESSION_TIER)(fakeEvent(), { sessionId: "s1", tier })
+      ).rejects.toThrow(/Invalid tier/);
+    }
+    expect(serviceMock.setSessionTier).not.toHaveBeenCalled();
+  });
+
+  it("setSessionTier forwards core and full with the caller's webContents id", async () => {
+    const event = {
+      sender: { id: 77 } as Electron.WebContents,
+    } as Electron.IpcMainInvokeEvent;
+    for (const tier of ["core", "full"] as const) {
+      await expect(
+        getHandler(CHANNELS.MCP_SERVER_SET_SESSION_TIER)(event, { sessionId: "sess-7", tier })
+      ).resolves.toEqual({ sessionId: "sess-7", tier });
+      expect(serviceMock.setSessionTier).toHaveBeenLastCalledWith("sess-7", tier, 77);
+    }
+  });
+
   describe("terminal hand-over (#12490)", () => {
     it("rejects malformed ids before resolving anything", async () => {
       const adopt = getHandler(CHANNELS.MCP_SERVER_ADOPT_TERMINAL);
@@ -379,13 +403,13 @@ describe("mcpServer IPC adversarial", () => {
         orchestratorPaneId: "pane-orchestrator",
         // Smuggled fields a hostile renderer might try: ignored.
         principalId: "principal-forged",
-        orchestrator: { principalId: "principal-forged", tier: "system" },
+        orchestrator: { principalId: "principal-forged", tier: "full" },
       });
 
       expect(serviceMock.adoptTerminal).toHaveBeenCalledWith({
         terminalId: "terminal-1",
         orchestratorPaneId: "pane-orchestrator",
-        orchestrator: { principalId: "principal-1", tier: "action" },
+        orchestrator: { principalId: "principal-1", tier: "core" },
       });
     });
 

@@ -10,9 +10,9 @@ import type { ActionId } from "@shared/types/actions";
 import type { ActionRegistry, ActionCallbacks } from "../actionTypes";
 import { DEFAULT_KEYBINDINGS } from "../../defaultKeybindings";
 import {
-  WORKBENCH_TIER_TOOLS,
-  ACTION_TIER_ADDONS,
-  SYSTEM_TIER_ADDONS,
+  CORE_TIER_TOOLS,
+  FULL_TIER_ADDONS,
+  toNonRendererOwnedTools,
 } from "@shared/config/helpAssistantTierAllowlists";
 import { MCP_EXTERNAL_TIER_TOOLS } from "@shared/config/mcpExternalTierAllowlist";
 
@@ -261,10 +261,10 @@ describe("external MCP tool surface budget (#11585)", () => {
     // Guard the guard: with no hidden actions at all this proves nothing.
     expect(hidden.length).toBeGreaterThan(0);
 
+    const inApp = [...CORE_TIER_TOOLS, ...FULL_TIER_ADDONS];
     const everyTierTool = new Set<string>([
-      ...WORKBENCH_TIER_TOOLS,
-      ...ACTION_TIER_ADDONS,
-      ...SYSTEM_TIER_ADDONS,
+      ...inApp,
+      ...toNonRendererOwnedTools(inApp),
       ...MCP_EXTERNAL_TIER_TOOLS,
     ]);
     expect(hidden.filter((id) => everyTierTool.has(id))).toEqual([]);
@@ -274,10 +274,11 @@ describe("external MCP tool surface budget (#11585)", () => {
 /**
  * Style rules for the descriptions a model actually reads (#11542).
  *
- * The cohort is every action reachable at any assistant tier, derived from the
- * live allowlists rather than restated, so an action added to a tier is held to
- * these rules the moment it is exposed. The external tier is a subset (asserted
- * below), which is why one cohort covers all four.
+ * The cohort is every action reachable at either in-app tool set, from either
+ * origin — the owned twins an agent pane is served in place of the unscoped ids
+ * included — derived from the live allowlists rather than restated, so an action
+ * added to a set is held to these rules the moment it is exposed. The external
+ * tier is a subset (asserted below), which is why one cohort covers all three.
  *
  * The rubric these enforce, in order: what the tool is for; when to prefer a
  * sibling instead; what it costs or changes; and what an unusual outcome means.
@@ -289,9 +290,9 @@ describe("external MCP tool surface budget (#11585)", () => {
  */
 describe("LLM-facing tool descriptions (#11542)", () => {
   const LLM_EXPOSED_TOOL_IDS = new Set<string>([
-    ...WORKBENCH_TIER_TOOLS,
-    ...ACTION_TIER_ADDONS,
-    ...SYSTEM_TIER_ADDONS,
+    ...CORE_TIER_TOOLS,
+    ...FULL_TIER_ADDONS,
+    ...toNonRendererOwnedTools([...CORE_TIER_TOOLS, ...FULL_TIER_ADDONS]),
   ]);
 
   // Below the floor a description says nothing a caller can act on. The matching
@@ -450,7 +451,16 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // workbench floor for the subset invariant — the external surface may not
   // reach past the assistant's. Its 343 B is the whole of the increase, so this
   // stays the measured total rather than an allowance.
-  const MAX_COHORT_TOTAL_BYTES = 56_657;
+  // 56_657 → 27_484 for the core/full split, the measured total of the 79
+  // descriptions now on either tool set or served as an owned twin (56_592 B
+  // across 181 before it). Nothing was reworded: the tools on neither set — git,
+  // forge writes and the `forge.open*` family, file reads, portal, theme and
+  // settings writes, bookmarks, the recipe editor, fleet arming, the bulk kills
+  // — left MCP and took their descriptions with them. Lowered rather than left,
+  // since 29 KB of headroom would let the surface grow back without a single
+  // raise being argued. The external total above does not move; that list is
+  // unchanged.
+  const MAX_COHORT_TOTAL_BYTES = 27_484;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -462,7 +472,7 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   }
 
   it("covers every externally advertised tool", async () => {
-    // One cohort can only stand in for all four tiers while this holds. If a
+    // One cohort can only stand in for all three tiers while this holds. If a
     // tool is ever added to the external allowlist alone, these rules would
     // silently stop applying to the surface that needs them most.
     expect(MCP_EXTERNAL_TIER_TOOLS.filter((id) => !LLM_EXPOSED_TOOL_IDS.has(id))).toEqual([]);
@@ -592,7 +602,7 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   });
 
   it("declares a required argument as required in the schema, not only in run()", async () => {
-    const rows = await cohortDefinitions();
+    const { registry } = await createRegistryWithAudit();
 
     // A handler that throws on a missing argument the schema advertises as
     // optional tells every model reading the manifest that an incomplete call
@@ -600,6 +610,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
     // pairs below are the ones where the handler's requirement is load-bearing;
     // this is a contract table rather than a derivation because no test can
     // infer an arbitrary handler's requirements by inspecting its body.
+    //
+    // Read from the registry rather than the cohort. `git.commit`,
+    // `forge.getPRs` and `forge.getChecks` are on neither tool set since the
+    // core/full split, but the schema is still what every other dispatcher
+    // validates against, and holding the rows here means the contract is
+    // already pinned if one of them is exposed again.
     const MUST_BE_REQUIRED: Record<string, string[]> = {
       "git.commit": ["message"],
       "forge.getPR": ["prNumber"],
@@ -632,9 +648,9 @@ describe("LLM-facing tool descriptions (#11542)", () => {
         violations.push(`${id} lists no required arguments — an emptied row gates nothing`);
         continue;
       }
-      const def = rows.find((r) => r.id === id)?.def;
+      const def = registry.get(id as ActionId)?.();
       if (!def) {
-        violations.push(`${id} is not on any tier — update this table or the allowlist`);
+        violations.push(`${id} is not a registered action — update this table`);
         continue;
       }
       if (!def.argsSchema) {
@@ -907,14 +923,16 @@ describe("definition invariants", () => {
     expect(missing).toEqual([]);
   });
 
-  it("every workbench-tier arg-requiring action has examples", async () => {
+  it("every core arg-requiring query has examples", async () => {
     const { registry } = await createRegistryWithAudit();
 
-    const workbenchSet = new Set<string>(WORKBENCH_TIER_TOOLS as readonly string[]);
+    const coreSet = new Set<string>(CORE_TIER_TOOLS as readonly string[]);
     const missing: string[] = [];
     for (const [key, factory] of registry) {
-      if (!workbenchSet.has(key)) continue;
+      if (!coreSet.has(key)) continue;
       const def = factory();
+      // Mirrors `validateDefinitionInvariants`: core's reads only.
+      if (def.kind !== "query") continue;
       const requiresArgs = def.argsSchema
         ? !def.argsSchema.safeParse(undefined).success && !def.argsSchema.safeParse({}).success
         : false;
@@ -925,11 +943,11 @@ describe("definition invariants", () => {
 
     if (missing.length > 0) {
       console.warn(
-        `[quality-gate] ${missing.length} workbench-tier arg-requiring action(s) missing examples:\n` +
+        `[quality-gate] ${missing.length} core arg-requiring query(ies) missing examples:\n` +
           missing.map((m) => `  - ${m}`).join("\n")
       );
     }
-    // TODO(#8431): Promote to hard assert once all workbench-tier actions have examples.
+    // TODO(#8431): Promote to hard assert once all core actions have examples.
   });
 });
 

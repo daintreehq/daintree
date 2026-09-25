@@ -9,7 +9,7 @@ import { z } from "zod";
  * (electron/services/mcp-server/sessionServer.ts) and runs against the
  * main-process skill registry, because the renderer holds no skill data (parsed
  * plugin markdown lives in main). `run()` throws if the renderer ever invokes
- * them directly. Skills are read-only knowledge tools → workbench tier.
+ * them directly. Skills are read-only knowledge tools in the `full` tool set.
  */
 export function registerSkillActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("skills.search", () =>

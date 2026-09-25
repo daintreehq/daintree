@@ -90,10 +90,10 @@ export function resolveTokenTier(
   }
 
   const token = extractBearerToken(authHeader);
-  if (token === null) return "workbench";
+  if (token === null) return "core";
 
   const paneTier = mcpPaneConfigService.getTierForToken(token);
-  if (paneTier === "workbench" || paneTier === "action" || paneTier === "system") {
+  if (paneTier === "core" || paneTier === "full") {
     return paneTier;
   }
   if (helpTokenValidator) {
@@ -101,7 +101,7 @@ export function resolveTokenTier(
     if (helpTier) return helpTier;
   }
 
-  return "workbench";
+  return "core";
 }
 
 /**
@@ -167,22 +167,21 @@ export interface SessionSurfacePolicy {
   /**
    * Whether the session is an agent pane, authenticated by the per-pane bearer
    * Daintree wrote into its `--mcp-config` (#12692). Only a pane's project tier
-   * is an auto-approval line rather than a ceiling: it may ask for anything up
-   * to {@link PANE_APPROVAL_CEILING}, and at `system` it skips the ordinary
-   * confirmation. Read as `=== true`, so an unclassified session keeps the
-   * refusal semantics.
+   * is an approval line rather than a ceiling: it may ask for anything up to
+   * {@link PANE_APPROVAL_CEILING}. Read as `=== true`, so an unclassified
+   * session keeps the refusal semantics.
    */
   paneApproval?: boolean;
 }
 
 /**
- * The most an agent pane can ever ask for (#12692): the `system` surface, less
- * the tools reserved for a renderer-owned origin (#12407). Approval raises a
- * pane to this line and never past it — asking cannot unlock the assistant's
- * unscoped terminal input, a hidden or restricted action, or an external-only
- * tool.
+ * The most an agent pane can ever ask for (#12692): the `full` surface as a
+ * non-renderer-owned origin sees it (#12407). Approval raises a pane to this
+ * line and never past it — asking cannot unlock the assistant's unscoped
+ * terminal tools, a hidden or restricted action, an external-only tool, or
+ * anything outside both tool sets.
  */
-export const PANE_APPROVAL_CEILING: ReadonlySet<string> = NON_RENDERER_OWNED_TIER_ALLOWLISTS.system;
+export const PANE_APPROVAL_CEILING: ReadonlySet<string> = NON_RENDERER_OWNED_TIER_ALLOWLISTS.full;
 
 /**
  * Whether a pane call above its tier should ask the user rather than be
@@ -198,27 +197,6 @@ export function isApprovalRequestable(
   if (!paneApproval || tier === "external") return false;
   if (isTierPermitted(tier, actionId, false)) return false;
   return PANE_APPROVAL_CEILING.has(actionId);
-}
-
-/**
- * Whether a pane's tier alone pre-authorizes the ordinary `danger: "confirm"`
- * dialog for this tool (#12692). Only at `system`, the tier whose settings copy
- * says it removes that step. Tools that act on every target they resolve at
- * dispatch time are excluded for the reason native grants exclude them
- * (#12121): their dialog is also where the user picks the targets, so there
- * is no bare approval to stand in for.
- *
- * Covers the D2 click only. The typed-name D3 gate on a force delete is
- * re-derived by the renderer bridge whenever a dispatch arrives preconfirmed,
- * so the tier never reaches it (#12115).
- */
-export function isTierAutoConfirmed(
-  tier: McpTier,
-  actionId: string,
-  paneApproval: boolean
-): boolean {
-  if (!paneApproval || tier !== "system") return false;
-  return isTierPermitted(tier, actionId, false) && isGenericNativeGrantEligible(actionId);
 }
 
 /**
@@ -431,8 +409,13 @@ function isIntrospectableForSession(
  * reason {@link MCP_SURFACE_MANIFEST_VERSION} does: main is the only process
  * that stamps it, so the shared module stays a type-only import from here and
  * its `zod` value import never becomes an eager edge on main's boot path.
+ *
+ * v3: `minimumTier` and `effectiveTier` took new values when the in-app ladder
+ * `workbench`/`action`/`system` became the `core`/`full` tool sets. A client
+ * parsing against the v2 enum would reject every in-app record, so the shape
+ * moved even though no field was added.
  */
-export const MCP_TARGET_POLICY_VERSION = 2;
+export const MCP_TARGET_POLICY_VERSION = 3;
 
 /**
  * The session facts a target policy is evaluated against, captured once at
@@ -449,7 +432,7 @@ export interface TargetPolicySessionSnapshot {
    * `sessionStore.isRendererOwnedOrigin`.
    *
    * Not derivable from {@link tier}, which is why it is threaded rather than
-   * inferred. `resolveTokenTier` falls back to `workbench` for any bearer token
+   * inferred. `resolveTokenTier` falls back to `core` for any bearer token
    * it does not recognise, while `getOrigin` defaults an unknown session to
    * `external`, so a session can hold a ladder tier and a non-renderer origin at
    * once. Grant issuance gates on the origin (`issueGrant` /
@@ -570,7 +553,7 @@ export function buildTargetPolicy(
       ? TIER_ALLOWLISTS.external.has(id)
         ? "external"
         : null
-      : minimumPermittingTier(id);
+      : minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true);
   // A ladder target with no permitting tier cannot be described honestly, and
   // cannot legitimately be granted either: both issuance paths refuse a tool
   // `minimumPermittingTier` does not place. Fail closed.
@@ -593,13 +576,10 @@ export function buildTargetPolicy(
   if (authorizedBy === null) return null;
 
   // Mirrors `dispatchConfirmed` in `sessionServer`, for a pane: an above-tier
-  // call always asks, and the ask IS the confirmation; at `system`, or under a
-  // session approval, the ordinary dialog is skipped for every tool whose
-  // dialog is not also a target picker.
-  const paneConfirmWaived =
-    paneApproval &&
-    isGenericNativeGrantEligible(id) &&
-    ((tierPermitted && isTierAutoConfirmed(snapshot.tier, id, true)) || perToolGranted);
+  // call always asks, and the ask IS the confirmation; under a session
+  // approval the ordinary dialog is skipped for every tool whose dialog is not
+  // also a target picker. No tier skips it on its own.
+  const paneConfirmWaived = paneApproval && isGenericNativeGrantEligible(id) && perToolGranted;
   const requiresConfirmation =
     authorizedBy === "approval" || (danger === "confirm" && !nativeGranted && !paneConfirmWaived);
 
@@ -691,13 +671,12 @@ export function buildTargetPolicy(
 }
 
 /** The nested in-app ladder. `external` is a flat peer of it, never a rung. */
-type LadderTier = "workbench" | "action" | "system";
+type LadderTier = "core" | "full";
 
 /** Rung order, so "strictly above this session" is a comparison, not a list. */
 const LADDER_RANK: Readonly<Record<LadderTier, number>> = {
-  workbench: 0,
-  action: 1,
-  system: 2,
+  core: 0,
+  full: 1,
 };
 
 /**
@@ -728,7 +707,7 @@ function isExistenceCatalogVisible(
   // to `McpTier` would be admitted by the negative form on the day it landed,
   // with no tier to report and nothing here to notice; this form refuses it
   // until someone puts it on the ladder deliberately.
-  return snapshot.tier === "workbench" || snapshot.tier === "action" || snapshot.tier === "system";
+  return snapshot.tier === "core" || snapshot.tier === "full";
 }
 
 /**
@@ -751,7 +730,7 @@ function isExistenceCatalogVisible(
  *   elevation reaches them, so naming them would describe a door with no key;
  * - an id no in-app tier permits, for the same reason;
  * - an id whose minimum tier is not strictly above this session's. The ladder
- *   nests (`action` = workbench ∪ addons, `system` = all three), so a
+ *   nests (`full` = core ∪ addons), so a
  *   non-permitted id always has a higher minimum and this is a backstop rather
  *   than a live branch — but it is what makes the record impossible to read as
  *   "raise your tier" when raising it would change nothing.

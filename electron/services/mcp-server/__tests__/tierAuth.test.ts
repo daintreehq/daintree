@@ -3,9 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { mockPaneConfigService } = vi.hoisted(() => ({
   mockPaneConfigService: {
     isValidPaneToken: vi.fn<(token: string) => boolean>(() => false),
-    getTierForToken: vi.fn<(token: string) => "workbench" | "action" | "system" | undefined>(
-      () => undefined
-    ),
+    getTierForToken: vi.fn<(token: string) => "core" | "full" | undefined>(() => undefined),
   },
 }));
 
@@ -38,15 +36,18 @@ import {
   type TargetPolicySessionSnapshot,
   getReachableActionIds,
   isApprovalRequestable,
-  isTierAutoConfirmed,
   PANE_APPROVAL_CEILING,
 } from "../tierAuth.js";
 import { McpUnavailableActionStubSchema } from "../../../../shared/types/mcpIntrospection.js";
 import { findWireStrippedKeywords } from "../../../../shared/utils/mcpWireSchema.js";
 import { TIER_ALLOWLISTS } from "../shared.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
-import { RENDERER_OWNED_ORIGIN_ONLY_TOOLS } from "../../../../shared/config/helpAssistantTierAllowlists.js";
+import {
+  OWNED_TWIN_TOOLS,
+  RENDERER_OWNED_ORIGIN_ONLY_TOOLS,
+} from "../../../../shared/config/helpAssistantTierAllowlists.js";
 import { MCP_EXTERNAL_TIER_TOOLS } from "../../../../shared/config/mcpExternalTierAllowlist.js";
+import { NATIVE_GRANT_USE_POLICY_OVERRIDES } from "../../../../shared/config/nativeGrantUsePolicies.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 import type { McpTargetPolicy } from "../../../../shared/types/mcpTargetPolicy.js";
 import {
@@ -164,8 +165,8 @@ describe("isAuthorized", () => {
   });
 
   it("authorizes a TAB-separated help token", () => {
-    const helpValidator = vi.fn<(t: string) => "workbench" | false>((t) =>
-      t === "help-tok" ? "workbench" : false
+    const helpValidator = vi.fn<(t: string) => "core" | false>((t) =>
+      t === "help-tok" ? "core" : false
     );
     expect(isAuthorized("Bearer\thelp-tok", null, helpValidator)).toBe(true);
     expect(helpValidator).toHaveBeenCalledWith("help-tok");
@@ -198,25 +199,25 @@ describe("resolveTokenTier", () => {
   });
 
   it("resolves a TAB-separated help token to its help tier (regression for #7129)", () => {
-    const helpValidator = vi.fn<(t: string) => "system" | false>((t) =>
-      t === "help-tok" ? "system" : false
+    const helpValidator = vi.fn<(t: string) => "full" | false>((t) =>
+      t === "help-tok" ? "full" : false
     );
-    expect(resolveTokenTier("Bearer\thelp-tok", null, helpValidator)).toBe("system");
+    expect(resolveTokenTier("Bearer\thelp-tok", null, helpValidator)).toBe("full");
   });
 
   it("resolves a lowercase-scheme pane token to its pane tier", () => {
     mockPaneConfigService.getTierForToken.mockImplementation((t) =>
-      t === "pane-tok" ? "action" : undefined
+      t === "pane-tok" ? "full" : undefined
     );
-    expect(resolveTokenTier("bearer pane-tok", null, null)).toBe("action");
+    expect(resolveTokenTier("bearer pane-tok", null, null)).toBe("full");
   });
 
-  it("falls back to workbench when no parser matches", () => {
-    expect(resolveTokenTier("Bearer unknown", null, null)).toBe("workbench");
+  it("falls back to core when no parser matches", () => {
+    expect(resolveTokenTier("Bearer unknown", null, null)).toBe("core");
   });
 
-  it("falls back to workbench when the header has no whitespace after the scheme", () => {
-    expect(resolveTokenTier("Bearerfoo", null, null)).toBe("workbench");
+  it("falls back to core when the header has no whitespace after the scheme", () => {
+    expect(resolveTokenTier("Bearerfoo", null, null)).toBe("core");
   });
 });
 
@@ -429,29 +430,29 @@ describe("wire/validation schema split", () => {
 
 describe("shouldExposeTool", () => {
   it("exposes core entries when tier-permitted", () => {
-    const entry = makeEntry({ id: "actions.list", mcpVisibility: "core" });
-    expect(shouldExposeTool(entry, "workbench")).toBe(true);
+    const entry = makeEntry({ id: "actions.search", mcpVisibility: "core" });
+    expect(shouldExposeTool(entry, "core")).toBe(true);
   });
 
   it("excludes hidden entries from tools/list", () => {
-    const entry = makeEntry({ id: "actions.list", mcpVisibility: "hidden" });
-    expect(shouldExposeTool(entry, "workbench")).toBe(false);
+    const entry = makeEntry({ id: "actions.search", mcpVisibility: "hidden" });
+    expect(shouldExposeTool(entry, "core")).toBe(false);
   });
 
   it("exposes unclassified entries (no mcpVisibility) for back-compat", () => {
-    const entry = makeEntry({ id: "actions.list" });
-    expect(shouldExposeTool(entry, "workbench")).toBe(true);
+    const entry = makeEntry({ id: "actions.search" });
+    expect(shouldExposeTool(entry, "core")).toBe(true);
   });
 
   it("still excludes core entries outside the tier allowlist (tier is the authority gate)", () => {
-    const entry = makeEntry({ id: "git.push", mcpVisibility: "core" });
-    expect(shouldExposeTool(entry, "workbench")).toBe(false);
-    expect(shouldExposeTool(entry, "system")).toBe(true);
+    const entry = makeEntry({ id: "project.runCheck", mcpVisibility: "core" });
+    expect(shouldExposeTool(entry, "core")).toBe(false);
+    expect(shouldExposeTool(entry, "full")).toBe(true);
   });
 
   it("still excludes restricted-danger tools regardless of visibility", () => {
-    const entry = makeEntry({ id: "actions.list", mcpVisibility: "core", danger: "restricted" });
-    expect(shouldExposeTool(entry, "workbench")).toBe(false);
+    const entry = makeEntry({ id: "actions.search", mcpVisibility: "core", danger: "restricted" });
+    expect(shouldExposeTool(entry, "core")).toBe(false);
   });
 
   // The metadata ceilings layer on top of the tier floor: an id the external
@@ -671,7 +672,7 @@ describe("external tool surface budget (#11585)", () => {
   it("admits workspace discovery externally and in-app alike (#12307)", () => {
     expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain("workspace.list");
     expect(isTierPermitted("external", "workspace.list")).toBe(true);
-    expect(isTierPermitted("workbench", "workspace.list")).toBe(true);
+    expect(isTierPermitted("core", "workspace.list")).toBe(true);
   });
 
   // Guards the opposite failure: a bad merge or an over-eager cut emptying the
@@ -690,37 +691,28 @@ describe("external tool surface budget (#11585)", () => {
 
   // The cut is a real revocation, not a listing trick: `tools/call` must reject
   // these too. Each id names a prior deliberate decision that #11585 supersedes
-  // — the apiKey back-compat guarantee (git/worktree mutations) and #11544's
-  // CI-status routes — so a future reader sees the reversal was intentional.
+  // — the apiKey back-compat guarantee and #11544's CI-status routes — so a
+  // future reader sees the reversal was intentional.
   //
-  // Every one of them stays reachable for the in-app assistant, which is not
-  // subject to any third-party client's cap. The paired internal-tier assertion
-  // is what makes this a boundary rather than a deletion.
+  // Every one of them stays reachable for the in-app assistant at `full`, which
+  // is not subject to any third-party client's cap. The paired internal-tier
+  // assertion is what makes this a boundary rather than a deletion.
   const CUT_FROM_EXTERNAL_KEPT_INTERNALLY = [
-    // Caller has its own shell git. `git.push` keeps its bespoke MCP plumbing
-    // (branch/commit preview, cwd pinning, headless-safe confirm) at `system`.
-    { id: "git.push", keptAt: "system" },
-    { id: "git.commit", keptAt: "system" },
-    { id: "git.getFileDiff", keptAt: "workbench" },
     // D2 destructive, and not needed to drive work forward — an external caller
-    // has its own shell. In-app it sits on the default floor since #12116.
-    { id: "worktree.delete", keptAt: "action" },
-    // #11544's two CI-status routes. An external agent has `gh`; the in-app
-    // assistant does not, so both stay at workbench.
-    { id: "forge.getCIStatus", keptAt: "workbench" },
-    { id: "worktree.reviewReadiness", keptAt: "workbench" },
-    // #11786's per-check read, for the same reason as its roll-up sibling.
-    { id: "forge.getChecks", keptAt: "workbench" },
-    // Caller has its own filesystem and `gh`.
-    { id: "file.read", keptAt: "workbench" },
-    { id: "forge.listIssues", keptAt: "workbench" },
-    { id: "project.getCurrent", keptAt: "workbench" },
-    { id: "worktree.resource.provision", keptAt: "action" },
+    // has its own shell. In-app the unscoped delete is a `full` tool.
+    "worktree.delete",
+    // #11544's two CI-status routes.
+    "forge.getCIStatus",
+    "worktree.reviewReadiness",
+    "forge.listIssues",
+    "git.getProjectPulse",
+    "project.runCheck",
+    "worktree.resource.provision",
   ] as const;
 
   it.each(CUT_FROM_EXTERNAL_KEPT_INTERNALLY)(
-    "$id is denied externally but still reachable at the $keptAt tier",
-    ({ id, keptAt }) => {
+    "%s is denied externally but still reachable by the assistant at full",
+    (id) => {
       // Pin to ground truth first, so a rename turns this into a red test
       // rather than a vacuous "unknown string is absent from a set".
       expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
@@ -728,10 +720,44 @@ describe("external tool surface budget (#11585)", () => {
       expect(isTierPermitted("external", id)).toBe(false);
       expect(shouldExposeTool(makeEntry({ id }), "external")).toBe(false);
 
-      expect(isTierPermitted(keptAt, id)).toBe(true);
-      expect(shouldExposeTool(makeEntry({ id }), keptAt)).toBe(true);
+      expect(isTierPermitted("full", id, true)).toBe(true);
+      expect(isTierPermitted("core", id, true)).toBe(false);
+      expect(
+        shouldExposeTool(makeEntry({ id }), "full", {
+          ...UNBOUND_SESSION_SURFACE,
+          rendererOwnedOrigin: true,
+        })
+      ).toBe(true);
     }
   );
+
+  // The core/full split went further than #11585 for the in-app tiers: these
+  // used to be reachable by the assistant and now reach no session at all. An
+  // agent has its own shell git and filesystem, and forge writes and the
+  // per-check read had no caller. Asserted at every tier and both origins, so a
+  // future "just put it back at full" has to argue with a red test.
+  const CUT_FROM_EVERY_TIER = [
+    "git.push",
+    "git.commit",
+    "git.getFileDiff",
+    "forge.getChecks",
+    "forge.createIssue",
+    "file.read",
+    "project.getCurrent",
+    "agentSettings.get",
+    "terminal.arm",
+    "panel.focus",
+  ] as const;
+
+  it.each(CUT_FROM_EVERY_TIER)("%s is reachable at no tier from either origin", (id) => {
+    expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+    for (const tier of ["core", "full", "external"] as const) {
+      for (const rendererOwned of [true, false]) {
+        expect(isTierPermitted(tier, id, rendererOwned)).toBe(false);
+      }
+      expect(shouldExposeTool(makeEntry({ id }), tier)).toBe(false);
+    }
+  });
 
   // The cut is purely subtractive: it authorizes nothing new. `terminal.close`
   // is the id that nearly slipped in — #11540's draft core set had it, on the
@@ -754,8 +780,12 @@ describe("external tool surface budget (#11585)", () => {
       expect(isTierPermitted("external", id)).toBe(false);
       expect(shouldExposeTool(makeEntry({ id }), "external")).toBe(false);
     }
-    // The in-app assistant, which has a human watching, keeps them.
-    expect(isTierPermitted("action", "terminal.close")).toBe(true);
+    // The in-app assistant, which has a human watching, keeps the close in core
+    // and the rest in full; an agent pane gets only the owned close.
+    expect(isTierPermitted("core", "terminal.close", true)).toBe(true);
+    expect(isTierPermitted("full", "terminal.kill", true)).toBe(true);
+    expect(isTierPermitted("full", "terminal.close", false)).toBe(false);
+    expect(isTierPermitted("core", "terminal.closeOwned", false)).toBe(true);
   });
 
   // Same split as the closes above, one rung down (#12338): the session-scoped
@@ -772,7 +802,7 @@ describe("external tool surface budget (#11585)", () => {
     expect(isTierPermitted("external", "terminal.interruptOwned")).toBe(true);
     expect(shouldExposeTool(makeEntry({ id: "terminal.interruptOwned" }), "external")).toBe(true);
     // Carried in-app too, or the subset invariant below fails.
-    expect(isTierPermitted("action", "terminal.interruptOwned")).toBe(true);
+    expect(isTierPermitted("core", "terminal.interruptOwned")).toBe(true);
 
     expect(isTierPermitted("external", "terminal.interrupt")).toBe(false);
     expect(shouldExposeTool(makeEntry({ id: "terminal.interrupt" }), "external")).toBe(false);
@@ -789,7 +819,7 @@ describe("external tool surface budget (#11585)", () => {
       expect(isTierPermitted("external", id)).toBe(true);
       expect(shouldExposeTool(makeEntry({ id, kind: "command" }), "external")).toBe(true);
     }
-    for (const id of RENDERER_OWNED_ORIGIN_ONLY_TOOLS) {
+    for (const id of [...RENDERER_OWNED_ORIGIN_ONLY_TOOLS, ...Object.keys(OWNED_TWIN_TOOLS)]) {
       expect(MCP_EXTERNAL_TIER_TOOLS as readonly string[]).not.toContain(id);
       expect(isTierPermitted("external", id)).toBe(false);
     }
@@ -798,13 +828,15 @@ describe("external tool surface budget (#11585)", () => {
   // A read, so it sits on the lowest in-app tier as well as the external one
   // (#12479) — the subset invariant below needs the first, and nothing about
   // reading an agent the session launched calls for more than the floor.
-  it("admits the owned last-message read externally and at the workbench floor (#12479)", () => {
+  it("admits the owned last-message read externally and at the core floor (#12479)", () => {
     const id = "terminal.readLastMessageOwned";
     expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
     expect(isTierPermitted("external", id)).toBe(true);
     expect(shouldExposeTool(makeEntry({ id, kind: "query" }), "external")).toBe(true);
-    for (const tier of ["workbench", "action", "system"] as const) {
-      expect(isTierPermitted(tier, id)).toBe(true);
+    for (const tier of ["core", "full"] as const) {
+      for (const rendererOwned of [true, false]) {
+        expect(isTierPermitted(tier, id, rendererOwned)).toBe(true);
+      }
     }
     // Read-only by its kind, not by an override — a query drives the hints.
     const annotations = buildAnnotations(makeEntry({ id, kind: "query", danger: "safe" }));
@@ -814,49 +846,68 @@ describe("external tool surface budget (#11585)", () => {
 
   // A cut PR that quietly widens is the failure #10710 documents, so assert the
   // direction outright rather than trusting the id list to be read carefully.
+  // The comparison is against `full` as an agent pane sees it — the same
+  // non-renderer-owned origin an api-key client has — so the owned twins the
+  // external roster carries are measured against the owned twins a pane gets.
+  it("authorizes nothing an agent pane at full cannot already reach", () => {
+    const paneFull = getTierPermittedActionIds("full", false);
+    expect([...TIER_ALLOWLISTS.external].filter((id) => !paneFull.has(id))).toEqual([]);
+  });
+
+  // And nothing the assistant cannot do in its own, unscoped form: every
+  // external id is either a `full` tool or the owned twin of one.
   it("authorizes nothing the in-app assistant cannot already reach", () => {
-    expect([...TIER_ALLOWLISTS.external].filter((id) => !TIER_ALLOWLISTS.system.has(id))).toEqual(
-      []
+    const assistantFull = getTierPermittedActionIds("full", true);
+    const twinOf = new Map<string, string>(
+      Object.entries(OWNED_TWIN_TOOLS).map(([unscoped, owned]) => [owned, unscoped])
     );
+    const beyond = [...TIER_ALLOWLISTS.external].filter(
+      (id) => !assistantFull.has(id) && !assistantFull.has(twinOf.get(id) ?? "")
+    );
+    expect(beyond).toEqual([]);
   });
 });
 
-// Forge used to be curated by hand in two separate files — WORKBENCH_TIER_TOOLS
-// in shared/config/helpAssistantTierAllowlists.ts and the external allowlist
-// in mcp-server/shared.ts — with nothing linking them, and adding a read to only
-// one shipped a tool invisible to the other caller class twice (#10696, #11545).
-//
-// #11585 removed the whole forge surface from `external` and so retired that
-// drift risk in the only way that actually works: one curated forge list, at the
-// help-assistant tiers. The rationale is that an external agent driving Daintree
-// over MCP already has `gh` or its provider's own tools, whereas the in-app
-// assistant does not. The assertions below lock that split so a future "why not
-// just add it back externally?" has to argue with a red test.
-describe("forge tool exposure is help-assistant-only (#11585)", () => {
+// Forge used to be curated by hand in two separate files with nothing linking
+// them, and adding a read to only one shipped a tool invisible to the other
+// caller class twice (#10696, #11545). #11585 removed the whole forge surface
+// from `external`, and the core/full split cut the in-app side down to the five
+// reads an orchestrator actually uses, all in `full`. Forge writes reach no MCP
+// session: an agent has `gh` or its provider's own tooling, and the assistant
+// hands an approved issue draft to the user rather than filing it. The
+// assertions below lock that split so a future "why not just add it back?" has
+// to argue with a red test.
+describe("forge tool exposure (#11585)", () => {
   it("no forge tool is reachable at the external tier", () => {
     expect([...TIER_ALLOWLISTS.external].filter((id) => id.startsWith("forge."))).toEqual([]);
   });
 
-  // Measured against the real registry, not against another tier: `system` is
-  // built as a union that already contains `workbench`, so "workbench forge ⊆
-  // system forge" is true by construction and would stay green while the whole
-  // surface drained away. The cut moved forge's only home to the in-app tiers,
-  // so this is now the assertion carrying that weight.
-  it("keeps every forge action reachable by the in-app assistant", () => {
-    const allForgeActions = BUILT_IN_ACTION_IDS.filter((id) => id.startsWith("forge."));
-    const systemForgeTools = [...TIER_ALLOWLISTS.system].filter((id) => id.startsWith("forge."));
+  const FORGE_READS_IN_FULL = [
+    "forge.getPR",
+    "forge.listPRs",
+    "forge.getIssue",
+    "forge.listIssues",
+    "forge.getCIStatus",
+  ];
 
-    expect(allForgeActions.length).toBeGreaterThan(0);
-    // The one exemption is enumerated rather than pattern-matched, and the test
-    // below holds it to a stricter standard than membership — a placeholder
-    // exclusion would blind this check the day an id matching it appeared,
-    // which is why the original had none.
-    const reachable = allForgeActions.filter((id) => !FORGE_ACTIONS_OFF_EVERY_TIER.has(id));
-    expect(new Set(systemForgeTools)).toEqual(new Set(reachable));
+  // Exact equality against the real registry, so the set can neither grow a
+  // write nor quietly drain away.
+  it("admits exactly the orchestration forge reads, and only at full", () => {
+    const allForgeActions = BUILT_IN_ACTION_IDS.filter((id) => id.startsWith("forge."));
+    expect(allForgeActions.length).toBeGreaterThan(FORGE_READS_IN_FULL.length);
+    for (const rendererOwned of [true, false]) {
+      const full = getTierPermittedActionIds("full", rendererOwned);
+      const core = getTierPermittedActionIds("core", rendererOwned);
+      expect(new Set(allForgeActions.filter((id) => full.has(id)))).toEqual(
+        new Set(FORGE_READS_IN_FULL)
+      );
+      expect(allForgeActions.filter((id) => core.has(id))).toEqual([]);
+    }
   });
 
   /**
-   * Forge actions deliberately absent from EVERY tier, not merely from one.
+   * Forge actions that must stay off every tier for a reason stronger than
+   * "nothing called it".
    *
    * `forge.validateToken` takes a raw forge access token as an argument. A tool
    * argument is model context by construction: whatever redaction the audit log
@@ -873,34 +924,13 @@ describe("forge tool exposure is help-assistant-only (#11585)", () => {
     // asserted so the exemption above cannot decay into "we forgot to add it".
     for (const id of FORGE_ACTIONS_OFF_EVERY_TIER) {
       expect(BUILT_IN_ACTION_IDS).toContain(id);
-      for (const tier of ["workbench", "action", "system", "external"] as const) {
+      for (const tier of ["core", "full", "external"] as const) {
         expect(isTierPermitted(tier, id)).toBe(false);
+        expect(isTierPermitted(tier, id, true)).toBe(false);
         expect(shouldExposeTool(makeEntry({ id, kind: "query", danger: "safe" }), tier)).toBe(
           false
         );
       }
-    }
-  });
-
-  // Sentinel for the read added in #11545: an agent that can post a comment must
-  // still be able to read the thread. The cohort checks above stay green if this
-  // id is dropped from every list, which would silently undo the feature.
-  it("permits forge.listIssueComments at the workbench and system tiers", () => {
-    const entry = makeEntry({ id: "forge.listIssueComments", kind: "query", danger: "safe" });
-    for (const tier of ["workbench", "system"] as const) {
-      expect(isTierPermitted(tier, "forge.listIssueComments")).toBe(true);
-      expect(shouldExposeTool(entry, tier)).toBe(true);
-    }
-  });
-
-  // Sentinel for the read added in #11786, for the same reason as the one
-  // above: an agent that can see a PR is red must be able to ask which check
-  // failed, and the cohort checks stay green if this id is dropped everywhere.
-  it("permits forge.getChecks at the workbench and system tiers", () => {
-    const entry = makeEntry({ id: "forge.getChecks", kind: "query", danger: "safe" });
-    for (const tier of ["workbench", "system"] as const) {
-      expect(isTierPermitted(tier, "forge.getChecks")).toBe(true);
-      expect(shouldExposeTool(entry, tier)).toBe(true);
     }
   });
 });
@@ -972,157 +1002,157 @@ describe("buildAnnotations", () => {
 // promoting git.push into the action tier). They test `isTierPermitted`, not
 // the raw arrays, so they fail closed if the tier wiring itself regresses.
 describe("help-session tier policy (#10640)", () => {
-  // The conductor's working tool set — orchestration, terminal driving, branch
-  // setup, recipes, and reads — all resolve under `action`.
-  const ASSISTANT_REQUIRED_TOOLS = [
+  // The orchestration loop the default tool set exists for: create worktrees,
+  // launch agents, prompt them, read and wait on them, move and close them.
+  const CORE_REQUIRED_TOOLS = [
     "agent.launch",
-    "agent.terminal",
-    "agent.getState",
-    "workflow.startWorkOnIssue",
-    "terminal.new",
+    "agent.listAvailable",
     "terminal.sendCommand",
     "terminal.getOutput",
     "terminal.getStatus",
     "terminal.waitUntilIdle",
     "terminal.waitUntilIdleBatch",
-    "recipe.run",
+    "terminal.moveToWorktree",
+    "terminal.close",
     "worktree.createWithRecipe",
-    "worktree.setActive",
+    "worktree.waitUntilReady",
     "worktree.list",
-    "git.getProjectPulse",
-    "files.search",
-    "copyTree.generate",
   ];
 
-  // Mutations the conductor must NOT reach at its default tier: `git.commit` and
-  // `forge.assignIssue` are `danger: "safe"`, so the tier is their only gate.
-  const HIGH_BLAST_RADIUS_TOOLS = ["git.commit", "git.push", "forge.assignIssue"];
+  // Reached for less often, so they stay out of the per-turn tool list until
+  // the user picks `full`.
+  const FULL_ONLY_TOOLS = [
+    "workflow.startWorkOnIssue",
+    "terminal.new",
+    "recipe.run",
+    "worktree.setActive",
+    "git.getProjectPulse",
+    "copyTree.generate",
+    "project.runCheck",
+  ];
 
-  // Confirm-classified worktree cleanup, promoted to the default floor by
-  // #12116. Reachable at `action`, still refused at `workbench` — the boundary
-  // moved down one tier, it did not disappear.
-  const CONFIRM_GATED_CLEANUP_TOOLS = [
-    "worktree.delete",
-    "worktree.deleteOwned",
-    "worktree.resource.teardown",
-  ] as const;
+  it.each(CORE_REQUIRED_TOOLS)("permits the assistant's required tool %s at core", (toolId) => {
+    // The assistant's own sessions are renderer-owned, which is what keeps
+    // unscoped terminal input on this list (#12407).
+    expect(isTierPermitted("core", toolId, true)).toBe(true);
+  });
 
-  it.each(ASSISTANT_REQUIRED_TOOLS)(
-    "permits the assistant's required tool %s at the action tier",
-    (toolId) => {
-      // The assistant's own sessions are renderer-owned, which is what keeps
-      // unscoped terminal input on this list (#12407).
-      expect(isTierPermitted("action", toolId, true)).toBe(true);
+  it.each(FULL_ONLY_TOOLS)("withholds %s at core and permits it at full", (toolId) => {
+    expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(toolId);
+    for (const rendererOwned of [true, false]) {
+      expect(isTierPermitted("core", toolId, rendererOwned)).toBe(false);
+      expect(isTierPermitted("full", toolId, rendererOwned)).toBe(true);
     }
-  );
+  });
 
-  it.each(HIGH_BLAST_RADIUS_TOOLS)(
-    "withholds high-blast-radius tool %s at the action tier (requires a grant)",
-    (toolId) => {
-      expect(isTierPermitted("action", toolId)).toBe(false);
-      // Sanity check: the tool exists in the model and IS reachable one tier up,
-      // so the `false` above is a real tier boundary, not a typo'd action id.
-      expect(isTierPermitted("system", toolId)).toBe(true);
-    }
-  );
-
-  it.each(CONFIRM_GATED_CLEANUP_TOOLS)(
-    "permits confirm-gated cleanup tool %s at the action tier but not below it (#12116)",
-    (toolId) => {
-      // Pin to ground truth first, so a rename turns this into a red test
-      // rather than a vacuous "unknown string is absent from a set".
+  // Confirm-classified worktree cleanup (#12116). Cleaning up a worktree the
+  // session created is part of the core loop; the unscoped delete and resource
+  // teardown reach worktrees the session never made, so they wait for `full`.
+  // Discovery is asserted beside dispatch because the two gates are what an
+  // agent actually experiences, and `shouldExposeTool` has its own reasons to
+  // withhold a `danger: "confirm"` tool (see `isWithheldFromBoundSession` for
+  // the bound-external case). Neither of them fires here.
+  it("admits the owned worktree delete at core and the unscoped cleanup only at full", () => {
+    const assistant = { ...UNBOUND_SESSION_SURFACE, rendererOwnedOrigin: true };
+    for (const toolId of [
+      "worktree.delete",
+      "worktree.deleteOwned",
+      "worktree.resource.teardown",
+    ]) {
       expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(toolId);
+    }
 
-      // The floor moved to `action`, so a default session reaches it without a
-      // grant. `workbench` still refuses it, which is what keeps this a
-      // boundary rather than a blanket promotion: a read-only session cannot
-      // delete a worktree by asking nicely.
-      //
-      // Discovery is asserted beside dispatch because the two gates are what an
-      // agent actually experiences, and `shouldExposeTool` has its own reasons
-      // to withhold a `danger: "confirm"` tool (see `isWithheldFromBoundSession`
-      // for the bound-external case). Neither of them fires here.
+    const owned = makeEntry({ id: "worktree.deleteOwned", danger: "confirm" });
+    expect(isTierPermitted("core", "worktree.deleteOwned", true)).toBe(true);
+    expect(isTierPermitted("core", "worktree.deleteOwned", false)).toBe(true);
+    expect(shouldExposeTool(owned, "core", assistant)).toBe(true);
+
+    for (const toolId of ["worktree.delete", "worktree.resource.teardown"]) {
       const entry = makeEntry({ id: toolId, danger: "confirm" });
-
-      expect(isTierPermitted("workbench", toolId)).toBe(false);
-      expect(shouldExposeTool(entry, "workbench")).toBe(false);
-
-      expect(isTierPermitted("action", toolId)).toBe(true);
-      expect(shouldExposeTool(entry, "action")).toBe(true);
-
-      expect(isTierPermitted("system", toolId)).toBe(true);
-      expect(shouldExposeTool(entry, "system")).toBe(true);
+      expect(isTierPermitted("core", toolId, true)).toBe(false);
+      expect(shouldExposeTool(entry, "core", assistant)).toBe(false);
+      expect(isTierPermitted("full", toolId, true)).toBe(true);
+      expect(shouldExposeTool(entry, "full", assistant)).toBe(true);
     }
-  );
+  });
 
-  it("withholds the shared-state mutations from the external tier too (#11585)", () => {
-    // `external` used to auto-permit these — `git.commit` with no gate at all,
-    // `git.push` behind only its confirm dialog — which was the contrast that
-    // motivated pinning the assistant to `action` in the first place. #11585
-    // closed it from the other side: an api-key caller has its own shell git and
-    // does not need ours, so both now live at `system`.
-    for (const toolId of ["git.push", "git.commit"]) {
-      expect(isTierPermitted("external", toolId)).toBe(false);
-      expect(isTierPermitted("system", toolId)).toBe(true);
-    }
-
-    // The two surfaces move independently, and #12116 is the case that proves
-    // it: promoting generic `worktree.delete` to the in-app `action` floor did
-    // not re-admit it externally. An api-key caller still gets only the
-    // ownership-scoped `worktree.deleteOwned`, which is the whole point of the
-    // #11585 cut — it has its own shell, so it does not need ours.
+  it("withholds the unscoped worktree delete from the external tier (#11585)", () => {
+    // The two surfaces move independently: the unscoped delete being a `full`
+    // tool for the assistant did not re-admit it externally. An api-key caller
+    // still gets only the ownership-scoped `worktree.deleteOwned`, which is the
+    // whole point of the #11585 cut — it has its own shell, so it does not need
+    // ours.
     expect(isTierPermitted("external", "worktree.delete")).toBe(false);
-    expect(isTierPermitted("action", "worktree.delete")).toBe(true);
+    expect(isTierPermitted("external", "worktree.deleteOwned")).toBe(true);
+    expect(isTierPermitted("full", "worktree.delete", true)).toBe(true);
   });
 });
 
-// agent.listToolbar and agent.listAvailable are the narrow, read-only discovery
-// surfaces for toolbar state and the effective launch registry. Both must be
-// reachable by every in-app tier WITHOUT exposing the broad `agentSettings.get`
-// (which leaks custom flags, dangerous args, global env, and presets).
-//
-// They part ways at `external` (#11585). `agent.listAvailable` stays: it answers
-// which agent ids `agent.launch` will actually accept, including user- and
-// plugin-contributed ones, and nothing outside Daintree can answer that.
-// `agent.listToolbar` reports which buttons the user has surfaced in the UI —
-// real for the in-app assistant, not worth a slot on a capped external surface.
+// agent.listAvailable and agent.listPresets are the narrow, read-only discovery
+// surfaces for the two ids `agent.launch` accepts — the effective launch
+// registry, including user- and plugin-contributed agents, and the generated
+// preset ids. Both are core, and external too, because nothing outside
+// Daintree can answer either. The broad `agentSettings.get` is on no tier: it
+// leaks custom flags, dangerous args, global env and preset payloads, and the
+// narrow reads are the only path. `agent.listToolbar` reports which buttons the
+// user has surfaced in the UI, which no orchestrator needs.
 describe("narrow agent discovery tier reachability", () => {
-  it.each(["agent.listToolbar", "agent.listAvailable", "agent.listPresets"] as const)(
-    "permits %s at every in-app tier",
+  it.each(["agent.listAvailable", "agent.listPresets"] as const)(
+    "permits %s at every in-app tier and externally",
     (toolId) => {
-      for (const tier of ["workbench", "action", "system"] as const) {
-        expect(isTierPermitted(tier, toolId)).toBe(true);
+      for (const tier of ["core", "full"] as const) {
+        expect(isTierPermitted(tier, toolId, true)).toBe(true);
+        expect(isTierPermitted(tier, toolId, false)).toBe(true);
       }
+      expect(isTierPermitted("external", toolId)).toBe(true);
     }
   );
 
-  it("keeps only the launch-resolving reads on the external tier", () => {
-    expect(isTierPermitted("external", "agent.listAvailable")).toBe(true);
-    // Preset ids are the other argument `agent.launch` accepts and cannot be
-    // guessed from outside, so this read earns the same slot on the same
-    // argument as the registry read above.
-    expect(isTierPermitted("external", "agent.listPresets")).toBe(true);
-    expect(isTierPermitted("external", "agent.listToolbar")).toBe(false);
-  });
-
-  it("keeps the broad agentSettings.get off the external tier so the narrow alternative is the only external path", () => {
-    expect(isTierPermitted("external", "agentSettings.get")).toBe(false);
-    // Sanity check the contrast is real, not a typo'd id: agentSettings.get IS
-    // reachable for the trusted in-app workbench session.
-    expect(isTierPermitted("workbench", "agentSettings.get")).toBe(true);
+  it("keeps agent.listToolbar and the broad agentSettings.get off every tier", () => {
+    for (const toolId of ["agent.listToolbar", "agentSettings.get"]) {
+      expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(toolId);
+      for (const tier of ["core", "full", "external"] as const) {
+        expect(isTierPermitted(tier, toolId, true)).toBe(false);
+        expect(isTierPermitted(tier, toolId, false)).toBe(false);
+      }
+    }
   });
 });
 
 describe("getTierPermittedActionIds", () => {
-  const TIERS = ["workbench", "action", "system", "external"] as const;
+  const TIERS = ["core", "full", "external"] as const;
 
   // The discovery filter enumerates the tier surface while tools/call probes it
   // one id at a time. Both must resolve to the same set or discovery drifts
   // from dispatch — the exact failure #11525 is about.
   it.each(TIERS)("agrees with isTierPermitted for every action id at tier %s", (tier) => {
-    const permitted = getTierPermittedActionIds(tier);
-    for (const id of BUILT_IN_ACTION_IDS) {
-      expect(permitted.has(id)).toBe(isTierPermitted(tier, id));
+    for (const rendererOwned of [true, false]) {
+      const permitted = getTierPermittedActionIds(tier, rendererOwned);
+      for (const id of BUILT_IN_ACTION_IDS) {
+        expect(permitted.has(id)).toBe(isTierPermitted(tier, id, rendererOwned));
+      }
+    }
+  });
+
+  // `full` must contain everything `core` does, from either origin, or a user
+  // picking the bigger set would lose a tool.
+  it.each([true, false])("nests core inside full (renderer-owned: %s)", (rendererOwned) => {
+    const core = getTierPermittedActionIds("core", rendererOwned);
+    const full = getTierPermittedActionIds("full", rendererOwned);
+    expect([...core].filter((id) => !full.has(id))).toEqual([]);
+  });
+
+  // The whole in-app surface has to be real actions; an allowlist entry naming
+  // a removed or renamed id would be advertised to nobody and hide the drift.
+  it("names only real actions on either in-app tier", () => {
+    const builtIn = new Set<string>(BUILT_IN_ACTION_IDS);
+    for (const tier of ["core", "full"] as const) {
+      for (const rendererOwned of [true, false]) {
+        const unknown = [...getTierPermittedActionIds(tier, rendererOwned)].filter(
+          (id) => !builtIn.has(id)
+        );
+        expect(unknown).toEqual([]);
+      }
     }
   });
 
@@ -1311,7 +1341,7 @@ describe("filterIntrospectionResultForSession", () => {
       const result = searchResult([
         makeEntry({ id: "terminal.list" }),
         makeEntry({ id: "git.push" }),
-        makeEntry({ id: "git.commit" }),
+        makeEntry({ id: "recipe.run" }),
       ]);
       const filtered = filterIntrospectionResultForSession("actions.search", result, permitted, {
         callerLimit: 20,
@@ -1374,7 +1404,7 @@ describe("filterIntrospectionResultForSession", () => {
       overrides: Partial<TargetPolicySessionSnapshot> = {}
     ): TargetPolicySessionSnapshot {
       return {
-        tier: "workbench",
+        tier: "core",
         rendererOwnedOrigin: true,
         perToolGrantedActionIds: new Set<string>(),
         nativeGrantedActionIds: new Set<string>(),
@@ -1574,8 +1604,8 @@ describe("filterIntrospectionResultForSession", () => {
         expect(policy.authorizedBy).toBe("tier");
         expect(policy.callable).toBe(true);
         expect(policy.unavailableReason).toBeNull();
-        expect(policy.effectiveTier).toBe("workbench");
-        expect(policy.minimumTier).toBe("workbench");
+        expect(policy.effectiveTier).toBe("core");
+        expect(policy.minimumTier).toBe("core");
         expect(policy.version).toBe(MCP_TARGET_POLICY_VERSION);
         expect(policy.hash).toMatch(/^[0-9a-f]{64}$/);
       });
@@ -1584,23 +1614,23 @@ describe("filterIntrospectionResultForSession", () => {
       // session, a grant lapses. Reporting only `callable` would collapse them.
       it("reports a grant as the admitting mechanism, with the tier it would need", () => {
         const policy = policyOf(
-          lookup(makeEntry({ id: "git.push" }), {
-            permittedActionIds: new Set([...permitted, "git.push"]),
-            policySnapshot: snapshot({ perToolGrantedActionIds: new Set(["git.push"]) }),
+          lookup(makeEntry({ id: "project.runCheck" }), {
+            permittedActionIds: new Set([...permitted, "project.runCheck"]),
+            policySnapshot: snapshot({ perToolGrantedActionIds: new Set(["project.runCheck"]) }),
           })
         );
 
         expect(policy.authorizedBy).toBe("grant");
-        expect(policy.minimumTier).toBe("system");
-        expect(policy.effectiveTier).toBe("workbench");
+        expect(policy.minimumTier).toBe("full");
+        expect(policy.effectiveTier).toBe("core");
         expect(policy.callable).toBe(true);
       });
 
       it("reports a native grant as the admitting mechanism", () => {
         const policy = policyOf(
-          lookup(makeEntry({ id: "git.push" }), {
-            permittedActionIds: new Set([...permitted, "git.push"]),
-            policySnapshot: snapshot({ nativeGrantedActionIds: new Set(["git.push"]) }),
+          lookup(makeEntry({ id: "project.runCheck" }), {
+            permittedActionIds: new Set([...permitted, "project.runCheck"]),
+            policySnapshot: snapshot({ nativeGrantedActionIds: new Set(["project.runCheck"]) }),
           })
         );
 
@@ -1630,17 +1660,17 @@ describe("filterIntrospectionResultForSession", () => {
       });
 
       it("keeps requiresConfirmation set for a per-resolved-target tool (#12121)", () => {
-        // `peekNativeGrant` refuses terminal.killAll, so a grant listing it
+        // `peekNativeGrant` refuses terminal.closeAll, so a grant listing it
         // buys no bypass. Reading the allowlist alone would advertise one the
         // dispatch gate will not honour.
-        // System tier so the floor admits the call on its own — this isolates
+        // Full tier so the floor admits the call on its own — this isolates
         // the confirmation axis instead of collapsing the whole record.
         const policy = policyOf(
-          lookup(makeEntry({ id: "terminal.killAll", danger: "confirm" }), {
-            permittedActionIds: new Set([...permitted, "terminal.killAll"]),
+          lookup(makeEntry({ id: "terminal.closeAll", danger: "confirm" }), {
+            permittedActionIds: new Set([...permitted, "terminal.closeAll"]),
             policySnapshot: snapshot({
-              tier: "system",
-              nativeGrantedActionIds: new Set(["terminal.killAll"]),
+              tier: "full",
+              nativeGrantedActionIds: new Set(["terminal.closeAll"]),
             }),
           })
         );
@@ -1663,7 +1693,7 @@ describe("filterIntrospectionResultForSession", () => {
       });
 
       // The divergence `resolveTokenTier` makes reachable: an unrecognised
-      // bearer token resolves to `workbench` while the origin still defaults to
+      // bearer token resolves to `core` while the origin still defaults to
       // `external`. Both grant-issuance paths gate on the ORIGIN, so a
       // tier-derived answer here would promise an approval flow that always
       // throws.
@@ -1683,11 +1713,11 @@ describe("filterIntrospectionResultForSession", () => {
       // the dispatch gate either, so the policy must not claim it does.
       it("ignores grants a non-renderer-owned origin could not have been issued", () => {
         const payload = payloadOf(
-          lookup(makeEntry({ id: "git.push" }), {
-            permittedActionIds: new Set([...permitted, "git.push"]),
+          lookup(makeEntry({ id: "project.runCheck" }), {
+            permittedActionIds: new Set([...permitted, "project.runCheck"]),
             policySnapshot: snapshot({
               rendererOwnedOrigin: false,
-              perToolGrantedActionIds: new Set(["git.push"]),
+              perToolGrantedActionIds: new Set(["project.runCheck"]),
             }),
           })
         );
@@ -1954,7 +1984,7 @@ describe("filterIntrospectionResultForSession", () => {
 
   describe("buildTargetPolicy fail-closed contract", () => {
     const snap: TargetPolicySessionSnapshot = {
-      tier: "workbench",
+      tier: "core",
       rendererOwnedOrigin: true,
       perToolGrantedActionIds: new Set<string>(),
       nativeGrantedActionIds: new Set<string>(),
@@ -1999,15 +2029,15 @@ describe("filterIntrospectionResultForSession", () => {
   // product ships as ones it lacks. A renderer-owned session now learns that
   // the name exists and which tier would permit it — and nothing else.
   describe("first-party existence catalog (#12117)", () => {
-    // `git.push` is system-tier; the session below is workbench, so it is
-    // out-of-tier for real rather than by fixture construction.
-    const OUT_OF_TIER = "git.push";
+    // `copyTree.generateAndCopyFile` is a full-tier tool; the session below is
+    // core, so it is out-of-tier for real rather than by fixture construction.
+    const OUT_OF_TIER = "copyTree.generateAndCopyFile";
 
     function firstParty(
       overrides: Partial<TargetPolicySessionSnapshot> = {}
     ): TargetPolicySessionSnapshot {
       return {
-        tier: "workbench",
+        tier: "core",
         rendererOwnedOrigin: true,
         perToolGrantedActionIds: new Set<string>(),
         nativeGrantedActionIds: new Set<string>(),
@@ -2098,44 +2128,50 @@ describe("filterIntrospectionResultForSession", () => {
 
     it("names an out-of-tier action, its band, and the tier that permits it", () => {
       const stub = buildUnavailableStub(
-        makeEntry({ id: OUT_OF_TIER, title: "Push", category: "git", danger: "confirm" }),
+        makeEntry({
+          id: OUT_OF_TIER,
+          title: "Copy context to clipboard",
+          category: "copyTree",
+          danger: "safe",
+        }),
         firstParty()
       );
 
       expect(stub).toEqual({
         id: OUT_OF_TIER,
-        title: "Push",
-        // BAND_OVERRIDES pins git.push to external-effect; deriving it here
+        title: "Copy context to clipboard",
+        // BAND_OVERRIDES pins the clipboard bundle to destructive-local where
+        // the mechanical derivation would say reversible; deriving it here
         // rather than reading `entry.band` is what keeps a renderer-attached
         // value from crossing the tier boundary unvalidated.
-        band: "external-effect",
-        minimumTier: "system",
+        band: "destructive-local",
+        minimumTier: "full",
         callable: false,
       });
       expect(McpUnavailableActionStubSchema.safeParse(stub).success).toBe(true);
     });
 
-    // `git.push` above proves nothing about the derivation: BAND_OVERRIDES pins
-    // it, so a builder that passed a hard-coded `danger: "safe"` into
-    // `deriveBand` would still report it correctly. `terminal.arm` has no
-    // override and is `danger: "confirm"` in a non-open-world category, so its
-    // band can only be right if the entry's OWN danger reaches the derivation.
-    // (`worktree.delete`, the action #12117 was filed about, was the exemplar
-    // here until #12116 promoted it to the action tier.)
+    // The stub above proves nothing about the derivation: BAND_OVERRIDES pins
+    // it, so a builder that passed a hard-coded `danger` into `deriveBand`
+    // would still report it correctly. `worktree.delete` — the action #12117
+    // was filed about, out of core's reach again since the core/full split —
+    // has no override and is `danger: "confirm"` in a non-open-world category,
+    // so its band can only be right if the entry's OWN danger reaches the
+    // derivation.
     it("derives the band from the entry's own danger, not a fixed value", () => {
       const destructive = buildUnavailableStub(
         makeEntry({
-          id: "terminal.arm",
-          title: "Arm Terminal",
-          category: "terminal",
+          id: "worktree.delete",
+          title: "Delete Worktree",
+          category: "worktree",
           danger: "confirm",
         }),
         firstParty()
       );
-      expect(destructive).toMatchObject({ band: "destructive-local", minimumTier: "system" });
+      expect(destructive).toMatchObject({ band: "destructive-local", minimumTier: "full" });
 
       const safe = buildUnavailableStub(
-        makeEntry({ id: "terminal.arm", category: "terminal", danger: "safe" }),
+        makeEntry({ id: "worktree.delete", category: "worktree", danger: "safe" }),
         firstParty()
       );
       expect(safe).toMatchObject({ band: "reversible" });
@@ -2223,7 +2259,7 @@ describe("filterIntrospectionResultForSession", () => {
       ]);
       expect(payload.total).toBe(1);
       expect(payload.unavailable).toEqual([
-        expect.objectContaining({ id: OUT_OF_TIER, minimumTier: "system", callable: false }),
+        expect.objectContaining({ id: OUT_OF_TIER, minimumTier: "full", callable: false }),
       ]);
       expect(payload.unavailableTotal).toBe(1);
     });
@@ -2271,8 +2307,8 @@ describe("filterIntrospectionResultForSession", () => {
         makeEntry({ id: "terminal.list" }),
         makeEntry({ id: "worktree.list" }),
         makeEntry({ id: OUT_OF_TIER }),
-        makeEntry({ id: "git.commit" }),
-        makeEntry({ id: "git.stageAll" }),
+        makeEntry({ id: "recipe.run" }),
+        makeEntry({ id: "terminal.new" }),
       ];
 
       const first = listFor(entries, firstParty(), { listPaging: { offset: 0, limit: 2 } });
@@ -2281,7 +2317,7 @@ describe("filterIntrospectionResultForSession", () => {
         "worktree.list",
       ]);
       expect(first.total).toBe(2);
-      expect(stubIds(first.unavailable)).toEqual([OUT_OF_TIER, "git.commit"]);
+      expect(stubIds(first.unavailable)).toEqual([OUT_OF_TIER, "recipe.run"]);
       expect(first.unavailableTotal).toBe(3);
 
       // Second page: the callable set is exhausted, the catalog is not. Each
@@ -2289,7 +2325,7 @@ describe("filterIntrospectionResultForSession", () => {
       const second = listFor(entries, firstParty(), { listPaging: { offset: 2, limit: 2 } });
       expect(second.actions).toEqual([]);
       expect(second.total).toBe(2);
-      expect(stubIds(second.unavailable)).toEqual(["git.stageAll"]);
+      expect(stubIds(second.unavailable)).toEqual(["terminal.new"]);
       expect(second.unavailableTotal).toBe(3);
     });
 
@@ -2304,7 +2340,7 @@ describe("filterIntrospectionResultForSession", () => {
         [
           makeEntry({ id: "terminal.list" }),
           makeEntry({ id: OUT_OF_TIER }),
-          makeEntry({ id: "git.commit" }),
+          makeEntry({ id: "recipe.run" }),
         ],
         firstParty(),
         { listPaging: { offset: 0, limit: 1 } }
@@ -2321,12 +2357,12 @@ describe("filterIntrospectionResultForSession", () => {
         [
           makeEntry({ id: "terminal.list" }),
           makeEntry({ id: OUT_OF_TIER }),
-          makeEntry({ id: "git.commit" }),
+          makeEntry({ id: "recipe.run" }),
         ],
         firstParty(),
         { listPaging: { offset: 1, limit: 1 } }
       );
-      expect(stubIds(next.unavailable)).toEqual(["git.commit"]);
+      expect(stubIds(next.unavailable)).toEqual(["recipe.run"]);
       expect(next.unavailableHasMore).toBe(false);
     });
 
@@ -2335,7 +2371,7 @@ describe("filterIntrospectionResultForSession", () => {
         [
           makeEntry({ id: "terminal.list" }),
           makeEntry({ id: OUT_OF_TIER }),
-          makeEntry({ id: "git.commit" }),
+          makeEntry({ id: "recipe.run" }),
         ],
         firstParty(),
         1
@@ -2380,7 +2416,7 @@ describe("filterIntrospectionResultForSession", () => {
       expect(payload.policy).toBeNull();
       expect(payload.error?.code).toBe("TIER_NOT_PERMITTED");
       expect(payload.unavailable).toEqual(
-        expect.objectContaining({ id: OUT_OF_TIER, minimumTier: "system", callable: false })
+        expect.objectContaining({ id: OUT_OF_TIER, minimumTier: "full", callable: false })
       );
       expect(McpGetSchemaWireResultSchema.safeParse(payload).success).toBe(true);
     });
@@ -2483,7 +2519,7 @@ describe("isWithheldFromBoundSession (#11789)", () => {
     ).toBe(false);
   });
 
-  it.each(["workbench", "action", "system"] as const)(
+  it.each(["core", "full"] as const)(
     "never withholds from the %s tier, so the pinned Assistant is untouched",
     (tier) => {
       // The Daintree Assistant is pinned to a renderer and carries confirm-gated
@@ -2505,68 +2541,89 @@ describe("isWithheldFromBoundSession (#11789)", () => {
 });
 
 // The ladder tiers are not only the assistant's (#12407). An agent pane's bearer
-// holds the project's tier with an `external` origin, and at `action` that used
-// to hand it input into any terminal — so an agent in a read-only sandbox could
-// type into the user's shell. These pin the split: the tier decides whether the
-// unscoped input could be reached, the origin decides whether it is.
-describe("unscoped terminal input is reserved for renderer-owned origins (#12407)", () => {
+// holds the project's tier with an `external` origin, and at the old `action`
+// tier that handed it input into any terminal — so an agent in a read-only
+// sandbox could type into the user's shell. These pin the split: the tier
+// decides whether a panel tool could be reached, the origin decides whether the
+// unscoped form or the owned twin is.
+describe("unscoped panel tools are reserved for renderer-owned origins (#12407)", () => {
   const ASSISTANT = { workspaceBound: false, rendererOwnedOrigin: true };
+  const TWIN_KEYS = new Set<string>(Object.keys(OWNED_TWIN_TOOLS));
+  const TWIN_VALUES = new Set<string>(Object.values(OWNED_TWIN_TOOLS));
 
   it.each(RENDERER_OWNED_ORIGIN_ONLY_TOOLS)("%s is reachable by tier, withheld by origin", (id) => {
     // Pin to ground truth, so a rename cannot turn the refusals below vacuous.
     expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
-    expect(TIER_ALLOWLISTS.action.has(id)).toBe(true);
+    expect(TIER_ALLOWLISTS.full.has(id)).toBe(true);
 
-    for (const tier of ["action", "system"] as const) {
-      const entry = makeEntry({ id, kind: "command" });
-      expect(isTierPermitted(tier, id, true)).toBe(true);
-      expect(shouldExposeTool(entry, tier, ASSISTANT)).toBe(true);
+    const entry = makeEntry({ id, kind: "command" });
+    expect(isTierPermitted("full", id, true)).toBe(true);
+    expect(shouldExposeTool(entry, "full", ASSISTANT)).toBe(true);
 
-      expect(isTierPermitted(tier, id, false)).toBe(false);
-      expect(
-        shouldExposeTool(entry, tier, { workspaceBound: false, rendererOwnedOrigin: false })
-      ).toBe(false);
-      // An unclassified caller gets the narrower surface, never the assistant's.
-      expect(isTierPermitted(tier, id)).toBe(false);
-      expect(shouldExposeTool(entry, tier)).toBe(false);
-    }
+    expect(isTierPermitted("full", id, false)).toBe(false);
+    expect(
+      shouldExposeTool(entry, "full", { workspaceBound: false, rendererOwnedOrigin: false })
+    ).toBe(false);
+    // An unclassified caller gets the narrower surface, never the assistant's.
+    expect(isTierPermitted("full", id)).toBe(false);
+    expect(shouldExposeTool(entry, "full")).toBe(false);
   });
 
-  it("leaves the owned forms on every ladder tier above workbench, for either origin", () => {
-    for (const id of ["terminal.sendCommandOwned", "terminal.injectOwned"]) {
-      expect(isTierPermitted("workbench", id, true)).toBe(false);
-      for (const tier of ["action", "system"] as const) {
-        expect(isTierPermitted(tier, id, true)).toBe(true);
-        expect(isTierPermitted(tier, id, false)).toBe(true);
+  it.each(Object.entries(OWNED_TWIN_TOOLS))(
+    "hands %s to the assistant and its owned twin to everyone else",
+    (unscoped, owned) => {
+      for (const id of [unscoped, owned]) {
+        expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+      }
+      for (const tier of ["core", "full"] as const) {
+        expect(isTierPermitted(tier, unscoped, false)).toBe(false);
+        if (isTierPermitted(tier, unscoped, true)) {
+          expect(isTierPermitted(tier, owned, false)).toBe(true);
+        }
+      }
+      // Reachable by the assistant somewhere, or the mapping names a dead id.
+      expect(isTierPermitted("full", unscoped, true)).toBe(true);
+    }
+  );
+
+  // Terminal input, injection and closing are the jobs the assistant already
+  // does with the unscoped tool; listing the owned form beside it would only
+  // give the model two tools for one job.
+  it("never lists the owned input, inject or close forms for the assistant", () => {
+    for (const id of ["terminal.sendCommandOwned", "terminal.injectOwned", "terminal.closeOwned"]) {
+      for (const tier of ["core", "full"] as const) {
+        expect(isTierPermitted(tier, id, true), `${tier} ${id}`).toBe(false);
       }
     }
   });
 
-  it("removes exactly the reserved ids and nothing else", () => {
+  it("differs between the origins only by the reserved and twinned ids", () => {
     const reserved = new Set<string>(RENDERER_OWNED_ORIGIN_ONLY_TOOLS);
-    for (const tier of ["workbench", "action", "system", "external"] as const) {
-      const full = getTierPermittedActionIds(tier, true);
-      const narrowed = getTierPermittedActionIds(tier, false);
-      expect([...narrowed].filter((id) => !full.has(id))).toEqual([]);
-      expect([...full].filter((id) => !narrowed.has(id)).sort()).toEqual(
-        [...full].filter((id) => reserved.has(id)).sort()
-      );
+    for (const tier of ["core", "full", "external"] as const) {
+      const assistant = getTierPermittedActionIds(tier, true);
+      const pane = getTierPermittedActionIds(tier, false);
+      expect(
+        [...pane].filter((id) => !assistant.has(id) && !TWIN_VALUES.has(id)),
+        `${tier}: pane-only ids that are not owned twins`
+      ).toEqual([]);
+      expect(
+        [...assistant].filter((id) => !pane.has(id) && !reserved.has(id) && !TWIN_KEYS.has(id)),
+        `${tier}: assistant-only ids that are neither reserved nor twinned`
+      ).toEqual([]);
     }
   });
 
   it("reports no authorization to a non-renderer-owned session in its target policy", () => {
-    for (const tier of ["action", "system"] as const) {
-      for (const id of RENDERER_OWNED_ORIGIN_ONLY_TOOLS) {
-        const entry = makeEntry({ id, kind: "command" });
-        const snapshot = (rendererOwnedOrigin: boolean): TargetPolicySessionSnapshot => ({
-          tier,
-          rendererOwnedOrigin,
-          perToolGrantedActionIds: new Set(),
-          nativeGrantedActionIds: new Set(),
-        });
-        expect(buildTargetPolicy(entry, snapshot(false)), `${tier} ${id}`).toBeNull();
-        expect(buildTargetPolicy(entry, snapshot(true)), `${tier} ${id}`).not.toBeNull();
-      }
+    for (const id of [...RENDERER_OWNED_ORIGIN_ONLY_TOOLS, ...TWIN_KEYS]) {
+      const entry = makeEntry({ id, kind: "command" });
+      const snapshot = (rendererOwnedOrigin: boolean): TargetPolicySessionSnapshot => ({
+        tier: "full",
+        rendererOwnedOrigin,
+        perToolGrantedActionIds: new Set(),
+        nativeGrantedActionIds: new Set(),
+      });
+      expect(buildTargetPolicy(entry, snapshot(false)), id).toBeNull();
+      expect(buildTargetPolicy(entry, snapshot(true)), id).not.toBeNull();
     }
   });
 });
@@ -2596,18 +2653,20 @@ describe("shouldExposeTool with a workspace-bound session (#11789)", () => {
 
   it("leaves every non-external tier's exposure unchanged when bound", () => {
     const entry = makeEntry({ id: "recipe.run", kind: "command", danger: "confirm" });
-    for (const tier of ["workbench", "action", "system"] as const) {
+    for (const tier of ["core", "full"] as const) {
       expect(shouldExposeTool(entry, tier, BOUND)).toBe(shouldExposeTool(entry, tier));
     }
   });
 });
 
 // #12692: an agent pane's project tier decides what runs without asking, not
-// what is refused. Everything above it, up to the pane ceiling, asks.
+// what is refused. Everything above it, up to the pane ceiling, asks. Since the
+// core/full split no tier skips the ordinary confirmation on its own; only a
+// session approval the user gave from the dialog does.
 describe("agent-pane approval (#12692)", () => {
   const PANE = { workspaceBound: true, paneApproval: true };
   const paneSnapshot = (
-    tier: "workbench" | "action" | "system",
+    tier: "core" | "full",
     perToolGranted: readonly string[] = []
   ): TargetPolicySessionSnapshot => ({
     tier,
@@ -2617,92 +2676,105 @@ describe("agent-pane approval (#12692)", () => {
     nativeGrantedActionIds: new Set(),
   });
 
-  it("caps the ceiling at the system surface a non-renderer-owned origin can hold", () => {
+  it("caps the ceiling at the full surface a non-renderer-owned origin can hold", () => {
     expect([...PANE_APPROVAL_CEILING].sort()).toEqual(
-      [...getTierPermittedActionIds("system", false)].sort()
+      [...getTierPermittedActionIds("full", false)].sort()
     );
-    for (const id of RENDERER_OWNED_ORIGIN_ONLY_TOOLS) {
+    for (const id of [...RENDERER_OWNED_ORIGIN_ONLY_TOOLS, ...Object.keys(OWNED_TWIN_TOOLS)]) {
       expect(PANE_APPROVAL_CEILING.has(id), id).toBe(false);
     }
   });
 
   it("asks only for what is above the tier and inside the ceiling", () => {
-    expect(isApprovalRequestable("action", "git.push", true)).toBe(true);
-    expect(isApprovalRequestable("workbench", "worktree.delete", true)).toBe(true);
+    expect(isApprovalRequestable("core", "project.runCheck", true)).toBe(true);
+    expect(isApprovalRequestable("core", "worktree.resource.teardown", true)).toBe(true);
     // At or below the tier it simply runs.
-    expect(isApprovalRequestable("action", "worktree.delete", true)).toBe(false);
-    expect(isApprovalRequestable("system", "git.push", true)).toBe(false);
-    // Nothing outside the ceiling is ever asked for.
-    for (const id of RENDERER_OWNED_ORIGIN_ONLY_TOOLS) {
-      expect(isApprovalRequestable("workbench", id, true), id).toBe(false);
+    expect(isApprovalRequestable("core", "worktree.deleteOwned", true)).toBe(false);
+    expect(isApprovalRequestable("full", "project.runCheck", true)).toBe(false);
+    // Nothing outside the ceiling is ever asked for — the reserved tools, the
+    // unscoped forms of the owned twins, and anything off MCP entirely.
+    for (const id of [...RENDERER_OWNED_ORIGIN_ONLY_TOOLS, ...Object.keys(OWNED_TWIN_TOOLS)]) {
+      expect(isApprovalRequestable("core", id, true), id).toBe(false);
     }
-    expect(isApprovalRequestable("workbench", "no.such.action", true)).toBe(false);
+    expect(isApprovalRequestable("core", "git.push", true)).toBe(false);
+    expect(isApprovalRequestable("core", "no.such.action", true)).toBe(false);
   });
 
   it("keeps every non-pane session's tier a hard ceiling", () => {
-    expect(isApprovalRequestable("action", "git.push", false)).toBe(false);
-    expect(isApprovalRequestable("external", "git.push", true)).toBe(false);
-    expect(getReachableActionIds("action", false, false)).toBe(
-      getTierPermittedActionIds("action", false)
+    expect(isApprovalRequestable("core", "project.runCheck", false)).toBe(false);
+    expect(isApprovalRequestable("external", "project.runCheck", true)).toBe(false);
+    expect(getReachableActionIds("core", false, false)).toBe(
+      getTierPermittedActionIds("core", false)
     );
     expect(getReachableActionIds("external", false, true)).toBe(
       getTierPermittedActionIds("external", false)
     );
   });
 
-  it("auto-confirms only at system, only for a pane, and never for a target-picking tool", () => {
-    expect(isTierAutoConfirmed("system", "worktree.delete", true)).toBe(true);
-    expect(isTierAutoConfirmed("action", "worktree.delete", true)).toBe(false);
-    expect(isTierAutoConfirmed("system", "worktree.delete", false)).toBe(false);
-    // Its dialog is where the user picks which terminals die (#12123).
-    expect(isTierAutoConfirmed("system", "terminal.killBatch", true)).toBe(false);
+  it("keeps the confirm dialog for a confirm-gated target at every tier", () => {
+    const teardown = makeEntry({
+      id: "worktree.resource.teardown",
+      kind: "command",
+      danger: "confirm",
+    });
+    expect(buildTargetPolicy(teardown, paneSnapshot("full"))).toMatchObject({
+      authorizedBy: "tier",
+      requiresConfirmation: true,
+    });
+    expect(buildTargetPolicy(teardown, paneSnapshot("core"))).toMatchObject({
+      authorizedBy: "approval",
+      requiresConfirmation: true,
+    });
   });
 
   it("lists ask-reachable tools for a pane so it can request them", () => {
-    const push = makeEntry({ id: "git.push", kind: "command" });
-    expect(shouldExposeTool(push, "action", PANE)).toBe(true);
-    expect(shouldExposeTool(push, "action", { workspaceBound: true })).toBe(false);
-    expect(getReachableActionIds("workbench", false, true).has("git.push")).toBe(true);
+    const check = makeEntry({ id: "project.runCheck", kind: "command" });
+    expect(shouldExposeTool(check, "core", PANE)).toBe(true);
+    expect(shouldExposeTool(check, "core", { workspaceBound: true })).toBe(false);
+    expect(getReachableActionIds("core", false, true).has("project.runCheck")).toBe(true);
   });
 
   it("reports an above-tier target as reached by approval, with a dialog", () => {
     const policy = buildTargetPolicy(
-      makeEntry({ id: "git.push", kind: "command" }),
-      paneSnapshot("action")
+      makeEntry({ id: "project.runCheck", kind: "command" }),
+      paneSnapshot("core")
     );
     expect(policy).toMatchObject({
       authorizedBy: "approval",
       requiresConfirmation: true,
       grantable: true,
-      minimumTier: "system",
+      minimumTier: "full",
     });
     expect(McpTargetPolicySchema.parse(policy)).toEqual(policy);
   });
 
-  it("reports no dialog for a confirm-gated target at system, and one below it", () => {
-    const del = makeEntry({ id: "worktree.delete", kind: "command", danger: "confirm" });
-    expect(buildTargetPolicy(del, paneSnapshot("system"))?.requiresConfirmation).toBe(false);
-    expect(buildTargetPolicy(del, paneSnapshot("action"))).toMatchObject({
-      authorizedBy: "tier",
-      requiresConfirmation: true,
-    });
-  });
-
-  it("does not advertise a target-picking tool as grantable to a pane", () => {
-    const kill = makeEntry({ id: "terminal.killBatch", kind: "command", danger: "confirm" });
-    expect(buildTargetPolicy(kill, paneSnapshot("workbench"))).toMatchObject({
-      authorizedBy: "approval",
-      grantable: false,
-    });
+  // A target-picking tool's dialog is where the user chooses which terminals
+  // die (#12123), so no approval can stand in for it. None of them is inside a
+  // pane's reach at all: the one left on MCP, `terminal.closeAll`, is reserved
+  // for the assistant.
+  it("keeps every target-picking tool out of a pane's reach", () => {
+    const targetPicking = Object.keys(NATIVE_GRANT_USE_POLICY_OVERRIDES);
+    expect(targetPicking.length).toBeGreaterThan(0);
+    for (const id of targetPicking) {
+      expect(PANE_APPROVAL_CEILING.has(id), id).toBe(false);
+      for (const tier of ["core", "full"] as const) {
+        expect(getReachableActionIds(tier, false, true).has(id), `${tier} ${id}`).toBe(false);
+      }
+    }
   });
 
   it("reports a session approval as waiving the dialog it replaced", () => {
-    const del = makeEntry({ id: "worktree.delete", kind: "command", danger: "confirm" });
+    const teardown = makeEntry({
+      id: "worktree.resource.teardown",
+      kind: "command",
+      danger: "confirm",
+    });
     expect(
-      buildTargetPolicy(del, paneSnapshot("action", ["worktree.delete"]))?.requiresConfirmation
+      buildTargetPolicy(teardown, paneSnapshot("full", ["worktree.resource.teardown"]))
+        ?.requiresConfirmation
     ).toBe(false);
-    const push = makeEntry({ id: "git.push", kind: "command" });
-    expect(buildTargetPolicy(push, paneSnapshot("action", ["git.push"]))).toMatchObject({
+    const check = makeEntry({ id: "project.runCheck", kind: "command" });
+    expect(buildTargetPolicy(check, paneSnapshot("core", ["project.runCheck"]))).toMatchObject({
       authorizedBy: "grant",
       requiresConfirmation: false,
     });

@@ -14,12 +14,12 @@ function makeAuditRecord(overrides: Partial<McpAuditRecord>): McpAuditRecord {
   return {
     id: overrides.id ?? "audit-1",
     timestamp: overrides.timestamp ?? Date.now(),
-    toolId: overrides.toolId ?? "agent.getState",
+    toolId: overrides.toolId ?? "terminal.getStatus",
     // The classifier joins on helpSessionId (the help-session id); sessionId
     // is the MCP transport id and intentionally never matches it.
     sessionId: overrides.sessionId ?? "mcp-transport-1",
     helpSessionId: overrides.helpSessionId ?? "session-1",
-    tier: overrides.tier ?? "action",
+    tier: overrides.tier ?? "core",
     argsSummary: overrides.argsSummary ?? "{}",
     result: overrides.result ?? "success",
     durationMs: overrides.durationMs ?? 12,
@@ -158,9 +158,9 @@ describe("classifyTurnOutcome", () => {
 
   it("returns reasoning-loop when 3+ identical (toolId, argsSummary) calls exist in the turn window", () => {
     const records = [
-      makeAuditRecord({ id: "r1", toolId: "agent.getState", argsSummary: "{}" }),
-      makeAuditRecord({ id: "r2", toolId: "agent.getState", argsSummary: "{}" }),
-      makeAuditRecord({ id: "r3", toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r1", toolId: "terminal.getStatus", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r2", toolId: "terminal.getStatus", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r3", toolId: "terminal.getStatus", argsSummary: "{}" }),
     ];
     expect(
       classifyTurnOutcome({
@@ -174,8 +174,8 @@ describe("classifyTurnOutcome", () => {
 
   it("does not trigger reasoning-loop below the threshold (2 identical calls)", () => {
     const records = [
-      makeAuditRecord({ id: "r1", toolId: "agent.getState", argsSummary: "{}" }),
-      makeAuditRecord({ id: "r2", toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r1", toolId: "terminal.getStatus", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r2", toolId: "terminal.getStatus", argsSummary: "{}" }),
     ];
     expect(
       classifyTurnOutcome({
@@ -189,11 +189,11 @@ describe("classifyTurnOutcome", () => {
 
   it("counts interleaved identical calls toward the reasoning-loop threshold", () => {
     const records = [
-      makeAuditRecord({ id: "r5", toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r5", toolId: "terminal.getStatus", argsSummary: "{}" }),
       makeAuditRecord({ id: "r4", toolId: "files.list", argsSummary: '{"path":"/foo"}' }),
-      makeAuditRecord({ id: "r3", toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r3", toolId: "terminal.getStatus", argsSummary: "{}" }),
       makeAuditRecord({ id: "r2", toolId: "terminal.run", argsSummary: '{"cmd":"ls"}' }),
-      makeAuditRecord({ id: "r1", toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r1", toolId: "terminal.getStatus", argsSummary: "{}" }),
     ];
     expect(
       classifyTurnOutcome({
@@ -209,14 +209,14 @@ describe("classifyTurnOutcome", () => {
     const records = [
       makeAuditRecord({
         id: "r4",
-        toolId: "agent.getState",
+        toolId: "terminal.getStatus",
         argsSummary: "{}",
         result: "error",
         errorCode: "DISPATCH_THREW",
       }),
-      makeAuditRecord({ id: "r3", toolId: "agent.getState", argsSummary: "{}" }),
-      makeAuditRecord({ id: "r2", toolId: "agent.getState", argsSummary: "{}" }),
-      makeAuditRecord({ id: "r1", toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r3", toolId: "terminal.getStatus", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r2", toolId: "terminal.getStatus", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r1", toolId: "terminal.getStatus", argsSummary: "{}" }),
     ];
     expect(
       classifyTurnOutcome({
@@ -571,9 +571,24 @@ describe("TurnOutcomeService.setNotifyTurnOutcomeAlert", () => {
   it("fires the alert callback for reasoning-loop with the turn id", () => {
     const now = Date.now();
     const auditRecords = [
-      makeAuditRecord({ id: "r1", timestamp: now, toolId: "agent.getState", argsSummary: "{}" }),
-      makeAuditRecord({ id: "r2", timestamp: now, toolId: "agent.getState", argsSummary: "{}" }),
-      makeAuditRecord({ id: "r3", timestamp: now, toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({
+        id: "r1",
+        timestamp: now,
+        toolId: "terminal.getStatus",
+        argsSummary: "{}",
+      }),
+      makeAuditRecord({
+        id: "r2",
+        timestamp: now,
+        toolId: "terminal.getStatus",
+        argsSummary: "{}",
+      }),
+      makeAuditRecord({
+        id: "r3",
+        timestamp: now,
+        toolId: "terminal.getStatus",
+        argsSummary: "{}",
+      }),
     ];
     const f = makeFixture({ auditRecords });
     const alert = vi.fn();
@@ -582,7 +597,10 @@ describe("TurnOutcomeService.setNotifyTurnOutcomeAlert", () => {
     f.service.handleTransition(
       makeTransition({ previousState: "idle", state: "working", trigger: "input", timestamp: now })
     );
-    f.service.appendOutput("term-1", "Looping through agent.getState repeatedly without progress.");
+    f.service.appendOutput(
+      "term-1",
+      "Looping through terminal.getStatus repeatedly without progress."
+    );
     f.service.handleTransition(
       makeTransition({ previousState: "working", state: "idle", trigger: "output", timestamp: now })
     );

@@ -355,9 +355,9 @@ export interface StoreSchema {
     docSearch: boolean;
     daintreeControl: boolean;
     /**
-     * MCP capability tier for the help assistant. Migrated at read time from
-     * the legacy `skipPermissions` boolean — see `helpAssistant.ts`
-     * `sanitizeStored` and `HelpSessionService.readSettings`.
+     * MCP tool set for the help assistant. Read-time migrated from the
+     * pre-split ladder values and the legacy `skipPermissions` boolean — see
+     * `helpAssistant.ts` `sanitizeStored` and `HelpSessionService.readSettings`.
      */
     tier: HelpAssistantTier;
     /**
@@ -818,7 +818,7 @@ const storeOptions = {
     helpAssistant: {
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7 as const,
     },

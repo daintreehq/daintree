@@ -543,7 +543,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
             //
             // "Agent", not "Assistant", and deliberately so. `dispatchSource`
             // cannot identify WHICH agent: useMcpBridge dispatches every MCP
-            // origin as "agent", and this action sits in WORKBENCH_TIER_TOOLS,
+            // origin as "agent", and this action sits in the `full` tool set,
             // which a normal Claude pane reaches through its own per-pane
             // bearer token (terminal/lifecycle.ts mints one for every Claude
             // launch when the project's MCP tier is on). Naming the in-app

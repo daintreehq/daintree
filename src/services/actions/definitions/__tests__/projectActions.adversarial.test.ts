@@ -146,7 +146,7 @@ describe("projectActions adversarial", () => {
     it("drops internal and unclassified fields rather than forwarding them", async () => {
       projectClientMock.getSettings.mockResolvedValue({
         runCommands: [],
-        daintreeMcpTier: "system",
+        daintreeMcpTier: "full",
         resourceEnvironments: { prod: { connect: "ssh -i ~/.ssh/id_ed25519 deploy@prod" } },
         commandOverrides: [{ id: "c1" }],
         preferredEditor: { command: "code" },

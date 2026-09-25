@@ -79,7 +79,7 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toEqual({
       docSearch: true,
       daintreeControl: true,
-      tier: "action",
+      tier: "core",
       bypassPermissions: false,
       auditRetention: 7,
       modelId: null,
@@ -92,7 +92,7 @@ describe("registerHelpAssistantHandlers", () => {
 
   it("merges stored values over defaults so legacy partial state still loads", async () => {
     storeMock.get.mockReturnValue({
-      tier: "system",
+      tier: "full",
       bypassPermissions: true,
       auditRetention: 30,
     });
@@ -103,7 +103,7 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toEqual({
       docSearch: true,
       daintreeControl: true,
-      tier: "system",
+      tier: "full",
       bypassPermissions: true,
       auditRetention: 30,
       modelId: null,
@@ -114,7 +114,7 @@ describe("registerHelpAssistantHandlers", () => {
     });
   });
 
-  it("migrates legacy skipPermissions=true to tier='system' + bypassPermissions=true", async () => {
+  it("migrates legacy skipPermissions=true to tier='full' + bypassPermissions=true", async () => {
     storeMock.get.mockReturnValue({
       skipPermissions: true,
     } as unknown as Partial<HelpAssistantSettings>);
@@ -122,10 +122,10 @@ describe("registerHelpAssistantHandlers", () => {
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 
     const result = await handler(null);
-    expect(result).toMatchObject({ tier: "system", bypassPermissions: true });
+    expect(result).toMatchObject({ tier: "full", bypassPermissions: true });
   });
 
-  it("migrates legacy skipPermissions=false to tier='action' + bypassPermissions=false", async () => {
+  it("migrates legacy skipPermissions=false to tier='core' + bypassPermissions=false", async () => {
     storeMock.get.mockReturnValue({
       skipPermissions: false,
     } as unknown as Partial<HelpAssistantSettings>);
@@ -133,20 +133,50 @@ describe("registerHelpAssistantHandlers", () => {
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 
     const result = await handler(null);
-    expect(result).toMatchObject({ tier: "action", bypassPermissions: false });
+    expect(result).toMatchObject({ tier: "core", bypassPermissions: false });
   });
 
   it("prefers new fields over legacy skipPermissions when both are present", async () => {
     storeMock.get.mockReturnValue({
       skipPermissions: true,
-      tier: "action",
+      tier: "core",
       bypassPermissions: false,
     } as unknown as Partial<HelpAssistantSettings>);
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 
     const result = await handler(null);
-    expect(result).toMatchObject({ tier: "action", bypassPermissions: false });
+    expect(result).toMatchObject({ tier: "core", bypassPermissions: false });
+  });
+
+  it.each([
+    ["workbench", "core"],
+    ["action", "core"],
+    ["system", "full"],
+  ] as const)(
+    "reads a tier stored before the core/full split (%s) as %s",
+    async (stored, expected) => {
+      storeMock.get.mockReturnValue({ tier: stored } as unknown as Partial<HelpAssistantSettings>);
+      registerHelpAssistantHandlers();
+      const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+      const result = await handler(null);
+      expect(result).toMatchObject({ tier: expected });
+    }
+  );
+
+  it("prefers a pre-split stored tier over legacy skipPermissions", async () => {
+    // A stored ladder name is still a tier the user chose; skipPermissions is
+    // only the fallback when no tier was ever written.
+    storeMock.get.mockReturnValue({
+      skipPermissions: true,
+      tier: "action",
+    } as unknown as Partial<HelpAssistantSettings>);
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    const result = await handler(null);
+    expect(result).toMatchObject({ tier: "core" });
   });
 
   it("rejects an invalid stored tier and falls back to default", async () => {
@@ -158,7 +188,7 @@ describe("registerHelpAssistantHandlers", () => {
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 
     const result = await handler(null);
-    expect(result).toMatchObject({ tier: "action", bypassPermissions: false });
+    expect(result).toMatchObject({ tier: "core", bypassPermissions: false });
   });
 
   it("persists each touched key under helpAssistant.<field>", async () => {
@@ -209,13 +239,12 @@ describe("registerHelpAssistantHandlers", () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
 
-    await handler(null, { tier: "system" });
-    await handler(null, { tier: "workbench" });
-    await handler(null, { tier: "action" });
+    await handler(null, { tier: "full" });
+    await handler(null, { tier: "core" });
 
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.tier", "system");
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.tier", "workbench");
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.tier", "action");
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.tier", "full");
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.tier", "core");
+    expect(storeMock.set).toHaveBeenCalledTimes(2);
   });
 
   it("rejects tier values outside the valid HelpAssistantTier union", async () => {
@@ -225,6 +254,10 @@ describe("registerHelpAssistantHandlers", () => {
     await handler(null, { tier: "external" });
     await handler(null, { tier: "off" });
     await handler(null, { tier: 0 });
+    // Pre-split names are normalized on read but never accepted as a write.
+    await handler(null, { tier: "workbench" });
+    await handler(null, { tier: "action" });
+    await handler(null, { tier: "system" });
 
     expect(storeMock.set).not.toHaveBeenCalled();
   });
@@ -343,7 +376,7 @@ describe("registerHelpAssistantHandlers", () => {
     storeMock.get.mockReturnValue({
       docSearch: "not-a-boolean" as unknown as boolean,
       daintreeControl: 42 as unknown as boolean,
-      tier: null as unknown as "action",
+      tier: null as unknown as "core",
       bypassPermissions: "yes" as unknown as boolean,
       auditRetention: 365 as unknown as 7,
     });
@@ -354,7 +387,7 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toEqual({
       docSearch: true,
       daintreeControl: true,
-      tier: "action",
+      tier: "core",
       bypassPermissions: false,
       auditRetention: 7,
       modelId: null,
@@ -704,7 +737,7 @@ describe("registerHelpAssistantHandlers — getLiveSessionStatus (#10032)", () =
 
   it("returns a connected snapshot shaped from the service result", async () => {
     mcpServiceMock.getHelpSessionLiveStatus.mockReturnValue({
-      tier: "system",
+      tier: "full",
       activeGrants: [{ toolId: "terminal.kill", expiresAt: 1000, ttlMs: 500 }],
     });
     registerHelpAssistantHandlers();
@@ -714,7 +747,7 @@ describe("registerHelpAssistantHandlers — getLiveSessionStatus (#10032)", () =
 
     expect(result).toEqual({
       connected: true,
-      tier: "system",
+      tier: "full",
       activeGrants: [{ toolId: "terminal.kill", expiresAt: 1000, ttlMs: 500 }],
     });
     // The public help id and the caller's webContentsId are threaded through.
@@ -728,7 +761,7 @@ describe("registerHelpAssistantHandlers — getLiveSessionStatus (#10032)", () =
 
     const result = await handler(CTX, { sessionId: "help-1" });
 
-    expect(result).toEqual({ connected: false, tier: "workbench", activeGrants: [] });
+    expect(result).toEqual({ connected: false, tier: "core", activeGrants: [] });
   });
 
   it("narrows an unexpected external tier down to a safe HelpAssistantTier", async () => {
@@ -743,7 +776,7 @@ describe("registerHelpAssistantHandlers — getLiveSessionStatus (#10032)", () =
 
     const result = await handler(CTX, { sessionId: "help-1" });
 
-    expect(result).toMatchObject({ connected: true, tier: "workbench" });
+    expect(result).toMatchObject({ connected: true, tier: "core" });
   });
 
   it("rejects a payload with a missing/empty sessionId before reaching the service", async () => {

@@ -1003,7 +1003,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         tier: {
           type: "string",
-          enum: ["workbench", "action", "system", "external"],
+          enum: ["core", "full", "external"],
           description: "The authorization tier this call was admitted at",
         },
         hash: {
@@ -1022,7 +1022,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               tier: {
                 type: "string",
-                enum: ["workbench", "action", "system", "external"],
+                enum: ["core", "full", "external"],
                 description: "Lowest tier on this caller's ladder that permits the tool",
               },
               kind: {
@@ -1425,6 +1425,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
       },
     },
+    keywords: ["agent", "state", "waiting", "working"],
     kind: "query",
     name: "terminal.getStatus",
     outputSchema: {

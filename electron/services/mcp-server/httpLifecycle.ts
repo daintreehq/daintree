@@ -1282,7 +1282,7 @@ export class HttpLifecycle {
 
     // Plugin endpoints authenticate their own credentials and nothing else, so
     // they branch off before the orchestration gate: a plugin grant must never
-    // reach `isAuthorized`, whose fallback would score it as a workbench bearer.
+    // reach `isAuthorized`, whose fallback would score it as a core bearer.
     if (url.pathname.startsWith(PLUGIN_MCP_ROUTE_PREFIX)) {
       if (this.pluginRouteHandler && this.port !== null) {
         await this.pluginRouteHandler.handle(req, res, url, this.port);
@@ -2228,7 +2228,7 @@ export class HttpLifecycle {
     if (!sessionId || typeof sessionId !== "string") {
       throw new Error("Invalid sessionId");
     }
-    if (tier !== "workbench" && tier !== "action" && tier !== "system") {
+    if (tier !== "core" && tier !== "full") {
       throw new Error("Invalid tier");
     }
     const current = this.deps.sessionStore.sessionTierMap.get(sessionId);
@@ -2259,7 +2259,7 @@ export class HttpLifecycle {
       // session that wasn't minted by it. Reject loudly.
       throw new Error("Caller is not the pinned renderer for this session");
     }
-    const order: McpTier[] = ["workbench", "action", "system", "external"];
+    const order: McpTier[] = ["core", "full", "external"];
     const currentRank = order.indexOf(current);
     const newRank = order.indexOf(tier);
     if (newRank < currentRank) {
@@ -2270,8 +2270,8 @@ export class HttpLifecycle {
     // Bound the renderer-approved elevation: after MCP_TIER_ELEVATION_TTL_MS
     // of awake time the session silently decays back to its pre-elevation
     // baseline. `current` is only the candidate — on a chained elevation
-    // `armTierElevationTimer` keeps the baseline the first one captured, so
-    // workbench→action→system still decays all the way to workbench. A stale
+    // `armTierElevationTimer` keeps the baseline the first one captured, so a
+    // chain of elevations still decays all the way to where it started. A stale
     // elevation therefore can't outlive the user's intent (#8462), which is
     // why the banner no longer labels this "always" (#12119). Each approval
     // refreshes the window from now; a chained re-elevation preserves the
@@ -2281,7 +2281,7 @@ export class HttpLifecycle {
     // (via the pinned session), the target tier, the pre-elevation tier, and
     // the bounded window. Only genuine elevations are logged — a same-tier
     // call (`newRank === currentRank`) arms no timer and changes nothing, so
-    // recording an `action → action` row would be misleading noise.
+    // recording a `core → core` row would be misleading noise.
     // Best-effort: an audit-write failure must never block the elevation.
     if (newRank > currentRank) {
       try {

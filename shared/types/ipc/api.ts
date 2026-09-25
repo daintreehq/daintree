@@ -2023,7 +2023,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         sessionId: string;
         toolId: string;
         tier: string;
-        targetTier: "workbench" | "action" | "system" | null;
+        targetTier: HelpAssistantTier | null;
       }) => void
     ): () => void;
     /**
@@ -2545,8 +2545,8 @@ export interface HelpAssistantSettings {
   /** Allow the help assistant to call Daintree control tools via the local MCP. Defaults to true. */
   daintreeControl: boolean;
   /**
-   * MCP capability tier the help assistant runs at — controls which Daintree
-   * actions the assistant can call. Defaults to `"action"`.
+   * MCP tool set the help assistant runs with — controls which Daintree
+   * actions the assistant can call. Defaults to `"core"`.
    */
   tier: HelpAssistantTier;
   /**

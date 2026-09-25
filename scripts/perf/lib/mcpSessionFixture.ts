@@ -184,7 +184,7 @@ function installElectronStub(): void {
 // --- Product and SDK modules -------------------------------------------------
 
 /** The MCP tiers, in the order every report renders them. */
-export const MCP_TIERS: readonly McpTier[] = ["workbench", "action", "system", "external"];
+export const MCP_TIERS: readonly McpTier[] = ["core", "full", "external"];
 
 type JsonRpcMessage = Record<string, unknown>;
 

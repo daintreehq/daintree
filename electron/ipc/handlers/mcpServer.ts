@@ -27,6 +27,7 @@ import type {
   TerminalAdoptionResult,
 } from "../../../shared/types/ipc/mcpServer.js";
 import type { PaneWatchState } from "../../../shared/types/terminalWatch.js";
+import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 
 type McpServerSingleton = typeof McpServerServiceModule.mcpServerService;
 type McpPaneConfigSingleton = typeof McpPaneConfigServiceModule.mcpPaneConfigService;
@@ -223,8 +224,8 @@ export const mcpServerNamespace = defineIpcNamespace({
       MCP_SERVER_METHOD_CHANNELS.setSessionTier,
       async (
         ctx,
-        payload: { sessionId: string; tier: "workbench" | "action" | "system" }
-      ): Promise<{ sessionId: string; tier: "workbench" | "action" | "system" }> => {
+        payload: { sessionId: string; tier: HelpAssistantTier }
+      ): Promise<{ sessionId: string; tier: HelpAssistantTier }> => {
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
@@ -232,7 +233,7 @@ export const mcpServerNamespace = defineIpcNamespace({
         if (typeof sessionId !== "string" || !sessionId) {
           throw new Error("Invalid sessionId");
         }
-        if (tier !== "workbench" && tier !== "action" && tier !== "system") {
+        if (tier !== "core" && tier !== "full") {
           throw new Error("Invalid tier");
         }
         const svc = await getMcpServerService();
@@ -242,7 +243,7 @@ export const mcpServerNamespace = defineIpcNamespace({
         const result = svc.setSessionTier(sessionId, tier, ctx.webContentsId);
         return {
           sessionId: result.sessionId,
-          tier: result.tier as "workbench" | "action" | "system",
+          tier: result.tier as HelpAssistantTier,
         };
       },
       { withContext: true }

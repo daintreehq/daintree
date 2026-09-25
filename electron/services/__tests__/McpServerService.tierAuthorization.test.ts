@@ -18,10 +18,10 @@ import type {
 } from "../../../shared/types/actions.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import {
-  ACTION_TIER_ADDONS,
+  CORE_TIER_TOOLS,
+  FULL_TIER_ADDONS,
+  OWNED_TWIN_TOOLS,
   RENDERER_OWNED_ORIGIN_ONLY_TOOLS,
-  SYSTEM_TIER_ADDONS,
-  WORKBENCH_TIER_TOOLS as WORKBENCH_TIER_TOOLS_LIST,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import {
   WAIT_UNTIL_IDLE_DESCRIPTION,
@@ -225,7 +225,7 @@ vi.mock("../persistence/auditRingStore.js", () => ({
   },
 }));
 
-const paneTokenTiers = vi.hoisted(() => new Map<string, "workbench" | "action" | "system">());
+const paneTokenTiers = vi.hoisted(() => new Map<string, "core" | "full">());
 
 vi.mock("../McpPaneConfigService.js", () => ({
   mcpPaneConfigService: {
@@ -563,11 +563,11 @@ describe("McpServerService", () => {
       return (svc as unknown as { getAuditRecords: () => AuditRecord[] }).getAuditRecords();
     }
 
-    async function connectWorkbench(
+    async function connectCore(
       port: number
     ): Promise<{ client: Client; transport: SSEClientTransport; token: string }> {
       const token = `pane-token-${Math.random().toString(36).slice(2)}`;
-      paneTokenTiers.set(token, "workbench");
+      paneTokenTiers.set(token, "core");
       const client = new Client({ name: "mcp-pane-client", version: "1.0.0" });
       const headers = { Authorization: `Bearer ${token}` };
       const transport = new SSEClientTransport(new URL(`http://127.0.0.1:${port}/sse`), {
@@ -602,9 +602,10 @@ describe("McpServerService", () => {
         "forge.getChecks",
         "worktree.reviewReadiness",
         "project.runCheck",
-        // System-tier but never external (#11880) — same reasoning as the cuts
-        // above: without it here, the workbench, action and external "not
-        // listed" assertions would pass on an empty fixture, not on the filter.
+        // Never external (#11880), and on neither in-app tool set since the
+        // core/full split — same reasoning as the cuts above: without it here,
+        // the core and external "not listed" assertions would pass on an empty
+        // fixture, not on the filter.
         "worktree.create",
       ];
       return ids.map((id) =>
@@ -616,7 +617,7 @@ describe("McpServerService", () => {
       );
     }
 
-    it("workbench tier: allows queries, denies mutations, and never reaches dispatch on denial", async () => {
+    it("core tier: allows its own surface, denies full-only tools, and never reaches dispatch on denial", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
         ok: true,
         result: { dispatched: payload.actionId },
@@ -627,59 +628,66 @@ describe("McpServerService", () => {
       });
 
       await service.start(window);
-      const { client, transport } = await connectWorkbench(service.currentPort!);
+      const { client, transport } = await connectCore(service.currentPort!);
       transports.push(transport);
 
-      // Query allowed
-      const allowed = getTextResult(await client.callTool({ name: "actions.list", arguments: {} }));
+      // A core read is allowed
+      const allowed = getTextResult(
+        await client.callTool({ name: "terminal.list", arguments: {} })
+      );
       expect(allowed.isError).not.toBe(true);
       expect(dispatchMock).toHaveBeenCalledWith(
-        expect.objectContaining({ actionId: "actions.list" })
+        expect.objectContaining({ actionId: "terminal.list" })
       );
       dispatchMock.mockClear();
 
-      // Mutation denied — workbench cannot create worktrees
+      // Denied — recipes run only on the full tool set
       const denied = getTextResult(
         await client.callTool({
-          name: "worktree.createWithRecipe",
-          arguments: { branchName: "x" },
+          name: "recipe.run",
+          arguments: { recipeId: "x" },
         })
       );
       expect(denied.isError).toBe(true);
       expect(denied.content[0].text).toContain("TIER_NOT_PERMITTED");
-      expect(denied.content[0].text).toContain("workbench");
+      expect(denied.content[0].text).toContain("core");
       expect(dispatchMock).not.toHaveBeenCalled();
 
-      // Action-tier mutation denied at workbench
-      const actionTierDenied = getTextResult(
-        await client.callTool({ name: "terminal.sendCommand", arguments: { id: "t", text: "x" } })
+      // A full-only spawn is denied at core too
+      const fullTierDenied = getTextResult(
+        await client.callTool({ name: "terminal.new", arguments: {} })
       );
-      expect(actionTierDenied.isError).toBe(true);
-      expect(actionTierDenied.content[0].text).toContain("TIER_NOT_PERMITTED");
+      expect(fullTierDenied.isError).toBe(true);
+      expect(fullTierDenied.content[0].text).toContain("TIER_NOT_PERMITTED");
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    it("workbench tier: listTools advertises only the workbench surface", async () => {
+    it("core tier: listTools advertises only the core surface", async () => {
       const { window } = createMockWindow({
         getManifest: manifestForAllAllowlistedTools,
       });
 
       await service.start(window);
-      const { client, transport } = await connectWorkbench(service.currentPort!);
+      const { client, transport } = await connectCore(service.currentPort!);
       transports.push(transport);
 
       const ids = (await client.listTools()).tools.map((t) => t.name);
-      expect(ids).toContain("actions.list");
       expect(ids).toContain("worktree.list");
+      expect(ids).toContain("worktree.createWithRecipe");
       expect(ids).toContain("terminal.list");
-      expect(ids).toContain("agent.getState");
-      // Mutations and destructive operations are absent.
+      // A pane bearer submits through the owned form of core's send.
+      expect(ids).toContain("terminal.sendCommandOwned");
+      // Full-only, off MCP entirely, or unscoped — all absent.
+      expect(ids).not.toContain("actions.list");
+      expect(ids).not.toContain("agent.getState");
       expect(ids).not.toContain("worktree.create");
-      expect(ids).not.toContain("worktree.createWithRecipe");
       expect(ids).not.toContain("worktree.delete");
+      expect(ids).not.toContain("terminal.new");
       expect(ids).not.toContain("terminal.inject");
+      expect(ids).not.toContain("terminal.injectOwned");
       expect(ids).not.toContain("terminal.sendCommand");
       expect(ids).not.toContain("recipe.run");
+      expect(ids).not.toContain("project.runCheck");
       expect(ids).not.toContain("git.commit");
     });
 
@@ -802,7 +810,8 @@ describe("McpServerService", () => {
     // surface exceeded what MCP clients accept, so the client was truncating it
     // for us and picking the survivors at random. Choosing which tools to drop
     // beats having Cursor choose. Everything here has a shell equivalent the
-    // caller already has, and all of it stays reachable for the in-app assistant.
+    // caller already has. The git writes have since left the in-app tool sets
+    // too; `worktree.delete` stays on `full` for the in-app assistant.
     it("external tier: shell-equivalent mutations are neither listed nor callable (#11585)", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
         ok: true,
@@ -853,21 +862,21 @@ describe("McpServerService", () => {
       });
 
       await service.start(window);
-      const { client, transport } = await connectWorkbench(service.currentPort!);
+      const { client, transport } = await connectCore(service.currentPort!);
       transports.push(transport);
 
-      await client.callTool({ name: "actions.list", arguments: {} });
+      await client.callTool({ name: "terminal.list", arguments: {} });
       await client.callTool({ name: "worktree.delete", arguments: { id: "wt" } });
 
       const records = getAuditRecords(service);
-      // newest first: worktree.delete (denied), then actions.list (allowed)
+      // newest first: worktree.delete (denied), then terminal.list (allowed)
       expect(records).toHaveLength(2);
       const denied = records.find((r) => r.toolId === "worktree.delete");
-      const allowed = records.find((r) => r.toolId === "actions.list");
-      expect(denied?.tier).toBe("workbench");
+      const allowed = records.find((r) => r.toolId === "terminal.list");
+      expect(denied?.tier).toBe("core");
       expect(denied?.result).toBe("unauthorized");
       expect(denied?.errorCode).toBe("TIER_NOT_PERMITTED");
-      expect(allowed?.tier).toBe("workbench");
+      expect(allowed?.tier).toBe("core");
       expect(allowed?.result).toBe("success");
     });
 
@@ -891,7 +900,7 @@ describe("McpServerService", () => {
       expect(records[0].result).toBe("success");
     });
 
-    it("Streamable HTTP transport with a pane token stamps workbench tier and gates dispatch", async () => {
+    it("Streamable HTTP transport with a pane token stamps core tier and gates dispatch", async () => {
       const dispatchMock = vi.fn((): ActionDispatchResult => ({ ok: true, result: { ok: true } }));
       const { window } = createMockWindow({
         getManifest: manifestForAllAllowlistedTools,
@@ -901,7 +910,7 @@ describe("McpServerService", () => {
       await service.start(window);
 
       const token = `pane-token-${Math.random().toString(36).slice(2)}`;
-      paneTokenTiers.set(token, "workbench");
+      paneTokenTiers.set(token, "core");
       const client = new Client({ name: "mcp-pane-http-client", version: "1.0.0" });
       const transport = new StreamableHTTPClientTransport(
         new URL(`http://127.0.0.1:${service.currentPort}/mcp`),
@@ -911,7 +920,9 @@ describe("McpServerService", () => {
       httpTransports.push(transport);
 
       // Query allowed
-      const allowed = getTextResult(await client.callTool({ name: "actions.list", arguments: {} }));
+      const allowed = getTextResult(
+        await client.callTool({ name: "terminal.list", arguments: {} })
+      );
       expect(allowed.isError).not.toBe(true);
 
       // Destructive denied at dispatch time
@@ -920,14 +931,14 @@ describe("McpServerService", () => {
       );
       expect(denied.isError).toBe(true);
       expect(denied.content[0].text).toContain("TIER_NOT_PERMITTED");
-      expect(denied.content[0].text).toContain("workbench");
+      expect(denied.content[0].text).toContain("core");
 
       const records = getAuditRecords(service);
       const denyRecord = records.find((r) => r.toolId === "worktree.delete");
-      const allowRecord = records.find((r) => r.toolId === "actions.list");
-      expect(denyRecord?.tier).toBe("workbench");
+      const allowRecord = records.find((r) => r.toolId === "terminal.list");
+      expect(denyRecord?.tier).toBe("core");
       expect(denyRecord?.result).toBe("unauthorized");
-      expect(allowRecord?.tier).toBe("workbench");
+      expect(allowRecord?.tier).toBe("core");
     });
   });
 
@@ -945,9 +956,9 @@ describe("McpServerService", () => {
         description: "Read worktree state",
         kind: "query",
       }),
-      // On every tier from `action` up, and externally (#12340). The fixture
-      // has to carry it or the subset assertions below read its absence from
-      // this manifest as an absence from the allowlist.
+      // On the full tool set, and externally (#12340). The fixture has to
+      // carry it or the subset assertions below read its absence from this
+      // manifest as an absence from the allowlist.
       createManifestEntry({
         id: "terminal.setClientMetadata" as ActionId,
         title: "Set Terminal Client Metadata",
@@ -963,7 +974,7 @@ describe("McpServerService", () => {
         title: "Create Worktree with Recipe",
         description: "Create worktree, optionally check out a PR, optionally run a recipe",
       }),
-      // System-only tools — mutations the action tier must not reach.
+      // Git writes — on neither in-app tool set since the core/full split.
       createManifestEntry({
         id: "git.commit" as ActionId,
         title: "Commit",
@@ -979,9 +990,10 @@ describe("McpServerService", () => {
         title: "Fetch",
         description: "Update remote-tracking refs from the remote",
       }),
-      // Action-tier since #12116. `danger` mirrors the real registry so the
-      // fixture doesn't quietly describe these as safe; the registry values
-      // themselves are guarded by `EXPECTED_CONFIRM_DANGER`.
+      // The owned delete is core and the unscoped one full (#12116), which a
+      // pane bearer only ever sees as the owned form. `danger` mirrors the real
+      // registry so the fixture doesn't quietly describe these as safe; the
+      // registry values themselves are guarded by `EXPECTED_CONFIRM_DANGER`.
       createManifestEntry({
         id: "worktree.delete" as ActionId,
         title: "Delete Worktree",
@@ -994,15 +1006,15 @@ describe("McpServerService", () => {
         description: "Remove a worktree this MCP session created",
         danger: "confirm",
       }),
-      // Action-tier since #12214: re-running project plugin discovery restarts
-      // running code, so a read-only workbench session must not reach it.
+      // Full-only (#12214): re-running project plugin discovery restarts
+      // running code, so a core session must not reach it.
       createManifestEntry({
         id: "plugin.reloadProject" as ActionId,
         title: "Reload Project Plugins",
         description: "Re-scan the open project's committed plugins",
       }),
-      // Action-tier since #12611: it discards view state a plugin never
-      // persisted, so a read-only workbench session must not reach it.
+      // Full-only (#12611): it discards view state a plugin never persisted,
+      // so a core session must not reach it.
       createManifestEntry({
         id: "plugin.reloadPanel" as ActionId,
         title: "Reload Panel",
@@ -1213,7 +1225,7 @@ describe("McpServerService", () => {
         title: "Mute Project Notifications",
         description: "Suppress future agent notifications for a project",
       }),
-      // Additional entries needed for full ACTION_TIER_ADDONS coverage.
+      // Additional entries needed for the tool-set coverage loops below.
       createManifestEntry({
         id: "worktree.setActive" as ActionId,
         title: "Set Active Worktree",
@@ -1296,7 +1308,7 @@ describe("McpServerService", () => {
       }),
       waitUntilIdleManifestEntry(),
       waitUntilIdleBatchManifestEntry(),
-      // Terminal watches (#12491), on the action tier beside the waits.
+      // Terminal watches (#12491), on the full set; the waits are core.
       ...(
         [
           ["terminal.registerWatch", "Watch Terminals"],
@@ -1311,10 +1323,11 @@ describe("McpServerService", () => {
           description: `${title} for this pane.`,
         })
       ),
-      // Session continuity + recipe-editor handoffs added to ACTION_TIER_ADDONS
-      // by #11908. The coverage loops below iterate the live allowlist, so an
-      // id tiered without an entry here fails as a missing tool rather than as
-      // the fixture gap it actually is.
+      // Session continuity + recipe-editor handoffs from #11908. The resume is
+      // on the full set; the bookmark and recipe-editor handoffs are on neither
+      // set now, which the off-MCP loop below pins. The coverage loops iterate
+      // the live allowlists, so an id tiered without an entry here fails as a
+      // missing tool rather than as the fixture gap it actually is.
       createManifestEntry({
         id: "agentSessionHistory.resume" as ActionId,
         title: "Resume Agent Session",
@@ -1433,8 +1446,9 @@ describe("McpServerService", () => {
         title: "Toggle Dev Dashboard",
         description: "Show or hide the portal dev dashboard",
       }),
-      // Action-tier since #12116; the rest of this block backfills
-      // SYSTEM_TIER_ADDONS coverage.
+      // Full-only (#12116). The git and forge writes and forge openers that
+      // follow are on neither in-app set; they stay in the fixture so their
+      // absence below is the tier gate's doing.
       createManifestEntry({
         id: "worktree.resource.teardown" as ActionId,
         title: "Teardown Resource",
@@ -1640,42 +1654,133 @@ describe("McpServerService", () => {
         description: "Edit a pull request via the forge provider",
         danger: "confirm",
       }),
+      // The rest of both tool sets, so the loops below iterate every production
+      // entry rather than a spot-check.
+      ...(
+        [
+          ["actions.getContext", "Get Context"],
+          ["actions.search", "Search Actions"],
+          ["actions.getSchema", "Get Action Schema"],
+          ["mcp.surface", "Describe MCP Surface"],
+          ["workspace.list", "List Workspaces"],
+          ["worktree.waitUntilReady", "Wait Until Worktree Ready"],
+          ["worktree.waitForPullRequest", "Wait For Pull Request"],
+          ["agent.listAvailable", "List Available Agents"],
+          ["agent.listPresets", "List Agent Presets"],
+          ["terminal.list", "List Terminals"],
+          ["terminal.getStatus", "Get Terminal Status"],
+          ["terminal.getOutput", "Get Terminal Output"],
+          ["help.displayImage", "Display Image"],
+          ["worktree.getCurrent", "Get Current Worktree"],
+          ["worktree.resource.status", "Resource Status"],
+          ["agentSessionHistory.list", "List Agent Sessions"],
+          ["project.detectRunners", "Detect Runners"],
+          ["git.getProjectPulse", "Get Project Pulse"],
+          ["forge.listPRs", "List PRs"],
+          ["forge.getIssue", "Get Issue"],
+          ["forge.listIssues", "List Issues"],
+          ["copyTree.generate", "Generate Context"],
+          ["skills.search", "Search Skills"],
+          ["skills.load", "Load Skill"],
+          ["slashCommands.list", "List Slash Commands"],
+          ["fleet.getRunStatus", "Get Fleet Run Status"],
+          ["browser.getConsoleMessages", "Get Console Messages"],
+          ["errors.recent", "Recent Errors"],
+          ["notifications.recent", "Recent Notifications"],
+          ["plugin.validate", "Validate Plugin"],
+          ["plugin.diagnostics", "Plugin Diagnostics"],
+        ] as const
+      ).map(([id, title]) =>
+        createManifestEntry({
+          id: id as ActionId,
+          title,
+          description: `${title}.`,
+          kind: "query",
+        })
+      ),
     ];
 
-    // Tier action/addon sets are sourced from the production allowlists so a
-    // rename in shared/config/helpAssistantTierAllowlists.ts or actionIds.ts
-    // produces a test failure here instead of silent drift.
-    // The workbench spot-check array is deliberately minimal — the manifest
-    // only contains a subset of workbench entries. Action and system addon
-    // sets iterate all production entries (manifest gaps filled above).
+    // The tool sets are sourced from the production allowlists so a rename in
+    // shared/config/helpAssistantTierAllowlists.ts or actionIds.ts produces a
+    // test failure here instead of silent drift. The fixture above carries every
+    // entry of both sets, so the loops below are exhaustive.
+    //
+    // A pane bearer's origin is `external` whatever its tier (#12407), so it
+    // sees each unscoped panel or worktree tool as its owned twin and never
+    // sees the tools reserved for Daintree's own assistant. The projection is
+    // spelled out here rather than read from `NON_RENDERER_OWNED_TIER_ALLOWLISTS`,
+    // so the production projection is under test rather than restated. The
+    // assistant's own sessions keep the unscoped forms; that half is pinned in
+    // sessionServer's origin tests, which can seed a renderer-owned origin.
+    const TWINS: Readonly<Record<string, string>> = OWNED_TWIN_TOOLS;
+    const PANE_BEARER_WITHHELD = new Set<string>(RENDERER_OWNED_ORIGIN_ONLY_TOOLS);
+    const paneSurface = (ids: readonly string[]): string[] => {
+      const out = new Set<string>();
+      for (const id of ids) {
+        if (!PANE_BEARER_WITHHELD.has(id)) out.add(TWINS[id] ?? id);
+      }
+      return [...out].sort();
+    };
+    const CORE_PANE_SURFACE = paneSurface(CORE_TIER_TOOLS);
+    const FULL_PANE_SURFACE = paneSurface([...CORE_TIER_TOOLS, ...FULL_TIER_ADDONS]);
 
-    const WORKBENCH_SPOT_CHECKS = [
-      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "workflow.prepBranchForReview")!,
-      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "agentSettings.get")!,
-      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "keybinding.getOverrides")!,
-      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "system.getResourceProfileSnapshot")!,
-      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "cliAvailability.get")!,
-      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "hibernation.getConfig")!,
-      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "terminal.readLastMessageOwned")!,
+    // Reachable over MCP on the old three-rung ladder, and on neither tool set
+    // since the core/full split. Fixed ids, not derived: a derived list shrinks
+    // with the allowlists and would stay green if one of these came back.
+    const LEFT_MCP_WITH_CORE_FULL_SPLIT = [
+      "worktree.create",
+      "worktree.refresh",
+      "git.commit",
+      "git.push",
+      "git.fetch",
+      "git.stageFile",
+      "git.stageAll",
+      "forge.createPR",
+      "forge.mergePR",
+      "forge.createIssue",
+      "forge.addIssueComment",
+      "forge.openPR",
+      "forge.getChecks",
+      "terminal.arm",
+      "terminal.disarm",
+      "terminal.disarmAll",
+      "terminal.killAll",
+      "terminal.killBatch",
+      "terminal.moveToDock",
+      "terminal.moveToGrid",
+      "terminal.toggleDock",
+      "agent.terminal",
+      "agentSettings.get",
+      "keybinding.getOverrides",
+      "system.getResourceProfileSnapshot",
+      "cliAvailability.get",
+      "hibernation.getConfig",
+      "project.update",
+      "project.saveSettings",
+      "project.muteNotifications",
+      "session.bookmarkAndClose",
+      "recipe.editor.open",
+      "file.openInEditor",
+      "browser.navigate",
+      "browser.openUrl",
+      "browser.captureScreenshot",
+      "panel.focus",
+      "devPreview.promoteToPortal",
+      "portal.openUrl",
+      "app.theme.pick",
     ] as const;
 
     // terminal.bulkCommand (the one-shot broadcast-send) is renderer-only — it
     // remains available via keybindings, palette, and menus, but is NOT exposed
-    // through the MCP control plane on any tier. (Distinct from the arming
-    // primitives terminal.arm/disarm/disarmAll, which only edit the broadcast
-    // membership set and ARE exposed at the system tier.)
+    // through the MCP control plane on any tier. (The arming primitives
+    // terminal.arm/disarm/disarmAll, which only edit the broadcast membership
+    // set, left MCP with the core/full split too.)
     const NEVER_EXPOSED_VIA_MCP = ["terminal.bulkCommand"] as const;
 
     // External tier (apiKey) curates MCP_TOOL_ALLOWLIST independently from the
-    // help-assistant tiers. Focus and theme actions live in ACTION_TIER_ADDONS
-    // for assistant-driven UI shifts but are intentionally absent from the
-    // external surface — guard against accidental cross-curation.
-    // A pane bearer's origin is `external` whatever its tier, so the unscoped
-    // terminal input its tier would otherwise carry is withheld (#12407). The
-    // assistant's own sessions keep it; that half is pinned in sessionServer's
-    // origin tests, which can seed a renderer-owned origin.
-    const PANE_BEARER_WITHHELD = new Set<string>(RENDERER_OWNED_ORIGIN_ONLY_TOOLS);
-
+    // in-app tool sets. Focus and theme actions once sat on the in-app ladder
+    // for assistant-driven UI shifts and were never on the external surface —
+    // guard against accidental cross-curation.
     const NOT_IN_EXTERNAL_TIER = [
       "agent.focusNextWaiting",
       "agent.focusNextWorking",
@@ -1689,29 +1794,35 @@ describe("McpServerService", () => {
       "keybinding.getOverrides",
     ] as const;
 
-    it("workbench tier exposes only read-only introspection tools", async () => {
-      paneTokenTiers.set("token-wb", "workbench");
+    it("core tier exposes exactly the core set, as a pane bearer sees it", async () => {
+      paneTokenTiers.set("token-core", "core");
       const { window } = createMockWindow({ getManifest: tierManifest });
 
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-wb",
+        Authorization: "Bearer token-core",
       });
       transports.push(transport);
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
-      expect(ids).toContain("actions.list");
-      expect(ids).toContain("worktree.list");
-      for (const id of WORKBENCH_SPOT_CHECKS) {
+      expect([...ids].sort()).toEqual(CORE_PANE_SURFACE);
+      // Fixed ids beside the derived equality, so a list edit that moved one of
+      // these would fail here rather than move the expectation with it.
+      for (const id of [
+        "worktree.createWithRecipe",
+        "worktree.deleteOwned",
+        "agent.launch",
+        "terminal.sendCommandOwned",
+        "terminal.closeOwned",
+        "terminal.waitUntilIdle",
+        "terminal.moveToWorktree",
+      ]) {
         expect(ids).toContain(id);
       }
-      expect(ids).not.toContain("worktree.create");
-      expect(ids).not.toContain("git.commit");
-      expect(ids).not.toContain("copyTree.isAvailable");
-      for (const id of ACTION_TIER_ADDONS) {
+      for (const id of ["terminal.sendCommand", "terminal.close", "terminal.injectOwned"]) {
         expect(ids).not.toContain(id);
       }
-      for (const id of SYSTEM_TIER_ADDONS) {
+      for (const id of FULL_TIER_ADDONS) {
         expect(ids).not.toContain(id);
       }
       for (const id of NEVER_EXPOSED_VIA_MCP) {
@@ -1719,85 +1830,111 @@ describe("McpServerService", () => {
       }
     });
 
-    it("action tier adds full in-app orchestration and confirm-gated worktree cleanup, but excludes git and externally-visible writes", async () => {
-      paneTokenTiers.set("token-action", "action");
+    it("full tier adds the rest of the orchestration surface, in owned form and without the assistant-only tools", async () => {
+      paneTokenTiers.set("token-full", "full");
       const { window } = createMockWindow({ getManifest: tierManifest });
 
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-action",
+        Authorization: "Bearer token-full",
       });
       transports.push(transport);
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
-      expect(ids).toContain("worktree.list");
-      expect(ids).not.toContain("worktree.create");
-      expect(ids).toContain("worktree.createWithRecipe");
-      for (const id of ACTION_TIER_ADDONS) {
-        if (PANE_BEARER_WITHHELD.has(id)) expect(ids).not.toContain(id);
-        else expect(ids).toContain(id);
-      }
-      for (const id of SYSTEM_TIER_ADDONS) {
-        expect(ids).not.toContain(id);
-      }
-      for (const id of NEVER_EXPOSED_VIA_MCP) {
-        expect(ids).not.toContain(id);
-      }
-    });
-
-    it("system tier exposes the full curated allowlist including irreversible mutations", async () => {
-      paneTokenTiers.set("token-sys", "system");
-      const { window } = createMockWindow({ getManifest: tierManifest });
-
-      await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-sys",
-      });
-      transports.push(transport);
-
-      const ids = (await client.listTools()).tools.map((tool) => tool.name);
-      expect(ids).toContain("worktree.list");
-      expect(ids).toContain("worktree.create");
-      expect(ids).toContain("worktree.createWithRecipe");
-      for (const id of ACTION_TIER_ADDONS) {
-        if (PANE_BEARER_WITHHELD.has(id)) expect(ids).not.toContain(id);
-        else expect(ids).toContain(id);
-      }
-      for (const id of SYSTEM_TIER_ADDONS) {
+      expect([...ids].sort()).toEqual(FULL_PANE_SURFACE);
+      for (const id of CORE_PANE_SURFACE) {
         expect(ids).toContain(id);
       }
+      for (const id of FULL_TIER_ADDONS) {
+        const twin = TWINS[id];
+        if (PANE_BEARER_WITHHELD.has(id)) {
+          expect(ids).not.toContain(id);
+        } else if (twin !== undefined) {
+          expect(ids).not.toContain(id);
+          expect(ids).toContain(twin);
+        } else {
+          expect(ids).toContain(id);
+        }
+      }
+      // The four unscoped panel tools with no owned form stay the assistant's.
+      for (const id of [
+        "copyTree.injectToTerminal",
+        "terminal.kill",
+        "terminal.restart",
+        "terminal.closeAll",
+      ]) {
+        expect(ids).not.toContain(id);
+      }
       for (const id of NEVER_EXPOSED_VIA_MCP) {
         expect(ids).not.toContain(id);
       }
     });
 
-    it("system tier advertises the retractable-write split on the wire (#12118)", async () => {
-      paneTokenTiers.set("token-sys-hints", "system");
+    it("keeps the tools that left MCP with the core/full split off both tool sets", async () => {
+      paneTokenTiers.set("token-core-left", "core");
+      paneTokenTiers.set("token-full-left", "full");
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({
+        ok: true,
+        result: "should-not-run",
+      }));
+      const { window } = createMockWindow({
+        getManifest: tierManifest,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+
+      // Guard the guard: the fixture offers every one of these, so absence is
+      // the tier gate at work.
+      const offered = tierManifest().map((e) => e.id);
+      for (const id of LEFT_MCP_WITH_CORE_FULL_SPLIT) {
+        expect(offered).toContain(id);
+      }
+
+      for (const token of ["token-core-left", "token-full-left"]) {
+        const { client, transport } = await connectClient(service.currentPort!, {
+          Authorization: `Bearer ${token}`,
+        });
+        transports.push(transport);
+
+        const ids = (await client.listTools()).tools.map((tool) => tool.name);
+        for (const id of LEFT_MCP_WITH_CORE_FULL_SPLIT) {
+          expect(ids, `${token} should not list ${id}`).not.toContain(id);
+        }
+      }
+
+      // Refused at dispatch too, even at the widest tier: listing and calling
+      // authorize through different functions.
+      const { client: full, transport: fullTransport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-full-left",
+      });
+      transports.push(fullTransport);
+      for (const name of ["git.commit", "git.push", "worktree.create", "forge.createPR"]) {
+        const denied = (await full.callTool({ name, arguments: {} })) as TextToolResult;
+        expect(denied.isError, `${name} should be denied at full`).toBe(true);
+        expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
+      }
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps #12118's retractable-write cohort off the wire, and still advertises the confirm split for what remains", async () => {
+      paneTokenTiers.set("token-full-hints", "full");
       const { window } = createMockWindow({ getManifest: tierManifest });
 
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-sys-hints",
+        Authorization: "Bearer token-full-hints",
       });
       transports.push(transport);
 
       const byName = new Map((await client.listTools()).tools.map((tool) => [tool.name, tool]));
 
-      // Three system-tier writes an agent must clear a host confirm for:
-      // createIssue and addIssueComment publish a record nobody can retract,
-      // and reopenIssue is a publicly visible state transition whose inverse
-      // (closeIssue) has been `confirm` since #10653. This asserts the
-      // classification survives all the way to the wire — the fixture defaults
-      // an unspecified entry to "safe", so a manifest that drifted back would
-      // read as green everywhere else.
-      for (const id of ["forge.createIssue", "forge.addIssueComment", "forge.reopenIssue"]) {
-        expect(byName.get(id)?.annotations?.destructiveHint).toBe(true);
-      }
-
-      // The rest of the cohort #12118 classified stays deliberately unattended:
-      // each is an idempotent state-set with an exact inverse, or a local index
-      // /commit write that only `git.push` can publish.
+      // The forge and git writes #12118 classified left MCP with the core/full
+      // split, so none of them reaches the wire at the widest tier.
       for (const id of [
+        "forge.createIssue",
+        "forge.addIssueComment",
+        "forge.reopenIssue",
         "forge.assignIssue",
         "forge.unassignIssue",
         "forge.addIssueLabel",
@@ -1808,12 +1945,22 @@ describe("McpServerService", () => {
         "git.stageAll",
         "git.unstageAll",
       ]) {
+        expect(byName.has(id), `${id} should not be listed`).toBe(false);
+      }
+
+      // The classification still survives to the wire for the confirm-gated
+      // writes that remain — the fixture defaults an unspecified entry to
+      // "safe", so a manifest that drifted would read as green everywhere else.
+      for (const id of ["worktree.deleteOwned", "worktree.resource.teardown"]) {
+        expect(byName.get(id)?.annotations?.destructiveHint).toBe(true);
+      }
+      for (const id of ["worktree.resource.pause", "worktree.resource.resume"]) {
         expect(byName.get(id)?.annotations?.destructiveHint).toBe(false);
       }
     });
 
     it("rejects callTool for actions outside the session tier with TIER_NOT_PERMITTED", async () => {
-      paneTokenTiers.set("token-wb", "workbench");
+      paneTokenTiers.set("token-core", "core");
       const dispatchMock = vi.fn((): ActionDispatchResult => ({
         ok: true,
         result: "should-not-run",
@@ -1825,25 +1972,27 @@ describe("McpServerService", () => {
 
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-wb",
+        Authorization: "Bearer token-core",
       });
       transports.push(transport);
 
+      // On the full set, so this is the core ceiling refusing it rather than a
+      // tool no tier carries.
       const denied = (await client.callTool({
-        name: "git.commit",
-        arguments: { message: "x" },
+        name: "project.runCheck",
+        arguments: { runnerId: "test" },
       })) as TextToolResult;
       expect(denied.isError).toBe(true);
       expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    // Fixed ids, not a loop over ACTION_TIER_ADDONS: the derived loops above
+    // Fixed ids, not a loop over CORE_TIER_TOOLS: the derived loops above
     // shrink with the allowlist, so dropping the entry again would leave them
     // green. These two pin the #11877 decision itself — the cross-worktree move
     // is reachable, and its dialog-bound sibling is deliberately not.
-    it("lets the action tier move a terminal across worktrees (#11877)", async () => {
-      paneTokenTiers.set("token-action", "action");
+    it("lets the core tier move a terminal across worktrees (#11877)", async () => {
+      paneTokenTiers.set("token-core", "core");
       const dispatchMock = vi.fn((): ActionDispatchResult => ({ ok: true, result: undefined }));
       const { window } = createMockWindow({
         getManifest: tierManifest,
@@ -1852,7 +2001,7 @@ describe("McpServerService", () => {
 
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-action",
+        Authorization: "Bearer token-core",
       });
       transports.push(transport);
 
@@ -1874,7 +2023,7 @@ describe("McpServerService", () => {
     });
 
     it("keeps the dialog-bound move-to-new-worktree off every tier (#11877)", async () => {
-      paneTokenTiers.set("token-sys", "system");
+      paneTokenTiers.set("token-full", "full");
       const dispatchMock = vi.fn((): ActionDispatchResult => ({
         ok: true,
         result: "should-not-run",
@@ -1886,11 +2035,11 @@ describe("McpServerService", () => {
 
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-sys",
+        Authorization: "Bearer token-full",
       });
       transports.push(transport);
 
-      // System is the widest tier, so absence here covers the narrower ones.
+      // Full is the widest tier, so absence here covers core.
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).not.toContain("terminal.moveToNewWorktree");
 
@@ -1906,8 +2055,8 @@ describe("McpServerService", () => {
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    it("rejects clipboard writes and git mutations at the action tier", async () => {
-      paneTokenTiers.set("token-action", "action");
+    it("rejects clipboard writes, recipe runs and project checks at the core tier", async () => {
+      paneTokenTiers.set("token-core", "core");
       const dispatchMock = vi.fn((): ActionDispatchResult => ({
         ok: true,
         result: "should-not-run",
@@ -1919,31 +2068,29 @@ describe("McpServerService", () => {
 
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-action",
+        Authorization: "Bearer token-core",
       });
       transports.push(transport);
 
-      // Deliberately no `worktree.delete` here since #12116 — it is admitted at
-      // this tier now, and what bounds it is the confirm gate rather than the
-      // floor. Its action-tier admission is asserted in `tierAuth.test.ts`, and
-      // the surviving entries are the shared-state writes that genuinely still
-      // need `system`.
+      // Deliberately no `worktree.deleteOwned` here — it is admitted at core,
+      // and what bounds it is the confirm gate rather than the floor. These are
+      // the full-only writes a core session must be refused before dispatch.
       const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [
         { name: "copyTree.generateAndCopyFile", arguments: {} },
-        { name: "git.commit", arguments: { message: "x" } },
-        { name: "git.push", arguments: {} },
+        { name: "recipe.run", arguments: { recipeId: "r" } },
+        { name: "project.runCheck", arguments: { runnerId: "test" } },
       ];
 
       for (const call of calls) {
         const denied = (await client.callTool(call)) as TextToolResult;
-        expect(denied.isError, `${call.name} should be denied at action tier`).toBe(true);
+        expect(denied.isError, `${call.name} should be denied at core tier`).toBe(true);
         expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
       }
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
     it("filters listTools and rejects callTool over the Streamable HTTP transport", async () => {
-      paneTokenTiers.set("token-wb-http", "workbench");
+      paneTokenTiers.set("token-core-http", "core");
       const dispatchMock = vi.fn((): ActionDispatchResult => ({
         ok: true,
         result: "should-not-run",
@@ -1955,17 +2102,18 @@ describe("McpServerService", () => {
 
       await service.start(window);
       const { client, transport } = await connectHttpClient(service.currentPort!, {
-        Authorization: "Bearer token-wb-http",
+        Authorization: "Bearer token-core-http",
       });
       httpTransports.push(transport);
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
+      expect(ids).not.toContain("recipe.run");
       expect(ids).not.toContain("worktree.create");
       expect(ids).not.toContain("git.commit");
 
       const denied = (await client.callTool({
-        name: "worktree.create",
+        name: "recipe.run",
         arguments: {},
       })) as TextToolResult;
       expect(denied.isError).toBe(true);
@@ -1996,8 +2144,9 @@ describe("McpServerService", () => {
     // external agent is sitting in a terminal with `gh` and can answer it
     // itself, and every slot on a capped surface has to earn its place against
     // something only Daintree can do. The in-app assistant has no shell, so
-    // #11544's fix survives intact where it was actually load-bearing — see the
-    // workbench assertions below.
+    // #11544's fix survives where it was actually load-bearing — on the full
+    // tool set, through `forge.getCIStatus` and `worktree.reviewReadiness`; see
+    // the full-tier assertions below.
     it("external tier (apiKey) no longer carries the CI-status routes (#11585)", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
         ok: true,
@@ -2037,13 +2186,13 @@ describe("McpServerService", () => {
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    it.each(["forge.getCIStatus", "forge.getChecks", "worktree.reviewReadiness"])(
-      "workbench tier can actually CALL %s, so #11544's fix survives where it matters",
+    it.each(["forge.getCIStatus", "worktree.reviewReadiness"])(
+      "full tier can actually CALL %s, so #11544's fix survives where it matters",
       async (actionId) => {
         // listTools and callTool authorize through different functions
         // (shouldExposeTool vs isTierPermitted), so advertising a tool does not
         // by itself prove a caller can invoke it.
-        paneTokenTiers.set("token-wb", "workbench");
+        paneTokenTiers.set("token-full", "full");
         const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
           ok: true,
           result: { dispatched: payload.actionId },
@@ -2055,7 +2204,7 @@ describe("McpServerService", () => {
 
         await service.start(window);
         const { client, transport } = await connectClient(service.currentPort!, {
-          Authorization: "Bearer token-wb",
+          Authorization: "Bearer token-full",
         });
         transports.push(transport);
 
@@ -2069,13 +2218,13 @@ describe("McpServerService", () => {
       }
     );
 
-    it("workbench tier also reaches forge.getCIStatus (it is a read)", async () => {
-      paneTokenTiers.set("token-wb", "workbench");
+    it("full tier also reaches forge.getCIStatus (it is a read)", async () => {
+      paneTokenTiers.set("token-full", "full");
       const { window } = createMockWindow({ getManifest: tierManifest });
 
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-wb",
+        Authorization: "Bearer token-full",
       });
       transports.push(transport);
 
@@ -2085,10 +2234,55 @@ describe("McpServerService", () => {
       expect(ids).not.toContain("forge.createPR");
     });
 
+    // `forge.getChecks` left both tool sets with the core/full split; the
+    // roll-up is the in-app route to "is this PR green?".
+    it("keeps forge.getChecks off the full tier, listed nowhere and refused at dispatch", async () => {
+      paneTokenTiers.set("token-full", "full");
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({
+        ok: true,
+        result: "should-not-run",
+      }));
+      const { window } = createMockWindow({
+        getManifest: tierManifest,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-full",
+      });
+      transports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).not.toContain("forge.getChecks");
+
+      const denied = (await client.callTool({
+        name: "forge.getChecks",
+        arguments: {},
+      })) as TextToolResult;
+      expect(denied.isError).toBe(true);
+      expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("core tier leaves the CI routes to full", async () => {
+      paneTokenTiers.set("token-core", "core");
+      const { window } = createMockWindow({ getManifest: tierManifest });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-core",
+      });
+      transports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).not.toContain("forge.getCIStatus");
+      expect(ids).not.toContain("worktree.reviewReadiness");
+    });
+
     it("rejects callTool for fleet-broadcast tools across every tier with TIER_NOT_PERMITTED", async () => {
-      paneTokenTiers.set("token-wb", "workbench");
-      paneTokenTiers.set("token-action", "action");
-      paneTokenTiers.set("token-sys", "system");
+      paneTokenTiers.set("token-core", "core");
+      paneTokenTiers.set("token-full", "full");
       const dispatchMock = vi.fn((): ActionDispatchResult => ({
         ok: true,
         result: "should-not-run",
@@ -2101,9 +2295,8 @@ describe("McpServerService", () => {
       await service.start(window);
 
       const tierTokens: Array<[string, string]> = [
-        ["workbench", "token-wb"],
-        ["action", "token-action"],
-        ["system", "token-sys"],
+        ["core", "token-core"],
+        ["full", "token-full"],
         ["external", ""],
       ];
 
@@ -2126,7 +2319,7 @@ describe("McpServerService", () => {
     });
 
     it("filters listTools by the pane token's tier for pane-scoped sessions", async () => {
-      paneTokenTiers.set("token-wb", "workbench");
+      paneTokenTiers.set("token-core", "core");
       const { window } = createMockWindow({
         getManifest: () => [
           ...tierManifest(),
@@ -2140,13 +2333,14 @@ describe("McpServerService", () => {
 
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-wb",
+        Authorization: "Bearer token-core",
       });
       transports.push(transport);
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
-      // Outside the workbench allowlist — the pane tier is the ceiling.
+      // Outside the core allowlist — the pane tier is the ceiling.
+      expect(ids).not.toContain("recipe.run");
       expect(ids).not.toContain("worktree.create");
       expect(ids).not.toContain("git.commit");
       expect(ids).not.toContain("panel.gridLayout.setStrategy");

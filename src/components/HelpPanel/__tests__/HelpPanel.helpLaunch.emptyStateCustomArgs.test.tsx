@@ -42,7 +42,7 @@ const {
   mockGetHelpAssistantSettings: vi.fn().mockResolvedValue({
     docSearch: true,
     daintreeControl: true,
-    tier: "action" as const,
+    tier: "core" as const,
     bypassPermissions: false,
     auditRetention: 7,
     modelId: "",
@@ -500,7 +500,7 @@ function resetState() {
     sessionId: "sess-default",
     sessionPath: "/help",
     token: "tok-default",
-    tier: "action",
+    tier: "core",
     mcpUrl: null,
     windowId: 1,
   });
@@ -514,7 +514,7 @@ function resetState() {
   mockGetHelpAssistantSettings.mockResolvedValue({
     docSearch: true,
     daintreeControl: true,
-    tier: "action" as const,
+    tier: "core" as const,
     bypassPermissions: false,
     auditRetention: 7,
     modelId: "",
@@ -603,7 +603,7 @@ beforeEach(() => {
           onSessionRevoked: vi.fn(() => () => {}),
           onGrantLifecycle: vi.fn(() => () => {}),
           onTurnOutcomeAlert: vi.fn(() => () => {}),
-          setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "workbench" }),
+          setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "core" }),
           resetDenialCounts: vi.fn().mockResolvedValue(undefined),
           issueGrant: vi.fn().mockResolvedValue({
             sessionId: "",
@@ -851,7 +851,7 @@ describe("HelpPanel — customArgs threading", () => {
     mockGetHelpAssistantSettings.mockResolvedValue({
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
       modelId: "",
@@ -877,7 +877,7 @@ describe("HelpPanel — customArgs threading", () => {
     mockGetHelpAssistantSettings.mockResolvedValue({
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
       modelId: "",
@@ -901,7 +901,7 @@ describe("HelpPanel — customArgs threading", () => {
     mockGetHelpAssistantSettings.mockResolvedValue({
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
       modelId: "",
@@ -926,7 +926,7 @@ describe("HelpPanel — customArgs threading", () => {
     mockGetHelpAssistantSettings.mockResolvedValue({
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
       modelId: "",

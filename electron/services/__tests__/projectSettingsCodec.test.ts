@@ -42,7 +42,7 @@ describe("decode", () => {
       default: { provision: ["echo hi"] },
     });
     expect(result.settings.activeResourceEnvironment).toBe("default");
-    expect(result.settings.daintreeMcpTier).toBe("workbench");
+    expect(result.settings.daintreeMcpTier).toBe("core");
   });
 
   it("preserves canonical resourceEnvironments when both shapes are present", () => {
@@ -62,12 +62,43 @@ describe("decode", () => {
   it("preserves canonical daintreeMcpTier when both shapes are present", () => {
     const result = decode({
       runCommands: [],
+      daintreeMcpTier: "full",
+      exposeDaintreeMcpToAgents: true,
+    });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.daintreeMcpTier).toBe("full");
+    expect(result.settings.exposeDaintreeMcpToAgents).toBe(true);
+  });
+
+  it.each([
+    ["workbench", "core"],
+    ["action", "core"],
+    ["system", "full"],
+  ])(
+    "reads a daintreeMcpTier written before the core/full split (%s) as %s",
+    (stored, expected) => {
+      const result = decode({ runCommands: [], daintreeMcpTier: stored });
+      if (!result.ok) throw new Error("expected ok");
+      expect(result.settings.daintreeMcpTier).toBe(expected);
+    }
+  );
+
+  it.each(["off", "core", "full"])("keeps a current daintreeMcpTier (%s) as written", (tier) => {
+    const result = decode({ runCommands: [], daintreeMcpTier: tier });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.daintreeMcpTier).toBe(tier);
+  });
+
+  it("lets a pre-split stored tier win over the legacy boolean", () => {
+    // `system` was an explicit choice; the boolean only ever meant the lowest
+    // rung, so it must not drag the project down to `core`.
+    const result = decode({
+      runCommands: [],
       daintreeMcpTier: "system",
       exposeDaintreeMcpToAgents: true,
     });
     if (!result.ok) throw new Error("expected ok");
-    expect(result.settings.daintreeMcpTier).toBe("system");
-    expect(result.settings.exposeDaintreeMcpToAgents).toBe(true);
+    expect(result.settings.daintreeMcpTier).toBe("full");
   });
 
   it("rejects unknown daintreeMcpTier values", () => {
@@ -282,11 +313,11 @@ describe("encodeEnvelope", () => {
     const enc = encodeEnvelope({
       runCommands: [{ id: "r1", name: "n", command: "c" }],
       resourceEnvironments: { default: { provision: ["echo"] } },
-      daintreeMcpTier: "workbench",
+      daintreeMcpTier: "core",
     });
     expect(enc.runCommands).toEqual([{ id: "r1", name: "n", command: "c" }]);
     expect(enc.resourceEnvironments).toEqual({ default: { provision: ["echo"] } });
-    expect(enc.daintreeMcpTier).toBe("workbench");
+    expect(enc.daintreeMcpTier).toBe("core");
   });
 });
 
@@ -311,7 +342,9 @@ describe("round-trip", () => {
         { maxLength: 3 }
       ),
       turbopackEnabled: fc.boolean(),
-      daintreeMcpTier: fc.constantFrom("off", "workbench", "action", "system"),
+      // Pre-split names included: they normalize on the first decode and must
+      // then round-trip as their core/full equivalents.
+      daintreeMcpTier: fc.constantFrom("off", "core", "full", "workbench", "action", "system"),
     },
     { requiredKeys: ["runCommands"] }
   );
@@ -352,11 +385,26 @@ describe("ProjectSettingsSaveSchema", () => {
   it("permits both daintreeMcpTier and exposeDaintreeMcpToAgents (strip happens at action layer)", () => {
     const result = ProjectSettingsSaveSchema.safeParse({
       runCommands: [],
-      daintreeMcpTier: "workbench",
+      daintreeMcpTier: "core",
       exposeDaintreeMcpToAgents: true,
     });
     expect(result.success).toBe(true);
   });
+
+  it.each(["off", "core", "full"])("accepts daintreeMcpTier %s", (tier) => {
+    expect(
+      ProjectSettingsSaveSchema.safeParse({ runCommands: [], daintreeMcpTier: tier }).success
+    ).toBe(true);
+  });
+
+  it.each(["workbench", "action", "system"])(
+    "rejects the pre-split daintreeMcpTier %s on save (read-side normalization only)",
+    (tier) => {
+      expect(
+        ProjectSettingsSaveSchema.safeParse({ runCommands: [], daintreeMcpTier: tier }).success
+      ).toBe(false);
+    }
+  );
 
   it("rejects non-object payloads", () => {
     expect(ProjectSettingsSaveSchema.safeParse(null).success).toBe(false);

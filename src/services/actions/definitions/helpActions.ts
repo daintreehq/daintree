@@ -59,8 +59,9 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
   // inline in the MCP CallTool handler (electron/services/mcp-server/
   // sessionServer.ts): the URL is validated against the daintree.org allowlist,
   // a figure number is assigned sequentially per help session, and the figure
-  // is pushed to the pinned renderer. The tool lives only in WORKBENCH_TIER_TOOLS
-  // (never the external/api-key allowlist), so only help sessions can call it.
+  // is pushed to the pinned renderer. The tool lives only in CORE_TIER_TOOLS
+  // (never the external/api-key allowlist), and the handler refuses any session
+  // without a help-session id, so only help sessions can call it.
   // `run()` throws if the renderer ever invokes it directly.
   actions.set("help.displayImage", () => ({
     id: "help.displayImage",

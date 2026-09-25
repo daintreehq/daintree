@@ -208,10 +208,11 @@ export interface OnboardingState {
 }
 
 /**
- * Tier classifications for the help-panel agent session. Maps to the
- * action danger boundaries from the help-assistant settings (#6517).
+ * The Daintree MCP tool set a help-panel session or agent pane is served:
+ * `core` is the orchestration surface, `full` adds the rest. Nothing outside
+ * `full` is reachable over MCP at all.
  */
-export type HelpAssistantTier = "workbench" | "action" | "system";
+export type HelpAssistantTier = "core" | "full";
 
 /** Serializable toast payload sent from main process to renderer via IPC. */
 export interface MainProcessToastPayload {
@@ -1646,7 +1647,7 @@ export interface IpcEventMap {
     sessionId: string;
     toolId: string;
     tier: string;
-    targetTier: "workbench" | "action" | "system" | null;
+    targetTier: HelpAssistantTier | null;
   };
 
   /**

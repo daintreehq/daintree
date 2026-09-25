@@ -86,6 +86,7 @@ function loadPluginService(): Promise<PluginServiceSingleton> {
 export type { HelpTokenValidator } from "./mcp-server/shared.js";
 export type McpAuthClass = import("./mcp-server/shared.js").McpAuthClass;
 export type McpTier = import("./mcp-server/shared.js").McpTier;
+type HelpAssistantTier = import("../../shared/types/ipc/maps.js").HelpAssistantTier;
 
 export class McpServerService {
   // Mutable reference updated by start(); read by bridge's getActiveProjectWebContents.
@@ -152,7 +153,7 @@ export class McpServerService {
         // which point the field is assigned. Mirrors `dropAbuseState`.
         dropBearerState: (sessionId) => this.httpLifecycle.detachBearerSession(sessionId),
         onTierDecayed: (sessionId, previousTier, newTier) => {
-          // Tier just decayed to the workbench baseline (#8462). Push a
+          // Tier just decayed to its pre-elevation baseline (#8462). Push a
           // tools/list_changed so the model re-fetches the now-narrowed
           // manifest instead of calling a tool it no longer has. The
           // session map is the freshness check — a transport closing
@@ -893,7 +894,7 @@ export class McpServerService {
 
   setSessionTier(
     sessionId: string,
-    tier: "workbench" | "action" | "system",
+    tier: HelpAssistantTier,
     callerWcId?: number
   ): { sessionId: string; tier: McpTier } {
     return this.httpLifecycle.setSessionTier(sessionId, tier, callerWcId);

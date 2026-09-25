@@ -104,7 +104,7 @@ const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   docSearch: "Search documentation",
   daintreeControl: "Daintree control",
   idleHibernateMinutes: "Hibernate after",
-  tier: "Capability tier",
+  tier: "Tool set",
   bypassPermissions: "Bypass",
   auditRetention: "Audit log retention",
   loadGlobalHooksAndServers: "Load my MCP servers and hooks",
@@ -118,7 +118,7 @@ interface SaveFailure {
 const DEFAULT_SETTINGS: HelpAssistantSettings = {
   docSearch: true,
   daintreeControl: true,
-  tier: "action",
+  tier: "core",
   bypassPermissions: false,
   auditRetention: 7,
   modelId: null,
@@ -132,41 +132,33 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
 // choice carries a sentinel in the dropdown and maps back to "" on persist.
 const MODEL_DEFAULT_SENTINEL = "__default__";
 
-// One sentence of consequence beside the select; the rest lives in the tier's
+// One sentence of consequence beside the select; the rest lives in the tool set's
 // disclosure with the action inventory, where it can be read in full.
 const TIER_SUMMARIES: Record<HelpAssistantTier, string> = {
-  workbench: "Reads project state but can't change it",
-  action: "Full in-app orchestration, including closing terminals and deleting worktrees",
-  system: "Adds git, forge and on-disk writes outside the app. Reserve for trusted automation.",
+  core: "Create worktrees, launch and prompt agents, and move, rename or close terminals",
+  full: "Adds recipes, workflows, project checks, forge and git reads, context tools and diagnostics",
 };
 
-// Descriptive exclusive choice: each tier's consequence stays readable in full, so the
-// one that grants destructive and external writes can't hide behind a truncated label.
+// Descriptive exclusive choice: each tool set's consequence stays readable in full, so
+// the larger one can't hide what it adds behind a truncated label.
 const TIER_CHOICES: { value: HelpAssistantTier; label: string; description: string }[] = [
-  { value: "workbench", label: "Workbench", description: TIER_SUMMARIES.workbench },
-  { value: "action", label: "Action (default)", description: TIER_SUMMARIES.action },
-  { value: "system", label: "System", description: TIER_SUMMARIES.system },
+  { value: "core", label: "Core (default)", description: TIER_SUMMARIES.core },
+  { value: "full", label: "Full", description: TIER_SUMMARIES.full },
 ];
 
 const TIER_DETAILS: Record<HelpAssistantTier, string> = {
-  workbench:
-    "The assistant can read project state but can't change it. Best when you're handing off observation tasks.",
-  action:
-    "The assistant can spawn agents, send prompts, read terminal state, close terminals, and delete worktrees in this project or tear down their resources. Deletions normally ask you to confirm each time, unless you have granted the assistant automation for them, and they run whatever teardown commands the project configures. Most assistance tasks need this.",
-  system:
-    "Adds git staging, commits, fetches and pushes; forge issue/PR reads and writes; worktree creation at any path on disk; clipboard and CopyTree-to-disk writes; and arming terminals for automation.",
+  core: "The assistant can create worktrees, launch agents and send them prompts, read and wait on terminals, and move, rename or close them. It can delete a worktree it created, which asks you to confirm. This covers most orchestration and keeps the tool list the model rereads every turn short.",
+  full: "Adds recipes and project checks, starting work on an issue, forge PR, issue and CI reads, git activity, CopyTree context, deleting any worktree and managing its resources, terminal watches, and diagnostics. Deletions and teardowns still ask you to confirm. Git and forge writes and file edits aren't available in either tool set.",
 };
 
 const TIER_SHORT_LABEL: Record<HelpAssistantTier, string> = {
-  workbench: "Workbench",
-  action: "Action",
-  system: "System",
+  core: "Core",
+  full: "Full",
 };
 
 const TIER_RANK: Record<HelpAssistantTier, number> = {
-  workbench: 0,
-  action: 1,
-  system: 2,
+  core: 0,
+  full: 1,
 };
 
 // Format a whole-seconds grant countdown as "Xm Ys" / "Xm" / "Ys". Exported
@@ -237,7 +229,7 @@ interface BypassCopy {
 // provision-time snapshots — a session already running keeps the tier it was
 // minted with, which the live-status card reports.
 const tierBoundsNewSessions = (tier: HelpAssistantTier): string =>
-  `New sessions are limited to the Daintree actions the ${TIER_SHORT_LABEL[tier]} capability tier allows. Actions that need confirmation still open Daintree's own prompt unless an automation grant covers them.`;
+  `New sessions are limited to the Daintree actions in the ${TIER_SHORT_LABEL[tier]} tool set. Actions that need confirmation still open Daintree's own prompt unless an automation grant covers them.`;
 
 /**
  * Per-agent wording for the one stored `bypassPermissions` preference. The
@@ -796,7 +788,7 @@ export function DaintreeAssistantSettingsTab() {
   };
 
   const setTier = (value: string) => {
-    if (value !== "workbench" && value !== "action" && value !== "system") return;
+    if (value !== "core" && value !== "full") return;
     void persist({ tier: value });
   };
 
@@ -1142,8 +1134,8 @@ export function DaintreeAssistantSettingsTab() {
         {saveError("security")}
         <SettingsGroup>
           <SettingsChoicebox
-            label="Capability tier"
-            description="The default for new sessions"
+            label="Tool set"
+            description="The Daintree actions new sessions can call"
             value={settings.tier}
             onChange={setTier}
             options={TIER_CHOICES}
@@ -1580,11 +1572,11 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
   const newAtTier = HELP_TIER_INCREMENTAL[tier].length;
   const groups = useMemo(() => {
     const cumulative = HELP_TIER_CUMULATIVE[tier];
-    // Pin the load-bearing dangerous actions at the top of whichever tier is
-    // being previewed, so they can't be missed in a long alphabetical list.
-    // Intersected with this tier rather than pinned only on `system` (#12116):
-    // the preview's job is to show what selecting THIS tier grants, so a tool
-    // has to be called out at the tier that first reaches it.
+    // Pin the load-bearing dangerous actions at the top of whichever tool set
+    // is being previewed, so they can't be missed in a long alphabetical list.
+    // Intersected with this set rather than pinned only on the largest (#12116):
+    // the preview's job is to show what selecting THIS set grants, so a tool
+    // has to be called out at the set that first reaches it.
     const pinnedList = HIGH_BLAST_RADIUS_TOOLS.filter((tool) => cumulative.includes(tool));
     if (pinnedList.length === 0) return groupToolsByNamespace(cumulative);
     const pinned = new Set(pinnedList);
@@ -1616,8 +1608,8 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
             aria-hidden="true"
           />
           <span>
-            What this tier allows · {totalCount} actions
-            {tier !== "workbench" && <span> ({newAtTier} new at this tier)</span>}
+            What this tool set allows · {totalCount} actions
+            {tier !== "core" && <span> ({newAtTier} more than core)</span>}
           </span>
         </span>
       </button>
@@ -1779,7 +1771,7 @@ function NativeGrantsSection({
             type="text"
             value={toolsInput}
             onChange={(e) => setToolsInput(e.target.value)}
-            placeholder="git.commit terminal.new"
+            placeholder="worktree.deleteOwned recipe.run"
             className="min-w-0 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-2 py-1 text-xs font-mono text-text-primary placeholder:text-text-placeholder focus-visible:outline-2 focus-visible:outline-accent-primary"
           />
         </label>
@@ -1845,13 +1837,14 @@ function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
         description={
           connected ? (
             <StatusLine tone="ok">
-              Running at{" "}
-              <span className="text-text-primary">{TIER_SHORT_LABEL[tier].toLowerCase()}</span>
+              Running the{" "}
+              <span className="text-text-primary">{TIER_SHORT_LABEL[tier].toLowerCase()}</span> tool
+              set
               {tierComparisonCopy}
             </StatusLine>
           ) : (
             <StatusLine tone="idle">
-              None. Open the assistant to start one; its live tier and grants show here.
+              None. Open the assistant to start one; its live tool set and grants show here.
             </StatusLine>
           )
         }

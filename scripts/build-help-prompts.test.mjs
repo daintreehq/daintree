@@ -161,13 +161,7 @@ describe("help prompt outputs", () => {
         expect(idx, heading).toBeLessThan(tasksIdx);
       }
       const tier = section(body, "## Tier Model");
-      for (const term of [
-        "`workbench`",
-        "`action`",
-        "`system`",
-        "TIER_NOT_PERMITTED",
-        "mcp.surface",
-      ]) {
+      for (const term of ["`core`", "`full`", "TIER_NOT_PERMITTED", "mcp.surface"]) {
         expect(tier).toContain(term);
       }
       expect(tier).toMatch(/confirm-gated/i);
@@ -265,8 +259,11 @@ describe("help prompt outputs", () => {
         /`worktree\.createWithRecipe`, then `worktree\.waitUntilReady`[^\n]*every job[^\n]*then `agent\.launch`/
       );
       expect(queue).toMatch(
-        /`prNumber`\/`prUrl` in `worktree\.list` is a cached hint, so confirm with `forge\.getPR`/
+        /`worktree\.waitForPullRequest` and `prNumber`\/`prUrl` in `worktree\.list` are cached hints, so confirm with `forge\.getPR`/
       );
+      // `forge.getPR` is only in `full`, so a `core` session needs a route of
+      // its own to the same confirmation.
+      expect(queue).toMatch(/`forge\.getPR`[^\n]* in `full`, or `gh pr view` in `core`/);
       expect(queue).toMatch(
         /Don't scrape a PR number from the agent's screen or write your own poller/
       );
@@ -303,7 +300,7 @@ describe("help prompt outputs", () => {
 
     it("AGENTS.md routes operational work through the tier-gated MCP rather than the shell", () => {
       expect(AGENTS).toContain("TIER_NOT_PERMITTED");
-      expect(AGENTS).toMatch(/spawn\/close\/kill terminals/);
+      expect(AGENTS).toMatch(/launch agents, send prompts, move and close terminals/);
     });
 
     // Asserted against the head partial, not the generated file: SHARED.md is

@@ -1030,8 +1030,8 @@ export interface GeneratedIpcInvokeMap {
     result: import("./mcpServer.js").McpServerStatusSnapshot;
   };
   "mcp-server:set-session-tier": {
-    args: [payload: { sessionId: string; tier: "action" | "workbench" | "system" }];
-    result: { sessionId: string; tier: "action" | "workbench" | "system" };
+    args: [payload: { sessionId: string; tier: import("./maps.js").HelpAssistantTier }];
+    result: { sessionId: string; tier: import("./maps.js").HelpAssistantTier };
   };
   "mcp-server:stop-pane-watches": {
     args: [terminalId: string];

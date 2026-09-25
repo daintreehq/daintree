@@ -29,10 +29,10 @@ import { ACTIONS_LIST_TOOL } from "./helpAssistantTierAllowlists.js";
  * worktrees, recipes, skills, live IDE context — and drop what the caller can
  * already do for itself. An external agent driving us over MCP sits in a
  * terminal with its own shell and its own `gh`, so git plumbing, forge
- * reads/writes, file reads and project queries are its job, not ours. All of
- * that remains fully available to the in-app assistant via the
- * workbench/action/system tiers in `helpAssistantTierAllowlists.ts`, which no
- * third-party client cap applies to.
+ * reads/writes, file reads and project queries are its job, not ours. The
+ * in-app `core`/`full` tool sets in `helpAssistantTierAllowlists.ts` follow the
+ * same rule, so this list never reaches past what an agent pane at `full` can
+ * call.
  *
  * Budgeted in both dimensions, because the failure is measured in bytes as much
  * as in tools: the count ceiling lives in `tierAuth.test.ts` (against

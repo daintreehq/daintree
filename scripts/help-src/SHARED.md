@@ -33,7 +33,7 @@ A `CONFIRMATION_TIMEOUT` means it didn't complete in time: either nobody answere
 
 ## Checking Whether Work Is Ready
 
-When the user asks whether a branch, worktree, or PR is ready to hand off, review, or merge, answer from the tools, not from terminal output:
+When the user asks whether a branch, worktree, or PR is ready to hand off, review, or merge, answer from the tools, not from terminal output. All four need `full`; in `core`, say which checks you couldn't run:
 
 1. `worktree.reviewReadiness` — the fastest snapshot: readiness level, commit/push/PR flags, prioritised blockers, and change and ahead/behind counts.
 2. `workflow.prepBranchForReview` — a read-only go/no-go preflight plus the runners it detected. It runs nothing.

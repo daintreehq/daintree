@@ -825,12 +825,12 @@ describe("HelpSessionService", () => {
     }
   });
 
-  it("sets defaultMode=bypassPermissions and tier=system when legacy skipPermissions is true", async () => {
+  it("sets defaultMode=bypassPermissions and tier=full when legacy skipPermissions is true", async () => {
     mockStoreGet.mockReturnValue({ skipPermissions: true });
 
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
-    expect(result.tier).toBe("system");
+    expect(result.tier).toBe("full");
 
     const settings = JSON.parse(
       await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
@@ -838,14 +838,14 @@ describe("HelpSessionService", () => {
     expect(settings.defaultMode).toBe("bypassPermissions");
   });
 
-  it("writes defaultMode=bypassPermissions when bypassPermissions is on but tier stays at action", async () => {
-    mockStoreGet.mockReturnValue({ tier: "action", bypassPermissions: true });
+  it("writes defaultMode=bypassPermissions when bypassPermissions is on but tier stays at core", async () => {
+    mockStoreGet.mockReturnValue({ tier: "core", bypassPermissions: true });
 
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
-    // tier and bypassPermissions are decoupled — action tier with bypass
-    // on writes defaultMode but does NOT elevate the MCP tier to system.
-    expect(result.tier).toBe("action");
+    // tier and bypassPermissions are decoupled — core with bypass on writes
+    // defaultMode but does NOT elevate the MCP tool set to full.
+    expect(result.tier).toBe("core");
 
     const settings = JSON.parse(
       await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
@@ -853,12 +853,12 @@ describe("HelpSessionService", () => {
     expect(settings.defaultMode).toBe("bypassPermissions");
   });
 
-  it("does NOT write defaultMode when tier=system but bypassPermissions is off", async () => {
-    mockStoreGet.mockReturnValue({ tier: "system", bypassPermissions: false });
+  it("does NOT write defaultMode when tier=full but bypassPermissions is off", async () => {
+    mockStoreGet.mockReturnValue({ tier: "full", bypassPermissions: false });
 
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
-    expect(result.tier).toBe("system");
+    expect(result.tier).toBe("full");
 
     const settings = JSON.parse(
       await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
@@ -874,7 +874,7 @@ describe("HelpSessionService", () => {
     ).rejects.toThrow('agentId "daintree-assistant" is not assistant-supported');
   });
 
-  it.each(["workbench", "action", "system"] as const)(
+  it.each(["core", "full"] as const)(
     "provisions a non-assistant help agent at the stored %s tier",
     async (tier) => {
       // The non-assistant path stays independently configurable — a Claude
@@ -892,8 +892,40 @@ describe("HelpSessionService", () => {
     }
   );
 
+  // Settings written before the core/full split carry the old ladder. They
+  // are read in place, never rewritten, so the bearer must come out at the
+  // equivalent set rather than falling through to the default.
+  it.each([
+    ["workbench", "core"],
+    ["action", "core"],
+    ["system", "full"],
+  ] as const)("provisions a pre-split stored %s tier at %s", async (stored, expected) => {
+    mockStoreGet.mockReturnValue({ tier: stored, bypassPermissions: false });
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+    expect(result.tier).toBe(expected);
+    expect(service.validateToken(result.token)).toBe(expected);
+  });
+
+  it("provisions at core when legacy skipPermissions is false", async () => {
+    mockStoreGet.mockReturnValue({ skipPermissions: false });
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+    expect(result.tier).toBe("core");
+  });
+
+  it("lets a pre-split stored tier win over legacy skipPermissions", async () => {
+    mockStoreGet.mockReturnValue({ tier: "action", skipPermissions: true });
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+    expect(result.tier).toBe("core");
+  });
+
   it("getBypassPermissions returns the snapshot taken at provision time", async () => {
-    mockStoreGet.mockReturnValue({ tier: "action", bypassPermissions: true });
+    mockStoreGet.mockReturnValue({ tier: "core", bypassPermissions: true });
 
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
@@ -913,14 +945,14 @@ describe("HelpSessionService", () => {
   });
 
   it("getDebugLogging returns the snapshot taken at provision time", async () => {
-    mockStoreGet.mockReturnValue({ tier: "action", debugLogging: true });
+    mockStoreGet.mockReturnValue({ tier: "core", debugLogging: true });
 
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
     // Mutate the store after provisioning: the accessor must return the
     // value captured at provision time, not re-read the live store.
-    mockStoreGet.mockReturnValue({ tier: "action", debugLogging: false });
+    mockStoreGet.mockReturnValue({ tier: "core", debugLogging: false });
 
     expect(service.getDebugLogging(result.token)).toBe(true);
     expect(service.getDebugLogging("not-a-token")).toBe(false);
@@ -956,7 +988,7 @@ describe("HelpSessionService", () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
-    expect(service.validateToken(result.token)).toBe("action");
+    expect(service.validateToken(result.token)).toBe("core");
     expect(service.validateToken("not-a-real-token")).toBe(false);
 
     await service.revokeSession(result.sessionId);
@@ -1187,7 +1219,7 @@ describe("HelpSessionService", () => {
     const lane = await readLaneConfig(second);
     expect(lane.mcpServers.daintree?.headers?.Authorization).toBe(`Bearer ${second.token}`);
     expect(service.validateToken(first.token)).toBe(false);
-    expect(service.validateToken(second.token)).toBe("action");
+    expect(service.validateToken(second.token)).toBe("core");
   });
 
   it("derives different session dirs for different project paths", async () => {
@@ -1204,7 +1236,7 @@ describe("HelpSessionService", () => {
 
     await service.revokeByWebContentsId(1);
     expect(service.validateToken(a.token)).toBe(false);
-    expect(service.validateToken(b.token)).toBe("action");
+    expect(service.validateToken(b.token)).toBe("core");
   });
 
   it("revokeAll wipes every active session", async () => {
@@ -1405,7 +1437,7 @@ describe("HelpSessionService", () => {
 
   it("probes the exact assistant SSE bearer after registering the minted session token", async () => {
     mockProbeMcpSseServer.mockImplementationOnce(async (_port, token) => {
-      expect(service.validateToken(token)).toBe("action");
+      expect(service.validateToken(token)).toBe("core");
     });
 
     const result = await service.provisionSession(provisionInput());
@@ -1483,7 +1515,7 @@ describe("HelpSessionService", () => {
       if (!second) throw new Error("expected second provision");
 
       expect(service.validateToken(first.token)).toBe(false);
-      expect(service.validateToken(second.token)).toBe("action");
+      expect(service.validateToken(second.token)).toBe("core");
       expect(mockPtyKill).toHaveBeenCalledWith("term-1", "help-session-displaced");
     });
 
@@ -1498,7 +1530,7 @@ describe("HelpSessionService", () => {
       if (!second) throw new Error("expected second provision");
 
       expect(service.validateToken(first.token)).toBe(false);
-      expect(service.validateToken(second.token)).toBe("action");
+      expect(service.validateToken(second.token)).toBe("core");
       expect(mockPtyKill).not.toHaveBeenCalled();
     });
 
@@ -1518,8 +1550,8 @@ describe("HelpSessionService", () => {
       });
       if (!second) throw new Error("expected second provision");
 
-      expect(service.validateToken(first.token)).toBe("action");
-      expect(service.validateToken(second.token)).toBe("action");
+      expect(service.validateToken(first.token)).toBe("core");
+      expect(service.validateToken(second.token)).toBe("core");
       expect(mockPtyKill).not.toHaveBeenCalled();
     });
 
@@ -1730,8 +1762,8 @@ describe("HelpSessionService", () => {
       expect(service.markTerminalForToken(second.token, "term-slot-1")).toBe(true);
 
       // The whole point of the feature: neither session displaced the other.
-      expect(service.validateToken(first.token)).toBe("action");
-      expect(service.validateToken(second.token)).toBe("action");
+      expect(service.validateToken(first.token)).toBe("core");
+      expect(service.validateToken(second.token)).toBe("core");
       expect(mockPtyKill).not.toHaveBeenCalled();
     });
 
@@ -1748,11 +1780,11 @@ describe("HelpSessionService", () => {
       if (!replacement) throw new Error("expected replacement provision");
 
       expect(service.validateToken(laneZero.token)).toBe(false);
-      expect(service.validateToken(replacement.token)).toBe("action");
+      expect(service.validateToken(replacement.token)).toBe("core");
       expect(mockPtyKill).toHaveBeenCalledWith("term-slot-0", "help-session-displaced");
       expect(mockPtyKill).not.toHaveBeenCalledWith("term-slot-1", "help-session-displaced");
       // The sibling is still fully live.
-      expect(service.validateToken(laneOne.token)).toBe("action");
+      expect(service.validateToken(laneOne.token)).toBe("core");
     });
 
     it("shares one session directory across lanes and keeps each bearer in its own lane file", async () => {
@@ -1817,7 +1849,7 @@ describe("HelpSessionService", () => {
         service.provisionSession({ ...provisionInput(), agentId: "codex", slot: 1 })
       ).rejects.toMatchObject({ name: "HelpSessionError", code: "MIXED_AGENT_LANES" });
       // The sibling is untouched.
-      expect(service.validateToken(claude.token)).toBe("action");
+      expect(service.validateToken(claude.token)).toBe("core");
 
       // Once the Claude lane is gone, the project can switch agents.
       await service.revokeSession(claude.sessionId);
@@ -1846,8 +1878,8 @@ describe("HelpSessionService", () => {
       ).rejects.toMatchObject({ name: "HelpSessionError", code: "MIXED_AGENT_LANES" });
 
       // The lane the refused launch targeted is still the user's live session.
-      expect(service.validateToken(laneOne.token)).toBe("action");
-      expect(service.validateToken(laneZero.token)).toBe("action");
+      expect(service.validateToken(laneOne.token)).toBe("core");
+      expect(service.validateToken(laneZero.token)).toBe("core");
       expect(mockPtyKill).not.toHaveBeenCalled();
     });
 
@@ -1920,8 +1952,8 @@ describe("HelpSessionService", () => {
       await fs.access(laneFile(laneZero, 0));
       await fs.access(laneFile(laneOne, 1));
       await fs.access(laneFile(warm, 2));
-      expect(service.validateToken(laneZero.token)).toBe("action");
-      expect(service.validateToken(laneOne.token)).toBe("action");
+      expect(service.validateToken(laneZero.token)).toBe("core");
+      expect(service.validateToken(laneOne.token)).toBe("core");
       expect((await readSharedMcp(laneZero.sessionPath)).mcpServers).toEqual({});
     });
 
@@ -1987,7 +2019,7 @@ describe("HelpSessionService", () => {
     it("revokes an unbound bearer older than the ceiling and tears down its MCP session", async () => {
       const result = await service.provisionSession(provisionInput());
       if (!result) throw new Error("expected result");
-      expect(service.validateToken(result.token)).toBe("action");
+      expect(service.validateToken(result.token)).toBe("core");
       // Wire the teardown spy AFTER provisioning — `ensureMcpServerReady` (run
       // during provision) re-sets `onMcpSessionRevoked`, so an earlier spy
       // would be overwritten before the sweep fires.
@@ -2011,7 +2043,7 @@ describe("HelpSessionService", () => {
       // A generous ceiling means the just-minted record is well within it.
       await service.sweepOrphanSessions(60 * 60 * 1000);
 
-      expect(service.validateToken(result.token)).toBe("action");
+      expect(service.validateToken(result.token)).toBe("core");
     });
 
     it("never sweeps a bound session regardless of age", async () => {
@@ -2023,7 +2055,7 @@ describe("HelpSessionService", () => {
       // a healthy live assistant and must survive.
       await service.sweepOrphanSessions(0);
 
-      expect(service.validateToken(result.token)).toBe("action");
+      expect(service.validateToken(result.token)).toBe("core");
       expect(mockPtyKill).not.toHaveBeenCalled();
     });
 
@@ -2668,7 +2700,7 @@ describe("HelpSessionService", () => {
       if (!second) throw new Error("expected second provision");
       // Sanity: displacement already invalidated the old token.
       expect(service.validateToken(first.token)).toBe(false);
-      expect(service.validateToken(second.token)).toBe("action");
+      expect(service.validateToken(second.token)).toBe("core");
 
       // Now let gracefulKill resolve with the captured (stale) resume ID.
       resolveGraceful("stale-resume-id-from-displaced-session");
@@ -3788,7 +3820,7 @@ describe("HelpSessionService", () => {
         expect(block).toContain("`/tmp/project` — branch `main` (main worktree)");
         expect(block).toContain("`/tmp/project-fix` — branch `fix/help`");
         expect(block).toContain("- Forge remote: `origin` `https://github.com/acme/example.git`");
-        expect(block).toContain("- Assistant tier setting: `action`");
+        expect(block).toContain("- Assistant tool set setting: `core`");
         expect(block).toContain("- Daintree MCP tools setting: `enabled`");
         // Shared by every lane: nothing lane- or session-scoped belongs here.
         expect(block).not.toContain(result.token);
@@ -3804,7 +3836,7 @@ describe("HelpSessionService", () => {
         await fs.readFile(path.join(result.sessionPath, "AGENTS.md"), "utf-8")
       );
       expect(block).toContain("- Path: `/tmp/project`");
-      expect(block).toContain("- Assistant tier setting: `action`");
+      expect(block).toContain("- Assistant tool set setting: `core`");
       expect(block).not.toContain("- Name:");
       expect(block).not.toContain("worktrees");
     });

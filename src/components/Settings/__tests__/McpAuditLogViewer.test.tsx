@@ -101,6 +101,22 @@ describe("McpAuditLogViewer", () => {
     expect(screen.getByText("project.getSettings")).toBeTruthy();
   });
 
+  // Records written before the core/full split carry the old ladder names;
+  // they read as history rather than naming a tool set that does not exist.
+  it("names the tool set a denied call needs, and a pre-split hint as a former tier", () => {
+    renderViewer([
+      { ...dispatch("4", "project.runCheck", "unauthorized"), tierHint: "full" } as McpLogRecord,
+      // Widened: the current type no longer admits the value an old record holds.
+      {
+        ...dispatch("5", "git.push", "unauthorized"),
+        tierHint: "system",
+      } as unknown as McpLogRecord,
+    ]);
+    expect(screen.getByText("Needs the Full tool set")).toBeTruthy();
+    expect(screen.getByText("Needed the former system tier")).toBeTruthy();
+    expect(screen.queryByText(/system tool set/)).toBeNull();
+  });
+
   it("names an unsuccessful outcome in words beside the tool", () => {
     renderViewer([dispatch("3", "project.getSettings", "rate_limited")]);
     // The glyph alone can't tell rate limited from awaiting confirmation or a collision.

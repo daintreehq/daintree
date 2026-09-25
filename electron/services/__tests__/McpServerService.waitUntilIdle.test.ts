@@ -200,7 +200,7 @@ vi.mock("../persistence/auditRingStore.js", () => ({
   },
 }));
 
-const paneTokenTiers = vi.hoisted(() => new Map<string, "workbench" | "action" | "system">());
+const paneTokenTiers = vi.hoisted(() => new Map<string, "core" | "full">());
 
 vi.mock("../McpPaneConfigService.js", () => ({
   mcpPaneConfigService: {
@@ -503,14 +503,14 @@ describe("McpServerService", () => {
       });
     };
 
-    it("listTools advertises the native tool with the documented schema for the action tier", async () => {
-      paneTokenTiers.set("token-wait-action", "action");
+    it("listTools advertises the native tool with the documented schema for the core tier", async () => {
+      paneTokenTiers.set("token-wait-core", "core");
       const { window } = createMockWindow({
         getManifest: () => [waitUntilIdleManifestEntry()],
       });
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-wait-action",
+        Authorization: "Bearer token-wait-core",
       });
       transports.push(transport);
 
@@ -523,19 +523,31 @@ describe("McpServerService", () => {
       expect(tool?.annotations?.destructiveHint).toBe(false);
     });
 
-    it("listTools hides the native tool from the workbench tier", async () => {
-      paneTokenTiers.set("token-wait-wb", "workbench");
+    it("listTools filters main-process tools by tier: core lists the wait but not the full-only watch", async () => {
+      // The wait is on both tool sets now, so its full-only sibling stands in
+      // for "a main-process tool this tier does not carry".
+      paneTokenTiers.set("token-wait-core-list", "core");
       const { window } = createMockWindow({
-        getManifest: () => [waitUntilIdleManifestEntry()],
+        getManifest: () => [
+          waitUntilIdleManifestEntry(),
+          {
+            ...waitUntilIdleManifestEntry(),
+            id: "terminal.registerWatch" as ActionId,
+            name: "terminal.registerWatch",
+            title: "Watch Terminals",
+            description: "Register a terminal watch",
+          },
+        ],
       });
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-wait-wb",
+        Authorization: "Bearer token-wait-core-list",
       });
       transports.push(transport);
 
       const ids = (await client.listTools()).tools.map((t) => t.name);
-      expect(ids).not.toContain("terminal.waitUntilIdle");
+      expect(ids).toContain("terminal.waitUntilIdle");
+      expect(ids).not.toContain("terminal.registerWatch");
     });
 
     it("returns immediately for a terminal that is already idle", async () => {
@@ -989,8 +1001,10 @@ describe("McpServerService", () => {
       ).rejects.toThrow(/non-negative integer/);
     });
 
-    it("rejects callTool from a workbench-tier session before invoking the handler", async () => {
-      paneTokenTiers.set("token-wait-deny", "workbench");
+    it("rejects a full-only main-process tool from a core-tier session before invoking the handler", async () => {
+      // Every tier carries the wait, so the gate in front of the main-process
+      // short-circuits is exercised with the full-only watch registration.
+      paneTokenTiers.set("token-wait-deny", "core");
       const { window } = createMockWindow({ getManifest: () => [] });
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!, {
@@ -999,8 +1013,8 @@ describe("McpServerService", () => {
       transports.push(transport);
 
       const result = (await client.callTool({
-        name: "terminal.waitUntilIdle",
-        arguments: { terminalId: "anything" },
+        name: "terminal.registerWatch",
+        arguments: { terminalIds: ["anything"] },
       })) as TextToolResult;
 
       expect(result.isError).toBe(true);

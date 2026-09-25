@@ -43,21 +43,21 @@ function newCache(opts?: {
 describe("GrantCache.issueGrant + check", () => {
   it("issueGrant returns an entry and emits grant.issued", () => {
     const { cache, emitted } = newCache();
-    const entry = cache.issueGrant("s1", "git.commit");
+    const entry = cache.issueGrant("s1", "project.runCheck");
     expect(entry.ttlMs).toBeGreaterThan(0);
     expect(entry.expiresAt).toBe(entry.issuedAt + entry.ttlMs);
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toMatchObject({
       sessionId: "s1",
-      payload: { type: "grant.issued", sessionId: "s1", toolId: "git.commit" },
+      payload: { type: "grant.issued", sessionId: "s1", toolId: "project.runCheck" },
     });
     cache.dispose();
   });
 
   it("check returns granted + issuedAt for a fresh grant", () => {
     const { cache } = newCache();
-    const entry = cache.issueGrant("s1", "git.commit");
-    const result = cache.check("s1", "git.commit");
+    const entry = cache.issueGrant("s1", "project.runCheck");
+    const result = cache.check("s1", "project.runCheck");
     expect(result.granted).toBe(true);
     if (result.granted) {
       expect(result.issuedAt).toBe(entry.issuedAt);
@@ -68,9 +68,9 @@ describe("GrantCache.issueGrant + check", () => {
 
   it("check returns not granted for an unknown (sessionId, toolId)", () => {
     const { cache } = newCache();
-    cache.issueGrant("s1", "git.commit");
-    const a = cache.check("s2", "git.commit"); // different session
-    const b = cache.check("s1", "git.push"); // different tool
+    cache.issueGrant("s1", "project.runCheck");
+    const a = cache.check("s2", "project.runCheck"); // different session
+    const b = cache.check("s1", "terminal.new"); // different tool
     expect(a.granted).toBe(false);
     expect(b.granted).toBe(false);
     cache.dispose();
@@ -81,23 +81,23 @@ describe("GrantCache lazy expiry", () => {
   it("check lazily evicts and emits grant.expired after the TTL passes", () => {
     let now = 0;
     const { cache, emitted } = newCache({ ttlMs: 1000, now: () => now });
-    cache.issueGrant("s1", "git.commit");
+    cache.issueGrant("s1", "project.runCheck");
     emitted.length = 0;
 
     // Just before expiry: still granted, no eviction.
     now = 999;
-    expect(cache.check("s1", "git.commit").granted).toBe(true);
+    expect(cache.check("s1", "project.runCheck").granted).toBe(true);
     expect(emitted).toHaveLength(0);
 
     // Just after expiry: lazy eviction + emit.
     now = 1001;
-    expect(cache.check("s1", "git.commit").granted).toBe(false);
+    expect(cache.check("s1", "project.runCheck").granted).toBe(false);
     expect(emitted).toHaveLength(1);
     expect(emitted[0].payload.type).toBe("grant.expired");
-    expect(emitted[0].payload.toolId).toBe("git.commit");
+    expect(emitted[0].payload.toolId).toBe("project.runCheck");
 
     // Subsequent check returns false but does NOT re-emit (entry gone).
-    expect(cache.check("s1", "git.commit").granted).toBe(false);
+    expect(cache.check("s1", "project.runCheck").granted).toBe(false);
     expect(emitted).toHaveLength(1);
 
     cache.dispose();
@@ -106,7 +106,7 @@ describe("GrantCache lazy expiry", () => {
   it("sweep evicts expired entries and emits one grant.expired per entry", () => {
     let now = 0;
     const { cache, emitted } = newCache({ ttlMs: 1000, now: () => now });
-    cache.issueGrant("s1", "git.commit");
+    cache.issueGrant("s1", "project.runCheck");
     cache.issueGrant("s2", "worktree.delete");
     emitted.length = 0;
 
@@ -123,14 +123,14 @@ describe("GrantCache.refresh — race guard (#2243)", () => {
   it("refresh extends expiresAt when issuedAt matches", () => {
     let now = 0;
     const { cache } = newCache({ ttlMs: 1000, now: () => now });
-    const entry = cache.issueGrant("s1", "git.commit");
+    const entry = cache.issueGrant("s1", "project.runCheck");
 
     now = 500;
-    const refreshed = cache.refresh("s1", "git.commit", entry.issuedAt);
+    const refreshed = cache.refresh("s1", "project.runCheck", entry.issuedAt);
     expect(refreshed).toBe(true);
 
     // Original expiresAt was 1000; refresh at 500 with TTL 1000 → 1500.
-    const peeked = cache._peek("s1", "git.commit");
+    const peeked = cache._peek("s1", "project.runCheck");
     expect(peeked?.expiresAt).toBe(1500);
     cache.dispose();
   });
@@ -138,21 +138,21 @@ describe("GrantCache.refresh — race guard (#2243)", () => {
   it("refresh with stale issuedAt no-ops (revoke + reissue race)", () => {
     let now = 0;
     const { cache } = newCache({ ttlMs: 1000, now: () => now });
-    const original = cache.issueGrant("s1", "git.commit");
+    const original = cache.issueGrant("s1", "project.runCheck");
 
     // Simulate: revoke (deletes entry), then issueGrant again (fresh issuedAt).
     cache.revokeSession("s1", "user");
     now = 100;
-    const reissued = cache.issueGrant("s1", "git.commit");
+    const reissued = cache.issueGrant("s1", "project.runCheck");
     expect(reissued.issuedAt).not.toBe(original.issuedAt);
 
     // An in-flight dispatch refreshes with the OLD issuedAt — must no-op.
     now = 200;
-    const refreshed = cache.refresh("s1", "git.commit", original.issuedAt);
+    const refreshed = cache.refresh("s1", "project.runCheck", original.issuedAt);
     expect(refreshed).toBe(false);
 
     // Entry kept its reissue expiresAt (100 + 1000 = 1100), not extended.
-    const peeked = cache._peek("s1", "git.commit");
+    const peeked = cache._peek("s1", "project.runCheck");
     expect(peeked?.issuedAt).toBe(reissued.issuedAt);
     expect(peeked?.expiresAt).toBe(1100);
 
@@ -161,7 +161,7 @@ describe("GrantCache.refresh — race guard (#2243)", () => {
 
   it("refresh of a missing entry no-ops", () => {
     const { cache } = newCache();
-    expect(cache.refresh("s1", "git.commit", 0)).toBe(false);
+    expect(cache.refresh("s1", "project.runCheck", 0)).toBe(false);
     cache.dispose();
   });
 });
@@ -172,24 +172,24 @@ describe("GrantCache max-lifetime ceiling (#9161)", () => {
     // Ceiling 5000 sits above the 1000ms TTL so the grant is refreshable for
     // a while, then hits the hard cap.
     const { cache, emitted } = newCache({ ttlMs: 1000, maxLifetimeMs: 5000, now: () => now });
-    const entry = cache.issueGrant("s1", "git.commit");
+    const entry = cache.issueGrant("s1", "project.runCheck");
     emitted.length = 0;
 
     // Within the ceiling: refresh slides the TTL window forward as usual.
     now = 4000;
-    expect(cache.refresh("s1", "git.commit", entry.issuedAt)).toBe(true);
-    expect(cache._peek("s1", "git.commit")?.expiresAt).toBe(5000);
+    expect(cache.refresh("s1", "project.runCheck", entry.issuedAt)).toBe(true);
+    expect(cache._peek("s1", "project.runCheck")?.expiresAt).toBe(5000);
     expect(emitted).toHaveLength(0);
 
     // Past the ceiling: refresh is denied, entry is evicted, event emitted.
     now = 5001;
-    expect(cache.refresh("s1", "git.commit", entry.issuedAt)).toBe(false);
-    expect(cache._peek("s1", "git.commit")).toBeUndefined();
+    expect(cache.refresh("s1", "project.runCheck", entry.issuedAt)).toBe(false);
+    expect(cache._peek("s1", "project.runCheck")).toBeUndefined();
     expect(emitted).toHaveLength(1);
     expect(emitted[0].payload.type).toBe("grant.revoked");
     expect(emitted[0].payload).toMatchObject({
       revokedReason: "grant-ceiling",
-      toolId: "git.commit",
+      toolId: "project.runCheck",
     });
 
     cache.dispose();
@@ -198,12 +198,12 @@ describe("GrantCache max-lifetime ceiling (#9161)", () => {
   it("ceiling boundary is exclusive — refresh at exactly issuedAt + maxLifetimeMs still succeeds", () => {
     let now = 0;
     const { cache } = newCache({ ttlMs: 10_000, maxLifetimeMs: 5000, now: () => now });
-    const entry = cache.issueGrant("s1", "git.commit");
+    const entry = cache.issueGrant("s1", "project.runCheck");
 
     now = 5000; // exactly at the ceiling
-    expect(cache.refresh("s1", "git.commit", entry.issuedAt)).toBe(true);
+    expect(cache.refresh("s1", "project.runCheck", entry.issuedAt)).toBe(true);
     now = 5001; // one ms past
-    expect(cache.refresh("s1", "git.commit", entry.issuedAt)).toBe(false);
+    expect(cache.refresh("s1", "project.runCheck", entry.issuedAt)).toBe(false);
 
     cache.dispose();
   });
@@ -213,11 +213,11 @@ describe("GrantCache max-lifetime ceiling (#9161)", () => {
     // TTL larger than the ceiling: a single grant's expiresAt stays in the
     // future, so only the ceiling can evict it.
     const { cache, emitted } = newCache({ ttlMs: 100_000, maxLifetimeMs: 5000, now: () => now });
-    cache.issueGrant("s1", "git.commit");
+    cache.issueGrant("s1", "project.runCheck");
     emitted.length = 0;
 
     now = 5001;
-    const result = cache.check("s1", "git.commit");
+    const result = cache.check("s1", "project.runCheck");
     expect(result.granted).toBe(false);
     expect(emitted).toHaveLength(1);
     // grant.revoked, NOT grant.expired — the ceiling is an active eviction.
@@ -225,7 +225,7 @@ describe("GrantCache max-lifetime ceiling (#9161)", () => {
     expect(emitted[0].payload).toMatchObject({ revokedReason: "grant-ceiling" });
 
     // Entry is gone — a subsequent check does not re-emit.
-    expect(cache.check("s1", "git.commit").granted).toBe(false);
+    expect(cache.check("s1", "project.runCheck").granted).toBe(false);
     expect(emitted).toHaveLength(1);
 
     cache.dispose();
@@ -234,7 +234,7 @@ describe("GrantCache max-lifetime ceiling (#9161)", () => {
   it("sweep evicts ceiling-expired entries with grant.revoked/grant-ceiling", () => {
     let now = 0;
     const { cache, emitted } = newCache({ ttlMs: 100_000, maxLifetimeMs: 5000, now: () => now });
-    cache.issueGrant("s1", "git.commit");
+    cache.issueGrant("s1", "project.runCheck");
     emitted.length = 0;
 
     // expiresAt (100_000) is still in the future, so the TTL-only sweep would
@@ -252,15 +252,15 @@ describe("GrantCache max-lifetime ceiling (#9161)", () => {
   it("check honours the exclusive boundary — valid at the ceiling, evicted one ms past", () => {
     let now = 0;
     const { cache, emitted } = newCache({ ttlMs: 100_000, maxLifetimeMs: 5000, now: () => now });
-    cache.issueGrant("s1", "git.commit");
+    cache.issueGrant("s1", "project.runCheck");
     emitted.length = 0;
 
     now = 5000; // exactly at the ceiling — still valid
-    expect(cache.check("s1", "git.commit").granted).toBe(true);
+    expect(cache.check("s1", "project.runCheck").granted).toBe(true);
     expect(emitted).toHaveLength(0);
 
     now = 5001; // one ms past — evicted with grant-ceiling
-    expect(cache.check("s1", "git.commit").granted).toBe(false);
+    expect(cache.check("s1", "project.runCheck").granted).toBe(false);
     expect(emitted).toHaveLength(1);
     expect(emitted[0].payload).toMatchObject({
       type: "grant.revoked",
@@ -276,11 +276,11 @@ describe("GrantCache max-lifetime ceiling (#9161)", () => {
     // window lapses long before the hard cap. Eviction should keep the
     // truthful passive-timeout signal even though the ceiling has also passed.
     const { cache, emitted } = newCache({ ttlMs: 1000, maxLifetimeMs: 5000, now: () => now });
-    cache.issueGrant("s1", "git.commit");
+    cache.issueGrant("s1", "project.runCheck");
     emitted.length = 0;
 
     now = 6000; // past both expiresAt (1000) and ceiling (5000)
-    const result = cache.check("s1", "git.commit");
+    const result = cache.check("s1", "project.runCheck");
     expect(result.granted).toBe(false);
     expect(emitted).toHaveLength(1);
     expect(emitted[0].payload.type).toBe("grant.expired");
@@ -291,7 +291,7 @@ describe("GrantCache max-lifetime ceiling (#9161)", () => {
   it("sweep reports an idle both-expired grant as grant.expired", () => {
     let now = 0;
     const { cache, emitted } = newCache({ ttlMs: 1000, maxLifetimeMs: 5000, now: () => now });
-    cache.issueGrant("s1", "git.commit");
+    cache.issueGrant("s1", "project.runCheck");
     emitted.length = 0;
 
     now = 6000;
@@ -307,21 +307,21 @@ describe("GrantCache max-lifetime ceiling (#9161)", () => {
     const ttlMs = 1000;
     const maxLifetimeMs = 5000;
     const { cache, emitted } = newCache({ ttlMs, maxLifetimeMs, now: () => now });
-    const entry = cache.issueGrant("s1", "git.commit");
+    const entry = cache.issueGrant("s1", "project.runCheck");
     emitted.length = 0;
 
     // Refresh just inside every TTL window — the abusive pattern from #9161.
     // Each refresh slides expiresAt forward, but the ceiling never moves.
     for (now = 900; now < maxLifetimeMs; now += ttlMs - 1) {
-      expect(cache.check("s1", "git.commit").granted).toBe(true);
-      expect(cache.refresh("s1", "git.commit", entry.issuedAt)).toBe(true);
+      expect(cache.check("s1", "project.runCheck").granted).toBe(true);
+      expect(cache.refresh("s1", "project.runCheck", entry.issuedAt)).toBe(true);
     }
 
     // One ms past the ceiling the grant is gone despite continuous refreshing.
     now = maxLifetimeMs + 1;
-    expect(cache.refresh("s1", "git.commit", entry.issuedAt)).toBe(false);
-    expect(cache.check("s1", "git.commit").granted).toBe(false);
-    expect(cache._peek("s1", "git.commit")).toBeUndefined();
+    expect(cache.refresh("s1", "project.runCheck", entry.issuedAt)).toBe(false);
+    expect(cache.check("s1", "project.runCheck").granted).toBe(false);
+    expect(cache._peek("s1", "project.runCheck")).toBeUndefined();
     expect(emitted.some((e) => e.payload.type === "grant.revoked")).toBe(true);
     expect(
       emitted.some(
@@ -337,26 +337,26 @@ describe("GrantCache max-lifetime ceiling (#9161)", () => {
     // TTL larger than the ceiling so the ceiling, not the sliding TTL, is the
     // limiting factor for the assertions below.
     const { cache } = newCache({ ttlMs: 100_000, maxLifetimeMs: 5000, now: () => now });
-    const original = cache.issueGrant("s1", "git.commit");
+    const original = cache.issueGrant("s1", "project.runCheck");
 
     // Cross the ceiling, then the user re-approves: a fresh grant is minted.
     now = 6000;
-    const reissued = cache.issueGrant("s1", "git.commit");
+    const reissued = cache.issueGrant("s1", "project.runCheck");
     expect(reissued.issuedAt).toBe(6000);
     expect(reissued.issuedAt).not.toBe(original.issuedAt);
 
     // A stale in-flight refresh carrying the OLD issuedAt must no-op on the
     // fresh entry (the #2243 race guard), leaving the new clock intact.
     now = 6100;
-    expect(cache.refresh("s1", "git.commit", original.issuedAt)).toBe(false);
-    expect(cache._peek("s1", "git.commit")?.issuedAt).toBe(reissued.issuedAt);
+    expect(cache.refresh("s1", "project.runCheck", original.issuedAt)).toBe(false);
+    expect(cache._peek("s1", "project.runCheck")?.issuedAt).toBe(reissued.issuedAt);
 
     // The new grant has its own independent ceiling window: still valid just
     // before issuedAt + maxLifetimeMs (6000 + 5000 = 11000).
     now = 10_999;
-    expect(cache.check("s1", "git.commit").granted).toBe(true);
+    expect(cache.check("s1", "project.runCheck").granted).toBe(true);
     now = 11_001;
-    expect(cache.check("s1", "git.commit").granted).toBe(false);
+    expect(cache.check("s1", "project.runCheck").granted).toBe(false);
 
     cache.dispose();
   });
@@ -365,9 +365,9 @@ describe("GrantCache max-lifetime ceiling (#9161)", () => {
 describe("GrantCache.revokeSession", () => {
   it("revokes all grants for the named session and emits grant.revoked per entry", () => {
     const { cache, emitted } = newCache();
-    cache.issueGrant("s1", "git.commit");
-    cache.issueGrant("s1", "git.push");
-    cache.issueGrant("s2", "git.commit");
+    cache.issueGrant("s1", "project.runCheck");
+    cache.issueGrant("s1", "terminal.new");
+    cache.issueGrant("s2", "project.runCheck");
     emitted.length = 0;
 
     const revoked = cache.revokeSession("s1", "user");
@@ -377,7 +377,7 @@ describe("GrantCache.revokeSession", () => {
     expect(emitted.every((e) => e.payload.revokedReason === "user")).toBe(true);
 
     // s2 untouched.
-    expect(cache.check("s2", "git.commit").granted).toBe(true);
+    expect(cache.check("s2", "project.runCheck").granted).toBe(true);
     cache.dispose();
   });
 
@@ -390,7 +390,7 @@ describe("GrantCache.revokeSession", () => {
 
   it("session-idle reason is propagated to the emitted record", () => {
     const { cache, emitted } = newCache();
-    cache.issueGrant("s1", "git.commit");
+    cache.issueGrant("s1", "project.runCheck");
     emitted.length = 0;
     cache.revokeSession("s1", "session-idle");
     expect(emitted[0].payload.revokedReason).toBe("session-idle");
@@ -401,11 +401,11 @@ describe("GrantCache.revokeSession", () => {
 describe("GrantCache denial counters", () => {
   it("incrementDenial counts per (sessionId, toolId) — cross-tool isolated", () => {
     const { cache } = newCache({ denialSilenceThreshold: 2 });
-    expect(cache.incrementDenial("s1", "git.commit")).toBe(1);
-    expect(cache.incrementDenial("s1", "git.commit")).toBe(2);
-    expect(cache.incrementDenial("s1", "git.push")).toBe(1);
-    expect(cache.getDenialCount("s1", "git.commit")).toBe(2);
-    expect(cache.getDenialCount("s1", "git.push")).toBe(1);
+    expect(cache.incrementDenial("s1", "project.runCheck")).toBe(1);
+    expect(cache.incrementDenial("s1", "project.runCheck")).toBe(2);
+    expect(cache.incrementDenial("s1", "terminal.new")).toBe(1);
+    expect(cache.getDenialCount("s1", "project.runCheck")).toBe(2);
+    expect(cache.getDenialCount("s1", "terminal.new")).toBe(1);
     cache.dispose();
   });
 
@@ -575,7 +575,7 @@ describe("GrantCache native grants (#10648)", () => {
       sessionId: "s1",
       actorId: "help-1",
       actorType: "help-session",
-      allowedTools: overrides?.allowedTools ?? ["git.commit", "git.push"],
+      allowedTools: overrides?.allowedTools ?? ["project.runCheck", "terminal.new"],
       maxUses: overrides?.maxUses ?? 3,
       ttlMs: overrides?.ttlMs,
     });
@@ -587,7 +587,7 @@ describe("GrantCache native grants (#10648)", () => {
     expect(entry.id).toBeTruthy();
     expect(entry.remainingUses).toBe(3);
     expect(entry.maxUses).toBe(3);
-    expect([...entry.allowedTools].sort()).toEqual(["git.commit", "git.push"]);
+    expect([...entry.allowedTools].sort()).toEqual(["project.runCheck", "terminal.new"]);
     expect(emitted).toHaveLength(1);
     expect(emitted[0].payload).toMatchObject({
       type: "grant.issued",
@@ -605,7 +605,7 @@ describe("GrantCache native grants (#10648)", () => {
     const { cache, emitted } = newCache();
     const entry = issue(cache);
     emitted.length = 0;
-    const result = cache.peekNativeGrant("s1", "git.commit");
+    const result = cache.peekNativeGrant("s1", "project.runCheck");
     expect(result.granted).toBe(true);
     if (result.granted) expect(result.grantId).toBe(entry.id);
     // Peek must not decrement or emit — the use is charged by consume.
@@ -618,12 +618,12 @@ describe("GrantCache native grants (#10648)", () => {
     const { cache, emitted } = newCache();
     const entry = issue(cache);
     emitted.length = 0;
-    expect(cache.consumeNativeGrantUse(entry.id, "git.commit")).toBe(true);
+    expect(cache.consumeNativeGrantUse(entry.id, "project.runCheck")).toBe(true);
     expect(cache._peekNative(entry.id)?.remainingUses).toBe(2);
     expect(emitted).toHaveLength(1);
     expect(emitted[0].payload).toMatchObject({
       type: "grant.used",
-      toolId: "git.commit",
+      toolId: "project.runCheck",
       grantId: entry.id,
       remainingUses: 2,
     });
@@ -632,9 +632,9 @@ describe("GrantCache native grants (#10648)", () => {
 
   it("peekNativeGrant denies a tool outside the allowlist", () => {
     const { cache, emitted } = newCache();
-    const entry = issue(cache, { allowedTools: ["git.commit"] });
+    const entry = issue(cache, { allowedTools: ["project.runCheck"] });
     emitted.length = 0;
-    expect(cache.peekNativeGrant("s1", "git.push").granted).toBe(false);
+    expect(cache.peekNativeGrant("s1", "terminal.new").granted).toBe(false);
     expect(cache._peekNative(entry.id)?.remainingUses).toBe(3);
     expect(emitted).toHaveLength(0);
     cache.dispose();
@@ -644,17 +644,17 @@ describe("GrantCache native grants (#10648)", () => {
     const { cache, emitted } = newCache();
     const entry = issue(cache, { maxUses: 1 });
     emitted.length = 0;
-    expect(cache.consumeNativeGrantUse(entry.id, "git.commit")).toBe(true);
+    expect(cache.consumeNativeGrantUse(entry.id, "project.runCheck")).toBe(true);
     expect(emitted).toHaveLength(1);
     expect(emitted[0].payload).toMatchObject({
       type: "grant.exhausted",
-      toolId: "git.commit",
+      toolId: "project.runCheck",
       remainingUses: 0,
     });
     expect(cache._peekNative(entry.id)).toBeUndefined();
     // Grant is gone — a subsequent peek or consume fails closed.
-    expect(cache.peekNativeGrant("s1", "git.commit").granted).toBe(false);
-    expect(cache.consumeNativeGrantUse(entry.id, "git.commit")).toBe(false);
+    expect(cache.peekNativeGrant("s1", "project.runCheck").granted).toBe(false);
+    expect(cache.consumeNativeGrantUse(entry.id, "project.runCheck")).toBe(false);
     cache.dispose();
   });
 
@@ -664,7 +664,7 @@ describe("GrantCache native grants (#10648)", () => {
     issue(cache, { ttlMs: 1000 });
     emitted.length = 0;
     clock = 2000;
-    expect(cache.peekNativeGrant("s1", "git.commit").granted).toBe(false);
+    expect(cache.peekNativeGrant("s1", "project.runCheck").granted).toBe(false);
     expect(emitted.some((e) => e.payload.type === "grant.expired")).toBe(true);
     cache.dispose();
   });
@@ -674,7 +674,7 @@ describe("GrantCache native grants (#10648)", () => {
     const { cache } = newCache({ ttlMs: 1000, maxLifetimeMs: 100000, now: () => clock });
     const entry = issue(cache, { ttlMs: 1000 });
     clock = 2000;
-    expect(cache.consumeNativeGrantUse(entry.id, "git.commit")).toBe(false);
+    expect(cache.consumeNativeGrantUse(entry.id, "project.runCheck")).toBe(false);
     expect(cache._peekNative(entry.id)).toBeUndefined();
     cache.dispose();
   });
@@ -686,13 +686,13 @@ describe("GrantCache native grants (#10648)", () => {
     "peekNativeGrant refuses %s without consuming or emitting",
     (fanOutTool) => {
       const { cache, emitted } = newCache();
-      const entry = issue(cache, { allowedTools: ["git.commit", fanOutTool] });
+      const entry = issue(cache, { allowedTools: ["project.runCheck", fanOutTool] });
       emitted.length = 0;
       expect(cache.peekNativeGrant("s1", fanOutTool).granted).toBe(false);
       expect(emitted).toHaveLength(0);
       // The refusal is scoped to the tool, not the grant: an eligible sibling in
       // the same allowlist must still be authorized, with the budget untouched.
-      expect(cache.peekNativeGrant("s1", "git.commit")).toEqual({
+      expect(cache.peekNativeGrant("s1", "project.runCheck")).toEqual({
         granted: true,
         grantId: entry.id,
       });
@@ -705,14 +705,14 @@ describe("GrantCache native grants (#10648)", () => {
     "consumeNativeGrantUse fails closed for %s without decrementing",
     (fanOutTool) => {
       const { cache, emitted } = newCache();
-      const entry = issue(cache, { allowedTools: ["git.commit", fanOutTool] });
+      const entry = issue(cache, { allowedTools: ["project.runCheck", fanOutTool] });
       emitted.length = 0;
       expect(cache.consumeNativeGrantUse(entry.id, fanOutTool)).toBe(false);
       expect(emitted).toHaveLength(0);
       // Nothing was authorized, so nothing was spent — and the grant survives for
       // the siblings it legitimately covers.
       expect(cache._peekNative(entry.id)?.remainingUses).toBe(3);
-      expect(cache.consumeNativeGrantUse(entry.id, "git.commit")).toBe(true);
+      expect(cache.consumeNativeGrantUse(entry.id, "project.runCheck")).toBe(true);
       cache.dispose();
     }
   );
@@ -725,7 +725,7 @@ describe("GrantCache native grants (#10648)", () => {
     let clock = 0;
     const { cache, emitted } = newCache({ ttlMs: 1000, maxLifetimeMs: 100000, now: () => clock });
     const entry = issue(cache, {
-      allowedTools: ["git.commit", "terminal.killAll"],
+      allowedTools: ["project.runCheck", "terminal.killAll"],
       ttlMs: 1000,
     });
     emitted.length = 0;
@@ -748,20 +748,25 @@ describe("GrantCache native grants (#10648)", () => {
     }
   );
 
-  it("every per-resolved-target override names a real tool a grant could otherwise reach", () => {
+  it("every per-resolved-target override names a real action, and one a grant can reach", () => {
     // The policy is keyed by tool id and defaults to `per-dispatch`, so a
     // renamed or retired action would silently fall back to being grantable
     // again. `BuiltInActionId` typing does not catch this on its own — it also
     // admits keybinding-only ids that no action registers.
+    //
+    // Not every entry is grantable: `terminal.killAll` and `terminal.killBatch`
+    // left both tool sets with the core/full split, and stay declared so that
+    // putting either back cannot make it grantable. The policy must still gate
+    // at least one tool a grant can name today, or it guards nothing.
     const overrides = Object.entries(NATIVE_GRANT_USE_POLICY_OVERRIDES);
     expect(overrides.length).toBeGreaterThan(0);
+    const grantable: string[] = [];
     for (const [toolId, policy] of overrides) {
       expect(policy).toBe("per-resolved-target");
       expect(BUILT_IN_ACTION_IDS, `${toolId} is not a registered action id`).toContain(toolId);
-      expect(minimumPermittingTier(toolId), `${toolId} is no longer a grantable tool id`).not.toBe(
-        null
-      );
+      if (minimumPermittingTier(toolId) !== null) grantable.push(toolId);
     }
+    expect(grantable.length).toBeGreaterThan(0);
   });
 
   it("treats a prototype-shaped tool id as an ordinary per-dispatch tool", () => {
@@ -780,7 +785,7 @@ describe("GrantCache native grants (#10648)", () => {
     issue(cache, { ttlMs: 100000 });
     emitted.length = 0;
     clock = 2000;
-    expect(cache.peekNativeGrant("s1", "git.commit").granted).toBe(false);
+    expect(cache.peekNativeGrant("s1", "project.runCheck").granted).toBe(false);
     expect(
       emitted.some(
         (e) => e.payload.type === "grant.revoked" && e.payload.revokedReason === "grant-ceiling"
@@ -895,7 +900,7 @@ describe("GrantCache.getLiveGrants", () => {
   it("never evicts or emits, unlike check", () => {
     let now = 1000;
     const { cache, emitted } = newCache({ ttlMs: 100, now: () => now });
-    cache.issueGrant("s1", "git.commit");
+    cache.issueGrant("s1", "project.runCheck");
     emitted.length = 0;
 
     now = 5000;
@@ -906,7 +911,7 @@ describe("GrantCache.getLiveGrants", () => {
 
     // check() on the same expired grant does both, which is why a discovery
     // filter must not use it.
-    expect(cache.check("s1", "git.commit").granted).toBe(false);
+    expect(cache.check("s1", "project.runCheck").granted).toBe(false);
     expect(emitted.map((e) => e.payload.type)).toEqual(["grant.expired"]);
     expect(cache.getActiveGrants("s1")).toHaveLength(0);
     cache.dispose();
