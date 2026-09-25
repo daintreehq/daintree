@@ -60,11 +60,7 @@ export async function initPerWindowServices(
   ctx: WindowContext,
   windowRegistry: WindowRegistry | undefined
 ): Promise<HandlerDependencies> {
-  let cliAvailabilityService = getCliAvailabilityServiceRef();
-  if (!cliAvailabilityService) {
-    cliAvailabilityService = new CliAvailabilityService();
-    setCliAvailabilityServiceRef(cliAvailabilityService);
-  }
+  const cliAvailabilityService = ensureCliAvailabilityService();
 
   // Per-window deferred work. Menu is window-specific, so each window queues
   // its own CLI check + menu rebuild. Registered here (before any awaits that
@@ -150,270 +146,7 @@ export async function initPerWindowServices(
   }
   console.log("[MAIN] NotificationService initialized");
 
-  // Critical services (global, first window only)
-  let ptyClient = getPtyClient();
-  if (!ptyClient) {
-    console.log("[MAIN] Starting critical services...");
-
-    // PtyClient is constructed with `deferStart` so the PTY host fork does NOT
-    // happen here — it is triggered by `ptyClient.start()` in
-    // windowServices.ts *after* `startRendererLoad`, which awaits the early
-    // PATH refresh immediately before forking. That keeps the #8625 invariant
-    // (PATH refresh → PTY fork, so node-pty inherits version-manager shims and
-    // user-local bin dirs in packaged builds) while no longer gating the first
-    // renderer load on the refresh (#8827). Constructing the client here keeps
-    // a live `ptyClient` reference available to IPC handlers at registration
-    // time — only the host fork is deferred, not the client object. The
-    // main-process watchdog start moved to windowServices.ts alongside the
-    // fork: its ordering invariant is watchdog-before-ptyClient.start(), not
-    // watchdog-before-renderer-load.
-
-    ptyClient = new PtyClient({
-      healthCheckIntervalMs: 5000,
-      showCrashDialog: false,
-      // Defer the host fork to windowServices.ts (#8827) — see the comment
-      // above. The client object is live now; the fork waits on the PATH
-      // refresh after startRendererLoad.
-      deferStart: true,
-    });
-    setPtyClientRef(ptyClient);
-
-    // Keep the host's fallback-eligible project set current (#12557). The
-    // registry spans every window, and `ptyClient` is a process-wide singleton,
-    // so this is installed once beside its construction rather than per window.
-    // Fires immediately with the current set, which is empty this early — the
-    // real value arrives as views register and broker their ports.
-    setFallbackEligibleProjectsListener((projectIds) => {
-      ptyClient?.setFallbackEligibleProjects(projectIds);
-    });
-
-    // A window whose port the host tore down has no reachable view any more,
-    // so the record is cleared to re-open the IPC fallback for it. Identity-
-    // guarded: a "port-replace" teardown is processed by the host only after
-    // Main has already registered the replacement holder, so clearing blindly
-    // would wipe the live record and leave the window permanently holderless —
-    // every chunk of its project then taking a fallback nobody acks.
-    ptyClient.on("port-disconnected", (windowId, _reason, holderWebContentsId) => {
-      clearPortHolderWebContentsIfCurrent(windowId, holderWebContentsId);
-    });
-
-    const versionSvc = new AgentVersionService(cliAvailabilityService);
-    setAgentVersionService(versionSvc);
-    setAgentUpdateHandler(new AgentUpdateHandler(ptyClient, versionSvc, cliAvailabilityService));
-
-    if (!getAgentModelCatalogService()) {
-      const modelCatalogSvc = new AgentModelCatalogService();
-      setAgentModelCatalogService(modelCatalogSvc);
-      // Warm the cache in the background so the first renderer request hits
-      // populated data. Errors are already silenced inside getCatalog().
-      void modelCatalogSvc.getCatalog().catch(() => {
-        /* swallow — surfaced via console.warn inside the service */
-      });
-    }
-
-    let lastCrashDetails: {
-      crashType: string;
-      code: number | null;
-      signal: string | null;
-      timestamp: number;
-    } | null = null;
-
-    ptyClient.on("host-crash-details", (details) => {
-      console.error(`[MAIN] Pty Host crashed:`, details);
-      lastCrashDetails = {
-        crashType: details.crashType,
-        code: details.code,
-        signal: details.signal,
-        timestamp: details.timestamp,
-      };
-      if (windowRegistry) {
-        for (const wCtx of windowRegistry.all()) {
-          const w = wCtx.browserWindow;
-          if (!w.isDestroyed()) {
-            const wc = getAppWebContents(w);
-            if (!wc.isDestroyed()) {
-              try {
-                wc.send(CHANNELS.EVENTS_PUSH, {
-                  name: "terminal:backend-recovering",
-                  payload: {
-                    crashType: details.crashType,
-                    code: details.code,
-                    signal: details.signal,
-                    timestamp: details.timestamp,
-                  },
-                });
-              } catch {
-                // Silently ignore send failures during window disposal.
-              }
-            }
-          }
-        }
-      }
-    });
-    ptyClient.on("host-crash", (code) => {
-      console.error(`[MAIN] Pty Host crashed with code ${code} (max restarts exceeded)`);
-      const payload = lastCrashDetails ?? {
-        crashType: "UNKNOWN_CRASH",
-        code,
-        signal: null,
-        timestamp: Date.now(),
-      };
-      lastCrashDetails = null;
-      if (windowRegistry) {
-        for (const wCtx of windowRegistry.all()) {
-          const w = wCtx.browserWindow;
-          if (!w.isDestroyed()) {
-            const wc = getAppWebContents(w);
-            if (!wc.isDestroyed()) {
-              try {
-                wc.send(CHANNELS.EVENTS_PUSH, {
-                  name: "terminal:backend-crashed",
-                  payload,
-                });
-              } catch {
-                // Silently ignore send failures during window disposal.
-              }
-            }
-          }
-        }
-      }
-    });
-    ptyClient.on("host-memory-warning", (payload) => {
-      if (payload.isWarning) {
-        logInfo("pty-host-memory-warning", {
-          utilizationPercent: payload.utilizationPercent,
-          heapMb: payload.heapMb,
-          externalMb: payload.externalMb,
-          workerHeapMb: payload.workerHeapMb,
-          workerExternalMb: payload.workerExternalMb,
-        });
-      } else {
-        logInfo("pty-host-memory-warning-cleared", {
-          utilizationPercent: payload.utilizationPercent,
-          heapMb: payload.heapMb,
-          externalMb: payload.externalMb,
-          workerHeapMb: payload.workerHeapMb,
-          workerExternalMb: payload.workerExternalMb,
-        });
-      }
-      // Broadcast to all windows so renderer can surface the warning
-      if (windowRegistry) {
-        for (const wCtx of windowRegistry.all()) {
-          const w = wCtx.browserWindow;
-          if (!w.isDestroyed()) {
-            try {
-              sendToRenderer(w, CHANNELS.EVENTS_PUSH, {
-                name: "window:memory-warning",
-                payload: {
-                  isWarning: payload.isWarning,
-                  utilizationPercent: payload.utilizationPercent,
-                  heapMb: payload.heapMb,
-                  externalMb: payload.externalMb,
-                },
-              });
-            } catch {
-              /* non-critical */
-            }
-          }
-        }
-      }
-    });
-    ptyClient.on("host-throttled", (payload) => {
-      if (!payload.isThrottled) {
-        logInfo("pty-host-resumed", { duration: payload.duration });
-        return;
-      }
-      logInfo("pty-host-throttled", { reason: payload.reason });
-      try {
-        session.defaultSession.clearCache().catch(() => {});
-      } catch {
-        /* non-critical */
-      }
-      // Broadcast to all windows
-      if (windowRegistry) {
-        for (const wCtx of windowRegistry.all()) {
-          const w = wCtx.browserWindow;
-          if (!w.isDestroyed()) {
-            try {
-              sendToRenderer(w, CHANNELS.EVENTS_PUSH, {
-                name: "window:reclaim-memory",
-                payload: { reason: "pty-host-pressure" },
-              });
-            } catch {
-              /* non-critical */
-            }
-          }
-        }
-      }
-      // Scope "all": the host only throttles after the governor has paused
-      // every PTY, and at critical utilization it skips its own pre-pause trim
-      // to pause immediately — so this is the last buffer reclaim available,
-      // and sparing the active agents holding the memory would leave nothing
-      // to reclaim (#10948). Fire-and-forget: unlike tier 1 this path makes no
-      // escalation decision, so the counts have no consumer here. `.catch()`
-      // rather than try/catch — trimState is async, so a rejection would
-      // escape the block.
-      void ptyClient!.trimState(SCROLLBACK_BACKGROUND, "all").catch(() => {
-        /* non-critical */
-      });
-    });
-    // The memory pause reaches the UI once, app-wide, never per pane (#12375).
-    // Sent on every change, the release included, to each window's active view;
-    // a cached view pulls the snapshot when it's revealed.
-    ptyClient.on("host-memory-pause-changed", (snapshot: HostMemoryPauseSnapshot) => {
-      if (!windowRegistry) return;
-      for (const wCtx of windowRegistry.all()) {
-        const w = wCtx.browserWindow;
-        if (w.isDestroyed()) continue;
-        try {
-          sendToRenderer(w, CHANNELS.EVENTS_PUSH, {
-            name: "terminal:host-memory-pause",
-            payload: snapshot,
-          });
-        } catch {
-          /* non-critical */
-        }
-      }
-    });
-    ptyClient.setPortRefreshCallback((windowId) => {
-      // Called with no windowId on a full host restart (refresh every window)
-      // and with one when the PTY fabric restarts or reroutes a single
-      // window's shard — refreshing only that window keeps a shard-local
-      // recovery from re-handshaking every healthy window's terminal stream.
-      console.log(
-        windowId === undefined
-          ? "[MAIN] Pty Host restarted, refreshing ports..."
-          : `[MAIN] Pty Host shard changed for window ${windowId}, refreshing its port...`
-      );
-      // Refresh ports for the targeted windows — target the active view
-      if (windowRegistry) {
-        for (const wCtx of windowRegistry.all()) {
-          if (windowId !== undefined && wCtx.windowId !== windowId) continue;
-          // One window's failure must not abort the refresh for the rest —
-          // the caller (respawnPendingForShard) still has respawn replay,
-          // data-mirror re-enable, and global config replay to run.
-          try {
-            if (!wCtx.browserWindow.isDestroyed()) {
-              const wc = getAppWebContents(wCtx.browserWindow);
-              if (!wc.isDestroyed()) {
-                distributePortsToView(wCtx.browserWindow, wCtx, wc, ptyClient);
-                try {
-                  wc.send(CHANNELS.EVENTS_PUSH, {
-                    name: "terminal:backend-ready",
-                    payload: undefined,
-                  });
-                } catch {
-                  // Silently ignore send failures during window disposal.
-                }
-              }
-            }
-          } catch (error) {
-            console.error(`[MAIN] Failed to refresh PTY port for window ${wCtx.windowId}:`, error);
-          }
-        }
-      }
-    });
-  }
+  const ptyClient = ensureCriticalServices(windowRegistry);
 
   // Per-window services
   ctx.services.eventBuffer = new EventBuffer(1000);
@@ -432,7 +165,7 @@ export async function initPerWindowServices(
   ctx.services.portalManager = new PortalManager(win, portalBackgroundColor);
   ctx.services.projectSwitchService = new ProjectSwitchService({
     mainWindow: win,
-    ptyClient: ptyClient ?? undefined,
+    ptyClient,
     eventBuffer: ctx.services.eventBuffer,
     portalManager: ctx.services.portalManager,
     cliAvailabilityService,
@@ -502,7 +235,7 @@ export async function initPerWindowServices(
 
   const handlerDeps: HandlerDependencies = {
     mainWindow: win,
-    ptyClient: ptyClient ?? undefined,
+    ptyClient,
     eventBuffer: ctx.services.eventBuffer,
     portalManager: ctx.services.portalManager,
     cliAvailabilityService,
@@ -515,6 +248,287 @@ export async function initPerWindowServices(
   handlerDeps.projectSwitchService = ctx.services.projectSwitchService;
 
   return handlerDeps;
+}
+
+function ensureCliAvailabilityService(): CliAvailabilityService {
+  let cliAvailabilityService = getCliAvailabilityServiceRef();
+  if (!cliAvailabilityService) {
+    cliAvailabilityService = new CliAvailabilityService();
+    setCliAvailabilityServiceRef(cliAvailabilityService);
+  }
+  return cliAvailabilityService;
+}
+
+/**
+ * Construct the process-wide critical services once — the PtyClient (with its
+ * host fork deferred) and the agent version/model/update services — for
+ * whichever boot path gets here first: the first window's setup or the
+ * windowless Host runtime. Later callers get the existing client.
+ */
+export function ensureCriticalServices(windowRegistry: WindowRegistry | undefined): PtyClient {
+  const cliAvailabilityService = ensureCliAvailabilityService();
+  const existing = getPtyClient();
+  if (existing) return existing;
+  console.log("[MAIN] Starting critical services...");
+
+  // PtyClient is constructed with `deferStart` so the PTY host fork does NOT
+  // happen here — `ensurePtyHostStarted()` (boot/hostServices.ts) triggers it,
+  // after `startRendererLoad` on a windowed boot, awaiting the early PATH
+  // refresh immediately before forking. That keeps the #8625 invariant (PATH
+  // refresh → PTY fork, so node-pty inherits version-manager shims and
+  // user-local bin dirs in packaged builds) while no longer gating the first
+  // renderer load on the refresh (#8827). Constructing the client here keeps
+  // a live `ptyClient` reference available to IPC handlers at registration
+  // time — only the host fork is deferred, not the client object. The
+  // main-process watchdog starts alongside the fork: its ordering invariant is
+  // watchdog-before-ptyClient.start(), not watchdog-before-renderer-load.
+
+  const ptyClient = new PtyClient({
+    healthCheckIntervalMs: 5000,
+    showCrashDialog: false,
+    // Defer the host fork to ensurePtyHostStarted (#8827) — see the comment
+    // above. The client object is live now; the fork waits on the PATH
+    // refresh after startRendererLoad.
+    deferStart: true,
+  });
+  setPtyClientRef(ptyClient);
+
+  // Keep the host's fallback-eligible project set current (#12557). The
+  // registry spans every window, and `ptyClient` is a process-wide singleton,
+  // so this is installed once beside its construction rather than per window.
+  // Fires immediately with the current set, which is empty this early — the
+  // real value arrives as views register and broker their ports.
+  setFallbackEligibleProjectsListener((projectIds) => {
+    ptyClient?.setFallbackEligibleProjects(projectIds);
+  });
+
+  // A window whose port the host tore down has no reachable view any more,
+  // so the record is cleared to re-open the IPC fallback for it. Identity-
+  // guarded: a "port-replace" teardown is processed by the host only after
+  // Main has already registered the replacement holder, so clearing blindly
+  // would wipe the live record and leave the window permanently holderless —
+  // every chunk of its project then taking a fallback nobody acks.
+  ptyClient.on("port-disconnected", (windowId, _reason, holderWebContentsId) => {
+    clearPortHolderWebContentsIfCurrent(windowId, holderWebContentsId);
+  });
+
+  const versionSvc = new AgentVersionService(cliAvailabilityService);
+  setAgentVersionService(versionSvc);
+  setAgentUpdateHandler(new AgentUpdateHandler(ptyClient, versionSvc, cliAvailabilityService));
+
+  if (!getAgentModelCatalogService()) {
+    const modelCatalogSvc = new AgentModelCatalogService();
+    setAgentModelCatalogService(modelCatalogSvc);
+    // Warm the cache in the background so the first renderer request hits
+    // populated data. Errors are already silenced inside getCatalog().
+    void modelCatalogSvc.getCatalog().catch(() => {
+      /* swallow — surfaced via console.warn inside the service */
+    });
+  }
+
+  let lastCrashDetails: {
+    crashType: string;
+    code: number | null;
+    signal: string | null;
+    timestamp: number;
+  } | null = null;
+
+  ptyClient.on("host-crash-details", (details) => {
+    console.error(`[MAIN] Pty Host crashed:`, details);
+    lastCrashDetails = {
+      crashType: details.crashType,
+      code: details.code,
+      signal: details.signal,
+      timestamp: details.timestamp,
+    };
+    if (windowRegistry) {
+      for (const wCtx of windowRegistry.all()) {
+        const w = wCtx.browserWindow;
+        if (!w.isDestroyed()) {
+          const wc = getAppWebContents(w);
+          if (!wc.isDestroyed()) {
+            try {
+              wc.send(CHANNELS.EVENTS_PUSH, {
+                name: "terminal:backend-recovering",
+                payload: {
+                  crashType: details.crashType,
+                  code: details.code,
+                  signal: details.signal,
+                  timestamp: details.timestamp,
+                },
+              });
+            } catch {
+              // Silently ignore send failures during window disposal.
+            }
+          }
+        }
+      }
+    }
+  });
+  ptyClient.on("host-crash", (code) => {
+    console.error(`[MAIN] Pty Host crashed with code ${code} (max restarts exceeded)`);
+    const payload = lastCrashDetails ?? {
+      crashType: "UNKNOWN_CRASH",
+      code,
+      signal: null,
+      timestamp: Date.now(),
+    };
+    lastCrashDetails = null;
+    if (windowRegistry) {
+      for (const wCtx of windowRegistry.all()) {
+        const w = wCtx.browserWindow;
+        if (!w.isDestroyed()) {
+          const wc = getAppWebContents(w);
+          if (!wc.isDestroyed()) {
+            try {
+              wc.send(CHANNELS.EVENTS_PUSH, {
+                name: "terminal:backend-crashed",
+                payload,
+              });
+            } catch {
+              // Silently ignore send failures during window disposal.
+            }
+          }
+        }
+      }
+    }
+  });
+  ptyClient.on("host-memory-warning", (payload) => {
+    if (payload.isWarning) {
+      logInfo("pty-host-memory-warning", {
+        utilizationPercent: payload.utilizationPercent,
+        heapMb: payload.heapMb,
+        externalMb: payload.externalMb,
+        workerHeapMb: payload.workerHeapMb,
+        workerExternalMb: payload.workerExternalMb,
+      });
+    } else {
+      logInfo("pty-host-memory-warning-cleared", {
+        utilizationPercent: payload.utilizationPercent,
+        heapMb: payload.heapMb,
+        externalMb: payload.externalMb,
+        workerHeapMb: payload.workerHeapMb,
+        workerExternalMb: payload.workerExternalMb,
+      });
+    }
+    // Broadcast to all windows so renderer can surface the warning
+    if (windowRegistry) {
+      for (const wCtx of windowRegistry.all()) {
+        const w = wCtx.browserWindow;
+        if (!w.isDestroyed()) {
+          try {
+            sendToRenderer(w, CHANNELS.EVENTS_PUSH, {
+              name: "window:memory-warning",
+              payload: {
+                isWarning: payload.isWarning,
+                utilizationPercent: payload.utilizationPercent,
+                heapMb: payload.heapMb,
+                externalMb: payload.externalMb,
+              },
+            });
+          } catch {
+            /* non-critical */
+          }
+        }
+      }
+    }
+  });
+  ptyClient.on("host-throttled", (payload) => {
+    if (!payload.isThrottled) {
+      logInfo("pty-host-resumed", { duration: payload.duration });
+      return;
+    }
+    logInfo("pty-host-throttled", { reason: payload.reason });
+    try {
+      session.defaultSession.clearCache().catch(() => {});
+    } catch {
+      /* non-critical */
+    }
+    // Broadcast to all windows
+    if (windowRegistry) {
+      for (const wCtx of windowRegistry.all()) {
+        const w = wCtx.browserWindow;
+        if (!w.isDestroyed()) {
+          try {
+            sendToRenderer(w, CHANNELS.EVENTS_PUSH, {
+              name: "window:reclaim-memory",
+              payload: { reason: "pty-host-pressure" },
+            });
+          } catch {
+            /* non-critical */
+          }
+        }
+      }
+    }
+    // Scope "all": the host only throttles after the governor has paused
+    // every PTY, and at critical utilization it skips its own pre-pause trim
+    // to pause immediately — so this is the last buffer reclaim available,
+    // and sparing the active agents holding the memory would leave nothing
+    // to reclaim (#10948). Fire-and-forget: unlike tier 1 this path makes no
+    // escalation decision, so the counts have no consumer here. `.catch()`
+    // rather than try/catch — trimState is async, so a rejection would
+    // escape the block.
+    void ptyClient!.trimState(SCROLLBACK_BACKGROUND, "all").catch(() => {
+      /* non-critical */
+    });
+  });
+  // The memory pause reaches the UI once, app-wide, never per pane (#12375).
+  // Sent on every change, the release included, to each window's active view;
+  // a cached view pulls the snapshot when it's revealed.
+  ptyClient.on("host-memory-pause-changed", (snapshot: HostMemoryPauseSnapshot) => {
+    if (!windowRegistry) return;
+    for (const wCtx of windowRegistry.all()) {
+      const w = wCtx.browserWindow;
+      if (w.isDestroyed()) continue;
+      try {
+        sendToRenderer(w, CHANNELS.EVENTS_PUSH, {
+          name: "terminal:host-memory-pause",
+          payload: snapshot,
+        });
+      } catch {
+        /* non-critical */
+      }
+    }
+  });
+  ptyClient.setPortRefreshCallback((windowId) => {
+    // Called with no windowId on a full host restart (refresh every window)
+    // and with one when the PTY fabric restarts or reroutes a single
+    // window's shard — refreshing only that window keeps a shard-local
+    // recovery from re-handshaking every healthy window's terminal stream.
+    console.log(
+      windowId === undefined
+        ? "[MAIN] Pty Host restarted, refreshing ports..."
+        : `[MAIN] Pty Host shard changed for window ${windowId}, refreshing its port...`
+    );
+    // Refresh ports for the targeted windows — target the active view
+    if (windowRegistry) {
+      for (const wCtx of windowRegistry.all()) {
+        if (windowId !== undefined && wCtx.windowId !== windowId) continue;
+        // One window's failure must not abort the refresh for the rest —
+        // the caller (respawnPendingForShard) still has respawn replay,
+        // data-mirror re-enable, and global config replay to run.
+        try {
+          if (!wCtx.browserWindow.isDestroyed()) {
+            const wc = getAppWebContents(wCtx.browserWindow);
+            if (!wc.isDestroyed()) {
+              distributePortsToView(wCtx.browserWindow, wCtx, wc, ptyClient);
+              try {
+                wc.send(CHANNELS.EVENTS_PUSH, {
+                  name: "terminal:backend-ready",
+                  payload: undefined,
+                });
+              } catch {
+                // Silently ignore send failures during window disposal.
+              }
+            }
+          }
+        } catch (error) {
+          console.error(`[MAIN] Failed to refresh PTY port for window ${wCtx.windowId}:`, error);
+        }
+      }
+    }
+  });
+  return ptyClient;
 }
 
 /**

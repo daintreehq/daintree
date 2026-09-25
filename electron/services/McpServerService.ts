@@ -731,9 +731,20 @@ export class McpServerService {
     }
   }
 
-  async start(registry: WindowRegistry): Promise<void> {
-    this._registry = registry;
-    await this.httpLifecycle.start(registry);
+  /**
+   * The registry may be empty: a windowless Host starts the server before any
+   * window exists, and tools that need a renderer refuse with their usual typed
+   * error until one attaches. Without one passed in, the process registry is
+   * used — it exists from the first line of main, windows or not.
+   */
+  async start(registry?: WindowRegistry | null): Promise<void> {
+    const resolved = registry ?? this._registry ?? getWindowRegistry();
+    if (!resolved) {
+      console.warn("[MCP] No window registry available — skipping start");
+      return;
+    }
+    this._registry = resolved;
+    await this.httpLifecycle.start(resolved);
   }
 
   async ensureReady(): Promise<boolean> {

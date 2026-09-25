@@ -1,17 +1,15 @@
 // eager-import-allow: multi-window service initialization
-import { app, BrowserWindow, dialog, webContents } from "electron";
+import { app, BrowserWindow, dialog } from "electron";
 import fs from "fs";
 import os from "os";
 import { registerIpcHandlers, sendToRenderer } from "../ipc/handlers.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import { distributePortsToView } from "./portDistribution.js";
 import { registerErrorHandlers, flushPendingErrors } from "../ipc/errorHandlers.js";
-import { getWorkspaceClient } from "../services/WorkspaceClient.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { createApplicationMenu, handleDirectoryOpen } from "../menu.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
 import { notificationService } from "../services/NotificationService.js";
-import { getMainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { scratchStore } from "../services/ScratchStore.js";
 import { initializeAgentAvailabilityStore } from "../services/AgentAvailabilityStore.js";
@@ -40,13 +38,11 @@ import { store } from "../store.js";
 import {
   isSmokeTest,
   smokeTestStart,
-  getEarlyPathRefreshPromise,
-  kickOffEarlyPathRefresh,
   getPendingOpenDirPaths,
   queuePendingOpenDirPath,
 } from "../setup/environment.js";
 import { shouldDeferRendererLoadForE2E } from "./earlyRenderer.js";
-import { isE2EFaultMode, isFreezeHarness, isIdleHarness } from "../setup/runtimeFlags.js";
+import { isFreezeHarness, isIdleHarness } from "../setup/runtimeFlags.js";
 import {
   extractCliPath,
   hasCliPathFlag,
@@ -65,17 +61,21 @@ import {
 import { holdWindowForOpen, isWindowBound } from "./windowOpenState.js";
 import { readOpenFoldersInNewWindow } from "./windowOpeningConfig.js";
 import { resetDeferredQueue } from "./deferredInitQueue.js";
-import { initGlobalServices } from "./globalServicesInit.js";
-import { initPerWindowServices, wireWatchdogDisabledBroadcast } from "./perWindowInit.js";
+import { ensureGlobalServicesInitialized } from "./globalServicesInit.js";
+import {
+  createWindowDepsAdopter,
+  ensurePtyHostStarted,
+  ensureWorkspaceClient,
+  isHostRuntimeActive,
+  isWorkspaceClientStarting,
+} from "../boot/hostServices.js";
+import type { HandlerDependencies } from "../ipc/types.js";
+import { initPerWindowServices } from "./perWindowInit.js";
 import {
   getPtyClient,
   getWorkspaceClientRef,
-  setWorkspaceClientRef,
   getWorktreePortBrokerRef,
-  setWorktreePortBrokerRef,
   getCliAvailabilityServiceRef,
-  getMainProcessWatchdogClientRef,
-  setMainProcessWatchdogClientRef,
   getCleanupErrorHandlers,
   setCleanupErrorHandlers,
   setCleanupIpcHandlers,
@@ -87,7 +87,6 @@ import {
   setProcessArgvDntrHandled,
   getIpcHandlersRegistered,
   setIpcHandlersRegistered,
-  getGlobalServicesInitialized,
 } from "./serviceRefs.js";
 
 // Re-export the public getters/setters so existing import paths in main.ts,
@@ -158,6 +157,49 @@ function createAndDistributePorts(win: BrowserWindow, ctx: WindowContext): void 
   distributePortsToView(win, ctx, wc, getPtyClient());
 }
 
+// The object the IPC handlers were registered with. They read it for the life
+// of the process, so a window attaching after a windowless Host boot has its
+// window-scoped fields filled in here.
+let registeredHandlerDeps: HandlerDependencies | null = null;
+// Only a windowless registration adopts later windows' fields; a windowed boot
+// keeps its first window's, as it always has.
+let registeredWithoutWindow = false;
+let windowDepsAdopter: ReturnType<typeof createWindowDepsAdopter> | null = null;
+
+/**
+ * Register the global IPC handlers once, with the first boot path's
+ * dependencies — a window's, or the Host runtime's window-less set. Returns
+ * the object the handlers actually read.
+ */
+export function ensureIpcHandlersRegistered(deps: HandlerDependencies): HandlerDependencies {
+  if (!getIpcHandlersRegistered()) {
+    setIpcHandlersRegistered(true);
+    registeredHandlerDeps = deps;
+    registeredWithoutWindow = deps.mainWindow === undefined;
+    if (registeredWithoutWindow) windowDepsAdopter = createWindowDepsAdopter(deps);
+    setCleanupIpcHandlers(registerIpcHandlers(deps));
+    markPerformance(PERF_MARKS.SERVICE_INIT_IPC_READY);
+    return deps;
+  }
+  if (!registeredHandlerDeps) return deps;
+  if (windowDepsAdopter && registeredHandlerDeps !== deps && deps.mainWindow) {
+    const adopter = windowDepsAdopter;
+    const win = deps.mainWindow;
+    // Read now: a destroyed window's id is unreadable in its `closed` handler.
+    const windowId = win.id;
+    adopter.attach(windowId, deps);
+    win.once("closed", () => adopter.detach(windowId));
+  }
+  return registeredHandlerDeps;
+}
+
+/** Error handlers also use ipcMain.handle — register once. */
+export function ensureErrorHandlersRegistered(): void {
+  if (!getCleanupErrorHandlers()) {
+    setCleanupErrorHandlers(registerErrorHandlers(getWorkspaceClientRef(), getPtyClient()));
+  }
+}
+
 export interface SetupWindowServicesOptions {
   loadRenderer: (reason: string, projectId?: string) => void;
   smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
@@ -205,11 +247,9 @@ export async function setupWindowServices(
 
   markPerformance(PERF_MARKS.WINDOW_SERVICES_START);
 
-  // ── One-time global initialization (first window only) ──
-  if (!getGlobalServicesInitialized()) {
-    const result = await initGlobalServices(windowRegistry);
-    if (result === "exit-requested") return "exit-requested";
-  }
+  // ── One-time global initialization (first window, or the Host runtime) ──
+  const globalResult = await ensureGlobalServicesInitialized(windowRegistry);
+  if (globalResult === "exit-requested") return "exit-requested";
 
   // ── Per-window initialization ──
   const handlerDeps = await initPerWindowServices(win, ctx, windowRegistry);
@@ -235,11 +275,7 @@ export async function setupWindowServices(
   // initialization moved to a deferred task in globalServicesInit.ts; the
   // plugin IPC handlers registered above return empty lists until init
   // completes, and contribution broadcasts populate the renderer when ready.
-  if (!getIpcHandlersRegistered()) {
-    setIpcHandlersRegistered(true);
-    setCleanupIpcHandlers(registerIpcHandlers(handlerDeps));
-    markPerformance(PERF_MARKS.SERVICE_INIT_IPC_READY);
-  }
+  const registeredDeps = ensureIpcHandlersRegistered(handlerDeps);
 
   // Default boot path: the did-finish-load handler is registered and
   // loadRenderer() fires before the workspace/PTY init block, so first
@@ -329,63 +365,24 @@ export async function setupWindowServices(
   console.log("[MAIN] Creating application menu (initial, no agent availability yet)...");
   createApplicationMenu(win, cliAvailabilityService ?? undefined);
 
-  // Start the external main-process watchdog before ptyClient.start() so a
-  // deadlock during PTY host fork (worst case: a synchronous spawn that
-  // hangs) is still recoverable — that pre-fork ordering is the watchdog's
-  // only invariant, which is why it lives here with the fork rather than
-  // pre-renderer-load in initPerWindowServices. The watchdog is fail-open:
-  // if its own fork throws, PtyClient still starts normally.
-  if (!isSmokeTest && !getMainProcessWatchdogClientRef()) {
-    try {
-      // Use the singleton accessor so `disposeMainProcessWatchdog()` in
-      // shutdown.ts reaches the running instance instead of a no-op.
-      const watchdog = getMainProcessWatchdogClient();
-      setMainProcessWatchdogClientRef(watchdog);
-      wireWatchdogDisabledBroadcast(watchdog, windowRegistry);
-    } catch (err) {
-      console.error("[MAIN] Failed to start main-process watchdog:", err);
-      setMainProcessWatchdogClientRef(null);
-    }
-  }
-
-  // Fork the PTY host now — *after* startRendererLoad — so first paint is no
-  // longer blocked by the early PATH refresh (#8827). PtyClient was constructed
-  // with `deferStart` in initPerWindowServices, so the host has not forked yet.
-  // We await the early PATH refresh here, immediately before forking, so
-  // node-pty inherits the user's full PATH (the #8625 invariant: PATH refresh →
-  // PTY fork). Awaiting a settled promise is a no-op; on the P95 path the probe
-  // resolved in ~50ms during the renderer bundle load, so the host forks before
-  // the renderer hydrates. First window only — `start()` is idempotent and
-  // `isHostStarted()` short-circuits subsequent windows.
-  const ptyClient = getPtyClient();
-  if (ptyClient && !ptyClient.isHostStarted()) {
-    // Fall back to kicking off the refresh here if it was never started (e.g. a
-    // custom entry path that skips main.ts's app.whenReady kickoff). The kickoff
-    // is idempotent — it returns the cached promise when already running — so
-    // this never double-runs the probe and guarantees the #8625 invariant holds
-    // before the fork rather than silently skipping it on a null promise.
-    await (getEarlyPathRefreshPromise() ?? kickOffEarlyPathRefresh());
-    // Reap descendants a previous session left detached, before any new host
-    // can reuse their PIDs. Only orphans that reparented away from their PTY
-    // tree are persisted, and each is re-verified against its recorded start
-    // time before it is signalled (#12203). Awaited rather than fired off: a
-    // reap racing the fork could validate a PID the new host has just spawned.
-    try {
-      const { reapPersistedLineages } = await import("../services/TerminalLineageLedger.js");
-      await reapPersistedLineages(app.getPath("userData"));
-    } catch (err) {
-      console.warn("[MAIN] Previous-session lineage reap failed:", err);
-    }
+  // Start the external main-process watchdog, then fork the PTY host — *after*
+  // startRendererLoad, so first paint is no longer blocked by the early PATH
+  // refresh (#8827). PtyClient was constructed with `deferStart` in
+  // initPerWindowServices, so the host has not forked yet. The fork awaits the
+  // early PATH refresh immediately before forking so node-pty inherits the
+  // user's full PATH (the #8625 invariant: PATH refresh → PTY fork). Shared
+  // with the windowless Host runtime: whichever boot path gets here first
+  // forks, later windows reuse the running host.
+  await ensurePtyHostStarted({
+    windowRegistry,
     // Project-restoring boots send set-active-project with a project path
     // right after the host is ready, draining the pool — tell the host to
     // skip the homedir warm those drains would immediately kill (#10393).
-    // The host falls back to a homedir warm if the restore falls through.
     // Keyed on initialProjectId only: path-only boots (CLI open) send
     // set-active-project(null) before the project-switch, which would fire
     // the fallback homedir warm and waste the deferral anyway.
-    ptyClient.setDeferInitialPoolWarm(Boolean(opts.initialProjectId));
-    ptyClient.start();
-  }
+    deferInitialPoolWarm: Boolean(opts.initialProjectId),
+  });
 
   // Initialize workspace client (first window only) — per-project hosts
   // are started on-demand when loadProject() is called, not at init time.
@@ -399,127 +396,30 @@ export async function setupWindowServices(
   // the possibility either way, and the gate now reports every outcome that
   // leaves the renderer without a port regardless of cause.
   let capturedWorkspaceClient = getWorkspaceClientRef();
-  if (!capturedWorkspaceClient) {
+  if (!capturedWorkspaceClient || isWorkspaceClientStarting()) {
     // Construct the workspace client and prewarm its per-project host
-    // concurrently with the PTY host fork. The two utility processes load
-    // native modules independently (node-pty vs better-sqlite3 + @parcel/watcher)
-    // and share no IPC/memory, so dispatching the workspace host fork while we
-    // await PTY-ready overlaps the two native loads instead of serializing them
-    // behind the PTY handshake (#8828).
-    const workspaceClient = getWorkspaceClient({
-      maxRestartAttempts: 3,
-      healthCheckIntervalMs: 10000,
-      showCrashDialog: false,
-    });
-
-    // Resolve the project path this window will load so the workspace host can
-    // start forking now. getProjectById is a synchronous SQLite read on the
-    // already-open shared DB, so it's safe before projectStore.initialize().
-    // Derivation + dispatch are wrapped together: a failed lookup or a
-    // synchronous prewarm error must not abort startup — the host self-heals
-    // and loadProject() forks a fresh one later if needed.
+    // concurrently with the PTY host fork (#8828); shared with the windowless
+    // Host runtime, so whichever boot path gets here first constructs it.
+    //
+    // getProjectById is a synchronous SQLite read on the already-open shared
+    // DB, so it's safe before projectStore.initialize(). A failed lookup must
+    // not abort startup — loadProject() forks a host on demand later.
+    let prewarmPath: string | undefined;
     try {
-      const prewarmPath =
+      prewarmPath =
         opts.initialProjectPath ??
         (opts.initialProjectId
           ? projectStore.getProjectById(opts.initialProjectId)?.path
           : undefined);
-      if (prewarmPath) {
-        console.log("[MAIN] Prewarming workspace host concurrently with PTY host:", prewarmPath);
-        // Fire-and-forget: prewarmProject sets up the host initPromise and a
-        // dormant-cleanup timer; async failure self-heals inside the pool.
-        workspaceClient.prewarmProject(prewarmPath);
-      }
     } catch (error) {
       console.warn("[MAIN] Workspace host prewarm failed; will fork on demand:", error);
     }
-
-    console.log("[MAIN] Waiting for Pty Host to be ready...");
-    try {
-      await ptyClient!.waitForReady();
-      console.log("[MAIN] Pty Host ready");
-      markPerformance(PERF_MARKS.SERVICE_INIT_PTY_READY);
-    } catch (error) {
-      console.error("[MAIN] Pty Host failed to start:", error);
-    }
-
-    setWorkspaceClientRef(workspaceClient);
+    const workspaceClient = await ensureWorkspaceClient({ prewarmPath });
     capturedWorkspaceClient = workspaceClient;
-
-    // Give PluginService the WorkspaceClient reference now that it's ready.
-    // initialize() is deferred and may run before or after this point — the
-    // service's pendingWorktreeSubs replay handles either ordering. The two
-    // imports are independent; load them concurrently with per-module error
-    // isolation.
-    const [pluginServiceResult, portBrokerResult] = await Promise.allSettled([
-      import("../services/PluginService.js"),
-      import("../services/WorktreePortBroker.js"),
-    ]);
-
-    if (pluginServiceResult.status === "fulfilled") {
-      try {
-        pluginServiceResult.value.pluginService.setWorkspaceClient(workspaceClient);
-      } catch (err) {
-        console.error("[MAIN] Failed to wire WorkspaceClient into PluginService:", err);
-      }
-    } else {
-      console.error(
-        "[MAIN] Failed to wire WorkspaceClient into PluginService:",
-        pluginServiceResult.reason
-      );
-    }
-
-    markPerformance(PERF_MARKS.SERVICE_INIT_WORKSPACE_READY);
-
-    // Create WorktreePortBroker alongside WorkspaceClient
-    if (!getWorktreePortBrokerRef()) {
-      if (portBrokerResult.status === "fulfilled") {
-        setWorktreePortBrokerRef(new portBrokerResult.value.WorktreePortBroker());
-      } else {
-        throw portBrokerResult.reason;
-      }
-    }
-
     handlerDeps.worktreeService = workspaceClient;
     handlerDeps.worktreePortBroker = getWorktreePortBrokerRef() ?? undefined;
-
-    workspaceClient.on("host-crash", (code: number) => {
-      console.error(`[MAIN] Workspace Host crashed with code ${code}`);
-    });
-
-    // Re-broker worktree ports when a workspace host restarts
-    workspaceClient.on(
-      "host-restarted",
-      ({
-        projectPath,
-        host,
-      }: {
-        projectPath: string;
-        host: import("../services/WorkspaceHostProcess.js").WorkspaceHostProcess;
-      }) => {
-        const worktreePortBroker = getWorktreePortBrokerRef();
-        if (!worktreePortBroker) return;
-        const wcIds = worktreePortBroker.closePortsForHost(projectPath);
-        if (wcIds.length > 0) {
-          const reBrokered = worktreePortBroker.reBrokerForHost(
-            host,
-            (wcId: number) => webContents.fromId(wcId) ?? undefined,
-            wcIds
-          );
-          console.log(
-            `[MAIN] Re-brokered ${reBrokered}/${wcIds.length} worktree port(s) after host restart`
-          );
-        }
-        if (isE2EFaultMode) {
-          const g = globalThis as Record<string, unknown>;
-          const current =
-            typeof g.__daintreeWorkspaceHostRestartCount === "number"
-              ? g.__daintreeWorkspaceHostRestartCount
-              : 0;
-          g.__daintreeWorkspaceHostRestartCount = current + 1;
-        }
-      }
-    );
+    registeredDeps.worktreeService ??= handlerDeps.worktreeService;
+    registeredDeps.worktreePortBroker ??= handlerDeps.worktreePortBroker;
   }
 
   const { armRestoreQuota } = await import("../ipc/utils.js");
@@ -533,10 +433,7 @@ export async function setupWindowServices(
   // no-op (already started above).
   startRendererLoad("after-services-ready");
 
-  // Error handlers also use ipcMain.handle — register once
-  if (!getCleanupErrorHandlers()) {
-    setCleanupErrorHandlers(registerErrorHandlers(getWorkspaceClientRef(), getPtyClient()));
-  }
+  ensureErrorHandlersRegistered();
 
   console.log("[MAIN] All critical services ready");
 
@@ -1030,6 +927,9 @@ export async function setupWindowServices(
       // Other windows still open — nothing to do at this level.
       return;
     }
+    // A Host owns the queue: it drained it for the process, and a reset while
+    // that drain is still running would abandon the global tasks it had left.
+    if (isHostRuntimeActive()) return;
     resetDeferredQueue();
   });
 

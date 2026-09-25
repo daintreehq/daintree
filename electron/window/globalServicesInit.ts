@@ -109,6 +109,7 @@ import {
   setAgentNotificationServiceRef,
   setWindowsStoreNotifierServiceRef,
   setGlobalServicesInitialized,
+  getGlobalServicesInitialized,
 } from "./serviceRefs.js";
 
 /**
@@ -319,6 +320,115 @@ async function evictStaleSessionFiles(): Promise<void> {
   } catch (err) {
     console.warn("[MAIN] Session eviction failed:", err);
   }
+}
+
+let globalInit: Promise<"ok" | "exit-requested"> | null = null;
+let mcpServerStart: Promise<void> | null = null;
+let pluginHostStart: Promise<void> | null = null;
+
+/**
+ * The single entry to {@link initGlobalServices} for both boot paths — the
+ * first window and the windowless Host runtime. Whichever arrives first runs
+ * it; the other awaits the same run, so neither proceeds past a migration the
+ * other is still applying.
+ */
+export function ensureGlobalServicesInitialized(
+  windowRegistry?: WindowRegistry
+): Promise<"ok" | "exit-requested"> {
+  if (globalInit) return globalInit;
+  if (getGlobalServicesInitialized()) return Promise.resolve("ok");
+  globalInit = initGlobalServices(windowRegistry);
+  return globalInit;
+}
+
+/**
+ * Start the MCP server once. Reached from the deferred `mcp-server` task on a
+ * windowed boot and directly from the Host runtime, which has no renderer to
+ * release the deferred queue. The registry may hold no windows yet.
+ */
+export function startMcpServerOnce(registry: WindowRegistry): Promise<void> {
+  mcpServerStart ??= (async () => {
+    try {
+      // The server defaults to disabled, and `httpLifecycle.start()` would
+      // just no-op after we paid the ~637KB module load to find that out.
+      // Mirror its enabled check with a synchronous store read and skip
+      // the import entirely. Safe to skip: every mid-session enable path
+      // (settings IPC, help-session provision, agent-spawn `ensureReady`)
+      // dynamically imports the service itself, and
+      // `HelpSessionService.ensureMcpServerReady()` re-wires the help-token
+      // validators this task would have wired.
+      if (!store.get("mcpServer").enabled) return;
+      const { mcpServerService } = await import("../services/McpServerService.js");
+      const { helpSessionService } = await import("../services/HelpSessionService.js");
+      // Register the help-token validator before start() so the very first
+      // request can authenticate against a help session if the renderer
+      // races ahead of us. (Also wired in HelpSessionService.ensureMcpServerReady
+      // — this deferred wiring covers the no-assistant warm-start path.)
+      mcpServerService.setHelpTokenValidator((token) => helpSessionService.validateToken(token));
+      mcpServerService.setHelpSessionWebContentsResolver((token) =>
+        helpSessionService.getWebContentsIdForToken(token)
+      );
+      mcpServerService.setHelpSessionIdResolver((token) =>
+        helpSessionService.getSessionIdForToken(token)
+      );
+      await mcpServerService.start(registry);
+    } catch (err) {
+      console.error("[MAIN] MCP server failed to start:", err);
+    }
+  })();
+  return mcpServerStart;
+}
+
+/**
+ * Initialise the plugin host once — the deferred `plugin-service` task on a
+ * windowed boot, or the Host runtime directly.
+ */
+export function startPluginHostOnce(): Promise<void> {
+  pluginHostStart ??= (async () => {
+    const { pluginService } = await import("../services/PluginService.js");
+    // Point the already-registered `plugin://` handler at the live resolver
+    // BEFORE `initialize()` runs, not after (#11728). The resolver is a
+    // plain lookup in a map that exists from construction, so it is safe to
+    // call at any point — it simply returns `undefined` until a plugin
+    // registers. Wiring it after `initialize()` left the placeholder resolver
+    // live for the whole scan: `initialize()` sweeps temp dirs, fetches the
+    // blocklist over the network, then awaits three sequential `loadFromDir`
+    // passes (builtin, user, sideload), while the FIRST plugin's
+    // `registerPanelKind` already broadcast an addressable `componentPath`.
+    // Every `plugin://` module request in that window 404'd, and a rejected
+    // dynamic import is permanent for that specifier — the module map has no
+    // eviction, so "Try again" re-imported the same poisoned URL forever.
+    setPluginDirResolver((authority) => pluginService.getPluginRootByAuthority(authority));
+    setPluginTourAudioResolver((authority, tourId, chapterId) =>
+      pluginService.getPluginTourRemoteAudio(authority, tourId, chapterId)
+    );
+    try {
+      await pluginService.initialize();
+    } catch (err) {
+      console.error("[MAIN] PluginService initialization failed:", err);
+    }
+    // macOS: drain any `.dntr` paths queued during cold launch (Finder
+    // double-click / "Open With") and take over live open-file events now
+    // that PluginService can install an approved archive. Each path is queued
+    // for the install-confirmation prompt, never installed outright (#11280).
+    // Fire-and-forget — previewing runs concurrently with the remaining
+    // deferred tasks. #9293
+    void activateOpenFileInstaller().catch((err) =>
+      console.error("[MAIN] Failed to activate the open-file archive queue:", err)
+    );
+    // Fire-and-forget — activations fan out in parallel and report errors
+    // via the per-plugin `loadError` provenance record. Awaiting here would
+    // delay subsequent deferred tasks behind the slowest plugin's activate().
+    void pluginService.activateStartupFinishedPlugins();
+  })();
+  return pluginHostStart;
+}
+
+/** Test-only: forget the once-per-process starts. */
+export function _resetGlobalServiceStartsForTest(): void {
+  globalInit = null;
+  mcpServerStart = null;
+  pluginHostStart = null;
 }
 
 /**
@@ -1086,43 +1196,7 @@ export async function initGlobalServices(
   //
   registerDeferredTask({
     name: "plugin-service",
-    run: async () => {
-      const { pluginService } = await import("../services/PluginService.js");
-      // Point the already-registered `plugin://` handler at the live resolver
-      // BEFORE `initialize()` runs, not after (#11728). The resolver is a
-      // plain lookup in a map that exists from construction, so it is safe to
-      // call at any point — it simply returns `undefined` until a plugin
-      // registers. Wiring it after `initialize()` left the placeholder resolver
-      // live for the whole scan: `initialize()` sweeps temp dirs, fetches the
-      // blocklist over the network, then awaits three sequential `loadFromDir`
-      // passes (builtin, user, sideload), while the FIRST plugin's
-      // `registerPanelKind` already broadcast an addressable `componentPath`.
-      // Every `plugin://` module request in that window 404'd, and a rejected
-      // dynamic import is permanent for that specifier — the module map has no
-      // eviction, so "Try again" re-imported the same poisoned URL forever.
-      setPluginDirResolver((authority) => pluginService.getPluginRootByAuthority(authority));
-      setPluginTourAudioResolver((authority, tourId, chapterId) =>
-        pluginService.getPluginTourRemoteAudio(authority, tourId, chapterId)
-      );
-      try {
-        await pluginService.initialize();
-      } catch (err) {
-        console.error("[MAIN] PluginService initialization failed:", err);
-      }
-      // macOS: drain any `.dntr` paths queued during cold launch (Finder
-      // double-click / "Open With") and take over live open-file events now
-      // that PluginService can install an approved archive. Each path is queued
-      // for the install-confirmation prompt, never installed outright (#11280).
-      // Fire-and-forget — previewing runs concurrently with the remaining
-      // deferred tasks. #9293
-      void activateOpenFileInstaller().catch((err) =>
-        console.error("[MAIN] Failed to activate the open-file archive queue:", err)
-      );
-      // Fire-and-forget — activations fan out in parallel and report errors
-      // via the per-plugin `loadError` provenance record. Awaiting here would
-      // delay subsequent deferred tasks behind the slowest plugin's activate().
-      void pluginService.activateStartupFinishedPlugins();
-    },
+    run: () => startPluginHostOnce(),
   });
 
   // CLI control socket (F32) — lets the `daintree-plugin` CLI install/uninstall
@@ -1220,37 +1294,7 @@ export async function initGlobalServices(
 
     registerDeferredTask({
       name: "mcp-server",
-      run: async () => {
-        try {
-          // The server defaults to disabled, and `httpLifecycle.start()` would
-          // just no-op after we paid the ~637KB module load to find that out.
-          // Mirror its enabled check with a synchronous store read and skip
-          // the import entirely. Safe to skip: every mid-session enable path
-          // (settings IPC, help-session provision, agent-spawn `ensureReady`)
-          // dynamically imports the service itself, and
-          // `HelpSessionService.ensureMcpServerReady()` re-wires the help-token
-          // validators this task would have wired.
-          if (!store.get("mcpServer").enabled) return;
-          const { mcpServerService } = await import("../services/McpServerService.js");
-          const { helpSessionService } = await import("../services/HelpSessionService.js");
-          // Register the help-token validator before start() so the very first
-          // request can authenticate against a help session if the renderer
-          // races ahead of us. (Also wired in HelpSessionService.ensureMcpServerReady
-          // — this deferred wiring covers the no-assistant warm-start path.)
-          mcpServerService.setHelpTokenValidator((token) =>
-            helpSessionService.validateToken(token)
-          );
-          mcpServerService.setHelpSessionWebContentsResolver((token) =>
-            helpSessionService.getWebContentsIdForToken(token)
-          );
-          mcpServerService.setHelpSessionIdResolver((token) =>
-            helpSessionService.getSessionIdForToken(token)
-          );
-          await mcpServerService.start(registryRef);
-        } catch (err) {
-          console.error("[MAIN] MCP server failed to start:", err);
-        }
-      },
+      run: () => startMcpServerOnce(registryRef),
     });
 
     registerDeferredTask({

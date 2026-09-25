@@ -673,6 +673,92 @@ describe("Chromium feature flags", () => {
   });
 });
 
+describe("Headless Host mode on Linux", () => {
+  const savedDisplay = process.env.DISPLAY;
+  const savedWayland = process.env.WAYLAND_DISPLAY;
+
+  function switchKeys(): string[] {
+    return vi.mocked(electronMock.app.commandLine.appendSwitch).mock.calls.map(([key]) => key);
+  }
+
+  function restoreEnv(key: "DISPLAY" | "WAYLAND_DISPLAY", value: string | undefined) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    fsMock.existsSync.mockReturnValue(false);
+    Object.defineProperty(process, "platform", { value: "linux", writable: true });
+    delete process.env.DISPLAY;
+    delete process.env.WAYLAND_DISPLAY;
+    delete process.env.XDG_SESSION_TYPE;
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    process.argv = originalArgv;
+    restoreEnv("DISPLAY", savedDisplay);
+    restoreEnv("WAYLAND_DISPLAY", savedWayland);
+  });
+
+  it("selects the headless Ozone backend and disables the GPU before any other switch", async () => {
+    process.argv = ["electron", "main.js", "--host-mode"];
+
+    const env = await import("../environment.js");
+
+    const keys = switchKeys();
+    expect(env.headlessOzone).toBe(true);
+    expect(electronMock.app.commandLine.appendSwitch).toHaveBeenCalledWith(
+      "ozone-platform",
+      "headless"
+    );
+    expect(keys).toContain("disable-gpu");
+    expect(keys).not.toContain("ozone-platform-hint");
+    expect(keys.indexOf("ozone-platform")).toBeLessThan(keys.indexOf("enable-features"));
+    expect(keys.indexOf("disable-gpu")).toBeLessThan(keys.indexOf("force-gpu-mem-available-mb"));
+    expect(electronMock.app.disableHardwareAcceleration).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["DISPLAY", ":0"],
+    ["WAYLAND_DISPLAY", "wayland-0"],
+  ] as const)("keeps auto-detection when %s is set", async (key, value) => {
+    process.argv = ["electron", "main.js", "--host-mode"];
+    process.env[key] = value;
+
+    const env = await import("../environment.js");
+
+    expect(env.headlessOzone).toBe(false);
+    expect(switchKeys()).toContain("ozone-platform-hint");
+    expect(switchKeys()).not.toContain("ozone-platform");
+    expect(switchKeys()).not.toContain("disable-gpu");
+    expect(electronMock.app.disableHardwareAcceleration).not.toHaveBeenCalled();
+  });
+
+  it("changes nothing without --host-mode, even with no display", async () => {
+    process.argv = ["electron", "main.js"];
+
+    const env = await import("../environment.js");
+
+    expect(env.headlessOzone).toBe(false);
+    expect(switchKeys()).toContain("ozone-platform-hint");
+    expect(switchKeys()).not.toContain("ozone-platform");
+    expect(switchKeys()).not.toContain("disable-gpu");
+  });
+
+  it("never applies on macOS", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.argv = ["electron", "main.js", "--host-mode"];
+
+    const env = await import("../environment.js");
+
+    expect(env.headlessOzone).toBe(false);
+    expect(switchKeys()).not.toContain("ozone-platform");
+  });
+});
+
 // The disabled flag is read via readFileSync (reason-aware since #10379);
 // route its content through the fs mock, ENOENT when absent, and leave every
 // other path on the unconfigured-mock default.

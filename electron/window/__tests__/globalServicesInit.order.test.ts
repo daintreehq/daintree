@@ -344,7 +344,13 @@ vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn() },
 }));
 
-import { initGlobalServices, __test__ } from "../globalServicesInit.js";
+import {
+  initGlobalServices,
+  ensureGlobalServicesInitialized,
+  startPluginHostOnce,
+  _resetGlobalServiceStartsForTest,
+  __test__,
+} from "../globalServicesInit.js";
 import {
   getGlobalServicesInitialized,
   setGlobalServicesInitialized,
@@ -748,10 +754,12 @@ describe("initGlobalServices task ordering", () => {
     migrationRunCalls.count = 0;
     mockLogRetentionDays = 30;
     setGlobalServicesInitialized(false);
+    _resetGlobalServiceStartsForTest();
   });
 
   afterEach(() => {
     setGlobalServicesInitialized(false);
+    _resetGlobalServiceStartsForTest();
   });
 
   // The deferred queue drains on the renderer's own first-interactive signal, so
@@ -1487,5 +1495,48 @@ describe("initGlobalServices task ordering", () => {
     // Guard is set early so a concurrent second window doesn't double-run
     // migrations; app.exit(1) terminates the process before that matters.
     expect(getGlobalServicesInitialized()).toBe(true);
+  });
+
+  describe("shared between a window and the windowless Host runtime", () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+
+    it("runs migrations once when both boot paths arrive together", async () => {
+      migrationCurrentVersion = 0;
+      storeFreshAtBoot = false;
+
+      const fromHost = ensureGlobalServicesInitialized(fakeRegistry);
+      const fromWindow = ensureGlobalServicesInitialized(fakeRegistry);
+
+      expect(fromWindow).toBe(fromHost);
+      expect(await fromHost).toBe("ok");
+      expect(await fromWindow).toBe("ok");
+      expect(migrationRunCalls.count).toBe(1);
+    });
+
+    it("hands a later caller the first run's exit request", async () => {
+      migrationCurrentVersion = 0;
+      migrationShouldThrow = true;
+
+      expect(await ensureGlobalServicesInitialized(fakeRegistry)).toBe("exit-requested");
+      expect(await ensureGlobalServicesInitialized(fakeRegistry)).toBe("exit-requested");
+      expect(app.exit).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not re-run once initialisation already happened another way", async () => {
+      setGlobalServicesInitialized(true);
+
+      expect(await ensureGlobalServicesInitialized(fakeRegistry)).toBe("ok");
+      expect(registeredTaskNames).toEqual([]);
+    });
+
+    it("initialises the plugin host once for the deferred task and the Host runtime", async () => {
+      await initGlobalServices(fakeRegistry);
+      const task = registeredTaskRuns.get("plugin-service");
+
+      await Promise.all([startPluginHostOnce(), task!(), startPluginHostOnce()]);
+
+      expect(pluginInitialize).toHaveBeenCalledTimes(1);
+      expect(activateOpenFileInstaller).toHaveBeenCalledTimes(1);
+    });
   });
 });
