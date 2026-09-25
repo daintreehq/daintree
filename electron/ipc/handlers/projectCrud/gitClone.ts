@@ -3,7 +3,14 @@ import { spawnSync } from "child_process";
 import { CHANNELS } from "../../channels.js";
 import { defineIpcNamespace, op } from "../../define.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
-import { broadcastToRenderer, sendToRenderer } from "../../utils.js";
+import { broadcastToRenderer, sendToRenderer, sendToRendererContext } from "../../utils.js";
+import type { IpcContext } from "../../types.js";
+import type { ClientEndpoint } from "../../endpoint.js";
+import {
+  getOperationRegistry,
+  normalizeOperationId,
+  type OperationHandle,
+} from "../../../services/operations/index.js";
 import { createAuthenticatedGit } from "../../../utils/hardenedGit.js";
 import {
   getActiveProvider,
@@ -13,6 +20,7 @@ import { makeForgeProviderId } from "../../../../shared/utils/forgeProviderIds.j
 import { scrubSecrets } from "../../../../shared/utils/secretScrubber.js";
 import type { CloneAuthProbe, CloneCapability } from "../../../../shared/types/forge.js";
 import type {
+  CloneCancelPayload,
   CloneRepoOptions,
   CloneRepoResult,
   CloneRepoProgressEvent,
@@ -70,24 +78,34 @@ function killCloneProcessTree(pid: number | undefined): void {
   }
 }
 
+/**
+ * The same remote spelled with or without a trailing slash or `.git` is one
+ * clone, so two clients naming it differently still join one operation.
+ */
+function normalizeCloneRemote(url: string): string {
+  return url
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\.git$/i, "");
+}
+
 export function registerGitCloneHandlers(): () => void {
   // Track every in-flight clone so cancel aborts each one independently.
   // Electron's ipcMain.handle permits concurrent invocations from multiple
   // senders; sharing a single controller would let a later clone overwrite an
-  // earlier one's cancel target.
-  const activeControllers = new Set<AbortController>();
+  // earlier one's cancel target. Keyed to the clone's operation id so a cancel
+  // can name one clone.
+  const activeControllers = new Map<AbortController, string>();
 
   const handleProjectCloneRepo = async (
-    ctx: import("../../types.js").IpcContext,
+    ctx: IpcContext,
     options: CloneRepoOptions
   ): Promise<CloneRepoResult> => {
     if (!options || typeof options !== "object") {
       throw new Error("Invalid options object");
     }
 
-    const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
-
-    const { url, parentPath, folderName, shallowClone } = options;
+    const { url, parentPath, folderName } = options;
 
     if (typeof url !== "string" || !url.trim()) {
       throw new Error("Repository URL is required");
@@ -118,6 +136,29 @@ export function registerGitCloneHandlers(): () => void {
       throw new Error("Folder name resolves outside of the parent directory");
     }
 
+    // Only a caller that names its operation joins another: an unnamed clone
+    // into a busy destination still fails on the existing folder, as before.
+    const opId = normalizeOperationId(options.opId);
+    const input = {
+      opId,
+      kind: "git-clone" as const,
+      projectId: ctx.projectId,
+      dedupKey: opId ? `git-clone:${normalizeCloneRemote(url)}\0${normalizedTarget}` : null,
+    };
+    return getOperationRegistry().run(input, (op) =>
+      cloneRepository(ctx, options, trimmedFolder, targetPath, op)
+    );
+  };
+
+  const cloneRepository = async (
+    ctx: IpcContext,
+    options: CloneRepoOptions,
+    trimmedFolder: string,
+    targetPath: string,
+    op: OperationHandle
+  ): Promise<CloneRepoResult> => {
+    const { url, parentPath, shallowClone } = options;
+    const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
     const fs = await import("fs");
 
     try {
@@ -143,6 +184,7 @@ export function registerGitCloneHandlers(): () => void {
 
     const emitProgress = (stage: string, progress: number, message: string) => {
       const progressEvent: CloneRepoProgressEvent = {
+        opId: op.opId,
         stage,
         progress,
         message,
@@ -150,13 +192,19 @@ export function registerGitCloneHandlers(): () => void {
       };
       if (senderWindow && !senderWindow.isDestroyed()) {
         sendToRenderer(senderWindow, CHANNELS.PROJECT_CLONE_PROGRESS, progressEvent);
+      } else if ((ctx.endpoint as ClientEndpoint | undefined)?.kind === "remote-view") {
+        // A remote caller has no window, and a global broadcast would put its
+        // clone's progress in every other client's dialog.
+        sendToRendererContext(ctx, CHANNELS.PROJECT_CLONE_PROGRESS, progressEvent);
       } else {
         broadcastToRenderer(CHANNELS.PROJECT_CLONE_PROGRESS, progressEvent);
       }
+      op.progress({ fraction: progress / 100, stage, message });
     };
 
     const localController = new AbortController();
-    activeControllers.add(localController);
+    activeControllers.set(localController, op.opId);
+    op.onCancel(() => localController.abort());
 
     // Resolve the URL's forge provider and probe its clone auth — an
     // authenticated probe picks the provider's clone path below. Probe
@@ -301,12 +349,14 @@ export function registerGitCloneHandlers(): () => void {
     }
   };
 
-  const handleProjectCloneCancel = async (): Promise<void> => {
-    // Cancel every in-flight clone. The renderer's clone dialog is the only
-    // surface that fires this channel, and a per-clone identifier isn't
-    // plumbed through, so all-or-nothing matches the historical UX.
-    for (const controller of activeControllers) {
-      controller.abort();
+  const handleProjectCloneCancel = async (payload?: CloneCancelPayload): Promise<void> => {
+    // Without an opId every in-flight clone is cancelled — the historical
+    // behaviour callers that don't name their clone still rely on.
+    const requested = normalizeOperationId(payload?.opId);
+    // A caller that joined another's clone names it by its own id.
+    const opId = requested && (getOperationRegistry().canonicalId(requested) ?? requested);
+    for (const [controller, controllerOpId] of activeControllers) {
+      if (opId === null || controllerOpId === opId) controller.abort();
     }
   };
 

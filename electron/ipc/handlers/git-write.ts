@@ -6,9 +6,19 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
-import { checkRateLimit, typedHandle, typedHandleWithContext, sendToRenderer } from "../utils.js";
+import {
+  checkRateLimit,
+  typedHandle,
+  typedHandleWithContext,
+  sendToRendererContext,
+} from "../utils.js";
+import {
+  getOperationRegistry,
+  normalizeOperationId,
+  type OperationHandle,
+} from "../../services/operations/index.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
-import type { PushProgressEvent } from "../../../shared/types/ipc/gitPush.js";
+import type { GitPushPayload, PushProgressEvent } from "../../../shared/types/ipc/gitPush.js";
 import type {
   ConflictedFileEntry,
   GitBaseIntegrationCommitPreview,
@@ -1132,25 +1142,48 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
   const pushingCwds = new Set<string>();
 
-  const handlePush = async (
-    ctx: IpcContext,
-    payload: { cwd: string; setUpstream?: boolean }
-  ): Promise<void> => {
+  const handlePush = async (ctx: IpcContext, payload: GitPushPayload): Promise<void> => {
+    const opId = normalizeOperationId(payload?.opId);
+    const registry = getOperationRegistry();
+    const dedupKey = `git-push:${payload?.cwd}`;
+    // A caller that names its operation joins a retry or a push already running
+    // for this cwd and gets the real outcome. Without an opId the in-flight
+    // push is still a silent no-op, as it always was.
+    const joined = opId
+      ? registry.join<void>({ opId, kind: "git-push", projectId: ctx.projectId, dedupKey })
+      : null;
+    if (joined) return joined;
     if (pushingCwds.has(payload.cwd)) return;
 
     checkRateLimit(CHANNELS.GIT_PUSH, 5, 10_000);
     validateCwd(payload?.cwd);
 
     pushingCwds.add(payload.cwd);
+    try {
+      await registry.run({ opId, kind: "git-push", projectId: ctx.projectId, dedupKey }, (op) =>
+        runPush(ctx, payload, op)
+      );
+    } finally {
+      pushingCwds.delete(payload.cwd);
+    }
+  };
+
+  const runPush = async (
+    ctx: IpcContext,
+    payload: { cwd: string; setUpstream?: boolean },
+    op: OperationHandle
+  ): Promise<void> => {
     const git = await createAuthenticatedGit(payload.cwd);
     let branchName: string | undefined;
     let destination: ResolvedGitPushDestination | undefined;
-    const senderWindow = ctx.senderWindow;
 
     const sendProgress = (event: PushProgressEvent) => {
-      if (senderWindow && !senderWindow.isDestroyed()) {
-        sendToRenderer(senderWindow, CHANNELS.GIT_PUSH_PROGRESS, event);
-      }
+      sendToRendererContext(ctx, CHANNELS.GIT_PUSH_PROGRESS, event);
+      op.progress({
+        fraction: event.progress === null ? null : event.progress / 100,
+        stage: event.stage,
+        message: event.targetBranch ?? null,
+      });
     };
 
     try {
@@ -1253,8 +1286,6 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
           branchName,
         }
       );
-    } finally {
-      pushingCwds.delete(payload.cwd);
     }
   };
   handlers.push(typedHandleWithContext(CHANNELS.GIT_PUSH, handlePush));

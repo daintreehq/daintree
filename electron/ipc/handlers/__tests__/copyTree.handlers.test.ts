@@ -76,6 +76,11 @@ vi.mock("../../../window/windowRef.js", () => ({
 
 import type { CopyTreeHistoryAppendInput } from "../../../../shared/types/ipc/copyTreeHistory.js";
 import { CHANNELS } from "../../channels.js";
+import {
+  OperationRegistry,
+  _resetOperationRegistryForTest,
+} from "../../../services/operations/index.js";
+import type { OperationsEvent } from "../../../../shared/types/ipc/operations.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import { contextDir, _resetReservedPathsForTests } from "../../../services/copyTreeOutputFile.js";
 import {
@@ -1103,6 +1108,56 @@ describe("file-backed generation", () => {
     expect(await nodeFs.readFile(result.filePath as string, "utf8")).toBe(
       "<files>clipboard me</files>"
     );
+  });
+  it("runs a named generate once and answers a retry from the operation record", async () => {
+    const events: OperationsEvent[] = [];
+    const registry = new OperationRegistry({ emit: (_projectId, event) => events.push(event) });
+    _resetOperationRegistryForTest(registry);
+    const generateContext = makeService("<files/>");
+    // No sender window: progress takes the broadcast path this suite can observe.
+    browserWindowMock.fromWebContents.mockReturnValue(null);
+    const writeBundle = generateContext.getMockImplementation()!;
+    generateContext.mockImplementationOnce(async (root, options, onProgress, outputPath) => {
+      (onProgress as (p: { stage: string; progress: number; message: string }) => void)({
+        stage: "load",
+        progress: 0.5,
+        message: "Loading",
+      });
+      return writeBundle(root, options, onProgress, outputPath);
+    });
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    const first = (await handler(mockSender, { worktreeId: "wt-1", opId: "ct-1" })) as Record<
+      string,
+      unknown
+    >;
+    const retry = (await handler(mockSender, { worktreeId: "wt-1", opId: "ct-1" })) as Record<
+      string,
+      unknown
+    >;
+
+    expect(generateContext).toHaveBeenCalledTimes(1);
+    expect(retry.filePath).toBe(first.filePath);
+    expect(events).toContainEqual({
+      type: "progress",
+      progress: expect.objectContaining({ opId: "ct-1", kind: "copytree", stage: "load" }),
+    });
+    // The record keeps a summary, never the bundle.
+    expect(registry.status("ct-1")).toMatchObject({
+      status: "succeeded",
+      result: { fileCount: 2, filePath: first.filePath },
+    });
+  });
+
+  it("generates every time for callers that name no operation", async () => {
+    _resetOperationRegistryForTest(new OperationRegistry());
+    const generateContext = makeService("<files/>");
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    await handler(mockSender, { worktreeId: "wt-1" });
+    await handler(mockSender, { worktreeId: "wt-1" });
+
+    expect(generateContext).toHaveBeenCalledTimes(2);
   });
 });
 

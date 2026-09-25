@@ -10,9 +10,16 @@ import {
   broadcastToRenderer,
   checkRateLimit,
   sendToRenderer,
+  sendToRendererContext,
   typedHandle,
   typedHandleWithContext,
 } from "../utils.js";
+import {
+  getOperationRegistry,
+  normalizeOperationId,
+  type OperationHandle,
+} from "../../services/operations/index.js";
+import type { ClientEndpoint } from "../endpoint.js";
 import { resolveScopedProjectForIpcContext } from "../projectContext.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
@@ -375,6 +382,61 @@ async function loadCopyTreeProjectSettings(
   }
 }
 
+const INJECTION_CANCELLED = "Injection cancelled";
+
+/**
+ * Progress goes to the caller on the existing channel and to the operation,
+ * whose events reach every client of the project. A remote caller has no
+ * window, so it is answered through its endpoint rather than a broadcast that
+ * would land in every other client too.
+ */
+function reportCopyTreeProgress(
+  ctx: IpcContext,
+  op: OperationHandle,
+  progress: CopyTreeProgress
+): void {
+  const senderWindow = ctx.senderWindow;
+  if (senderWindow && !senderWindow.isDestroyed()) {
+    sendToRenderer(senderWindow, CHANNELS.COPYTREE_PROGRESS, progress);
+  } else if ((ctx.endpoint as ClientEndpoint | undefined)?.kind === "remote-view") {
+    sendToRendererContext(ctx, CHANNELS.COPYTREE_PROGRESS, progress);
+  } else {
+    broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, progress);
+  }
+  op.progress({ fraction: progress.progress, stage: progress.stage, message: progress.message });
+}
+
+/**
+ * Runs a copytree call as an operation. A retry carrying the same opId joins
+ * the first run instead of generating (or injecting) twice. The retained
+ * record keeps a summary, never the bundle content.
+ */
+function runCopyTreeOperation(
+  channel: string,
+  ctx: IpcContext,
+  payload: unknown,
+  work: (op: OperationHandle) => Promise<CopyTreeResult>
+): Promise<CopyTreeResult> {
+  return getOperationRegistry().run(
+    {
+      opId: normalizeOperationId(getStringField(payload, "opId")),
+      kind: "copytree",
+      scope: channel,
+      projectId: ctx.projectId,
+    },
+    work,
+    {
+      failureOf: (result) => result.error ?? null,
+      cancelledBy: (result) => result.error === INJECTION_CANCELLED,
+      recordResult: (result) => ({
+        fileCount: result.fileCount,
+        filePath: result.filePath ?? null,
+        outputBytes: result.outputBytes ?? null,
+      }),
+    }
+  );
+}
+
 export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void {
   // copyTree progress is broadcast to all windows
   const handlers: Array<() => void> = [];
@@ -430,12 +492,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   };
 
   const handleCopyTreeGenerate = async (
-    ctx: import("../types.js").IpcContext,
-    payload: CopyTreeGeneratePayload
+    ctx: IpcContext,
+    payload: CopyTreeGeneratePayload,
+    op: OperationHandle
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_GENERATE, 5, 10_000);
     const traceId = crypto.randomUUID();
-    const senderWindow = ctx.senderWindow;
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(`[${traceId}] CopyTree generate started for worktree ${requestedWorktreeId}`);
 
@@ -477,12 +539,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     const onProgress = (progress: CopyTreeProgress) => {
-      const progressPayload = { ...progress, traceId };
-      if (senderWindow && !senderWindow.isDestroyed()) {
-        sendToRenderer(senderWindow, CHANNELS.COPYTREE_PROGRESS, progressPayload);
-      } else {
-        broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, progressPayload);
-      }
+      reportCopyTreeProgress(ctx, op, { ...progress, traceId, opId: op.opId });
     };
 
     // Merge project settings with runtime options
@@ -517,15 +574,21 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return result;
     }
   };
-  handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_GENERATE, handleCopyTreeGenerate));
+  handlers.push(
+    typedHandleWithContext(CHANNELS.COPYTREE_GENERATE, (ctx, payload) =>
+      runCopyTreeOperation(CHANNELS.COPYTREE_GENERATE, ctx, payload, (op) =>
+        handleCopyTreeGenerate(ctx, payload, op)
+      )
+    )
+  );
 
   const handleCopyTreeGenerateAndCopyFile = async (
-    ctx: import("../types.js").IpcContext,
-    payload: CopyTreeGenerateAndCopyFilePayload
+    ctx: IpcContext,
+    payload: CopyTreeGenerateAndCopyFilePayload,
+    op: OperationHandle
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, 5, 10_000);
     const traceId = crypto.randomUUID();
-    const senderWindow = ctx.senderWindow;
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(
       `[${traceId}] CopyTree generate-and-copy-file started for worktree ${requestedWorktreeId}`
@@ -569,12 +632,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     const onProgress = (progress: CopyTreeProgress) => {
-      const progressPayload = { ...progress, traceId };
-      if (senderWindow && !senderWindow.isDestroyed()) {
-        sendToRenderer(senderWindow, CHANNELS.COPYTREE_PROGRESS, progressPayload);
-      } else {
-        broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, progressPayload);
-      }
+      reportCopyTreeProgress(ctx, op, { ...progress, traceId, opId: op.opId });
     };
 
     // Merge project settings with runtime options
@@ -651,19 +709,20 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
   };
   handlers.push(
-    typedHandleWithContext(
-      CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE,
-      handleCopyTreeGenerateAndCopyFile
+    typedHandleWithContext(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, (ctx, payload) =>
+      runCopyTreeOperation(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, ctx, payload, (op) =>
+        handleCopyTreeGenerateAndCopyFile(ctx, payload, op)
+      )
     )
   );
 
   const handleCopyTreeInject = async (
-    ctx: import("../types.js").IpcContext,
-    payload: CopyTreeInjectPayload
+    ctx: IpcContext,
+    payload: CopyTreeInjectPayload,
+    op: OperationHandle
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_INJECT, 5, 10_000);
     const traceId = crypto.randomUUID();
-    const senderWindow = ctx.senderWindow;
     const requestedTerminalId = getStringField(payload, "terminalId") ?? "unknown";
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(
@@ -707,6 +766,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const sender = resolveCopyTreeSender(ctx, deps);
 
     contextInjectionTracker.beginInjection(validated.terminalId, injectionId);
+    op.onCancel(() => contextInjectionTracker.markCancelled(injectionId));
 
     try {
       const worktree = await findSenderWorktree(sender, validated.worktreeId, deps.worktreeService);
@@ -728,12 +788,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       }
 
       const onProgress = (progress: CopyTreeProgress) => {
-        const progressPayload = { ...progress, traceId };
-        if (senderWindow && !senderWindow.isDestroyed()) {
-          sendToRenderer(senderWindow, CHANNELS.COPYTREE_PROGRESS, progressPayload);
-        } else {
-          broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, progressPayload);
-        }
+        reportCopyTreeProgress(ctx, op, { ...progress, traceId, opId: op.opId });
       };
 
       // Merge project settings with runtime options
@@ -761,7 +816,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         for (let i = 0; i < source.length;) {
           if (contextInjectionTracker.isCancelled(injectionId)) {
             console.log(`[${traceId}] CopyTree inject cancelled by user`);
-            return "Injection cancelled";
+            return INJECTION_CANCELLED;
           }
 
           if (!deps.ptyClient!.hasTerminal(validated.terminalId)) {
@@ -807,7 +862,13 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       contextInjectionTracker.finishInjection(validated.terminalId, injectionId);
     }
   };
-  handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_INJECT, handleCopyTreeInject));
+  handlers.push(
+    typedHandleWithContext(CHANNELS.COPYTREE_INJECT, (ctx, payload) =>
+      runCopyTreeOperation(CHANNELS.COPYTREE_INJECT, ctx, payload, (op) =>
+        handleCopyTreeInject(ctx, payload, op)
+      )
+    )
+  );
 
   const handleCopyTreeAvailable = async (): Promise<boolean> => {
     return !!deps.worktreeService && deps.worktreeService.isReady();

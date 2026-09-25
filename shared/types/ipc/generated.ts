@@ -1150,15 +1150,15 @@ export interface GeneratedIpcInvokeMap {
     result: import("./maps.js").TourOnboardingState;
   };
   "operations:cancel": {
-    args: [_payload: import("./operations.js").OperationIdPayload];
+    args: [payload: import("./operations.js").OperationIdPayload];
     result: boolean;
   };
   "operations:get-status": {
-    args: [_payload: import("./operations.js").OperationIdPayload];
+    args: [payload: import("./operations.js").OperationIdPayload];
     result: import("../remoteHosts.js").OperationOutcome;
   };
   "operations:list": {
-    args: [_payload: import("./operations.js").ListOperationsPayload];
+    args: [payload: import("./operations.js").ListOperationsPayload];
     result: import("../remoteHosts.js").OperationRecord[];
   };
   "os-dnd:get-state": {
@@ -1629,7 +1629,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("../projectRelocation.js").RelocationPreview;
   };
   "project:clone-cancel": {
-    args: [];
+    args: [payload?: import("./gitClone.js").CloneCancelPayload | undefined];
     result: void;
   };
   "project:clone-repo": {

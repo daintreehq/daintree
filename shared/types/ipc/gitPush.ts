@@ -6,3 +6,10 @@ export interface PushProgressEvent {
   total: number | null;
   targetBranch?: string;
 }
+
+export interface GitPushPayload {
+  cwd: string;
+  setUpstream?: boolean;
+  /** Client-minted operation id; absent means the Host mints its own. */
+  opId?: string;
+}
