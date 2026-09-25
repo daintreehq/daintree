@@ -582,10 +582,13 @@ export class TerminalRestoreController {
       // Output that arrived while the fetch was failing proves the pane is
       // being fed; a failed fetch says nothing about lost output then.
       const fed = hasBeenFed(managed);
-      if (!fed) managed.lastScrollbackRestoreError = classifyRestoreError(error);
+      const superseded =
+        this.deps.getInstance(id) !== managed || managed.restoreGeneration !== restoreGeneration;
+      if (!fed && !superseded) managed.lastScrollbackRestoreError = classifyRestoreError(error);
       logError(`Failed to fetch state to recover terminal ${id}`, error);
       release();
-      return fed ? "live-output" : "failed";
+      if (fed) return "live-output";
+      return superseded ? "stale" : "failed";
     }
   }
 

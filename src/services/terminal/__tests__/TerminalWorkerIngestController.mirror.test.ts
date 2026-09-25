@@ -116,6 +116,19 @@ describe("TerminalWorkerIngestController mirror writes", () => {
     expect(managed.pendingOwnClearWrites).toBe(0);
   });
 
+  it("records output receipt for live chunks and non-empty snapshots only (#12754)", () => {
+    applySnapshotToMirror(mirror, "");
+    mirror.write("");
+    expect(managed.hasReceivedOutput).toBeUndefined();
+
+    applySnapshotToMirror(mirror, "prompt$ ");
+    expect(managed.hasReceivedOutput).toBe(true);
+
+    managed.hasReceivedOutput = undefined;
+    mirror.write("agent output");
+    expect(managed.hasReceivedOutput).toBe(true);
+  });
+
   it("a write xterm rejects releases the flag instead of stranding it", () => {
     vi.mocked(managed.terminal.write).mockImplementationOnce(() => {
       throw new Error("write buffer discard watermark");

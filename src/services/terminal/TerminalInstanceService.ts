@@ -2029,6 +2029,7 @@ class TerminalInstanceService {
       managed.outputRecoveryNextProbeAt = undefined;
       managed.outputRecoveryFailures = undefined;
       managed.outputRecoveryGaveUp = undefined;
+      managed.outputRecoveryInFlight = undefined;
       // A replacement Terminal brings a brand-new RenderService with its own
       // pause state. attachGeneration doesn't move here, so without this the
       // fresh renderer inherits the old one's give-up latch and — since it

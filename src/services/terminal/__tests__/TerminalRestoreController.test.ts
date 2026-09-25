@@ -723,6 +723,27 @@ describe("TerminalRestoreController", () => {
       expect(writeDataSpy).toHaveBeenCalledWith("t1", "late", 1);
     });
 
+    it("reports stale when a newer restore supersedes the probe before its fetch rejects", async () => {
+      const { terminalClient } = await import("@/clients");
+      let rejectFetch!: (err: Error) => void;
+      vi.mocked(terminalClient.getSerializedState).mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectFetch = reject;
+          })
+      );
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.recoverMissingOutput("t1");
+      await flushMicrotasks();
+      managed.restoreGeneration += 1;
+      rejectFetch(new Error("host gone"));
+
+      expect(await promise).toBe("stale");
+      expect(managed.lastScrollbackRestoreError).toBeUndefined();
+    });
+
     it("reports stale, not failed, when a newer restore supersedes a large replay", async () => {
       const resolveFetch = await deferredFetch();
       const managed = makeManagedTerminal();
