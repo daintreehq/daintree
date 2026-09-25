@@ -16,6 +16,7 @@ import type { PtyHostActivityTier } from "../../../../shared/types/pty-host.js";
 import { normalizeTerminalGridDimension } from "../../../../shared/types/terminal.js";
 import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.js";
 import { isPanelTitleMode, type PanelTitleMode } from "../../../../shared/types/panel.js";
+import { peekDriveLeaseService } from "../../../services/DriveLeaseService.js";
 import { events } from "../../../services/events.js";
 import {
   getWebContentsForProject,
@@ -238,6 +239,13 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
 
       const { id, cols, rows } = parseResult.data;
       if (isRefusedForRemoteCaller(ctx, id)) return;
+      // The port paths gate resizes on the drive lease; this fallback must
+      // too, or a view that isn't driving could still set the PTY's grid.
+      const lease = peekDriveLeaseService();
+      if (lease && ctx.endpoint) {
+        const projectId = ptyClient.getTerminalProjectId(id);
+        if (projectId !== null && !lease.isDriving(projectId, ctx.endpoint)) return;
+      }
       // Defensive backstop at the shared ceiling. The renderer already
       // normalized to the same bound before choosing a transport, so this
       // agrees with what the MessagePort path (which bypasses Main entirely)

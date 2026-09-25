@@ -8,6 +8,7 @@ import { FolderGit2 } from "@/components/icons";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { projectClient, systemClient } from "@/clients";
 import { mintRemoteOperationId } from "@/clients/operationsClient";
+import { runHostOperation } from "@/hooks/useHostConnection";
 import { actionService } from "@/services/ActionService";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -32,7 +33,7 @@ import {
 import { join as joinPath } from "@shared/utils/path";
 import { matchProviderForRemoteUrl } from "@shared/utils/forgeHostnames";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
-import type { CloneRepoProgressEvent } from "@shared/types/ipc/gitClone";
+import type { CloneRepoProgressEvent, CloneRepoResult } from "@shared/types/ipc/gitClone";
 import type { ProjectCreationIdentity } from "@shared/types";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { isClientGitError } from "@/utils/clientGitError";
@@ -151,6 +152,18 @@ function checkCloneUrl(url: string, shorthandHost: string | null): CloneUrlCheck
 
 function isValidCloneUrl(url: string, shorthandHost: string | null): boolean {
   return checkCloneUrl(url, shorthandHost) === "ok";
+}
+
+/** A clone whose answer was lost but that succeeded on the host: its recorded result. */
+function clonedPathFromOutcome(result: unknown): CloneRepoResult {
+  const clonedPath =
+    typeof result === "object" && result !== null && "clonedPath" in result
+      ? result.clonedPath
+      : undefined;
+  if (typeof clonedPath !== "string" || clonedPath.length === 0) {
+    throw new Error("The host finished the clone but didn't report where it went");
+  }
+  return { clonedPath };
 }
 
 const URL_PROBLEM_COPY: Record<Exclude<CloneUrlCheck, "ok">, string> = {
@@ -360,13 +373,18 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     cloneOpIdRef.current = opId;
 
     try {
-      const { clonedPath: resultPath } = await projectClient.cloneRepo({
-        url: normalizeCloneUrl(url, shorthandHost),
-        parentPath,
-        folderName: targetFolder,
-        shallowClone,
-        ...(opId ? { opId } : {}),
-      });
+      const { clonedPath: resultPath } = await runHostOperation(
+        opId ?? undefined,
+        () =>
+          projectClient.cloneRepo({
+            url: normalizeCloneUrl(url, shorthandHost),
+            parentPath,
+            folderName: targetFolder,
+            shallowClone,
+            ...(opId ? { opId } : {}),
+          }),
+        { fromResult: clonedPathFromOutcome }
+      );
 
       setClonedPath(resultPath);
       setIsComplete(true);

@@ -41,6 +41,7 @@ import type { ConflictedFileEntry, StagingFileEntry } from "@shared/types/git";
 import type { CommitItem, HeatCell } from "@shared/types/pulse";
 import { z } from "zod";
 import { mintRemoteOperationId } from "@/clients/operationsClient";
+import { runHostOperation } from "@/hooks/useHostConnection";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(Math.trunc(value) || min, min), max);
@@ -772,9 +773,15 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       forcePush.clearRecovery(resolvedCwd);
       try {
         const opId = mintRemoteOperationId();
-        return await (opId
-          ? window.electron.git.push(resolvedCwd, setUpstream, opId)
-          : window.electron.git.push(resolvedCwd, setUpstream));
+        // A push has no result to rebuild; a lost answer settles on the host's outcome.
+        return await runHostOperation(
+          opId,
+          () =>
+            opId
+              ? window.electron.git.push(resolvedCwd, setUpstream, opId)
+              : window.electron.git.push(resolvedCwd, setUpstream),
+          { fromResult: () => undefined }
+        );
       } catch (error) {
         if (isClientGitError(error) && error.gitReason === "push-rejected-outdated") {
           // `recordRejection` stores nothing when either field is missing, so a

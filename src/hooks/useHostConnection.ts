@@ -1,13 +1,8 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { isPtyPanel } from "@shared/types/panel";
-import {
-  LOCAL_HOST_ID,
-  type DriveLeaseState,
-  type HostId,
-  type OperationId,
-} from "@shared/types/remoteHosts";
+import { LOCAL_HOST_ID, type HostId, type OperationId } from "@shared/types/remoteHosts";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
-import type { DriveLeaseEvent } from "@shared/types/ipc/driveLease";
+import type { DriveLeaseEvent, DriveLeaseView } from "@shared/types/ipc/driveLease";
 import { isRemoteHostsSupported } from "@/lib/remoteHosts";
 import { useHostConnectionStore, isHostLinkUp } from "@/store/hostConnectionStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -31,19 +26,14 @@ export function getViewHostId(): HostId | null {
 }
 
 /**
- * The lease as this view sees it. `heldByYou` is the Host's per-endpoint
- * answer when it gives one. Without it, a view on the host machine itself is
- * driven elsewhere only by a remote client; a remote view can't tell and so
- * never locks itself out on a guess.
+ * Who drives this view's project from another machine, or null when this view
+ * may type. The host answers per view: `drivingHere` is true for every window
+ * of the holder's machine, so only a holder elsewhere locks input.
  */
-export type ObservedLease = DriveLeaseState & { heldByYou?: boolean };
-
-export function drivenElsewhereBy(lease: ObservedLease | null, isRemoteView: boolean) {
+export function drivenElsewhereBy(lease: DriveLeaseView | null): string | null {
   const holder = lease?.holder ?? null;
-  if (!holder) return null;
-  if (typeof lease?.heldByYou === "boolean") return lease.heldByYou ? null : holder.clientName;
-  if (isRemoteView) return null;
-  return holder.isHostLocal ? null : holder.clientName;
+  if (!holder || lease?.drivingHere) return null;
+  return holder.clientName;
 }
 
 function hostLabel(): string {
@@ -145,7 +135,7 @@ async function refreshLease(): Promise<void> {
   const lease = window.electron?.driveLease;
   if (!projectId || !lease) return;
   const generation = leaseGeneration;
-  let state: ObservedLease | null;
+  let state: DriveLeaseView | null;
   try {
     state = await lease.get({ projectId });
   } catch {
@@ -156,8 +146,8 @@ async function refreshLease(): Promise<void> {
   if (generation === leaseGeneration) applyLease(state);
 }
 
-function applyLease(lease: ObservedLease | null): void {
-  const driver = drivenElsewhereBy(lease, getViewHostId() !== null);
+function applyLease(lease: DriveLeaseView | null): void {
+  const driver = drivenElsewhereBy(lease);
   setLeaseInputBlock(driver === null ? null : { kind: "driven-elsewhere", driverName: driver });
 }
 

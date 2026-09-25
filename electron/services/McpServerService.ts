@@ -115,6 +115,7 @@ export class McpServerService {
    * recording the first time the MCP server restarts.
    */
   private readonly persistentListeners: Array<() => void> = [];
+  private hostBridgeListenersInstalled = false;
   private readonly bridge;
   /**
    * Views with an MCP operation in flight (#11790). Instance-owned rather than
@@ -1069,6 +1070,36 @@ export class McpServerService {
     const id = this.sessionStore.sessionWebContentsMap.get(sessionId);
     if (id === undefined) return;
     sendToPinnedView(id, CHANNELS.MCP_GRANT_LIFECYCLE, () => payload, "grant lifecycle");
+  }
+
+  /**
+   * Remote Hosts: a host's MCP server runs an action in the local view that
+   * drives one of its projects. Answered over the same renderer bridge a
+   * pinned session uses, whether or not this machine's own server is on.
+   */
+  dispatchActionForHost(
+    ...args: Parameters<typeof this.bridge.dispatchActionForWebContents>
+  ): ReturnType<typeof this.bridge.dispatchActionForWebContents> {
+    this.ensureHostBridgeListeners();
+    return this.bridge.dispatchActionForWebContents(...args);
+  }
+
+  /** Remote Hosts: the action manifest of the local view that drives a host's project. */
+  requestManifestForHost(webContentsId: number): Promise<ActionManifestEntry[]> {
+    this.ensureHostBridgeListeners();
+    return this.bridge.requestManifestForWebContents(webContentsId);
+  }
+
+  /**
+   * The renderer answers on the bridge's response channels, which are
+   * otherwise heard only while this machine's server runs. Kept for the
+   * service's life: a second copy while the server also listens finds no
+   * pending request and does nothing.
+   */
+  private ensureHostBridgeListeners(): void {
+    if (this.hostBridgeListenersInstalled) return;
+    this.hostBridgeListenersInstalled = true;
+    this.bridge.setupListeners(this.persistentListeners);
   }
 
   // Delegates for test access — tests call .bind(service) on these.

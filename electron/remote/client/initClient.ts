@@ -27,6 +27,7 @@ import {
 } from "./RemoteHostManager.js";
 import { RemoteHostsClient, type WindowControl } from "./RemoteHostsClient.js";
 import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
+import { answerReverseRequest } from "./reverseRequests.js";
 import { SshTransport } from "./sshTransport.js";
 import { WindowHostBinding } from "./WindowHostBinding.js";
 
@@ -172,6 +173,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   onEndpointClosed(listener: (hostId: string, info: EndpointClosedInfo) => void): () => void;
   /** The view's authoritative host, or null when it runs on this machine. */
   hostForView(webContentsId: number): HostId | null;
+  /** The dispatcher's router, for Shell-side relays that forward on a view's behalf. */
+  router: RemoteRouterImpl;
   dispose(): Promise<void>;
 } {
   const registry = new HostRegistry(store as unknown as RemoteHostsStore);
@@ -191,14 +194,16 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
         process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux",
     },
     views: createViewSink(hostForView),
+    reverseRequests: answerReverseRequest,
   });
   const bindings = new WindowHostBinding();
-  router = new RemoteRouterImpl(manager, bindings, senders);
+  const remoteRouter = new RemoteRouterImpl(manager, bindings, senders);
+  router = remoteRouter;
   const client = new RemoteHostsClient({
     registry,
     manager,
     bindings,
-    router,
+    router: remoteRouter,
     senders,
     windows: createWindowControl(hooks),
     installRouter: (next) => getIpcDispatcher().setRemoteRouter(next),
@@ -211,6 +216,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     onEndpointOpened: (listener) => manager.onEndpointOpened(listener),
     onEndpointClosed: (listener) => manager.onEndpointClosed(listener),
     hostForView,
+    router: remoteRouter,
     async dispose() {
       unregister();
       await client.dispose();

@@ -50,8 +50,22 @@ const m = vi.hoisted(() => {
       return () => clientClosedListeners.delete(l);
     }),
     hostForView: (id: number) => viewHosts.get(id) ?? null,
+    router: { name: "router" },
     dispose: vi.fn(async () => record("client.dispose")),
   };
+  const leaseListeners = new Set<(state: unknown) => void>();
+  const lease = {
+    noteEndpointClient: vi.fn(),
+    getHolderEndpoint: vi.fn((_projectId: string) => null as unknown),
+    onChange: vi.fn((l: (state: unknown) => void) => {
+      leaseListeners.add(l);
+      return () => leaseListeners.delete(l);
+    }),
+  };
+  const viewFilter: { current: ((id: number, ch: string, args: unknown[]) => boolean) | null } = {
+    current: null,
+  };
+  const mcpResolver: { current: ((projectId: string) => unknown) | null } = { current: null };
   const remoteViewHooks: { current: unknown } = { current: null };
 
   return {
@@ -61,6 +75,14 @@ const m = vi.hoisted(() => {
     sessionHost,
     openedListeners,
     client,
+    lease,
+    leaseListeners,
+    viewFilter,
+    mcpResolver,
+    installHybridSplits: vi.fn(() => vi.fn()),
+    admitHybridHostLegs: vi.fn(() => vi.fn()),
+    acceptLocalPushForRemoteView: vi.fn((channel: string) => channel === "shell:ok"),
+    uninstallViewRequests: vi.fn(),
     clientOpenedListeners,
     clientClosedListeners,
     viewHosts,
@@ -171,14 +193,45 @@ vi.mock("../worktreePort/attach.js", () => ({
   }),
 }));
 
+vi.mock("../../ipc/utils.js", () => ({
+  setRemoteBoundViewFilter: vi.fn((filter: (id: number, ch: string, a: unknown[]) => boolean) => {
+    m.viewFilter.current = filter;
+    return () => {
+      m.viewFilter.current = null;
+    };
+  }),
+}));
+vi.mock("../../services/DriveLeaseService.js", () => ({
+  getDriveLeaseService: () => m.lease,
+}));
+vi.mock("../../services/mcp-server/driveTarget.js", () => ({
+  setMcpDriveTargetResolver: vi.fn((resolver: (projectId: string) => unknown) => {
+    m.mcpResolver.current = resolver;
+    return () => {
+      m.mcpResolver.current = null;
+    };
+  }),
+}));
+vi.mock("../hybrid/index.js", () => ({
+  installHybridSplits: m.installHybridSplits,
+  admitHybridHostLegs: m.admitHybridHostLegs,
+  acceptLocalPushForRemoteView: m.acceptLocalPushForRemoteView,
+}));
+vi.mock("../client/viewRequests.js", () => ({
+  installViewReverseRequests: vi.fn(() => m.uninstallViewRequests),
+}));
+
 import { startRemoteHosts, stopRemoteHosts } from "../boot.js";
 import { _resetRemoteServicesForTest, getRemoteService } from "../runtime.js";
+import { Lane } from "../link/frames.js";
+import { ControlKind } from "../link/messages.js";
 
-function fakeEndpoint(endpointId: string) {
+function fakeEndpoint(endpointId: string, projectId: string | null = null) {
   const closeListeners: Array<() => void> = [];
   let closed = false;
   return {
     endpointId,
+    projectId,
     clientEndpointId: endpointId.split(":").at(-1),
     isClosed: () => closed,
     onClose: (l: () => void) => {
@@ -192,8 +245,8 @@ function fakeEndpoint(endpointId: string) {
   };
 }
 
-function openEndpoint(endpoint: unknown, sessionId: string, link: unknown) {
-  for (const l of [...m.openedListeners]) l(endpoint, { sessionId, link: () => link });
+function openEndpoint(endpoint: unknown, sessionId: string, link: unknown, client?: unknown) {
+  for (const l of [...m.openedListeners]) l(endpoint, { sessionId, link: () => link, client });
 }
 
 beforeEach(() => {
@@ -206,6 +259,9 @@ beforeEach(() => {
   m.viewHosts.clear();
   m.clientHooks.current = {};
   m.remoteViewHooks.current = null;
+  m.leaseListeners.clear();
+  m.viewFilter.current = null;
+  m.mcpResolver.current = null;
   vi.clearAllMocks();
   _resetRemoteServicesForTest();
 });
@@ -233,6 +289,35 @@ describe("startRemoteHosts", () => {
     expect(m.clientOpenedListeners.size).toBe(0);
     // Both boot paths already started the workspace client; boot never starts one.
     expect(m.ensureWorkspaceClient).not.toHaveBeenCalled();
+  });
+
+  it("answers hosts' view requests from start, and releases them on stop", async () => {
+    await startRemoteHosts({ hostMode: false });
+    await stopRemoteHosts();
+    expect(m.uninstallViewRequests).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs hybrid splits and the remote-view push filter only on first use", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(m.installHybridSplits).not.toHaveBeenCalled();
+    expect(m.viewFilter.current).toBeNull();
+
+    m.clientHooks.current.onFirstUse?.();
+    expect(m.installHybridSplits).toHaveBeenCalledWith({ router: m.client.router });
+    const filter = m.viewFilter.current!;
+    m.viewHosts.set(11, "studio-01");
+    // A local view gets everything; a remote-bound one only Shell-owned pushes.
+    expect(filter(12, "host:thing", [])).toBe(true);
+    expect(filter(11, "host:thing", [])).toBe(false);
+    expect(filter(11, "shell:ok", [])).toBe(true);
+    // The local view never reaches the channel check.
+    expect(m.acceptLocalPushForRemoteView.mock.calls).toEqual([
+      ["host:thing", []],
+      ["shell:ok", []],
+    ]);
+
+    await stopRemoteHosts();
+    expect(m.viewFilter.current).toBeNull();
   });
 
   it("waits for a workspace client still starting before installing the port overrides", async () => {
@@ -388,6 +473,53 @@ describe("startRemoteHosts", () => {
       "remote:s1:view-11",
       "remote:s1:view-12",
     ]);
+  });
+
+  it("admits hybrid host legs and routes MCP to the lease holder in Host mode", async () => {
+    await startRemoteHosts({ hostMode: true });
+    expect(m.admitHybridHostLegs).toHaveBeenCalledTimes(1);
+    const holder = { endpointId: "remote:s1:view-11" };
+    m.lease.getHolderEndpoint.mockReturnValueOnce(holder);
+    expect(m.mcpResolver.current?.("proj-1")).toBe(holder);
+    expect(m.lease.getHolderEndpoint).toHaveBeenCalledWith("proj-1");
+
+    await stopRemoteHosts();
+    expect(m.mcpResolver.current).toBeNull();
+  });
+
+  it("names each endpoint's machine to the lease and tells Shells showing the project of changes", async () => {
+    await startRemoteHosts({ hostMode: true });
+    const client = { clientId: "c1", clientName: "greg-mbp" };
+    const link1 = { post: vi.fn() };
+    const link2 = { post: vi.fn() };
+    const onProject = fakeEndpoint("remote:s1:view-11", "proj-1");
+    openEndpoint(onProject, "s1", link1, client);
+    openEndpoint(fakeEndpoint("remote:s2:view-12", "proj-2"), "s2", link2, client);
+    expect(m.lease.noteEndpointClient).toHaveBeenCalledWith("remote:s1:view-11", client);
+
+    const state = { projectId: "proj-1", holder: null };
+    for (const l of m.leaseListeners) l(state);
+    expect(link1.post).toHaveBeenCalledWith({
+      lane: Lane.CONTROL,
+      kind: ControlKind.LEASE_CHANGED,
+      body: state,
+    });
+    expect(link2.post).not.toHaveBeenCalled();
+
+    // A closed endpoint no longer shows the project; an expired session is forgotten.
+    onProject.close();
+    link1.post.mockClear();
+    for (const l of m.leaseListeners) l(state);
+    expect(link1.post).not.toHaveBeenCalled();
+
+    link2.post.mockImplementationOnce(() => {
+      throw new Error("closing");
+    });
+    for (const l of m.leaseListeners) l({ projectId: "proj-2", holder: null });
+    for (const l of m.server.expiredListeners) l({ sessionId: "s2", clientId: "c1" });
+    link2.post.mockClear();
+    for (const l of m.leaseListeners) l({ projectId: "proj-2", holder: null });
+    expect(link2.post).not.toHaveBeenCalled();
   });
 
   it("does not treat a listen interrupted by stop as a failure", async () => {

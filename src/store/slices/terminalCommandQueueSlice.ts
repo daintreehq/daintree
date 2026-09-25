@@ -3,6 +3,7 @@ import { isPtyPanel } from "@shared/types/panel";
 import type { AgentState } from "@/types";
 import { terminalClient } from "@/clients";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { isTerminalInputBlocked } from "@/services/terminal/inputGate";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -57,7 +58,9 @@ export const createTerminalCommandQueueSlice =
       }
 
       const agentState = isPtyPanel(terminal) ? terminal.agentState : undefined;
-      if (isAgentReady(agentState)) {
+      // A blocked write is dropped, not delivered, so automation waits in the
+      // queue instead of being counted as sent.
+      if (isAgentReady(agentState) && !isTerminalInputBlocked()) {
         terminalClient.write(terminalId, payload);
         return;
       }
@@ -76,6 +79,8 @@ export const createTerminalCommandQueueSlice =
     },
 
     processQueue: (terminalId) => {
+      // Keep the command until the host link is back or this view drives again.
+      if (isTerminalInputBlocked()) return;
       const terminal = getTerminal(terminalId);
       const agentState = terminal && isPtyPanel(terminal) ? terminal.agentState : undefined;
       if (!terminal || !isAgentReady(agentState)) {

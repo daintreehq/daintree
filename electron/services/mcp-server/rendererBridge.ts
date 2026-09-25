@@ -869,7 +869,8 @@ export function createRendererBridge(
     args: unknown,
     confirmed = false,
     contextOverride?: ActionContext,
-    sessionOrigin: McpSessionOrigin = "external"
+    sessionOrigin: McpSessionOrigin = "external",
+    approval?: Pick<WorkspaceDispatchOptions, "offerSessionApproval" | "approvalOnly">
   ): Promise<DispatchEnvelope> {
     return sendDispatchRequest(
       () => getPinnedWebContents(id),
@@ -879,7 +880,8 @@ export function createRendererBridge(
       sessionOrigin,
       contextOverride,
       undefined,
-      { kind: "pinned", webContentsId: id }
+      { kind: "pinned", webContentsId: id },
+      approval
     );
   }
 

@@ -16,6 +16,7 @@ import {
 import { AppError } from "../../utils/errorTypes.js";
 import { getRemoteService } from "../runtime.js";
 import { mergeByOwnership, splitByOwnership } from "./fieldOwnership.js";
+import { notificationSettingsGet, notificationSettingsSet } from "./notificationSettings.js";
 
 type SplitCall = Parameters<HybridSplit>[0];
 
@@ -276,6 +277,8 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
   [CHANNELS.LOGS_GET_LEVEL_OVERRIDES]: remoteOnly,
   [CHANNELS.LOGS_SET_LEVEL_OVERRIDES]: logLevelsOnBoth(),
   [CHANNELS.LOGS_CLEAR_LEVEL_OVERRIDES]: logLevelsOnBoth(),
+  [CHANNELS.NOTIFICATION_SETTINGS_GET]: notificationSettingsGet,
+  [CHANNELS.NOTIFICATION_SETTINGS_SET]: notificationSettingsSet,
   [CHANNELS.PROJECT_SWITCH]: projectSwitch,
   [CHANNELS.PROJECT_REOPEN]: projectSwitch,
   [CHANNELS.PROJECT_GET_CURRENT]: remoteOnly,
@@ -357,5 +360,8 @@ export const HYBRID_HOST_LEGS: readonly string[] = [
   CHANNELS.PROJECT_REOPEN,
   CHANNELS.PROJECT_GET_CURRENT,
   CHANNELS.PROJECT_CLOSE,
+  CHANNELS.NOTIFICATION_SETTINGS_GET,
+  CHANNELS.NOTIFICATION_SETTINGS_SET,
   CHANNELS.NOTIFICATION_SYNC_WATCHED,
+  CHANNELS.NOTIFICATION_SESSION_MUTE_SET,
 ];

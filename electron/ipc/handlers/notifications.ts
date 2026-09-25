@@ -197,14 +197,26 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
       .catch((err) => console.error("[notifications] acknowledgeWorkingPulse failed:", err));
   };
 
-  const handleSessionMuteSet = (_event: Electron.IpcMainEvent, payload: unknown): void => {
-    if (!payload || typeof payload !== "object") return;
+  const applySessionMute = (payload: unknown): boolean => {
+    if (!payload || typeof payload !== "object") return false;
     const p = payload as Record<string, unknown>;
-    if (typeof p.timestampMs !== "number" || !Number.isFinite(p.timestampMs)) return;
+    if (typeof p.timestampMs !== "number" || !Number.isFinite(p.timestampMs)) return false;
     const ts = p.timestampMs;
     void getAgentNotificationService()
       .then((svc) => svc.setSessionMuteUntil(ts))
       .catch((err) => console.error("[notifications] setSessionMuteUntil failed:", err));
+    return true;
+  };
+
+  const handleSessionMuteSet = (event: Electron.IpcMainEvent, payload: unknown): void => {
+    if (!applySessionMute(payload)) return;
+    // Muting is about the person at this screen, so it applies here and also
+    // on the host that decides when this view's agents notify.
+    hostRelay?.(event.sender.id, CHANNELS.NOTIFICATION_SESSION_MUTE_SET, [payload]);
+  };
+
+  const handleRemoteSessionMuteSet = (_ctx: IpcContext, payload: unknown): void => {
+    applySessionMute(payload);
   };
 
   const handleShowNative = (_event: Electron.IpcMainEvent, payload: unknown): void => {
@@ -310,7 +322,8 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
     dispatcher.registerSend(
       CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE,
       handleRemoteWorkingPulseAcknowledge
-    )
+    ),
+    dispatcher.registerSend(CHANNELS.NOTIFICATION_SESSION_MUTE_SET, handleRemoteSessionMuteSet)
   );
 
   cleanups.push(typedHandle(CHANNELS.NOTIFICATION_SETTINGS_GET, handleSettingsGet));

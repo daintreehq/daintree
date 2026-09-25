@@ -5,7 +5,8 @@ import type {
   HostHandshakeInfo,
   HostId,
 } from "../../../shared/types/remoteHosts.js";
-import { getChannelLocality } from "../../ipc/channelLocality.js";
+import { AppError } from "../../utils/errorTypes.js";
+import { acceptHostPush } from "../hybrid/eventsPush.js";
 import { appErrorEnvelope, hostDisconnectedEnvelope } from "../link/envelopes.js";
 import { Lane } from "../link/frames.js";
 import {
@@ -13,6 +14,7 @@ import {
   EventKind,
   type EventMessage,
   type LinkClientInfo,
+  type ReverseRequestMessage,
 } from "../link/messages.js";
 import type { LinkSession, LinkSessionOptions } from "../link/session.js";
 import {
@@ -80,6 +82,17 @@ export type EndpointClosedListener = (info: EndpointClosedInfo) => void;
 
 export type SessionAttachedListener = (info: SessionAttachedInfo) => void;
 
+/** A host asked one of this Shell's views something (MCP dispatch, a notification to show). */
+export interface ViewReverseRequest {
+  hostId: HostId;
+  webContentsId: number;
+  method: string;
+  payload: unknown;
+}
+
+/** Answers a {@link ViewReverseRequest}; a rejection goes back to the host as its error. */
+export type ReverseRequestAnswerer = (request: ViewReverseRequest) => Promise<unknown>;
+
 /** How {@link HostConnection.whenReady} settled. */
 export type HostReadiness = "ready" | "version-mismatch" | "timeout" | "stopped";
 
@@ -127,7 +140,8 @@ export class HostConnection {
   constructor(
     private readonly descriptor: () => HostDescriptor | null,
     options: LinkClientOptions & { hostId: HostId },
-    private readonly views: ViewSink
+    private readonly views: ViewSink,
+    private readonly answerReverse: ReverseRequestAnswerer | null = null
   ) {
     this.hostId = options.hostId;
     this.link = new LinkClient(options);
@@ -342,6 +356,9 @@ export class HostConnection {
     }
     this.session = session;
     session.on(Lane.EVENTS, EventKind.EVENT, (body) => this.deliver(body));
+    // Every session, fresh or resumed: a resume is a new LinkSession, and one
+    // without a handler answers the host UNSUPPORTED.
+    session.setReverseRequestHandler((message) => this.reverseRequest(message));
     session.registerCallHandler(
       LinkMethod.ENDPOINT_RESYNC,
       EndpointResyncPayloadSchema,
@@ -504,13 +521,40 @@ export class HostConnection {
   }
 
   /**
+   * A host may only ask the view behind one of this connection's endpoints,
+   * and only while that view is still bound to it.
+   */
+  private reverseRequest(message: ReverseRequestMessage): Promise<unknown> {
+    const webContentsId = this.viewsByEndpoint.get(message.endpointId);
+    if (webContentsId === undefined || !this.isBoundHere(webContentsId)) {
+      return Promise.reject(
+        new AppError({
+          code: "HOST_DISCONNECTED",
+          message: `No view is attached as ${message.endpointId}`,
+        })
+      );
+    }
+    if (!this.answerReverse) {
+      return Promise.reject(
+        new AppError({ code: "UNSUPPORTED", message: `No handler for ${message.method}` })
+      );
+    }
+    return this.answerReverse({
+      hostId: this.hostId,
+      webContentsId,
+      method: message.method,
+      payload: message.payload,
+    });
+  }
+
+  /**
    * Host events go only to the views bound to the endpoint they name (or, for
    * a session-wide event, to every view bound to this host). Channels a Shell
-   * answers for itself are never taken from a host.
+   * answers for itself, and the Shell-owned halves of hybrid ones, are never
+   * taken from a host.
    */
   private deliver(event: EventMessage): void {
-    const locality = getChannelLocality(event.channel);
-    if (locality !== "host" && locality !== "hybrid") return;
+    if (!acceptHostPush(event.channel, event.args)) return;
     if (event.endpointId === null) {
       for (const webContentsId of this.endpoints.keys()) {
         if (this.isBoundHere(webContentsId)) {
@@ -532,6 +576,8 @@ export interface RemoteHostManagerOptions {
   handshake: () => HostHandshakeInfo;
   client: LinkClientInfo;
   views: ViewSink;
+  /** Answers hosts' requests to this Shell's views; without one they are refused. */
+  reverseRequests?: ReverseRequestAnswerer;
   session?: Omit<LinkSessionOptions, "role">;
   backoff?: LinkClientOptions["backoff"];
   now?: () => number;
@@ -609,7 +655,8 @@ export class RemoteHostManager {
           backoff: this.options.backoff,
           now: this.options.now,
         },
-        this.options.views
+        this.options.views,
+        this.options.reverseRequests ?? null
       );
       this.connections.set(hostId, connection);
       const conn = connection;

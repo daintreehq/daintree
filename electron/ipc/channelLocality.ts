@@ -12,6 +12,11 @@ import type { ChannelName } from "./channels.js";
  *   link (hydrate, events:push, project activation, native pickers, clipboard
  *   capture, notifications, keep-awake, settings bundles).
  *
+ * The `mcp:` request/response bridge is `shell` although MCP is host work: it
+ * joins a machine's main process to its own views. A host reaches a remote
+ * view's renderer through the link's reverse requests, which the view's Shell
+ * answers over this bridge.
+ *
  * There is no default. The record is total over {@link ChannelName}, so a new
  * channel that isn't classified here fails typecheck, and
  * `npm run check:channel-locality` fails for channel strings registered
@@ -446,19 +451,19 @@ export const CHANNEL_LOCALITY = {
   "mcp-server:tool-call-settled": "host",
   "mcp-server:tool-call-started": "host",
   "mcp-server:turn-outcome-alert": "host",
-  "mcp:dispatch-action-request": "host",
-  "mcp:dispatch-action-response": "host",
-  "mcp:get-manifest-request": "host",
-  "mcp:get-manifest-response": "host",
+  "mcp:dispatch-action-request": "shell",
+  "mcp:dispatch-action-response": "shell",
+  "mcp:get-manifest-request": "shell",
+  "mcp:get-manifest-response": "shell",
   "menu:action": "shell",
   "menu:show-application": "shell",
   "menu:show-context": "shell",
   "milestones:get": "shell",
   "milestones:mark-shown": "shell",
   "notification:play-sound": "shell",
-  "notification:session-mute-set": "shell",
-  "notification:settings-get": "host",
-  "notification:settings-set": "host",
+  "notification:session-mute-set": "hybrid",
+  "notification:settings-get": "hybrid",
+  "notification:settings-set": "hybrid",
   "notification:show-native": "shell",
   "notification:show-toast": "shell",
   "notification:show-watch": "hybrid",

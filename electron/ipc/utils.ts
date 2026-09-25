@@ -403,9 +403,37 @@ function broadcastToRemoteEndpoints(
   sendToEndpoints(registry.getRemote(), exclude, channel, args);
 }
 
+/**
+ * Decides whether a push produced on this machine may reach one of its views.
+ * Returns false for a view bound to a remote host that must not see it: that
+ * view shows the host's agents and projects, not this machine's.
+ */
+export type RemoteBoundViewFilter = (
+  webContentsId: number,
+  channel: string,
+  args: readonly unknown[]
+) => boolean;
+
+// Null until Remote Hosts is actually used, so local delivery pays one null check.
+let remoteBoundViewFilter: RemoteBoundViewFilter | null = null;
+
+/** Installed by the Remote Hosts boot the first time a host is used. */
+export function setRemoteBoundViewFilter(filter: RemoteBoundViewFilter | null): () => void {
+  remoteBoundViewFilter = filter;
+  return () => {
+    if (remoteBoundViewFilter === filter) remoteBoundViewFilter = null;
+  };
+}
+
+function isWithheldFromView(webContentsId: number, channel: string, args: unknown[]): boolean {
+  const filter = remoteBoundViewFilter;
+  return filter !== null && !filter(webContentsId, channel, args);
+}
+
 export function broadcastToRenderer(channel: string, ...args: unknown[]): void {
   for (const wc of getAllAppWebContents()) {
     if (!wc.isDestroyed()) {
+      if (isWithheldFromView(wc.id, channel, args)) continue;
       try {
         wc.send(channel, ...args);
       } catch {
@@ -490,6 +518,7 @@ function deliverToLocalProjectViews(
   for (const wc of targets) {
     // getWebContentsForProject already drops destroyed views.
     if (exclude?.has(wc.id) || (!scoped && wc.isDestroyed())) continue;
+    if (isWithheldFromView(wc.id, channel, args)) continue;
     try {
       wc.send(channel, ...args);
     } catch {
@@ -523,6 +552,7 @@ export function broadcastToVisibleRenderers(channel: string, ...args: unknown[])
   for (const wc of getAllAppWebContents()) {
     if (isCachedViewWebContents(wc.id)) continue;
     if (!wc.isDestroyed()) {
+      if (isWithheldFromView(wc.id, channel, args)) continue;
       try {
         wc.send(channel, ...args);
       } catch {

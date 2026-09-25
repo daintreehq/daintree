@@ -80,7 +80,11 @@ import {
   waitFor,
 } from "../../link/__tests__/linkTestUtils.js";
 import { HostRegistry, type RemoteHostsStore } from "../HostRegistry.js";
-import { RemoteHostManager, type ViewSink } from "../RemoteHostManager.js";
+import {
+  RemoteHostManager,
+  type ReverseRequestAnswerer,
+  type ViewSink,
+} from "../RemoteHostManager.js";
 import { RemoteRouterImpl } from "../RemoteRouter.js";
 import { createDirectTransport, type LinkTransport } from "../transport.js";
 import { WindowHostBinding } from "../WindowHostBinding.js";
@@ -159,7 +163,11 @@ const cleanups: Array<() => unknown> = [];
 let h: Harness;
 
 async function startHarness(
-  options: { eventsLimits?: { high: number; cap: number }; maxEndpoints?: number } = {}
+  options: {
+    eventsLimits?: { high: number; cap: number };
+    maxEndpoints?: number;
+    reverseRequests?: ReverseRequestAnswerer;
+  } = {}
 ) {
   const dir = await makeTempDir();
   const location = hostSocketLocation({ platform: "darwin", userDataDir: dir });
@@ -212,6 +220,7 @@ async function startHarness(
     handshake: () => TEST_HANDSHAKE,
     client: { clientId: "client-1", clientName: "greg-mbp", platform: "darwin" },
     views: sink.sink,
+    reverseRequests: options.reverseRequests,
     session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
     backoff: { initialMs: 20, maxMs: 40, jitter: 0 },
   });
@@ -281,6 +290,70 @@ afterEach(async () => {
 });
 
 describe("remote session wiring", () => {
+  it("answers a host's request to a view through the Shell's answerer, on fresh and resumed sessions", async () => {
+    const answerer = vi.fn<ReverseRequestAnswerer>(async (request) => ({
+      echoed: request.payload,
+    }));
+    await startHarness({ reverseRequests: answerer });
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    const endpoint = hostContexts[0]!.endpoint;
+
+    await expect(endpoint.request("mcp:get-manifest", { n: 1 })).resolves.toEqual({
+      echoed: { n: 1 },
+    });
+    expect(answerer).toHaveBeenCalledWith({
+      hostId: HOST_ID,
+      webContentsId: VIEW_A,
+      method: "mcp:get-manifest",
+      payload: { n: 1 },
+    });
+
+    // A resumed session is a new LinkSession; it must answer too.
+    h.sockets.at(-1)!.destroy();
+    await waitFor(() => h.manager.get(HOST_ID)?.unavailableEnvelope() !== null);
+    await waitFor(() => h.manager.get(HOST_ID)?.unavailableEnvelope() === null);
+    await expect(endpoint.request("notification.show", { n: 2 })).resolves.toEqual({
+      echoed: { n: 2 },
+    });
+  });
+
+  it("refuses a host's request for a view that moved to another host", async () => {
+    const answerer = vi.fn<ReverseRequestAnswerer>(async () => "answered");
+    await startHarness({ reverseRequests: answerer });
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    const endpoint = hostContexts[0]!.endpoint;
+    h.sink.hosts.set(VIEW_A, "studio-02");
+
+    await expect(endpoint.request("mcp:get-manifest", {})).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+    expect(answerer).not.toHaveBeenCalled();
+  });
+
+  it("answers UNSUPPORTED when the Shell installed no answerer", async () => {
+    await startHarness();
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    await expect(hostContexts[0]!.endpoint.request("mcp:get-manifest", {})).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+  });
+
+  it("never takes a Shell-owned push from a host", async () => {
+    await startHarness();
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+
+    broadcastToRenderer("accessibility:support-changed", true);
+    broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
+    await waitFor(() => (h.sink.delivered.get(VIEW_A)?.length ?? 0) === 1);
+    expect(h.sink.delivered.get(VIEW_A)).toEqual([
+      { channel: EVENT_CHANNEL, args: ["term-all", "hi"] },
+    ]);
+  });
+
   it("runs a host handler for a remote view and returns the host's envelope", async () => {
     await startHarness();
     await connect();
