@@ -15,7 +15,9 @@ const electronMock = vi.hoisted(() => {
     handlers: Record<string, (...args: unknown[]) => void>;
     show: ReturnType<typeof vi.fn>;
     removeAllListeners: ReturnType<typeof vi.fn>;
+    close: ReturnType<typeof vi.fn>;
     once(event: string, handler: (...args: unknown[]) => void): NotificationMockInstance;
+    on(event: string, handler: (...args: unknown[]) => void): NotificationMockInstance;
     trigger(event: string, ...args: unknown[]): void;
   }
 
@@ -24,10 +26,16 @@ const electronMock = vi.hoisted(() => {
     handlers: Record<string, (...args: unknown[]) => void> = {};
     show = vi.fn();
     removeAllListeners = vi.fn();
+    // Like Electron, closing a shown notification emits "close".
+    close = vi.fn(() => this.trigger("close"));
     constructor(public options: { title: string; body: string; silent?: boolean }) {
       notificationInstances.push(this);
     }
     once(event: string, handler: (...args: unknown[]) => void) {
+      this.handlers[event] = handler;
+      return this;
+    }
+    on(event: string, handler: (...args: unknown[]) => void) {
       this.handlers[event] = handler;
       return this;
     }
@@ -626,6 +634,157 @@ describe("NotificationService", () => {
       expect.stringContaining("native notification failed"),
       "unsigned dev build"
     );
+  });
+
+  describe("closing banners with their panels (#12793)", () => {
+    const tracked = () =>
+      (
+        notificationService as unknown as {
+          pendingPanelsByNotification: Map<unknown, Set<string>>;
+        }
+      ).pendingPanelsByNotification;
+
+    it("closes a banner once its only panel is dealt with", () => {
+      notificationService.showNativeNotification("Agent waiting", "a", {
+        closeWithPanels: ["term-1"],
+      });
+      const instance = electronMock.notificationInstances.at(-1)!;
+
+      notificationService.closeNotificationsForPanel("term-1");
+
+      expect(instance.close).toHaveBeenCalledTimes(1);
+      expect(tracked().size).toBe(0);
+    });
+
+    it("leaves other panels' banners alone", () => {
+      notificationService.showNativeNotification("Agent waiting", "a", {
+        closeWithPanels: ["term-1"],
+      });
+      const first = electronMock.notificationInstances.at(-1)!;
+      notificationService.showNativeNotification("Agent waiting", "b", {
+        closeWithPanels: ["term-2"],
+      });
+      const second = electronMock.notificationInstances.at(-1)!;
+
+      notificationService.closeNotificationsForPanel("term-2");
+
+      expect(first.close).not.toHaveBeenCalled();
+      expect(second.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a grouped banner until every panel it names is dealt with", () => {
+      notificationService.showNativeNotification("Agents waiting", "2 agents", {
+        closeWithPanels: ["term-1", "term-2"],
+      });
+      const instance = electronMock.notificationInstances.at(-1)!;
+
+      notificationService.closeNotificationsForPanel("term-1");
+      expect(instance.close).not.toHaveBeenCalled();
+
+      notificationService.closeNotificationsForPanel("term-1");
+      expect(instance.close).not.toHaveBeenCalled();
+
+      notificationService.closeNotificationsForPanel("term-2");
+      expect(instance.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("never closes a banner that did not ask to close with its panel", () => {
+      notificationService.showWatchNotification(
+        "Agent completed",
+        "done",
+        { panelId: "term-1", panelTitle: "Agent" },
+        "notification:watch-navigate"
+      );
+      const instance = electronMock.notificationInstances.at(-1)!;
+
+      notificationService.closeNotificationsForPanel("term-1");
+
+      expect(instance.close).not.toHaveBeenCalled();
+    });
+
+    it("carries closeWithPanels through watch notifications", () => {
+      notificationService.showWatchNotification(
+        "Agent waiting",
+        "a",
+        { panelId: "term-1", panelTitle: "Agent" },
+        "notification:watch-navigate",
+        { closeWithPanels: ["term-1"] }
+      );
+      const instance = electronMock.notificationInstances.at(-1)!;
+
+      notificationService.closeNotificationsForPanel("term-1");
+
+      expect(instance.close).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["close", "click", "failed"])("stops tracking a banner once it emits %s", (event) => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      notificationService.showNativeNotification("Agent waiting", "a", {
+        closeWithPanels: ["term-1"],
+        navigation: {
+          channel: "notification:watch-navigate",
+          context: { panelId: "term-1", panelTitle: "Agent" },
+        },
+      });
+      const instance = electronMock.notificationInstances.at(-1)!;
+
+      instance.trigger(event, {}, "err");
+      notificationService.closeNotificationsForPanel("term-1");
+
+      expect(tracked().size).toBe(0);
+      expect(instance.close).not.toHaveBeenCalled();
+    });
+
+    it("keeps a Windows toast that timed out into Action Center closeable", () => {
+      notificationService.showNativeNotification("Agent waiting", "a", {
+        closeWithPanels: ["term-1"],
+      });
+      const instance = electronMock.notificationInstances.at(-1)!;
+
+      instance.trigger("close", { reason: "timedOut" });
+      expect(tracked().size).toBe(1);
+
+      notificationService.closeNotificationsForPanel("term-1");
+      expect(instance.close).toHaveBeenCalledTimes(1);
+      expect(tracked().size).toBe(0);
+    });
+
+    it("forgets a timed-out toast that nothing could close later", () => {
+      notificationService.showNativeNotification("Agent completed", "done");
+      const instance = electronMock.notificationInstances.at(-1)!;
+
+      instance.trigger("close", { reason: "timedOut" });
+
+      expect(
+        (notificationService as unknown as { activeNotifications: Set<unknown> })
+          .activeNotifications.size
+      ).toBe(0);
+    });
+
+    it("drops tracking even when close() throws", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      notificationService.showNativeNotification("Agent waiting", "a", {
+        closeWithPanels: ["term-1"],
+      });
+      const instance = electronMock.notificationInstances.at(-1)!;
+      instance.close.mockImplementation(() => {
+        throw new Error("gone");
+      });
+
+      expect(() => notificationService.closeNotificationsForPanel("term-1")).not.toThrow();
+      expect(tracked().size).toBe(0);
+      expect(warnSpy).toHaveBeenCalled();
+    });
+
+    it("clears tracking on dispose", () => {
+      notificationService.showNativeNotification("Agent waiting", "a", {
+        closeWithPanels: ["term-1"],
+      });
+
+      notificationService.dispose();
+
+      expect(tracked().size).toBe(0);
+    });
   });
 
   // #11110 — state used to be one global `currentState` that any renderer could

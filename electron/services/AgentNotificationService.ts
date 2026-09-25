@@ -11,6 +11,7 @@ import { soundService } from "./SoundService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { isScheduledQuietNow } from "../../shared/utils/quietHours.js";
 import { getOsDndService } from "./OsDndService.js";
+import type { UserPresence } from "./userPresence.js";
 import { shouldPlayUiFeedbackSound } from "../utils/uiFeedbackSound.js";
 import { coerceWaitingReason, type WaitingReason } from "../../shared/types/agent.js";
 import {
@@ -290,6 +291,7 @@ class AgentNotificationService {
         // same panel repopulates it; notifications already in flight captured
         // their owner when the event fired.
         this.forgetPanelOwnership(payload.terminalId);
+        this.dismissWaitingAlerts(payload.terminalId);
       }
     });
 
@@ -302,6 +304,7 @@ class AgentNotificationService {
         this.activeTerminalIds.delete(payload.terminalId);
         this.terminalIndexById.delete(payload.terminalId);
         this.forgetPanelOwnership(payload.terminalId);
+        this.dismissWaitingAlerts(payload.terminalId);
       }
     });
 
@@ -430,6 +433,7 @@ class AgentNotificationService {
     if (previousState === "waiting" && state !== "waiting" && terminalId) {
       this.waitingTerminalIds.delete(terminalId);
       this.clearWaitingEscalation(terminalId);
+      notificationService.closeNotificationsForPanel(terminalId);
     }
 
     // Purge any waiting-burst entry for this terminal once the terminal
@@ -441,17 +445,7 @@ class AgentNotificationService {
     // ~200ms after the kill/exit. Per-terminal splice keeps entries for
     // other terminals intact.
     if ((state === "completed" || state === "exited") && terminalId) {
-      const before = this.waitingBurstBuffer.length;
-      this.waitingBurstBuffer = this.waitingBurstBuffer.filter(
-        (entry) => entry.terminalId !== terminalId
-      );
-      if (this.waitingBurstBuffer.length === 0 && this.waitingBurstTimer !== null) {
-        clearTimeout(this.waitingBurstTimer);
-        this.waitingBurstTimer = null;
-      } else if (this.waitingBurstBuffer.length !== before) {
-        // Buffer still has items for other terminals — let the existing
-        // timer continue to fire. Only the spliced entry was dropped.
-      }
+      this.dropBufferedWaiting(terminalId);
     }
 
     // Cancel working pulse when agent leaves "working"
@@ -653,9 +647,33 @@ class AgentNotificationService {
           : `unknown:${index}`;
       dedupedByKey.set(key, item);
     }
-    const dedupedItems = Array.from(dedupedByKey.values());
+    // Someone at the desk looking at the worktree already sees the agent
+    // waiting. Every part of that has to be proven — the owning view showing
+    // in a focused window, that worktree selected, the user present — and
+    // anything unresolved, including unknown presence, still pages. Presence
+    // and the selection are read at most once per flush.
+    let presence: UserPresence | undefined;
+    let activeWorktreeId: string | null | undefined;
+    const dedupedItems = Array.from(dedupedByKey.values()).filter((item) => {
+      // A pane that went back to work inside the burst window has nothing to
+      // announce. Checked here rather than purged on the transition, so a
+      // quick waiting → working → waiting flap still delivers once the
+      // renderer's one-shot unwatch has stopped a second entry being buffered.
+      if (item.terminalId && !this.waitingTerminalIds.has(item.terminalId)) return false;
+      if (!item.worktreeId) return true;
+      const owner = this.emitOwner(item.terminalId, item.ownerWebContentsId);
+      if (!notificationService.isOwnerViewFocused(owner)) return true;
+      activeWorktreeId ??= store.get("appState").activeWorktreeId ?? null;
+      if (activeWorktreeId !== item.worktreeId) return true;
+      presence ??= notificationService.getUserPresence();
+      return presence !== "present";
+    });
+    if (dedupedItems.length === 0) return;
 
     const first = dedupedItems[0];
+    const closeWithPanels = dedupedItems.flatMap((item) =>
+      item.terminalId ? [item.terminalId] : []
+    );
     this.playNotificationSound(first.soundEnabled, first.soundFile);
 
     const ownerWebContentsId = this.emitOwner(first.terminalId, first.ownerWebContentsId);
@@ -668,7 +686,7 @@ class AgentNotificationService {
         describeWaiting(label, first.waitingReason),
         context,
         CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-        { silent: true, ownerWebContentsId }
+        { silent: true, ownerWebContentsId, closeWithPanels }
       );
     } else {
       const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
@@ -685,7 +703,7 @@ class AgentNotificationService {
         describeWaitingMany(dedupedItems.length, uniformReason ?? undefined),
         context,
         CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-        { silent: true, ownerWebContentsId }
+        { silent: true, ownerWebContentsId, closeWithPanels }
       );
     }
   }
@@ -780,7 +798,7 @@ class AgentNotificationService {
         notificationService.showNativeNotification(
           "Agents still waiting",
           `${waitingDockTerminalIds.length} agents have been waiting for input`,
-          { ownerWebContentsId, navigation }
+          { ownerWebContentsId, navigation, closeWithPanels: waitingDockTerminalIds }
         );
       } else {
         const label = currentTerminal.title || this.getLabel(agentId, worktreeId);
@@ -792,7 +810,7 @@ class AgentNotificationService {
         notificationService.showNativeNotification(
           "Agent still waiting",
           reason ? describeWaiting(label, reason) : `${label} has been waiting for input`,
-          { ownerWebContentsId, navigation }
+          { ownerWebContentsId, navigation, closeWithPanels: [terminalId] }
         );
       }
     }, settings.waitingEscalationDelayMs);
@@ -809,7 +827,33 @@ class AgentNotificationService {
   }
 
   acknowledgeWaiting(terminalId: string): void {
+    this.dismissWaitingAlerts(terminalId);
+  }
+
+  /**
+   * The pane has been dealt with: cancel its reminder, drop any banner still in
+   * the burst window and take down the ones already delivered. Grouped banners only go once
+   * every pane they name has been dealt with.
+   */
+  private dismissWaitingAlerts(terminalId: string): void {
+    // Out of the escalation group too, or a sibling's grouped reminder would
+    // name this pane again. Its next waiting transition puts it back.
+    this.waitingTerminalIds.delete(terminalId);
     this.clearWaitingEscalation(terminalId);
+    this.dropBufferedWaiting(terminalId);
+    notificationService.closeNotificationsForPanel(terminalId);
+  }
+
+  private dropBufferedWaiting(terminalId: string): void {
+    this.waitingBurstBuffer = this.waitingBurstBuffer.filter(
+      (entry) => entry.terminalId !== terminalId
+    );
+    // Other terminals' entries keep the running timer; only an emptied buffer
+    // cancels it.
+    if (this.waitingBurstBuffer.length === 0 && this.waitingBurstTimer !== null) {
+      clearTimeout(this.waitingBurstTimer);
+      this.waitingBurstTimer = null;
+    }
   }
 
   acknowledgeWorkingPulse(terminalId: string): void {
