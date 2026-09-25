@@ -5,10 +5,12 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 // The mockup kit is headed for `@daintreehq/tour` and plugin scenes (#12764),
-// so it must draw only from what it is handed. Everything it reaches — type
-// imports included — has to stay inside the kit, the tour runtime it animates
-// against, or a short list of packages. The app's own picture of itself lives
-// in `daintreeMockKit.ts`, outside this boundary.
+// so it must draw only from what it is handed. Everything it imports — type
+// imports included — has to stay inside the kit, reach the tour runtime its
+// timeline hooks read, or name a short list of packages. The runtime is the
+// engine #12764 extracts and is checked there, so edges into it are allowed
+// but not followed. The app's own picture of itself lives in
+// `daintreeMockKit.ts`, outside this boundary.
 
 const TOUR_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MOCKUP_DIR = path.join(TOUR_DIR, "mockup");
@@ -27,7 +29,7 @@ function kitSources(dir: string, out: string[] = []): string[] {
 
 const ROOTS = [...kitSources(MOCKUP_DIR), path.join(TOUR_DIR, "scenes", "sceneParts.tsx")];
 
-/** The player runtime the kit's timeline hooks read; it travels with the kit. */
+/** The player runtime the kit's timeline hooks read; a boundary, not walked. */
 const RUNTIME = new Set(
   ["useTourPlayer.ts", "TourPlayer.ts", "tourTypes.ts"].map((name) => path.join(TOUR_DIR, name))
 );
@@ -82,13 +84,10 @@ function resolveRelative(specifier: string, from: string): string | null {
   );
 }
 
-function isInsideKit(file: string): boolean {
-  return ROOTS.includes(file) || RUNTIME.has(file);
-}
-
 /** Offending `file -> specifier` edges across the kit's whole import closure. */
-function violations(): { visited: Set<string>; offenders: string[] } {
+function violations(): { reached: Set<string>; offenders: string[] } {
   const visited = new Set<string>();
+  const reached = new Set<string>();
   const offenders: string[] = [];
   const pending = [...ROOTS];
   while (pending.length > 0) {
@@ -99,14 +98,15 @@ function violations(): { visited: Set<string>; offenders: string[] } {
     for (const specifier of specifiers(fs.readFileSync(file, "utf8"), file)) {
       if (specifier.startsWith(".")) {
         const resolved = resolveRelative(specifier, file);
-        if (resolved && isInsideKit(resolved)) pending.push(resolved);
+        if (resolved && ROOTS.includes(resolved)) pending.push(resolved);
+        else if (resolved && RUNTIME.has(resolved)) reached.add(resolved);
         else offenders.push(`${rel} -> ${specifier}`);
       } else if (!PACKAGES.has(specifier)) {
         offenders.push(`${rel} -> ${specifier}`);
       }
     }
   }
-  return { visited, offenders };
+  return { reached, offenders };
 }
 
 describe("mockup kit isolation", () => {
@@ -149,9 +149,9 @@ describe("mockup kit isolation", () => {
   });
 
   it("imports nothing from the app", () => {
-    const { visited, offenders } = violations();
+    const { reached, offenders } = violations();
     expect(offenders).toEqual([]);
-    // The walk really followed edges out of the roots, into the tour runtime.
-    for (const file of RUNTIME) expect(visited.has(file), path.basename(file)).toBe(true);
+    // The walk really followed the kit's edges: its timeline hooks come from the runtime.
+    expect([...reached].map((file) => path.basename(file))).toContain("useTourPlayer.ts");
   });
 });
