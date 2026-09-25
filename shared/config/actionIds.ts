@@ -306,6 +306,11 @@ export const BUILT_IN_ACTION_IDS = [
   "project.settings.open",
   "project.cloneRepo",
 
+  // -- hostActions (registered only where Remote Hosts is supported) --
+  "host.switch",
+  "host.add",
+  "project.openOnHost",
+
   // -- appActions --
   "app.pluginManager",
   "app.reloadConfig",

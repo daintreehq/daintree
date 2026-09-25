@@ -332,6 +332,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `project.muteNotifications` | Mute project notifications | safe | `projectId` |
 | `project.openDialog` | Pick directory | safe | — |
 | `project.openInNewWindow` | Open project in new window | safe | — |
+| `project.openOnHost` | Open project on host… | safe | `hostId`, `projectId` |
 | `project.remove` | Remove project | confirm | `projectId` |
 | `project.saveSettings` | Save project settings | safe | `projectId`, `settings` |
 | `project.settings.open` | Open project settings | safe | — |
@@ -493,6 +494,8 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
+| `host.add` | Add host… | safe | — |
+| `host.switch` | Switch host… | safe | `hostId?`, `newWindow?` |
 | `workspace.list` | List workspaces | safe | — |
 
 ## worktree

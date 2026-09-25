@@ -105,6 +105,8 @@ import {
   SCRATCH_CLEANUP_COUNTDOWN_VISIBLE_DAYS,
 } from "@shared/config/scratchCleanup";
 import { PathSegments } from "@/components/ui/PathSegments";
+import { OpenOnHostSubmenu } from "@/components/Hosts/OpenOnHostSubmenu";
+import { OtherHostsSection } from "@/components/Hosts/OtherHostsSection";
 
 export interface ProjectSwitcherPaletteProps {
   isOpen: boolean;
@@ -885,6 +887,9 @@ function ProjectListItem({
               Locate moved project
             </ContextMenuItem>
           </>
+        )}
+        {!project.isMissing && (
+          <OpenOnHostSubmenu projectId={project.id} projectName={project.name} />
         )}
       </ContextMenuContent>
     </ContextMenu>
@@ -2463,6 +2468,7 @@ function ProjectPaletteInner({
             />
           </>
         )}
+        <OtherHostsSection query={query} onChosen={onClose} />
       </AppPaletteDialog.Body>
 
       {(onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder) && (

@@ -9,6 +9,7 @@ import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
 import { useGlobalBannerDismissalStore } from "@/store/globalBannerDismissalStore";
 import { useHostConnectionSync } from "@/hooks/useHostConnection";
 import { selectHostBannerVariant, useHostConnectionStore } from "@/store/hostConnectionStore";
+import { useDriveLeaseBanner, useDriveLeaseSync } from "./driveLeaseState";
 import {
   useMissingPrerequisiteStore,
   selectMissingPrerequisiteVisible,
@@ -17,6 +18,7 @@ import {
 export type GlobalBannerSlot =
   | "host-connection"
   | "host-crash"
+  | "drive-lease"
   | "watchdog-disabled"
   | "host-memory-stall"
   | "safe-mode"
@@ -31,6 +33,8 @@ export type GlobalBannerSlot =
 //   host-connection    — a remote window's link to its host is down or a
 //                        different build; everything the window shows lives there
 //   host-crash         — backend is unusable right now (#8678 motivator)
+//   drive-lease        — another machine drives this view's project, so its
+//                        terminals take no input here until it is taken back
 //   watchdog-disabled  — deadlock detector is gone; protection layer down (#8674)
 //   host-memory-stall  — a terminal host's memory pause isn't recovering (#12375)
 //   safe-mode          — panels weren't restored after a crash loop
@@ -74,8 +78,15 @@ export type GlobalBannerSlot =
 // It never claims the slot in a window that runs on this machine. Its
 // transient variants (reconnecting, checking) render nothing inside the 400ms
 // gate, which holds the slot exactly as host-crash's recovering variant does.
+//
+// drive-lease sits below both: with the link down or the backend gone, who
+// drives the project is moot. It sits above everything else because this
+// view's terminals refuse input until the user takes the project back, and the
+// banner is the only place that says why or offers the way out.
 export function useGlobalBannerPriority(): GlobalBannerSlot {
   useHostConnectionSync();
+  useDriveLeaseSync();
+  const driveLeaseBanner = useDriveLeaseBanner();
   const hostBanner = useHostConnectionStore(selectHostBannerVariant);
   const backendStatus = usePanelStore((s) => s.backendStatus);
   const watchdogStatus = usePanelStore((s) => s.watchdogStatus);
@@ -105,6 +116,7 @@ export function useGlobalBannerPriority(): GlobalBannerSlot {
 
   if (hostBanner !== null) return "host-connection";
   if (backendStatus !== "connected") return "host-crash";
+  if (driveLeaseBanner !== null) return "drive-lease";
   if (watchdogDisabled && !dismissed.has("watchdog-disabled")) return "watchdog-disabled";
   if (hostMemoryStalled) return "host-memory-stall";
   if (safeMode && !safeModeDismissed) return "safe-mode";

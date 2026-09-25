@@ -1148,6 +1148,18 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
 ];
 
+// Remote Hosts doesn't exist on Windows, so neither does its action.
+const REMOTE_HOSTS_KEYBINDINGS: KeybindingConfig[] = [
+  {
+    actionId: "host.switch",
+    combo: "Cmd+Shift+Alt+H",
+    scope: "global",
+    priority: 0,
+    description: "Switch host",
+    category: "Navigation",
+  },
+];
+
 const WINDOWS_ONLY_KEYBINDINGS: KeybindingConfig[] = [
   {
     actionId: "terminal.close",
@@ -1189,8 +1201,9 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
  */
 export function buildDefaultKeybindings(isWindows: boolean, isLinux = false): KeybindingConfig[] {
   if (isWindows) return [...CORE_KEYBINDINGS, ...WINDOWS_ONLY_KEYBINDINGS];
-  if (!isLinux) return [...CORE_KEYBINDINGS];
-  return CORE_KEYBINDINGS.map(
+  const bindings = [...CORE_KEYBINDINGS, ...REMOTE_HOSTS_KEYBINDINGS];
+  if (!isLinux) return bindings;
+  return bindings.map(
     (binding) =>
       LINUX_REPLACEMENT_KEYBINDINGS.find(
         (r) => r.actionId === binding.actionId && r.scope === binding.scope
