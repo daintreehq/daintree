@@ -142,6 +142,7 @@ import {
   registerPanelKind,
   unregisterPanelKind,
 } from "@shared/config/panelKindRegistry";
+import { registerTour } from "@/components/Tour/tourRegistry";
 import type { PanelLocation } from "@/types";
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import {
@@ -267,6 +268,18 @@ function registerPluginKind(
   });
 }
 
+const tourCleanups: Array<() => void> = [];
+
+/** Registers a tour under `id` so a kind declaring it has something to play. */
+function registerPlayableTour(id: string) {
+  tourCleanups.push(
+    registerTour({
+      summary: { id, title: "Acme Tour", minutes: 1, chapterTitles: ["One"] },
+      load: () => Promise.reject(new Error("not under test")),
+    })
+  );
+}
+
 const pluginPanel = {
   id: "panel-1",
   title: "Dashboard",
@@ -280,6 +293,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     // Unmounted first: dropping a kind while the menu still listens would
     // notify it outside act().
     cleanup();
+    for (const cleanupTour of tourCleanups.splice(0)) cleanupTour();
     dispatch.mockReset();
     worktreeList.current = [];
     layoutState.current = { maximizeTarget: null, group: undefined };
@@ -431,6 +445,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
 
   it("offers a kind's declared tour in the shared list and plays it by id (#12774)", () => {
     registerPluginKind(VIEW_PLUGIN_KIND, { name: "Dashboard", tourId: "acme.dashboard-intro" });
+    registerPlayableTour("acme.dashboard-intro");
     renderMenuFor(pluginPanel);
 
     expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
@@ -442,6 +457,17 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
       { tourId: "acme.dashboard-intro" },
       expect.anything()
     );
+  });
+
+  it("offers a declared tour only once it is registered (#12774)", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { name: "Dashboard", tourId: "acme.dashboard-intro" });
+    renderMenuFor(pluginPanel);
+    expect(menuRows()).toEqual(sharedRows());
+    cleanup();
+
+    registerPlayableTour("acme.dashboard-intro");
+    renderMenuFor(pluginPanel);
+    expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
   });
 
   it("asks a panel holding unsaved work before removing it", async () => {
@@ -538,6 +564,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     const browser = getPanelKindConfig("browser")!;
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     registerPanelKind({ ...browser, tourId: "browser-intro" });
+    registerPlayableTour("browser-intro");
     try {
       renderMenuFor({
         id: "panel-1",
@@ -567,6 +594,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
       name: "Shell",
       tourId: "acme.shell-intro",
     });
+    registerPlayableTour("acme.shell-intro");
     renderMenuFor({
       id: "panel-1",
       title: "Acme Shell",

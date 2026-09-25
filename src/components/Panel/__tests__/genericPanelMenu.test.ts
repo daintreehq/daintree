@@ -16,6 +16,7 @@ import {
   readPanelKindMenuCapabilities,
   type GenericPanelMenuInput,
 } from "../genericPanelMenu";
+import { getRegisteredTourIdsSnapshot, registerTour } from "@/components/Tour/tourRegistry";
 
 const PTY_PLUGIN_KIND = "acme.shell";
 const VIEW_PLUGIN_KIND = "acme.dashboard";
@@ -51,7 +52,20 @@ function groups(input: Partial<GenericPanelMenuInput> = {}) {
   });
 }
 
+const tourCleanups: Array<() => void> = [];
+
+/** Registers a tour under `id` so a kind declaring it has something to play. */
+function registerPlayableTour(id: string) {
+  tourCleanups.push(
+    registerTour({
+      summary: { id, title: "Acme Tour", minutes: 1, chapterTitles: ["One"] },
+      load: () => Promise.reject(new Error("not under test")),
+    })
+  );
+}
+
 afterEach(() => {
+  for (const cleanupTour of tourCleanups.splice(0)) cleanupTour();
   unregisterPanelKind(PTY_PLUGIN_KIND);
   unregisterPanelKind(VIEW_PLUGIN_KIND);
   unregisterPanelKind(UNDOCKABLE_PLUGIN_KIND);
@@ -85,10 +99,31 @@ describe("readPanelKindMenuCapabilities", () => {
 
   it("offers the tour a kind declares under the kind's own name (#12774)", () => {
     registerPluginKind(TOURED_PLUGIN_KIND, { name: "Metrics", tourId: "acme.metrics-intro" });
+    registerPlayableTour("acme.metrics-intro");
 
     expect(
-      readPanelKindMenuCapabilities(getPanelKindRegistrySnapshot(), TOURED_PLUGIN_KIND).tour
+      readPanelKindMenuCapabilities(
+        getPanelKindRegistrySnapshot(),
+        TOURED_PLUGIN_KIND,
+        getRegisteredTourIdsSnapshot()
+      ).tour
     ).toEqual({ id: "acme.metrics-intro", label: "Metrics Welcome Tour" });
+  });
+
+  it("offers no declared tour until it is registered, since it would open nothing", () => {
+    registerPluginKind(TOURED_PLUGIN_KIND, { name: "Metrics", tourId: "acme.metrics-intro" });
+    const read = () =>
+      readPanelKindMenuCapabilities(
+        getPanelKindRegistrySnapshot(),
+        TOURED_PLUGIN_KIND,
+        getRegisteredTourIdsSnapshot()
+      ).tour;
+
+    expect(read()).toBeNull();
+    registerPlayableTour("acme.metrics-intro");
+    expect(read()).toEqual({ id: "acme.metrics-intro", label: "Metrics Welcome Tour" });
+    for (const cleanupTour of tourCleanups.splice(0)) cleanupTour();
+    expect(read()).toBeNull();
   });
 
   it("reads the snapshot it is handed, not the live registry", () => {

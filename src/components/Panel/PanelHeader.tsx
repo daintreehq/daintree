@@ -95,6 +95,10 @@ import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
 import { MoveToWorktreePicker } from "./MoveToWorktreePicker";
 import {
+  getRegisteredTourIdsSnapshot,
+  subscribeToTourRegistry,
+} from "@/components/Tour/tourRegistry";
+import {
   GENERIC_PANEL_MENU_ACTION_IDS,
   GENERIC_PANEL_RELOAD_ACTION_ID,
   GENERIC_PANEL_TOUR_ACTION_ID,
@@ -426,7 +430,16 @@ function PanelHeaderComponent({
   const storedKind = usePanelStore((state) => state.panelsById[id]?.kind);
   // Read off the stored kind for the same reason: a PTY-backed plugin kind's
   // tour belongs to it, not to "terminal".
-  const kindTour = readPanelKindMenuCapabilities(panelKindRegistry, storedKind ?? kind).tour;
+  const registeredTourIds = useSyncExternalStore(
+    subscribeToTourRegistry,
+    getRegisteredTourIdsSnapshot,
+    getRegisteredTourIdsSnapshot
+  );
+  const kindTour = readPanelKindMenuCapabilities(
+    panelKindRegistry,
+    storedKind ?? kind,
+    registeredTourIds
+  ).tour;
   const handleTourSelect = () => {
     if (!kindTour) return;
     void actionService.dispatch(

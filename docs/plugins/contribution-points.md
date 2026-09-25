@@ -684,7 +684,7 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 
 ## Tours — _Planned_
 
-Welcome tours that play in the same dialog as the Daintree tour. The manifest entry is validated today, and a panel tour already adds its item to that panel's menus; loading and playing contributed tours is a follow-up, so until it lands the item opens nothing.
+Welcome tours that play in the same dialog as the Daintree tour. The manifest entry is validated today; loading and playing contributed tours is a follow-up. A panel kind that names a tour gets a Welcome Tour item in its menus once that tour is registered, so the item never appears with nothing to play.
 
 A tour without `panelKind` is a **plugin tour**, offered from Help and the command palette (for example "SvelteKit Site Builder: Welcome Tour"). A tour with `panelKind` is a **panel tour**, opened from that panel's three-dots menu as "<Panel name> Welcome Tour"; it keeps to a couple of chapters but is held to the same standard as any other tour.
 

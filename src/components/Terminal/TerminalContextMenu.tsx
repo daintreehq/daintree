@@ -107,6 +107,10 @@ import {
 import { MenuActionSourceContext, type MenuActionSourceValue } from "@/components/ui/menu-source";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { PopoverAnchor } from "@/components/ui/popover";
+import {
+  getRegisteredTourIdsSnapshot,
+  subscribeToTourRegistry,
+} from "@/components/Tour/tourRegistry";
 import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
 import {
   GENERIC_PANEL_RELOAD_ACTION_ID,
@@ -178,6 +182,11 @@ export function TerminalContextMenu({
     subscribeToPanelKindRegistry,
     getPanelKindRegistrySnapshot,
     getPanelKindRegistrySnapshot
+  );
+  const registeredTourIds = useSyncExternalStore(
+    subscribeToTourRegistry,
+    getRegisteredTourIdsSnapshot,
+    getRegisteredTourIdsSnapshot
   );
 
   // Which panel the picker was opened for, not a bare flag: the dock's tab
@@ -702,7 +711,8 @@ export function TerminalContextMenu({
         case "tour": {
           const tour = readPanelKindMenuCapabilities(
             panelKindRegistry,
-            terminal.kind ?? "terminal"
+            terminal.kind ?? "terminal",
+            registeredTourIds
           ).tour;
           if (!tour) break;
           void actionService.dispatch(
@@ -739,7 +749,7 @@ export function TerminalContextMenu({
           break;
       }
     },
-    [terminal, terminalId, terminalPty, terminalBrowser, panelKindRegistry]
+    [terminal, terminalId, terminalPty, terminalBrowser, panelKindRegistry, registeredTourIds]
   );
 
   const handleCloseAutoFocus = useCallback(
@@ -811,7 +821,11 @@ export function TerminalContextMenu({
   const isFileBrowser = isFileBrowserPanel(terminal);
   const isDiff = isDiffPanel(terminal);
   const kind = terminal.kind ?? "terminal";
-  const kindCapabilities = readPanelKindMenuCapabilities(panelKindRegistry, kind);
+  const kindCapabilities = readPanelKindMenuCapabilities(
+    panelKindRegistry,
+    kind,
+    registeredTourIds
+  );
   const hasPty = terminal.kind ? kindCapabilities.hasPty : true;
   // A non-PTY plugin kind matches none of the built-in guards, so without this
   // it falls through to the terminal menu and is offered "Duplicate terminal",

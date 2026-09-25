@@ -52,9 +52,11 @@ export interface GenericPanelMenuInput {
 export interface PanelKindMenuCapabilities {
   hasPty: boolean;
   isDockable: boolean;
-  /** The tour the kind declares, which its menus offer by `label`. */
+  /** The tour the kind declares, which its menus offer by `label` once it is registered. */
   tour: { id: string; label: string } | null;
 }
+
+const EMPTY_TOUR_IDS: ReadonlySet<string> = new Set();
 
 /**
  * What the menus need to know about a kind, read from a registry snapshot the
@@ -66,13 +68,19 @@ export interface PanelKindMenuCapabilities {
  */
 export function readPanelKindMenuCapabilities(
   registry: Readonly<Record<string, PanelKindConfig>>,
-  kind: PanelKind
+  kind: PanelKind,
+  registeredTourIds: ReadonlySet<string> = EMPTY_TOUR_IDS
 ): PanelKindMenuCapabilities {
   const config = registry[kind];
+  const tourId = config?.tourId;
   return {
     hasPty: config?.hasPty ?? false,
     isDockable: config !== undefined && config.dockable !== false,
-    tour: config?.tourId ? { id: config.tourId, label: `${config.name} Welcome Tour` } : null,
+    // A declared tour nothing has registered would open nothing, so it waits.
+    tour:
+      tourId && registeredTourIds.has(tourId)
+        ? { id: tourId, label: `${config.name} Welcome Tour` }
+        : null,
   };
 }
 

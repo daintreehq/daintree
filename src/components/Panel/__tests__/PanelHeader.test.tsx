@@ -10,6 +10,7 @@ import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getGenericPanelMenuGroups, type GenericPanelMenuInput } from "../genericPanelMenu";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
+import { registerTour } from "@/components/Tour/tourRegistry";
 import type { PanelKind } from "@/types";
 import {
   __resetPanelCloseGuardsForTests,
@@ -974,10 +975,21 @@ describe("PanelHeader", () => {
       };
     }
 
+    const tourCleanups: Array<() => void> = [];
+    function registerPlayableTour(id: string) {
+      tourCleanups.push(
+        registerTour({
+          summary: { id, title: "Acme Tour", minutes: 1, chapterTitles: ["One"] },
+          load: () => Promise.reject(new Error("not under test")),
+        })
+      );
+    }
+
     afterEach(() => {
       // Unmounted first: dropping a kind while a header still listens would
       // notify it outside act().
       cleanup();
+      for (const cleanupTour of tourCleanups.splice(0)) cleanupTour();
       unregisterPanelKind(PLUGIN_KIND);
       unregisterPanelKind(PTY_PLUGIN_KIND);
       __resetPanelCloseGuardsForTests();
@@ -1189,6 +1201,7 @@ describe("PanelHeader", () => {
 
     it("offers a kind's declared tour in the shared list and plays it by id (#12774)", () => {
       registerPluginKind(PLUGIN_KIND, { name: "Dashboard", tourId: "acme.dashboard-intro" });
+      registerPlayableTour("acme.dashboard-intro");
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
       expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
@@ -1200,6 +1213,15 @@ describe("PanelHeader", () => {
         { tourId: "acme.dashboard-intro" },
         { source: "menu" }
       );
+    });
+
+    it("offers a declared tour only once it is registered (#12774)", () => {
+      registerPluginKind(PLUGIN_KIND, { name: "Dashboard", tourId: "acme.dashboard-intro" });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+
+      expect(menuRows()).toEqual(sharedRows());
+      act(() => registerPlayableTour("acme.dashboard-intro"));
+      expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
     });
 
     it("offers no tour for a kind that declares none", () => {
@@ -1274,6 +1296,7 @@ describe("PanelHeader", () => {
         name: "Shell",
         tourId: "acme.shell-intro",
       });
+      registerPlayableTour("acme.shell-intro");
       mockHasPty = true;
       storePanelKind(PTY_PLUGIN_KIND);
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
