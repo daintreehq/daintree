@@ -2365,7 +2365,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Block until the first of several agents stops working, or all do; the fan-out primitive when agents finish at different speeds. Prefer it to waiting on each in turn, or a status snapshot with `includeOutput` to poll without blocking; both report `lastOutputChangeAt`, not a hang verdict. Timing out means not met yet; a gone terminal settles too, `closed` if user-closed; read `trackingState`.",
+      "Block until the first of several agents stops working, or all do; the fan-out primitive when agents finish at different speeds. Prefer it to waiting on each in turn, or a status snapshot with `includeOutput` to poll without blocking; both report `lastOutputChangeAt`, not a hang verdict. A timeout means not met yet; a gone terminal settles too, `closed` if user-closed; see `trackingState`.",
     enabled: true,
     id: "terminal.waitUntilIdleBatch",
     inputSchema: {

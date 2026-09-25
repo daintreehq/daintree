@@ -496,9 +496,9 @@ export function AgentSettings({
               description={
                 <>
                   Used by automated workflows such as "What's next?", onboarding and project
-                  explanations, and wherever a launch doesn't name an agent. The Daintree
-                  Assistant picks its own agent on the Assistant tab, and the portal's default
-                  new tab agent is set separately
+                  explanations, and wherever a launch doesn't name an agent. The Daintree Assistant
+                  picks its own agent on the Assistant tab, and the portal's default new tab agent
+                  is set separately
                 </>
               }
               value={defaultAgent ?? NO_DEFAULT_AGENT}

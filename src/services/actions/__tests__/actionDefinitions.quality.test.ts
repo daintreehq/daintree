@@ -450,14 +450,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // workbench floor for the subset invariant — the external surface may not
   // reach past the assistant's. Its 343 B is the whole of the increase, so this
   // stays the measured total rather than an allowance.
-  //
-  // Then again for `agentCapabilities.search`, which shipped with its contract but on
-  // no tier, so the assistant was told to use an action `tools/list` never offered it.
-  // Workbench only, beside the `slashCommands.list` it extends, so the external total
-  // does not move. Its description predates this change and is the whole of the
-  // increase, not an allowance. `agentCapabilities.get` stays off every tier until its
-  // source read is contained, and costs nothing here until then.
-  const MAX_COHORT_TOTAL_BYTES = 56_657;
+  // 56_657 → 56_900 for the native assistant branch, measured at 56_833 B over
+  // this develop base. The 176 B is `agentCapabilities.search`, which shipped with
+  // its contract but on no tier, so the assistant was told to use an action
+  // `tools/list` never offered it. Workbench only, beside the `slashCommands.list`
+  // it extends, so the external total does not move. `agentCapabilities.get` stays
+  // off every tier until its source read is contained, and costs nothing here.
+  const MAX_COHORT_TOTAL_BYTES = 56_900;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

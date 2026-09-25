@@ -512,11 +512,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // the background — without it a supervisor reads a string of expired waits
   // on a backgrounded project as "no PR yet". The property descriptions were
   // cut to the target before measuring.
-  //
-  // Then again for the `closed` idle reason on both wait tools. A terminal the user
-  // closes only goes hidden and is killed `TRASH_TTL_MS` later, so without it a waiter
+  // 63_300 → 63_700 for the native assistant branch, measured at 63_698 B over
+  // this develop base: the `closed` idle reason on both wait tools, and the
+  // default-agent fields on `agent.listAvailable`. A terminal the user closes only
+  // goes hidden and is killed `TRASH_TTL_MS` later, so without `closed` a waiter
   // reads the user's own close as an ordinary exit up to 20 s after the fact.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_300;
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_700;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -642,13 +643,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   //
   // Then again for this branch's `closed` idle reason, the same spend the external
   // ceiling above carries, seen from the full surface.
-  //
-  // Then again for `agentCapabilities.search`, which shipped with its contract but on
-  // no tier, so the assistant was told to use an action `tools/list` never offered it.
-  // Workbench only, beside the `slashCommands.list` it extends, so the external total
-  // does not move. `agentCapabilities.get` stays off every tier until its source read
-  // is contained, and costs nothing here until then.
-  const MAX_COHORT_PAYLOAD_BYTES = 227_300;
+  // 227_300 → 228_500 for the native assistant branch, measured at 228_413 B over
+  // this develop base: the external spend above, plus `agentCapabilities.search`,
+  // which shipped with its contract but on no tier, so the assistant was told to use
+  // an action `tools/list` never offered it. `agentCapabilities.get` stays off every
+  // tier until its source read is contained, and costs nothing here until then.
+  const MAX_COHORT_PAYLOAD_BYTES = 228_500;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

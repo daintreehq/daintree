@@ -369,13 +369,12 @@ describe("DaintreeAssistantSettingsTab", () => {
   });
 
   it("marks the behavior switches modified only when they differ from their defaults, and resets them", async () => {
+    const stored = { ...settingsFixture(), docSearch: false, daintreeControl: false };
     installApi({
-      getSettings: vi.fn().mockResolvedValue({
-        docSearch: false,
-        daintreeControl: false,
-        tier: "action" as const,
-        bypassPermissions: false,
-        auditRetention: 7,
+      getSettings: vi.fn().mockResolvedValue({ ...stored }),
+      setSettings: vi.fn(async (patch: Record<string, unknown>) => {
+        Object.assign(stored, patch);
+        return { ...stored };
       }),
     });
 
@@ -1104,7 +1103,10 @@ describe("DaintreeAssistantSettingsTab", () => {
 
   it("rolls a rejected save back and offers Retry on the affected group until a save lands", async () => {
     const setSettings = vi.fn().mockRejectedValueOnce(new Error("disk full"));
-    setSettings.mockResolvedValue(undefined);
+    setSettings.mockImplementation(async (patch: Record<string, unknown>) => ({
+      ...settingsFixture(),
+      ...patch,
+    }));
     installApi({ setSettings });
 
     const { container } = render(
@@ -1153,7 +1155,10 @@ describe("DaintreeAssistantSettingsTab", () => {
 
   it("clears a group's save error when a later save in that group succeeds", async () => {
     const setSettings = vi.fn().mockRejectedValueOnce(new Error("disk full"));
-    setSettings.mockResolvedValue(undefined);
+    setSettings.mockImplementation(async (patch: Record<string, unknown>) => ({
+      ...settingsFixture(),
+      ...patch,
+    }));
     installApi({ setSettings });
 
     const { container } = render(
@@ -1201,7 +1206,9 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Auto-approve assistant actions");
 
-    fireEvent.click(await screen.findByLabelText("Reset Auto-approve assistant actions to default"));
+    fireEvent.click(
+      await screen.findByLabelText("Reset Auto-approve assistant actions to default")
+    );
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
         bypassPermissions: false,
