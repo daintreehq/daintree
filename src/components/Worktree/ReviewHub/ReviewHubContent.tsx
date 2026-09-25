@@ -93,6 +93,7 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients/systemClient";
 import { forgeClient } from "@/clients/forgeClient";
+import { mintRemoteOperationId } from "@/clients/operationsClient";
 import { actionService } from "@/services/ActionService";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -1301,7 +1302,10 @@ export function ReviewHubContent({
     // state nobody has observed since.
     useGitForcePushStore.getState().clearRecovery(worktreePath);
     try {
-      await window.electron.git.push(worktreePath);
+      const opId = mintRemoteOperationId();
+      await (opId
+        ? window.electron.git.push(worktreePath, undefined, opId)
+        : window.electron.git.push(worktreePath));
       setPushError(null);
     } catch (err) {
       // GitOperationError carries `gitReason` (auth-failed, push-rejected-*, etc.).

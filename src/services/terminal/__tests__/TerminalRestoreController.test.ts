@@ -195,8 +195,8 @@ describe("TerminalRestoreController", () => {
 
       // Each replayed batch carries its own chunkCount so the write settles
       // exactly the pending port-ack FIFO entries the batch owns.
-      expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred1", 1);
-      expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred2", 3);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred1", 1, undefined);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred2", 3, undefined);
     });
 
     it("does not apply callback when destroyed mid-write", async () => {
@@ -233,7 +233,7 @@ describe("TerminalRestoreController", () => {
 
       // Only the second restore's deferred output should have been flushed
       expect(writeDataSpy).toHaveBeenCalledTimes(1);
-      expect(writeDataSpy).toHaveBeenCalledWith("t1", "second-deferred", 2);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "second-deferred", 2, undefined);
       expect(managed.restoreGeneration).toBe(2);
     });
 
@@ -399,7 +399,7 @@ describe("TerminalRestoreController", () => {
       }
       await promise;
 
-      expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred-data", 1);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred-data", 1, undefined);
     });
 
     it("clears all timeout handles after successful multi-chunk restore", async () => {
@@ -555,7 +555,7 @@ describe("TerminalRestoreController", () => {
 
       expect(result).toBe(false);
       expect(managed.isSerializedRestoreInProgress).toBe(false);
-      expect(writeDataSpy).toHaveBeenCalledWith("t1", "mid-fetch-output", 2);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "mid-fetch-output", 2, undefined);
       expect(managed.deferredOutput).toHaveLength(0);
     });
 
@@ -582,7 +582,7 @@ describe("TerminalRestoreController", () => {
 
       expect(result).toBe(false);
       expect(managed.isSerializedRestoreInProgress).toBe(false);
-      expect(writeDataSpy).toHaveBeenCalledWith("t1", "mid-fetch-output", 1);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "mid-fetch-output", 1, undefined);
       expect(managed.deferredOutput).toHaveLength(0);
     });
 
@@ -679,7 +679,7 @@ describe("TerminalRestoreController", () => {
       expect(mockTerminal.write).not.toHaveBeenCalled();
       expect(managed.isSerializedRestoreInProgress).toBe(false);
       expect(writeDataSpy).toHaveBeenCalledTimes(1);
-      expect(writeDataSpy).toHaveBeenCalledWith("t1", "prompt$ ", 1);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "prompt$ ", 1, undefined);
       expect(managed.deferredOutput).toHaveLength(0);
     });
 
@@ -725,7 +725,7 @@ describe("TerminalRestoreController", () => {
 
       expect(await promise).toBe("live-output");
       expect(managed.lastScrollbackRestoreError).toBeUndefined();
-      expect(writeDataSpy).toHaveBeenCalledWith("t1", "late", 1);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "late", 1, undefined);
     });
 
     it("reports stale when a newer restore supersedes the probe before its fetch rejects", async () => {
@@ -797,7 +797,7 @@ describe("TerminalRestoreController", () => {
 
       expect(result).toBe(false);
       expect(managed.isSerializedRestoreInProgress).toBe(false);
-      expect(writeDataSpy).toHaveBeenCalledWith("t1", "held", 3);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "held", 3, undefined);
       expect(managed.deferredOutput).toHaveLength(0);
     });
   });
@@ -1032,7 +1032,7 @@ describe("TerminalRestoreController", () => {
       // terminal still parked at the capture width would corrupt them too.
       expect(result).toBe(false);
       expect(trace.at(-1)).toBe("resize:170x24");
-      expect(writeDataSpy).toHaveBeenCalledWith("t1", "held", 2);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "held", 2, undefined);
     });
 
     it("does not let a failing fetch close a window a later restore opened", async () => {

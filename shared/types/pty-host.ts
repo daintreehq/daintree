@@ -1457,7 +1457,13 @@ export type RendererToPtyHostMessage =
   // and posts the `ingest-detached` sentinel (carrying `drainId`) on the
   // dedicated port, FIFO behind the final worker-routed chunk.
   | { type: "worker-ingest-engage"; id: string }
-  | { type: "worker-ingest-release"; id: string; drainId: number };
+  | { type: "worker-ingest-release"; id: string; drainId: number }
+  // Snapshot fence (Remote Hosts: a remote endpoint's stream bridge in main,
+  // never a renderer). The host flushes what the port batcher holds for the
+  // terminal, posts `serialize-fence` back FIFO behind it, and only then takes
+  // the snapshot it answers with in `serialized-state`: every byte before the
+  // fence is in the snapshot, every byte after it is not.
+  | { type: "serialize-fence"; id: string; requestId: number };
 
 /**
  * Messages sent from Pty Host → Renderer via MessagePort (direct channel).
@@ -1517,7 +1523,15 @@ export type PtyHostToRendererMessage =
   | {
       type: "reset";
       id: string;
-      snapshot: string | null;
+      snapshot: SerializedTerminalSnapshot | null;
+    }
+  // Answers to a `serialize-fence` (see RendererToPtyHostMessage); main only.
+  | { type: "serialize-fence"; id: string; requestId: number }
+  | {
+      type: "serialized-state";
+      id: string;
+      requestId: number;
+      state: SerializedTerminalSnapshot | null;
     };
 
 /** Per-process resource breakdown entry */

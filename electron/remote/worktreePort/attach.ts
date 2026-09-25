@@ -1,10 +1,11 @@
 import type { WebContents } from "electron";
-import type { ClientEndpoint } from "../../ipc/endpoint.js";
+import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import type { WorktreePortHost } from "../../services/WorktreePortBroker.js";
 import { getWorkspaceClientRef, getWorktreePortBrokerRef } from "../../window/serviceRefs.js";
 import type { LinkSession } from "../link/session.js";
+import type { RemoteStreamEndpoint } from "../terminal/hostAttach.js";
 import { wrapMainPort } from "../terminal/ports.js";
 import { WorktreePortClientRelay, WorktreePortHostBridge } from "./WorktreePortBridge.js";
 
@@ -17,23 +18,67 @@ import { WorktreePortClientRelay, WorktreePortHostBridge } from "./WorktreePortB
 
 const hostBridges = new Map<string, { bridge: WorktreePortHostBridge; cleanup: () => void }>();
 
+/**
+ * A remote endpoint usually opens before its project is resident on this
+ * host (the Shell names it first, and the workspace host is started by the
+ * project's activation), so a first attempt that finds no workspace host is
+ * retried with backoff rather than abandoned.
+ */
+const OPEN_RETRY_INITIAL_MS = 250;
+const OPEN_RETRY_MAX_MS = 5_000;
+const OPEN_RETRY_ATTEMPTS = 40;
+
+export interface WorktreePortBridgeOverrides {
+  retryInitialMs?: number;
+  retryMaxMs?: number;
+  retryAttempts?: number;
+}
+
 export function attachWorktreePortBridge(
   session: LinkSession,
-  endpoint: ClientEndpoint
+  endpoint: RemoteStreamEndpoint,
+  overrides: WorktreePortBridgeOverrides = {}
 ): WorktreePortHostBridge {
   let entry = hostBridges.get(endpoint.endpointId);
   if (!entry) {
     const handle = endpoint.handle;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const cancelRetry = () => {
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = null;
+    };
+    const tryOpen = (projectId: string): boolean => {
+      const broker = getWorktreePortBrokerRef();
+      const projectPath = projectStore.getProjectById(projectId)?.path;
+      const host = projectPath ? getWorkspaceClientRef()?.getHostForProject(projectPath) : null;
+      if (!broker || !host) return false;
+      return broker.brokerEndpointPort(host, handle, (port) => bridge.setPort(wrapMainPort(port)));
+    };
     const bridge: WorktreePortHostBridge = new WorktreePortHostBridge({
-      endpointId: endpoint.endpointId,
+      endpointId: endpoint.clientEndpointId,
       open: (projectId) => {
-        const broker = getWorktreePortBrokerRef();
-        const projectPath = projectStore.getProjectById(projectId)?.path;
-        const host = projectPath ? getWorkspaceClientRef()?.getHostForProject(projectPath) : null;
-        if (!broker || !host) return;
-        broker.brokerEndpointPort(host, handle, (port) => bridge.setPort(wrapMainPort(port)));
+        cancelRetry();
+        if (tryOpen(projectId)) return;
+        let delay = overrides.retryInitialMs ?? OPEN_RETRY_INITIAL_MS;
+        let attempts = overrides.retryAttempts ?? OPEN_RETRY_ATTEMPTS;
+        const retry = () => {
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            if (tryOpen(projectId) || --attempts <= 0) return;
+            delay = Math.min(delay * 2, overrides.retryMaxMs ?? OPEN_RETRY_MAX_MS);
+            retry();
+          }, delay);
+          retryTimer.unref?.();
+        };
+        retry();
       },
-      release: () => getWorktreePortBrokerRef()?.releaseEndpointPort(handle),
+      // The bridge releases before every reopen and on detach, so a pending
+      // retry never outlives the project or session it was for.
+      release: () => {
+        cancelRetry();
+        getWorktreePortBrokerRef()?.releaseEndpointPort(handle);
+      },
+      resolveProjectRoot: (projectId) => projectStore.getProjectById(projectId)?.path ?? null,
     });
     const closeSub = endpoint.onClose(() => detachWorktreePortBridge(endpoint.endpointId));
     const offChange = getEndpointRegistry().onChange(() => {
@@ -42,6 +87,7 @@ export function attachWorktreePortBridge(
     entry = {
       bridge,
       cleanup: () => {
+        cancelRetry();
         closeSub.dispose();
         offChange();
       },
@@ -63,6 +109,7 @@ export function detachWorktreePortBridge(endpointId: string): void {
 
 interface ClientEntry {
   relay: WorktreePortClientRelay;
+  hostId: HostId;
   host: WorktreePortHost;
   cleanup: () => void;
 }
@@ -72,11 +119,12 @@ const clientRelays = new Map<number, ClientEntry>();
 export function attachClientWorktreeRelay(
   session: LinkSession,
   viewWebContents: WebContents,
-  endpointId: string
+  endpointId: string,
+  hostId: HostId
 ): WorktreePortClientRelay {
   const wcId = viewWebContents.id;
   let entry = clientRelays.get(wcId);
-  if (entry && entry.relay.endpointId !== endpointId) {
+  if (entry && (entry.relay.endpointId !== endpointId || entry.hostId !== hostId)) {
     detachClientWorktreeRelay(wcId);
     entry = undefined;
   }
@@ -94,7 +142,7 @@ export function attachClientWorktreeRelay(
     // the view its end as usual and gives this relay the end it would have
     // transferred to a local host.
     const host: WorktreePortHost = {
-      projectPath: `remote-endpoint:${endpointId}`,
+      projectPath: `remote-endpoint:${hostId}:${endpointId}`,
       attachWorktreePort: (port) => {
         relay.setRendererPort(wrapMainPort(port));
         return true;
@@ -104,6 +152,7 @@ export function attachClientWorktreeRelay(
     viewWebContents.once("destroyed", onDestroyed);
     entry = {
       relay,
+      hostId,
       host,
       cleanup: () => viewWebContents.removeListener("destroyed", onDestroyed),
     };
@@ -122,12 +171,58 @@ export function detachClientWorktreeRelay(webContentsId: number): void {
   getWorktreePortBrokerRef()?.closePortsForView(webContentsId);
 }
 
+/** Retire a view's relay only while it still belongs to this (host, endpoint). */
+export function detachClientWorktreeRelayFor(
+  webContentsId: number,
+  hostId: HostId,
+  endpointId: string
+): void {
+  const entry = clientRelays.get(webContentsId);
+  if (entry?.hostId === hostId && entry.relay.endpointId === endpointId) {
+    detachClientWorktreeRelay(webContentsId);
+  }
+}
+
+export function disposeAllClientWorktreeRelays(): void {
+  for (const webContentsId of [...clientRelays.keys()]) detachClientWorktreeRelay(webContentsId);
+}
+
 /**
- * Make every broker path that (re)posts a view's worktree port reach the
- * view's relay when it has one, instead of a local workspace host.
+ * Post a remote view a fresh relayed worktree port: after a reload (the old
+ * document's port died with it) or a cached-view reactivation (caching closed
+ * it). A view whose relay has no session yet gets one when it attaches.
  */
-export function installClientWorktreePortOverride(): () => void {
+export function redeliverClientWorktreePort(viewWebContents: WebContents): void {
+  const entry = clientRelays.get(viewWebContents.id);
+  if (!entry?.relay.isAttached || viewWebContents.isDestroyed()) return;
+  getWorktreePortBrokerRef()?.brokerPort(entry.host, viewWebContents, { force: true });
+}
+
+/** Refuses every port: a remote view whose relay is not up yet waits for it. */
+const AWAITING_RELAY: WorktreePortHost = {
+  projectPath: "remote-endpoint:awaiting-relay",
+  attachWorktreePort: () => false,
+};
+
+/**
+ * Make every broker path that (re)posts a view's worktree port follow the
+ * view's authoritative host: its relay for a remote view, and for a remote
+ * view with no relay yet, nothing at all — never this machine's workspace
+ * host, whose port would answer for the wrong machine's project.
+ */
+export function installClientWorktreePortOverride(
+  hostForView: (webContentsId: number) => HostId | null
+): () => void {
   const broker = getWorktreePortBrokerRef();
   if (!broker) return () => {};
-  return broker.setHostOverride((wcId) => clientRelays.get(wcId)?.host ?? null);
+  return broker.setHostOverride((wcId) => {
+    const hostId = hostForView(wcId);
+    if (hostId === null) return null;
+    const entry = clientRelays.get(wcId);
+    if (entry?.hostId === hostId) return entry.host;
+    if (entry) detachClientWorktreeRelay(wcId);
+    // Whatever local port the view held belongs to the machine it left.
+    broker.closePortsForView(wcId);
+    return AWAITING_RELAY;
+  });
 }

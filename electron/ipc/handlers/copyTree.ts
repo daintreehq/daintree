@@ -16,7 +16,7 @@ import {
 } from "../utils.js";
 import {
   getOperationRegistry,
-  normalizeOperationId,
+  untrackedOperationHandle,
   type OperationHandle,
 } from "../../services/operations/index.js";
 import type { ClientEndpoint } from "../endpoint.js";
@@ -107,6 +107,7 @@ import {
   CopyTreeCancelPayloadSchema,
   CopyTreeTestConfigPayloadSchema,
 } from "../../schemas/ipc.js";
+import { AppError } from "../../utils/errorTypes.js";
 import type {
   CopyTreeCancelPayload,
   CopyTreeTestConfigOptions,
@@ -406,20 +407,42 @@ function reportCopyTreeProgress(
   op.progress({ fraction: progress.progress, stage: progress.stage, message: progress.message });
 }
 
+/** The operation-stamped progress event; an unnamed run's events carry no opId, as before. */
+function stampProgress(
+  progress: CopyTreeProgress,
+  traceId: string,
+  op: OperationHandle
+): CopyTreeProgress {
+  return op.tracked ? { ...progress, traceId, opId: op.opId } : { ...progress, traceId };
+}
+
 /**
- * Runs a copytree call as an operation. A retry carrying the same opId joins
- * the first run instead of generating (or injecting) twice. The retained
- * record keeps a summary, never the bundle content.
+ * Runs a copytree call as an operation when the caller named one. A retry
+ * carrying the same opId joins the first run instead of generating (or
+ * injecting) twice, and the retained record keeps a summary, never the bundle
+ * content. A call with no opId runs exactly as it did before operations.
+ *
+ * The opId is validated first, through the channel's own schema, so a
+ * malformed one is refused before any work rather than read as "no id".
  */
-function runCopyTreeOperation(
+async function runCopyTreeOperation(
   channel: string,
+  schema: { shape: { opId: z.ZodType<string | undefined> } },
   ctx: IpcContext,
   payload: unknown,
   work: (op: OperationHandle) => Promise<CopyTreeResult>
 ): Promise<CopyTreeResult> {
+  const rawOpId =
+    payload && typeof payload === "object" ? (payload as Record<string, unknown>).opId : undefined;
+  const parsed = schema.shape.opId.safeParse(rawOpId);
+  if (!parsed.success) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid operation id" });
+  }
+  const opId = parsed.data;
+  if (opId === undefined) return work(untrackedOperationHandle());
   return getOperationRegistry().run(
     {
-      opId: normalizeOperationId(getStringField(payload, "opId")),
+      opId,
       kind: "copytree",
       scope: channel,
       projectId: ctx.projectId,
@@ -539,7 +562,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     const onProgress = (progress: CopyTreeProgress) => {
-      reportCopyTreeProgress(ctx, op, { ...progress, traceId, opId: op.opId });
+      reportCopyTreeProgress(ctx, op, stampProgress(progress, traceId, op));
     };
 
     // Merge project settings with runtime options
@@ -576,8 +599,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   };
   handlers.push(
     typedHandleWithContext(CHANNELS.COPYTREE_GENERATE, (ctx, payload) =>
-      runCopyTreeOperation(CHANNELS.COPYTREE_GENERATE, ctx, payload, (op) =>
-        handleCopyTreeGenerate(ctx, payload, op)
+      runCopyTreeOperation(
+        CHANNELS.COPYTREE_GENERATE,
+        CopyTreeGeneratePayloadSchema,
+        ctx,
+        payload,
+        (op) => handleCopyTreeGenerate(ctx, payload, op)
       )
     )
   );
@@ -632,7 +659,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     const onProgress = (progress: CopyTreeProgress) => {
-      reportCopyTreeProgress(ctx, op, { ...progress, traceId, opId: op.opId });
+      reportCopyTreeProgress(ctx, op, stampProgress(progress, traceId, op));
     };
 
     // Merge project settings with runtime options
@@ -710,8 +737,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   };
   handlers.push(
     typedHandleWithContext(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, (ctx, payload) =>
-      runCopyTreeOperation(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, ctx, payload, (op) =>
-        handleCopyTreeGenerateAndCopyFile(ctx, payload, op)
+      runCopyTreeOperation(
+        CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE,
+        CopyTreeGenerateAndCopyFilePayloadSchema,
+        ctx,
+        payload,
+        (op) => handleCopyTreeGenerateAndCopyFile(ctx, payload, op)
       )
     )
   );
@@ -788,7 +819,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       }
 
       const onProgress = (progress: CopyTreeProgress) => {
-        reportCopyTreeProgress(ctx, op, { ...progress, traceId, opId: op.opId });
+        reportCopyTreeProgress(ctx, op, stampProgress(progress, traceId, op));
       };
 
       // Merge project settings with runtime options
@@ -864,8 +895,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   };
   handlers.push(
     typedHandleWithContext(CHANNELS.COPYTREE_INJECT, (ctx, payload) =>
-      runCopyTreeOperation(CHANNELS.COPYTREE_INJECT, ctx, payload, (op) =>
-        handleCopyTreeInject(ctx, payload, op)
+      runCopyTreeOperation(
+        CHANNELS.COPYTREE_INJECT,
+        CopyTreeInjectPayloadSchema,
+        ctx,
+        payload,
+        (op) => handleCopyTreeInject(ctx, payload, op)
       )
     )
   );

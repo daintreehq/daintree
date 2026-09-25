@@ -124,16 +124,34 @@ describe("git push as an operation", () => {
     expect(pushCalls).toBe(1);
   });
 
-  it("gives a named caller the outcome of a push already running for the cwd", async () => {
-    const unnamed = push({});
+  it("gives a second named caller the outcome of a named push running for the cwd", async () => {
+    const first = push({ opId: "op-first" });
     await pushStarted();
     const named = push({ opId: "op-join" });
     failPush(new Error("fatal: Authentication failed"));
 
-    await expect(unnamed).rejects.toThrow();
+    await expect(first).rejects.toThrow();
     await expect(named).rejects.toThrow();
     expect(pushCalls).toBe(1);
     expect(registry.status("op-join")).toMatchObject({ status: "failed" });
+  });
+
+  it("refuses to join a running push that asked for something else", async () => {
+    const first = push({ opId: "op-first" });
+    await pushStarted();
+    await expect(push({ opId: "op-other", setUpstream: true })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    releasePush();
+    await first;
+    expect(pushCalls).toBe(1);
+  });
+
+  it("rejects a malformed opId before touching git", async () => {
+    await expect(push({ opId: "not/an id" })).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(push({ opId: 42 })).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(createAuthenticatedGitMock).not.toHaveBeenCalled();
+    expect(registry.list()).toEqual([]);
   });
 
   it("keeps a second unnamed push a silent no-op, as before", async () => {
@@ -167,13 +185,24 @@ describe("git push as an operation", () => {
     });
   });
 
-  it("still settles a push with no opId under an id the Host minted", async () => {
+  it("records and publishes nothing for a push with no opId", async () => {
     const run = push({});
     await pushStarted();
+    progress!({ stage: "writing", progress: 50, processed: 5, total: 10 });
     releasePush();
     await run;
 
-    const [record] = registry.list();
-    expect(record).toMatchObject({ kind: "git-push", outcome: { status: "succeeded" } });
+    expect(registry.list()).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it("leaves a named caller out of an unnamed push, which it has no record to join", async () => {
+    const unnamed = push({});
+    await pushStarted();
+    await push({ opId: "op-late" });
+    expect(pushCalls).toBe(1);
+    expect(registry.status("op-late")).toEqual({ status: "unknown" });
+    releasePush();
+    await unnamed;
   });
 });

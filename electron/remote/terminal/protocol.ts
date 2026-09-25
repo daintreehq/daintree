@@ -58,9 +58,25 @@ export const TerminalOutPortMessageSchema = z.discriminatedUnion("type", [
 ]);
 export type TerminalOutPortMessage = z.infer<typeof TerminalOutPortMessageSchema>;
 
+/** Most terminals one resume call may name; a client with more sends several calls. */
+export const MAX_RESUME_TERMINALS = 4096;
+
 export const TerminalResumeRequestSchema = z.object({
   endpointId: z.string().min(1).max(256),
-  terminals: z.array(z.object({ id: terminalId, incarnation, lastSeq: seq })).max(4096),
+  terminals: z
+    .array(
+      z.object({
+        id: terminalId,
+        incarnation,
+        lastSeq: seq,
+        /**
+         * The client cannot use a replay (its renderer port was replaced, so
+         * whatever it painted is gone): answer with a snapshot reset.
+         */
+        reset: z.boolean().optional(),
+      })
+    )
+    .max(MAX_RESUME_TERMINALS),
 });
 export type TerminalResumeRequest = z.infer<typeof TerminalResumeRequestSchema>;
 
@@ -75,6 +91,6 @@ export type TerminalResumeOutcome = "replayed" | "reset" | "unknown";
 export const TerminalResumeResultSchema = z.object({
   terminals: z
     .array(z.object({ id: terminalId, outcome: z.enum(["replayed", "reset", "unknown"]) }))
-    .max(4096),
+    .max(MAX_RESUME_TERMINALS),
 });
 export type TerminalResumeResult = z.infer<typeof TerminalResumeResultSchema>;

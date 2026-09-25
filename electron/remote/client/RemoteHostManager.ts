@@ -39,11 +39,50 @@ export interface ViewSink {
   watch(webContentsId: number, onGone: () => void): () => void;
   /** The host asked this view to repaint from a snapshot. */
   resync(webContentsId: number, hostId: HostId, reason: EndpointResyncReason): void;
+  /**
+   * The host the view is authoritatively bound to (its project key, else its
+   * window's binding), or null for a local view. When present, a connection
+   * delivers nothing to, and carries no streams for, a view bound elsewhere.
+   */
+  hostOf?(webContentsId: number): HostId | null;
 }
 
 interface OpenEndpoint {
   endpointId: string;
   projectId: string | null;
+}
+
+/** A local view's endpoint is live on a session: newly opened, or carried over by a resume. */
+export interface EndpointSessionInfo {
+  session: LinkSession;
+  webContentsId: number;
+  endpointId: string;
+}
+
+export type EndpointOpenedListener = (info: EndpointSessionInfo) => void;
+
+/** A local view's endpoint is gone: the view went away, moved host, or the connection stopped. */
+export interface EndpointClosedInfo {
+  webContentsId: number;
+  endpointId: string;
+}
+
+export type EndpointClosedListener = (info: EndpointClosedInfo) => void;
+
+/** How {@link HostConnection.whenReady} settled. */
+export type HostReadiness = "ready" | "version-mismatch" | "timeout" | "stopped";
+
+function notifyEndpointOpened(
+  listeners: Iterable<EndpointOpenedListener>,
+  info: EndpointSessionInfo
+): void {
+  for (const listener of [...listeners]) {
+    try {
+      listener(info);
+    } catch (error) {
+      console.error("[RemoteHostManager] endpoint-opened listener failed:", error);
+    }
+  }
 }
 
 /**
@@ -59,6 +98,16 @@ export class HostConnection {
   private readonly endpoints = new Map<number, OpenEndpoint>();
   private readonly viewsByEndpoint = new Map<string, number>();
   private readonly watched = new Map<number, () => void>();
+  private readonly openedListeners = new Set<EndpointOpenedListener>();
+  private readonly closedListeners = new Set<EndpointClosedListener>();
+  /**
+   * Endpoints closed while the link was down. The host keeps a dropped
+   * session's endpoints for a resume, so these are closed there once it
+   * resumes; without that every disconnect-close-resume cycle would leave one
+   * behind and wear down the host's per-session endpoint allowance.
+   */
+  private readonly pendingCloses = new Set<string>();
+  private readonly readyWaiters = new Set<() => void>();
   private info: HostInfo | null = null;
   private started = false;
 
@@ -70,6 +119,7 @@ export class HostConnection {
     this.hostId = options.hostId;
     this.link = new LinkClient(options);
     this.link.onSession(({ session, resumed }) => this.attach(session, resumed));
+    this.link.onStateChange(() => this.checkReady());
   }
 
   get isStarted(): boolean {
@@ -92,9 +142,57 @@ export class HostConnection {
     return this.link.onStateChange(listener);
   }
 
+  /**
+   * Seam for per-view streams (terminals, the worktree port) that ride the
+   * link beside invokes: told whenever a view's endpoint is on a session.
+   */
+  onEndpointOpened(listener: EndpointOpenedListener): () => void {
+    this.openedListeners.add(listener);
+    return () => this.openedListeners.delete(listener);
+  }
+
+  /** Told whenever one of this connection's endpoints for a view is discarded. */
+  onEndpointClosed(listener: EndpointClosedListener): () => void {
+    this.closedListeners.add(listener);
+    return () => this.closedListeners.delete(listener);
+  }
+
   start(): void {
     this.started = true;
     this.link.start();
+  }
+
+  /**
+   * Settle once calls can go to the host, the host turns out to run another
+   * build, the connection is stopped, or `timeoutMs` passes. Never rejects,
+   * so a caller maps each outcome to its own error.
+   */
+  whenReady(timeoutMs: number): Promise<HostReadiness> {
+    const settledNow = this.readiness();
+    if (settledNow) return Promise.resolve(settledNow);
+    return new Promise((resolve) => {
+      const check = () => {
+        const outcome = this.readiness();
+        if (outcome) finish(outcome);
+      };
+      const finish = (outcome: HostReadiness) => {
+        clearTimeout(timer);
+        this.readyWaiters.delete(check);
+        resolve(outcome);
+      };
+      const timer = setTimeout(() => finish("timeout"), timeoutMs);
+      this.readyWaiters.add(check);
+    });
+  }
+
+  private readiness(): HostReadiness | null {
+    if (!this.started) return "stopped";
+    if (this.link.getState().status === "version-mismatch") return "version-mismatch";
+    return this.unavailableEnvelope() === null ? "ready" : null;
+  }
+
+  private checkReady(): void {
+    for (const check of [...this.readyWaiters]) check();
   }
 
   retryNow(): void {
@@ -103,12 +201,20 @@ export class HostConnection {
 
   async stop(): Promise<void> {
     this.started = false;
+    this.checkReady();
     await this.link.stop();
     this.session = null;
+    const discarded = [...this.endpoints];
     this.forgetEndpoints();
+    this.pendingCloses.clear();
+    for (const [webContentsId, open] of discarded) {
+      this.notifyClosed({ webContentsId, endpointId: open.endpointId });
+    }
     // A discarded connection must not stay reachable through live views' listeners.
     for (const unwatch of this.watched.values()) unwatch();
     this.watched.clear();
+    this.openedListeners.clear();
+    this.closedListeners.clear();
   }
 
   state(): HostConnectionState {
@@ -192,9 +298,24 @@ export class HostConnection {
     return [...this.endpoints.keys()];
   }
 
+  /** The view now belongs to another host (or this machine): close its endpoint here. */
+  retireView(webContentsId: number): void {
+    this.closeEndpoint(webContentsId);
+  }
+
+  /** Whether the view still belongs to this host, by its authoritative binding. */
+  private isBoundHere(webContentsId: number): boolean {
+    return this.views.hostOf ? this.views.hostOf(webContentsId) === this.hostId : true;
+  }
+
   private attach(session: LinkSession, resumed: boolean): void {
-    // A fresh session means the host dropped every endpoint of the old one.
-    if (!resumed) this.forgetEndpoints();
+    // A fresh session means the host dropped every endpoint of the old one,
+    // including any still waiting to be closed.
+    const reopen = resumed ? [] : [...this.endpoints];
+    if (!resumed) {
+      this.forgetEndpoints();
+      this.pendingCloses.clear();
+    }
     this.session = session;
     session.on(Lane.EVENTS, EventKind.EVENT, (body) => this.deliver(body));
     session.registerCallHandler(
@@ -210,7 +331,34 @@ export class HostConnection {
     );
     session.onClose(() => {
       if (this.session === session) this.session = null;
+      this.checkReady();
     });
+    this.flushPendingCloses(session);
+    // A resume keeps the host's endpoints, so the views' streams move to the new session.
+    for (const [webContentsId, open] of [...this.endpoints]) {
+      if (!this.isBoundHere(webContentsId)) {
+        this.closeEndpoint(webContentsId);
+        continue;
+      }
+      notifyEndpointOpened(this.openedListeners, {
+        session,
+        webContentsId,
+        endpointId: open.endpointId,
+      });
+    }
+    // A fresh session reopens the endpoints of views still bound here, so
+    // their terminal and worktree streams come back without waiting for the
+    // view's next call; the rest are discarded.
+    for (const [webContentsId, open] of reopen) {
+      const endpointId = this.isBoundHere(webContentsId)
+        ? this.ensureEndpoint(session, webContentsId, open.projectId)
+        : null;
+      if (endpointId === null) {
+        this.unwatch(webContentsId);
+        this.notifyClosed({ webContentsId, endpointId: open.endpointId });
+      }
+    }
+    this.checkReady();
     void session.call(LinkMethod.HOST_INFO, null).then(
       (answer) => {
         const parsed = HostInfoSchema.safeParse(answer);
@@ -245,6 +393,7 @@ export class HostConnection {
       body: { endpointId, projectId },
     });
     if (result === "refused") return null;
+    this.pendingCloses.delete(endpointId);
     this.endpoints.set(webContentsId, { endpointId, projectId });
     this.viewsByEndpoint.set(endpointId, webContentsId);
     if (!this.watched.has(webContentsId)) {
@@ -253,23 +402,59 @@ export class HostConnection {
         this.views.watch(webContentsId, () => this.closeEndpoint(webContentsId))
       );
     }
+    notifyEndpointOpened(this.openedListeners, { session, webContentsId, endpointId });
     return endpointId;
   }
 
   private closeEndpoint(webContentsId: number): void {
-    this.watched.get(webContentsId)?.();
-    this.watched.delete(webContentsId);
+    this.unwatch(webContentsId);
     const open = this.endpoints.get(webContentsId);
     if (!open) return;
     this.endpoints.delete(webContentsId);
     this.viewsByEndpoint.delete(open.endpointId);
-    const session = this.session;
-    if (session?.isOpen) {
-      session.post({
-        lane: Lane.CONTROL,
-        kind: ControlKind.ENDPOINT_CLOSE,
-        body: { endpointId: open.endpointId },
-      });
+    if (!this.postClose(this.session, open.endpointId)) this.pendingCloses.add(open.endpointId);
+    this.notifyClosed({ webContentsId, endpointId: open.endpointId });
+  }
+
+  private postClose(session: LinkSession | null, endpointId: string): boolean {
+    if (!session?.isOpen) return false;
+    try {
+      return (
+        session.post({
+          lane: Lane.CONTROL,
+          kind: ControlKind.ENDPOINT_CLOSE,
+          body: { endpointId },
+        }) !== "refused"
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private flushPendingCloses(session: LinkSession): void {
+    for (const endpointId of [...this.pendingCloses]) {
+      // Reopened under the same id since: the host's endpoint is live again.
+      if (this.viewsByEndpoint.has(endpointId)) {
+        this.pendingCloses.delete(endpointId);
+        continue;
+      }
+      if (!this.postClose(session, endpointId)) return;
+      this.pendingCloses.delete(endpointId);
+    }
+  }
+
+  private unwatch(webContentsId: number): void {
+    this.watched.get(webContentsId)?.();
+    this.watched.delete(webContentsId);
+  }
+
+  private notifyClosed(info: EndpointClosedInfo): void {
+    for (const listener of [...this.closedListeners]) {
+      try {
+        listener(info);
+      } catch (error) {
+        console.error("[RemoteHostManager] endpoint-closed listener failed:", error);
+      }
     }
   }
 
@@ -288,12 +473,16 @@ export class HostConnection {
     if (locality !== "host" && locality !== "hybrid") return;
     if (event.endpointId === null) {
       for (const webContentsId of this.endpoints.keys()) {
-        this.views.send(webContentsId, event.channel, event.args);
+        if (this.isBoundHere(webContentsId)) {
+          this.views.send(webContentsId, event.channel, event.args);
+        }
       }
       return;
     }
     const webContentsId = this.viewsByEndpoint.get(event.endpointId);
-    if (webContentsId !== undefined) this.views.send(webContentsId, event.channel, event.args);
+    if (webContentsId !== undefined && this.isBoundHere(webContentsId)) {
+      this.views.send(webContentsId, event.channel, event.args);
+    }
   }
 }
 
@@ -315,6 +504,10 @@ export interface RemoteHostManagerOptions {
 export class RemoteHostManager {
   private readonly connections = new Map<HostId, HostConnection>();
   private readonly listeners = new Set<(hostId: HostId, state: HostConnectionState) => void>();
+  private readonly endpointListeners = new Set<
+    (hostId: HostId, info: EndpointSessionInfo) => void
+  >();
+  private readonly closedListeners = new Set<(hostId: HostId, info: EndpointClosedInfo) => void>();
   private readonly now: () => number;
 
   constructor(private readonly options: RemoteHostManagerOptions) {
@@ -332,6 +525,18 @@ export class RemoteHostManager {
   onStateChange(listener: (hostId: HostId, state: HostConnectionState) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** {@link HostConnection.onEndpointOpened} across every connection, including later ones. */
+  onEndpointOpened(listener: (hostId: HostId, info: EndpointSessionInfo) => void): () => void {
+    this.endpointListeners.add(listener);
+    return () => this.endpointListeners.delete(listener);
+  }
+
+  /** {@link HostConnection.onEndpointClosed} across every connection, including later ones. */
+  onEndpointClosed(listener: (hostId: HostId, info: EndpointClosedInfo) => void): () => void {
+    this.closedListeners.add(listener);
+    return () => this.closedListeners.delete(listener);
   }
 
   /** Start (or nudge) the host's link. Resolves once the attempt is under way, not connected. */
@@ -354,6 +559,32 @@ export class RemoteHostManager {
       );
       this.connections.set(hostId, connection);
       const conn = connection;
+      conn.onEndpointOpened((info) => {
+        if (this.connections.get(hostId) !== conn) return;
+        // A view talks to one host at a time: an endpoint it still holds on
+        // another host is from before it moved, and must not keep its streams.
+        for (const [otherId, other] of this.connections) {
+          if (otherId !== hostId) other.retireView(info.webContentsId);
+        }
+        for (const listener of [...this.endpointListeners]) {
+          try {
+            listener(hostId, info);
+          } catch (error) {
+            console.error("[RemoteHostManager] endpoint-opened listener failed:", error);
+          }
+        }
+      });
+      // Unconditional on purpose: stop() reports the endpoints it discards after
+      // the connection has already left the map.
+      conn.onEndpointClosed((info) => {
+        for (const listener of [...this.closedListeners]) {
+          try {
+            listener(hostId, info);
+          } catch (error) {
+            console.error("[RemoteHostManager] endpoint-closed listener failed:", error);
+          }
+        }
+      });
       let wasConnected = false;
       conn.onStateChange((state) => {
         if (this.connections.get(hostId) !== conn) return;

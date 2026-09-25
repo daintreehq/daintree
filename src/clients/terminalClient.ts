@@ -23,7 +23,7 @@ import type {
 import type { PanelTitleMode } from "@shared/types/panel";
 import type { TerminalSubmissionLookup } from "@shared/types/terminalSubmission";
 import type { TerminalOutputActivityLookup } from "@shared/types/terminalStatus";
-import { normalizeTerminalGridDimension } from "@shared/types/terminal";
+import { isValidTerminalGeometry, normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { isImageAttachmentPath, MAX_SUBMIT_IMAGE_PATHS } from "@shared/utils/imageAttachmentInput";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
@@ -117,16 +117,45 @@ const terminalStatusCallbacks = new Set<(data: TerminalStatusPayload) => void>()
 // this view missed, so the terminal must be cleared and repainted from the
 // snapshot. A subscriber (the restore path) takes over when present;
 // otherwise the reset is painted through the terminal's own data path.
-const resetCallbacks = new Set<(id: string, snapshot: string | null) => void>();
+const resetCallbacks = new Set<(id: string, snapshot: SerializedTerminalSnapshot | null) => void>();
+
+// Per-terminal port-ack generation, bumped by each reset. The host settles its
+// flow control for everything before a reset, so an xterm write queued before
+// it must not settle a FIFO entry that belongs to output after it — the write
+// callback carries the generation it was queued under and is dropped once that
+// is stale. Absent means 0: only relayed remote ports ever reset, so a local
+// view's generation never moves and its acks behave exactly as before.
+const portAckGenerations = new Map<string, number>();
+
+function currentPortAckGeneration(id: string): number {
+  return portAckGenerations.get(id) ?? 0;
+}
 
 // Full reset (RIS): clears the screen, scrollback and modes — what the restore
 // path does with terminal.reset() before replaying a snapshot.
 const FULL_RESET_SEQUENCE = "\x1bc";
 
-function handlePortReset(id: string, snapshot: string | null): void {
+/**
+ * The reset's snapshot, or null. Geometry that is not a whole grid is dropped
+ * to 0×0 rather than rejecting the payload: the restore path treats an
+ * unusable grid as "no geometry" and replays verbatim, which beats losing the
+ * repaint over a bad size.
+ */
+function parseResetSnapshot(raw: unknown): SerializedTerminalSnapshot | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { data, cols, rows } = raw as { data?: unknown; cols?: unknown; rows?: unknown };
+  if (typeof data !== "string") return null;
+  const geometry = { cols, rows };
+  return isValidTerminalGeometry(geometry)
+    ? { data, cols: geometry.cols, rows: geometry.rows }
+    : { data, cols: 0, rows: 0 };
+}
+
+function handlePortReset(id: string, snapshot: SerializedTerminalSnapshot | null): void {
   // The host settled its flow control for everything before the reset, so
   // queued acks must not reach it; and buffered output predates the snapshot.
   pendingPortAckBytes.delete(id);
+  portAckGenerations.set(id, currentPortAckGeneration(id) + 1);
   earlyDataBuffer.delete(id);
   earlyDataBufferBytes.delete(id);
 
@@ -137,7 +166,7 @@ function handlePortReset(id: string, snapshot: string | null): void {
     return;
   }
 
-  const repaint = FULL_RESET_SEQUENCE + (snapshot ?? "");
+  const repaint = FULL_RESET_SEQUENCE + (snapshot?.data ?? "");
   const cbs = dataCallbacks.get(id);
   if (cbs) {
     // A zero-byte FIFO entry keeps the consumer's per-chunk ack count aligned
@@ -220,7 +249,7 @@ function installPortDataHandler(port: MessagePort): void {
       return;
     }
     if (msg?.type === "reset" && typeof msg.id === "string") {
-      handlePortReset(msg.id, typeof msg.snapshot === "string" ? msg.snapshot : null);
+      handlePortReset(msg.id, parseResetSnapshot(msg.snapshot));
       return;
     }
     if (msg?.type === "data" && typeof msg.id === "string") {
@@ -564,6 +593,7 @@ export const terminalClient = {
     earlyDataBuffer.delete(id);
     earlyDataBufferBytes.delete(id);
     pendingPortAckBytes.delete(id);
+    portAckGenerations.delete(id);
     pendingEchoProbes.delete(id);
     settleWorkerPortRequest(id, null);
     return window.electron.terminal.kill(id);
@@ -573,6 +603,7 @@ export const terminalClient = {
     earlyDataBuffer.delete(id);
     earlyDataBufferBytes.delete(id);
     pendingPortAckBytes.delete(id);
+    portAckGenerations.delete(id);
     pendingEchoProbes.delete(id);
     settleWorkerPortRequest(id, null);
     return window.electron.terminal.gracefulKill(id);
@@ -582,6 +613,7 @@ export const terminalClient = {
     earlyDataBuffer.delete(id);
     earlyDataBufferBytes.delete(id);
     pendingPortAckBytes.delete(id);
+    portAckGenerations.delete(id);
     pendingEchoProbes.delete(id);
     settleWorkerPortRequest(id, null);
     return window.electron.terminal.trash(id);
@@ -750,7 +782,9 @@ export const terminalClient = {
    * buffered output for the terminal are already discarded when this fires.
    * While nobody subscribes, the reset is painted through the data path.
    */
-  onReset: (callback: (id: string, snapshot: string | null) => void): (() => void) => {
+  onReset: (
+    callback: (id: string, snapshot: SerializedTerminalSnapshot | null) => void
+  ): (() => void) => {
     resetCallbacks.add(callback);
     return () => {
       resetCallbacks.delete(callback);
@@ -831,9 +865,13 @@ export const terminalClient = {
    * host's removeBytes accepts aggregate counts, same as discardPortAcks).
    * Shifts at most what is queued: entries for IPC or early-buffer-flushed
    * data never exist, so over-counted requests degrade to a no-op.
+   * `generation` is {@link getPortAckGeneration} as it stood when the chunk was
+   * queued for writing; a reset since then retired its entries, so the ack is
+   * dropped rather than allowed to settle output that arrived after the reset.
    */
-  acknowledgePortData: (id: string, _bytes: number, chunkCount = 1): void => {
+  acknowledgePortData: (id: string, _bytes: number, chunkCount = 1, generation?: number): void => {
     if (!messagePort) return;
+    if (generation !== undefined && generation !== currentPortAckGeneration(id)) return;
     const queue = pendingPortAckBytes.get(id);
     if (!queue || queue.length === 0) return;
     const take = Math.min(chunkCount, queue.length);
@@ -853,6 +891,12 @@ export const terminalClient = {
       // Port closed — ack lost, safety timeout will resume PTY
     }
   },
+
+  /**
+   * The terminal's port-ack generation (see acknowledgePortData). Always 0 for
+   * a terminal that never received a remote reset.
+   */
+  getPortAckGeneration: (id: string): number => currentPortAckGeneration(id),
 
   /**
    * Drain the entire pending port-ack FIFO for a terminal as one batched ack.

@@ -758,7 +758,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Subscribe to clone progress events */
     onCloneProgress(callback: (event: CloneRepoProgressEvent) => void): () => void;
     /** Cancel an in-progress clone operation */
-    cancelClone(): Promise<void>;
+    cancelClone(opId?: string): Promise<void>;
     getRecipes(
       projectId: string
     ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }>;
@@ -1033,7 +1033,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     stageAll(cwd: string): Promise<void>;
     unstageAll(cwd: string): Promise<void>;
     commit(cwd: string, message: string): Promise<{ hash: string; summary: string }>;
-    push(cwd: string, setUpstream?: boolean): Promise<void>;
+    push(cwd: string, setUpstream?: boolean, opId?: string): Promise<void>;
     pullRebase(cwd: string): Promise<void>;
     forcePushWithLease(cwd: string, branchName: string, leaseSha: string): Promise<void>;
     listRemoteCommits(

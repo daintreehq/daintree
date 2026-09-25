@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   OperationRegistry,
   OPERATION_RETENTION_MS,
+  OPERATION_MAX_ALIASES,
+  OPERATION_MAX_RUNNING,
   normalizeOperationId,
+  untrackedOperationHandle,
 } from "../OperationRegistry.js";
 import type { OperationsEvent } from "../../../../shared/types/ipc/operations.js";
 
@@ -332,6 +335,84 @@ describe("OperationRegistry guards", () => {
       .filter((e) => e.type === "settled")
       .map((e) => (e.type === "settled" ? e.record.opId : null));
     expect(settledIds).toEqual(["op-a", "op-b"]);
+  });
+});
+
+describe("OperationRegistry joins and admission", () => {
+  const clone = (opId: string, overrides: Record<string, unknown> = {}) => ({
+    opId,
+    kind: "git-clone" as const,
+    projectId: "p",
+    dedupKey: "k",
+    fingerprint: '{"shallow":false}',
+    ...overrides,
+  });
+
+  it("refuses to join running work whose request differs", () => {
+    const registry = makeRegistry();
+    registry.start(clone("op-a"));
+
+    expect(() => registry.start(clone("op-b", { fingerprint: '{"shallow":true}' }))).toThrow(
+      expect.objectContaining({ code: "VALIDATION" })
+    );
+    expect(() => registry.start(clone("op-c", { projectId: "other" }))).toThrow(
+      expect.objectContaining({ code: "VALIDATION" })
+    );
+    // A refused joiner leaves nothing behind that answers for its id.
+    expect(registry.status("op-b")).toEqual({ status: "unknown" });
+    expect(registry.status("op-c")).toEqual({ status: "unknown" });
+  });
+
+  it("refuses a retry by opId whose request differs", () => {
+    const registry = makeRegistry();
+    registry.start(clone("op-a"));
+    expect(() => registry.start(clone("op-a", { fingerprint: '{"shallow":true}' }))).toThrow(
+      /another operation/
+    );
+  });
+
+  it("gives every accepted joiner a resolvable id, and refuses one past the cap", () => {
+    const registry = makeRegistry();
+    registry.start(clone("op-first"));
+    for (let i = 0; i < OPERATION_MAX_ALIASES; i++) {
+      expect(registry.start(clone(`op-join-${i}`)).handle).toBeNull();
+    }
+    for (let i = 0; i < OPERATION_MAX_ALIASES; i++) {
+      expect(registry.canonicalId(`op-join-${i}`)).toBe("op-first");
+    }
+
+    expect(() => registry.start(clone("op-overflow"))).toThrow(
+      expect.objectContaining({ code: "RATE_LIMITED" })
+    );
+    expect(registry.status("op-overflow")).toEqual({ status: "unknown" });
+    // An id that already joined is still answered from its record.
+    expect(registry.start(clone("op-join-0")).record.opId).toBe("op-first");
+  });
+
+  it("admits running work up to the cap and refuses the next", () => {
+    const registry = makeRegistry();
+    for (let i = 0; i < OPERATION_MAX_RUNNING; i++) {
+      registry.start({ opId: `op-${i}`, kind: "git-push", projectId: "p" });
+    }
+    expect(() => registry.start({ opId: "op-over", kind: "git-push", projectId: "p" })).toThrow(
+      expect.objectContaining({ code: "RATE_LIMITED" })
+    );
+    // A retry of admitted work is not new work.
+    expect(registry.start({ opId: "op-0", kind: "git-push", projectId: "p" }).handle).toBeNull();
+
+    registry.settle("op-0", { status: "succeeded", result: null });
+    expect(
+      registry.start({ opId: "op-over", kind: "git-push", projectId: "p" }).handle
+    ).not.toBeNull();
+  });
+
+  it("hands out an untracked handle that records and publishes nothing", () => {
+    const handle = untrackedOperationHandle();
+    handle.progress({ fraction: 0.5, stage: "x", message: null });
+    handle.onCancel(() => {});
+    expect(handle.tracked).toBe(false);
+    expect(handle.signal.aborted).toBe(false);
+    expect(events).toEqual([]);
   });
 });
 

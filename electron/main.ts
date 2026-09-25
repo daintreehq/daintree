@@ -67,7 +67,7 @@ import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
-import { distributePortsToView } from "./window/portDistribution.js";
+import { distributePortsToView, getRemoteViewHooks } from "./window/portDistribution.js";
 import { findOtherProjectOwner, type ProjectOwner } from "./window/projectOwnership.js";
 import { openFolderInNewWindow } from "./window/newWindowOpen.js";
 import { deliverOpenSystemMemoryPressure } from "./window/systemMemoryPressureDelivery.js";
@@ -612,13 +612,23 @@ if (!gotTheLock) {
           }
         }
         deliverOpenSystemMemoryPressure(win, wc);
-        // Refresh workspace direct port (preload context is reset on reload)
-        getWorkspaceClientRef()?.attachDirectPort(win.id, wc);
+        // A view bound to a remote host takes its workspace and worktree ports
+        // from that host; this machine's workspace host must not answer it.
+        // The hooks exist only once a remote host is in use.
+        const remoteViewHooks = getRemoteViewHooks();
+        const remoteView = remoteViewHooks?.isRemoteView(wc) === true;
+        if (remoteView) {
+          getWorkspaceClientRef()?.removeDirectPort(wc.id);
+          remoteViewHooks?.redeliverWorktreePort(wc);
+        } else {
+          // Refresh workspace direct port (preload context is reset on reload)
+          getWorkspaceClientRef()?.attachDirectPort(win.id, wc);
+        }
 
         // Re-broker worktree port (preload context is reset on reload)
         const broker = getWorktreePortBrokerRef();
         const wsClient = getWorkspaceClientRef();
-        if (broker && wsClient) {
+        if (!remoteView && broker && wsClient) {
           // This window's own manager, not the process-global one: the global
           // points at the last-created window, so an older window's view
           // reload would broker no port at all (#11100).
@@ -1104,7 +1114,14 @@ if (!gotTheLock) {
             // Published before the start resolves, so a quit during it still
             // stops whatever the start got as far as.
             stopRemoteHosts = remoteHosts.stopRemoteHosts;
-            await remoteHosts.startRemoteHosts();
+            remoteHosts.setRemoteHostsWindowOpener(async () => {
+              let id = -1;
+              await createWindow(null, undefined, { onRegistered: (w) => (id = w) });
+              return id;
+            });
+            await remoteHosts.startRemoteHosts({
+              hostMode: hostModeLaunch || isHostModeEnabled(),
+            });
           } catch (error) {
             console.error("[MAIN] Remote Hosts failed to start:", error);
           }

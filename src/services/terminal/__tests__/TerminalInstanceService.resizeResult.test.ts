@@ -24,6 +24,7 @@ vi.mock("@/clients", () => ({
       return vi.fn();
     }),
     onTierChanged: vi.fn(() => vi.fn()),
+    onReset: vi.fn(() => vi.fn()),
     resize: vi.fn(),
     write: vi.fn(),
     setActivityTier: vi.fn(),
@@ -32,6 +33,7 @@ vi.mock("@/clients", () => ({
     getSharedBuffers: vi.fn(async () => ({ visualBuffers: [], signalBuffer: null })),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    getPortAckGeneration: vi.fn(() => 0),
     discardPortAcks: vi.fn(),
   },
   systemClient: { openExternal: vi.fn() },

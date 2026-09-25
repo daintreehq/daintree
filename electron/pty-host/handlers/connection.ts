@@ -165,6 +165,31 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
               );
             }
           } else if (
+            portMsg.type === "serialize-fence" &&
+            typeof portMsg.id === "string" &&
+            typeof portMsg.requestId === "number"
+          ) {
+            // A remote endpoint's reset needs a snapshot and a stream position
+            // that agree exactly. Flush what the batcher holds and post the
+            // fence FIFO behind it, then start the serialize in the same turn:
+            // the mirror is fed in the same step output reaches the batcher,
+            // so every byte before the fence is in the snapshot and every
+            // byte after it is not.
+            const { id, requestId } = portMsg;
+            perWindowBatcher.flushTerminal(id);
+            receivedPort.postMessage({ type: "serialize-fence", id, requestId });
+            const answer = (state: unknown) => {
+              try {
+                receivedPort.postMessage({ type: "serialized-state", id, requestId, state });
+              } catch {
+                // Port closed meanwhile; the bridge abandons the fence with it.
+              }
+            };
+            ptyManager.getSerializedStateAsync(id).then(answer, (error: unknown) => {
+              console.error(`[PtyHost] Failed to serialize terminal ${id} for a fence:`, error);
+              answer(null);
+            });
+          } else if (
             portMsg.type === "worker-ingest-release" &&
             typeof portMsg.id === "string" &&
             typeof portMsg.drainId === "number"

@@ -11,6 +11,7 @@ import { BrowserWindow, MessageChannelMain } from "electron";
 import { randomBytes } from "crypto";
 import {
   clearPortHolderWebContents,
+  isCachedViewWebContents,
   registerPortHolderWebContents,
 } from "./webContentsRegistry.js";
 import type { WindowContext } from "./WindowRegistry.js";
@@ -35,6 +36,53 @@ export function setTerminalPortOverride(override: TerminalPortOverride | null): 
   return () => {
     if (terminalPortOverride === override) terminalPortOverride = null;
   };
+}
+
+/**
+ * What core window code asks about a view whose ports come from a remote
+ * host. Installed by Remote Hosts only once a host is actually in use, so
+ * with nothing installed every view is local and nothing here runs.
+ */
+export interface RemoteViewHooks {
+  /** The view is bound to a remote host (its ports are relayed over the link). */
+  isRemoteView(webContents: Electron.WebContents): boolean;
+  /** Re-post a remote view's relayed worktree port (after a reload or reactivation). */
+  redeliverWorktreePort(webContents: Electron.WebContents): void;
+}
+
+let remoteViewHooks: RemoteViewHooks | null = null;
+
+export function setRemoteViewHooks(hooks: RemoteViewHooks | null): () => void {
+  remoteViewHooks = hooks;
+  return () => {
+    if (remoteViewHooks === hooks) remoteViewHooks = null;
+  };
+}
+
+export function getRemoteViewHooks(): RemoteViewHooks | null {
+  return remoteViewHooks;
+}
+
+/**
+ * Retire a window's local terminal port pair and its worker ports: the view
+ * the window now shows is served over the link, and the pty-host must stop
+ * streaming the previous local project into a view nobody is looking at —
+ * what a local switch does by replacing the pair.
+ */
+export function releaseWindowTerminalPort(ctx: WindowContext, ptyClient: PtyClient | null): void {
+  releaseAllTerminalWorkerPorts(ctx, ptyClient);
+  const hadPort = ctx.services.activePtyHostPort !== undefined;
+  for (const port of [ctx.services.activeRendererPort, ctx.services.activePtyHostPort]) {
+    try {
+      port?.close();
+    } catch {
+      /* ignore */
+    }
+  }
+  ctx.services.activeRendererPort = undefined;
+  ctx.services.activePtyHostPort = undefined;
+  if (hadPort) ptyClient?.disconnectMessagePort(ctx.windowId);
+  clearPortHolderWebContents(ctx.windowId);
 }
 
 /**
@@ -77,7 +125,12 @@ export function distributePortsToView(
   targetWc: Electron.WebContents,
   ptyClient: PtyClient | null
 ): void {
-  if (terminalPortOverride?.(targetWc)) return;
+  if (terminalPortOverride?.(targetWc)) {
+    // A cached view reloading in the background must not take the port from
+    // the window's active local view; only the view being shown retires it.
+    if (!isCachedViewWebContents(targetWc.id)) releaseWindowTerminalPort(ctx, ptyClient);
+    return;
+  }
 
   // Dedicated worker-ingest ports share the window port's lifecycle chokepoint:
   // replacing the window pair (project switch, reload) severs them too — the

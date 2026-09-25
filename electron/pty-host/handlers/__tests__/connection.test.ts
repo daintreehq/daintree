@@ -724,6 +724,36 @@ describe("worker-ingest dedicated ports (#10960)", () => {
     expect(h.dedicatedPort.posted).toContainEqual({ type: "ingest-detached", drainId: 3 });
   });
 
+  it("a serialize fence flushes held output ahead of the marker, then answers with the snapshot", async () => {
+    const h = makeWorkerIngestHarness();
+    const snapshot = { data: "SNAP", cols: 90, rows: 30 };
+    let serializedAfter: number | null = null;
+    (h.ctx.ptyManager as unknown as { getSerializedStateAsync: unknown }).getSerializedStateAsync =
+      vi.fn(async () => {
+        serializedAfter = h.windowPort.posted.length;
+        return snapshot;
+      });
+    h.handlers["connect-port"]({ windowId: 1 }, [h.windowPort] as never);
+    const bytes = new TextEncoder().encode("held");
+    h.ctx.rendererConnections.get(1)!.batcher.write("term-1", bytes, bytes.byteLength);
+    expect(h.windowPort.posted).toEqual([]);
+
+    h.windowPort.emit("message", {
+      data: { type: "serialize-fence", id: "term-1", requestId: 5 },
+    });
+
+    expect(h.windowPort.posted.map((m) => m.type)).toEqual(["data", "serialize-fence"]);
+    // Serialized in the same turn as the fence, before anything else could be posted.
+    expect(serializedAfter).toBe(2);
+    await vi.waitFor(() => expect(h.windowPort.posted).toHaveLength(3));
+    expect(h.windowPort.posted[2]).toEqual({
+      type: "serialized-state",
+      id: "term-1",
+      requestId: 5,
+      state: snapshot,
+    });
+  });
+
   it("engage without a dedicated connection never posts the marker", () => {
     const h = makeWorkerIngestHarness();
     h.handlers["connect-port"]({ windowId: 1 }, [h.windowPort] as never);

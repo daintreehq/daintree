@@ -605,6 +605,17 @@ export const CopyTreeRunSourceSchema = z.enum(COPY_TREE_RUN_SOURCES);
  */
 const CopyTreeRunNameSchema = z.string().optional();
 
+/**
+ * A client-minted operation id, held to the same grammar as
+ * `normalizeOperationId`. Optional, but never coerced: a malformed id is a
+ * rejected request, not an unnamed one.
+ */
+export const OperationIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9._:-]+$/);
+
 export const CopyTreeGeneratePayloadSchema = z.object({
   worktreeId: z.string().min(1),
   options: CopyTreeOptionsSchema,
@@ -615,6 +626,7 @@ export const CopyTreeGeneratePayloadSchema = z.object({
   includeContent: z.boolean().optional(),
   name: CopyTreeRunNameSchema,
   source: CopyTreeRunSourceSchema.optional(),
+  opId: OperationIdSchema.optional(),
 });
 
 export const CopyTreeGenerateAndCopyFilePayloadSchema = z.object({
@@ -622,6 +634,7 @@ export const CopyTreeGenerateAndCopyFilePayloadSchema = z.object({
   options: CopyTreeOptionsSchema,
   name: CopyTreeRunNameSchema,
   source: CopyTreeRunSourceSchema.optional(),
+  opId: OperationIdSchema.optional(),
 });
 
 export const CopyTreeInjectPayloadSchema = z.object({
@@ -631,6 +644,7 @@ export const CopyTreeInjectPayloadSchema = z.object({
   injectionId: z.string().min(1).optional(),
   name: CopyTreeRunNameSchema,
   source: CopyTreeRunSourceSchema.optional(),
+  opId: OperationIdSchema.optional(),
 });
 
 export const CopyTreeCancelPayloadSchema = z.object({

@@ -43,10 +43,16 @@ import {
   distributePortsToView,
   distributeTerminalWorkerPortToView,
   postTerminalPortToView,
+  getRemoteViewHooks,
   releaseTerminalWorkerPort,
+  setRemoteViewHooks,
   setTerminalPortOverride,
 } from "../portDistribution.js";
-import { getPortHolderWebContentsId } from "../webContentsRegistry.js";
+import {
+  getPortHolderWebContentsId,
+  registerCachedViewWebContents,
+  unregisterCachedViewWebContents,
+} from "../webContentsRegistry.js";
 import type { WindowContext } from "../WindowRegistry.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import type { BrowserWindow } from "electron";
@@ -71,6 +77,7 @@ function makeMockPtyClient() {
     connectMessagePort: vi.fn(),
     connectTerminalMessagePort: vi.fn(),
     disconnectTerminalMessagePort: vi.fn(),
+    disconnectMessagePort: vi.fn(),
   };
 }
 
@@ -424,5 +431,59 @@ describe("relayed terminal ports", () => {
     expect(port1.close).toHaveBeenCalled();
     expect(port2.close).toHaveBeenCalled();
     expect(postTerminalPortToView(asWc(makeMockWc(true)))).toBeNull();
+  });
+
+  it("retires the window's local pair when a claimed remote view is the one being shown", () => {
+    const ctx = makeCtx(9);
+    const local = makeMockWc();
+    const remote = makeMockWc();
+    const pty = makeMockPtyClient();
+    distributePortsToView(makeMockWin(), ctx, asWc(local), asPty(pty));
+    const { port1, port2 } = madeChannels[0];
+    expect(getPortHolderWebContentsId(9)).toBe(local.id);
+
+    const uninstall = setTerminalPortOverride((wc) => wc.id === remote.id);
+    try {
+      distributePortsToView(makeMockWin(), ctx, asWc(remote), asPty(pty));
+    } finally {
+      uninstall();
+    }
+
+    expect(port1.close).toHaveBeenCalled();
+    expect(port2.close).toHaveBeenCalled();
+    expect(ctx.services.activeRendererPort).toBeUndefined();
+    expect(ctx.services.activePtyHostPort).toBeUndefined();
+    expect(pty.disconnectMessagePort).toHaveBeenCalledWith(9);
+    expect(getPortHolderWebContentsId(9)).toBeUndefined();
+  });
+
+  it("leaves the active local view's pair alone when a cached remote view reloads", () => {
+    const ctx = makeCtx(10);
+    const local = makeMockWc();
+    const cachedRemote = makeMockWc();
+    const pty = makeMockPtyClient();
+    distributePortsToView(makeMockWin(), ctx, asWc(local), asPty(pty));
+    registerCachedViewWebContents(asWc(cachedRemote));
+
+    const uninstall = setTerminalPortOverride((wc) => wc.id === cachedRemote.id);
+    try {
+      distributePortsToView(makeMockWin(), ctx, asWc(cachedRemote), asPty(pty));
+    } finally {
+      uninstall();
+      unregisterCachedViewWebContents(cachedRemote.id);
+    }
+
+    expect(madeChannels[0].port1.close).not.toHaveBeenCalled();
+    expect(pty.disconnectMessagePort).not.toHaveBeenCalled();
+    expect(getPortHolderWebContentsId(10)).toBe(local.id);
+  });
+
+  it("has no remote view hooks until Remote Hosts installs them", () => {
+    expect(getRemoteViewHooks()).toBeNull();
+    const hooks = { isRemoteView: () => true, redeliverWorktreePort: () => {} };
+    const uninstall = setRemoteViewHooks(hooks);
+    expect(getRemoteViewHooks()).toBe(hooks);
+    uninstall();
+    expect(getRemoteViewHooks()).toBeNull();
   });
 });

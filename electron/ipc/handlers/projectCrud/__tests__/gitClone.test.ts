@@ -14,8 +14,9 @@ const sentEvents: CloneRepoProgressEvent[] = [];
 
 vi.mock("../../../utils.js", () => ({
   typedHandle: vi.fn(() => () => {}),
-  typedHandleWithContext: vi.fn((_channel: string, handler: CloneHandler) => {
-    capturedHandler = handler;
+  // Cancel registers with a context too, so capture the clone handler by name.
+  typedHandleWithContext: vi.fn((channel: string, handler: CloneHandler) => {
+    if (channel === "project:clone-repo") capturedHandler = handler;
     return () => {};
   }),
   sendToRenderer: vi.fn((_win: unknown, _channel: string, event: CloneRepoProgressEvent) => {

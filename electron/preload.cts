@@ -2024,7 +2024,8 @@ function buildElectronApi(): ElectronAPI {
         callback: (event: import("../shared/types/ipc/gitClone.js").CloneRepoProgressEvent) => void
       ) => _typedOn(CHANNELS.PROJECT_CLONE_PROGRESS, callback),
 
-      cancelClone: (): Promise<void> => _unwrappingInvoke(CHANNELS.PROJECT_CLONE_CANCEL),
+      cancelClone: (opId?: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_CLONE_CANCEL, opId ? { opId } : undefined),
 
       getRecipes: (
         projectId: string
@@ -2260,8 +2261,8 @@ function buildElectronApi(): ElectronAPI {
       commit: (cwd: string, message: string) =>
         _unwrappingInvoke(CHANNELS.GIT_COMMIT, { cwd, message }),
 
-      push: (cwd: string, setUpstream?: boolean) =>
-        _unwrappingInvoke(CHANNELS.GIT_PUSH, { cwd, setUpstream }),
+      push: (cwd: string, setUpstream?: boolean, opId?: string) =>
+        _unwrappingInvoke(CHANNELS.GIT_PUSH, { cwd, setUpstream, opId }),
 
       pullRebase: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_PULL_REBASE, { cwd }),
 
