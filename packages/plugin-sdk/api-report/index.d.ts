@@ -2348,6 +2348,50 @@ interface RecipeContribution {
      */
     autoAssign?: "always" | "never" | "prompt";
 }
+/** One caption line in a {@link PluginTourChapter}, in seconds from the chapter start. */
+interface PluginTourCaption {
+    start: number;
+    end: number;
+    text: string;
+}
+/**
+ * Timing for one chapter of a {@link PluginTourContribution}, the same data the
+ * built-in Daintree tour generates per chapter. Every cue and caption falls
+ * inside `duration` (seconds).
+ */
+interface PluginTourChapter {
+    id: string;
+    duration: number;
+    /** Named scene cues, in seconds. Scenes animate off these, never wall-clock literals. */
+    cues?: Record<string, number>;
+    captions?: PluginTourCaption[];
+    /**
+     * Narration audio: a plugin-relative asset path, an https URL on a host the
+     * tour lists in `audioHosts`, or `null` for a silent chapter.
+     */
+    audioUrl: string | null;
+    /** 8-character lowercase hex fingerprint of the narration the timing was generated from. */
+    narrationHash: string;
+}
+/**
+ * One `contributes.tours` entry (#12768): a welcome tour that plays in the same
+ * dialog as the Daintree tour. Without `panelKind` it is a plugin tour offered
+ * from Help and the command palette; with one it is a panel tour opened from
+ * that panel's menu, and `panelKind` must name one of this plugin's own
+ * `contributes.panels`. Remote narration may only be fetched from the hosts
+ * listed in `audioHosts`, so the user can see where audio comes from.
+ * Declaration only for now — loading and playback are a follow-up.
+ */
+interface PluginTourContribution {
+    id: string;
+    title: string;
+    /** Plugin-relative module exporting the chapter scenes. */
+    componentPath: string;
+    panelKind?: string;
+    /** Bare hostnames remote chapter audio is fetched from, e.g. `cdn.example.com`. */
+    audioHosts?: string[];
+    chapters: PluginTourChapter[];
+}
 /**
  * Per-capability scope binding that attenuates the compound-capability lattice
  * elevation in `PluginService.validateAndBuildActionDescriptor`. The lattice
@@ -2643,6 +2687,12 @@ interface PluginManifest {
          * qualified id. Empty unless the plugin ships recipes.
          */
         recipes: RecipeContribution[];
+        /**
+         * Plugin welcome tours (#12768). Optional in the type but always
+         * materialized by the manifest schema's `.default([])`, for the same reason
+         * as `agentMcp`. Not available to a `scope: "project"` plugin.
+         */
+        tours?: PluginTourContribution[];
         /**
          * Project surfaces this plugin claims (§7.8). Optional in the type but
          * always materialized by the manifest schema's `.default({})`, so a

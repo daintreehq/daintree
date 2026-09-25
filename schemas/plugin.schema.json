@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/daintreehq/daintree/develop/schemas/plugin.schema.json",
   "title": "Daintree plugin manifest",
-  "description": "Manifest for a Daintree plugin installed into the user's own plugins directory. A plugin committed into a project's .daintree/plugins/ is held to different rules — use plugin.project.schema.json for those.\n\nGenerated from Daintree's own manifest schema — do not edit by hand.\n\nStructural rules only. These cross-field rules are enforced when the plugin loads and cannot be expressed here:\n- A view's id must equal the id of a declared panel, and a surface's viewId must name a declared view whose panel is not a PTY panel.\n- Under project scope, menuItems, agents, skills, recipes, fileDecorationProviders, fileEditors, processTools, mcpServers and forgeProviders are refused, and \"scope\": \"project\" is required.\n- The reserved daintree.* publisher namespace is accepted only for built-in plugins.\n- previewTools and guestAdapters are accepted only for built-in plugins, each id must be namespaced under the plugin's own name, and a preview tool's guestAdapter must name an adapter the same manifest declares.\n- A command id may not collide with a built-in action id, and some built-in ids refuse plugin dispatch outright.",
+  "description": "Manifest for a Daintree plugin installed into the user's own plugins directory. A plugin committed into a project's .daintree/plugins/ is held to different rules — use plugin.project.schema.json for those.\n\nGenerated from Daintree's own manifest schema — do not edit by hand.\n\nStructural rules only. These cross-field rules are enforced when the plugin loads and cannot be expressed here:\n- A view's id must equal the id of a declared panel, and a surface's viewId must name a declared view whose panel is not a PTY panel.\n- Under project scope, menuItems, agents, skills, recipes, fileDecorationProviders, fileEditors, processTools, mcpServers, tours and forgeProviders are refused, and \"scope\": \"project\" is required.\n- The reserved daintree.* publisher namespace is accepted only for built-in plugins.\n- previewTools and guestAdapters are accepted only for built-in plugins, each id must be namespaced under the plugin's own name, and a preview tool's guestAdapter must name an adapter the same manifest declares.\n- A command id may not collide with a built-in action id, and some built-in ids refuse plugin dispatch outright.\n- A tour's panelKind must name a declared panel; its chapter ids must be unique; every cue and caption must fall inside its chapter's duration; and a remote chapter audioUrl must be https on a host listed in that tour's audioHosts.",
   "type": "object",
   "properties": {
     "$schema": {
@@ -1288,6 +1288,141 @@
               "id",
               "name",
               "mode"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "tours": {
+          "default": [],
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9._-]+$"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "componentPath": {
+                "type": "string",
+                "minLength": 1
+              },
+              "panelKind": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9._-]+$"
+              },
+              "audioHosts": {
+                "default": [],
+                "maxItems": 8,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 253
+                }
+              },
+              "chapters": {
+                "minItems": 1,
+                "maxItems": 32,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[a-zA-Z0-9._-]+$"
+                    },
+                    "duration": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 600
+                    },
+                    "cues": {
+                      "default": {},
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[a-zA-Z0-9._-]+$"
+                      },
+                      "additionalProperties": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    },
+                    "captions": {
+                      "default": [],
+                      "maxItems": 128,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "start": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "end": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          },
+                          "text": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 500
+                          }
+                        },
+                        "required": [
+                          "start",
+                          "end",
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "audioUrl": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "narrationHash": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}$"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "duration",
+                    "audioUrl",
+                    "narrationHash"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "componentPath",
+              "chapters"
             ],
             "additionalProperties": false
           }
