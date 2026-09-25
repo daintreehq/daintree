@@ -1338,6 +1338,96 @@ describe("getWorktreeChangesWithStats cancellation (#12460)", () => {
   });
 });
 
+describe("getWorktreeChangesWithStats oversized changeset warnings", () => {
+  const emptyStatus = {
+    modified: [],
+    created: [],
+    deleted: [],
+    renamed: [],
+    staged: [],
+    conflicted: [],
+    not_added: [],
+  };
+  const NUMSTAT_MSG = "Large changeset detected; limiting numstat to first 100 files";
+  const UNTRACKED_MSG = "Large number of untracked files; limiting to first 200";
+
+  const files = (prefix: string, n: number) =>
+    Array.from({ length: n }, (_, i) => `${prefix}/f${i}.ts`);
+
+  const warnCount = (message: string) =>
+    vi.mocked(logWarn).mock.calls.filter(([msg]) => msg === message).length;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __clearPerFileDiffStatCacheForTesting();
+    (fs.access as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 50 });
+    mockGit.raw.mockResolvedValue("");
+    mockGit.diff.mockResolvedValue("");
+  });
+
+  it("warns about a large tracked changeset once per cwd until it drops under the cap", async () => {
+    const cwd = "/oversized-numstat/" + Math.random();
+    const large = { ...emptyStatus, modified: files("src", 150) };
+    mockGit.status.mockResolvedValue(large);
+
+    await getWorktreeChangesWithStats(cwd, true);
+    invalidateWorktreeCache(cwd);
+    await getWorktreeChangesWithStats(cwd, true);
+    await getWorktreeChangesWithStats(cwd, true);
+
+    expect(warnCount(NUMSTAT_MSG)).toBe(1);
+    expect(logWarn).toHaveBeenCalledWith(NUMSTAT_MSG, {
+      cwd,
+      totalFiles: 150,
+      limitedTo: 100,
+    });
+
+    mockGit.status.mockResolvedValue({ ...emptyStatus, modified: files("src", 5) });
+    await getWorktreeChangesWithStats(cwd, true);
+    expect(warnCount(NUMSTAT_MSG)).toBe(1);
+
+    mockGit.status.mockResolvedValue(large);
+    await getWorktreeChangesWithStats(cwd, true);
+    expect(warnCount(NUMSTAT_MSG)).toBe(2);
+  });
+
+  it("warns about many untracked files once per cwd until it drops under the cap", async () => {
+    const cwd = "/oversized-untracked/" + Math.random();
+    const large = { ...emptyStatus, not_added: files("tmp", 250) };
+    mockGit.status.mockResolvedValue(large);
+
+    await getWorktreeChangesWithStats(cwd, true);
+    await getWorktreeChangesWithStats(cwd, true);
+
+    expect(warnCount(UNTRACKED_MSG)).toBe(1);
+    expect(logWarn).toHaveBeenCalledWith(UNTRACKED_MSG, {
+      cwd,
+      totalUntracked: 250,
+      limitedTo: 200,
+    });
+
+    mockGit.status.mockResolvedValue(emptyStatus);
+    await getWorktreeChangesWithStats(cwd, true);
+    mockGit.status.mockResolvedValue(large);
+    await getWorktreeChangesWithStats(cwd, true);
+
+    expect(warnCount(UNTRACKED_MSG)).toBe(2);
+  });
+
+  it("tracks warned state independently per cwd", async () => {
+    const cwdA = "/oversized-isolation-a/" + Math.random();
+    const cwdB = "/oversized-isolation-b/" + Math.random();
+    mockGit.status.mockResolvedValue({ ...emptyStatus, not_added: files("tmp", 250) });
+
+    await getWorktreeChangesWithStats(cwdA, true);
+    await getWorktreeChangesWithStats(cwdB, true);
+    await getWorktreeChangesWithStats(cwdA, true);
+
+    expect(warnCount(UNTRACKED_MSG)).toBe(2);
+  });
+});
+
 describe("capCommitBody", () => {
   it("keeps the trailer block when a long body is capped", () => {
     const trailers = "Co-authored-by: Sam Okafor <sam@helios.dev>";
