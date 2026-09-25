@@ -46,6 +46,7 @@ import {
 } from "@/store/slices/panelRegistry/panelCount";
 import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
 import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
+import { buildTerminalSendCommandReceipt } from "@shared/utils/terminalSendCommandResult";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 
@@ -59,16 +60,6 @@ const HANDBACK_ARG_SCHEMA = z
   .describe(
     "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only; a shell refuses it."
   );
-
-/**
- * Cap on the command text echoed back by `terminal.sendCommand` (#12337).
- *
- * Bounded because the result advertises an output schema: over the 50 KiB
- * response budget the transport drops `structuredContent` and flags the call
- * `isError`, so an unbounded echo would turn a successful large submission into
- * a reported failure with its own correlation token truncated away.
- */
-const MAX_ECHOED_COMMAND_CHARS = 1024;
 
 export function registerTerminalQueryActions(
   actions: ActionRegistry,
@@ -906,20 +897,11 @@ export function registerTerminalQueryActions(
         await terminalClient.submit(terminalId, command, submissionToken);
       }
 
-      // Return a clear message so the AI model knows not to repeat this action
-      return {
-        sent: true,
-        terminalId,
-        // Echoed back bounded, never whole. The result now advertises an output
-        // schema, and an oversized result does not merely truncate: it drops
-        // `structuredContent` and comes back flagged `isError`. A large context
-        // injection echoed in full would therefore report a submission that DID
-        // go out as a failed call, with the token it needs to check that gone
-        // from the truncated body — the exact silent loss this issue closes.
-        command: command.slice(0, MAX_ECHOED_COMMAND_CHARS),
-        submissionToken,
-        message: `Submission queued. Do not send this command again; check delivery with the terminal-status capability using this submissionToken.`,
-      };
+      // A clear message so the AI model knows not to repeat this action, with
+      // the command echoed back bounded, never whole: an oversized result drops
+      // `structuredContent` and comes back flagged `isError`, which would report
+      // a submission that DID go out as a failed call.
+      return buildTerminalSendCommandReceipt(terminalId, command, submissionToken);
     },
   }));
 

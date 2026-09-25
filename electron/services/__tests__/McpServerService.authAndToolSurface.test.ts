@@ -1747,14 +1747,16 @@ describe("McpServerService", () => {
       expect(names).not.toContain("recipe.run");
 
       // Dispatch is still fail-closed — it must not have landed in window A,
-      // whose manifest returns "from-window-A".
+      // whose manifest returns "from-window-A". Nothing is attached to the
+      // workspace and the host has no form of this action to run alone, which
+      // is reported as exactly that rather than as a lost route.
       const beforeOpen = await client.callTool({ name: "terminal.list", arguments: {} });
       expect(beforeOpen.isError).toBe(true);
       const failure = JSON.parse(getTextResult(beforeOpen).content[0].text as string) as {
         code: string;
         retriable: boolean;
       };
-      expect(failure.code).toBe("SESSION_BINDING_GONE");
+      expect(failure.code).toBe("NO_FRONTEND_ATTACHED");
       // The half that makes the surface honest: a conductor that gave up
       // permanently here would be this same bug one layer down.
       expect(failure.retriable).toBe(true);

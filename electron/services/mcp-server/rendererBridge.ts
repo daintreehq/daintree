@@ -1,6 +1,19 @@
-import { ipcMain, webContents as electronWebContents } from "electron";
+import { webContents as electronWebContents } from "electron";
 import { randomUUID } from "node:crypto";
 import type { WindowRegistry } from "../../window/WindowRegistry.js";
+import type { ClientEndpoint } from "../../ipc/endpoint.js";
+import type { IpcContext } from "../../ipc/types.js";
+import { onWithContext } from "../../ipc/utils.js";
+import {
+  MCP_DISPATCH_ACTION_METHOD,
+  MCP_GET_MANIFEST_METHOD,
+  resolveMcpDriveTarget,
+} from "./driveTarget.js";
+import {
+  describeViewlessWorkspace,
+  hasViewlessImplementation,
+  runViewlessAction,
+} from "../viewless/index.js";
 import { getProjectViewManager } from "../../window/windowRef.js";
 import {
   getWebContentsForProject,
@@ -88,6 +101,35 @@ export class WorkspaceBindingError extends McpRouteBindingError {
     this.name = "WorkspaceBindingError";
     this.workspaceId = workspaceId;
     this.reason = reason;
+  }
+}
+
+/**
+ * A workspace-bound dispatch found no frontend attached to its workspace — no
+ * local view, no remote driver — and the action has no host-side form that
+ * could run without one.
+ *
+ * A `WorkspaceBindingError` with reason `not-found`, because that is exactly
+ * what it is to every caller that already handles one: retriable, never routed
+ * elsewhere, answered from the base surface at discovery. The tool result is
+ * where it differs, reporting `NO_FRONTEND_ATTACHED` so a caller can tell "open
+ * a window, or ask for something the host can do alone" from a route it lost.
+ */
+export class NoFrontendAttachedError extends WorkspaceBindingError {
+  readonly frontendCode = "NO_FRONTEND_ATTACHED";
+  /** The action that could not run, or undefined when a manifest was asked for. */
+  readonly actionId: string | undefined;
+
+  constructor(workspaceId: string, actionId?: string) {
+    super(workspaceId, "not-found");
+    this.name = "NoFrontendAttachedError";
+    this.actionId = actionId;
+    this.message =
+      actionId === undefined
+        ? `No Daintree frontend is attached to workspace ${workspaceId}, so it has no live action surface.`
+        : `No Daintree frontend is attached to workspace ${workspaceId}, and the host cannot run ` +
+          `'${actionId}' without one. The action was not run. Open the workspace in Daintree and ` +
+          `retry, or use a tool the host can run on its own.`;
   }
 }
 
@@ -193,6 +235,50 @@ function thawThenSend(
     });
 }
 
+/**
+ * The dispatch request a renderer answers, less the correlation id: the local
+ * IPC send adds a `requestId`, while a remote driver's endpoint correlates the
+ * request itself.
+ */
+function buildDispatchPayload(
+  actionId: string,
+  args: unknown,
+  confirmed: boolean,
+  sessionOrigin: McpSessionOrigin,
+  contextOverride?: ActionContext,
+  callerInfo?: McpBearerIdentity,
+  approval?: Pick<WorkspaceDispatchOptions, "offerSessionApproval" | "approvalOnly">
+) {
+  return {
+    actionId,
+    args,
+    confirmed,
+    // Only help/assistant-pinned and agent-pane dispatch pass a
+    // contextOverride; the external/api-key paths leave this undefined so the
+    // renderer keeps its live context (#8317, #12486).
+    context: contextOverride,
+    // Display-only requesting-bearer identity for the confirm dialog (#9157).
+    // Only the unpinned external path supplies it; absent for pinned
+    // help-session dispatch so the dialog stays provenance-free.
+    callerInfo,
+    // How the dispatching session authenticated (#11808), so the renderer can
+    // stamp a spawn it creates as assistant-launched rather than lumping every
+    // MCP-borne spawn under one origin. Always present: main resolves it, the
+    // caller never sends it.
+    sessionOrigin,
+    // Agent-pane approval controls (#12692). Main decides both; the renderer
+    // only honours them.
+    ...(approval?.offerSessionApproval ? { offerSessionApproval: true } : {}),
+    ...(approval?.approvalOnly ? { approvalOnly: true } : {}),
+  };
+}
+
+/** Whether a rejection means the endpoint went away before it answered. */
+function isEndpointGone(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === "HOST_DISCONNECTED" || code === "STALE_GENERATION";
+}
+
 export function createRendererBridge(
   pendingManifests: Map<string, PendingRequest<ActionManifestEntry[]>>,
   pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>,
@@ -234,6 +320,11 @@ export function createRendererBridge(
   // WebContents ids that already have a teardown-eviction listener wired, so we
   // never double-register one across repeated fetches or a server restart.
   const perWebContentsEvictionWired = new Set<number>();
+  // A remote driving view's manifest, keyed by endpoint and project: the same warm cache
+  // the per-WebContents map gives a local view, so a bound session driven from
+  // another machine does not pay a link round trip for every call's lookup.
+  const remoteManifestCache = new Map<string, ActionManifestEntry[]>();
+  const remoteManifestEvictionWired = new Set<string>();
 
   // One-shot latch so a persistently broken workspace lookup can't flood the
   // log on every dispatch (#11536).
@@ -639,26 +730,15 @@ export function createRendererBridge(
         try {
           webContents.send(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, {
             requestId,
-            actionId,
-            args,
-            confirmed,
-            // Only help/assistant-pinned and agent-pane dispatch pass a
-            // contextOverride; the external/api-key paths leave this undefined
-            // so the renderer keeps its live context (#8317, #12486).
-            context: contextOverride,
-            // Display-only requesting-bearer identity for the confirm dialog
-            // (#9157). Only the unpinned external path supplies it; absent for
-            // pinned help-session dispatch so the dialog stays provenance-free.
-            callerInfo,
-            // How the dispatching session authenticated (#11808), so the
-            // renderer can stamp a spawn it creates as assistant-launched
-            // rather than lumping every MCP-borne spawn under one origin.
-            // Always present: main resolves it, the caller never sends it.
-            sessionOrigin,
-            // Agent-pane approval controls (#12692). Main decides both; the
-            // renderer only honours them.
-            ...(approval?.offerSessionApproval ? { offerSessionApproval: true } : {}),
-            ...(approval?.approvalOnly ? { approvalOnly: true } : {}),
+            ...buildDispatchPayload(
+              actionId,
+              args,
+              confirmed,
+              sessionOrigin,
+              contextOverride,
+              callerInfo,
+              approval
+            ),
           });
         } catch (err) {
           clearTimeout(timer);
@@ -804,20 +884,202 @@ export function createRendererBridge(
   }
 
   /**
+   * Who drives a workspace, according to the drive lease.
+   *
+   * A remote driver is the only answer that bypasses local resolution: its
+   * renderer is on another machine and is reached through its endpoint, never
+   * through "the focused window". A local driver is a preference — the view the
+   * lease names wins over the pane's launch view and settles a workspace that
+   * is open in more than one local view — but it is still resolved as a local
+   * view, so a lease that names a view that has since gone falls back to the
+   * rules below. With no lease installed, or nobody driving, routing is what it
+   * was before leases existed.
+   */
+  function resolveDriver(workspaceId: string): {
+    remote?: ClientEndpoint;
+    localWebContentsId?: number;
+  } {
+    const driver = resolveMcpDriveTarget(workspaceId);
+    if (!driver) return {};
+    if (driver.kind === "remote-view") return { remote: driver };
+    const wc = electronWebContents.fromId(driver.handle);
+    return wc && !wc.isDestroyed() ? { localWebContentsId: wc.id } : {};
+  }
+
+  /**
+   * A remote endpoint can be rebound to another project without closing, so its
+   * manifest is keyed by the project it described as well: a rebound view never
+   * serves the previous project's actions, or their danger, to this one.
+   */
+  function remoteManifestKey(endpoint: ClientEndpoint, workspaceId: string): string {
+    return `${endpoint.endpointId}\0${workspaceId}`;
+  }
+
+  /**
+   * Evict a remote driver's cached manifest when its endpoint closes. Wired
+   * once per endpoint, as the per-WebContents eviction is.
+   */
+  function ensureRemoteManifestEviction(endpoint: ClientEndpoint): void {
+    if (remoteManifestEvictionWired.has(endpoint.endpointId)) return;
+    remoteManifestEvictionWired.add(endpoint.endpointId);
+    endpoint.onClose(() => {
+      const prefix = `${endpoint.endpointId}\0`;
+      for (const key of remoteManifestCache.keys()) {
+        if (key.startsWith(prefix)) remoteManifestCache.delete(key);
+      }
+      remoteManifestEvictionWired.delete(endpoint.endpointId);
+    });
+  }
+
+  async function requestManifestFromEndpoint(
+    endpoint: ClientEndpoint,
+    workspaceId: string
+  ): Promise<ActionManifestEntry[]> {
+    let answer: unknown;
+    try {
+      answer = await endpoint.request(
+        MCP_GET_MANIFEST_METHOD,
+        {},
+        { timeoutMs: MCP_MANIFEST_REQUEST_TIMEOUT_MS }
+      );
+    } catch (err) {
+      // The driver left mid-request: the same retriable binding failure a
+      // local view torn down mid-fetch reports.
+      if (isEndpointGone(err)) throw new WorkspaceBindingError(workspaceId, "not-found");
+      throw normalizeError(err, "Failed to request action manifest");
+    }
+    const manifest = Array.isArray(answer) ? (answer as ActionManifestEntry[]) : [];
+    if (!endpoint.isClosed()) {
+      remoteManifestCache.set(remoteManifestKey(endpoint, workspaceId), manifest);
+      ensureRemoteManifestEviction(endpoint);
+    }
+    return manifest;
+  }
+
+  /**
+   * Read a remote driver's answer to a dispatch. The endpoint already checked
+   * that it came from the view it asked; this checks its shape, strictly as the
+   * local response handler does, so a remote view can report no more than a
+   * local one can.
+   */
+  function readDispatchAnswer(answer: unknown, actionId: string): DispatchEnvelope {
+    const payload = answer as {
+      result?: { ok?: unknown };
+      confirmationDecision?: unknown;
+      approvalScope?: unknown;
+    } | null;
+    if (
+      payload === null ||
+      typeof payload !== "object" ||
+      payload.result === null ||
+      typeof payload.result !== "object" ||
+      typeof payload.result.ok !== "boolean"
+    ) {
+      throw new Error(`Malformed answer to ${actionId} from the driving view`);
+    }
+    const confirmationDecision =
+      typeof payload.confirmationDecision === "string"
+        ? (payload.confirmationDecision as DispatchEnvelope["confirmationDecision"])
+        : undefined;
+    return {
+      result: payload.result as DispatchEnvelope["result"],
+      ...(confirmationDecision !== undefined ? { confirmationDecision } : {}),
+      ...(confirmationDecision === "approved" && payload.approvalScope === "session"
+        ? { approvalScope: "session" as const }
+        : {}),
+    };
+  }
+
+  async function dispatchToEndpoint(
+    endpoint: ClientEndpoint,
+    workspaceId: string,
+    actionId: string,
+    args: unknown,
+    confirmed: boolean,
+    sessionOrigin: McpSessionOrigin,
+    options: WorkspaceDispatchOptions
+  ): Promise<DispatchEnvelope> {
+    let answer: unknown;
+    try {
+      answer = await endpoint.request(
+        MCP_DISPATCH_ACTION_METHOD,
+        buildDispatchPayload(
+          actionId,
+          args,
+          confirmed,
+          sessionOrigin,
+          options.contextOverride,
+          undefined,
+          options
+        ),
+        { timeoutMs: MCP_DISPATCH_TIMEOUT_MS }
+      );
+    } catch (err) {
+      if (isEndpointGone(err)) throw new WorkspaceBindingError(workspaceId, "not-found");
+      throw normalizeError(err, `Failed to dispatch action: ${actionId}`);
+    }
+    const envelope = readDispatchAnswer(answer, actionId);
+    const dispatchedWorkspace = await describeViewlessWorkspace(workspaceId).catch(() => undefined);
+    return { ...envelope, ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}) };
+  }
+
+  /**
+   * A workspace with no frontend attached: run the action in main when the
+   * host has its own form of it, and otherwise say so rather than guess.
+   *
+   * An approval request never runs anything, so it keeps the plain binding
+   * failure it always reported — there is no dialog to raise, and nothing here
+   * could stand in for the user's answer.
+   */
+  async function dispatchWithoutFrontend(
+    workspaceId: string,
+    actionId: string,
+    args: unknown,
+    confirmed: boolean,
+    options: WorkspaceDispatchOptions
+  ): Promise<DispatchEnvelope> {
+    if (options.approvalOnly) throw new WorkspaceBindingError(workspaceId, "not-found");
+    if (!hasViewlessImplementation(actionId)) {
+      throw new NoFrontendAttachedError(workspaceId, actionId);
+    }
+    const result = await runViewlessAction({
+      workspaceId,
+      actionId,
+      args,
+      confirmed,
+      ...(options.contextOverride ? { context: options.contextOverride } : {}),
+    });
+    if (result === null) throw new NoFrontendAttachedError(workspaceId, actionId);
+    const dispatchedWorkspace = await describeViewlessWorkspace(workspaceId).catch(() => undefined);
+    return { result, ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}) };
+  }
+
+  /**
    * Manifest fetch for a workspace-bound external session (#11789). Resolves
    * the workspace's current view, then reuses the per-WebContents fetch and
    * cache the pinned path already uses — so a bound session gets the same
    * cross-window isolation and the same warm cache, keyed by whichever view
-   * currently owns its workspace.
+   * currently owns its workspace. A remote driver answers through its endpoint.
    */
   function requestManifestForWorkspace(
     workspaceId: string,
     preferredWebContentsId?: number
   ): Promise<ActionManifestEntry[]> {
+    const driver = resolveDriver(workspaceId);
+    if (driver.remote) return requestManifestFromEndpoint(driver.remote, workspaceId);
     let id: number;
     try {
-      id = getWorkspaceWebContents(workspaceId, preferredWebContentsId).id;
+      id = getWorkspaceWebContents(
+        workspaceId,
+        driver.localWebContentsId ?? preferredWebContentsId
+      ).id;
     } catch (err) {
+      // Nothing is attached to the workspace at all, which callers answer
+      // differently from a route they lost: discovery falls back to the base
+      // surface either way, but a call can still run in main.
+      if (err instanceof WorkspaceBindingError && err.reason === "not-found") {
+        return Promise.reject(new NoFrontendAttachedError(workspaceId));
+      }
       return Promise.reject(normalizeError(err, "MCP workspace binding unavailable"));
     }
     return requestManifestForWebContents(id).catch((err: unknown) => {
@@ -838,8 +1100,12 @@ export function createRendererBridge(
    * the bound view's own live context already describes the right workspace.
    * An agent pane does (#12486) — it replays the snapshot taken when it was
    * launched, as a help session does, so "current worktree" means its own.
+   *
+   * Targets the workspace's driver: a remote driving view through its endpoint,
+   * a local one as the preferred view. With no frontend attached at all, the
+   * host runs the action itself when it can (see `dispatchWithoutFrontend`).
    */
-  function dispatchActionForWorkspace(
+  async function dispatchActionForWorkspace(
     workspaceId: string,
     actionId: string,
     args: unknown,
@@ -847,8 +1113,32 @@ export function createRendererBridge(
     sessionOrigin: McpSessionOrigin = "external",
     options: WorkspaceDispatchOptions = {}
   ): Promise<DispatchEnvelope> {
+    const driver = resolveDriver(workspaceId);
+    if (driver.remote) {
+      return dispatchToEndpoint(
+        driver.remote,
+        workspaceId,
+        actionId,
+        args,
+        confirmed,
+        sessionOrigin,
+        options
+      );
+    }
+    let target: Electron.WebContents;
+    try {
+      target = getWorkspaceWebContents(
+        workspaceId,
+        driver.localWebContentsId ?? options.preferredWebContentsId
+      );
+    } catch (err) {
+      if (err instanceof WorkspaceBindingError && err.reason === "not-found") {
+        return dispatchWithoutFrontend(workspaceId, actionId, args, confirmed, options);
+      }
+      throw err;
+    }
     return sendDispatchRequest(
-      () => getWorkspaceWebContents(workspaceId, options.preferredWebContentsId),
+      () => target,
       actionId,
       args,
       confirmed,
@@ -860,16 +1150,17 @@ export function createRendererBridge(
     );
   }
 
-  const manifestHandler = (
-    event: Electron.IpcMainEvent,
-    payload: { requestId: string; manifest: unknown }
-  ) => {
+  // Both response handlers read the sender off the IPC context rather than a
+  // raw event, so they are registered with the dispatcher too: a response that
+  // arrives over a link carries its endpoint's handle, never a WebContents, and
+  // can match only a request that was addressed to that handle.
+  const manifestHandler = (ctx: IpcContext, payload: { requestId: string; manifest: unknown }) => {
     if (!payload || typeof payload.requestId !== "string") return;
     const pending = pendingManifests.get(payload.requestId);
     if (!pending) return;
-    if (event.sender.id !== pending.webContentsId) {
+    if (ctx.webContentsId !== pending.webContentsId) {
       console.warn(
-        `[MCP] Ignoring manifest response from unexpected sender ${event.sender.id} (expected ${pending.webContentsId}, requestId=${payload.requestId})`
+        `[MCP] Ignoring manifest response from unexpected sender ${ctx.webContentsId} (expected ${pending.webContentsId}, requestId=${payload.requestId})`
       );
       return;
     }
@@ -887,7 +1178,7 @@ export function createRendererBridge(
   };
 
   const dispatchHandler = (
-    event: Electron.IpcMainEvent,
+    ctx: IpcContext,
     payload: {
       requestId: string;
       result: import("../../../shared/types/actions.js").ActionDispatchResult;
@@ -898,9 +1189,9 @@ export function createRendererBridge(
     if (!payload || typeof payload.requestId !== "string") return;
     const pending = pendingDispatches.get(payload.requestId);
     if (!pending) return;
-    if (event.sender.id !== pending.webContentsId) {
+    if (ctx.webContentsId !== pending.webContentsId) {
       console.warn(
-        `[MCP] Ignoring dispatch response from unexpected sender ${event.sender.id} (expected ${pending.webContentsId}, requestId=${payload.requestId})`
+        `[MCP] Ignoring dispatch response from unexpected sender ${ctx.webContentsId} (expected ${pending.webContentsId}, requestId=${payload.requestId})`
       );
       return;
     }
@@ -925,12 +1216,9 @@ export function createRendererBridge(
   };
 
   function setupListeners(cleanupListeners: Array<() => void>): void {
-    ipcMain.on(CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE, manifestHandler);
-    ipcMain.on(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, dispatchHandler);
-
     cleanupListeners.push(
-      () => ipcMain.removeListener(CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE, manifestHandler),
-      () => ipcMain.removeListener(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, dispatchHandler)
+      onWithContext(CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE, manifestHandler),
+      onWithContext(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, dispatchHandler)
     );
   }
 
@@ -968,16 +1256,23 @@ export function createRendererBridge(
      * `null` when the workspace has no single live view, so a bound session can
      * never fall back to the shared cache and serve another workspace's tool
      * surface — the same isolation `getCachedManifestForWebContents` gives the
-     * pinned path.
+     * pinned path. A remote driver reads its own endpoint's entry.
      */
     getCachedManifestForWorkspace: (
       workspaceId: string,
       preferredWebContentsId?: number
     ): ActionManifestEntry[] | null => {
+      const driver = resolveDriver(workspaceId);
+      if (driver.remote) {
+        return remoteManifestCache.get(remoteManifestKey(driver.remote, workspaceId)) ?? null;
+      }
       try {
         return (
           perWebContentsCache.get(
-            getWorkspaceWebContents(workspaceId, preferredWebContentsId).id
+            getWorkspaceWebContents(
+              workspaceId,
+              driver.localWebContentsId ?? preferredWebContentsId
+            ).id
           ) ?? null
         );
       } catch {
@@ -994,6 +1289,7 @@ export function createRendererBridge(
       // double-registering on the next fetch.
       perWebContentsCache.clear();
       perWebContentsInflight.clear();
+      remoteManifestCache.clear();
     },
   };
 }

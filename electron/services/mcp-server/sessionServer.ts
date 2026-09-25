@@ -58,6 +58,7 @@ import {
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
   SESSION_GONE,
+  NO_FRONTEND_ATTACHED_CODE,
   INVALID_URL_CODE,
   RESOURCE_NOT_OWNED_CODE,
   RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS,
@@ -75,6 +76,7 @@ import {
 } from "../../../shared/types/terminalWaitUntilIdle.js";
 import {
   McpRouteBindingError,
+  NoFrontendAttachedError,
   RendererBridgeUnavailableError,
   WorkspaceBindingError,
 } from "./rendererBridge.js";
@@ -1594,6 +1596,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         ) {
           viewlessStatusWorkspaceId = err.workspaceId;
           boundManifest = [];
+        } else if (
+          err instanceof NoFrontendAttachedError &&
+          getExternalBaseManifest().some((entry) => entry.id === actionId)
+        ) {
+          // Nothing is attached to the workspace, so no renderer can be asked:
+          // the dispatch below either runs the action in main or refuses it as
+          // needing a frontend. The ceiling still has a truthful answer for a
+          // built-in tool, because the host's base surface is generated from
+          // the same action registry, and it is what keeps a confirm-gated call
+          // refused here rather than run by main unattended. A tool the base
+          // surface does not describe — a plugin's — keeps failing closed below:
+          // a view that opened before its dispatch could raise its dialog.
+          boundManifest = getExternalBaseManifest();
         } else {
           // Fail closed. Proceeding on an unresolved manifest would erase the
           // only evidence that this action needs confirmation, turning a refusal
@@ -2775,6 +2790,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         } catch (err) {
           outcome = { kind: "throw", error: err };
+          // Checked before the binding failure it extends: the workspace is
+          // reachable in principle, it just has nothing attached that could run
+          // this action, and the host has no form of it to run alone.
+          if (err instanceof NoFrontendAttachedError) {
+            const statusHint =
+              actionId === TERMINAL_GET_STATUS_TOOL
+                ? ` Status for specific terminals can still be read without one — call '${actionId}' again with an explicit 'terminalIds' array.`
+                : "";
+            return buildToolError({
+              code: NO_FRONTEND_ATTACHED_CODE,
+              message: `${err.message}${statusHint}`,
+              retriable: true,
+            });
+          }
           if (err instanceof McpRouteBindingError) {
             return buildToolError({
               code: SESSION_BINDING_GONE,
@@ -2821,14 +2850,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // entry couldn't be fetched (the manifest itself comes from the
             // renderer, so `entry` is undefined here and the tool's danger is
             // unknowable). We must not claim CONFIRMATION_REQUIRED without
-            // knowing the tool is confirm-gated, so this stays a *retriable*
-            // EXECUTION_ERROR — the renderer may come back when a window opens.
-            // The message names the cause so the caller retries deliberately
-            // rather than treating it as an opaque dispatch failure.
+            // knowing the tool is confirm-gated, so this is the typed, retriable
+            // "no frontend" refusal — a window may open, locally or from another
+            // machine. An unbound session names no workspace, so there is no
+            // project the host could run the action for on its own.
             return buildToolError({
-              code: EXECUTION_ERROR_CODE,
+              code: NO_FRONTEND_ATTACHED_CODE,
               message:
                 "No Daintree window is open, so the action surface is unavailable. Retry once a project window is open.",
+              retriable: true,
             });
           }
           return buildToolError({
@@ -3617,6 +3647,13 @@ async function lookupManifestEntry(
       // null and silently drop host confirmation + structuredContent.
       manifest = await requestManifest();
     } catch (err) {
+      // No frontend is attached, which is not a route that went away: the
+      // dispatch can still run in main, or say it needs a frontend. The host's
+      // base surface describes the built-in actions it covers, so their danger
+      // and output schema stay known.
+      if (err instanceof NoFrontendAttachedError) {
+        return getExternalBaseManifest().find((e) => e.id === actionId);
+      }
       // A route that is gone is not a manifest that is merely unavailable
       // (#12082). Collapsing it to `undefined` here makes the bound-session
       // guard below report a non-retriable `NOT_FOUND` — "no such action" — for
