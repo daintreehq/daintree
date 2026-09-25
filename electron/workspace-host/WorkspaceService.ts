@@ -19,6 +19,7 @@ import { SimpleGit, BranchSummary } from "simple-git";
 import { createHardenedGit, createAuthenticatedGit } from "../utils/hardenedGit.js";
 import { readRemotesWithStatus } from "../utils/baseCompareRef.js";
 import { createRemoteInventoryReader } from "./remoteInventory.js";
+import { copyWorktreeIncludeFiles } from "./worktreeInclude.js";
 import {
   classifyGitError,
   extractGitErrorMessage,
@@ -3736,6 +3737,9 @@ export class WorkspaceService {
           startedAt: setupStartedAt,
         });
         await this.lifecycleService.copyDaintreeDir(rootPath, canonicalPath);
+        // Same stage: `WorktreeSetupStage` is part of the MCP output schema.
+        // Never throws — a bad `.worktreeinclude` must not fail the setup.
+        await copyWorktreeIncludeFiles(rootPath, canonicalPath);
 
         // Awaited, and awaited HERE: the setup script below must not start
         // against an unpopulated submodule tree — the original "worktree is

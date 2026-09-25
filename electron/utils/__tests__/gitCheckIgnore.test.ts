@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { spawn } from "node:child_process";
-import { checkIgnoredPaths } from "../gitCheckIgnore.js";
+import { checkIgnoredPaths, listUntrackedMatchingPatternFile } from "../gitCheckIgnore.js";
 import { GIT_BLOCK_TIMEOUT_MS } from "../hardenedGit.js";
 
 vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
@@ -217,5 +217,53 @@ describe("checkIgnoredPaths", () => {
     expect(options.signal).toBe(controller.signal);
     child.emit("close", 1, null);
     await promise;
+  });
+});
+
+describe("listUntrackedMatchingPatternFile", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("uses the pattern file as the only exclude source and expands directories", async () => {
+    const child = nextChild();
+    const promise = listUntrackedMatchingPatternFile("/repo", "/repo/.worktreeinclude");
+    child.stdout.emit("data", Buffer.from(".env\0certs/dev.pem\0"));
+    child.emit("close", 0, null);
+
+    await expect(promise).resolves.toEqual(new Set([".env", "certs/dev.pem"]));
+    const args = spawnArgs();
+    expect(args.slice(-5)).toEqual([
+      "ls-files",
+      "-z",
+      "-o",
+      "-i",
+      "--exclude-from=/repo/.worktreeinclude",
+    ]);
+    // --exclude-standard would union the repo's own rules into the match.
+    expect(args).not.toContain("--exclude-standard");
+    expect(args).not.toContain("--directory");
+  });
+
+  it("kills git and rejects once output exceeds the byte cap", async () => {
+    const child = nextChild();
+    const promise = listUntrackedMatchingPatternFile("/repo", "/repo/.worktreeinclude", {
+      maxStdoutBytes: 8,
+    });
+    child.stdout.emit("data", Buffer.from("a.env\0b.env\0"));
+    child.emit("close", 0, null);
+
+    await expect(promise).rejects.toThrow("output exceeded 8 bytes");
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("rejects on any non-zero exit", async () => {
+    const child = nextChild();
+    const promise = listUntrackedMatchingPatternFile("/repo", "/repo/.worktreeinclude");
+    child.stderr.emit("data", Buffer.from("fatal: cannot use /repo/.worktreeinclude"));
+    child.emit("close", 128, null);
+
+    await expect(promise).rejects.toThrow("exit 128");
   });
 });

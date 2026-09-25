@@ -126,6 +126,10 @@ vi.mock("fs/promises", () => ({
   realpath: vi.fn().mockImplementation((p: string) => Promise.resolve(p)),
 }));
 
+vi.mock("../worktreeInclude.js", () => ({
+  copyWorktreeIncludeFiles: vi.fn(),
+}));
+
 // Default to "exists" so pre-existing tests don't exercise the parent mkdir
 // path unless they opt in by toggling the mock.
 vi.mock("fs", () => ({
@@ -195,6 +199,15 @@ describe("WorkspaceService.createWorktree", () => {
     // (the containment-escape cases below) can't leak into later tests.
     const fsPromisesModule = await import("fs/promises");
     vi.mocked(fsPromisesModule.realpath).mockImplementation((p: any) => Promise.resolve(p));
+
+    const worktreeIncludeModule = await import("../worktreeInclude.js");
+    vi.mocked(worktreeIncludeModule.copyWorktreeIncludeFiles).mockResolvedValue({
+      copied: 0,
+      skippedExisting: 0,
+      skippedUnsafe: 0,
+      skippedOversized: 0,
+      skippedOverLimit: 0,
+    });
 
     mockSendEvent = vi.fn();
 
@@ -533,6 +546,39 @@ describe("WorkspaceService.createWorktree", () => {
 
     resolveCopy!();
     await flushAsyncTail();
+  });
+
+  it("copies .worktreeinclude files in the copy-config stage, after .daintree/", async () => {
+    const { copyWorktreeIncludeFiles } = await import("../worktreeInclude.js");
+    const copySpy = vi.spyOn(service["lifecycleService"], "copyDaintreeDir");
+    const statuses: Array<string | undefined> = [];
+    vi.mocked(copyWorktreeIncludeFiles).mockImplementationOnce(async () => {
+      const monitor = service["monitors"].get(path.resolve("/test/worktree-include"));
+      statuses.push(monitor?.setupStatus?.stage);
+      return {
+        copied: 1,
+        skippedExisting: 0,
+        skippedUnsafe: 0,
+        skippedOversized: 0,
+        skippedOverLimit: 0,
+      };
+    });
+
+    await service.createWorktree("req-include", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/include",
+      path: "/test/worktree-include",
+    });
+    await flushAsyncTail();
+
+    expect(copyWorktreeIncludeFiles).toHaveBeenCalledWith(
+      "/test/root",
+      path.resolve("/test/worktree-include")
+    );
+    expect(copySpy.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(copyWorktreeIncludeFiles).mock.invocationCallOrder[0]
+    );
+    expect(statuses).toEqual(["copy-config"]);
   });
 
   it("logs async tail failure without firing a second create-worktree-result event", async () => {

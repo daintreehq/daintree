@@ -40,6 +40,8 @@ interface RunOptions extends CheckIgnoreOptions {
   input?: string;
   /** Exit codes to treat as a successful empty result rather than an error. */
   emptyResultCodes: readonly number[];
+  /** Kill the child and reject once stdout exceeds this many bytes. */
+  maxStdoutBytes?: number;
 }
 
 /** Spawn one hardened git command and return its NUL-separated stdout tokens. */
@@ -97,7 +99,25 @@ function runGitTokens(cwd: string, gitArgs: string[], options: RunOptions): Prom
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
 
-    child.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    let stdoutBytes = 0;
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      stdoutBytes += chunk.length;
+      if (options.maxStdoutBytes !== undefined && stdoutBytes > options.maxStdoutBytes) {
+        // A partial listing is never trusted, so stop git and drop the output.
+        stdoutChunks.length = 0;
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // already exited
+        }
+        settle(() =>
+          reject(new Error(`git ${gitArgs[0]} output exceeded ${options.maxStdoutBytes} bytes`))
+        );
+        return;
+      }
+      stdoutChunks.push(chunk);
+    });
     child.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
 
     // Swallow stdin EPIPE: when git exits before we finish writing the body
@@ -204,4 +224,26 @@ export async function hasTrackedIgnoredPaths(
     emptyResultCodes: [],
   });
   return tokens.size > 0;
+}
+
+/**
+ * Untracked files under `cwd` that match the gitignore-syntax patterns in
+ * `patternFile`, as repo-relative paths with `/` separators.
+ *
+ * `patternFile` is deliberately the ONLY pattern source: `--exclude-from`
+ * stacks with `--exclude-standard` as a union, so adding the repo's real ignore
+ * rules here would widen the match rather than narrow it. Callers that need
+ * "matches the pattern file AND git ignores it" intersect this with
+ * `checkIgnoredPaths`. No `--directory`, so a matched directory is expanded to
+ * the individual files beneath it.
+ */
+export async function listUntrackedMatchingPatternFile(
+  cwd: string,
+  patternFile: string,
+  options: CheckIgnoreOptions & { maxStdoutBytes?: number } = {}
+): Promise<Set<string>> {
+  return runGitTokens(cwd, ["ls-files", "-z", "-o", "-i", `--exclude-from=${patternFile}`], {
+    ...options,
+    emptyResultCodes: [],
+  });
 }
