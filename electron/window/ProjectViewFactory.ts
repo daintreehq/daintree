@@ -29,6 +29,32 @@ import { registerProjectView, registerWebContents } from "./webContentsRegistry.
 import { setupViewHandlers } from "./ProjectViewHandlers.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
+import { isLocalHostId, parseHostScopedKey } from "../../shared/types/remoteHosts.js";
+
+/**
+ * The host a remote view is attached to, next to the project id. Omitted for
+ * local views, whose arguments are unchanged.
+ */
+export const HOST_ID_ARG = "--daintree-host-id";
+
+/**
+ * The renderer's side of a view key: the project id as its host knows it,
+ * and the host when that is not this machine.
+ */
+export function viewIdentityArgs(viewKey: string): string[] {
+  const { hostId, projectId } = parseHostScopedKey(viewKey);
+  return isLocalHostId(hostId)
+    ? [`${INITIAL_PROJECT_ID_ARG}=${viewKey}`]
+    : [`${INITIAL_PROJECT_ID_ARG}=${projectId}`, `${HOST_ID_ARG}=${hostId}`];
+}
+
+/**
+ * A remote project's plugins, residency and name live on its host, so this
+ * machine's per-project hooks run for local keys only.
+ */
+export function isLocalViewKey(viewKey: string): boolean {
+  return isLocalHostId(parseHostScopedKey(viewKey).hostId);
+}
 
 /**
  * Two-phase load timing, captured per call. The soft bound is observability
@@ -126,7 +152,7 @@ export function createView(host: ProjectViewManager, projectId: string): WebCont
       // instances (#10123).
       additionalArguments: [
         `${INITIAL_COLOR_SCHEME_ARG}=${resolveInitialColorSchemeId()}`,
-        `${INITIAL_PROJECT_ID_ARG}=${projectId}`,
+        ...viewIdentityArgs(projectId),
         `${INSTANCE_ROLE_ARG}=${resolveInstanceRole()}`,
         ...resolveE2EPreloadArgs(),
         // Demo mode is gated in the renderer on process.argv. Electron does
@@ -274,7 +300,10 @@ export function loadView(
       // paint gate starts confirming the frame it reveals once this resolves,
       // and a frame drawn before the CSS applies can still be the skeleton's
       // opacity-0 entrance (#12394). `insertSkeletonCss` never rejects.
-      void Promise.all([verifyProjectBootstrap(wc, projectId), skeletonCssApplied]).then(
+      void Promise.all([
+        verifyProjectBootstrap(wc, parseHostScopedKey(projectId).projectId),
+        skeletonCssApplied,
+      ]).then(
         () => settle(() => resolve()),
         // Always re-wrapped, never passed through: `CANCELLED` must be
         // reachable only from `onDestroyed`, which is the invariant
@@ -332,7 +361,8 @@ export function loadView(
     // precedes did-finish-load, so it has already fired and self-removed.
     const onDomReady = () => {
       if (wc.isDestroyed()) return;
-      const project = projectStore.getProjectById(projectId);
+      // A remote project's name and colour live on its host; paint it plain.
+      const project = isLocalViewKey(projectId) ? projectStore.getProjectById(projectId) : null;
       // instantReveal drops index.html's entrance fades (the 400ms Doherty
       // delay and the staggered section reveals): a switch reveals the view on
       // its skeleton, and any fade still running then shows a blank canvas
