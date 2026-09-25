@@ -1,5 +1,5 @@
 // eager-import-allow: sets up custom protocols (daintree, plugin) and security headers (CSP) eagerly on startup
-import { app, protocol, session } from "electron";
+import { app, net, protocol, session } from "electron";
 import { getWindowForWebContents, getAppWebContents } from "../window/webContentsRegistry.js";
 import path from "path";
 import fs from "fs/promises";
@@ -35,7 +35,11 @@ import {
   formatDialogOrigin,
 } from "../../shared/utils/urlUtils.js";
 import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
-import { stripPluginViewGeneration } from "../../shared/utils/pluginViewUrl.js";
+import {
+  parsePluginTourAudioPath,
+  stripPluginViewGeneration,
+} from "../../shared/utils/pluginViewUrl.js";
+import { fetchWithPrivateHostGuard } from "../utils/pluginDownloadPolicy.js";
 import { getWebviewDialogService } from "../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -56,10 +60,22 @@ import { logWarn } from "../utils/logger.js";
  */
 export type GetPluginRootByAuthority = (authority: string) => string | undefined;
 
+/**
+ * Resolve a tour chapter's remote-audio route on `authority` to the narration
+ * URL the plugin's manifest declared, with the hosts every fetch hop must stay
+ * on. `undefined` when no loaded plugin behind that authority registered it.
+ */
+export type GetPluginTourAudio = (
+  authority: string,
+  tourId: string,
+  chapterId: string
+) => { url: string; hosts: ReadonlySet<string> } | undefined;
+
 // Track which sessions have had protocols registered to avoid double-registration
 const registeredSessions = new WeakSet<Electron.Session>();
 let cachedDistPath: string | null = null;
 let cachedPluginRootResolver: GetPluginRootByAuthority | null = null;
+let cachedPluginTourAudioResolver: GetPluginTourAudio | null = null;
 
 /**
  * Create the app:// protocol handler function for a given distPath.
@@ -1204,6 +1220,69 @@ function buildPluginErrorHeaders(): Record<string, string> {
   };
 }
 
+/** How long a remote narration host has to answer before the chapter plays silent. */
+const PLUGIN_TOUR_AUDIO_TIMEOUT_MS = 15_000;
+
+/**
+ * Stream a tour chapter's remote narration through `plugin://` (#12773). The
+ * renderer's `media-src` can't name every host a plugin declares, so main
+ * fetches from the URL its registry holds and passes the audio through. Every
+ * hop must stay https, on a host the tour declared, and off private addresses;
+ * anything else fails the request, and the player falls back to captions.
+ */
+async function proxyPluginTourAudio(
+  source: { url: string; hosts: ReadonlySet<string> },
+  request: GlobalRequest,
+  netFetch: typeof net.fetch
+): Promise<Response> {
+  const headers: Record<string, string> = {};
+  const range = request.headers.get("range");
+  if (range) headers.Range = range;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PLUGIN_TOUR_AUDIO_TIMEOUT_MS);
+  let upstream: Response;
+  try {
+    const guarded = await fetchWithPrivateHostGuard(
+      netFetch,
+      source.url,
+      { method: request.method, headers, signal: controller.signal },
+      (hostname) => source.hosts.has(hostname.toLowerCase())
+    );
+    if (!guarded.ok) {
+      return new Response("Forbidden", { status: 403, headers: buildPluginErrorHeaders() });
+    }
+    upstream = guarded.response;
+  } catch {
+    return new Response("Bad Gateway", { status: 502, headers: buildPluginErrorHeaders() });
+  } finally {
+    // The deadline covers reaching the host, not the length of the narration.
+    clearTimeout(timer);
+  }
+  const contentType = upstream.headers.get("content-type") ?? "";
+  if (
+    !(upstream.ok || upstream.status === 206) ||
+    !contentType.toLowerCase().startsWith("audio/")
+  ) {
+    await upstream.body?.cancel().catch(() => {});
+    return new Response("Bad Gateway", { status: 502, headers: buildPluginErrorHeaders() });
+  }
+  const passed: Record<string, string> = {
+    "Content-Type": contentType,
+    "Content-Security-Policy": "sandbox; default-src 'none'",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+  };
+  for (const name of ["content-length", "content-range", "accept-ranges"]) {
+    const value = upstream.headers.get(name);
+    if (value) passed[name] = value;
+  }
+  return new Response(request.method === "HEAD" ? null : upstream.body, {
+    status: upstream.status,
+    headers: passed,
+  });
+}
+
 /**
  * Create the plugin:// protocol handler.
  *
@@ -1214,7 +1293,11 @@ function buildPluginErrorHeaders(): Record<string, string> {
  * segment-by-segment `..` rejection, `fs.realpath()` containment, and
  * `O_RDONLY | O_NOFOLLOW` on the final open to close the realpath/open TOCTOU.
  */
-export function createPluginProtocolHandler(getPluginRoot: GetPluginRootByAuthority) {
+export function createPluginProtocolHandler(
+  getPluginRoot: GetPluginRootByAuthority,
+  getTourAudio: GetPluginTourAudio = resolvePluginTourAudio,
+  netFetch: typeof net.fetch = (input, init) => net.fetch(input, init)
+) {
   return async (request: GlobalRequest) => {
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method Not Allowed", {
@@ -1299,6 +1382,18 @@ export function createPluginProtocolHandler(getPluginRoot: GetPluginRootByAuthor
     }
     decodedPath = stripped.path;
 
+    const tourAudio = parsePluginTourAudioPath(decodedPath);
+    if (tourAudio !== null) {
+      const source =
+        tourAudio === "invalid"
+          ? undefined
+          : getTourAudio(authority, tourAudio.tourId, tourAudio.chapterId);
+      if (!source) {
+        return new Response("Not Found", { status: 404, headers: buildPluginErrorHeaders() });
+      }
+      return proxyPluginTourAudio(source, request, netFetch);
+    }
+
     // Normalize and re-check for '..'. The leading-slash normalize collapses
     // every `..` against the root, so the segment scan is redundant for
     // standard inputs — but cheap defense-in-depth against future changes to
@@ -1375,6 +1470,12 @@ export function createPluginProtocolHandler(getPluginRoot: GetPluginRootByAuthor
       }
 
       const mimeType = getMimeType(realFile);
+      // Tour narration (#12773) plays by `<audio>` tag, which seeks with byte
+      // ranges; hand it to the range-aware streamer, which reopens the same
+      // contained path with the same O_NOFOLLOW discipline.
+      if (isMediaMimeType(mimeType)) {
+        return await streamContainedMediaFile(candidatePath, mimeType, request);
+      }
       // The renderer reads a view module's own text over fetch() to compile its
       // Tailwind classes before the view mounts (#12220). Tag loads and ESM
       // imports never consult this; a cross-origin fetch() does, and the scheme
@@ -1493,6 +1594,19 @@ export function registerDaintreeMediaProtocol(): void {
 // re-`handle` (which would open a micro-tick `ERR_UNKNOWN_URL_SCHEME` gap).
 function resolvePluginRoot(authority: string): string | undefined {
   return cachedPluginRootResolver ? cachedPluginRootResolver(authority) : undefined;
+}
+
+function resolvePluginTourAudio(
+  authority: string,
+  tourId: string,
+  chapterId: string
+): ReturnType<GetPluginTourAudio> {
+  return cachedPluginTourAudioResolver?.(authority, tourId, chapterId);
+}
+
+/** Point tour remote-audio routes at the live registry; installed beside the root resolver. */
+export function setPluginTourAudioResolver(resolver: GetPluginTourAudio): void {
+  cachedPluginTourAudioResolver = resolver;
 }
 
 export function registerPluginProtocol(getPluginRoot: GetPluginRootByAuthority): void {

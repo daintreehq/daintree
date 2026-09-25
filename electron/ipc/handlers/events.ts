@@ -89,6 +89,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:context-menu-items-changed": "external",
   "plugin:agents-changed": "external",
   "plugin:recipes-changed": "external",
+  "plugin:tours-changed": "external",
   "plugin:decorations-changed": "external",
   "plugin:panel-badges-changed": "external",
   "plugin:panel-badges-cleared": "external",

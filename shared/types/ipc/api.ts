@@ -2321,6 +2321,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         complete: boolean;
       }) => void
     ): () => void;
+    /** Subscribe to plugin tour registry changes (#12773). Returns a cleanup. */
+    onToursChanged(
+      callback: (payload: { tours: import("../plugin.js").PluginTourDescriptor[] }) => void
+    ): () => void;
     /** Subscribe to plugin toolbar button registry changes. Returns a cleanup. */
     onToolbarButtonsChanged(
       callback: (payload: {

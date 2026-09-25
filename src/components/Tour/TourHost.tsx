@@ -2,11 +2,12 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import type { TourOnboardingState } from "@shared/types";
 import { tourProgressFor } from "@shared/utils/tourIds";
 import { getOnboardingState } from "@/clients/onboardingClient";
+import { notify } from "@/lib/notify";
 import { logError, logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import type { TourDefinition } from "./tourDefinition";
+import type { TourDefinition, TourRegistration } from "./tourDefinition";
 import { OPEN_TOUR_EVENT, TOUR_COMPLETED_EVENT, tourIdOf } from "./tourEvents";
-import { getTour } from "./tourRegistry";
+import { getTour, subscribeTours } from "./tourRegistry";
 
 const LazyTourDialog = lazy(() => import("./TourDialog").then((m) => ({ default: m.TourDialog })));
 
@@ -25,6 +26,30 @@ export function TourHost() {
   const requestRef = useRef(0);
   const pendingRef = useRef<string | null>(null);
   const openIdRef = useRef<string | null>(null);
+  // The registrations behind the pending and open tours. A plugin tour is
+  // withdrawn when its plugin is disabled, and replaced under the same id when
+  // it reloads, so identity — not the id — says whether a tour is still current.
+  const pendingRegistrationRef = useRef<TourRegistration | null>(null);
+  const openRegistrationRef = useRef<TourRegistration | null>(null);
+
+  useEffect(
+    () =>
+      subscribeTours((changedId) => {
+        const current = getTour(changedId);
+        if (pendingRef.current === changedId && current !== pendingRegistrationRef.current) {
+          requestRef.current++;
+          pendingRef.current = null;
+          pendingRegistrationRef.current = null;
+        }
+        if (openIdRef.current === changedId && current !== openRegistrationRef.current) {
+          // Progress stays saved; reopening plays whatever is registered now.
+          openIdRef.current = null;
+          openRegistrationRef.current = null;
+          setOpen(null);
+        }
+      }),
+    []
+  );
 
   useEffect(() => {
     const onOpen = (event: Event) => {
@@ -44,6 +69,7 @@ export function TourHost() {
       }
       const request = ++requestRef.current;
       pendingRef.current = tourId;
+      pendingRegistrationRef.current = registration;
       const saved = Promise.resolve()
         .then(() => getOnboardingState())
         .catch(() => null);
@@ -52,7 +78,12 @@ export function TourHost() {
       void Promise.all([loaded, saved])
         .then(([tour, state]) => {
           if (request !== requestRef.current) return;
+          // Withdrawn or replaced while it loaded: the subscription above has
+          // already dropped the request, but a loader that settled in the same
+          // turn as the withdrawal must not open a stale tour either.
+          if (getTour(tourId) !== registration) return;
           openIdRef.current = tourId;
+          openRegistrationRef.current = registration;
           setOpen({
             tour,
             ...(state
@@ -65,19 +96,32 @@ export function TourHost() {
           });
         })
         .catch((error: unknown) => {
-          if (request === requestRef.current) logError("Couldn't load the tour", error, { tourId });
+          if (request !== requestRef.current) return;
+          logError("Couldn't load the tour", error, { tourId });
+          // A failed module import is cached for its URL, so retrying can't
+          // help until the plugin reloads; say so instead of offering it.
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+          notify({
+            type: "error",
+            title: "Tour didn't open",
+            message: `${registration.summary.title} couldn't be loaded. Reload or update the plugin that provides it.`,
+          });
         })
         .finally(() => {
-          if (request === requestRef.current) pendingRef.current = null;
+          if (request !== requestRef.current) return;
+          pendingRef.current = null;
+          pendingRegistrationRef.current = null;
         });
     };
     window.addEventListener(OPEN_TOUR_EVENT, onOpen);
     const requests = requestRef;
     const pending = pendingRef;
+    const pendingRegistration = pendingRegistrationRef;
     return () => {
       // Unmounting drops whatever is still loading.
       requests.current++;
       pending.current = null;
+      pendingRegistration.current = null;
       window.removeEventListener(OPEN_TOUR_EVENT, onOpen);
     };
   }, []);
@@ -87,7 +131,9 @@ export function TourHost() {
     // Closing also drops a tour still loading, so it can't open after the fact.
     requestRef.current++;
     pendingRef.current = null;
+    pendingRegistrationRef.current = null;
     openIdRef.current = null;
+    openRegistrationRef.current = null;
     setOpen(null);
   }, []);
   const onChapterReached = useCallback(

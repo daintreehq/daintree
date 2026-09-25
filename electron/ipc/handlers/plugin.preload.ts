@@ -42,6 +42,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   restartWorker: "plugin:restart-worker",
   getAgents: "plugin:agents-get",
   getRecipes: "plugin:recipes-get",
+  getTours: "plugin:tours-get",
   recordRecipeUse: "plugin:recipe-record-use",
   updateRecipeMetadata: "plugin:recipe-metadata-update",
   getForgeProviders: "plugin:forge-providers-get",

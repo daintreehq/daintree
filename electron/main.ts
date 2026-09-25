@@ -243,6 +243,8 @@ protocol.registerSchemesAsPrivileged([
     // handler still echoes Access-Control-Allow-Origin solely for the trusted
     // app document (trustedAppCorsOrigin), which is what lets the renderer read
     // a view module's own text to compile its Tailwind classes (#12220).
+    // stream lets `<audio>` play tour narration straight from the scheme with
+    // ranged reads, as daintree-media:// does (#12773).
     scheme: "plugin",
     privileges: {
       standard: true,
@@ -250,6 +252,7 @@ protocol.registerSchemesAsPrivileged([
       supportFetchAPI: true,
       corsEnabled: true,
       codeCache: true,
+      stream: true,
     },
   },
 ]);

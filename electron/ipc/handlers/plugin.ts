@@ -78,6 +78,7 @@ import type {
   PluginIpcContext,
   PluginActionContribution,
   PluginActionDescriptor,
+  PluginTourDescriptor,
   PluginInstallOptions,
   PluginInstallError,
   PluginInstallExpectation,
@@ -1066,6 +1067,16 @@ async function handleRecipesGet(): Promise<TerminalRecipe[]> {
   return (await getPluginService()).getPluginRecipes();
 }
 
+async function handleToursGet(ctx: IpcContext): Promise<PluginTourDescriptor[]> {
+  const service = await getPluginService();
+  await service.waitForInit();
+  return selectContributionsForProject(
+    service.getPluginTours(),
+    (tour) => tour.pluginId,
+    ctx.projectId
+  );
+}
+
 async function handleRecipeRecordUse(recipeId: string, timestamp: number): Promise<TerminalRecipe> {
   const service = await getPluginService();
   await service.waitForInit();
@@ -1910,6 +1921,7 @@ export const pluginNamespace = defineIpcNamespace({
     }),
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
     getRecipes: op(PLUGIN_METHOD_CHANNELS.getRecipes, handleRecipesGet),
+    getTours: op(PLUGIN_METHOD_CHANNELS.getTours, handleToursGet, { withContext: true }),
     recordRecipeUse: op(PLUGIN_METHOD_CHANNELS.recordRecipeUse, handleRecipeRecordUse),
     updateRecipeMetadata: op(
       PLUGIN_METHOD_CHANNELS.updateRecipeMetadata,

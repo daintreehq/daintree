@@ -43,6 +43,11 @@ vi.mock("electron", () => ({
   },
 }));
 
+// The tour-audio route re-resolves every hop's hostname; keep that off the network.
+vi.mock("node:dns/promises", () => ({
+  default: { lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) },
+}));
+
 vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
   logWarn: vi.fn(),
@@ -3360,6 +3365,120 @@ describe("createPluginProtocolHandler", () => {
     } finally {
       relativeSpy.mockRestore();
     }
+  });
+  describe("tour narration (#12773)", () => {
+    const AUDIO = Buffer.from("0123456789");
+    const REMOTE = {
+      url: "https://cdn.example.com/tours/welcome/publish.ogg",
+      hosts: new Set(["cdn.example.com"]),
+    };
+
+    function tourAudioHandler(netFetch: ReturnType<typeof vi.fn>) {
+      return createPluginProtocolHandler(
+        (authority) => (authority === "pi-abc" ? PLUGIN_ROOT : undefined),
+        (authority, tourId, chapterId) =>
+          authority === "pi-abc" && tourId === "welcome" && chapterId === "publish"
+            ? REMOTE
+            : undefined,
+        netFetch as unknown as typeof fetch
+      );
+    }
+
+    it("streams a bundled narration file with byte ranges", async () => {
+      const fs = await import("fs/promises");
+      const appProtocol = await import("../../utils/appProtocol.js");
+      vi.mocked(appProtocol.getMimeType).mockReturnValue("audio/ogg");
+      vi.mocked(fs.open).mockResolvedValue({
+        stat: vi
+          .fn()
+          .mockResolvedValue({ size: AUDIO.length, isFile: () => true, mtime: PLUGIN_MTIME }),
+        createReadStream: vi.fn(({ start, end }: { start: number; end: number }) =>
+          Readable.from([AUDIO.subarray(start, end + 1)])
+        ),
+        readFile: vi.fn(),
+        close: vi.fn().mockResolvedValue(undefined),
+      } as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+      const response = await buildHandler()(
+        makeRequest("plugin://my-plugin/__dtv-2/tours/welcome/intro.ogg", {
+          headers: { Range: "bytes=2-5" },
+        })
+      );
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get("Content-Type")).toBe("audio/ogg");
+      expect(response.headers.get("Content-Range")).toBe(`bytes 2-5/${AUDIO.length}`);
+      expect(await response.text()).toBe("2345");
+    });
+
+    it("fetches remote narration from the registered URL, never one the request names", async () => {
+      const netFetch = vi.fn(
+        async () =>
+          new Response("abc", {
+            status: 206,
+            headers: { "content-type": "audio/ogg", "content-range": "bytes 0-2/3" },
+          })
+      );
+      const response = await tourAudioHandler(netFetch)(
+        makeRequest("plugin://pi-abc/__dtv-2/__dta/welcome/publish?to=https://evil.test/x", {
+          headers: { Range: "bytes=0-2" },
+        })
+      );
+
+      expect(response.status).toBe(206);
+      expect(await response.text()).toBe("abc");
+      expect(response.headers.get("Content-Type")).toBe("audio/ogg");
+      expect(response.headers.get("content-range")).toBe("bytes 0-2/3");
+      expect(netFetch).toHaveBeenCalledTimes(1);
+      const [url, init] = netFetch.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe(REMOTE.url);
+      expect(init.headers).toEqual({ Range: "bytes=0-2" });
+      expect(init.redirect).toBe("manual");
+    });
+
+    it("refuses a redirect off the declared hosts before following it", async () => {
+      const netFetch = vi.fn(
+        async () =>
+          new Response(null, {
+            status: 302,
+            headers: { location: "https://other.example.org/a.ogg" },
+          })
+      );
+      const response = await tourAudioHandler(netFetch)(
+        makeRequest("plugin://pi-abc/__dtv-2/__dta/welcome/publish")
+      );
+
+      expect(response.status).toBe(403);
+      expect(netFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses an answer that isn't audio", async () => {
+      const netFetch = vi.fn(
+        async () =>
+          new Response("<html>", { status: 200, headers: { "content-type": "text/html" } })
+      );
+      const response = await tourAudioHandler(netFetch)(
+        makeRequest("plugin://pi-abc/__dtv-2/__dta/welcome/publish")
+      );
+      expect(response.status).toBe(502);
+    });
+
+    it("404s a route no loaded tour registered, without touching the network or disk", async () => {
+      const fs = await import("fs/promises");
+      const netFetch = vi.fn();
+      const handler = tourAudioHandler(netFetch);
+
+      for (const url of [
+        "plugin://pi-abc/__dta/welcome/intro",
+        "plugin://pi-abc/__dta/welcome",
+        "plugin://pi-abc/__dta/welcome/publish/extra",
+        "plugin://pi-gone/__dta/welcome/publish",
+      ]) {
+        expect((await handler(makeRequest(url))).status).toBe(404);
+      }
+      expect(netFetch).not.toHaveBeenCalled();
+      expect(fs.open).not.toHaveBeenCalled();
+    });
   });
 });
 

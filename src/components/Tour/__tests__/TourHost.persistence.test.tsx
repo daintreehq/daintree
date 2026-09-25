@@ -4,11 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DAINTREE_TOUR_ID, makePluginTourId } from "@shared/utils/tourIds";
 import type { TourDialogProps } from "../TourDialog";
 
-const { getOnboardingStateMock, dialogProps } = vi.hoisted(() => ({
+const { getOnboardingStateMock, dialogProps, notifyMock } = vi.hoisted(() => ({
   getOnboardingStateMock: vi.fn(),
   dialogProps: { current: null as TourDialogProps | null },
+  notifyMock: vi.fn(),
 }));
 vi.mock("@/clients/onboardingClient", () => ({ getOnboardingState: getOnboardingStateMock }));
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 // The host only needs the definition's identity and length, not the real scenes.
 vi.mock("../daintreeTour", () => ({
   DAINTREE_TOUR: {
@@ -65,6 +67,7 @@ describe("TourHost", () => {
   beforeEach(() => {
     dialogProps.current = null;
     getOnboardingStateMock.mockReset();
+    notifyMock.mockReset();
     onboarding = {
       setTourProgress: vi.fn().mockResolvedValue(undefined),
       setTourMuted: vi.fn().mockResolvedValue(true),
@@ -209,6 +212,9 @@ describe("TourHost", () => {
     });
     expect(dialogProps.current).toBeNull();
     expect(load).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock.mock.calls[0]![0]).toMatchObject({ type: "error" });
+    expect(notifyMock.mock.calls[0]![0].message).toContain("Acme Tour");
 
     load.mockImplementation(() => Promise.resolve(acmeTour));
     act(() => {
@@ -287,5 +293,85 @@ describe("TourHost", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(dialogProps.current!.tour.id).toBe(DAINTREE_TOUR_ID);
+  });
+
+  it("closes an open tour whose registration is withdrawn, and keeps its progress", async () => {
+    unregister = registerTour({
+      summary: { id: ACME_TOUR_ID, title: "Acme Tour", minutes: 1, chapterTitles: [] },
+      load: () => Promise.resolve(acmeTour),
+    });
+    getOnboardingStateMock.mockResolvedValue({ tours: {}, tourMuted: false });
+    await openHostedTour(ACME_TOUR_ID);
+    expect(screenHasDialog()).toBe(true);
+    onboarding.setTourProgress.mockClear();
+
+    act(() => unregister());
+
+    expect(screenHasDialog()).toBe(false);
+    // Withdrawal is not completion: nothing is written on the way out.
+    expect(onboarding.setTourProgress).not.toHaveBeenCalled();
+  });
+
+  it("closes an open tour replaced under the same id, as a plugin reload does", async () => {
+    unregister = registerTour({
+      summary: { id: ACME_TOUR_ID, title: "Acme Tour", minutes: 1, chapterTitles: [] },
+      load: () => Promise.resolve(acmeTour),
+    });
+    getOnboardingStateMock.mockResolvedValue({ tours: {}, tourMuted: false });
+    await openHostedTour(ACME_TOUR_ID);
+
+    const reloaded = { ...acmeTour, title: "Acme Tour v2" };
+    act(() => {
+      unregister();
+      unregister = registerTour({
+        summary: { id: ACME_TOUR_ID, title: "Acme Tour v2", minutes: 1, chapterTitles: [] },
+        load: () => Promise.resolve(reloaded),
+      });
+    });
+    expect(screenHasDialog()).toBe(false);
+
+    dialogProps.current = null;
+    act(() => {
+      openTour(ACME_TOUR_ID);
+    });
+    await waitFor(() => expect(dialogProps.current?.tour).toBe(reloaded));
+  });
+
+  it("leaves another open tour alone when an unrelated tour is withdrawn", async () => {
+    unregister = registerTour({
+      summary: { id: ACME_TOUR_ID, title: "Acme Tour", minutes: 1, chapterTitles: [] },
+      load: () => Promise.resolve(acmeTour),
+    });
+    getOnboardingStateMock.mockResolvedValue({ tours: {}, tourMuted: false });
+    await openHostedTour();
+
+    act(() => unregister());
+
+    expect(dialogProps.current!.tour.id).toBe(DAINTREE_TOUR_ID);
+    expect(screenHasDialog()).toBe(true);
+  });
+
+  it("drops a tour still loading when its registration is withdrawn", async () => {
+    let resolveSlow: (tour: TourDefinition) => void = () => {};
+    const slowLoad = vi.fn(() => new Promise<TourDefinition>((resolve) => (resolveSlow = resolve)));
+    unregister = registerTour({
+      summary: { id: ACME_TOUR_ID, title: "Acme Tour", minutes: 1, chapterTitles: [] },
+      load: slowLoad,
+    });
+    getOnboardingStateMock.mockResolvedValue({ tours: {}, tourMuted: false });
+    render(<TourHost />);
+    act(() => {
+      openTour(ACME_TOUR_ID);
+    });
+    await waitFor(() => expect(slowLoad).toHaveBeenCalled());
+
+    act(() => unregister());
+    await act(async () => {
+      resolveSlow(acmeTour);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(dialogProps.current).toBeNull();
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 });

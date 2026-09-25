@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DAINTREE_TOUR_ID } from "@shared/utils/tourIds";
 import type { TourRegistration } from "../tourDefinition";
 import { TOUR_CHAPTER_TITLES, TOUR_MINUTES } from "../tourSummary.generated";
-import { getTour, registerTour } from "../tourRegistry";
+import { getTour, registerTour, subscribeTours } from "../tourRegistry";
 
 const registration = (id: string): TourRegistration => ({
   summary: { id, title: "Acme Tour", minutes: 2, chapterTitles: ["One"] },
@@ -52,5 +52,17 @@ describe("tourRegistry", () => {
     expect(tour.chapters.map((chapter) => chapter.title)).toEqual(TOUR_CHAPTER_TITLES);
     expect(tour.chapters.every((chapter) => typeof chapter.scene === "function")).toBe(true);
     expect(tour.resolveTimings("mac")).toHaveLength(tour.chapters.length);
+  });
+
+  it("tells subscribers when a tour arrives and when it is withdrawn", () => {
+    const seen: string[] = [];
+    const unsubscribe = subscribeTours((id) => seen.push(`${id}:${getTour(id) ? "in" : "out"}`));
+    const unregister = registerTour(registration("acme.tools.watch"));
+    unregister();
+    // A second cleanup withdraws nothing, so it says nothing.
+    unregister();
+    unsubscribe();
+    registerTour(registration("acme.tools.unwatched"))();
+    expect(seen).toEqual(["acme.tools.watch:in", "acme.tools.watch:out"]);
   });
 });

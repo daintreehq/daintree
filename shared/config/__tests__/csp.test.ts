@@ -215,6 +215,16 @@ describe("Daintree app CSP", () => {
       }
     });
 
+    it("plays plugin tour narration from plugin: in both modes (#12773)", () => {
+      // Bundled narration is a plugin asset and remote narration is proxied
+      // through the scheme, so no plugin-declared host ever enters the policy.
+      for (const csp of [getDaintreeAppProdCSP(), getDaintreeAppDevCSP()]) {
+        const mediaSrc = csp.match(/media-src ([^;]*);/)?.[1] ?? "";
+        expect(mediaSrc.split(" ")).toContain("plugin:");
+        expect(mediaSrc).not.toMatch(/https:\/\/(?!cdn\.daintree\.org)/);
+      }
+    });
+
     it("allows daintree-file: in media-src in production", () => {
       const mediaSrc = getDaintreeAppProdCSP().match(/media-src ([^;]*);/)?.[1];
       expect(mediaSrc).toContain("daintree-file:");

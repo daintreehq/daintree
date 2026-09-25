@@ -80,7 +80,7 @@ import {
 } from "../ipc/handlers/projectCrud/index.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import { isSmokeTest } from "../setup/environment.js";
-import { setPluginDirResolver } from "../setup/protocols.js";
+import { setPluginDirResolver, setPluginTourAudioResolver } from "../setup/protocols.js";
 import { isE2EFaultMode, isE2EMode } from "../setup/runtimeFlags.js";
 import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
@@ -1101,6 +1101,9 @@ export async function initGlobalServices(
       // dynamic import is permanent for that specifier — the module map has no
       // eviction, so "Try again" re-imported the same poisoned URL forever.
       setPluginDirResolver((authority) => pluginService.getPluginRootByAuthority(authority));
+      setPluginTourAudioResolver((authority, tourId, chapterId) =>
+        pluginService.getPluginTourRemoteAudio(authority, tourId, chapterId)
+      );
       try {
         await pluginService.initialize();
       } catch (err) {

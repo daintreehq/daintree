@@ -1426,6 +1426,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
   };
+  "plugin:tours-get": {
+    args: [];
+    result: import("../plugin.js").PluginTourDescriptor[];
+  };
   "plugin:uninstall": {
     args: [pluginId: string, deleteSettings?: boolean | undefined];
     result: void;

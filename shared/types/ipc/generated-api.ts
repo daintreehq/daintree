@@ -605,6 +605,9 @@ export interface GeneratedElectronAPI {
     getSettingValues(
       ...args: IpcInvokeMap["plugin:settings-get-values"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-get-values"]["result"]>;
+    getTours(
+      ...args: IpcInvokeMap["plugin:tours-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:tours-get"]["result"]>;
     getWorktreeStatus(
       ...args: IpcInvokeMap["plugin:worktree-status-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:worktree-status-get"]["result"]>;

@@ -1122,8 +1122,6 @@ export const TourChapterSchema = z
  * that panel's menu, and the manifest-level `superRefine` requires the kind to
  * be one of this plugin's own `contributes.panels`. `componentPath` is the
  * module exporting the chapter scenes, validated like a view's.
- *
- * Declaration only for now — loading and playback are a follow-up.
  */
 export const TourContributionSchema = z
   .object({

@@ -3363,6 +3363,11 @@ function buildElectronApi(): ElectronAPI {
           complete: boolean;
         }) => void
       ) => _eventBusOn("plugin:recipes-changed", callback),
+      onToursChanged: (
+        callback: (payload: {
+          tours: import("../shared/types/plugin.js").PluginTourDescriptor[];
+        }) => void
+      ) => _eventBusOn("plugin:tours-changed", callback),
       onToolbarButtonsChanged: (
         callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
       ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),
