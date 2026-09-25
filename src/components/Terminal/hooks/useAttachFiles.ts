@@ -37,7 +37,7 @@ export function useAttachFiles(editorViewRef: RefObject<EditorView | null>, cwd:
       await insertFileAttachments(
         editorViewRef,
         view,
-        filePaths.map(fileAttachmentEntryFromPath),
+        filePaths.map((filePath) => fileAttachmentEntryFromPath(filePath, "local")),
         cwd
       );
     } catch (error) {

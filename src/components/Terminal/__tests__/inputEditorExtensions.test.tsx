@@ -1177,8 +1177,9 @@ describe("createFilePasteHandler", () => {
     const originalElectron = window.electron;
     (window as unknown as Record<string, unknown>).electron = {
       ...window.electron,
-      webUtils: {
-        getPathForFile: (file: File) => (file as unknown as { _testPath?: string })._testPath ?? "",
+      files: {
+        getDroppedFilePaths: (files: readonly File[]) =>
+          files.map((file) => (file as unknown as { _testPath?: string })._testPath ?? ""),
       },
     };
 
@@ -1237,8 +1238,8 @@ describe("createFilePasteHandler", () => {
     const originalElectron = window.electron;
     (window as unknown as Record<string, unknown>).electron = {
       ...window.electron,
-      webUtils: {
-        getPathForFile: () => "",
+      files: {
+        getDroppedFilePaths: (files: readonly File[]) => files.map(() => ""),
       },
     };
 
