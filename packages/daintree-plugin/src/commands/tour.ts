@@ -26,7 +26,7 @@ import { roundTiming, timeChapter } from "../tour/timing.js";
 
 const RECORDING_EXTENSIONS = [".wav", ".mp3", ".m4a", ".ogg", ".flac", ".aac"];
 
-interface TourCommonOptions {
+export interface TourCommonOptions {
   /** Plugin project directory (default: cwd). */
   dir?: string;
   /** Which `contributes.tours` entry; optional when the plugin declares one tour. */
@@ -79,15 +79,17 @@ export interface TourCommandResult {
   chapters: TourChapterReport[];
 }
 
-interface NarrationChapter {
+export interface NarrationChapter {
   id: string;
+  /** As authored, with cue markers and delivery directions. */
+  narration: string;
   parsed: ParsedNarration;
   hash: string;
 }
 
-type ChapterEntry = Record<string, unknown> & { id: string };
+export type ChapterEntry = Record<string, unknown> & { id: string };
 
-interface TourContext {
+export interface TourContext {
   dir: string;
   manifestPath: string;
   narrationPath: string;
@@ -125,7 +127,7 @@ function checkPathId(kind: string, id: string): void {
   }
 }
 
-async function loadTour(opts: TourCommonOptions): Promise<TourContext> {
+export async function loadTour(opts: TourCommonOptions): Promise<TourContext> {
   const dir = path.resolve(opts.dir ?? process.cwd());
   const manifestPath = path.join(dir, "plugin.json");
   let raw: string;
@@ -248,7 +250,7 @@ async function loadNarration(file: string): Promise<NarrationChapter[]> {
       throw new Error(`${file}: chapter "${id}": ${(error as Error).message}`, { cause: error });
     }
     if (parsed.words.length === 0) throw new Error(`${file}: chapter "${id}" has no words`);
-    return { id, parsed, hash: narrationFingerprint(parsed) };
+    return { id, narration, parsed, hash: narrationFingerprint(parsed) };
   });
 }
 
@@ -384,17 +386,21 @@ async function isIntactTake(
   }
 }
 
+/** Timing exists for this chapter but was made from different narration. */
+export function isStaleTiming(entry: ChapterEntry | undefined, chapter: NarrationChapter): boolean {
+  return entry !== undefined && entry.narrationHash !== chapter.hash;
+}
+
 function report(
   ctx: TourContext,
   chapter: NarrationChapter,
   outcome: TourChapterOutcome,
   extra: Partial<TourChapterReport> = {}
 ): TourChapterReport {
-  const entry = ctx.entries.get(chapter.id);
   return {
     id: chapter.id,
     outcome,
-    stale: entry !== undefined && entry.narrationHash !== chapter.hash,
+    stale: isStaleTiming(ctx.entries.get(chapter.id), chapter),
     ...extra,
   };
 }

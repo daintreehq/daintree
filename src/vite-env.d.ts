@@ -28,4 +28,6 @@ declare module "virtual:daintree-plugin-style-contract" {
   export const tailwindUtilitiesCss: string;
   /** `tw-animate-css`, an approved extension of the plugin vocabulary. */
   export const twAnimateCss: string;
+  /** Tailwind's preflight. Not plugin vocabulary: only the standalone tour preview uses it. */
+  export const tailwindPreflightCss: string;
 }

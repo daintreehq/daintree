@@ -9,6 +9,7 @@ import { runDev } from "./commands/dev.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runSchema } from "./commands/schema.js";
 import { runTourAlign, runTourVoice, type TourCommandResult } from "./commands/tour.js";
+import { runTourPreview } from "./commands/tourPreview.js";
 import { CLI_VERSION } from "./version.js";
 
 function fail(message: string): never {
@@ -183,7 +184,7 @@ function printTourResult(result: TourCommandResult): void {
 
 const tour = program
   .command("tour")
-  .description("Voice a tour's narration and time its cues from the audio");
+  .description("Voice a tour's narration, time its cues from the audio, and preview it");
 
 tour
   .command("voice")
@@ -238,6 +239,71 @@ tour
         printTourResult(await runTourAlign({ ...opts, log: (line) => console.log(line) }));
       } catch (err) {
         fail((err as Error).message);
+      }
+    }
+  );
+
+function parseInteger(min: number, max: number) {
+  return (value: string): number => {
+    const n = Number(value);
+    if (!/^\d+$/.test(value.trim()) || n < min || n > max) {
+      throw new InvalidArgumentError(`expected a whole number from ${min} to ${max}`);
+    }
+    return n;
+  };
+}
+
+tour
+  .command("preview")
+  .description(
+    "Play and scrub the tour in a browser, with cue markers and anchor outlines; --headless captures a frame at each cue"
+  )
+  .option("--tour <id>", "which contributes.tours entry (needed when there are several)")
+  .option("--narration <file>", "narration file (default: tours/<tourId>.narration.json)")
+  .option("--only <ids>", "comma-separated chapter ids", parseOnly)
+  .option("--theme <id>", "built-in Daintree theme to draw the scenes in", "daintree")
+  .option("--port <port>", "port to serve on (default: any free port)", parseInteger(0, 65535))
+  .option("--headless", "capture a frame at each cue with playwright-core instead of serving")
+  .option("--out <dir>", "where --headless writes its frames and capture.json")
+  .option(
+    "--settle <ms>",
+    "how long a scene settles after each seek before its frame is taken",
+    parseInteger(0, 10_000)
+  )
+  .action(
+    async (opts: {
+      tour?: string;
+      narration?: string;
+      only?: string[];
+      theme: string;
+      port?: number;
+      headless?: boolean;
+      out?: string;
+      settle?: number;
+    }) => {
+      const controller = new AbortController();
+      const stop = () => controller.abort();
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+      try {
+        const result = await runTourPreview({
+          ...opts,
+          settleMs: opts.settle,
+          signal: controller.signal,
+          log: (line) => console.log(line),
+          onListening: (url) => {
+            if (!opts.headless) console.log(`Previewing tour at ${url} (Ctrl+C to stop)`);
+          },
+        });
+        if (result.capture) {
+          const frames = result.capture.manifest.chapters.reduce((n, c) => n + c.frames.length, 0);
+          console.log(`✓ Captured ${frames} frames to ${result.capture.manifestPath}`);
+        }
+      } catch (err) {
+        fail((err as Error).message);
+      } finally {
+        process.off("SIGINT", stop);
+        process.off("SIGTERM", stop);
       }
     }
   );

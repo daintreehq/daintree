@@ -1,4 +1,7 @@
+import { build } from "esbuild";
 import { defineConfig } from "tsup";
+import { HOST_IMPORTMAP_SPECIFIERS } from "../plugin-vite/src/hostImportMap";
+import { pluginStyleContractEsbuild } from "../../scripts/lib/plugin-style-contract.mjs";
 
 export default defineConfig({
   entry: {
@@ -30,5 +33,26 @@ export default defineConfig({
   // the build fail loudly if that boundary is ever crossed. The declared runtime
   // dependencies (archiver, yauzl, semver, zod, commander, execa, globby,
   // @clack/prompts) resolve from node_modules and stay external by default.
-  external: ["electron"],
+  // `playwright-core` is an optional dependency, loaded only by `tour preview
+  // --headless`.
+  external: ["electron", "playwright-core"],
+  // `tour preview` compiles scene classes against the host's design contract,
+  // inlined here from the same bytes the renderer compiles with.
+  esbuildPlugins: [pluginStyleContractEsbuild()],
+  // The preview page runs in a browser, so it is its own build, emitted after
+  // `clean`. Every host specifier stays bare for the page's import map, which
+  // is what gives the page and the plugin's scenes one React and one tour.
+  onSuccess: async () => {
+    await build({
+      entryPoints: ["src/tour/preview/browser/harness.tsx"],
+      outdir: "dist/tour-preview",
+      bundle: true,
+      format: "esm",
+      platform: "browser",
+      target: "es2022",
+      jsx: "automatic",
+      external: [...HOST_IMPORTMAP_SPECIFIERS],
+      logLevel: "warning",
+    });
+  },
 });
