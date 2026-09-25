@@ -165,13 +165,12 @@ export function createPluginTourRegistration(tour: PluginTourDescriptor): TourRe
   return {
     summary: pluginTourSummary(tour),
     load: async () => {
-      const [module] = await Promise.all([
-        withTimeout(
-          importTourModule(tour.moduleUrl),
-          `Tour "${tour.id}": ${tour.moduleUrl} took longer than ${PLUGIN_TOUR_IMPORT_TIMEOUT_MS}ms to load`
-        ),
-        preparePluginStyles(tour.moduleUrl),
-      ]);
+      // One deadline for both halves: style preparation is best-effort and
+      // must never hold the tour open-pending on its own.
+      const [module] = await withTimeout(
+        Promise.all([importTourModule(tour.moduleUrl), preparePluginStyles(tour.moduleUrl)]),
+        `Tour "${tour.id}": ${tour.moduleUrl} took longer than ${PLUGIN_TOUR_IMPORT_TIMEOUT_MS}ms to load`
+      );
       return buildPluginTourDefinition(tour, readPluginTourModule(module, tour));
     },
   };

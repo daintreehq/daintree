@@ -3409,6 +3409,34 @@ describe("createPluginProtocolHandler", () => {
       expect(response.headers.get("Content-Type")).toBe("audio/ogg");
       expect(response.headers.get("Content-Range")).toBe(`bytes 2-5/${AUDIO.length}`);
       expect(await response.text()).toBe("2345");
+      // A tag load carries no Origin, so it gets no CORS grant.
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    });
+
+    it("keeps the trusted document's fetch() read of bundled media", async () => {
+      const fs = await import("fs/promises");
+      const appProtocol = await import("../../utils/appProtocol.js");
+      vi.mocked(appProtocol.getMimeType).mockReturnValue("audio/ogg");
+      vi.mocked(fs.open).mockResolvedValue({
+        stat: vi
+          .fn()
+          .mockResolvedValue({ size: AUDIO.length, isFile: () => true, mtime: PLUGIN_MTIME }),
+        createReadStream: vi.fn(({ start, end }: { start: number; end: number }) =>
+          Readable.from([AUDIO.subarray(start, end + 1)])
+        ),
+        readFile: vi.fn(),
+        close: vi.fn().mockResolvedValue(undefined),
+      } as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+      const response = await buildHandler()(
+        makeRequest("plugin://my-plugin/sounds/chime.ogg", {
+          headers: { Origin: "app://daintree" },
+        })
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
+      expect(response.headers.get("Vary")).toBe("Origin");
     });
 
     it("fetches remote narration from the registered URL, never one the request names", async () => {
@@ -3434,6 +3462,8 @@ describe("createPluginProtocolHandler", () => {
       expect(url).toBe(REMOTE.url);
       expect(init.headers).toEqual({ Range: "bytes=0-2" });
       expect(init.redirect).toBe("manual");
+      // The manifest picks the endpoint, so it never sees the session's cookies.
+      expect(init.credentials).toBe("omit");
     });
 
     it("refuses a redirect off the declared hosts before following it", async () => {
@@ -3450,6 +3480,16 @@ describe("createPluginProtocolHandler", () => {
 
       expect(response.status).toBe(403);
       expect(netFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("answers 502 when the host can't be reached", async () => {
+      const netFetch = vi.fn(async () => {
+        throw new Error("net::ERR_NAME_NOT_RESOLVED");
+      });
+      const response = await tourAudioHandler(netFetch)(
+        makeRequest("plugin://pi-abc/__dtv-2/__dta/welcome/publish")
+      );
+      expect(response.status).toBe(502);
     });
 
     it("refuses an answer that isn't audio", async () => {

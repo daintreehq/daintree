@@ -658,7 +658,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     await expect(waiter).resolves.toBeUndefined();
   });
 
-  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, context-menu items, agents, and recipes to the target webContents", async () => {
+  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, context-menu items, agents, recipes, and tours to the target webContents", async () => {
     const service = new PluginService(tmpDir);
     await service.activateStartupFinishedPlugins();
     const send = vi.fn();
@@ -666,7 +666,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(7);
+    expect(send).toHaveBeenCalledTimes(8);
     // Every replay goes through the EVENTS_PUSH channel — the same channel the
     // renderer hooks' persistent push listeners consume, so no renderer-side
     // changes are needed for the cold-restore path.
@@ -681,6 +681,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect(names).toContain("plugin:context-menu-items-changed");
     expect(names).toContain("plugin:agents-changed");
     expect(names).toContain("plugin:recipes-changed");
+    expect(names).toContain("plugin:tours-changed");
     // The renderer menu-items channel was removed (#10465) — guard against the
     // cold-restore replay accidentally re-emitting it.
     expect(names).not.toContain("plugin:menu-items-changed");
@@ -724,7 +725,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(7);
+    expect(send).toHaveBeenCalledTimes(8);
     const names = send.mock.calls.map((c) => (c[1] as { name?: string })?.name);
     expect(names).toContain("plugin:panel-kinds-changed");
     expect(names).toContain("plugin:toolbar-buttons-changed");
@@ -732,6 +733,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect(names).toContain("plugin:context-menu-items-changed");
     expect(names).toContain("plugin:agents-changed");
     expect(names).toContain("plugin:recipes-changed");
+    expect(names).toContain("plugin:tours-changed");
   });
 
   it("pushSnapshotTo() skips a destroyed webContents", async () => {
@@ -759,7 +761,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.activateStartupFinishedPlugins();
     await inFlight;
-    expect(send).toHaveBeenCalledTimes(7);
+    expect(send).toHaveBeenCalledTimes(8);
   });
 
   it("pushSnapshotTo() does not send after dispose()", async () => {

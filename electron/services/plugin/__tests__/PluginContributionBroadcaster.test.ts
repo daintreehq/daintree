@@ -48,6 +48,7 @@ vi.mock("../PluginRecipeRegistry.js", () => ({
 }));
 vi.mock("../PluginTourRegistry.js", () => ({
   getPluginTours: () => contributionsMock.tours,
+  notifyPluginToursVisibilityChanged: () => {},
 }));
 
 // The visibility overlay reads electron-store; keep it in memory so the filter

@@ -43,8 +43,17 @@ function mirror(tour: PluginTourDescriptor): Mirrored | null {
   }
   const unregisterTour = registerTour(createPluginTourRegistration(tour));
   // Panel tours are opened from their panel, never listed app-wide.
-  const actionId = tour.panelKind === undefined ? pluginTourActionId(tour.id) : null;
-  if (actionId && !actionService.has(actionId)) actionService.register(toAction(tour));
+  // Only an action this mirror registered is its to withdraw.
+  let actionId: ActionId | null = null;
+  if (tour.panelKind === undefined) {
+    const candidate = pluginTourActionId(tour.id);
+    if (actionService.has(candidate)) {
+      logWarn("[PluginTours] An action is already registered under this id", { candidate });
+    } else {
+      actionService.register(toAction(tour));
+      actionId = candidate;
+    }
+  }
   return {
     key: JSON.stringify(tour),
     withdraw: () => {

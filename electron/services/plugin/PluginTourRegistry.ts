@@ -145,6 +145,14 @@ export function getPluginTourRemoteAudio(
   return remoteAudioByPlugin.get(pluginId)?.get(tourId)?.remoteAudio.get(chapterId);
 }
 
+/**
+ * Tell listeners the tours a project sees changed without the registry
+ * changing, as when a plugin is hidden or shown in a project.
+ */
+export function notifyPluginToursVisibilityChanged(): void {
+  notify();
+}
+
 /** Called after any change to the registered set. Returns the unsubscribe. */
 export function onPluginToursChanged(listener: () => void): () => void {
   listeners.add(listener);

@@ -1245,7 +1245,8 @@ async function proxyPluginTourAudio(
     const guarded = await fetchWithPrivateHostGuard(
       netFetch,
       source.url,
-      { method: request.method, headers, signal: controller.signal },
+      // Anonymous: the manifest picks this endpoint, so it gets no session cookies.
+      { method: request.method, headers, signal: controller.signal, credentials: "omit" },
       (hostname) => source.hosts.has(hostname.toLowerCase())
     );
     if (!guarded.ok) {
@@ -1474,7 +1475,13 @@ export function createPluginProtocolHandler(
       // ranges; hand it to the range-aware streamer, which reopens the same
       // contained path with the same O_NOFOLLOW discipline.
       if (isMediaMimeType(mimeType)) {
-        return await streamContainedMediaFile(candidatePath, mimeType, request);
+        const streamed = await streamContainedMediaFile(candidatePath, mimeType, request);
+        // Keep the trusted-document read a view's own fetch() of its bundled
+        // media had before narration was streamed (WebAudio, blob playback).
+        const mediaCorsOrigin = trustedAppCorsOrigin(request);
+        streamed.headers.set("Vary", "Origin");
+        if (mediaCorsOrigin) streamed.headers.set("Access-Control-Allow-Origin", mediaCorsOrigin);
+        return streamed;
       }
       // The renderer reads a view module's own text over fetch() to compile its
       // Tailwind classes before the view mounts (#12220). Tag loads and ESM

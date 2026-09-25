@@ -11,7 +11,7 @@ import { getPluginKeybindings } from "../pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../pluginContextMenuRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import { getPluginRecipes } from "./PluginRecipeRegistry.js";
-import { getPluginTours } from "./PluginTourRegistry.js";
+import { getPluginTours, notifyPluginToursVisibilityChanged } from "./PluginTourRegistry.js";
 import {
   hasProjectPluginVisibilityOverrides,
   isPluginVisibleInProject,
@@ -375,6 +375,8 @@ export class PluginContributionBroadcaster {
     this.scheduleKeybindingsBroadcast(true);
     this.scheduleContextMenuItemsBroadcast(true);
     this.scheduleToursBroadcast();
+    // The native Help menu lists tours per project too; rebuild it.
+    notifyPluginToursVisibilityChanged();
   }
 
   /**

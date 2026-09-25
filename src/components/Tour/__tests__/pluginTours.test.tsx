@@ -6,10 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginTourDescriptor } from "@shared/types/plugin";
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
 
-const { prepareMock, registerRootMock } = vi.hoisted(() => ({
-  prepareMock: vi.fn(() => Promise.resolve()),
-  registerRootMock: vi.fn((_node: Element | null) => () => {}),
-}));
+const { prepareMock, registerRootMock, unregisterRootMock } = vi.hoisted(() => {
+  const unregisterRootMock = vi.fn();
+  return {
+    prepareMock: vi.fn(() => Promise.resolve()),
+    registerRootMock: vi.fn((_node: Element | null) => unregisterRootMock),
+    unregisterRootMock,
+  };
+});
 vi.mock("@/services/plugin/pluginStyleContract", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/services/plugin/pluginStyleContract")>()),
   preparePluginStyles: prepareMock,
@@ -100,6 +104,7 @@ describe("plugin tours", () => {
     createdAudio.length = 0;
     prepareMock.mockClear();
     registerRootMock.mockClear();
+    unregisterRootMock.mockClear();
     vi.stubGlobal("Audio", BlockedAudio);
     vi.stubGlobal(
       "ResizeObserver",
@@ -144,8 +149,9 @@ describe("plugin tours", () => {
 
   it("plays a scene inside the plugin style root, with the dialog chrome outside it", async () => {
     const tour = await createPluginTourRegistration(fixtureTour()).load();
+    let unmount: () => void = () => {};
     await act(async () => {
-      render(
+      ({ unmount } = render(
         <TourDialog
           isOpen
           tour={tour}
@@ -156,7 +162,7 @@ describe("plugin tours", () => {
           onCompleted={vi.fn()}
           onMutedChange={vi.fn()}
         />
-      );
+      ));
     });
 
     const scene = screen.getByTestId("acme-intro");
@@ -171,6 +177,11 @@ describe("plugin tours", () => {
     expect(scene.innerHTML).toContain("text-category-amber-text");
     // Narration that can't play leaves the chapter on screen, captioned.
     expect(createdAudio).toContain("plugin://pi-abc/__dtv-3/tours/welcome/intro.ogg");
+
+    // Closing the tour takes the scene's root out of the style runtime.
+    expect(unregisterRootMock).not.toHaveBeenCalled();
+    act(() => unmount());
+    expect(unregisterRootMock).toHaveBeenCalled();
   });
 
   it("fails the load when the module can't be imported", async () => {

@@ -24,8 +24,9 @@ import type { UpdateMenuState } from "./services/AutoUpdaterService.js";
 import { getAutoUpdaterServiceRef } from "./window/serviceRefs.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { getPluginTours } from "./services/plugin/PluginTourRegistry.js";
+import { isPluginVisibleInProject } from "./services/plugin/projectPluginVisibility.js";
 import { evaluateWhen } from "./services/WhenClauseService.js";
-import { getAppWebContents } from "./window/webContentsRegistry.js";
+import { getAppWebContents, getProjectForWebContents } from "./window/webContentsRegistry.js";
 import { openFolderInNewWindow } from "./window/newWindowOpen.js";
 import {
   claimProjectActivation,
@@ -220,9 +221,17 @@ export function createApplicationMenu(
   const terminalPluginItems = buildPluginMenuItems("terminal");
   const helpPluginItems = buildPluginMenuItems("help");
   // Plugin tours sit beside the Daintree Tour, named "<plugin>: <tour>". Panel
-  // tours are opened from their panel, not from Help.
+  // tours are opened from their panel, not from Help, and a plugin hidden in
+  // this window's project has withdrawn its tours from the view, so Help drops
+  // them too.
+  const menuProjectId = mainWindow.isDestroyed()
+    ? null
+    : getProjectForWebContents(getAppWebContents(mainWindow).id);
   const pluginTourItems: Electron.MenuItemConstructorOptions[] = getPluginTours()
-    .filter((tour) => tour.panelKind === undefined)
+    .filter(
+      (tour) =>
+        tour.panelKind === undefined && isPluginVisibleInProject(tour.pluginId, menuProjectId)
+    )
     .map((tour) => ({
       label: `${tour.pluginName}: ${tour.title}`,
       click: (_item, browserWindow) =>

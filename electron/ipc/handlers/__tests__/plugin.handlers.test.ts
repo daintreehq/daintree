@@ -60,6 +60,8 @@ const { mockGetPluginRecipes, mockRecordPluginRecipeUse, mockUpdatePluginRecipeM
     mockUpdatePluginRecipeMetadata: vi.fn(),
   }));
 
+const mockGetPluginTours = vi.hoisted(() => vi.fn((): unknown[] => []));
+
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
     listPlugins: (...args: unknown[]) => mockListPlugins(...args),
@@ -85,6 +87,7 @@ vi.mock("../../../services/PluginService.js", () => ({
     // since we don't exercise the gate here.
     waitForInit: vi.fn().mockResolvedValue(undefined),
     getPluginRecipes: () => mockGetPluginRecipes(),
+    getPluginTours: () => mockGetPluginTours(),
     recordPluginRecipeUse: (recipeId: string, timestamp: number) =>
       mockRecordPluginRecipeUse(recipeId, timestamp),
     updatePluginRecipeMetadata: (recipeId: string, updates: unknown) =>
@@ -2761,6 +2764,21 @@ describe("plugin install jobs (#11302)", () => {
       createdAt: 0,
       origin: { kind: "plugin" as const, pluginId: "acme.tools", contributionId: "deploy" },
     };
+
+    it("plugin:tours-get returns the tours after init, for a sender with no project (#12773)", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      const waitForInit = vi.mocked(pluginService.waitForInit);
+      let releaseGate: () => void = () => {};
+      waitForInit.mockReturnValueOnce(new Promise<void>((resolve) => (releaseGate = resolve)));
+      const tour = { id: "acme.tools.welcome", pluginId: "acme.tools", title: "Welcome" };
+      mockGetPluginTours.mockReturnValueOnce([tour]);
+
+      const inFlight = getHandler("plugin:tours-get")({ sender: { id: 1 } }) as Promise<unknown>;
+      await Promise.resolve();
+      expect(mockGetPluginTours).not.toHaveBeenCalled();
+      releaseGate();
+      await expect(inFlight).resolves.toEqual([tour]);
+    });
 
     it("plugin:recipes-get returns the service snapshot", async () => {
       const handler = getHandler("plugin:recipes-get");
