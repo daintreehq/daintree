@@ -561,11 +561,13 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
   const effectiveKernelLevel = (): KernelPressureLevel | null => {
     const now = Date.now();
     const currentMaxAgeMs = kernelMaxAgeMs();
-    while (
-      kernelReadings.length > 0 &&
-      now - kernelReadings[0]!.at > Math.max(kernelReadings[0]!.maxAgeMs, currentMaxAgeMs)
-    ) {
-      kernelReadings.shift();
+    // Each on its own clock: after a cadence change a newer reading can
+    // expire before an older one, so expiry is not a prefix of the list.
+    for (let i = kernelReadings.length - 1; i >= 0; i--) {
+      const reading = kernelReadings[i]!;
+      if (now - reading.at > Math.max(reading.maxAgeMs, currentMaxAgeMs)) {
+        kernelReadings.splice(i, 1);
+      }
     }
     let level: KernelPressureLevel | null = null;
     for (const reading of kernelReadings) {

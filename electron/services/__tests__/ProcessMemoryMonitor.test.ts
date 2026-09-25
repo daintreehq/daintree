@@ -1083,7 +1083,7 @@ describe("ProcessMemoryMonitor", () => {
       // enough to count, had suspend kept them.
       level = 1;
       onSuspend();
-      onWake();
+      onWake(0);
       await advancePolls(3);
 
       expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
