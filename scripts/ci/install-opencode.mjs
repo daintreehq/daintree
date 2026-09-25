@@ -2,8 +2,8 @@
 // Single source of truth for the OpenCode CLI version CI installs (#11476).
 //
 // The online E2E suite gates release publishes, so an unrelated upstream
-// publish must not be able to change what that gate runs against. Three
-// workflows install this CLI (e2e.yml, e2e-single.yml, screenshots.yml); before
+// publish must not be able to change what that gate runs against. Two
+// workflows install this CLI (e2e.yml, e2e-single.yml); before
 // this wrapper each ran `npm install -g opencode-ai` unpinned and could
 // therefore pick up a different build on any given day.
 //

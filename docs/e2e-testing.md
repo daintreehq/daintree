@@ -37,7 +37,7 @@ Tests are split into twelve Playwright projects:
 - **full-plugins** — Plugin manager UI, plugin lifecycle (enable/disable, restart gating), and manifest contribution rendering against the sideloaded sample plugin.
 - **online** — Tests that interact with real agent CLIs (requires `ANTHROPIC_API_KEY`).
 - **nightly** — Long-running memory-leak / soak detection, 5 specs (workers=1, no retries). The project name predates the scheduled nightly; it now runs as part of the `stabilize` sweep and on demand, not on a cron.
-- **screenshots** — Marketing screenshot pipeline plus the theme tour and the per-surface design-review captures. Run on demand via `screenshots.yml`, not part of the PR/release gates.
+- **screenshots** — The theme tour and the per-surface design-review captures. Run locally on demand, not part of the PR/release gates.
 - **demo** — Demo-engine specs that exercise the in-app demo automation API (`window.electron.demo`) — screencast recording and scripted terminal input (workers=1, no retries). Runs on demand via the `demo` suite in `e2e.yml`; not a release gate. The 4K dimension assertion in `demo-reel` is skipped on hosted CI (where the virtual display can't reach 4K) unless `DAINTREE_DEMO_STRICT_DIMS=1` is set.
 
 ## Configuration
@@ -112,8 +112,7 @@ e2e/
 │   └── *.spec.ts
 ├── nightly/             # 5 memory-leak / soak specs (stabilize sweep / on demand)
 │   └── nightly-*.spec.ts
-├── screenshots/         # marketing + design-review capture pipeline (on demand)
-│   ├── store-reel.spec.ts        # marketing reel
+├── screenshots/         # design-review capture harnesses (on demand)
 │   ├── theme-tour.spec.ts        # 19-scene theme review tour
 │   └── *-review.spec.ts          # per-surface design-review captures
 └── demo/                # demo-engine specs (on demand)

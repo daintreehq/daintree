@@ -38,7 +38,7 @@ Twelve Playwright projects:
 - `full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins` — the seven feature buckets, auto-sharded 4× in CI.
 - `online` — real-API agent tests; gates releases.
 - `nightly` — memory-leak detection.
-- `screenshots` — marketing and theme-tour capture (`npm run theme:tour`).
+- `screenshots` — design-review and theme-tour capture (`npm run theme:tour`).
 - `demo` — demo-video recording.
 
 Run one: `npx playwright test <spec>` or `npm run test:e2e:full-terminal`. Remotely: `gh workflow run "E2E Tests" --ref develop -f platform=linux -f suite=full-terminal -f test_file=<spec>`, or `e2e-single.yml` for a single test.

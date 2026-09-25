@@ -149,16 +149,10 @@ export default defineConfig({
       retries: 0,
     },
     {
-      // Marketing screenshot pipeline — runs on demand via
-      // .github/workflows/screenshots.yml. Each spec opens a separate demo
-      // repo, drives a deterministic UI state, and writes a PNG to
-      // artifacts/screenshots/. Real Anthropic API calls happen for the
-      // agent-state shots, so flake is non-zero; we surface failures rather
-      // than retry them (the workflow is manually rerun).
-      //
-      // 1800s (30 min) per scene — multi-agent + heavy fixed waits eat
-      // budget on Windows cold launches. We'd rather wait long than
-      // ship a screenshot of a half-painted panel.
+      // Design-review captures and the theme tour — run locally on demand.
+      // Each spec self-skips unless its env var is set. 1800s because the
+      // tour is interactive and some captures cold-launch several times;
+      // we'd rather wait long than capture a half-painted panel.
       name: "screenshots",
       testDir: "./e2e/screenshots",
       timeout: 1_800_000,
