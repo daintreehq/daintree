@@ -24,11 +24,19 @@ export function TourHost() {
   // The latest request wins: a slower load for an earlier one is dropped.
   const requestRef = useRef(0);
   const pendingRef = useRef<string | null>(null);
+  const openIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const onOpen = (event: Event) => {
       const tourId = tourIdOf(event);
       if (pendingRef.current === tourId) return;
+      // Asking for the tour already playing keeps it where it is, and
+      // withdraws any switch to another tour still loading.
+      if (openIdRef.current === tourId) {
+        requestRef.current++;
+        pendingRef.current = null;
+        return;
+      }
       const registration = getTour(tourId);
       if (!registration) {
         logWarn("No tour is registered under this id", { tourId });
@@ -39,9 +47,12 @@ export function TourHost() {
       const saved = Promise.resolve()
         .then(() => getOnboardingState())
         .catch(() => null);
-      void Promise.all([registration.load(), saved])
+      // Inside the chain, so a loader that throws rather than rejects is still handled.
+      const loaded = Promise.resolve().then(() => registration.load());
+      void Promise.all([loaded, saved])
         .then(([tour, state]) => {
           if (request !== requestRef.current) return;
+          openIdRef.current = tourId;
           setOpen({
             tour,
             ...(state
@@ -61,15 +72,24 @@ export function TourHost() {
         });
     };
     window.addEventListener(OPEN_TOUR_EVENT, onOpen);
+    const requests = requestRef;
+    const pending = pendingRef;
     return () => {
-      requestRef.current++;
-      pendingRef.current = null;
+      // Unmounting drops whatever is still loading.
+      requests.current++;
+      pending.current = null;
       window.removeEventListener(OPEN_TOUR_EVENT, onOpen);
     };
   }, []);
 
   const tourId = open?.tour.id;
-  const onClose = useCallback(() => setOpen(null), []);
+  const onClose = useCallback(() => {
+    // Closing also drops a tour still loading, so it can't open after the fact.
+    requestRef.current++;
+    pendingRef.current = null;
+    openIdRef.current = null;
+    setOpen(null);
+  }, []);
   const onChapterReached = useCallback(
     (index: number) => {
       if (!tourId) return;

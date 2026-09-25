@@ -25,9 +25,11 @@ vi.mock("../daintreeTour", () => ({
 vi.mock("../TourDialog", () => ({
   TourDialog: (props: TourDialogProps) => {
     dialogProps.current = props;
-    return null;
+    return <div data-testid="tour-dialog-mock" />;
   },
 }));
+
+const screenHasDialog = () => document.querySelector("[data-testid='tour-dialog-mock']") !== null;
 
 import type { TourDefinition } from "../tourDefinition";
 import { openTour, TOUR_COMPLETED_EVENT } from "../tourEvents";
@@ -147,14 +149,17 @@ describe("TourHost", () => {
       event instanceof CustomEvent ? event.detail : null
     );
     window.addEventListener(TOUR_COMPLETED_EVENT, completed);
-    const props = await openHostedTour(ACME_TOUR_ID);
-    expect(props.tour).toBe(acmeTour);
-    expect(props.initialChapter).toBe(1);
-    act(() => {
-      props.onChapterReached(1);
-      props.onCompleted();
-    });
-    window.removeEventListener(TOUR_COMPLETED_EVENT, completed);
+    try {
+      const props = await openHostedTour(ACME_TOUR_ID);
+      expect(props.tour).toBe(acmeTour);
+      expect(props.initialChapter).toBe(1);
+      act(() => {
+        props.onChapterReached(1);
+        props.onCompleted();
+      });
+    } finally {
+      window.removeEventListener(TOUR_COMPLETED_EVENT, completed);
+    }
     expect(onboarding.setTourProgress).toHaveBeenNthCalledWith(1, ACME_TOUR_ID, { lastChapter: 1 });
     expect(onboarding.setTourProgress).toHaveBeenNthCalledWith(2, ACME_TOUR_ID, {
       completed: true,
@@ -187,10 +192,14 @@ describe("TourHost", () => {
     expect(getOnboardingStateMock).not.toHaveBeenCalled();
   });
 
-  it("opens nothing when the tour fails to load", async () => {
+  it("opens nothing when the tour fails to load, and can be asked again", async () => {
+    const load = vi.fn<() => Promise<TourDefinition>>(() => {
+      // Thrown rather than rejected: the host must still let go of the request.
+      throw new Error("load failed");
+    });
     unregister = registerTour({
       summary: { id: ACME_TOUR_ID, title: "Acme Tour", minutes: 1, chapterTitles: [] },
-      load: () => Promise.reject(new Error("load failed")),
+      load,
     });
     getOnboardingStateMock.mockResolvedValue({ tours: {}, tourMuted: false });
     render(<TourHost />);
@@ -199,6 +208,52 @@ describe("TourHost", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(dialogProps.current).toBeNull();
+    expect(load).toHaveBeenCalledTimes(1);
+
+    load.mockImplementation(() => Promise.resolve(acmeTour));
+    act(() => {
+      openTour(ACME_TOUR_ID);
+    });
+    await waitFor(() => expect(dialogProps.current?.tour).toBe(acmeTour));
+  });
+
+  it("keeps an open tour where it is when it is asked for again", async () => {
+    // A fresh object per load, as a plugin's loader may well return.
+    const load = vi.fn(() => Promise.resolve({ ...acmeTour }));
+    unregister = registerTour({
+      summary: { id: ACME_TOUR_ID, title: "Acme Tour", minutes: 1, chapterTitles: [] },
+      load,
+    });
+    getOnboardingStateMock.mockResolvedValue({ tours: {}, tourMuted: false });
+    const first = await openHostedTour(ACME_TOUR_ID);
+    await act(async () => {
+      openTour(ACME_TOUR_ID);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(dialogProps.current!.tour).toBe(first.tour);
+  });
+
+  it("drops a tour still loading once the dialog is closed", async () => {
+    let resolveSlow: (tour: TourDefinition) => void = () => {};
+    unregister = registerTour({
+      summary: { id: ACME_TOUR_ID, title: "Acme Tour", minutes: 1, chapterTitles: [] },
+      load: () => new Promise((resolve) => (resolveSlow = resolve)),
+    });
+    getOnboardingStateMock.mockResolvedValue({ tours: {}, tourMuted: false });
+    const daintree = await openHostedTour();
+    act(() => {
+      openTour(ACME_TOUR_ID);
+    });
+    act(() => {
+      daintree.onClose();
+    });
+    await act(async () => {
+      resolveSlow(acmeTour);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(dialogProps.current!.tour.id).toBe(DAINTREE_TOUR_ID);
+    expect(screenHasDialog()).toBe(false);
   });
 
   it("starts from the beginning when stored progress can't be read", async () => {

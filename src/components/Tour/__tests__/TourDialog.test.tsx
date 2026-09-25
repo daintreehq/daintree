@@ -98,6 +98,7 @@ describe("TourDialog", () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("steps forward and back through chapters and reports each one reached", () => {
@@ -350,10 +351,11 @@ describe("TourDialog", () => {
       fireEvent.click(screen.getByRole("button", { name: "Finish" }));
       window.removeEventListener("daintree:show-getting-started", gettingStarted);
       expect(run).toHaveBeenCalledTimes(1);
+      expect(gettingStarted).not.toHaveBeenCalled();
     });
 
     it("fails only the chapter whose scene throws", () => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "error").mockImplementation(() => {});
       let player: TourPlayer | null = null;
       renderDialog({
         tour: tourWith({
@@ -369,13 +371,13 @@ describe("TourDialog", () => {
       expect(screen.getByRole("heading", { level: 3 }).textContent).toBe("First steps");
       expect(screen.getByText(/First steps stopped working/)).toBeTruthy();
       // Nothing to narrate over a broken scene.
-      expect(player!.getState().status).not.toBe("playing");
+      expect(player!.getState().status).toBe("paused");
 
       fireEvent.click(screen.getByRole("button", { name: "Next" }));
       expect(screen.getByRole("heading", { level: 3 }).textContent).toBe("Next steps");
       expect(screen.getByTestId("plain-scene")).toBeTruthy();
       expect(screen.queryByText(/stopped working/)).toBeNull();
-      consoleError.mockRestore();
+      expect(player!.getState().status).toBe("playing");
     });
   });
 });

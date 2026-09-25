@@ -8,6 +8,7 @@ vi.mock("@/services/ActionService", () => ({
 
 vi.mock("@/components/Tour/tourEvents", () => ({ openTour: mockOpenTour }));
 
+import { makePluginTourId } from "@shared/utils/tourIds";
 import { registerHelpActions } from "../helpActions";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
@@ -37,11 +38,8 @@ describe("help.tour.show", () => {
     const action = helpTourShow();
     await action.run(undefined, {});
     await action.run({}, {});
-    await action.run({ tourId: "plugin:acme.tools/welcome" }, {});
-    expect(mockOpenTour.mock.calls).toEqual([
-      [undefined],
-      [undefined],
-      ["plugin:acme.tools/welcome"],
-    ]);
+    const acme = makePluginTourId("acme.tools", "welcome");
+    await action.run({ tourId: acme }, {});
+    expect(mockOpenTour.mock.calls).toEqual([[undefined], [undefined], [acme]]);
   });
 });
