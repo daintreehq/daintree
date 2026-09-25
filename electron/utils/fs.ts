@@ -4,10 +4,13 @@ import {
   access,
   chmod as fsChmod,
   constants as fsConstants,
+  lstat as fsLstat,
+  mkdir as fsMkdir,
   open,
   unlink as fsUnlink,
 } from "fs/promises";
 import { chmodSync, closeSync, fsyncSync, openSync, unlinkSync, writeFileSync } from "fs";
+import type { Stats } from "fs";
 import stubbornFs from "stubborn-fs";
 
 // Wall-clock retry budgets for transient file-locking errors (EPERM/EBUSY/EACCES).
@@ -265,6 +268,49 @@ export async function tightenDirPermissions(dirPath: string): Promise<void> {
     if (isMissingPathError(error)) return;
     console.warn("[fs] Failed to tighten directory permissions:", dirPath, error);
   }
+}
+
+/**
+ * Create `dirPath` (and any missing parents) as an owner-only directory, or
+ * verify and tighten one that is already there. Meant for fixed names under a
+ * shared temp dir, where another local user can plant the name first.
+ *
+ * Throws when the final component is a symlink or not a directory, and on POSIX
+ * when it is owned by another user: following a planted symlink would redirect
+ * every later write into a location someone else chose, and a foreign directory
+ * can't be made private by chmod. A directory we own but left at the umask
+ * default (every install from before this check) is tightened to 0o700 in
+ * place, since `mkdir`'s `mode` only applies to segments it creates.
+ *
+ * Windows keeps only the symlink/type refusal; it has no mode bits or uid.
+ */
+export async function ensureOwnerOnlyDir(dirPath: string): Promise<void> {
+  // lstat before mkdir: `mkdir -p` reports success on a symlink to a directory.
+  await assertOwnDirectory(dirPath, true);
+  await fsMkdir(dirPath, { recursive: true, mode: OWNER_RWX_DIR_MODE });
+  const stats = await assertOwnDirectory(dirPath, false);
+  if (process.platform === "win32" || !stats) return;
+  if ((stats.mode & 0o777) !== OWNER_RWX_DIR_MODE) {
+    await fsChmod(dirPath, OWNER_RWX_DIR_MODE);
+  }
+}
+
+async function assertOwnDirectory(dirPath: string, allowMissing: boolean): Promise<Stats | null> {
+  let stats: Stats;
+  try {
+    stats = await fsLstat(dirPath);
+  } catch (error) {
+    if (allowMissing && isMissingPathError(error)) return null;
+    throw error;
+  }
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new Error(`Refusing ${dirPath}: expected a real directory`);
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  if (process.platform !== "win32" && uid !== null && stats.uid !== uid) {
+    throw new Error(`Refusing ${dirPath}: owned by another user`);
+  }
+  return stats;
 }
 
 // stubborn-fs only provides attempt.unlink (swallows all errors), not retry.unlink.

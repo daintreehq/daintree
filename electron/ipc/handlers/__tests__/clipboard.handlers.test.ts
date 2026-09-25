@@ -34,14 +34,36 @@ vi.mock("electron", () => ({
 const fsPromisesMock = vi.hoisted(() => ({
   mkdir: vi.fn(() => Promise.resolve()),
   readdir: vi.fn(() => Promise.resolve([])),
+  lstat: vi.fn(() =>
+    Promise.resolve({
+      isSymbolicLink: () => false,
+      isDirectory: () => true,
+      uid: typeof process.getuid === "function" ? process.getuid() : 0,
+    })
+  ),
   stat: vi.fn(),
-  unlink: vi.fn(),
+  unlink: vi.fn(() => Promise.resolve()),
   writeFile: vi.fn(() => Promise.resolve()),
   open: vi.fn(),
-  constants: { O_RDONLY: 1, O_NOFOLLOW: 0x20000 },
+  constants: {
+    O_RDONLY: 1,
+    O_WRONLY: 2,
+    O_CREAT: 0x200,
+    O_EXCL: 0x800,
+    O_NOFOLLOW: 0x20000,
+  },
 }));
 
 vi.mock("node:fs/promises", () => fsPromisesMock);
+
+// The directory checks run against a real filesystem in
+// electron/__tests__/clipboard.permissions.test.ts; here they are only observed.
+const fsUtilsMock = vi.hoisted(() => ({
+  ensureOwnerOnlyDir: vi.fn<(dir: string) => Promise<void>>(() => Promise.resolve()),
+  OWNER_RW_FILE_MODE: 0o600,
+}));
+
+vi.mock("../../../utils/fs.js", () => fsUtilsMock);
 
 // pathGuard.ts resolves containment via the "fs" module's promises.realpath.
 const fsModuleMock = vi.hoisted(() => ({
@@ -225,10 +247,17 @@ describe("clipboard:save-image cleanup trigger", () => {
     resize: () => ({ toPNG: () => Buffer.from([0x89]) }),
   };
 
+  const writeHandle = {
+    writeFile: vi.fn<(data: Buffer) => Promise<void>>(() => Promise.resolve()),
+    close: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     clipboardMock.readImage.mockReturnValue(fakeClipboardImage);
     vi.mocked(fsPromises.readdir).mockResolvedValue([]);
+    fsPromisesMock.open.mockResolvedValue(writeHandle);
+    writeHandle.writeFile.mockResolvedValue(undefined);
     cleanup = registerClipboardHandlers();
   });
 
@@ -240,10 +269,49 @@ describe("clipboard:save-image cleanup trigger", () => {
     const handler = getHandler("clipboard:save-image");
     await handler(fakeEvent);
 
-    expect(fsPromises.writeFile).toHaveBeenCalled();
+    expect(writeHandle.writeFile).toHaveBeenCalled();
     // cleanup reads the clipboard dir; startup also runs it once, so assert it
     // ran again after the save (≥2 invocations total).
     expect(vi.mocked(fsPromises.readdir).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("verifies the clipboard dir as owner-only before every save", async () => {
+    fsUtilsMock.ensureOwnerOnlyDir.mockClear();
+    const handler = getHandler("clipboard:save-image");
+    await handler(fakeEvent);
+
+    expect(fsUtilsMock.ensureOwnerOnlyDir).toHaveBeenCalledWith(CLIPBOARD_DIR);
+  });
+
+  it("creates the PNG exclusively, owner-only, without following a symlink", async () => {
+    const handler = getHandler("clipboard:save-image");
+    const result = (await handler(fakeEvent)) as { filePath: string };
+
+    expect(result.filePath.startsWith(CLIPBOARD_DIR + path.sep)).toBe(true);
+    expect(fsPromisesMock.open).toHaveBeenCalledWith(
+      result.filePath,
+      2 | 0x200 | 0x800 | 0x20000,
+      0o600
+    );
+    expect(fsPromises.writeFile).not.toHaveBeenCalled();
+  });
+
+  it("fails the save rather than writing through a dir it refused", async () => {
+    fsUtilsMock.ensureOwnerOnlyDir.mockRejectedValueOnce(new Error("expected a real directory"));
+    const handler = getHandler("clipboard:save-image");
+
+    await expect(handler(fakeEvent)).rejects.toThrow();
+    expect(fsPromisesMock.open).not.toHaveBeenCalled();
+  });
+
+  it("removes a half-written file when the write fails", async () => {
+    writeHandle.writeFile.mockRejectedValueOnce(new Error("ENOSPC"));
+    const handler = getHandler("clipboard:save-image");
+
+    await expect(handler(fakeEvent)).rejects.toThrow("ENOSPC");
+    const [openedPath] = fsPromisesMock.open.mock.calls[0] as unknown as [string];
+    expect(fsPromises.unlink).toHaveBeenCalledWith(openedPath);
+    expect(writeHandle.close).toHaveBeenCalled();
   });
 
   it("does not reject the save when cleanup fails", async () => {
