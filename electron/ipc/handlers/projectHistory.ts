@@ -86,7 +86,10 @@ export function createProjectHistoryNamespace(deps: HandlerDependencies) {
    * handler dependencies rather than the one that pressed the key.
    */
   const resolveLastWorkspace = (ctx: IpcContext): ProjectHistoryTarget | null => {
-    const windowId = ctx.senderWindow?.id ?? deps.mainWindow?.id;
+    // The primary-window fallback is for a local sender whose window can't be
+    // resolved. A view attached over a link has no window here, and borrowing
+    // this machine's would hand it another screen's history.
+    const windowId = ctx.senderWindow?.id ?? (ctx.event !== null ? deps.mainWindow?.id : undefined);
     if (windowId === undefined) return null;
 
     const history = getProjectHistory(windowId);

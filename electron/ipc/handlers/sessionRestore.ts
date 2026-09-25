@@ -41,7 +41,10 @@ export function registerSessionRestoreHandlers(deps: HandlerDependencies): () =>
       notifyViewHydrated: op(
         SESSION_RESTORE_METHOD_CHANNELS.notifyViewHydrated,
         async (ctx): Promise<void> => {
-          const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
+          // A view attached over a link is restored by its own Shell; nothing
+          // on this host is waiting on it.
+          if (ctx.event === null) return;
+          const senderWindow = getWindowForWebContents(ctx.event.sender);
           const pvm =
             (senderWindow &&
               deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??

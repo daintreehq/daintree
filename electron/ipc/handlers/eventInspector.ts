@@ -1,12 +1,17 @@
-import { ipcMain, type WebContents } from "electron";
+import type { WebContents } from "electron";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { EVENT_INSPECTOR_METHOD_CHANNELS } from "./eventInspector.preload.js";
-import type { HandlerDependencies } from "../types.js";
+import type { HandlerDependencies, IpcContext } from "../types.js";
+import type { ClientEndpoint, Disposable } from "../endpoint.js";
+import { onWithContext } from "../utils.js";
 import type { FilterOptions } from "../../services/EventBuffer.js";
 import type { EventFilterOptions, EventRecord } from "../../../shared/types/index.js";
 
 const subscribedWebContents = new Map<WebContents, () => void>();
+// Views attached over a link have no WebContents here; they are keyed by
+// their endpoint and dropped when it closes.
+const subscribedEndpoints = new Map<ClientEndpoint, Disposable>();
 let eventBufferUnsubscribe: (() => void) | null = null;
 let pendingBatch: EventRecord[] = [];
 let batchTimeout: NodeJS.Timeout | null = null;
@@ -74,10 +79,66 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
       }
     }
 
-    if (subscribedWebContents.size === 0 && eventBufferUnsubscribe) {
+    for (const [endpoint, closeListener] of subscribedEndpoints.entries()) {
+      if (endpoint.isClosed()) {
+        closeListener.dispose();
+        subscribedEndpoints.delete(endpoint);
+        continue;
+      }
+      try {
+        for (let i = 0; i < batch.length; i += MAX_BATCH_SIZE) {
+          const chunk = batch.slice(i, i + MAX_BATCH_SIZE);
+          endpoint.send({
+            type: "event",
+            channel: CHANNELS.EVENT_INSPECTOR_EVENT_BATCH,
+            args: [chunk],
+          });
+        }
+      } catch (error) {
+        console.warn(
+          "[EventInspector] Failed to send event batch to endpoint, keeping subscription:",
+          error
+        );
+      }
+    }
+
+    releaseBufferIfIdle();
+  };
+
+  const hasSubscribers = () => subscribedWebContents.size > 0 || subscribedEndpoints.size > 0;
+
+  const releaseBufferIfIdle = () => {
+    if (!hasSubscribers() && eventBufferUnsubscribe) {
       eventBufferUnsubscribe();
       eventBufferUnsubscribe = null;
     }
+  };
+
+  const ensureBufferSubscription = () => {
+    if (!eventBufferUnsubscribe && deps.eventBuffer) {
+      eventBufferUnsubscribe = deps.eventBuffer.onRecord(queueEvent);
+    }
+  };
+
+  const subscribeEndpoint = (endpoint: ClientEndpoint) => {
+    if (endpoint.isClosed() || subscribedEndpoints.has(endpoint)) return;
+    subscribedEndpoints.set(
+      endpoint,
+      endpoint.onClose(() => {
+        subscribedEndpoints.delete(endpoint);
+        releaseBufferIfIdle();
+      })
+    );
+    ensureBufferSubscription();
+  };
+
+  const unsubscribeEndpoint = (endpoint: ClientEndpoint) => {
+    const closeListener = subscribedEndpoints.get(endpoint);
+    if (closeListener) {
+      closeListener.dispose();
+      subscribedEndpoints.delete(endpoint);
+    }
+    releaseBufferIfIdle();
   };
 
   const queueEvent = (record: EventRecord) => {
@@ -87,8 +148,12 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
     }
   };
 
-  const handleSubscribe = (event: Electron.IpcMainEvent) => {
-    const sender = event.sender;
+  const handleSubscribe = (ctx: IpcContext) => {
+    if (ctx.event === null) {
+      subscribeEndpoint(ctx.endpoint);
+      return;
+    }
+    const sender = ctx.event.sender;
     if (sender.isDestroyed()) return;
 
     if (subscribedWebContents.has(sender)) {
@@ -97,24 +162,22 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
 
     const destroyListener = () => {
       subscribedWebContents.delete(sender);
-      if (subscribedWebContents.size === 0 && eventBufferUnsubscribe) {
-        eventBufferUnsubscribe();
-        eventBufferUnsubscribe = null;
-      }
+      releaseBufferIfIdle();
     };
 
     subscribedWebContents.set(sender, destroyListener);
     sender.once("destroyed", destroyListener);
 
-    if (!eventBufferUnsubscribe && deps.eventBuffer) {
-      eventBufferUnsubscribe = deps.eventBuffer.onRecord(queueEvent);
-    }
+    ensureBufferSubscription();
   };
-  ipcMain.on(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE, handleSubscribe);
-  cleanups.push(() => ipcMain.removeListener(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE, handleSubscribe));
+  cleanups.push(onWithContext(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE, handleSubscribe));
 
-  const handleUnsubscribe = (event: Electron.IpcMainEvent) => {
-    const sender = event.sender;
+  const handleUnsubscribe = (ctx: IpcContext) => {
+    if (ctx.event === null) {
+      unsubscribeEndpoint(ctx.endpoint);
+      return;
+    }
+    const sender = ctx.event.sender;
     const destroyListener = subscribedWebContents.get(sender);
 
     if (destroyListener) {
@@ -122,15 +185,9 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
       subscribedWebContents.delete(sender);
     }
 
-    if (subscribedWebContents.size === 0 && eventBufferUnsubscribe) {
-      eventBufferUnsubscribe();
-      eventBufferUnsubscribe = null;
-    }
+    releaseBufferIfIdle();
   };
-  ipcMain.on(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE, handleUnsubscribe);
-  cleanups.push(() =>
-    ipcMain.removeListener(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE, handleUnsubscribe)
-  );
+  cleanups.push(onWithContext(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE, handleUnsubscribe));
 
   return () => {
     cleanups.forEach((cleanup) => cleanup());
@@ -143,6 +200,8 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
       }
     }
     subscribedWebContents.clear();
+    for (const closeListener of subscribedEndpoints.values()) closeListener.dispose();
+    subscribedEndpoints.clear();
 
     pendingBatch = [];
     if (batchTimeout) {

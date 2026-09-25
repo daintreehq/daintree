@@ -1,9 +1,8 @@
 import path from "path";
 import { CHANNELS } from "../../channels.js";
-import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import {
   broadcastToRenderer,
-  sendToRenderer,
+  sendToRendererContext,
   typedHandle,
   typedHandleWithContext,
 } from "../../utils.js";
@@ -48,8 +47,6 @@ export function registerGitInitHandlers(): () => void {
       throw new Error("Invalid options object");
     }
 
-    const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
-
     const {
       directoryPath,
       createInitialCommit = true,
@@ -80,10 +77,14 @@ export function registerGitInitHandlers(): () => void {
         error,
         timestamp: Date.now(),
       };
-      if (senderWindow && !senderWindow.isDestroyed()) {
-        sendToRenderer(senderWindow, CHANNELS.PROJECT_INIT_GIT_PROGRESS, progressEvent);
-      } else {
+      // Progress is uncorrelated, so it goes to the caller alone. Only a local
+      // sender whose window is gone falls back to every renderer; a view
+      // attached over a link must never leak it to this host's other clients.
+      const senderWindow = ctx.senderWindow;
+      if (ctx.event !== null && (!senderWindow || senderWindow.isDestroyed())) {
         broadcastToRenderer(CHANNELS.PROJECT_INIT_GIT_PROGRESS, progressEvent);
+      } else {
+        sendToRendererContext(ctx, CHANNELS.PROJECT_INIT_GIT_PROGRESS, progressEvent);
       }
     };
 
