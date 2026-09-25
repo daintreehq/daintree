@@ -43,6 +43,8 @@ const ALLOWED_EXTERNALS = new Set([
   "react/jsx-dev-runtime",
   "react-dom",
   "react-dom/client",
+  "@daintreehq/tour",
+  "@daintreehq/tour/react",
 ]);
 
 function run(command, args) {
@@ -78,8 +80,8 @@ function auditExternals(artifact) {
     if (specifier.startsWith(".") || specifier.startsWith("/")) continue;
     if (ALLOWED_EXTERNALS.has(specifier)) continue;
     fail(
-      `${artifact} leaves "${specifier}" external. The host import map serves only React ` +
-        `specifiers, so this would fail to resolve at load time — and an externalized ` +
+      `${artifact} leaves "${specifier}" external. The host import map serves only React and ` +
+        `@daintreehq/tour specifiers, so this would fail to resolve at load time — and an externalized ` +
         `@daintreehq/* specifier would also stop the sample proving the package boundary.`
     );
   }

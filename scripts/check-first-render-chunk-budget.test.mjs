@@ -103,14 +103,14 @@ describe("findEntryKey", () => {
   it("skips tour facade entries that precede the app entry", () => {
     const manifest = {
       "\0virtual:daintree-host/@daintreehq/tour": {
-        file: "assets/host-daintreehq-tour-ccc.js",
+        file: "assets/host-daintreehq-tour-Ab3_x-9Z.js",
         name: "host-daintreehq-tour",
         isEntry: true,
         imports: ["_tour.js"],
         dynamicImports: [],
       },
       "\0virtual:daintree-host/@daintreehq/tour/react": {
-        file: "assets/host-daintreehq-tour-react-ddd.js",
+        file: "assets/host-daintreehq-tour-react-Cd4ef5Gh.js",
         isEntry: true,
         imports: ["_tour.js"],
         dynamicImports: [],
@@ -132,6 +132,33 @@ describe("findEntryKey", () => {
       ...makeManifest(),
     };
     expect(findEntryKey(manifest)).toBe("src/tourish.ts");
+  });
+
+  it("does not treat a real entry that extends a tour facade name as a facade", () => {
+    const manifest = {
+      "src/tourExtra.ts": {
+        file: "assets/host-daintreehq-tour-extra-Ab3_x-9Z.js",
+        name: "host-daintreehq-tour-extra",
+        isEntry: true,
+        imports: [],
+        dynamicImports: [],
+      },
+      ...makeManifest(),
+    };
+    expect(findEntryKey(manifest)).toBe("src/tourExtra.ts");
+  });
+
+  it("identifies a tour facade by its hashed file path when the manifest carries no name", () => {
+    const manifest = {
+      "\0virtual:daintree-host/@daintreehq/tour/react": {
+        file: "assets/host-daintreehq-tour-react-Cd4ef5Gh.js",
+        isEntry: true,
+        imports: [],
+        dynamicImports: [],
+      },
+      ...makeManifest(),
+    };
+    expect(findEntryKey(manifest)).toBe("index.html");
   });
 
   it("does not mistake a real chunk for a facade just because it imports react", () => {

@@ -295,9 +295,9 @@ describe("@daintreehq/plugin-vite — node target", () => {
     expect(external).toContain("node:fs");
   });
 
-  it("does not externalize React (node code has no host import map)", () => {
+  it("does not externalize React or the tour (node code has no host import map)", () => {
     const external = nodeConfig(daintreePlugin({ target: "node" })).build.rollupOptions.external;
-    for (const re of reactExternals) {
+    for (const re of [...reactExternals, ...tourExternals]) {
       expect(external).not.toContain(re);
     }
   });
