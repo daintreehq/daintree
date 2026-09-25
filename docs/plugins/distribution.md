@@ -213,6 +213,25 @@ For plugins distributed via URL, this means:
 
 Auto-updating plugins is a planned feature for a future release, gated behind per-plugin user consent.
 
+## Plugins on remote hosts
+
+A window attached to another machine (a remote host) runs that host's plugins: its installed set, versions, settings, secrets, trust and consent. Plugins installed on the machine you're sitting at don't run against a remote project, and the window loads a plugin's views from the host, so this machine doesn't need the plugin installed to use it there. Nothing syncs between machines in the background.
+
+Settings → Hosts → _host_ → Plugins compares the two machines and groups the differences:
+
+| Group | Meaning | Action |
+| --- | --- | --- |
+| Only on this machine | Installed here, missing on the host. Its panels, actions and MCP tools are absent in the host's windows. | **Install on _host_** |
+| Different versions | The host's version runs in its windows. | **Update on _host_** when this machine's copy is newer; never a downgrade |
+| Can't run as they are | No build for the host's OS (`platforms`), `"remote": "unsupported"`, blocked by the blocklist on the host, an `engines.daintree` range the host's build misses (a warning: the plugin still loads), or a user-scope secret with no value on the host | The reason, naming the host |
+| Only on _host_ | Works in the host's windows | None needed |
+
+**Install on _host_** copies this machine's package of that one plugin to the host and runs the host's normal install path there. Before anything is copied into the host's plugins folder the manifest is read from the package and refused if it has no build for the host's OS or the host's copy of the plugin blocklist names that version; the rest of the manifest is then validated as for any install. A `.dntr` dropped on the Plugin Manager, or picked with Install from file, in a window attached to a host installs on that host the same way.
+
+Plugin settings and secrets are per host and aren't copied. On a Linux host with no desktop session there is no keyring, so secret fields say that secrets can't be saved there; use environment variables or the tool's own login on that host instead.
+
+When a window switches to a host that lacks some of this machine's plugins, one notice says how many, with **Review** to open this comparison. A saved panel whose plugin the host doesn't have shows a placeholder naming the plugin and the host, with **Install on _host_** when this machine has the plugin; if the host removes a plugin while its panel is open, the panel switches to that placeholder and one toast says so. Calls to a plugin the host doesn't have are refused with a `PLUGIN_NOT_ON_HOST` error.
+
 ## Uninstalling
 
 ```

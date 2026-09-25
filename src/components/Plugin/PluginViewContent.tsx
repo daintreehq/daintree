@@ -54,8 +54,13 @@ import { useBuiltinPanelView } from "@/registry/builtinRendererRegistry";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { actionService } from "@/services/ActionService";
-import { isRemoteUnsupportedError, pluginViewImportPath } from "./remotePluginView";
+import {
+  isPluginNotOnHostError,
+  isRemoteUnsupportedError,
+  pluginViewImportPath,
+} from "./remotePluginView";
 import { PluginRemoteUnsupportedPlaceholder } from "./PluginRemoteUnsupportedPlaceholder";
+import { PluginNotOnHostPlaceholder } from "./PluginNotOnHostPlaceholder";
 
 /**
  * The resolved subset of `PanelKindConfig` a plugin view actually needs. Both
@@ -311,6 +316,17 @@ export function makePluginViewContent(
     // another machine. Nothing here is broken, so there are no diagnostics.
     if (isRemoteUnsupportedError(error)) {
       return <PluginRemoteUnsupportedPlaceholder pluginDisplayName={pluginDisplayName} />;
+    }
+    // The window's host doesn't have this plugin (any more). Also not broken.
+    if (isPluginNotOnHostError(error)) {
+      return (
+        <PluginNotOnHostPlaceholder
+          pluginId={pluginId}
+          kind={kindId}
+          pluginDisplayName={pluginDisplayName}
+          onRemove={onRequestClose}
+        />
+      );
     }
 
     return (
