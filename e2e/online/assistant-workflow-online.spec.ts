@@ -162,7 +162,9 @@ const SCENARIOS: Scenario[] = [
       // A transcript is not always on disk; then the launch shows in the answer.
       if (metrics.toolCalls.length > 0) {
         expect(
-          metrics.toolCalls.some((c) => /agent[._]launch/.test(c.input) && /claude/.test(c.input)),
+          metrics.toolCalls.some(
+            (c) => /agent[._]launch/.test(`${c.name} ${c.input}`) && /claude/.test(c.input)
+          ),
           "Claude was never launched"
         ).toBe(true);
       }
@@ -188,7 +190,9 @@ const SCENARIOS: Scenario[] = [
     timeoutMs: 30 * 60_000,
     check: ({ workers, finalText, metrics }) => {
       // Losers are closed by the follow-up, so launches come from the transcript.
-      const launchCalls = metrics.toolCalls.filter((c) => /agent[._]launch/.test(c.input));
+      const launchCalls = metrics.toolCalls.filter((c) =>
+        /agent[._]launch/.test(`${c.name} ${c.input}`)
+      );
       for (const agent of FACT_WORKERS) {
         expect(
           launchCalls.some((c) => c.input.includes(`"${agent}"`) || c.input.includes(`'${agent}'`)),
@@ -468,7 +472,8 @@ function readClaudeTranscript(
               lines.push(`${rel}   OUT ${text.length}B: ${text.slice(0, 600)}`);
             } else if (part.type === "text" && part.text) {
               metrics.turns++;
-              if (part.text.startsWith("Daintree:")) metrics.notices++;
+              // Claude receives a multi-line notice as a paste, wrapped in a tag.
+              if (/(^|\n)Daintree: /.test(part.text)) metrics.notices++;
               lines.push(`${rel} UserMessage: ${part.text}`);
             }
           }
