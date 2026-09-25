@@ -124,6 +124,25 @@ describe("TerminalWriteController.write", () => {
     expect(managed.hasReceivedOutput).toBe(true);
   });
 
+  it("settles a chunk a restore fence covers without painting it (#12791)", () => {
+    managed.streamFence = 100;
+    controller.write("t1", "covered", 2, { start: 90, end: 97 });
+
+    // A zero-length byte array, not "": an empty string entry ends xterm's
+    // flushSync drain and drops everything queued behind it.
+    expect(vi.mocked(managed.terminal.write).mock.calls[0]![0]).toEqual(new Uint8Array(0));
+    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 7, 2);
+    expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 7);
+    expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 7);
+  });
+
+  it("paints only the part of a chunk past the fence", () => {
+    managed.streamFence = 100;
+    controller.write("t1", "oldnew", 1, { start: 97, end: 103 });
+    expect(vi.mocked(managed.terminal.write).mock.calls[0]![0]).toBe("new");
+    expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 6);
+  });
+
   it("marks receipt even for a chunk deferred behind a restore window (#12754)", () => {
     managed.isSerializedRestoreInProgress = true;
     controller.write("t1", new Uint8Array([0x24]));

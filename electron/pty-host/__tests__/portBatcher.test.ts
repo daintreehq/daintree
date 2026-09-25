@@ -867,6 +867,18 @@ describe("PortBatcher", () => {
       expect(deps.postMessage).toHaveBeenNthCalledWith(2, "t1", bytes("ccc"), 3, 9);
     });
 
+    it("never merges a chunk that carries an offset with one that does not", () => {
+      const deps = createDeps();
+      const batcher = new PortBatcher(deps);
+      batcher.write("t1", bytes("aaa"), 3);
+      batcher.write("t1", bytes("bbb"), 3, false, false, false, 6);
+      batcher.write("t1", bytes("ccc"), 3);
+      batcher.flush();
+      expect(deps.postMessage).toHaveBeenNthCalledWith(1, "t1", bytes("aaa"), 3);
+      expect(deps.postMessage).toHaveBeenNthCalledWith(2, "t1", bytes("bbb"), 3, 6);
+      expect(deps.postMessage).toHaveBeenNthCalledWith(3, "t1", bytes("ccc"), 3);
+    });
+
     it("hands the end offset to the failed-batch recovery", () => {
       const onError = vi.fn();
       const deps = createDeps({

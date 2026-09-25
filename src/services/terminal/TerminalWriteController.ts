@@ -296,7 +296,7 @@ export class TerminalWriteController {
     // Ledgers above are charged for the whole batch; only the paint shrinks
     // when a restore fence says the snapshot already holds these bytes. A
     // fully covered batch still writes "" so its bookkeeping settles in order.
-    const paint = stripCoveredOutput(managed, data, range);
+    const paint = stripCoveredOutput(managed.streamFence, data, range);
     managed.parserTail?.feedAny(paint);
     const slices = sliceChunk(paint);
     for (let i = 0; i < slices.length - 1; i++) {

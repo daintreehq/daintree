@@ -27,7 +27,7 @@ import {
   createWebLinksAddon,
 } from "./TerminalAddonManager";
 import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
-import { receiveStreamChunk, type StreamRange } from "./streamFence";
+import { streamRangeOf, type StreamRange } from "./streamFence";
 import { PartialEscapeTracker } from "@shared/utils/terminalPartialEscapeTail";
 import { TerminalParserHandler } from "./TerminalParserHandler";
 import { TerminalUnseenOutputTracker, UnseenOutputSnapshot } from "./TerminalUnseenOutputTracker";
@@ -1260,7 +1260,7 @@ class TerminalInstanceService {
       if (receiving && (typeof data === "string" ? data.length : data.byteLength) > 0) {
         receiving.hasReceivedOutput = true;
       }
-      const range = receiving ? receiveStreamChunk(receiving, data, streamEnd) : undefined;
+      const range = streamRangeOf(data, streamEnd);
       // Worker-ingest diversion (issue #10960): while a terminal is in (or
       // transitioning through) worker mode, main-thread chunks route into the
       // controller — it acks them immediately and lands them on the mirror
@@ -1268,7 +1268,8 @@ class TerminalInstanceService {
       // controller.
       const ingest = this.workerIngestController.getIngest(id);
       if (ingest?.shouldDivert()) {
-        ingest.feedDiverted(data);
+        if (range) ingest.feedDiverted(data, range);
+        else ingest.feedDiverted(data);
         return;
       }
       if (range) this.dataBuffer.bufferData(id, data, range);
@@ -3314,6 +3315,9 @@ class TerminalInstanceService {
 
   handleBackendRecovery(): void {
     this.instances.forEach((managed, id) => {
+      // A restarted host numbers its streams from scratch, so a fence from the
+      // old one would swallow the new host's first output.
+      managed.streamFence = undefined;
       try {
         writeLocal(managed, "\x1b[!p");
 

@@ -467,13 +467,7 @@ export class TerminalOutputIngestService {
       // A merged batch carries one range, so it may only span a contiguous
       // run of the stream (or chunks that carry no offsets at all).
       const nextRange = queue.ranges[count];
-      if (
-        range === undefined
-          ? nextRange !== undefined
-          : nextRange?.start !== range.end || nextRange.epoch !== range.epoch
-      ) {
-        break;
-      }
+      if (range === undefined ? nextRange !== undefined : nextRange?.start !== range.end) break;
       const size = this.chunkByteSize(next);
       if (taken + size > batchCap) break;
       taken += size;

@@ -7,56 +7,49 @@
 export interface StreamRange {
   start: number;
   end: number;
-  // The pane's stream epoch at receipt (ManagedTerminal.streamEpoch).
-  epoch: number;
 }
 
-interface StreamCursor {
-  streamEpoch?: number;
-  lastStreamEnd?: number;
-  streamFence?: { offset: number; epoch: number };
-}
+// A zero-length write still runs its callback in order. It must not be "":
+// xterm's WriteBuffer.flushSync drains with `while (chunk = queue.shift())`,
+// so an empty string ends the drain and the entries queued behind it are
+// discarded along with their callbacks.
+const NOTHING_TO_PAINT = new Uint8Array(0);
 
 /**
- * Place a just-received chunk in its pane's stream. Offsets only ever grow
- * within one host process, so a chunk that starts behind the last one means
- * the process behind this id was replaced: the epoch moves on and any fence
- * from the old stream is dropped.
+ * Where a received chunk sits in its terminal's stream. The host keeps
+ * offsets growing across respawns at the same id, so the range alone places
+ * the chunk; no per-pane cursor is needed.
  */
-export function receiveStreamChunk(
-  cursor: StreamCursor,
+export function streamRangeOf(
   data: string | Uint8Array,
   streamEnd: number | undefined
 ): StreamRange | undefined {
   if (streamEnd === undefined) return undefined;
-  const start = streamEnd - utf8Length(data);
-  if (cursor.lastStreamEnd !== undefined && start < cursor.lastStreamEnd) {
-    cursor.streamEpoch = (cursor.streamEpoch ?? 0) + 1;
-    cursor.streamFence = undefined;
-  }
-  cursor.lastStreamEnd = streamEnd;
-  return { start, end: streamEnd, epoch: cursor.streamEpoch ?? 0 };
+  return { start: streamEnd - utf8Length(data), end: streamEnd };
 }
 
 /**
  * The part of a chunk a committed fence has not already painted: all of it,
- * none of it (`""`), or the suffix past the fence. The first chunk that
- * reaches past the fence retires it.
+ * none of it, or the suffix past the fence. The fence stays armed, because a
+ * chunk delivered on the other transport can arrive after later output.
  */
 export function stripCoveredOutput(
-  cursor: StreamCursor,
+  fence: number | undefined,
   data: string | Uint8Array,
   range: StreamRange | undefined
 ): string | Uint8Array {
-  const fence = cursor.streamFence;
-  if (!fence || !range || range.epoch !== fence.epoch) return data;
-  if (range.start >= fence.offset) {
-    cursor.streamFence = undefined;
-    return data;
-  }
-  if (range.end <= fence.offset) return "";
-  cursor.streamFence = undefined;
-  return dropLeadingBytes(data, fence.offset - range.start);
+  if (fence === undefined || !range || range.start >= fence) return data;
+  if (range.end <= fence) return NOTHING_TO_PAINT;
+  return dropLeadingBytes(data, fence - range.start);
+}
+
+// A lone surrogate encodes as U+FFFD (3 bytes) on the host, so only a real
+// pair counts as 4.
+function isSurrogatePair(data: string, i: number): boolean {
+  const code = data.charCodeAt(i);
+  if (code < 0xd800 || code > 0xdbff) return false;
+  const next = data.charCodeAt(i + 1);
+  return next >= 0xdc00 && next <= 0xdfff;
 }
 
 export function utf8Length(data: string | Uint8Array): number {
@@ -66,7 +59,7 @@ export function utf8Length(data: string | Uint8Array): number {
     const code = data.charCodeAt(i);
     if (code < 0x80) bytes += 1;
     else if (code < 0x800) bytes += 2;
-    else if (code >= 0xd800 && code <= 0xdbff) {
+    else if (isSurrogatePair(data, i)) {
       bytes += 4;
       i++;
     } else bytes += 3;
@@ -90,7 +83,7 @@ export function dropLeadingBytes(data: string | Uint8Array, bytes: number): stri
     const code = data.charCodeAt(i);
     if (code < 0x80) consumed += 1;
     else if (code < 0x800) consumed += 2;
-    else if (code >= 0xd800 && code <= 0xdbff) {
+    else if (isSurrogatePair(data, i)) {
       consumed += 4;
       i++;
     } else consumed += 3;

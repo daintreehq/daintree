@@ -259,7 +259,7 @@ export class TerminalRestoreController {
     continuation: SnapshotContinuation | undefined
   ): void {
     if (continuation?.streamOffset === undefined) return;
-    managed.streamFence = { offset: continuation.streamOffset, epoch: managed.streamEpoch ?? 0 };
+    managed.streamFence = Math.max(managed.streamFence ?? 0, continuation.streamOffset);
   }
 
   restoreFromSerialized(
@@ -497,7 +497,9 @@ export class TerminalRestoreController {
     captureGeometry?: TerminalGeometry,
     continuation?: SnapshotContinuation
   ): Promise<boolean> {
-    if (!serializedState) {
+    // An empty screen still has to land when the source is mid-sequence: the
+    // tail is the only record of bytes the pane never saw.
+    if (serializedState === null || (serializedState === "" && !this.restoreTail(continuation))) {
       logWarn(`No serialized state for terminal ${id}`);
       return false;
     }

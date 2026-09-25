@@ -108,7 +108,8 @@ describe("PartialEscapeTracker", () => {
   it("matches uninterrupted playback at every split of a mixed stream", async () => {
     const stream =
       "a\x1b[1;31mb\x1b]0;t\x1bitle\x07c\x1b[2;4Hd\x1bPq#0;2;0;0;0\x1b\\e\x9b32mf\x1b(Bg" +
-      "\x1b[3\n2mh\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\é😀\x1b_Gx\x1b\\i";
+      "\x1b[3\n2mh\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\é😀\x1b_Gx\x1b\\i" +
+      "\x1b^pmé j\x1bP$q\x7fm\x1b\\k\x1bX sos \x07 still\x1b\\l";
     const expected = screen(await uninterrupted(stream));
     for (let split = 0; split <= stream.length; split++) {
       // PTY strings are decoded whole, so a split never lands inside a
@@ -151,10 +152,12 @@ describe("PartialEscapeTracker", () => {
     expect(tracker.tail).toBe("\x1b]0;long title");
   });
 
-  it("reports an oversized string as unavailable and recovers at its terminator", () => {
+  it("stands in for an oversized string and recovers at its terminator", () => {
     const tracker = new PartialEscapeTracker();
     tracker.feed("\x1b]52;c;" + "A".repeat(70000));
-    expect(tracker.tail).toBeNull();
+    // Not the truncated payload: a clipboard write of half the data would be
+    // worse than none. The stand-in swallows the rest without dispatching.
+    expect(tracker.tail).not.toContain("52;");
     tracker.feed("A\x07");
     expect(tracker.tail).toBe("");
     tracker.feed("\x1b[3");
@@ -190,6 +193,24 @@ describe("PartialEscapeTracker", () => {
       expect(observe(dest.term, ""), JSON.stringify(pending)).toEqual(observe(expected.term, ""));
     }
   });
+});
+
+describe("PartialEscapeTracker overflow stand-ins", () => {
+  for (const [name, head, rest] of [
+    ["OSC", "a\x1b]0;" + "t".repeat(70000), "t\x07b"],
+    ["DCS", "a\x1bP1$q" + "m".repeat(70000), "m\x1b\\b"],
+    ["APC", "a\x1b_G" + "x".repeat(70000), "x\x1b\\b"],
+    ["CSI", "a\x1b[" + "1;".repeat(3000), "1mb"],
+  ] as const) {
+    it(`swallows the continuation of an oversized ${name} without printing it`, async () => {
+      const tracker = new PartialEscapeTracker();
+      tracker.feed(head);
+      const dest = makeTerminal();
+      await write(dest.term, PARSER_GROUND + "a" + (tracker.tail ?? ""));
+      await write(dest.term, rest);
+      expect(dest.term.buffer.active.getLine(0)?.translateToString(true)).toBe("ab");
+    });
+  }
 });
 
 describe("PartialEscapeTracker byte input", () => {

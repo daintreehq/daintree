@@ -164,6 +164,77 @@ describe("worker parse handoffs across a split escape sequence (#12791)", () => 
     });
   }
 
+  // Through the session, so a transition that stopped forwarding the tail
+  // fails here even though the authority and mirror halves still work.
+  function sessionOver(
+    mirror: ReturnType<typeof makeMirror>,
+    seed?: { serialized: string; tail: string | null }
+  ) {
+    return new WorkerParseSession(
+      createInThreadTransport(),
+      { write: (data, cb) => mirror.terminal.write(data, cb) },
+      {
+        cols: 80,
+        rows: 24,
+        scrollback: 1000,
+        cadenceMs: 0,
+        initialSerializedState: seed?.serialized,
+        initialEscapeTail: seed?.tail,
+      }
+    );
+  }
+
+  function paneTailOf(data: string): string | null {
+    const tracker = new PartialEscapeTracker();
+    tracker.feed(data);
+    return tracker.tail;
+  }
+
+  for (const [name, [head, rest]] of Object.entries(SPLITS)) {
+    it(`completes a ${name} split that straddles engage, in worker mode`, async () => {
+      const mirror = makeMirror();
+      mirror.terminal.write(head);
+      await drain(mirror.terminal);
+      const session = sessionOver(mirror, {
+        serialized: mirror.serializeAddon.serialize(),
+        tail: paneTailOf(head),
+      });
+      session.feed(rest);
+      await session.promoteToInteractive();
+      await drain(mirror.terminal);
+
+      expect(mirror.serializeAddon.serialize()).toBe((await reference(head, rest)).serialized);
+      session.dispose();
+    });
+
+    it(`completes a ${name} split that straddles promotion, in passthrough`, async () => {
+      const mirror = makeMirror();
+      const session = sessionOver(mirror);
+      session.feed(head);
+      await session.promoteToInteractive();
+      session.feed(rest);
+      await drain(mirror.terminal);
+
+      expect(mirror.serializeAddon.serialize()).toBe((await reference(head, rest)).serialized);
+      session.dispose();
+    });
+
+    it(`completes a ${name} split that straddles demotion`, async () => {
+      const mirror = makeMirror();
+      const session = sessionOver(mirror);
+      await session.promoteToInteractive();
+      session.feed(head);
+      await drain(mirror.terminal);
+      session.demoteToWorker(mirror.serializeAddon.serialize(), paneTailOf(head));
+      session.feed(rest);
+      await session.promoteToInteractive();
+      await drain(mirror.terminal);
+
+      expect(mirror.serializeAddon.serialize()).toBe((await reference(head, rest)).serialized);
+      session.dispose();
+    });
+  }
+
   it("grounds an authority whose parser was left mid-sequence before a re-seed", async () => {
     const authority = new ParseAuthority({ cols: 80, rows: 24, scrollback: 1000 });
     authority.write("\x1b]0;stale");

@@ -125,6 +125,12 @@ export interface TerminalProcessCallbacks {
    * (#12791) so the renderer can tell which chunks it already contains.
    */
   emitData: (id: string, data: string, streamEnd: number) => void;
+  /**
+   * Where this process's stream offsets start. The owner carries it over from
+   * the previous process at the same id, so offsets never go backwards across
+   * a respawn and a restore fence can never cover the new process's output.
+   */
+  streamOffsetBase?: number;
   onExit: (id: string, exitCode: number, signal?: number) => void;
   /**
    * Fired once the preserved-exit snapshot has actually been captured (after
@@ -393,6 +399,7 @@ export class TerminalProcess {
     prelude: string = "",
     dataHandoff?: PooledPtyDataHandoff
   ) {
+    this.emittedBytes = callbacks.streamOffsetBase ?? 0;
     const { shell, args: spawnArgs } = spawnContext;
     const spawnedAt = Date.now();
 

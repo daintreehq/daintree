@@ -141,6 +141,7 @@ export class TerminalWorkerIngestController {
         return current?.serializeAddon.serialize() ?? "";
       },
       mirrorEscapeTail: () => this.deps.getInstance(id)?.parserTail?.tail ?? "",
+      getStreamFence: () => this.deps.getInstance(id)?.streamFence,
       getGeometry: () => {
         const current = this.deps.getInstance(id);
         return {

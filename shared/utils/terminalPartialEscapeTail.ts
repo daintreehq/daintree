@@ -50,6 +50,33 @@ function isAnywhere(c: number): boolean {
   return c === 0x1b || c === 0x18 || c === 0x1a || (c >= 0x80 && c <= 0x9f);
 }
 
+// Sequences that run to the same terminators as the one that overflowed, but
+// that xterm abandons without effect: `?` after a parameter moves CSI and DCS
+// to their ignore states, and a non-digit OSC identifier aborts the OSC.
+function overflowSink(state: S): string | null {
+  switch (state) {
+    case S.CsiEntry:
+    case S.CsiParam:
+    case S.CsiIntermediate:
+    case S.CsiIgnore:
+      return "\x1b[0?";
+    case S.OscString:
+      return "\x1b]x";
+    case S.DcsEntry:
+    case S.DcsParam:
+    case S.DcsIntermediate:
+    case S.DcsIgnore:
+    case S.DcsPassthrough:
+      return "\x1bP0?";
+    case S.ApcEntry:
+    case S.ApcIntermediate:
+    case S.ApcPassthrough:
+      return "\x1b_x";
+    default:
+      return null;
+  }
+}
+
 function isStringState(state: S): boolean {
   return state === S.OscString || state === S.DcsPassthrough || state === S.ApcPassthrough;
 }
@@ -71,12 +98,14 @@ export class PartialEscapeTracker {
 
   /**
    * The code units to replay after a snapshot: `""` when the parser is in
-   * ground, `null` when the pending sequence outgrew the cap and cannot be
-   * reproduced (the consumer must not replay a truncated sequence).
+   * ground. A sequence that outgrew the cap cannot be reproduced; for it the
+   * tail opens a stand-in that swallows the continuation without dispatching
+   * anything, which is as close as a snapshot can get. `null` only when not
+   * even that exists.
    */
   get tail(): string | null {
     if (this.state === S.Ground) return "";
-    return this.overflowed ? null : this.buffer;
+    return this.overflowed ? overflowSink(this.state) : this.buffer;
   }
 
   reset(): void {
@@ -247,7 +276,7 @@ export class PartialEscapeTracker {
         return T.Drop;
 
       case S.SosPmString:
-        return T.Drop;
+        return printable ? this.go(S.Ground, T.Drop) : T.Drop;
 
       case S.OscString:
         if (c === 0x07) return this.go(S.Ground, T.Drop);
@@ -268,8 +297,10 @@ export class PartialEscapeTracker {
       case S.DcsIgnore:
         return T.Drop;
 
+      // DEL is payload here: xterm's DCS_PUT read-ahead only stops at
+      // CAN/SUB/ESC and C1.
       case S.DcsPassthrough:
-        return c === 0x7f ? T.Drop : T.Append;
+        return T.Append;
 
       case S.ApcEntry:
       case S.ApcIntermediate:

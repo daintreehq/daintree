@@ -89,8 +89,8 @@ export interface SnapshotContinuation {
   /**
    * The escape sequence the source parser was inside when `data` was
    * serialized, which `data` cannot represent. `""` means the parser was in
-   * ground; `null` means the sequence outgrew the tracker and cannot be
-   * reproduced.
+   * ground. A sequence too long to keep is replaced by one that swallows its
+   * continuation harmlessly; `null` means not even that was possible.
    */
   pendingEscapeTail: string | null;
   /**

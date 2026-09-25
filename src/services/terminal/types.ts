@@ -336,14 +336,11 @@ export interface ManagedTerminal {
     chunkCount: number;
     range?: StreamRange;
   }>;
-  // Set when a live snapshot restore commits (#12791): chunks of the same
-  // stream ending at or before `offset` are already in the snapshot, so the
-  // write path acks them without painting. Cleared by the first chunk past it.
-  streamFence?: { offset: number; epoch: number };
-  // Bumped when chunk offsets go backwards — the host process behind this id
-  // was replaced, and a fence from the old stream no longer applies.
-  streamEpoch?: number;
-  lastStreamEnd?: number;
+  // Stream offset the last live snapshot restore covered (#12791): output
+  // ending at or before it is already on screen, so the write path acks it
+  // without painting. Offsets only grow for a host's lifetime, so it never
+  // covers newer output; a host restart starts them over and clears it.
+  streamFence?: number;
   // Follows every write to `terminal`, so a serialize of this xterm can hand
   // over the escape sequence it is in the middle of.
   parserTail?: PartialEscapeTracker;

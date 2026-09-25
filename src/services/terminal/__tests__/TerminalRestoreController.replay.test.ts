@@ -9,7 +9,8 @@ import { Terminal } from "@xterm/headless";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { TerminalRestoreController } from "../TerminalRestoreController";
 import { TerminalWriteController } from "../TerminalWriteController";
-import { receiveStreamChunk, utf8Length } from "../streamFence";
+import { INCREMENTAL_RESTORE_CONFIG } from "../types";
+import { streamRangeOf, utf8Length } from "../streamFence";
 import { PartialEscapeTracker } from "@shared/utils/terminalPartialEscapeTail";
 import type { ManagedTerminal } from "../types";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
@@ -409,8 +410,10 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
     }
   };
 
+  // Every terminal in a scenario — source, destination, reference — shares it.
+  let gridScrollback = 200;
   function makeGrid(): Terminal {
-    return makeTerminal(40, 6);
+    return new Terminal({ cols: 40, rows: 6, scrollback: gridScrollback, allowProposedApi: true });
   }
 
   function screen(terminal: Terminal): { lines: string[]; cursor: string; fg: number[] } {
@@ -480,10 +483,11 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
     const stream = { end: 0 };
     // What the ingest path does per delivered chunk: stamp its stream range at
     // receipt, then hand it to the write controller.
-    const deliver = (chunk: string): void => {
+    const deliver = (chunk: string, asBytes = false): void => {
       stream.end += utf8Length(chunk);
-      const range = receiveStreamChunk(managed, chunk, stream.end);
-      writer.write("t1", chunk, 1, range);
+      // Port chunks arrive as UTF-8 bytes, IPC chunks as strings.
+      const data = asBytes ? new TextEncoder().encode(chunk) : chunk;
+      writer.write("t1", data, 1, streamRangeOf(data, stream.end));
     };
     return { managed, restorer, deliver, acks, stream };
   }
@@ -505,22 +509,23 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
     chunks: string[],
     painted: number,
     parsed: number,
-    options: { withContinuation?: boolean; lateChunks?: number } = {}
+    options: { withContinuation?: boolean; lateChunks?: number; asBytes?: boolean } = {}
   ): Promise<{ result: ReturnType<typeof screen>; acks: { port: number; ipcBytes: number } }> {
     const terminal = makeGrid();
     const pane = makePane(terminal);
     const late = options.lateChunks ?? 0;
-    for (const chunk of chunks.slice(0, painted)) pane.deliver(chunk);
+    const deliver = (chunk: string) => pane.deliver(chunk, options.asBytes);
+    for (const chunk of chunks.slice(0, painted)) deliver(chunk);
     await flush(terminal);
 
     const snapshot = await hostSnapshot(chunks, parsed, options.withContinuation ?? true);
     getSerializedState.mockImplementationOnce(async () => {
-      for (const chunk of chunks.slice(painted, chunks.length - late)) pane.deliver(chunk);
+      for (const chunk of chunks.slice(painted, chunks.length - late)) deliver(chunk);
       return snapshot;
     });
     await pane.restorer.fetchAndRestore("t1");
     await settle(terminal);
-    for (const chunk of chunks.slice(chunks.length - late)) pane.deliver(chunk);
+    for (const chunk of chunks.slice(chunks.length - late)) deliver(chunk);
     await settle(terminal);
     return { result: screen(terminal), acks: pane.acks };
   }
@@ -535,6 +540,7 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
   describe("fetch-and-restore across a split escape sequence (#12791)", () => {
     beforeEach(() => {
       getSerializedState.mockReset();
+      gridScrollback = 200;
     });
 
     for (const [name, chunks] of Object.entries(SPLITS)) {
@@ -578,7 +584,7 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
     });
 
     it("trims a held-back batch that straddles the snapshot's offset", async () => {
-      const chunks = ["one ", "two ", "three"];
+      const chunks = ["ōne ", "twö 😀 ", "three"];
       const terminal = makeGrid();
       const pane = makePane(terminal);
       const snapshot = await hostSnapshot(chunks, 1);
@@ -586,7 +592,7 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
         // The ingest queue coalesced the first two chunks into one batch.
         const batch = chunks[0]! + chunks[1]!;
         pane.stream.end = utf8Length(batch);
-        const range = receiveStreamChunk(pane.managed, batch, pane.stream.end);
+        const range = streamRangeOf(batch, pane.stream.end);
         pane.managed.deferredOutput.push({ data: batch, chunkCount: 2, range });
         return snapshot;
       });
@@ -595,6 +601,39 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
       pane.deliver(chunks[2]!);
       await settle(terminal);
       expect(screen(terminal)).toEqual(await uninterrupted(chunks));
+    });
+
+    it("fences port-delivered byte chunks the same way", async () => {
+      for (const chunks of Object.values(SPLITS)) {
+        const expected = await uninterrupted(chunks);
+        const { result } = await restoreMidStream(chunks, 0, 2, { asBytes: true });
+        expect(result).toEqual(expected);
+      }
+    });
+
+    it("restores a split through the incremental path for a large snapshot", async () => {
+      gridScrollback = 12000;
+      const filler = Array.from({ length: 11000 }, (_, i) => `line ${i} ${"x".repeat(24)}\r\n`);
+      const chunks = [filler.join(""), "tail \x1b[3", "1mRED"];
+      const snapshot = await hostSnapshot(chunks, 2);
+      expect(snapshot.data.length).toBeGreaterThan(
+        INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes
+      );
+      const expected = await uninterrupted(chunks);
+      const { result } = await restoreMidStream(chunks, 0, 2);
+      expect(result).toEqual(expected);
+    });
+
+    it("applies an empty screen when the source is only mid-sequence", async () => {
+      const chunks = ["\x1b[3", "1mRED"];
+      const { result } = await restoreMidStream(chunks, 0, 1);
+      expect(result).toEqual(await uninterrupted(chunks));
+    });
+
+    it("swallows the rest of a sequence too long to carry instead of printing it", async () => {
+      const chunks = ["hi \x1b]52;c;" + "QUFB".repeat(20000), "QUFB\x07world"];
+      const { result } = await restoreMidStream(chunks, 0, 1);
+      expect(result).toEqual(await uninterrupted(chunks));
     });
 
     it("grounds a destination parser left mid-sequence before the snapshot lands", async () => {

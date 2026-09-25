@@ -119,6 +119,9 @@ export class PtyManager extends EventEmitter {
   // shell sat in the pool. `emitData` routes by registry entry, so without this
   // those bytes were dropped and a shell blocked on a prompt stayed blank
   // (#12753). Flushed in order right after registration.
+  // Last renderer-bound stream offset per terminal id, outliving the process
+  // so a respawn at the same id continues the sequence (#12791).
+  private streamOffsets = new Map<string, number>();
   private constructionOutput: {
     id: string;
     chunks: Array<{ data: string; streamEnd: number }>;
@@ -358,6 +361,7 @@ export class PtyManager extends EventEmitter {
    * Accepts both string and Uint8Array data for binary optimization.
    */
   private emitData(id: string, data: string, streamEnd: number): void {
+    this.streamOffsets.set(id, streamEnd);
     if (this.constructionOutput?.id === id) {
       this.constructionOutput.chunks.push({ data, streamEnd });
       return;
@@ -535,6 +539,7 @@ export class PtyManager extends EventEmitter {
         options,
         {
           emitData: (termId, data, streamEnd) => this.emitData(termId, data, streamEnd),
+          streamOffsetBase: this.streamOffsets.get(id) ?? 0,
           onExit: (termId, exitCode, signal) => {
             // Guard against stale exit events from previous terminal with same ID
             if (this.registry.get(termId) !== terminalProcess) {
@@ -1440,6 +1445,7 @@ export class PtyManager extends EventEmitter {
 
     this.registry.dispose();
     this.pendingResizes.clear();
+    this.streamOffsets.clear();
     this.lifecycleLedger.clear();
     this.removeAllListeners();
 
