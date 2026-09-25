@@ -16,6 +16,7 @@ import { search, openSearchPanel, gotoLine } from "@codemirror/search";
 import { getDaintreeEditorTheme } from "./editorTheme";
 import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
 import { editorSearchHighlightTheme, editorSearchPanelTheme } from "./editorSearchTheme";
+import { createEditorSearchPanel } from "./editorSearchPanel";
 import { CODEMIRROR_LANGUAGES } from "./codeMirrorLanguages";
 import { cn } from "@/lib/utils";
 
@@ -69,7 +70,7 @@ const BASE_EXTENSIONS: Extension[] = [
   highlightedLineField,
   highlightLineTheme,
   EditorState.readOnly.of(true),
-  search({ top: true }),
+  search({ top: true, createPanel: createEditorSearchPanel }),
   keymap.of([{ key: "Mod-l", run: gotoLine }]),
   editorSearchPanelTheme,
   editorSearchHighlightTheme,

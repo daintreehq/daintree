@@ -305,6 +305,13 @@ describe("MarkdownEditorView (#12323)", () => {
       window.dispatchEvent(new Event("daintree:find-in-panel"));
     });
     expect(document.querySelector(".cm-search")).not.toBeNull();
+    // The shared search field, with replace controls since this editor is editable.
+    const query = document.querySelector<HTMLInputElement>(
+      ".cm-search .search-field > input.search-field-input[main-field]"
+    );
+    expect(query).not.toBeNull();
+    expect(document.activeElement).toBe(query);
+    expect(document.querySelector(".cm-search input.cm-textfield[name=replace]")).not.toBeNull();
   });
 
   it("unmounting the view keeps the draft — it is document state", async () => {
