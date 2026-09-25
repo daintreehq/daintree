@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import {
   isFleetRestoreEligible,
   requestCrashFleetRestore,
@@ -31,7 +31,7 @@ function harness(overrides: Partial<CrashFleetRestoreDeps> = {}) {
   );
   const deps: CrashFleetRestoreDeps = {
     startupRestore: Promise.resolve(),
-    waitForRequesterHydrated: vi.fn(async () => {}),
+    waitForRequesterHydrated: vi.fn(async () => true),
     readManifest: vi.fn(() => ({
       hadManifest: true,
       records: [{ projectId: "a" }, { projectId: "b" }] as OpenWindowRecord[],
@@ -41,6 +41,7 @@ function harness(overrides: Partial<CrashFleetRestoreDeps> = {}) {
     suppressSaves: vi.fn(() => events.push("suppress")),
     resumeSaves: vi.fn((persist: boolean) => events.push(`resume:${persist}`)),
     enableSaves: vi.fn(() => events.push("enable")),
+    adoptBackgroundProjects: vi.fn(),
     onBackgroundWindowFailed: vi.fn(),
     isProjectOwned: () => false,
     isShuttingDown: () => false,
@@ -121,7 +122,7 @@ describe("restoreFleetAfterCrash", () => {
 
   it("waits for the startup restore and the recovery window's hydration first", async () => {
     const startup = deferred();
-    const hydrated = deferred();
+    const hydrated = deferred<boolean>();
     const { deps, createWindow } = harness({
       startupRestore: startup.promise,
       waitForRequesterHydrated: () => hydrated.promise,
@@ -135,9 +136,58 @@ describe("restoreFleetAfterCrash", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(createWindow).not.toHaveBeenCalled();
 
-    hydrated.resolve();
+    hydrated.resolve(true);
     await run;
     expect(createWindow).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens nothing when the recovery window closed before it hydrated", async () => {
+    const { deps, createWindow } = harness({ waitForRequesterHydrated: async () => false });
+
+    await restoreFleetAfterCrash(deps);
+
+    expect(deps.readManifest).not.toHaveBeenCalled();
+    expect(createWindow).not.toHaveBeenCalled();
+    expect(deps.enableSaves).not.toHaveBeenCalled();
+  });
+
+  it("hands the recovery window's saved background projects to it", async () => {
+    const { deps, createWindow } = harness({
+      readManifest: () => ({
+        hadManifest: true,
+        records: [{ projectId: "recovered", backgroundProjectIds: ["x", "y"] }, { projectId: "b" }],
+      }),
+      isProjectOwned: (id) => id === "recovered",
+    });
+
+    await restoreFleetAfterCrash(deps);
+
+    expect(deps.adoptBackgroundProjects).toHaveBeenCalledWith("recovered", ["x", "y"]);
+    expect(createWindow.mock.calls.map((c) => c[0])).toEqual(["b"]);
+  });
+
+  it("hands nothing over when session restore is off", async () => {
+    const { deps } = harness({
+      readManifest: () => ({
+        hadManifest: true,
+        records: [{ projectId: "recovered", backgroundProjectIds: ["x"] }],
+      }),
+      isProjectOwned: () => true,
+      restoreLiveProjects: false,
+    });
+
+    await restoreFleetAfterCrash(deps);
+
+    expect(deps.adoptBackgroundProjects).not.toHaveBeenCalled();
+  });
+
+  it("lifts the read-only hold when every saved window is already open", async () => {
+    const { deps, events, createWindow } = harness({ isProjectOwned: () => true });
+
+    await restoreFleetAfterCrash(deps);
+
+    expect(createWindow).not.toHaveBeenCalled();
+    expect(events).toEqual(["suppress", "enable", "resume:true"]);
   });
 
   it("still runs when the startup restore rejected", async () => {
@@ -201,6 +251,10 @@ describe("restoreFleetAfterCrash", () => {
 
 describe("requestCrashFleetRestore", () => {
   beforeEach(() => {
+    resetCrashFleetRestoreForTests();
+  });
+
+  afterEach(() => {
     resetCrashFleetRestoreForTests();
   });
 

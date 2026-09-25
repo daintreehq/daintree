@@ -91,6 +91,7 @@ import {
   getStopDiskSpaceMonitor,
   setStopDiskSpaceMonitor,
   getMainProcessWatchdogClientRef,
+  queueWindowBackgroundProjects,
 } from "./window/windowServices.js";
 import { getMcpServerServiceRef, getResourceProfileService } from "./window/serviceRefs.js";
 import {
@@ -982,9 +983,23 @@ if (!gotTheLock) {
             startupRestore,
             waitForRequesterHydrated: async () => {
               const ctx = windowRegistry.getByWebContentsId(requesterWebContentsId);
-              await ctx?.services.projectViewManager?.waitForViewHydrated(requesterWebContentsId, {
+              const pvm = ctx?.services.projectViewManager;
+              if (!ctx || !pvm) return false;
+              const outcome = await pvm.waitForViewHydrated(requesterWebContentsId, {
                 timeoutMs: RESTORE_HYDRATION_WAIT_MS,
                 signal: ctx.abortController.signal,
+              });
+              return outcome !== "cancelled" && !ctx.browserWindow.isDestroyed();
+            },
+            adoptBackgroundProjects: (projectId, projectIds) => {
+              const owner = findOtherProjectOwner(windowRegistry, projectId, {});
+              if (!owner) return;
+              queueWindowBackgroundProjects({
+                windowId: owner.context.windowId,
+                getManager: () => owner.context.services.projectViewManager,
+                projectViewManager: owner.projectViewManager,
+                windowRegistry,
+                projectIds,
               });
             },
             readManifest: readOpenWindowsManifestSync,

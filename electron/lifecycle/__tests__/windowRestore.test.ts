@@ -560,19 +560,45 @@ describe("restoreWindowFleet behind a window that is already open (#12801)", () 
     expect(h.persisted()).toBe(true);
   });
 
-  it("paces every window but the last on hydration", async () => {
-    const h = harness({
-      records: [record("a"), record("b")],
-      hadManifest: true,
-      primaryAlreadyOpen: true,
-    });
+  it("starts each window only after the one before it settles", async () => {
+    const pending: Array<(result: CreateWindowResult) => void> = [];
+    const h = harness(
+      { records: [record("a"), record("b")], hadManifest: true, primaryAlreadyOpen: true },
+      () => new Promise<CreateWindowResult>((resolve) => pending.push(resolve))
+    );
+
+    const run = restoreWindowFleet(h.deps);
+    await Promise.resolve();
+    expect(h.openedProjects()).toEqual(["a"]);
+    const waits = () =>
+      h.createWindow.mock.calls.map(
+        (c) => (c[1] as { awaitHydrationMs?: number } | undefined)?.awaitHydrationMs
+      );
+    expect(waits()).toEqual([RESTORE_HYDRATION_WAIT_MS]);
+
+    pending[0]("ok");
+    await vi.waitFor(() => expect(h.openedProjects()).toEqual(["a", "b"]));
+    expect(waits()).toEqual([RESTORE_HYDRATION_WAIT_MS, undefined]);
+
+    pending[1]("ok");
+    await run;
+    expect(h.persisted()).toBe(true);
+  });
+
+  it("stops at exit-requested and keeps the manifest", async () => {
+    const h = harness(
+      {
+        records: [record("a"), record("b"), record("c")],
+        hadManifest: true,
+        primaryAlreadyOpen: true,
+      },
+      async (projectId) => (projectId === "b" ? "exit-requested" : "ok")
+    );
 
     await restoreWindowFleet(h.deps);
 
-    const waits = h.createWindow.mock.calls.map(
-      (c) => (c[1] as { awaitHydrationMs?: number } | undefined)?.awaitHydrationMs
-    );
-    expect(waits).toEqual([RESTORE_HYDRATION_WAIT_MS, undefined]);
+    expect(h.openedProjects()).toEqual(["a", "b"]);
+    expect(h.persisted()).toBe(false);
   });
 
   it("opens nothing for an empty manifest instead of a fallback window", async () => {

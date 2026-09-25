@@ -13,7 +13,11 @@
  */
 
 import type { OpenWindowRecord } from "../services/persistence/windowManifest.js";
-import { restoreWindowFleet, type RestoreWindowFleetDeps } from "./windowRestore.js";
+import {
+  normalizeWindowRecords,
+  restoreWindowFleet,
+  type RestoreWindowFleetDeps,
+} from "./windowRestore.js";
 
 /**
  * The crash counts that still get the full window set. Matches the renderer's
@@ -36,11 +40,21 @@ export interface CrashFleetRestoreDeps extends Pick<
    * counter, so two restores overlapping would release it early.
    */
   startupRestore: Promise<unknown>;
-  /** Resolves once the window that asked for recovery has hydrated, or gave up. */
-  waitForRequesterHydrated: () => Promise<unknown>;
+  /**
+   * Resolves once the window that asked for recovery has hydrated, or gave up
+   * waiting. False when that window is gone: a user who closed the recovery
+   * window did not ask for the rest of the set to appear.
+   */
+  waitForRequesterHydrated: () => Promise<boolean>;
   readManifest: () => { hadManifest: boolean; records: OpenWindowRecord[] };
   /** The user's session-restore setting — whether windows get their background projects. */
   restoreLiveProjects: boolean;
+  /**
+   * Hand background projects to the live window that already shows `projectId`.
+   * The recovery window opened on its own, so the saved record it stands in for
+   * never had its background list queued.
+   */
+  adoptBackgroundProjects: (projectId: string, projectIds: readonly string[]) => void;
   /** Lifts the recovery launch's read-only manifest hold. */
   enableSaves: () => void;
   isShuttingDown: () => boolean;
@@ -51,17 +65,30 @@ export async function restoreFleetAfterCrash(deps: CrashFleetRestoreDeps): Promi
   await deps.startupRestore.catch(() => {});
   // The recovery window is the one the user is looking at; let it restore its
   // panels before the rest of the fleet competes with it.
-  await deps.waitForRequesterHydrated();
-  if (deps.isShuttingDown()) return;
+  const requesterLive = await deps.waitForRequesterHydrated();
+  if (!requesterLive || deps.isShuttingDown()) return;
 
   const { hadManifest, records } = deps.readManifest();
   if (!hadManifest) return;
 
   // Picker windows have nothing to restore, and the recovery window already
   // gives the user one.
-  const fleetRecords = records
+  const fleetRecords = normalizeWindowRecords(records)
     .filter((record) => record.projectId !== null)
     .map((record) => (deps.restoreLiveProjects ? record : { projectId: record.projectId }));
+
+  // The fleet skips a record whose project is already open, which would drop
+  // the projects that window had warm — and a clean finish would then persist
+  // the manifest without them.
+  for (const record of fleetRecords) {
+    if (
+      record.projectId !== null &&
+      record.backgroundProjectIds?.length &&
+      deps.isProjectOwned?.(record.projectId)
+    ) {
+      deps.adoptBackgroundProjects(record.projectId, record.backgroundProjectIds);
+    }
+  }
 
   await restoreWindowFleet({
     records: fleetRecords,
