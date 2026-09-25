@@ -299,3 +299,64 @@ describe("host.clipboard.writeImage", () => {
     expect(mockClipboard.writeImage).not.toHaveBeenCalled();
   });
 });
+
+// ── Host mode: the clipboard is the driving person's ──
+
+import {
+  _resetPluginFrontendRoutingForTesting,
+  setPluginFrontendRouter,
+  type PluginFrontend,
+} from "../plugin/pluginFrontendRouting.js";
+import { PluginFrontendMethod } from "../plugin/pluginFrontendRequests.js";
+import type { ClientEndpoint } from "../../ipc/endpoint.js";
+
+describe("host.clipboard with a driver on another machine", () => {
+  let frontend: PluginFrontend = { kind: "local" };
+  const request = vi.fn(async (_method: string, payload: { op: string }) =>
+    payload.op === "readText" ? "from the driver" : null
+  );
+
+  beforeEach(() => {
+    request.mockClear();
+    _resetPluginFrontendRoutingForTesting();
+    setPluginFrontendRouter({ resolve: () => frontend, onChange: () => () => {} });
+    frontend = {
+      kind: "remote",
+      endpoint: { request, isClosed: () => false } as unknown as ClientEndpoint,
+    };
+  });
+
+  afterEach(() => {
+    _resetPluginFrontendRoutingForTesting();
+  });
+
+  it("writes and reads the driving machine's clipboard, never this one's", async () => {
+    const host = registerPlugin(["clipboard:write", "clipboard:read"]);
+    await host.clipboard.writeText("hello");
+    await host.clipboard.writeImage(pngBytes());
+    expect(await host.clipboard.readText()).toBe("from the driver");
+
+    expect(request.mock.calls.map(([method, payload]) => [method, payload.op])).toEqual([
+      [PluginFrontendMethod.CLIPBOARD, "writeText"],
+      [PluginFrontendMethod.CLIPBOARD, "writeImage"],
+      [PluginFrontendMethod.CLIPBOARD, "readText"],
+    ]);
+    expect(mockClipboard.writeText).not.toHaveBeenCalled();
+    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+    expect(mockClipboard.readText).not.toHaveBeenCalled();
+  });
+
+  it("keeps the capability gate in front of the remote clipboard", async () => {
+    const host = registerPlugin([]);
+    await expect(host.clipboard.writeText("nope")).rejects.toThrow(/PERMISSION_REQUIRED/);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("uses this machine's clipboard when the driver is here or nobody is attached", async () => {
+    const host = registerPlugin(["clipboard:write"]);
+    frontend = { kind: "none", reason: "vacant" };
+    await host.clipboard.writeText("x");
+    expect(mockClipboard.writeText).toHaveBeenCalledWith("x");
+    expect(request).not.toHaveBeenCalled();
+  });
+});

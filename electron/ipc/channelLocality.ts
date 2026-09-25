@@ -16,6 +16,9 @@ import type { ChannelName } from "./channels.js";
  * joins a machine's main process to its own views. A host reaches a remote
  * view's renderer through the link's reverse requests, which the view's Shell
  * answers over this bridge.
+ * The plugin prompt and capability-consent bridges are `shell` for the same
+ * reason: a host's plugin asks the driving Shell by reverse request, and that
+ * Shell puts the question to its own view.
  *
  * There is no default. The record is total over {@link ChannelName}, so a new
  * channel that isn't classified here fails typecheck, and
@@ -507,8 +510,8 @@ export const CHANNEL_LOCALITY = {
   "perf:flush-renderer-marks": "shell",
   "plugin-agent-mcp:list-project-endpoints": "host",
   "plugin-agent-mcp:set-project-endpoint-enabled": "host",
-  "plugin-capability:acknowledge-consent": "host",
-  "plugin-capability:resolve-consent": "host",
+  "plugin-capability:acknowledge-consent": "shell",
+  "plugin-capability:resolve-consent": "shell",
   "plugin-mcp:call-tool": "host",
   "plugin-mcp:get-config": "host",
   "plugin-mcp:get-full-schema": "host",
@@ -584,9 +587,9 @@ export const CHANNEL_LOCALITY = {
   "plugin:settings-reveal-secret": "host",
   "plugin:settings-set-value": "host",
   "plugin:toolbar-buttons": "host",
-  "plugin:ui-prompt-cancel": "host",
-  "plugin:ui-prompt-request": "host",
-  "plugin:ui-prompt-response": "host",
+  "plugin:ui-prompt-cancel": "shell",
+  "plugin:ui-prompt-request": "shell",
+  "plugin:ui-prompt-response": "shell",
   "plugin:uninstall": "host",
   "plugin:validate-action-ids": "host",
   "plugin:validate-manifest": "host",
@@ -991,7 +994,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "app-agent:dispatch-action-request": "host",
   "copy-tree-history:update": "host",
   "forge:remote-changed": "host",
-  "plugin-capability:consent-request": "host",
+  "plugin-capability:consent-request": "shell",
   "plugin-mcp:consent-request": "host",
   "plugin:actions-changed": "host",
   "plugin:agents-changed": "host",

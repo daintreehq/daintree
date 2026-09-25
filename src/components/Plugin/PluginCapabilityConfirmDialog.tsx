@@ -5,6 +5,7 @@ import { usePluginCapabilityConfirmStore } from "@/store/pluginCapabilityConfirm
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import type { PluginCapabilityConsentDecision } from "@shared/types/pluginCapabilityConsent";
 import type { BuiltInPluginCapability } from "@shared/types/plugin";
+import { useHostConnection } from "@/hooks/useHostConnection";
 
 /**
  * Singleton dialog driven by the just-in-time capability consent queue (#10524).
@@ -18,6 +19,10 @@ export function PluginCapabilityConfirmDialog() {
   const current = usePluginCapabilityConfirmStore((state) => state.current);
   const resolveCurrent = usePluginCapabilityConfirmStore((state) => state.resolveCurrent);
   const resetKey = current?.requestId ?? "null";
+  // A window attached to another machine asks on that host's behalf: the
+  // capability is used there, so the question names it.
+  const { hostId, hostName } = useHostConnection();
+  const onHost = hostId === null ? "" : ` on ${hostName ?? hostId}`;
 
   const handledRequestIdRef = useRef<string | null>(null);
   const resolveOnce = useCallback(
@@ -57,7 +62,7 @@ export function PluginCapabilityConfirmDialog() {
         isOpen={true}
         onClose={() => resolveOnce(current.requestId, "rejected")}
         title={titleFor(current.pluginDisplayName, current.capability)}
-        description={`'${current.pluginDisplayName}' is asking to ${capabilityAction(current.capability)} for the first time. Allowing remembers this for the plugin until you uninstall or revoke it.`}
+        description={`'${current.pluginDisplayName}' is asking to ${capabilityAction(current.capability)}${onHost} for the first time. Allowing remembers this for the plugin until you uninstall or revoke it.`}
         confirmLabel="Allow and remember"
         cancelLabel="Deny"
         onConfirm={() => resolveOnce(current.requestId, "approved-and-pin")}

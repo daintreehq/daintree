@@ -344,3 +344,49 @@ describe("host.system auditing", () => {
     expect(audits).toHaveLength(0);
   });
 });
+
+// ── Host mode: a remote driver gets no windows on this host's screen ──
+
+import {
+  _resetPluginFrontendRoutingForTesting,
+  setPluginFrontendRouter,
+  type PluginFrontend,
+} from "../plugin/pluginFrontendRouting.js";
+import type { ClientEndpoint } from "../../ipc/endpoint.js";
+
+describe("host.system with a driver on another machine", () => {
+  let frontend: PluginFrontend = { kind: "local" };
+
+  beforeEach(() => {
+    _resetPluginFrontendRoutingForTesting();
+    setPluginFrontendRouter({ resolve: () => frontend, onChange: () => () => {} });
+  });
+
+  afterEach(() => {
+    _resetPluginFrontendRoutingForTesting();
+  });
+
+  it("refuses openPath and showItemInFolder instead of opening them on this screen", async () => {
+    frontend = {
+      kind: "remote",
+      endpoint: { request: vi.fn(), isClosed: () => false } as unknown as ClientEndpoint,
+    };
+    const host = registerPlugin(["fs:user-data-write"]);
+    const target = await writeInDataDir("shot.png");
+
+    await expect(host.system.openPath(target)).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    await expect(host.system.showItemInFolder(target)).rejects.toThrow(/REMOTE_FRONTEND/);
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+    expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it("still opens for a driver at this machine, or with nobody attached", async () => {
+    const host = registerPlugin(["fs:user-data-write"]);
+    const target = await writeInDataDir("shot.png");
+    frontend = { kind: "local" };
+    await expect(host.system.openPath(target)).resolves.toBeUndefined();
+    frontend = { kind: "none", reason: "vacant" };
+    await expect(host.system.openPath(target)).resolves.toBeUndefined();
+    expect(shellMock.openPath).toHaveBeenCalledTimes(2);
+  });
+});

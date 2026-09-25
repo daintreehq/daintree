@@ -487,16 +487,19 @@ export interface SendToActiveAgentParams {
 export interface ShowQuickPickParams {
   items: PluginQuickPickItem[];
   options?: PluginQuickPickOptions;
+  whenNoFrontend?: "fail" | "queue";
 }
 
 /** Params for `showInputBox` (`host-call`). */
 export interface ShowInputBoxParams {
   options?: PluginInputBoxOptions;
+  whenNoFrontend?: "fail" | "queue";
 }
 
 /** Params for `showConfirm` (`host-call`). */
 export interface ShowConfirmParams {
   options: PluginConfirmOptions;
+  whenNoFrontend?: "fail" | "queue";
 }
 
 /** Params for `fs.readFile` / `fs.readFileBytes` / `fs.readdir` / `fs.stat` (`host-call`). */

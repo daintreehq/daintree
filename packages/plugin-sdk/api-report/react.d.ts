@@ -22,6 +22,13 @@ interface UseHostChannelResult<TArgs, TResult> {
     invoke: (args: TArgs) => Promise<TResult | undefined>;
     loading: boolean;
     error: Error | null;
+    /**
+     * The latest call failed because the link to the view's host is down
+     * (`error` is a `HostDisconnectedError` or `OutcomeUnknownError`). Cleared by
+     * the next call that gets through. Always `false` for a window on the
+     * plugin's own machine.
+     */
+    disconnected: boolean;
 }
 /**
  * Handler signature for `usePluginEvent(pluginId, channel, handler)`. Receives
@@ -50,8 +57,34 @@ type PluginEventHandler<TPayload> = (payload: TPayload) => void;
  * resolutions are dropped so a fast click that triggers two invokes never
  * lets the older response overwrite the newer one. `loading` reflects the
  * latest call only.
+ *
+ * In a window attached to another machine the plugin's host code runs there,
+ * and the link can drop. A call that could not reach the host fails with
+ * `HostDisconnectedError`; one whose answer was lost after it was sent fails
+ * with `OutcomeUnknownError` (it may have run). Either sets `disconnected`
+ * until a later call gets through, so a view can show a quiet offline state
+ * instead of an error.
  */
 declare function useHostChannel<TArgs = unknown, TResult = unknown>(pluginId: string, channel: string): UseHostChannelResult<TArgs, TResult>;
+
+/**
+ * The view's window is attached to another machine and the link to it is
+ * down, so the call never reached the plugin's host code. Safe to retry once
+ * the link is back; `useHostChannel` reports `disconnected` meanwhile.
+ */
+declare class HostDisconnectedError extends Error {
+    readonly code: "HOST_DISCONNECTED";
+    constructor(message?: string, options?: ErrorOptions);
+}
+/**
+ * The link dropped after the call was sent: the plugin's host code may or may
+ * not have run it. Don't blindly repeat a call that changes something — check
+ * its effect first, or make it idempotent.
+ */
+declare class OutcomeUnknownError extends Error {
+    readonly code: "OUTCOME_UNKNOWN";
+    constructor(message?: string, options?: ErrorOptions);
+}
 
 /**
  * Subscribe a plugin view to a host push channel — the renderer side of
@@ -218,4 +251,4 @@ interface ViewScope {
  */
 declare function createViewScope(signal: AbortSignal, options?: ViewScopeOptions): ViewScope;
 
-export { type PluginDocumentPackage, type PluginEventHandler, type UseHostChannelResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, createViewScope, loadDocumentPackage, useHostChannel, usePluginEvent, usePluginPanelEvent };
+export { HostDisconnectedError, OutcomeUnknownError, type PluginDocumentPackage, type PluginEventHandler, type UseHostChannelResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, createViewScope, loadDocumentPackage, useHostChannel, usePluginEvent, usePluginPanelEvent };

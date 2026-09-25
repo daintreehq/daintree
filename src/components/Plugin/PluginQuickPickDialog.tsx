@@ -41,6 +41,7 @@ export function PluginQuickPickDialog() {
           pluginId: current.pluginId,
           items: current.params.items,
           options: current.params.options,
+          waited: current.params.waited,
         }
       : null;
   const isQuickPick = quickPick !== null;
@@ -197,7 +198,7 @@ export function PluginQuickPickDialog() {
   // one line on this palette the plugin did not write.
   const footer = (
     <div className="flex w-full items-center justify-between gap-3">
-      <PluginProvenance attribution={attribution} className="flex-1" />
+      <PluginProvenance attribution={attribution} className="flex-1" waited={quickPick?.waited} />
       {canSelectMany && (
         <div className="flex shrink-0 items-center gap-3">
           {/* Enter earns its chip here and only here: in a multi-select list

@@ -27,7 +27,7 @@ import type {
   PluginToastOptions,
   PluginQuickPickItem,
   PluginQuickPickOptions,
-  PluginHostCallOptions,
+  PluginPromptCallOptions,
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
   PluginWorktreeStatus,
@@ -109,6 +109,11 @@ interface RegisteredMcpTool {
  * than pin a pending invoke forever.
  */
 const COMMAND_IMPORT_TIMEOUT_MS = 5000;
+
+/** Only an explicit opt-in to waiting crosses the port; anything else is the default. */
+function promptQueueParam(callOptions?: PluginPromptCallOptions): { whenNoFrontend?: "queue" } {
+  return callOptions?.whenNoFrontend === "queue" ? { whenNoFrontend: "queue" } : {};
+}
 
 export class PluginDevWorkerHostProxy {
   readonly host: PluginHostApi;
@@ -934,23 +939,28 @@ export class PluginDevWorkerHostProxy {
       showQuickPick: ((
         items: PluginQuickPickItem[],
         options?: PluginQuickPickOptions,
-        callOptions?: PluginHostCallOptions
+        callOptions?: PluginPromptCallOptions
       ) =>
         this.callWithGrace<PluginQuickPickItem | PluginQuickPickItem[] | undefined>(
           "showQuickPick",
-          { items, options },
+          { items, options, ...promptQueueParam(callOptions) },
           undefined,
           callOptions?.signal
         )) as PluginHostApi["showQuickPick"],
       showInputBox: (options, callOptions) =>
         this.callWithGrace<string | undefined>(
           "showInputBox",
-          { options },
+          { options, ...promptQueueParam(callOptions) },
           undefined,
           callOptions?.signal
         ),
       showConfirm: (options, callOptions) =>
-        this.callWithGrace<boolean>("showConfirm", { options }, false, callOptions?.signal),
+        this.callWithGrace<boolean>(
+          "showConfirm",
+          { options, ...promptQueueParam(callOptions) },
+          false,
+          callOptions?.signal
+        ),
       logger: {
         info: (message, fields) => this.notify("logger.info", { message, fields }),
         warn: (message, fields) => this.notify("logger.warn", { message, fields }),

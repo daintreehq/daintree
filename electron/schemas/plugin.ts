@@ -1887,6 +1887,9 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // here — whether it is required, optional-but-rejected, or absent is a
       // function of the discovering `origin`, enforced in `superRefine`.
       scope: z.literal("project").optional(),
+      // Whether a window attached from another machine may use the plugin.
+      // Absent means supported: plugin main code runs on the host either way.
+      remote: z.enum(["supported", "unsupported"]).optional(),
       capabilities: z.array(PluginCapabilitySchema).default([]),
       scopes: PluginManifestScopesSchema.optional(),
       activationEvents: z.array(z.literal("onStartupFinished")).default([]),

@@ -85,6 +85,13 @@
       "type": "string",
       "const": "project"
     },
+    "remote": {
+      "type": "string",
+      "enum": [
+        "supported",
+        "unsupported"
+      ]
+    },
     "capabilities": {
       "default": [],
       "type": "array",

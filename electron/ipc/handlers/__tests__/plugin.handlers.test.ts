@@ -38,6 +38,14 @@ const mockSetPluginVisibilityDefault = vi.fn();
 const mockReloadProjectPlugins = vi.fn();
 const mockRestartPluginWorker = vi.fn();
 const mockListPluginRuntimeStatuses = vi.fn();
+const mockIsRemoteUnsupported = vi.fn<(pluginId: string) => boolean>();
+const mockResolveActiveWorktreeIdForProject =
+  vi.fn<(projectId: string) => Promise<string | null>>();
+
+vi.mock("../../../services/plugin/pluginInvokeContext.js", () => ({
+  resolveActiveWorktreeIdForProject: (projectId: string) =>
+    mockResolveActiveWorktreeIdForProject(projectId),
+}));
 
 // plugin:invoke resolves the sender's project/worktree through the registry
 // (#11297). Mocked so a test can register a sender without standing up a real
@@ -104,6 +112,7 @@ vi.mock("../../../services/PluginService.js", () => ({
     reloadProjectPlugins: (...args: unknown[]) => mockReloadProjectPlugins(...args),
     restartPluginWorker: (...args: unknown[]) => mockRestartPluginWorker(...args),
     listPluginRuntimeStatuses: (...args: unknown[]) => mockListPluginRuntimeStatuses(...args),
+    isRemoteUnsupported: (pluginId: string) => mockIsRemoteUnsupported(pluginId),
   },
 }));
 
@@ -3342,5 +3351,197 @@ describe("cross-project plugin control", () => {
       `project__${PROJECT_B}__acme.dashboard`,
       "acme.dashboard",
     ]);
+  });
+});
+
+// ── plugin:invoke from a window on another machine (over the link) ──
+
+import { _resetIpcDispatcherForTesting, getIpcDispatcher } from "../../dispatcher.js";
+import { wrapError, wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
+import type { ClientEndpoint } from "../../endpoint.js";
+import {
+  _resetPluginFrontendRoutingForTesting,
+  getPluginInvokeOrigin,
+  setPluginFrontendRouter,
+} from "../../../services/plugin/pluginFrontendRouting.js";
+
+describe("plugin:invoke over the link", () => {
+  const PROJECT = "c".repeat(64);
+
+  function remoteEndpoint(projectId: string | null = PROJECT): ClientEndpoint & {
+    projectId: string | null;
+  } {
+    return {
+      endpointId: "s1:ep-1",
+      clientId: "client-greg-mbp",
+      projectId,
+      kind: "remote-view",
+      handle: -7,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => {} }),
+      isClosed: () => false,
+    };
+  }
+
+  const client = {
+    clientId: "client-greg-mbp",
+    clientName: "greg-mbp",
+    platform: "darwin" as const,
+    kind: "remote" as const,
+  };
+
+  beforeEach(() => {
+    _resetIpcDispatcherForTesting();
+    _resetPluginFrontendRoutingForTesting();
+    getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) => {
+      try {
+        return wrapSuccess(await call());
+      } catch (error) {
+        return wrapError(error);
+      }
+    });
+    mockIsRemoteUnsupported.mockReturnValue(false);
+    mockResolveActiveWorktreeIdForProject.mockResolvedValue("wt-host");
+  });
+
+  afterEach(() => {
+    _resetIpcDispatcherForTesting();
+    _resetPluginFrontendRoutingForTesting();
+  });
+
+  it("registers a context handler the link can reach, beside the local handle", () => {
+    registerPluginHandlers();
+    expect(getIpcDispatcher().hasInvoke("plugin:invoke")).toBe(true);
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:invoke", expect.any(Function));
+  });
+
+  it("carries the endpoint's project, the project's worktree and the calling frontend", async () => {
+    mockDispatchHandler.mockResolvedValue({ ok: 1 });
+    registerPluginHandlers();
+    const endpoint = remoteEndpoint();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client },
+      "plugin:invoke",
+      ["acme.graph", "selection", { id: "n1" }]
+    );
+    expect(envelope).toMatchObject({ ok: true, data: { ok: 1 } });
+    expect(mockResolveActiveWorktreeIdForProject).toHaveBeenCalledWith(PROJECT);
+    expect(mockGetActiveWorktreeIdForWindow).not.toHaveBeenCalled();
+    expect(mockDispatchHandler).toHaveBeenCalledWith(
+      "acme.graph",
+      "selection",
+      {
+        projectId: PROJECT,
+        worktreeId: "wt-host",
+        webContentsId: -7,
+        pluginId: "acme.graph",
+        origin: { kind: "remote", clientId: "client-greg-mbp", endpointId: "s1:ep-1" },
+      },
+      [{ id: "n1" }]
+    );
+  });
+
+  it("delivers a site-preview observation to the host plugin as an ordinary invoke", async () => {
+    mockDispatchHandler.mockResolvedValue(undefined);
+    registerPluginHandlers();
+    const observation = { kind: "element-selected", selector: "main > h1", url: "http://x/" };
+    await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:invoke",
+      ["acme.svelte-tools", "preview:element-selected", observation]
+    );
+    expect(mockDispatchHandler).toHaveBeenCalledWith(
+      "acme.svelte-tools",
+      "preview:element-selected",
+      expect.objectContaining({ projectId: PROJECT }),
+      [observation]
+    );
+  });
+
+  it("refuses another project's plugin by the endpoint's own binding", async () => {
+    registerPluginHandlers();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:invoke",
+      [`project__${"d".repeat(64)}__acme.graph`, "selection"]
+    );
+    expect(envelope.ok).toBe(false);
+    expect(mockDispatchHandler).not.toHaveBeenCalled();
+  });
+
+  it("drops the worktree when the endpoint is rebound mid-lookup", async () => {
+    mockDispatchHandler.mockResolvedValue(undefined);
+    registerPluginHandlers();
+    const endpoint = remoteEndpoint();
+    mockResolveActiveWorktreeIdForProject.mockImplementation(async () => {
+      endpoint.projectId = "e".repeat(64);
+      return "wt-old";
+    });
+    await getIpcDispatcher().invokeForEndpoint({ endpoint, client }, "plugin:invoke", [
+      "acme.graph",
+      "selection",
+    ]);
+    expect(mockDispatchHandler.mock.calls[0]![2]).toMatchObject({ worktreeId: null });
+  });
+
+  it("refuses a remote-unsupported plugin for a window on another machine and logs it", async () => {
+    mockIsRemoteUnsupported.mockReturnValue(true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    registerPluginHandlers();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:invoke",
+      ["acme.local-only", "go"]
+    );
+    expect(envelope.ok).toBe(false);
+    expect(mockDispatchHandler).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("acme.local-only"));
+    expect(mockAuditAppend).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "acme.local-only", result: "restricted" })
+    );
+    warn.mockRestore();
+  });
+
+  it("remembers the calling frontend for prompts only while routing is on", async () => {
+    mockDispatchHandler.mockResolvedValue(undefined);
+    registerPluginHandlers();
+    const endpoint = remoteEndpoint();
+    await getIpcDispatcher().invokeForEndpoint({ endpoint, client }, "plugin:invoke", [
+      "acme.graph",
+      "x",
+    ]);
+    expect(getPluginInvokeOrigin("acme.graph")).toBeNull();
+
+    setPluginFrontendRouter({ resolve: () => ({ kind: "local" }), onChange: () => () => {} });
+    await getIpcDispatcher().invokeForEndpoint({ endpoint, client }, "plugin:invoke", [
+      "acme.graph",
+      "x",
+    ]);
+    expect(getPluginInvokeOrigin("acme.graph")).toBe(endpoint);
+  });
+
+  it("activate-for-view refuses a remote-unsupported plugin with a typed error", async () => {
+    mockActivatePluginForView.mockResolvedValue({
+      ok: false,
+      error: "only works on the machine it runs on",
+      remoteUnsupported: { pluginId: "acme.local-only" },
+    });
+    registerPluginHandlers();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:activate-for-view",
+      ["acme.local-only.view"]
+    );
+    expect(mockActivatePluginForView).toHaveBeenCalledWith("acme.local-only.view", false, {
+      remoteFrontend: true,
+    });
+    expect(envelope.ok).toBe(false);
+    if (envelope.ok) return;
+    expect(envelope.error.code).toBe("PLUGIN_INCOMPATIBLE");
+    expect((envelope.error as { details?: unknown }).details).toMatchObject({
+      pluginId: "acme.local-only",
+      reason: { kind: "remote-unsupported" },
+    });
   });
 });

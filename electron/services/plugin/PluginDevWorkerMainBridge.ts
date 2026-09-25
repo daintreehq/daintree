@@ -74,6 +74,11 @@ import { abortErrorFor } from "./pluginAbortError.js";
 
 const logger = createLogger("main:PluginDevWorkerBridge");
 
+/** A worker's prompt may only opt in to waiting; any other value is the default. */
+function promptQueueOption(value: unknown): { whenNoFrontend?: "queue" } {
+  return value === "queue" ? { whenNoFrontend: "queue" } : {};
+}
+
 /**
  * Structural narrowing for an interactive process handle (#11300). The host adds
  * `resize` only for a real PTY, so its presence — not what the worker
@@ -806,15 +811,24 @@ export class PluginDevWorkerMainBridge {
         // dismisses the question rather than leaving it on screen owned by a
         // worker that no longer exists (#12279).
         const p = params as ShowQuickPickParams;
-        return this.host.showQuickPick(p.items, p.options ?? {}, { signal });
+        return this.host.showQuickPick(p.items, p.options ?? {}, {
+          signal,
+          ...promptQueueOption(p.whenNoFrontend),
+        });
       }
       case "showInputBox": {
         const p = params as ShowInputBoxParams;
-        return this.host.showInputBox(p.options, { signal });
+        return this.host.showInputBox(p.options, {
+          signal,
+          ...promptQueueOption(p.whenNoFrontend),
+        });
       }
       case "showConfirm": {
         const p = params as ShowConfirmParams;
-        return this.host.showConfirm(p.options, { signal });
+        return this.host.showConfirm(p.options, {
+          signal,
+          ...promptQueueOption(p.whenNoFrontend),
+        });
       }
       case "settings.get": {
         const p = params as SettingsGetParams;

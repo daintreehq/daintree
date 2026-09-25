@@ -3119,9 +3119,19 @@ export class PluginService {
    * and shared by every view the plugin contributes, so a plugin occupies two
    * namespaces at worst no matter how many times the user retries.
    */
+  /**
+   * Whether a loaded plugin declares `"remote": "unsupported"`: it only works
+   * for a person sitting at this machine, so a window attached from another
+   * machine must not start or call it.
+   */
+  isRemoteUnsupported(pluginId: string): boolean {
+    return this.plugins.get(pluginId)?.manifest.remote === "unsupported";
+  }
+
   async activatePluginForView(
     panelKindId: string,
-    requestRecoveryPath = false
+    requestRecoveryPath = false,
+    options: { remoteFrontend?: boolean } = {}
   ): Promise<PluginActivationResult> {
     if (typeof panelKindId !== "string" || panelKindId.length === 0) return { ok: true };
     for (const [pluginId, plugin] of this.plugins) {
@@ -3138,6 +3148,16 @@ export class PluginService {
                 projectId
               );
         if (runtimeId === panelKindId) {
+          if (options.remoteFrontend && plugin.manifest.remote === "unsupported") {
+            console.warn(
+              `[PluginService] Refused to activate "${pluginId}" for a window on another machine: the plugin declares "remote": "unsupported"`
+            );
+            return {
+              ok: false,
+              error: `Plugin "${pluginId}" only works on the machine it runs on`,
+              remoteUnsupported: { pluginId },
+            };
+          }
           await this.activatePlugin(pluginId);
           const loadError = this.getPluginLoadError(pluginId);
           if (loadError) {

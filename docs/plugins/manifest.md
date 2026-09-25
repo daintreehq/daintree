@@ -45,6 +45,10 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   // roots. Omit it for a normal, app-wide plugin. See "scope" below.
   "scope": "project",
 
+  // Optional. "unsupported" keeps the plugin from starting for a window
+  // attached from another machine. Defaults to "supported". See "remote" below.
+  "remote": "unsupported",
+
   // Path to the compiled ESM entry, relative to the plugin directory.
   // Optional — plugins with only static contributions (themes, static MCP
   // server configs) don't need one.
@@ -190,6 +194,12 @@ The manifest gate enforces it in both directions, against the root the manifest 
 This is a guardrail against accidental promotion, not a security control — the trust decision is the project folder, not this field. What it prevents is a plugin loading under assumptions its author never made: a project plugin copied into the user directory would go app-wide with project-shaped expectations about its settings tier and its bound project, and a user plugin dropped into `.daintree/plugins/` would load with none of the project-local guarantees. Neither failure is visible at runtime, so both are refused at the gate.
 
 Declaring `"scope": "project"` also changes what the manifest may contribute. `contributes.surfaces` becomes available, and eight contribution groups become unavailable — `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `processTools`, `mcpServers` and `forgeProviders`, each rejected with an error naming the structural reason it cannot yet be narrowed to one project. `agentMcp` stays available, because its credentials are bound to one project. See [Project-local plugins](./project-local.md) and the per-point status in [Contribution points](./contribution-points.md).
+
+### `remote`
+
+`"supported"` (the default when omitted) or `"unsupported"`. Plugin main code always runs on the machine the project lives on; this field is about windows attached to that machine from another one.
+
+Declare `"remote": "unsupported"` when the plugin only works for a person sitting at the machine it runs on — a view that assumes the renderer's `localhost` is the project's machine, or code that relies on local OS behaviour. The host then never starts the plugin for a window on another machine: that window shows a placeholder naming the machine the plugin needs, calls to it are refused with a `PLUGIN_INCOMPATIBLE` error, and each refusal is logged.
 
 ### `capabilities`
 

@@ -25,7 +25,12 @@ export function PluginConfirmPromptDialog() {
   // item — the object literal pins the narrowed `options` type.
   const confirm =
     current && current.params.kind === "confirm"
-      ? { promptId: current.promptId, pluginId: current.pluginId, options: current.params.options }
+      ? {
+          promptId: current.promptId,
+          pluginId: current.pluginId,
+          options: current.params.options,
+          waited: current.params.waited,
+        }
       : null;
   const resetKey = confirm ? confirm.promptId : "null";
   const pluginId = confirm ? confirm.pluginId : "";
@@ -88,7 +93,7 @@ export function PluginConfirmPromptDialog() {
         cancelLabel={options.cancelLabel || "Cancel"}
         onConfirm={() => resolveOnce(confirm.promptId, true)}
         variant={variant}
-        hint={<PluginProvenance attribution={attribution} />}
+        hint={<PluginProvenance attribution={attribution} waited={confirm.waited} />}
       />
     </ErrorBoundary>
   );

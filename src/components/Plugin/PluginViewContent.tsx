@@ -50,6 +50,8 @@ import { useBuiltinPanelView } from "@/registry/builtinRendererRegistry";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { actionService } from "@/services/ActionService";
+import { isRemoteUnsupportedError, pluginViewImportPath } from "./remotePluginView";
+import { PluginRemoteUnsupportedPlaceholder } from "./PluginRemoteUnsupportedPlaceholder";
 
 /**
  * The resolved subset of `PanelKindConfig` a plugin view actually needs. Both
@@ -286,6 +288,12 @@ export function makePluginViewContent(
     const refreshPluginRuntime = usePluginRuntimeStore((s) => s.refresh);
     useEffect(() => refreshPluginRuntime(), [refreshPluginRuntime]);
 
+    // Not a failure: the host declined to start this plugin for a window on
+    // another machine. Nothing here is broken, so there are no diagnostics.
+    if (isRemoteUnsupportedError(error)) {
+      return <PluginRemoteUnsupportedPlaceholder pluginDisplayName={pluginDisplayName} />;
+    }
+
     return (
       <PluginViewDiagnosticsFallback
         error={error}
@@ -391,7 +399,7 @@ export function makePluginViewContent(
           // Started before activation is awaited so the Tailwind chunk, the
           // ~10ms compile, and the view's own source read all overlap the
           // activation round trip rather than queueing behind it (#12220).
-          const initialPath = recoveryComponentPath ?? componentPath;
+          const initialPath = pluginViewImportPath(recoveryComponentPath ?? componentPath);
           const stylesReady = preparePluginStyles(initialPath);
           const recovered = requestRecoveryPath
             ? await window.electron?.plugin?.activateForView?.(kindId, true)
@@ -399,7 +407,7 @@ export function makePluginViewContent(
           if (typeof recovered === "string" && recovered.length > 0) {
             recoveryComponentPath = recovered;
           }
-          const viewPath = recoveryComponentPath ?? componentPath;
+          const viewPath = pluginViewImportPath(recoveryComponentPath ?? componentPath);
           pluginDocumentRuntime.registerView(pluginId, viewPath);
           try {
             const module: unknown = await import(/* @vite-ignore */ viewPath);

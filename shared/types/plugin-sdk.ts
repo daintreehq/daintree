@@ -72,6 +72,7 @@ export type {
   PluginHostActionsApi,
   PluginActivationApi,
   PluginHostCallOptions,
+  PluginPromptCallOptions,
   PluginHostSubscriptionOptions,
   ActionHandler,
   PluginToastOptions,
@@ -130,6 +131,7 @@ export type { StorageApi, PluginStorageScope } from "./plugin.js";
 
 export type {
   PluginIpcContext,
+  PluginInvokeOrigin,
   PluginIpcHandler,
   PluginChannelSchema,
   PluginTypedIpcHandler,

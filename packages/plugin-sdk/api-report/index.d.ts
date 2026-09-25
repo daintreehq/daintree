@@ -2591,6 +2591,14 @@ interface PluginManifest {
      * decision is the project folder, not this field.
      */
     scope?: "project";
+    /**
+     * `"unsupported"` for a plugin that only works on the machine the person is
+     * sitting at — a view that assumes the renderer's `localhost` is the
+     * project's machine, or code that relies on local OS behaviour. It is then
+     * not activated for a window attached from another machine, which shows a
+     * placeholder instead. Absent means `"supported"`.
+     */
+    remote?: "supported" | "unsupported";
     capabilities?: PluginCapability[];
     /**
      * Per-capability scope bindings that attenuate the compound-capability
@@ -2826,6 +2834,21 @@ interface PluginHostCallOptions {
     signal?: AbortSignal;
 }
 /**
+ * Call options for {@link PluginHostApi.showQuickPick},
+ * {@link PluginHostApi.showInputBox} and {@link PluginHostApi.showConfirm}.
+ *
+ * `whenNoFrontend` decides what happens when the project lives on a host that
+ * nobody is attached to (agents often run overnight with no window open).
+ * `"fail"`, the default, rejects with a `NO_FRONTEND_ATTACHED:` error — never
+ * the dismiss value, so "nobody was there" can't be mistaken for "the person
+ * said no". `"queue"` waits until a frontend attaches and shows the prompt
+ * there, marked with the host and the time it was asked; aborting `signal`
+ * still settles it with the dismiss value.
+ */
+interface PluginPromptCallOptions extends PluginHostCallOptions {
+    whenNoFrontend?: "fail" | "queue";
+}
+/**
  * Options accepted by high-frequency event subscriptions (today
  * {@link PluginActivationApi.onDidChangeWorktrees}). `debounceMs` coalesces a
  * burst of change events into a single trailing callback fired `debounceMs`
@@ -2918,8 +2941,27 @@ interface StorageApi {
 interface PluginIpcContext {
     projectId: string | null;
     worktreeId: string | null;
+    /**
+     * Opaque per-caller handle. A view on this machine has its renderer's id
+     * (positive); a view on another machine attached to this host has a negative
+     * handle that names no local renderer.
+     */
     webContentsId: number;
     pluginId: string;
+    /**
+     * Set when the call reached this host over a link: which attached frontend
+     * made it (`"remote"` for a window on another machine). Absent for a window
+     * on this machine.
+     */
+    origin?: PluginInvokeOrigin;
+}
+/** The frontend behind one {@link PluginIpcContext}. */
+interface PluginInvokeOrigin {
+    kind: "local" | "remote";
+    /** Stable id of the attached machine; `"local"` for this one. */
+    clientId: string;
+    /** Stable id of the calling view for as long as it stays attached. */
+    endpointId: string;
 }
 type PluginIpcHandler = (ctx: PluginIpcContext, ...args: unknown[]) => unknown | Promise<unknown>;
 /**
@@ -4403,11 +4445,15 @@ interface PluginHostApi extends PluginActivationApi {
      * `undefined` rather than rejecting — a cancelled prompt is a dismissal, not a
      * failure, so the never-throws contract above still holds (#12279). This is
      * the one place {@link PluginHostCallOptions} settles instead of rejecting.
+     *
+     * The one rejection a well-formed prompt can meet is `NO_FRONTEND_ATTACHED:`,
+     * when the project is on a host nobody is attached to; see
+     * {@link PluginPromptCallOptions.whenNoFrontend}.
      */
     showQuickPick(items: PluginQuickPickItem[], options: PluginQuickPickOptions & {
         canSelectMany: true;
-    }, callOptions?: PluginHostCallOptions): Promise<PluginQuickPickItem[] | undefined>;
-    showQuickPick(items: PluginQuickPickItem[], options?: PluginQuickPickOptions, callOptions?: PluginHostCallOptions): Promise<PluginQuickPickItem | undefined>;
+    }, callOptions?: PluginPromptCallOptions): Promise<PluginQuickPickItem[] | undefined>;
+    showQuickPick(items: PluginQuickPickItem[], options?: PluginQuickPickOptions, callOptions?: PluginPromptCallOptions): Promise<PluginQuickPickItem | undefined>;
     /**
      * Imperatively prompt the user for a line of text, rendered through the app's
      * dialog surface. Resolves with the entered string, or `undefined` if the user
@@ -4418,7 +4464,7 @@ interface PluginHostApi extends PluginActivationApi {
      * resolves `undefined` if the plugin is unloaded while the dialog is open, and
      * aborting `callOptions.signal` dismisses it and resolves `undefined` too.
      */
-    showInputBox(options?: PluginInputBoxOptions, callOptions?: PluginHostCallOptions): Promise<string | undefined>;
+    showInputBox(options?: PluginInputBoxOptions, callOptions?: PluginPromptCallOptions): Promise<string | undefined>;
     /**
      * Imperatively ask the user to confirm an action, rendered through the app's
      * `ConfirmDialog`. Resolves `true` if confirmed, `false` if cancelled,
@@ -4429,7 +4475,7 @@ interface PluginHostApi extends PluginActivationApi {
      * For an irreversible action set {@link PluginConfirmOptions.destructive} and
      * use a verb-noun `confirmLabel`.
      */
-    showConfirm(options: PluginConfirmOptions, callOptions?: PluginHostCallOptions): Promise<boolean>;
+    showConfirm(options: PluginConfirmOptions, callOptions?: PluginPromptCallOptions): Promise<boolean>;
     /**
      * Persistent, plugin-scoped key/value settings. JSON storage with `chmod 0o600`
      * on POSIX; declared secrets are encrypted through the OS keychain. See
@@ -4654,4 +4700,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginInvokeOrigin, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPromptCallOptions, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
