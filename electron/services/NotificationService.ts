@@ -379,8 +379,11 @@ class NotificationService {
     };
     notification.on("close", (details) => {
       // A Windows toast that times out moves to Action Center rather than
-      // going away, so it stays closeable when its panel is dealt with.
-      if (details?.reason === "timedOut") return;
+      // going away, so one that closes with its panels stays tracked until
+      // they are dealt with. Nothing else could ever close it, so the rest go.
+      if (details?.reason === "timedOut" && this.pendingPanelsByNotification.has(notification)) {
+        return;
+      }
       cleanup();
     });
     notification.once("failed", (_event, error) => {

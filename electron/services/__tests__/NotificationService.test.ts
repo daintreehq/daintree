@@ -749,6 +749,18 @@ describe("NotificationService", () => {
       expect(tracked().size).toBe(0);
     });
 
+    it("forgets a timed-out toast that nothing could close later", () => {
+      notificationService.showNativeNotification("Agent completed", "done");
+      const instance = electronMock.notificationInstances.at(-1)!;
+
+      instance.trigger("close", { reason: "timedOut" });
+
+      expect(
+        (notificationService as unknown as { activeNotifications: Set<unknown> })
+          .activeNotifications.size
+      ).toBe(0);
+    });
+
     it("drops tracking even when close() throws", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       notificationService.showNativeNotification("Agent waiting", "a", {
