@@ -1,11 +1,5 @@
 import { cn } from "@/lib/utils";
-import {
-  GRID_RECT,
-  MockApp,
-  MockGrid,
-  MockWorktreeCard,
-  SIDEBAR_PLUS_POINT,
-} from "../mockup/MockApp";
+import { GRID_RECT, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
   MockCursor,
   MockLines,
@@ -19,15 +13,14 @@ import { useCue } from "@daintreehq/tour/react";
 import { MockEmptyGrid, MockSpotlight } from "./sceneParts";
 
 const DIALOG = { x: GRID_RECT.x + 119, y: 84, width: 230 } as const;
-const NAME_FIELD = { x: DIALOG.x + 120, y: DIALOG.y + 114 };
-// Measured from the render: the dialog's Create worktree button.
-const CREATE_BUTTON = { x: 448, y: 235 };
+const NAME_FIELD = { anchor: "create-worktree-name", dx: 5, dy: -3 };
+const CREATE_BUTTON = { anchor: "create-worktree-button" };
 // The name is done before the pointer sets off for Create.
 const CREATE = { cue: "create" } as const;
 
-const CURSOR: readonly CursorStep[] = [
-  { cue: "plus", at: SIDEBAR_PLUS_POINT },
-  { cue: "plus", offset: 0.6, at: SIDEBAR_PLUS_POINT, click: true },
+export const CURSOR: readonly CursorStep[] = [
+  { cue: "plus", at: { anchor: "sidebar-plus" } },
+  { cue: "plus", offset: 0.6, at: { anchor: "sidebar-plus" }, click: true },
   { cue: "name", at: NAME_FIELD },
   { cue: "create", at: CREATE_BUTTON },
   { cue: "create", offset: 0.6, at: CREATE_BUTTON, click: true },
@@ -97,7 +90,10 @@ export function WorktreesScene() {
           </div>
           <div className="mb-3 flex flex-col gap-1">
             <span className="text-3xs font-medium text-text-secondary">Name</span>
-            <div className="flex h-5 items-center rounded-md border border-border-interactive bg-surface-input px-2 text-3xs text-text-primary">
+            <div
+              data-tour-anchor="create-worktree-name"
+              className="flex h-5 items-center rounded-md border border-border-interactive bg-surface-input px-2 text-3xs text-text-primary"
+            >
               <MockTyping
                 cue="name"
                 text="add-search"

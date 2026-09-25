@@ -1,6 +1,6 @@
 import { ClaudeIcon, DaintreeIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
-import { ANCHOR, MockApp, MockGrid, MockWaitingPill, MockWorktreeCard } from "../mockup/MockApp";
+import { MockApp, MockGrid, MockWaitingPill, MockWorktreeCard } from "../mockup/MockApp";
 import {
   MockCursor,
   MockLines,
@@ -14,14 +14,13 @@ import {
 import { useCue } from "@daintreehq/tour/react";
 import { MockSpotlight } from "./sceneParts";
 
-const BUTTON = ANCHOR.assistant;
+const BUTTON = { anchor: "assistant" };
 const REQUEST = "Start issue #52 with Codex";
 const ISSUE_BRANCH = "feature/issue-52-checkout-total";
 const ASKED = { cue: "act" } as const;
-// The idle panel's Start assistant button; measured from the render.
-const START_BUTTON = { x: 552, y: 250 };
+const START_BUTTON = { anchor: "assistant-start" };
 
-const CURSOR: readonly CursorStep[] = [
+export const CURSOR: readonly CursorStep[] = [
   { cue: "open", at: BUTTON },
   { cue: "open", offset: 0.5, at: BUTTON, click: true },
   { cue: "start", offset: -0.2, at: START_BUTTON },

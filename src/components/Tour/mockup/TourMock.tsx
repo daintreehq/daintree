@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { MousePointer2, RadioTower } from "lucide-react";
 import { cn } from "./cn";
 import {
@@ -15,6 +15,7 @@ import {
   useTourPlayer,
   type TimelinePoint,
 } from "@daintreehq/tour/react";
+import { ANCHOR_SETTLE_MS, hasCanvasLayout, measureAnchor } from "./tourAnchors";
 
 /** Breathing room between the last typed character and the moment it's acted on. */
 const TYPING_MARGIN_S = 0.15;
@@ -113,7 +114,7 @@ export function MockLines({
 interface MockPaneProps {
   /** A known id, or a full descriptor for an agent the kit hasn't been given. */
   agent: MockAgentId | MockAgent;
-  /** Prefix for this pane's spotlight anchors (`<anchor>-glyph`, `-armed`, `-input`). Defaults to the agent. */
+  /** Prefix for this pane's anchors (`<anchor>-titlebar`, `-glyph`, `-armed`, `-body`, `-input`). Defaults to the agent. */
   anchor?: string;
   state?: MockStateId | null;
   armed?: boolean;
@@ -155,7 +156,10 @@ export function MockPane({
         className
       )}
     >
-      <div className="flex h-6 shrink-0 items-center gap-1.5 border-b border-border-subtle bg-surface-panel-elevated px-2">
+      <div
+        data-tour-anchor={`${anchorPrefix}-titlebar`}
+        className="flex h-6 shrink-0 items-center gap-1.5 border-b border-border-subtle bg-surface-panel-elevated px-2"
+      >
         <MockAgentIcon agent={resolved} className="size-3" />
         <span className="truncate text-2xs font-medium text-text-primary">{title ?? name}</span>
         <span className="flex-1" />
@@ -248,8 +252,22 @@ export interface CursorStop {
   y: number;
 }
 
+/**
+ * The centre of a `data-tour-anchor` element, measured from the render, nudged
+ * by `dx`/`dy` canvas pixels — so a click stays on its element however the
+ * mockup's layout shifts.
+ */
+export interface CursorAnchor {
+  anchor: string;
+  dx?: number;
+  dy?: number;
+}
+
+/** Where the pointer goes: an anchor, or a plain canvas point for spots on no element. */
+export type CursorTarget = CursorStop | CursorAnchor;
+
 export interface CursorStep extends TimelinePoint {
-  at: CursorStop;
+  at: CursorTarget;
   click?: boolean;
   /** A key held for this step, shown riding beside the pointer (e.g. "⇧ Shift"). */
   modifier?: string;
@@ -291,7 +309,9 @@ export function MockStreamingLines({
 
 /**
  * The pointer that shows where to click. Moves between canvas positions with
- * one eased glide; a click is a ring that blooms once from the tip.
+ * one eased glide; a click is a ring that blooms once from the tip. An anchor
+ * target is measured once its step lands and again after the target's entry
+ * transition settles; one that isn't rendered leaves the pointer where it was.
  */
 export function MockCursor({
   at,
@@ -299,21 +319,80 @@ export function MockCursor({
   modifier = null,
   visible = true,
 }: {
-  at: CursorStop;
+  at: CursorTarget;
   /** Changing this replays the click ring; null shows none. */
   clickKey: string | null;
   modifier?: string | null;
   visible?: boolean;
 }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const player = useTourPlayer();
+  // The anchor target the pointer last reached and the click it reached it on,
+  // so a later click on the same target stays put.
+  const reached = useRef<{ target: string; on: string | null } | null>(null);
+  const anchor = "anchor" in at ? at.anchor : null;
+  const dx = "anchor" in at ? (at.dx ?? 0) : 0;
+  const dy = "anchor" in at ? (at.dy ?? 0) : 0;
+  const x = "anchor" in at ? 0 : at.x;
+  const y = "anchor" in at ? 0 : at.y;
+  const [shown, setShown] = useState<CursorStop>({ x, y });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const place = (next: CursorStop) =>
+      setShown((prev) => (prev.x === next.x && prev.y === next.y ? prev : next));
+    if (anchor === null) {
+      reached.current = null;
+      place({ x, y });
+      return;
+    }
+    const target = `${anchor}|${dx}|${dy}`;
+    const prior = reached.current;
+    // A click lands where the arrival put it: re-measuring now would chase the
+    // target as the scene reacts to the click (a dialog leaving, panes reflowing).
+    if (clickKey !== null && prior?.target === target && prior.on !== clickKey) return;
+    reached.current = null;
+    const measure = () => {
+      const r = measureAnchor(el, anchor);
+      if (!r) return false;
+      reached.current = { target, on: clickKey };
+      place({ x: r.x + r.width / 2 + dx, y: r.y + r.height / 2 + dy });
+      return true;
+    };
+    measure();
+    const timer = window.setTimeout(() => {
+      if (!measure() && import.meta.env.DEV && hasCanvasLayout(el)) {
+        console.warn(`[tour] cursor target "${anchor}" is not rendered`);
+      }
+    }, ANCHOR_SETTLE_MS);
+    // Not rendered yet — it mounts later in the step, or a seek lands back
+    // where it's shown: retry once the scene has drawn each new moment.
+    let frame = 0;
+    const offTime = player.subscribeTime(() => {
+      if (reached.current?.target === target) return;
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(measure);
+    });
+    return () => {
+      window.clearTimeout(timer);
+      window.cancelAnimationFrame(frame);
+      offTime();
+    };
+  }, [player, anchor, dx, dy, x, y, clickKey]);
+
+  const point = anchor === null ? { x, y } : shown;
   return (
     <div
+      ref={ref}
       aria-hidden="true"
+      data-tour-cursor={anchor ?? undefined}
       className={cn(
         "pointer-events-none absolute left-0 top-0 z-40",
         "transition-[translate,opacity] duration-[450ms] ease-[cubic-bezier(0.45,0,0.2,1)] reduce-motion:transition-[opacity]",
         visible ? "opacity-100" : "opacity-0"
       )}
-      style={{ translate: `${at.x}px ${at.y}px` }}
+      style={{ translate: `${point.x}px ${point.y}px` }}
     >
       {clickKey !== null && (
         <span
