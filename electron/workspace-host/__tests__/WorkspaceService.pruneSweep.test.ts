@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { SimpleGit } from "simple-git";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
@@ -36,7 +36,7 @@ describe("WorkspaceService worktree cleanup keeps stranded submodule commits (#1
   let root: string;
   let registry: string;
   let service: WorkspaceService;
-  let sendEvent: ReturnType<typeof vi.fn>;
+  let sendEvent: Mock<(event: WorkspaceHostEvent) => void>;
 
   /**
    * A linked worktree with a real, absorbed submodule, deleted outside
@@ -53,7 +53,7 @@ describe("WorkspaceService worktree cleanup keeps stranded submodule commits (#1
 
   function retainedEvents(): RetainedEvent[] {
     return sendEvent.mock.calls
-      .map(([event]) => event as WorkspaceHostEvent)
+      .map(([event]) => event)
       .filter((event): event is RetainedEvent => event.type === "worktree-prune-retained");
   }
 
@@ -68,7 +68,7 @@ describe("WorkspaceService worktree cleanup keeps stranded submodule commits (#1
     git(root, "commit", "-q", "-m", "add submodule");
     registry = path.join(root, ".git", "worktrees");
 
-    sendEvent = vi.fn();
+    sendEvent = vi.fn<(event: WorkspaceHostEvent) => void>();
     const { WorkspaceService } = await import("../WorkspaceService.js");
     service = new WorkspaceService(sendEvent);
     service["projectRootPath"] = root;
