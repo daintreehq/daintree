@@ -133,3 +133,29 @@ export function getHostConnectionBannerCopy(
       };
   }
 }
+
+/**
+ * Copy for a project another machine drives. Only one frontend drives at a
+ * time, so this states who does and offers to take it; it never mirrors.
+ */
+export function getDriveLeaseBannerCopy(
+  state:
+    | { kind: "taken-from-host"; driverName: string }
+    | { kind: "driven-elsewhere"; driverName: string; driverIsHostScreen: boolean },
+  hostName: string
+): RecoveryBannerCopy & { actionLabel: string } {
+  if (state.kind === "taken-from-host") {
+    return {
+      title: `Being driven from ${state.driverName}`,
+      description: "Terminals here are read-only while it drives. Take back to type here again.",
+      actionLabel: "Take back",
+    };
+  }
+  return {
+    title: state.driverIsHostScreen
+      ? `${hostName} is being driven from its own screen`
+      : `${hostName} is being driven from ${state.driverName}`,
+    description: "Terminals here are read-only while it drives. Take over to type here instead.",
+    actionLabel: "Take over",
+  };
+}
