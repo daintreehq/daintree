@@ -137,6 +137,7 @@ vi.mock("@/hooks/useKeybinding", async (importOriginal) => ({
 }));
 
 import {
+  getPanelKindConfig,
   panelKindIsDockable,
   registerPanelKind,
   unregisterPanelKind,
@@ -531,6 +532,33 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     // Its kind has no duplicate recipe, so a Duplicate here would throw.
     expect(screen.queryByText("Duplicate terminal")).toBeNull();
     expect(screen.queryByText(/Welcome Tour$/)).toBeNull();
+  });
+
+  it("offers a tour a built-in kind declares, with no menu changes (#12774)", () => {
+    const browser = getPanelKindConfig("browser")!;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    registerPanelKind({ ...browser, tourId: "browser-intro" });
+    try {
+      renderMenuFor({
+        id: "panel-1",
+        title: "Docs",
+        kind: "browser",
+        browserUrl: "https://example.com",
+        worktreeId: "wt-1",
+      });
+
+      findRow(`${browser.name} Welcome Tour`)!.click();
+
+      expect(dispatch).toHaveBeenCalledWith(
+        "help.tour.show",
+        { tourId: "browser-intro" },
+        expect.anything()
+      );
+    } finally {
+      cleanup();
+      registerPanelKind(browser);
+      warnSpy.mockRestore();
+    }
   });
 
   it("offers a PTY-backed plugin kind's tour on the terminal menu (#12774)", () => {

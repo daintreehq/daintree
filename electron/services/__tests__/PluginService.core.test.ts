@@ -244,7 +244,6 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 import { PluginService } from "../PluginService.js";
 import { type PluginIpcContext } from "../../../shared/types/plugin.js";
 import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
-import { makePluginTourId } from "../../../shared/utils/tourIds.js";
 import { registerToolbarButton } from "../../../shared/config/toolbarButtonRegistry.js";
 import { registerPluginMenuItem } from "../pluginMenuRegistry.js";
 
@@ -388,14 +387,19 @@ describe("PluginService", () => {
       },
     });
 
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const service = new PluginService(tmpDir);
     await service.initialize();
 
+    // The second tour reached the loop rather than being dropped at parse.
+    expect(
+      warnSpy.mock.calls.some((args) => String(args[0]).includes('tours "metrics-again"'))
+    ).toBe(true);
+    warnSpy.mockRestore();
     const callFor = (id: string) =>
       vi.mocked(registerPanelKind).mock.calls.find((call) => call[0]?.id === id)?.[0];
-    expect(callFor("acme.tour-plugin.metrics")?.tourId).toBe(
-      makePluginTourId("acme.tour-plugin", "metrics-intro")
-    );
+    // Qualified like the kind id beside it, so another plugin's "metrics-intro" can't alias.
+    expect(callFor("acme.tour-plugin.metrics")?.tourId).toBe("acme.tour-plugin.metrics-intro");
     expect(callFor("acme.tour-plugin.plain")).toBeDefined();
     expect(Object.prototype.hasOwnProperty.call(callFor("acme.tour-plugin.plain"), "tourId")).toBe(
       false

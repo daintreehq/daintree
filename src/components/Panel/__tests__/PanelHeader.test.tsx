@@ -1206,7 +1206,9 @@ describe("PanelHeader", () => {
       registerPluginKind(PLUGIN_KIND, { name: "Dashboard" });
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
-      expect(findMenuButton("Dashboard Welcome Tour")).toBeUndefined();
+      const rows = Array.from(screen.getByTestId("overflow-menu").querySelectorAll("button"));
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.some((row) => rowLabel(row).endsWith("Welcome Tour"))).toBe(false);
     });
 
     it.each(["file", "file-browser", "diff"])("offers no Reload panel on %s panels", (kind) => {

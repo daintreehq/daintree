@@ -821,6 +821,15 @@ export function TerminalContextMenu({
   // kinds stay out: they render through TerminalPane and are genuine
   // terminals, so they keep copy/paste, redraw, restart and the rest.
   const hasGenericMenu = hasGenericPanelMenu(kind, hasPty);
+  // The generic list carries the tour as a command of its own; the built-in
+  // menus below draw this beside Rename, so a built-in kind that declares a
+  // tour gets it on right-click with no menu changes.
+  const tourMenuItem = kindCapabilities.tour ? (
+    <ContextMenuItem onSelect={() => handleAction("tour")}>
+      <CirclePlay className={ICON_CLASS} aria-hidden="true" />
+      {kindCapabilities.tour.label}
+    </ContextMenuItem>
+  ) : null;
 
   const submenuWorktrees = worktrees.slice(0, MOVE_TO_WORKTREE_SUBMENU_LIMIT);
   const hasMoreWorktrees = worktrees.length > submenuWorktrees.length;
@@ -976,6 +985,7 @@ export function TerminalContextMenu({
             <Pencil className={ICON_CLASS} aria-hidden="true" />
             Rename browser
           </ContextMenuItem>
+          {tourMenuItem}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1039,6 +1049,7 @@ export function TerminalContextMenu({
             <Pencil className={ICON_CLASS} aria-hidden="true" />
             Rename dev preview
           </ContextMenuItem>
+          {tourMenuItem}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1088,6 +1099,7 @@ export function TerminalContextMenu({
             <Pencil className={ICON_CLASS} aria-hidden="true" />
             Rename review
           </ContextMenuItem>
+          {tourMenuItem}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1436,12 +1448,7 @@ export function TerminalContextMenu({
             <Info className={ICON_CLASS} aria-hidden="true" />
             View terminal info
           </ContextMenuItem>
-          {kindCapabilities.tour && (
-            <ContextMenuItem onSelect={() => handleAction("tour")}>
-              <CirclePlay className={ICON_CLASS} aria-hidden="true" />
-              {kindCapabilities.tour.label}
-            </ContextMenuItem>
-          )}
+          {tourMenuItem}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
