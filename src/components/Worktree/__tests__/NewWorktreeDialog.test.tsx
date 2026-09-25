@@ -69,7 +69,8 @@ vi.mock("@/config/agents", () => ({
 const mockAddTerminal = vi.fn().mockResolvedValue("new-terminal-id");
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: Object.assign(() => ({}), {
-    getState: () => ({ addPanel: mockAddTerminal }),
+    getState: () => ({ addPanel: mockAddTerminal, panelsById: {} }),
+    subscribe: () => () => {},
   }),
 }));
 
@@ -1852,6 +1853,13 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
     renderDialog({ initialAgentId: "claude", initialPrompt: PROMPT });
     await advanceTimersGradually(500);
     expect(screen.getByDisplayValue(PROMPT).getAttribute("data-testid")).toBe("first-agent-prompt");
+  });
+
+  it("keeps a Retry's explicit No agent over the remembered agent", async () => {
+    firstAgentFixtures.lastAgentByProject = { "test-project": "claude" };
+    renderDialog({ initialAgentId: null, initialPrompt: "" });
+    await advanceTimersGradually(500);
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("");
   });
 
   it("launches the agent once, after setup is ready, with the exact prompt", async () => {

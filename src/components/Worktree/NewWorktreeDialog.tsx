@@ -249,7 +249,9 @@ export function NewWorktreeDialog({
     branchInputTouchedRef.current = true;
   }, [isOpen, initialBranchInput, setBranchInput, branchInputTouchedRef]);
 
-  // Seeded once per open: a Retry's draft wins over the project's remembered agent.
+  // Seeded once per open. A Retry always carries a prompt (possibly empty), and
+  // its agent — including an explicit "No agent" — wins over the project's
+  // remembered one.
   const appliedAgentDraftRef = useRef(false);
   useEffect(() => {
     if (!isOpen) {
@@ -258,7 +260,10 @@ export function NewWorktreeDialog({
     }
     if (appliedAgentDraftRef.current || !projectId) return;
     appliedAgentDraftRef.current = true;
-    setFirstAgentId(initialAgentId ?? lastSelectedWorktreeAgentId ?? null);
+    const isRetryDraft = initialPrompt !== null && initialPrompt !== undefined;
+    setFirstAgentId(
+      isRetryDraft ? (initialAgentId ?? null) : (lastSelectedWorktreeAgentId ?? null)
+    );
     setFirstPrompt(initialPrompt ?? "");
     setAgentPickerOpen(false);
   }, [isOpen, projectId, initialAgentId, initialPrompt, lastSelectedWorktreeAgentId]);
@@ -926,7 +931,10 @@ export function NewWorktreeDialog({
             cwd: placeholderPath ?? undefined,
           };
           if (layoutAgentConflict) notifyAgentNotStarted(launch, layoutAgentConflict);
-          else void startFirstAgentWhenReady(launch);
+          else
+            void startFirstAgentWhenReady(launch).catch((launchErr: unknown) =>
+              logError("Failed to start the new worktree's agent", launchErr)
+            );
         }
 
         onWorktreeCreated?.(worktreeId);

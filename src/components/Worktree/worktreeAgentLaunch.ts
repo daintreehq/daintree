@@ -1,5 +1,6 @@
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
+import { usePanelStore } from "@/store/panelStore";
 import type { WorktreeSetupState } from "@shared/types";
 
 /**
@@ -7,6 +8,8 @@ import type { WorktreeSetupState } from "@shared/types";
  * handing the launch back to the user. Setup keeps running either way.
  */
 export const FIRST_AGENT_SETUP_BUDGET_MS = 5 * 60_000;
+/** How long a launched panel is watched for a failed spawn. */
+const SPAWN_WATCH_MS = 60_000;
 /** `worktree.waitUntilReady` refuses longer waits, so the budget is spent in slices. */
 const WAIT_SLICE_MS = 25_000;
 
@@ -46,9 +49,9 @@ export async function waitForWorktreeSetup(
 }
 
 /** One `agent.launch`. A blank prompt starts the agent without a first turn. */
-export async function launchFirstAgent(launch: FirstAgentLaunch): Promise<boolean> {
+export async function launchFirstAgent(launch: FirstAgentLaunch): Promise<string | null> {
   try {
-    const result = await actionService.dispatch<{ launched: boolean }>(
+    const result = await actionService.dispatch<{ launched: boolean; terminalId: string | null }>(
       "agent.launch",
       {
         agentId: launch.agentId,
@@ -58,14 +61,56 @@ export async function launchFirstAgent(launch: FirstAgentLaunch): Promise<boolea
       },
       { source: "user" }
     );
-    return result.ok && result.result.launched;
+    if (!result.ok || !result.result.launched) return null;
+    return result.result.terminalId ?? "";
   } catch {
-    return false;
+    return null;
   }
 }
 
+/**
+ * A launched panel still spawns its process afterwards, and the pane's own
+ * restart rebuilds the command without the first prompt — so a spawn that
+ * fails is handed back here too. Settles on the first non-spawning status; a
+ * closed panel or a spawn slower than the watch counts as nothing to report.
+ */
+export function waitForSpawnOutcome(
+  terminalId: string,
+  timeoutMs: number = SPAWN_WATCH_MS
+): Promise<"ready" | "failed" | "unknown"> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const watch: { unsubscribe?: () => void; timer?: ReturnType<typeof setTimeout> } = {};
+    const settle = (outcome: "ready" | "failed" | "unknown") => {
+      if (settled) return;
+      settled = true;
+      watch.unsubscribe?.();
+      if (watch.timer !== undefined) clearTimeout(watch.timer);
+      resolve(outcome);
+    };
+    const check = (state: ReturnType<typeof usePanelStore.getState>) => {
+      const panel = state.panelsById[terminalId];
+      if (!panel) return settle("unknown");
+      const status = "spawnStatus" in panel ? panel.spawnStatus : undefined;
+      if (status === "spawning") return;
+      settle(status === "failed" ? "failed" : "ready");
+    };
+    check(usePanelStore.getState());
+    if (settled) return;
+    watch.unsubscribe = usePanelStore.subscribe(check);
+    watch.timer = setTimeout(() => settle("unknown"), timeoutMs);
+  });
+}
+
 async function launchOrNotify(launch: FirstAgentLaunch): Promise<void> {
-  if (!(await launchFirstAgent(launch))) notifyAgentNotStarted(launch, "launch-failed");
+  const terminalId = await launchFirstAgent(launch);
+  if (terminalId === null) {
+    notifyAgentNotStarted(launch, "launch-failed");
+    return;
+  }
+  if (terminalId && (await waitForSpawnOutcome(terminalId)) === "failed") {
+    notifyAgentNotStarted(launch, "launch-failed");
+  }
 }
 
 function describeReason(reason: AgentNotStartedReason, agentName: string): string {
@@ -89,9 +134,17 @@ function describeReason(reason: AgentNotStartedReason, agentName: string): strin
   }
 }
 
+/** Setup that may still finish on its own: starting again waits for it rather than racing it. */
+const REWAIT_REASONS: ReadonlySet<AgentNotStartedReason> = new Set([
+  "still-running",
+  "needs-approval",
+]);
+
 /**
  * The launch is handed back rather than dropped: the action replays the same
  * agent and prompt, and fires at most once so a double click can't start two.
+ * Grid-bar placement because the dialog that asked for it is long closed, and
+ * an inbox-only entry would lose the action that carries the prompt.
  */
 export function notifyAgentNotStarted(
   launch: FirstAgentLaunch,
@@ -104,13 +157,16 @@ export function notifyAgentNotStarted(
     message: `${describeReason(reason, launch.agentName)} Your prompt is kept for when you start it.`,
     correlationId: launch.worktreeId,
     context: { eventKind: "agent" },
+    placement: "grid-bar",
     duration: 0,
     action: {
       label: `Start ${launch.agentName}`,
       onClick: () => {
         if (fired) return;
         fired = true;
-        void launchOrNotify(launch);
+        void (REWAIT_REASONS.has(reason)
+          ? startFirstAgentWhenReady(launch)
+          : launchOrNotify(launch));
       },
     },
   });
