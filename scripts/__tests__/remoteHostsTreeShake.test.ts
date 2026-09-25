@@ -1,36 +1,16 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import path from "node:path";
-import { build, type Metafile } from "esbuild";
+import { build, type BuildOptions, type Metafile } from "esbuild";
+import { MAIN_EXTERNAL, MAIN_PRELOAD_ENTRY, mainEsmEntryPoints } from "../main-build-entries.mjs";
 
 // A Windows build compiles `__DAINTREE_REMOTE_HOSTS__` to false and must ship
-// none of Remote Hosts. This bundles the core entries the way
-// scripts/build-main.mjs does and reads the metafile, so a static import from
-// core into a remote module fails here rather than in a Windows release.
+// none of Remote Hosts' gated modules. This bundles every entry
+// scripts/build-main.mjs builds, from the same shared list, and reads the
+// metafile, so a static import from core into a remote module fails here
+// rather than in a Windows release.
 const root = path.resolve(__dirname, "../..");
 
-const ENTRY_POINTS = [
-  "electron/bootstrap.ts",
-  "electron/main.ts",
-  "electron/pty-host.ts",
-  "electron/workspace-host.ts",
-  "electron/watchdog-host.ts",
-  "electron/plugin-dev-worker.ts",
-  "electron/pty-host/analysisWorker.ts",
-  "electron/workspace-host/copytreeWorker.ts",
-  "electron/services/persistence/dbMaintenanceWorker.ts",
-];
-
-const EXTERNAL = [
-  "electron",
-  "@parcel/watcher",
-  "node-pty",
-  "better-sqlite3",
-  "win-job-object",
-  "posix-pty-reaper",
-  "copytree",
-  "onnxruntime-node",
-  "avr-vad",
-];
+const ESM_ENTRY_POINTS: string[] = mainEsmEntryPoints(root);
 
 // The only remote files core code may import statically.
 const CORE_ALLOWED = new Set([
@@ -55,18 +35,12 @@ const GATED_DIRS = [
 ];
 
 async function bundledInputs(remoteHosts: boolean): Promise<string[]> {
-  const result = await build({
+  const shared: BuildOptions = {
     absWorkingDir: root,
-    entryPoints: ENTRY_POINTS,
     bundle: true,
     platform: "node",
     target: "node22",
-    format: "esm",
-    splitting: true,
-    outdir: "dist-electron",
-    outbase: ".",
-    chunkNames: "electron/chunks/[name]-[hash]",
-    external: EXTERNAL,
+    external: MAIN_EXTERNAL,
     write: false,
     metafile: true,
     logLevel: "silent",
@@ -75,8 +49,26 @@ async function bundledInputs(remoteHosts: boolean): Promise<string[]> {
       __DAINTREE_REMOTE_HOSTS__: JSON.stringify(remoteHosts),
       __DAINTREE_BUILD_COMMIT__: JSON.stringify("test"),
     },
-  });
-  return collectInputs(result.metafile);
+  };
+  const [esm, preload] = await Promise.all([
+    build({
+      ...shared,
+      entryPoints: ESM_ENTRY_POINTS,
+      format: "esm",
+      splitting: true,
+      outdir: "dist-electron",
+      outbase: ".",
+      chunkNames: "electron/chunks/[name]-[hash]",
+    }),
+    build({
+      ...shared,
+      entryPoints: [MAIN_PRELOAD_ENTRY],
+      format: "cjs",
+      outdir: "dist-electron/electron",
+      outExtension: { ".js": ".cjs" },
+    }),
+  ]);
+  return [...new Set([...collectInputs(esm.metafile!), ...collectInputs(preload.metafile!)])];
 }
 
 function collectInputs(metafile: Metafile): string[] {
@@ -98,6 +90,15 @@ describe("Remote Hosts build gate tree-shaking", () => {
   beforeAll(async () => {
     [disabled, enabled] = await Promise.all([bundledInputs(false), bundledInputs(true)]);
   }, 120_000);
+
+  it("checks every entry the production build compiles", () => {
+    expect(ESM_ENTRY_POINTS).toContain("electron/pty-host-bootstrap.ts");
+    expect(ESM_ENTRY_POINTS).toContain("electron/services/voice/openaiVadWorker.ts");
+    expect(ESM_ENTRY_POINTS.some((entry) => entry.startsWith("plugins/builtin/"))).toBe(true);
+    for (const entry of [...ESM_ENTRY_POINTS, MAIN_PRELOAD_ENTRY]) {
+      expect(disabled, entry).toContain(entry);
+    }
+  });
 
   it("bundles no gated remote module when the gate is false", () => {
     expect(disabled.length).toBeGreaterThan(0);

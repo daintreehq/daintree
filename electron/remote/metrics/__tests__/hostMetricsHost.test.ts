@@ -95,7 +95,7 @@ function deps(overrides: Partial<MetricsHostDeps> = {}): MetricsHostDeps & {
   let clock = 0;
   return {
     loop: { subscribe: () => () => {}, latest: () => null },
-    listFleetTargets: async () => [],
+    listFleetTargets: async () => ({ targets: [], complete: true }),
     submitFleet: async () => {},
     listWorktrees: async () => [],
     onAgentWaiting(listener) {
@@ -205,32 +205,38 @@ describe("installHostMetricsHostWith", () => {
     const dispose = installHostMetricsHostWith(
       server,
       deps({
-        listFleetTargets: async () => [
-          {
-            hostId: "local",
-            terminalId: "t1",
-            title: "Claude",
-            projectId: "p1",
-            projectName: "app",
-            agentId: "claude",
-            agentState: "waiting",
-          },
-        ],
+        listFleetTargets: async () => ({
+          targets: [
+            {
+              hostId: "local",
+              terminalId: "t1",
+              title: "Claude",
+              projectId: "p1",
+              projectName: "app",
+              agentId: "claude",
+              agentState: "waiting",
+            },
+          ],
+          complete: false,
+        }),
       })
     );
     const p = await pair();
     server.attach(p.host, "shell");
     const answer = await p.client.call(MetricsLinkMethod.LIST_FLEET_TARGETS, null);
-    expect(answer).toEqual([
-      {
-        terminalId: "t1",
-        title: "Claude",
-        projectId: "p1",
-        projectName: "app",
-        agentId: "claude",
-        agentState: "waiting",
-      },
-    ]);
+    expect(answer).toEqual({
+      targets: [
+        {
+          terminalId: "t1",
+          title: "Claude",
+          projectId: "p1",
+          projectName: "app",
+          agentId: "claude",
+          agentState: "waiting",
+        },
+      ],
+      complete: false,
+    });
     dispose();
   });
 

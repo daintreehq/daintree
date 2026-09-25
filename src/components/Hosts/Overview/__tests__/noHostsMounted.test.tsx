@@ -52,7 +52,7 @@ describe("with no host added", () => {
       emit: () => {},
       deliverAttention: () => false,
       local: {
-        listFleetTargets: async () => [],
+        listFleetTargets: async () => ({ targets: [], complete: true }),
         submitFleet: async () => {},
         listWorktrees: async () => [],
       },

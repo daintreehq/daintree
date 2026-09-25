@@ -627,17 +627,20 @@ describe("agents on other hosts", () => {
   it("asks the host while it waits on it, and stops asking after the limit", async () => {
     vi.useFakeTimers();
     try {
-      const listFleetTargets = vi.fn(async () => [
-        {
-          hostId: "studio-01",
-          terminalId: "t1",
-          title: "Claude",
-          projectId: null,
-          projectName: null,
-          agentId: "claude",
-          agentState: "working" as const,
-        },
-      ]);
+      const listFleetTargets = vi.fn(async () => ({
+        targets: [
+          {
+            hostId: "studio-01",
+            terminalId: "t1",
+            title: "Claude",
+            projectId: null,
+            projectName: null,
+            agentId: "claude",
+            agentState: "working" as const,
+          },
+        ],
+        complete: true,
+      }));
       Object.assign(window, {
         electron: {
           runHistory: { append: (input: unknown) => appendMock(input) },
@@ -664,10 +667,40 @@ describe("agents on other hosts", () => {
     }
   });
 
+  it("leaves a target the host's degraded read omitted unobserved, not gone", async () => {
+    vi.useFakeTimers();
+    try {
+      let complete = false;
+      const listFleetTargets = vi.fn(async () => ({ targets: [], complete }));
+      Object.assign(window, {
+        electron: {
+          runHistory: { append: (input: unknown) => appendMock(input) },
+          hostMetrics: { listFleetTargets },
+        },
+      });
+      const unsubscribe = subscribeFleetRunWatcher();
+      startMixedRun();
+      setAgentState("a", "completed");
+      useFleetRunStore.getState().reconcile();
+      await vi.advanceTimersByTimeAsync(FLEET_HOST_OBSERVE_INTERVAL_MS * 3);
+      expect(listFleetTargets).toHaveBeenCalled();
+      let run = useFleetRunStore.getState().run!;
+      expect(run.status).toBe("watching");
+      expect(run.targets.find((t) => t.terminalId === REMOTE)?.gone).not.toBe(true);
+      complete = true;
+      await vi.advanceTimersByTimeAsync(FLEET_HOST_OBSERVE_INTERVAL_MS);
+      run = useFleetRunStore.getState().run!;
+      expect(run.targets.find((t) => t.terminalId === REMOTE)).toMatchObject({ gone: true });
+      unsubscribe();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("never asks any host when the run has only this view's panes", async () => {
     vi.useFakeTimers();
     try {
-      const listFleetTargets = vi.fn(async () => []);
+      const listFleetTargets = vi.fn(async () => ({ targets: [], complete: true }));
       Object.assign(window, {
         electron: {
           runHistory: { append: (input: unknown) => appendMock(input) },

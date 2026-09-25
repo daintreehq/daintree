@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import type { HostFleetTarget, HostWorktreeEntry } from "../../../shared/types/ipc/hostMetrics.js";
+import type {
+  HostFleetTarget,
+  HostFleetTargetList,
+  HostWorktreeEntry,
+} from "../../../shared/types/ipc/hostMetrics.js";
 import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
@@ -9,6 +13,7 @@ import { classifyRun } from "../../services/projectAgentCounts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { isSessionEndpoint } from "../projects/hostInstall.js";
 import { getPtyClient, getWorkspaceClientRef } from "../../window/serviceRefs.js";
+import { FLEET_SUBMIT_RETENTION_MS } from "../../../shared/config/fleetSubmitRetention.js";
 import { openProjects } from "./hostSources.js";
 import {
   MAX_FLEET_SUBMIT_CHARS,
@@ -24,9 +29,14 @@ import {
  */
 export type FleetCaller = { kind: "remote"; sessionId: string } | { kind: "local" };
 
-/** How long a submit's outcome answers a resend of its opId, and how many are kept. */
-export const FLEET_SUBMIT_RETENTION_MS = 10 * 60_000;
-export const FLEET_SUBMIT_MAX_RETAINED = 512;
+/**
+ * The most outcomes kept at once. A record is never dropped while its
+ * retention runs, since the Shell's safe-retry window relies on it, so this
+ * only bounds memory against a runaway caller: at the cap a new opId is
+ * refused before anything is typed. Twenty broadcasts to a full fleet of
+ * `MAX_FLEET_TARGETS` agents inside one retention window fit.
+ */
+export const FLEET_SUBMIT_MAX_RETAINED = 20 * MAX_FLEET_TARGETS;
 
 interface LedgerEntry {
   terminalId: string;
@@ -63,13 +73,21 @@ export class FleetSubmitLedger {
       }
       return existing.outcome;
     }
+    if (this.entries.size >= this.maxRetained) {
+      return Promise.reject(
+        refuse(
+          "RATE_LIMITED",
+          `Fleet submit ${opId} refused: ${this.entries.size} recent submits are still on record`,
+          "Too many prompts were sent to this host in the last few minutes. Try again shortly."
+        )
+      );
+    }
     const outcome = work();
     const entry: LedgerEntry = { terminalId, digest, settledAt: null, outcome };
     this.entries.set(opId, entry);
     outcome.then(
       () => {
         entry.settledAt = this.now();
-        this.evictOverCap();
       },
       () => {
         if (this.entries.get(opId) === entry) this.entries.delete(opId);
@@ -82,30 +100,32 @@ export class FleetSubmitLedger {
     return this.entries.size;
   }
 
-  /** Only settled outcomes expire or give way: dropping one still running would let a resend run it twice. */
+  /**
+   * Only a settled outcome whose retention has run out is dropped. Dropping one
+   * still running, or one a Shell may still resend inside its safe-retry
+   * window, would let that resend type the prompt twice.
+   */
   private prune(): void {
     const cutoff = this.now() - this.retentionMs;
     for (const [opId, entry] of this.entries) {
       if (entry.settledAt !== null && entry.settledAt <= cutoff) this.entries.delete(opId);
     }
   }
-
-  private evictOverCap(): void {
-    for (const [opId, entry] of this.entries) {
-      if (this.entries.size <= this.maxRetained) return;
-      if (entry.settledAt !== null) this.entries.delete(opId);
-    }
-  }
 }
 
 const ledger = new FleetSubmitLedger();
 
-/** This host's agent runs, as fleet targets. Ids are this host's own terminal ids. */
-export async function listLocalFleetTargets(): Promise<HostFleetTarget[]> {
+/**
+ * This host's agent runs, as fleet targets. Ids are this host's own terminal
+ * ids. Incomplete when a pty-host shard didn't answer or the cap cut the list,
+ * so a Shell never reads a missing target as gone.
+ */
+export async function listLocalFleetTargets(): Promise<HostFleetTargetList> {
   const pty = getPtyClient();
-  if (!pty) return [];
+  if (!pty) return { targets: [], complete: false };
   const availability = getAgentAvailabilityStore();
-  const terminals = await pty.getAllTerminalsAsync();
+  const { terminals, degraded } = await pty.getAllTerminalsWithCompletenessAsync();
+  let complete = !degraded;
   const out: HostFleetTarget[] = [];
   for (const terminal of terminals) {
     if (classifyRun(terminal, (id) => availability.isHelpTerminal(id)) !== null) continue;
@@ -122,13 +142,16 @@ export async function listLocalFleetTargets(): Promise<HostFleetTarget[]> {
       agentId,
       agentState: terminal.agentState ?? null,
     });
-    if (out.length >= MAX_FLEET_TARGETS) break;
+    if (out.length >= MAX_FLEET_TARGETS) {
+      complete = false;
+      break;
+    }
   }
-  return out;
+  return { targets: out, complete };
 }
 
 function refuse(
-  code: "NOT_FOUND" | "VALIDATION" | "DRIVEN_ELSEWHERE",
+  code: "NOT_FOUND" | "VALIDATION" | "DRIVEN_ELSEWHERE" | "RATE_LIMITED",
   message: string,
   userMessage?: string
 ): AppError {

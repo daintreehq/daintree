@@ -1,7 +1,7 @@
 import type {
   HostAttentionEvent,
   HostFleetSubmitPayload,
-  HostFleetTarget,
+  HostFleetTargetList,
   HostMetricsEvent,
   HostMetricsSnapshot,
   HostWorktreeEntry,
@@ -57,7 +57,7 @@ export interface HostMetricsClientOptions {
   deliverAttention(event: HostAttentionEvent): boolean;
   /** This machine's fleet and worktree reads, for the "local" host. */
   local: {
-    listFleetTargets(): Promise<HostFleetTarget[]>;
+    listFleetTargets(): Promise<HostFleetTargetList>;
     submitFleet(
       terminalId: string,
       text: string,
@@ -73,6 +73,17 @@ export interface HostMetricsClientOptions {
 
 /** Long enough for a dropped link's automatic reconnect; short enough not to hold a broadcast. */
 export const FLEET_RECONCILE_MS = 10_000;
+
+/**
+ * Refusals the host's fleet handler answers with. For a resent opId the host
+ * answers from its record when the first send ran, so one of these means it didn't.
+ */
+const HOST_FLEET_REFUSALS = new Set(["NOT_FOUND", "VALIDATION", "DRIVEN_ELSEWHERE"]);
+
+function isHostFleetRefusal(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && HOST_FLEET_REFUSALS.has(code);
+}
 
 function isUnknownOutcome(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
@@ -136,7 +147,7 @@ export class HostMetricsClient {
     return this.latest(hostId)?.agentsObserved?.working ?? null;
   }
 
-  async listFleetTargets(payload: unknown): Promise<HostFleetTarget[]> {
+  async listFleetTargets(payload: unknown): Promise<HostFleetTargetList> {
     const hostId = this.hostIdOf(payload);
     if (isLocalHostId(hostId)) return this.options.local.listFleetTargets();
     const answer = await this.connection(hostId).callHost(
@@ -149,7 +160,10 @@ export class HostMetricsClient {
         code: "INTERNAL",
         message: `Host ${hostId} sent invalid fleet targets`,
       });
-    return parsed.data.map((target) => ({ ...target, hostId }));
+    return {
+      targets: parsed.data.targets.map((target) => ({ ...target, hostId })),
+      complete: parsed.data.complete,
+    };
   }
 
   /**
@@ -157,7 +171,10 @@ export class HostMetricsClient {
    * its answer is lost the host may or may not have typed it, so this asks
    * again with the same opId once the host is back, and the host answers from
    * its record rather than typing it twice. Still unanswered, the outcome is
-   * reported unknown, and a retry that reuses the opId stays safe.
+   * reported unknown. The host keeps that record for a limited time
+   * (`FLEET_SUBMIT_RETENTION_MS`), so a retry reusing the opId is safe only
+   * within the renderer's `FLEET_SAFE_RETRY_MS` of the first send; the
+   * renderer owns that window, so this message makes no promise about retries.
    */
   async submitFleet(payload: unknown): Promise<void> {
     const hostId = this.hostIdOf(payload);
@@ -181,13 +198,15 @@ export class HostMetricsClient {
       const unknown = new AppError({
         code: "OUTCOME_UNKNOWN",
         message: `Couldn't confirm fleet submit ${op} on host ${hostId}`,
-        userMessage: `Couldn't confirm whether ${name} received the prompt. Retrying won't send it twice.`,
+        userMessage: `Couldn't confirm whether ${name} received the prompt.`,
       });
       if (!connection) throw unknown;
       try {
         await connection.callHost(MetricsLinkMethod.SUBMIT_FLEET, request);
       } catch (again) {
-        throw isUnknownOutcome(again) ? unknown : again;
+        // Only the host's own refusal of this opId proves the first send typed nothing;
+        // anything else (a full link queue, a dropped link) leaves the outcome unknown.
+        throw isHostFleetRefusal(again) ? again : unknown;
       }
     }
   }

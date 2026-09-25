@@ -906,7 +906,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "host-metrics:list-fleet-targets": {
     args: [payload: { hostId: string }];
-    result: import("./hostMetrics.js").HostFleetTarget[];
+    result: import("./hostMetrics.js").HostFleetTargetList;
   };
   "host-metrics:list-worktrees": {
     args: [payload: { hostId: string }];

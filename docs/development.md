@@ -119,8 +119,10 @@ Remote Hosts (see [architecture/remote-hosts.md](./architecture/remote-hosts.md)
 
 ```bash
 npm test -- electron/remote/__tests__/e2e.harness.test.ts   # boot, hydrate, invoke, events, terminals, lease, worktree port, files, uploads, plugins, viewless, reconnect, latency
-npm test -- scripts/__tests__/remoteHostsTreeShake.test.ts  # Windows builds carry none of electron/remote/**
+npm test -- scripts/__tests__/remoteHostsTreeShake.test.ts  # Windows builds carry only the four core-safe electron/remote files
 ```
+
+The tree-shake test bundles every entry `scripts/build-main.mjs` builds (the list is shared through `scripts/main-build-entries.mjs`, so a new worker or plugin entry is checked automatically) with the gate off, and fails if anything under `electron/remote/**` ships except four small core-safe files that core code imports statically: `buildGate.ts` (the runtime gate and baked build commit), `runtime.ts` (the service locator core code reaches remote services through), `pendingHandler.ts` (the typed refusal for frozen but unimplemented remote IPC ops) and `handshakeInfo.ts` (what this process reports about itself in a link handshake). None of them opens a link, dials a host or loads a gated module; every other remote directory is reached only through a direct `if (__DAINTREE_REMOTE_HOSTS__) { await import(...) }`, so a Windows build drops it.
 
 The latency scenario prints one `[remote-harness] keystroke RTT ms {...}` line (idle and loaded p50/p95/p99, bulk and flood throughput) to stdout; compare it before and after any change to the link's lanes, scheduler or framing. Helpers live in `electron/remote/__tests__/harness/`. The ssh path itself (`ssh -L` and `ssh -O forward`) is covered only by injected-spawner unit tests; to try it for real, turn on Host mode on a machine you can `ssh` into and add it from Settings → Hosts.
 

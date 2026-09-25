@@ -42,6 +42,16 @@ export interface HostFleetTarget {
   agentState: AgentState | null;
 }
 
+/**
+ * A host's fleet targets as it could read them. `complete` is false when the
+ * read missed some terminals (a pty-host shard that didn't answer) or the list
+ * was cut at its cap: a target absent from an incomplete list may still exist.
+ */
+export interface HostFleetTargetList {
+  targets: HostFleetTarget[];
+  complete: boolean;
+}
+
 export interface HostFleetSubmitPayload {
   hostId: HostId;
   terminalId: string;
