@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { useHostMetricsStore } from "@/store/hostMetricsStore";
 import { useProjectStore } from "@/store/projectStore";
+import { PluginParitySummary } from "../PluginParitySummary";
 import { PortsView } from "../PortsView";
 import { useHostList } from "../hostList";
 import { buildHostMenuRows, clientPlatform } from "../hostModel";
@@ -14,14 +15,6 @@ import { HostFleetTargets } from "./HostFleetTargets";
 import { isLive } from "./overviewModel";
 
 const EMPTY_HISTORY: never[] = [];
-
-/**
- * Where a host's plugin parity line goes once the plugin-parity summary is
- * available to embed. Renders nothing until then.
- */
-function PluginParitySlot(_props: { hostId: HostId }) {
-  return null;
-}
 
 interface HostsOverviewDialogProps {
   onClose: () => void;
@@ -75,7 +68,10 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
                 history={history[row.hostId] ?? EMPTY_HISTORY}
                 onSwitch={(newWindow) => switchTo(row.hostId, row.isCurrent, newWindow)}
               >
-                <PluginParitySlot hostId={row.hostId} />
+                <PluginParitySummary
+                  hostId={row.hostId}
+                  connected={!row.isLocal && row.connection?.status === "connected"}
+                />
                 {row.isCurrent ? (
                   <div>
                     <Button variant="outline" size="sm" onClick={addProject}>
