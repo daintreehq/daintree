@@ -93,9 +93,7 @@ describe("PtyManager.spawn — pooled-shell prelude reaches the data event", () 
     manager.spawn("t1", { cwd: "/tmp", cols: 80, rows: 24, kind: "terminal" });
     handoff.handle("live");
 
-    expect(dataEvents.map(([, data]) => data).join("")).toBe(
-      "prelude buffered-1 buffered-2 live"
-    );
+    expect(dataEvents.map(([, data]) => data).join("")).toBe("prelude buffered-1 buffered-2 live");
     expect(dataEvents.every(([id]) => id === "t1")).toBe(true);
   });
 
