@@ -3162,7 +3162,8 @@ export class PluginService {
   ): void {
     if (this.plugins.get(pluginId) !== boundPlugin) return;
 
-    let rendered = typeof message === "string" ? message : safeStringify(message);
+    const safeMessage = typeof message === "string" ? message : safeStringify(message);
+    let rendered = safeMessage;
     if (fields !== undefined) {
       const serialized = safeStringify(fields);
       rendered = serialized ? `${rendered} ${serialized}` : rendered;
@@ -3203,7 +3204,7 @@ export class PluginService {
         pluginId,
         level,
         level === "error" ? "Plugin reported an error" : "Plugin reported a warning",
-        { message: boundPluginFileLogText(message) }
+        { message: boundPluginFileLogText(safeMessage) }
       );
     }
   }
@@ -3211,9 +3212,9 @@ export class PluginService {
   /**
    * Write one plugin-attributed line to `daintree.log` through the rate bound.
    * `category` picks the budget; the level follows it except for lifecycle,
-   * which the caller may raise to `warn`. Never throws — this runs inside
-   * `host.logger.*` and lifecycle bookkeeping, neither of which may fail
-   * because the log did.
+   * which the caller may raise to `warn`. Returns whether the line was
+   * admitted. Never throws — this runs inside `host.logger.*` and lifecycle
+   * bookkeeping, neither of which may fail because the log did.
    */
   private writePluginFileLog(
     pluginId: string,
@@ -3221,7 +3222,7 @@ export class PluginService {
     message: string,
     context: Record<string, unknown> = {},
     level: "info" | "warn" | "error" = category === "lifecycle" ? "info" : category
-  ): void {
+  ): boolean {
     try {
       const identity = pluginFileLogIdentity(pluginId);
       const { admitted, suppressedInPreviousWindow } = this.fileLogLimiter.admit(
@@ -3231,14 +3232,16 @@ export class PluginService {
       if (suppressedInPreviousWindow) {
         this.writePluginFileLogSummary(pluginId, suppressedInPreviousWindow);
       }
-      if (!admitted) return;
+      if (!admitted) return false;
       if (level === "error") {
         logger.error(message, undefined, { ...identity, ...context });
       } else {
         logger[level](message, { ...identity, ...context });
       }
+      return true;
     } catch {
       // A failing log write must not become a failing plugin call.
+      return false;
     }
   }
 
@@ -5219,6 +5222,8 @@ export class PluginService {
         {},
         "warn"
       );
+      // Never registered, so no unload will come to drain its window.
+      this.fileLogLimiter.drain(instanceKey);
       return false;
     }
 
@@ -6213,11 +6218,14 @@ export class PluginService {
     }
     const signature = `${loadError.message}\n${loadError.stack ?? ""}`;
     if (this.fileLoggedLoadErrors.get(plugin) === signature) return;
-    this.fileLoggedLoadErrors.set(plugin, signature);
-    this.writePluginFileLog(pluginId, "error", "Plugin failed to load", {
-      error: boundPluginFileLogText(loadError.message),
-      ...(loadError.stack ? { stack: boundPluginFileLogText(loadError.stack) } : {}),
+    // Keys avoid `error`, which `logger.error` overwrites with its own error
+    // argument. Marked as logged only once admitted, so a failure that lost
+    // out to a burst is still written on its next attempt.
+    const written = this.writePluginFileLog(pluginId, "error", "Plugin failed to load", {
+      loadErrorMessage: boundPluginFileLogText(loadError.message),
+      ...(loadError.stack ? { loadErrorStack: boundPluginFileLogText(loadError.stack) } : {}),
     });
+    if (written) this.fileLoggedLoadErrors.set(plugin, signature);
   }
 
   /**

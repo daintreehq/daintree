@@ -14,6 +14,7 @@ function limiter(overrides: Partial<PluginFileLogLimiterOptions> = {}) {
     windowMs: 1_000,
     perPlugin: { error: 2, warn: 2, lifecycle: 2 },
     global: { error: 3, warn: 3, lifecycle: 3 },
+    globalSummaries: 1,
     now: () => clock.t,
     ...overrides,
   });
@@ -26,7 +27,7 @@ describe("pluginFileLogIdentity", () => {
     expect(pluginFileLogIdentity(key)).toEqual({
       pluginId: "acme.demo",
       projectId: "a".repeat(64),
-      instanceKey: key,
+      instanceId: key,
     });
   });
 
@@ -49,6 +50,24 @@ describe("boundPluginFileLogText", () => {
     expect(codepoints).toHaveLength(PLUGIN_FILE_LOG_TEXT_MAX_CHARS);
     expect(codepoints.at(-1)).toBe("…");
     expect(codepoints.slice(0, -1).every((c) => c === "😀")).toBe(true);
+  });
+
+  it("redacts a secret that straddles the cap instead of cutting it into a fragment", () => {
+    const token = `ghp_${"0123456789abcdefghijklmnopqrstuvwxyz"}`;
+    const out = boundPluginFileLogText(
+      `${"x".repeat(PLUGIN_FILE_LOG_TEXT_MAX_CHARS - 10)} ${token}`
+    );
+    expect(out).not.toContain("ghp_");
+    expect(Array.from(out).length).toBeLessThanOrEqual(PLUGIN_FILE_LOG_TEXT_MAX_CHARS);
+  });
+
+  it("survives a value whose toString throws", () => {
+    const hostile = {
+      toString() {
+        throw new Error("nope");
+      },
+    };
+    expect(boundPluginFileLogText(hostile)).toBe("[unprintable]");
   });
 
   it("leaves short text untouched", () => {
@@ -88,15 +107,76 @@ describe("PluginFileLogLimiter", () => {
 
   it("does not spend a plugin's budget on a line the global cap refused", () => {
     const { instance, clock } = limiter({
-      perPlugin: { error: 2, warn: 2, lifecycle: 2 },
+      perPlugin: { error: 1, warn: 1, lifecycle: 1 },
       global: { error: 1, warn: 1, lifecycle: 1 },
     });
     expect(instance.admit("a", "error").admitted).toBe(true);
+    clock.t += 500;
+    // `b` opens its window half way through the global one and is refused by it.
     expect(instance.admit("b", "error").admitted).toBe(false);
 
-    clock.t += 1_000;
-    // `b` still has its whole allowance in the new window.
+    // Only the global window has rolled. Had the refusal spent `b`'s single
+    // allowance, this line — still inside `b`'s window — would be refused too.
+    clock.t += 500;
     expect(instance.admit("b", "error").admitted).toBe(true);
+  });
+
+  it("returns a pending summary even when the line that rolled the window is refused", () => {
+    const { instance, clock } = limiter({
+      perPlugin: { error: 2, warn: 2, lifecycle: 2 },
+      global: { error: 3, warn: 3, lifecycle: 3 },
+    });
+    instance.admit("p", "warn");
+    instance.admit("p", "warn");
+    instance.admit("p", "warn");
+    clock.t += 1_000;
+    // Exhaust the new global window from other plugins first.
+    instance.admit("a", "warn");
+    instance.admit("b", "warn");
+    instance.admit("c", "warn");
+    expect(instance.admit("p", "warn")).toEqual({
+      admitted: false,
+      suppressedInPreviousWindow: { warn: 1 },
+    });
+  });
+
+  it("carries a summary forward when the global summary allowance is spent", () => {
+    const { instance, clock } = limiter();
+    for (const id of ["a", "b"]) {
+      instance.admit(id, "lifecycle");
+      instance.admit(id, "lifecycle");
+      instance.admit(id, "lifecycle");
+    }
+    clock.t += 1_000;
+    expect(instance.admit("a", "lifecycle").suppressedInPreviousWindow).toEqual({ lifecycle: 1 });
+    // One summary per window across all plugins: `b`'s waits.
+    expect(instance.admit("b", "lifecycle").suppressedInPreviousWindow).toBeUndefined();
+    clock.t += 1_000;
+    // `b` came second into a shared global budget of 3, so two of its lines fell.
+    expect(instance.admit("b", "lifecycle").suppressedInPreviousWindow).toEqual({ lifecycle: 2 });
+  });
+
+  it("drain respects the global summary allowance", () => {
+    const { instance } = limiter();
+    for (const id of ["a", "b"]) {
+      instance.admit(id, "warn");
+      instance.admit(id, "warn");
+      instance.admit(id, "warn");
+    }
+    expect(instance.drain("a")).toEqual({ warn: 1 });
+    expect(instance.drain("b")).toBeUndefined();
+  });
+
+  it("treats a clock that stepped backwards as a new window", () => {
+    const { instance, clock } = limiter();
+    instance.admit("p", "error");
+    instance.admit("p", "error");
+    expect(instance.admit("p", "error").admitted).toBe(false);
+    clock.t -= 60_000;
+    expect(instance.admit("p", "error")).toEqual({
+      admitted: true,
+      suppressedInPreviousWindow: { error: 1 },
+    });
   });
 
   it("reports no summary when nothing was dropped", () => {

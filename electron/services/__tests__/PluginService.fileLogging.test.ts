@@ -32,6 +32,7 @@ vi.mock("../../ipc/utils.js", () => ({
 
 import { PluginService } from "../PluginService.js";
 import type { LoadedPlugin } from "../plugin/PluginServiceTypes.js";
+import { DEFAULT_PLUGIN_FILE_LOG_LIMITS } from "../plugin/pluginFileLog.js";
 import {
   makeProjectPluginInstanceKey,
   type PluginLoadError,
@@ -92,7 +93,7 @@ function projectPlugin(service: PluginService, manifestId = "acme.demo") {
 const projectIdentity = (key: string, manifestId = "acme.demo") => ({
   pluginId: manifestId,
   projectId: PROJECT_ID,
-  instanceKey: key,
+  instanceId: key,
 });
 
 let service: PluginService;
@@ -114,8 +115,13 @@ beforeEach(() => {
 
 afterEach(() => {
   service.dispose();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+function loadFailures() {
+  return pluginServiceLogger.error.mock.calls.filter(([m]) => m === "Plugin failed to load");
+}
 
 function warnCalls(message: string) {
   return pluginServiceLogger.warn.mock.calls.filter(([m]) => m === message);
@@ -176,11 +182,13 @@ describe("PluginService file logging — host.logger reports (#12804)", () => {
     const host = service._createHostForTests(key);
     for (let i = 0; i < 50; i++) host.logger.error(`e${i}`);
 
+    const budget = DEFAULT_PLUGIN_FILE_LOG_LIMITS.perPlugin.error;
     const admitted = pluginServiceLogger.error.mock.calls.filter(
       ([m]) => m === "Plugin reported an error"
     );
-    expect(admitted.length).toBeGreaterThan(0);
-    expect(admitted.length).toBeLessThan(50);
+    expect(admitted.map(([, , ctx]) => (ctx as { message: string }).message)).toEqual(
+      Array.from({ length: budget }, (_, i) => `e${i}`)
+    );
     // The ring still holds every line.
     expect(
       service.getDiagnosticsSnapshot().plugins.find((p) => p.pluginId === key)?.logLines
@@ -191,7 +199,7 @@ describe("PluginService file logging — host.logger reports (#12804)", () => {
     expect(summaries).toHaveLength(1);
     expect(summaries[0][1]).toEqual({
       ...projectIdentity(key),
-      suppressed: { error: 50 - admitted.length },
+      suppressed: { error: 50 - budget },
     });
   });
 
@@ -212,6 +220,23 @@ describe("PluginService file logging — host.logger reports (#12804)", () => {
     });
     expect(() => service._createHostForTests(key).logger.error("boom")).not.toThrow();
   });
+
+  it("never lets a message whose toString throws reach plugin code", () => {
+    const { key } = projectPlugin(service);
+    const hostile = {
+      toString() {
+        throw new Error("nope");
+      },
+    };
+    expect(() =>
+      service._createHostForTests(key).logger.error(hostile as unknown as string)
+    ).not.toThrow();
+    expect(pluginServiceLogger.error).toHaveBeenCalledWith(
+      "Plugin reported an error",
+      undefined,
+      expect.objectContaining(projectIdentity(key))
+    );
+  });
 });
 
 describe("PluginService file logging — lifecycle (#12804)", () => {
@@ -222,19 +247,35 @@ describe("PluginService file logging — lifecycle (#12804)", () => {
     internals(service).recordPluginLoadError(key, plugin, loadError);
     internals(service).recordPluginLoadError(key, plugin, { ...loadError, at: 2 });
 
-    const failures = () =>
-      pluginServiceLogger.error.mock.calls.filter(([m]) => m === "Plugin failed to load");
-    expect(failures()).toHaveLength(1);
-    expect(failures()[0][2]).toEqual({
+    expect(loadFailures()).toHaveLength(1);
+    // Not `error`: logger.error overwrites that key with its own error argument.
+    expect(loadFailures()[0][2]).toEqual({
       ...projectIdentity(key),
-      error: "activate() threw",
-      stack: "at activate",
+      loadErrorMessage: "activate() threw",
+      loadErrorStack: "at activate",
     });
 
     // A clear re-arms: the same failure on the next attempt is new evidence.
     internals(service).recordPluginLoadError(key, plugin, null);
     internals(service).recordPluginLoadError(key, plugin, loadError);
-    expect(failures()).toHaveLength(2);
+    expect(loadFailures()).toHaveLength(2);
+  });
+
+  it("writes a load error that lost out to a burst on its next attempt", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { plugin, key } = projectPlugin(service);
+    const host = service._createHostForTests(key);
+    for (let i = 0; i <= DEFAULT_PLUGIN_FILE_LOG_LIMITS.perPlugin.error; i++) {
+      host.logger.error(`e${i}`);
+    }
+    const loadError = { message: "activate() threw", at: 1 };
+
+    internals(service).recordPluginLoadError(key, plugin, loadError);
+    expect(loadFailures()).toHaveLength(0);
+
+    vi.setSystemTime(Date.now() + DEFAULT_PLUGIN_FILE_LOG_LIMITS.windowMs);
+    internals(service).recordPluginLoadError(key, plugin, { ...loadError, at: 2 });
+    expect(loadFailures()).toHaveLength(1);
   });
 
   it("ignores a load error from a stale instance", () => {

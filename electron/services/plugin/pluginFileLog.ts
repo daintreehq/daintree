@@ -23,14 +23,18 @@ export interface PluginFileLogIdentity {
   /** The manifest id — what the plugin's author and the user know it as. */
   pluginId: string;
   projectId?: string;
-  instanceKey?: string;
+  /**
+   * The registry key. Not named `instanceKey`: the logger redacts any context
+   * key containing "key", which would blank it in the file.
+   */
+  instanceId?: string;
 }
 
 /** Split a registry key into the identity fields a log line carries. */
 export function pluginFileLogIdentity(registryId: string): PluginFileLogIdentity {
   const parsed = parseProjectPluginInstanceKey(registryId);
   if (!parsed) return { pluginId: registryId };
-  return { pluginId: parsed.manifestId, projectId: parsed.projectId, instanceKey: registryId };
+  return { pluginId: parsed.manifestId, projectId: parsed.projectId, instanceId: registryId };
 }
 
 /**
@@ -42,10 +46,18 @@ export function boundPluginFileLogText(
   text: unknown,
   maxChars: number = PLUGIN_FILE_LOG_TEXT_MAX_CHARS
 ): string {
-  const scrubbed = scrubSecrets(typeof text === "string" ? text : String(text));
+  const scrubbed = scrubSecrets(typeof text === "string" ? text : toPrintable(text));
   const codepoints = Array.from(scrubbed);
   if (codepoints.length <= maxChars) return scrubbed;
   return `${codepoints.slice(0, maxChars - 1).join("")}…`;
+}
+
+function toPrintable(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    return "[unprintable]";
+  }
 }
 
 export type PluginFileLogBudget = Record<PluginFileLogCategory, number>;
@@ -54,6 +66,8 @@ export interface PluginFileLogLimiterOptions {
   windowMs: number;
   perPlugin: PluginFileLogBudget;
   global: PluginFileLogBudget;
+  /** Suppression summaries across all plugins per window. */
+  globalSummaries: number;
   now?: () => number;
 }
 
@@ -73,6 +87,10 @@ interface WindowCounts {
   used: Record<PluginFileLogCategory, number>;
 }
 
+interface GlobalWindow extends WindowCounts {
+  summaries: number;
+}
+
 interface PluginWindow extends WindowCounts {
   suppressed: PluginFileLogSuppressed;
 }
@@ -81,6 +99,7 @@ export const DEFAULT_PLUGIN_FILE_LOG_LIMITS: PluginFileLogLimiterOptions = {
   windowMs: 10_000,
   perPlugin: { error: 5, warn: 10, lifecycle: 20 },
   global: { error: 20, warn: 40, lifecycle: 100 },
+  globalSummaries: 10,
 };
 
 function emptyCounts(): Record<PluginFileLogCategory, number> {
@@ -102,33 +121,36 @@ export class PluginFileLogLimiter {
   private readonly options: PluginFileLogLimiterOptions;
   private readonly now: () => number;
   private readonly windows = new Map<string, PluginWindow>();
-  private readonly globalWindow: WindowCounts;
+  private readonly globalWindow: GlobalWindow;
 
   constructor(options: PluginFileLogLimiterOptions = DEFAULT_PLUGIN_FILE_LOG_LIMITS) {
     this.options = options;
-    this.now = options.now ?? Date.now;
-    this.globalWindow = { start: this.now(), used: emptyCounts() };
+    this.now = options.now ?? (() => Date.now());
+    this.globalWindow = { start: this.now(), used: emptyCounts(), summaries: 0 };
   }
 
   admit(pluginId: string, category: PluginFileLogCategory): PluginFileLogAdmission {
     const now = this.now();
-    const { windowMs, perPlugin, global } = this.options;
-
-    if (now - this.globalWindow.start >= windowMs) {
-      this.globalWindow.start = now;
-      this.globalWindow.used = emptyCounts();
-    }
+    const { perPlugin, global } = this.options;
+    this.rollGlobalWindow(now);
 
     let window = this.windows.get(pluginId);
     let suppressedInPreviousWindow: PluginFileLogSuppressed | undefined;
     if (!window) {
       window = { start: now, used: emptyCounts(), suppressed: {} };
       this.windows.set(pluginId, window);
-    } else if (now - window.start >= windowMs) {
-      if (hasSuppressed(window.suppressed)) suppressedInPreviousWindow = window.suppressed;
+    } else if (this.expired(window.start, now)) {
+      let carried: PluginFileLogSuppressed = {};
+      if (hasSuppressed(window.suppressed)) {
+        // Summaries are rate-bound too: with many noisy plugins rolling over at
+        // once, the ones past the global allowance carry their counts into the
+        // next window rather than each writing a line now.
+        if (this.takeSummary()) suppressedInPreviousWindow = window.suppressed;
+        else carried = window.suppressed;
+      }
       window.start = now;
       window.used = emptyCounts();
-      window.suppressed = {};
+      window.suppressed = carried;
     }
 
     // Both limits are checked before either is spent, so a line the global cap
@@ -146,10 +168,33 @@ export class PluginFileLogLimiter {
     return suppressedInPreviousWindow ? { admitted, suppressedInPreviousWindow } : { admitted };
   }
 
-  /** Forget a plugin, returning whatever it had dropped in its open window. */
+  /**
+   * Forget a plugin, returning whatever it had dropped in its open window — or
+   * nothing, when the global summary allowance for this window is spent.
+   */
   drain(pluginId: string): PluginFileLogSuppressed | undefined {
     const window = this.windows.get(pluginId);
     this.windows.delete(pluginId);
-    return window && hasSuppressed(window.suppressed) ? window.suppressed : undefined;
+    if (!window || !hasSuppressed(window.suppressed)) return undefined;
+    this.rollGlobalWindow(this.now());
+    return this.takeSummary() ? window.suppressed : undefined;
+  }
+
+  private rollGlobalWindow(now: number): void {
+    if (!this.expired(this.globalWindow.start, now)) return;
+    this.globalWindow.start = now;
+    this.globalWindow.used = emptyCounts();
+    this.globalWindow.summaries = 0;
+  }
+
+  private takeSummary(): boolean {
+    if (this.globalWindow.summaries >= this.options.globalSummaries) return false;
+    this.globalWindow.summaries += 1;
+    return true;
+  }
+
+  /** A clock that stepped backwards also ends the window, so it cannot stall. */
+  private expired(start: number, now: number): boolean {
+    return now < start || now - start >= this.options.windowMs;
   }
 }
