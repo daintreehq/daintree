@@ -102,7 +102,7 @@ import { useCue } from "@daintreehq/tour/react";
 const PAGES = ["Home", "Pricing", "Blog"];
 
 function Worktrees() {
-  return <MockWorktreeCard name="acme-site" branch="main" selected states={["working"]} />;
+  return <MockWorktreeCard name="acme-site" branch="main" selected />;
 }
 
 function Pages({ shown }: { shown: boolean }) {
@@ -129,7 +129,7 @@ function Intro() {
       grid={
         <MockGrid columns={2}>
           <Pages shown={pages} />
-          <MockPane agent="claude" state="working">
+          <MockPane agent={{ id: "claude", name: "Claude", Icon: null }}>
             <MockLines widths={[84, 62, 90, 50]} />
           </MockPane>
         </MockGrid>
@@ -172,7 +172,7 @@ export default {
 };
 ```
 
-**`vite.config.ts`** — build it with `@daintreehq/plugin-vite`, which leaves `react` and `@daintreehq/tour` external for the host to supply. Install `@daintreehq/tour` as a dev dependency for its types and for `tour preview`.
+**`vite.config.ts`** — build it with `@daintreehq/plugin-vite`, which leaves `react` and `@daintreehq/tour` external for the host to supply. Install `@daintreehq/tour` as a dev dependency for its types and for `tour preview`, plus `lucide-react`, which the kit's icons come from and the preview needs to draw them.
 
 ```ts
 import { daintreePlugin } from "@daintreehq/plugin-vite";
@@ -206,7 +206,7 @@ Narration is written for the ear, and the same rules apply to plugin tours as to
 - **`[single brackets]` direct the delivery, never the content.** Write them as short stage directions that combine two dimensions (`[warm and welcoming, unhurried]` reads better than `[warm]`), put them at the start of a sentence, and use them sparingly: a direction holds until the next one, and every switch is an audible change of register. The plain read is usually the right one.
 - **A chapter is a sentence or two.** Most built-in chapters run 10 to 20 seconds. A chapter can be at most 600 seconds, but a viewer won't sit through anything close.
 
-Editing a chapter's words or directions changes its fingerprint, which marks that chapter's timing stale until it is re-voiced (`tour preview` warns about it). Re-running `tour voice` only re-voices the chapters whose narration or voice changed.
+Editing a chapter's words or directions changes its fingerprint, which marks that chapter's timing stale until it is re-voiced (`tour preview` warns about it). Re-running `tour voice` only re-voices the chapters whose narration, voice or model changed, or whose audio file is missing.
 
 ## Building scenes
 
@@ -274,10 +274,10 @@ The mock window's regions, layout constants and anchor names are a contract plug
 
 The cursor and the spotlight never target hand-placed coordinates. They target `data-tour-anchor` names measured from the render, so they land on the element even when the layout shifts.
 
-- **Name your own elements** with `data-tour-anchor="<name>"`. Names are matched by value, not as a selector, so any string is safe. Prefix yours with something of your own (`acme-publish`) so they can't collide with the mock window's.
+- **Name your own elements** with `data-tour-anchor="<name>"`. Names are matched by value, not as a selector, so any string without a `|` is safe (`MockSpotlight` joins its targets with one). Prefix yours with something of your own (`acme-publish`) so they can't collide with the mock window's.
 - **The mock window names its own.** Toolbar: `sidebar-toggle`, `launcher`, `toolbar-agents`, `agent-<id>`, `terminal`, `file-browser`, `project`, `forge`, `forge-issues`, `forge-prs`, `notifications`, `copy-context`, `palette`, `settings`, `assistant`, `portal`. Sidebar: `sidebar-arm`, `sidebar-plus`, `worktree-list`, `worktree-<name>`, `worktree-<name>-branch`. Dock: `dock-launcher`, `dock-waiting`. A `MockPane` names `<prefix>-titlebar`, `-glyph`, `-body`, `-input` and `-armed`, where the prefix is its `anchor` prop or its agent id.
 - **An anchor that isn't rendered is skipped**, not an error: the spotlight rings the others and the cursor holds its last position. `tour preview` outlines every anchor on screen so you can see what's reachable.
-- Anchors are measured again 260 ms after they appear, so a target's own entrance transition has settled before the cursor or spotlight commits to it.
+- The cursor and spotlight measure an anchor as soon as they target it and again 260 ms later, once the target's own entrance transition has settled.
 
 ## Voicing
 
@@ -298,7 +298,7 @@ daintree-plugin tour voice [--tour <id>] [--narration <file>] [--voice <id>] [--
 | `--only` | All chapters | Comma-separated chapter ids. |
 | `--force` | Off | Re-voice chapters whose narration is unchanged. |
 
-Each chapter is voiced from its clean text (cue markers stripped, directions passed to the voice), and every cue lands on the moment its word is spoken. Chapters whose narration, voice and audio file are unchanged are skipped.
+Each chapter is voiced from its clean text (cue markers stripped, directions passed to the voice), and every cue lands on the moment its word is spoken. A chapter is skipped when its timing was made from this narration with this voice and model and its audio file is still intact on disk; anything else re-voices it.
 
 ### Your own recordings
 
@@ -308,7 +308,7 @@ daintree-plugin tour align --recordings <dir> [--tour <id>] [--narration <file>]
 
 Record one file per chapter, named by chapter id (`intro.wav`; `.mp3`, `.m4a`, `.ogg`, `.flac` and `.aac` also work), reading the narration as written. Small ad-libs are fine; reworded sentences shift the cues. Each recording is encoded to Ogg Opus with `ffmpeg` (which must be on your `PATH`), transcribed with word timestamps through Inworld speech-to-text (`--stt-model`, default `groq/whisper-large-v3`), and aligned back to the narration. Misheard words are interpolated between their neighbours; if fewer than 60% of a chapter's words line up, the run stops there with that chapter's timing unchanged. A chapter without a recording keeps its previous timing.
 
-The manifest is only written once every chapter in the narration has timing, so the first run of either command has to cover them all (`--only` is for later runs). Both write it atomically, checked against the same schema Daintree loads it with, and delete only the superseded audio files they wrote themselves. Add the narration file and your raw recordings to `.dntrignore` if you don't want them in the package.
+Neither command writes the manifest until every chapter in the narration has timing, so the first run has to cover them all (`--only` is for later runs); from then on each chapter is committed as it succeeds, so a run that stops partway keeps the chapters it finished. Both write atomically, checked against the same schema Daintree loads it with, and delete only the superseded audio files they wrote themselves. Add the narration file and your raw recordings to `.dntrignore` if you don't want them in the package.
 
 ## Where audio comes from
 

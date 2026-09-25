@@ -29,6 +29,7 @@ const REQUIRED_EXPORTS: Partial<Record<HostSpecifier, string[]>> = {
   "@daintreehq/tour": ["TourPlayer"],
   "@daintreehq/tour/react": ["TourPlayerContext", "useCue"],
   "@daintreehq/tour/kit": ["TourCanvas", "measureAnchor"],
+  "@daintreehq/tour/mock-app": ["MockKitContext", "EMPTY_MOCK_KIT"],
 };
 
 const SAFE_EXPORT_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
