@@ -1046,6 +1046,16 @@ describe("McpServerService", () => {
         description: "Stop the turn an agent this MCP session created is running",
       }),
       createManifestEntry({
+        id: "terminal.sendKeysOwned" as ActionId,
+        title: "Press Keys in Owned Terminal",
+        description: "Answer a dialog in a terminal this MCP session created",
+      }),
+      createManifestEntry({
+        id: "terminal.sendKeys" as ActionId,
+        title: "Press Keys in Terminal",
+        description: "Answer a dialog in a terminal",
+      }),
+      createManifestEntry({
         id: "terminal.readLastMessageOwned" as ActionId,
         title: "Read Owned Agent's Last Message",
         description: "Read the last reply an agent this MCP session created wrote",

@@ -233,12 +233,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         notify: {
           description:
-            "When this agent next stops working, Daintree types a notice into your own prompt with its last screen lines (its reply), so end your turn instead of polling. Agent panes and assistants only.",
+            "When this agent next stops, Daintree types a notice quoting its last screen lines into your prompt; end your turn, don't poll. Agent panes and assistants only.",
           type: "boolean",
         },
         replyLines: {
           description:
-            "With notify: how many of the agent's last screen lines the notice quotes (default 40, 0 for none). With handback, the quote ends at the marker.",
+            "With notify: screen lines the notice quotes (default 40, 0 for none). With handback it ends at the marker.",
           type: "integer",
           minimum: 0,
           maximum: 200,
@@ -282,7 +282,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         excludeFromPersistence: {
           description:
-            "Keeps the terminal out of the saved session, so it does not return after a restart. Listings, status snapshots, agent-state reads and bulk close or kill all skip it, so the caller cannot find or poll it later. Use for throwaway work.",
+            "Keep the terminal out of the saved session, listings, status reads and bulk close or kill, so it cannot be found or polled later. For throwaway work.",
           type: "boolean",
         },
         removeOnExit: {
@@ -308,7 +308,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["auto", "preserve", "take"],
           description:
-            'Whether the new panel takes keyboard focus: "auto" (default) takes it unless the assistant owns input, "preserve" never takes it, "take" always does. Prefer preserve for background spawns so the user is not interrupted.',
+            'Whether the new panel takes focus: "auto" (default) unless the assistant owns input, "preserve" never, "take" always. Use preserve for background spawns.',
         },
         requestedId: {
           description:
@@ -322,7 +322,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         name: {
           description:
-            'Always provide a short, task-descriptive name for the terminal tab, at most 200 characters (e.g. "Claude: auth refactor"), so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.',
+            'Always pass a short task name for the tab ("Claude: auth refactor") so parallel agents are told apart. Pins the title; blank uses the default.',
           type: "string",
           maxLength: 200,
         },
@@ -514,7 +514,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         projectId: {
           description:
-            "Which project's repository presets to include. Defaults to the project this call is dispatched in. Naming one that is not the loaded project returns the other layers and reports the result as incomplete rather than answering for the wrong project.",
+            "Which project's repository presets to include; defaults to this call's project. Another project returns the other layers, marked incomplete.",
           type: "string",
           minLength: 1,
         },
@@ -701,7 +701,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         name: {
           description:
-            "Short human-readable label for this copy tree, shown in the user's copy-tree history and in the completion notification. Use 2 to 4 words, for example 'auth flow context'. Omitted, the notification is unlabelled and the history entry keeps or derives its own label.",
+            "A 2 to 4 word label for this copy tree ('auth flow context'), shown in the copy-tree history and the completion notification.",
           type: "string",
         },
       },
@@ -1134,7 +1134,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["auto", "preserve", "take"],
           description:
-            'Whether the new panel takes keyboard focus: "auto" (default) takes it unless the assistant owns input, "preserve" never takes it, "take" always does. Prefer preserve for background spawns so the user is not interrupted.',
+            'Whether the new panel takes focus: "auto" (default) unless the assistant owns input, "preserve" never, "take" always. Use preserve for background spawns.',
         },
       },
       required: ["recipeId"],
@@ -1302,7 +1302,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Read the trailing scrollback of one terminal, to inspect what an agent or command printed. Use the status snapshot when watching several terminals: it fetches tails for a whole fleet in one call, and reading one at a time is the common mistake. ANSI codes are stripped by default; output may be truncated to the requested tail, and a missing terminal returns an error field, not a failed call.",
+      "Read the trailing output of one terminal: what an agent or command printed. For several, the status snapshot reads every tail in one call. ANSI is stripped by default; a missing terminal returns an error field, not a failed call.",
     enabled: true,
     examples: [
       {
@@ -1381,7 +1381,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Snapshot agent and process state across many terminals, with optional output tails, and confirm a submission landed. The batched polling path: prefer it over listing terminals for agent state, or reading each one's output. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the fetch failed. Use the blocking wait to catch an agent finishing.",
+      "Snapshot agent and process state across many terminals in one call, with optional output tails, and confirm a submission landed. Prefer it to listing terminals or reading each one's output. Never blocks or fails as a whole; an entry's error means that terminal was missing or unreadable.",
     enabled: true,
     id: "terminal.getStatus",
     inputSchema: {
@@ -1732,7 +1732,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         location: {
           description:
-            "Restricts the listing to terminals in one place: the main grid, the sidebar dock, the trash, or the background. Omitted, trashed and backgrounded terminals are left out, so ask for those explicitly to see them.",
+            "Only terminals in one place: grid, dock, trash or background. Omitted, trashed and backgrounded terminals are left out.",
           type: "string",
           enum: ["grid", "dock", "trash", "background"],
         },
@@ -1859,7 +1859,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["auto", "preserve", "take"],
           description:
-            'Whether the new panel takes keyboard focus: "auto" (default) takes it unless the assistant owns input, "preserve" never takes it, "take" always does. Prefer preserve for background spawns so the user is not interrupted.',
+            'Whether the new panel takes focus: "auto" (default) unless the assistant owns input, "preserve" never, "take" always. Use preserve for background spawns.',
         },
         cwd: {
           description:
@@ -1885,7 +1885,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Read what the agent in a panel this connection created or was handed last wrote to its own transcript: that reply's text, plus any tool calls left unanswered since, such as a question and its options. Claude Code only for now. This reports what the file holds, not whether the agent is waiting; a permission prompt never appears there, so read the terminal for the live screen.",
+      "Read what an agent this connection launched or was handed last wrote to its transcript: that reply's text and any tool calls left unanswered, such as a question and its options. Claude Code only. It says nothing of whether the agent is waiting; a permission prompt is only on the live screen.",
     enabled: true,
     examples: [
       {
@@ -2118,8 +2118,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         command: {
           type: "string",
           minLength: 1,
-          description:
-            "Text to submit. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit.",
+          description: "Text to submit. Multi-line text goes in atomically with one Enter.",
         },
         handback: {
           description:
@@ -2128,12 +2127,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         notify: {
           description:
-            "When this agent next stops working, Daintree types a notice into your own prompt with its last screen lines (its reply), so end your turn instead of polling. Agent panes and assistants only.",
+            "When this agent next stops, Daintree types a notice quoting its last screen lines into your prompt; end your turn, don't poll. Agent panes and assistants only.",
           type: "boolean",
         },
         replyLines: {
           description:
-            "With notify: how many of the agent's last screen lines the notice quotes (default 40, 0 for none). With handback, the quote ends at the marker.",
+            "With notify: screen lines the notice quotes (default 40, 0 for none). With handback it ends at the marker.",
           type: "integer",
           minimum: 0,
           maximum: 200,
@@ -2278,7 +2277,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         timeoutMs: {
           description:
-            "Pass 0 for an immediate non-blocking snapshot — the recommended mode. Otherwise, the maximum time to long-poll in milliseconds; defaults to 60s. Interactive sessions are capped at 60s server-side; headless sessions may block up to 2 hours.",
+            "0 for an immediate snapshot (recommended); otherwise the most milliseconds to long-poll, default 60s. Interactive sessions cap at 60s, headless at 2 hours.",
           type: "integer",
           minimum: 0,
           maximum: 7200000,
@@ -2408,7 +2407,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         timeoutMs: {
           description:
-            "Pass 0 for an immediate non-blocking snapshot. Otherwise the maximum time to long-poll in milliseconds; defaults to 60s. Interactive sessions are capped at 60s server-side; headless sessions may block up to 2 hours.",
+            "0 for an immediate snapshot; otherwise the most milliseconds to long-poll, default 60s. Interactive sessions cap at 60s, headless at 2 hours.",
           type: "integer",
           minimum: 0,
           maximum: 7200000,
@@ -2697,7 +2696,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["auto", "preserve", "take"],
           description:
-            'Whether the new panel takes keyboard focus: "auto" (default) takes it unless the assistant owns input, "preserve" never takes it, "take" always does. Prefer preserve for background spawns so the user is not interrupted.',
+            'Whether the new panel takes focus: "auto" (default) unless the assistant owns input, "preserve" never, "take" always. Use preserve for background spawns.',
         },
       },
       required: ["source"],

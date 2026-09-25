@@ -50,7 +50,7 @@ export const TerminalSpawnSourceSchema = z
 export const AddPanelFocusPolicySchema = z
   .enum(["auto", "preserve", "take"])
   .describe(
-    'Whether the new panel takes keyboard focus: "auto" (default) takes it unless the assistant owns input, "preserve" never takes it, "take" always does. Prefer preserve for background spawns so the user is not interrupted.'
+    'Whether the new panel takes focus: "auto" (default) unless the assistant owns input, "preserve" never, "take" always. Use preserve for background spawns.'
   );
 
 // Derived from the settingsTabIds tuples so the action schema can't drift from

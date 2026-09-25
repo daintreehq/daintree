@@ -124,7 +124,7 @@ const ForgeListOptionsSchema = ForgeListPagingSchema.extend({
     .string()
     .optional()
     .describe(
-      "Provider-native query fragment, NOT plain text. The dialect is the provider's own issue search, typically supporting negation. Trimmed, appended after the generated repo/type/state/sort qualifiers, and truncated to the provider's length cap. Routes via the search API, which caps result depth."
+      "Provider-native issue search fragment, not plain text; appended after the generated qualifiers and cut to the provider's cap. Uses the search API, which caps result depth."
     ),
 }).strict();
 
@@ -144,7 +144,7 @@ const ForgePRListOptionsSchema = ForgeListPagingSchema.extend({
     .string()
     .optional()
     .describe(
-      "Provider-native query fragment, NOT plain text. The dialect is the provider's own PR search, typically supporting negation and PR qualifiers. Trimmed, appended after the generated repo/type/state/sort qualifiers, and truncated to the provider's length cap. Routes via the search API, which caps result depth."
+      "Provider-native PR search fragment, not plain text; appended after the generated qualifiers and cut to the provider's cap. Uses the search API, which caps result depth."
     ),
 }).strict();
 

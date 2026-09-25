@@ -108,7 +108,7 @@ const AgentListPresetsArgsSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Which project's repository presets to include. Defaults to the project this call is dispatched in. Naming one that is not the loaded project returns the other layers and reports the result as incomplete rather than answering for the wrong project."
+      "Which project's repository presets to include; defaults to this call's project. Another project returns the other layers, marked incomplete."
     ),
 });
 
@@ -410,7 +410,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .boolean()
         .optional()
         .describe(
-          "Keeps the terminal out of the saved session, so it does not return after a restart. Listings, status snapshots, agent-state reads and bulk close or kill all skip it, so the caller cannot find or poll it later. Use for throwaway work."
+          "Keep the terminal out of the saved session, listings, status reads and bulk close or kill, so it cannot be found or polled later. For throwaway work."
         ),
       removeOnExit: z
         .boolean()
@@ -443,7 +443,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .max(200)
         .optional()
         .describe(
-          'Always provide a short, task-descriptive name for the terminal tab, at most 200 characters (e.g. "Claude: auth refactor"), so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.'
+          'Always pass a short task name for the tab ("Claude: auth refactor") so parallel agents are told apart. Pins the title; blank uses the default.'
         ),
     }),
     // Top-level object, never `.nullable()`: `buildToolOutputSchema` (tierAuth)

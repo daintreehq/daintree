@@ -1394,6 +1394,8 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // only malformed.
     const STRICT_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
       "terminal.setClientMetadata": { terminalId: "t-placeholder", clientMetadata: null },
+      "terminal.sendKeys": { terminalId: "t-placeholder", keys: ["Enter"] },
+      "terminal.sendKeysOwned": { terminalId: "t-placeholder", keys: ["Enter"] },
     };
 
     const failures: string[] = [];

@@ -104,7 +104,7 @@ export function registerTerminalQueryActions(
           .enum(["grid", "dock", "trash", "background"])
           .optional()
           .describe(
-            "Restricts the listing to terminals in one place: the main grid, the sidebar dock, the trash, or the background. Omitted, trashed and backgrounded terminals are left out, so ask for those explicitly to see them."
+            "Only terminals in one place: grid, dock, trash or background. Omitted, trashed and backgrounded terminals are left out."
           ),
         owned: z
           .boolean()
@@ -216,7 +216,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getOutput",
     title: "Get terminal output",
     description:
-      "Read the trailing scrollback of one terminal, to inspect what an agent or command printed. Use the status snapshot when watching several terminals: it fetches tails for a whole fleet in one call, and reading one at a time is the common mistake. ANSI codes are stripped by default; output may be truncated to the requested tail, and a missing terminal returns an error field, not a failed call.",
+      "Read the trailing output of one terminal: what an agent or command printed. For several, the status snapshot reads every tail in one call. ANSI is stripped by default; a missing terminal returns an error field, not a failed call.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -313,7 +313,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getStatus",
     title: "Get terminal status",
     description:
-      "Snapshot agent and process state across many terminals, with optional output tails, and confirm a submission landed. The batched polling path: prefer it over listing terminals for agent state, or reading each one's output. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the fetch failed. Use the blocking wait to catch an agent finishing.",
+      "Snapshot agent and process state across many terminals in one call, with optional output tails, and confirm a submission landed. Prefer it to listing terminals or reading each one's output. Never blocks or fails as a whole; an entry's error means that terminal was missing or unreadable.",
     // The MCP answer to "what state is this agent in" since `agent.getState`
     // left the tool sets, so search has to find it by those words.
     keywords: ["agent", "state", "waiting", "working"],
@@ -679,7 +679,7 @@ export function registerTerminalQueryActions(
         .max(MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS)
         .optional()
         .describe(
-          "Pass 0 for an immediate non-blocking snapshot — the recommended mode. Otherwise, the maximum time to long-poll in milliseconds; defaults to 60s. Interactive sessions are capped at 60s server-side; headless sessions may block up to 2 hours."
+          "0 for an immediate snapshot (recommended); otherwise the most milliseconds to long-poll, default 60s. Interactive sessions cap at 60s, headless at 2 hours."
         ),
     }),
     rawOutputSchema: WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,
@@ -731,7 +731,7 @@ export function registerTerminalQueryActions(
         .max(MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS)
         .optional()
         .describe(
-          "Pass 0 for an immediate non-blocking snapshot. Otherwise the maximum time to long-poll in milliseconds; defaults to 60s. Interactive sessions are capped at 60s server-side; headless sessions may block up to 2 hours."
+          "0 for an immediate snapshot; otherwise the most milliseconds to long-poll, default 60s. Interactive sessions cap at 60s, headless at 2 hours."
         ),
     }),
     rawOutputSchema: WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
@@ -760,7 +760,7 @@ export function registerTerminalQueryActions(
     id: "terminal.readLastMessageOwned",
     title: "Read owned agent's last message",
     description:
-      "Read what the agent in a panel this connection created or was handed last wrote to its own transcript: that reply's text, plus any tool calls left unanswered since, such as a question and its options. Claude Code only for now. This reports what the file holds, not whether the agent is waiting; a permission prompt never appears there, so read the terminal for the live screen.",
+      "Read what an agent this connection launched or was handed last wrote to its transcript: that reply's text and any tool calls left unanswered, such as a question and its options. Claude Code only. It says nothing of whether the agent is waiting; a permission prompt is only on the live screen.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -851,7 +851,7 @@ export function registerTerminalQueryActions(
         .string()
         .min(1)
         .describe(
-          "Text to submit. Runs as a shell command in a plain terminal, or is submitted as the next prompt/turn in an agent pane. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit."
+          "Text to submit: a shell command, or an agent's next prompt. Multi-line text goes in atomically with one Enter."
         ),
       handback: HANDBACK_ARG_SCHEMA,
       notify: NOTIFY_ARG_SCHEMA,
@@ -969,9 +969,7 @@ export function registerTerminalQueryActions(
       command: z
         .string()
         .min(1)
-        .describe(
-          "Text to submit. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit."
-        ),
+        .describe("Text to submit. Multi-line text goes in atomically with one Enter."),
       handback: HANDBACK_ARG_SCHEMA,
       notify: NOTIFY_ARG_SCHEMA,
       replyLines: NotifyReplyLinesSchema,

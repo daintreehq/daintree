@@ -356,6 +356,18 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     releasesOwnership: false,
     acceptsAdoption: true,
   },
+  // Keys for a dialog in a panel this session launched — most often the trust
+  // screen a fresh worktree puts in front of an agent it just started. Only
+  // the key list is forwarded; the delegate validates it.
+  "terminal.sendKeysOwned": {
+    resourceKind: "terminal",
+    executor: "renderer",
+    delegateTo: "terminal.sendKeys",
+    idArg: "terminalId",
+    forwardArgs: ["keys"],
+    releasesOwnership: false,
+    acceptsAdoption: true,
+  },
   // The one entry that runs in main rather than delegating (#12479). What it
   // reads is a file the agent wrote, which the renderer cannot open, and the
   // answer is built from host state — the pty-host record and the store the

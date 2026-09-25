@@ -96,6 +96,10 @@ export const CORE_TIER_TOOLS = [
   "terminal.notifyWhenIdle",
   // Stop a turn without losing the conversation (#12338).
   "terminal.interruptOwned",
+  // Answers a CLI's own dialog (trust, permission, a selection) that a
+  // submitted prompt cannot: a send types text and Enter, which picks whatever
+  // is highlighted. Swapped for `terminal.sendKeysOwned` outside the assistant.
+  "terminal.sendKeys",
   // Swapped for `terminal.closeOwned` outside the assistant, like the send.
   "terminal.close",
   "terminal.moveToWorktree",
@@ -210,6 +214,7 @@ export const OWNED_TWIN_TOOLS = {
   "terminal.sendCommand": "terminal.sendCommandOwned",
   "terminal.inject": "terminal.injectOwned",
   "terminal.close": "terminal.closeOwned",
+  "terminal.sendKeys": "terminal.sendKeysOwned",
   "worktree.delete": "worktree.deleteOwned",
 } as const satisfies Partial<Record<BuiltInActionId, BuiltInActionId>>;
 

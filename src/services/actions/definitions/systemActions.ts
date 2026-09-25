@@ -146,7 +146,7 @@ const copyTreeRunNameField = z
   .string()
   .optional()
   .describe(
-    "Short human-readable label for this copy tree, shown in the user's copy-tree history and in the completion notification. Use 2 to 4 words, for example 'auth flow context'. Omitted, the notification is unlabelled and the history entry keeps or derives its own label."
+    "A 2 to 4 word label for this copy tree ('auth flow context'), shown in the copy-tree history and the completion notification."
   );
 
 /**

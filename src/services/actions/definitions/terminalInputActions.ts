@@ -51,6 +51,45 @@ const TerminalInterruptResultSchema = z.object({
     ),
 });
 
+const SEND_KEY_NAMES = {
+  Up: "\x1b[A",
+  Down: "\x1b[B",
+  Right: "\x1b[C",
+  Left: "\x1b[D",
+  Enter: "\r",
+  Escape: "\x1b",
+  Tab: "\t",
+  Space: " ",
+  Backspace: "\x7f",
+} as const;
+
+const SEND_KEYS_GAP_MS = 80;
+
+function keySequence(key: string): string {
+  return Object.hasOwn(SEND_KEY_NAMES, key)
+    ? SEND_KEY_NAMES[key as keyof typeof SEND_KEY_NAMES]
+    : key;
+}
+
+const SEND_KEYS_DESCRIPTION =
+  "Press named keys in a terminal to answer a CLI's own dialog (trust, permission, a list). A send can't: it types text then Enter, taking whatever is highlighted.";
+
+const SendKeysArgsSchema = z.object({
+  terminalId: z.string().min(1).describe("The terminal to press keys in."),
+  keys: z
+    .array(z.string().regex(/^(Up|Down|Left|Right|Enter|Escape|Tab|Space|Backspace|[a-z0-9])$/))
+    .min(1)
+    .max(16)
+    .describe(
+      'Up to 16: Up, Down, Left, Right, Enter, Escape, Tab, Space, Backspace, or one lowercase letter or digit. Second option of a list: ["Down", "Enter"].'
+    ),
+});
+
+const SendKeysResultSchema = z.object({
+  terminalId: z.string(),
+  keys: z.array(z.string()).describe("The keys written, in order. Not proof the CLI read them."),
+});
+
 export function registerTerminalInputActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -71,7 +110,7 @@ export function registerTerminalInputActions(
           .min(1)
           .optional()
           .describe(
-            "Identifies the terminal to inject into, using a panel id from the terminal-listing capability. An automated caller must name it: focus can drift between the call and its execution, so relying on the focused terminal can land a large context dump in the wrong pane."
+            "The terminal to inject into. An automated caller must name it: focus can drift before the call runs and land a large context dump in the wrong pane."
           ),
       })
       .optional(),
@@ -286,6 +325,66 @@ export function registerTerminalInputActions(
     run: async () => {
       throw new Error(
         "terminal.interruptOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
+  actions.set("terminal.sendKeys", () => ({
+    id: "terminal.sendKeys",
+    title: "Press keys in terminal",
+    description: SEND_KEYS_DESCRIPTION,
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    // Keystrokes into an agent terminal: the same injection surface as the
+    // interrupt, behind the `agent:input` capability (#10558).
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["key", "press", "dialog", "trust", "select", "arrow", "enter", "escape"],
+    palette: { mode: "hidden" },
+    argsSchema: SendKeysArgsSchema,
+    resultSchema: SendKeysResultSchema,
+    run: async (args: z.infer<typeof SendKeysArgsSchema>) => {
+      const { terminalId, keys } = args;
+      const state = usePanelStore.getState();
+      const panel = Object.hasOwn(state.panelsById, terminalId)
+        ? state.panelsById[terminalId]
+        : undefined;
+      if (!panel || !isPtyPanel(panel)) {
+        throw new UnactionableTargetError(`No terminal ${terminalId} to press keys in.`);
+      }
+      if (panel.isInputLocked || terminalInstanceService.get(terminalId)?.isInputLocked) {
+        throw new UnactionableTargetError(`Terminal ${terminalId} has its input locked.`);
+      }
+      // One write per key, spaced out: a TUI reading a burst as one chunk can
+      // take an arrow and an Enter as a single unknown sequence.
+      for (const [index, key] of keys.entries()) {
+        if (index > 0) await new Promise((resolve) => setTimeout(resolve, SEND_KEYS_GAP_MS));
+        terminalClient.write(terminalId, keySequence(key));
+      }
+      return { terminalId, keys };
+    },
+  }));
+
+  // Manifest metadata only; main checks ownership and delegates to
+  // `terminal.sendKeys` with the key list, like `terminal.interruptOwned`.
+  actions.set("terminal.sendKeysOwned", () => ({
+    id: "terminal.sendKeysOwned",
+    title: "Press keys in owned terminal",
+    description:
+      "Press named keys in a terminal this connection created or was handed, to answer a CLI's own dialog (trust, permission, a list). Read the screen before and after.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["key", "press", "dialog", "trust", "select", "owned"],
+    palette: { mode: "hidden" },
+    argsSchema: SendKeysArgsSchema,
+    resultSchema: SendKeysResultSchema,
+    run: async () => {
+      throw new Error(
+        "terminal.sendKeysOwned must be invoked through the MCP main-process path, not renderer dispatch."
       );
     },
   }));

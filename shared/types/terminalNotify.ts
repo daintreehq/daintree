@@ -102,11 +102,11 @@ const WAITING_REASON_VALUES = ["prompt", "question", "approval", "error"] as con
  * drift apart.
  */
 export const NOTIFY_ARG_DESCRIPTION =
-  "When this agent next stops working, Daintree types a notice into your own prompt with its last screen lines (its reply), so end your turn instead of polling. Agent panes and assistants only.";
+  "When this agent next stops, Daintree types a notice quoting its last screen lines into your prompt; end your turn, don't poll. Agent panes and assistants only.";
 
 /** Model-facing description of `replyLines`, shared like {@link NOTIFY_ARG_DESCRIPTION}. */
 export const NOTIFY_REPLY_LINES_DESCRIPTION =
-  "With notify: how many of the agent's last screen lines the notice quotes (default 40, 0 for none). With handback, the quote ends at the marker.";
+  "With notify: screen lines the notice quotes (default 40, 0 for none). With handback it ends at the marker.";
 
 export const NotifyReplyLinesSchema = z
   .number()

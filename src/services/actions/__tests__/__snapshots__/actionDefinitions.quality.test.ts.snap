@@ -4899,7 +4899,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Read the trailing scrollback of one terminal, to inspect what an agent or command printed. Use the status snapshot when watching several terminals: it fetches tails for a whole fleet in one call, and reading one at a time is the common mistake. ANSI codes are stripped by default; output may be truncated to the requested tail, and a missing terminal returns an error field, not a failed call.",
+    "description": "Read the trailing output of one terminal: what an agent or command printed. For several, the status snapshot reads every tail in one call. ANSI is stripped by default; a missing terminal returns an error field, not a failed call.",
     "examples": [
       {
         "args": {
@@ -4926,7 +4926,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Snapshot agent and process state across many terminals, with optional output tails, and confirm a submission landed. The batched polling path: prefer it over listing terminals for agent state, or reading each one's output. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the fetch failed. Use the blocking wait to catch an agent finishing.",
+    "description": "Snapshot agent and process state across many terminals in one call, with optional output tails, and confirm a submission landed. Prefer it to listing terminals or reading each one's output. Never blocks or fails as a whole; an entry's error means that terminal was missing or unreadable.",
     "examples": undefined,
     "id": "terminal.getStatus",
     "keywords": [
@@ -5238,7 +5238,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Be told when a working agent terminal stops, instead of polling. Returns at once; when it next leaves working, Daintree types one line into your own prompt saying what it saw, with your note. End your turn after calling. A terminal not working comes back unarmed with its state. For a prompt you are sending, set notify on the send instead.",
+    "description": "Be told when a working agent terminal stops, instead of polling. Returns at once; when it next leaves working, Daintree types what it saw, your note and its last screen lines into your prompt. End your turn after calling. A terminal not working comes back unarmed with its state. For a prompt you are sending, set notify on the send instead.",
     "examples": undefined,
     "id": "terminal.notifyWhenIdle",
     "keywords": [
@@ -5320,7 +5320,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Read what the agent in a panel this connection created or was handed last wrote to its own transcript: that reply's text, plus any tool calls left unanswered since, such as a question and its options. Claude Code only for now. This reports what the file holds, not whether the agent is waiting; a permission prompt never appears there, so read the terminal for the live screen.",
+    "description": "Read what an agent this connection launched or was handed last wrote to its transcript: that reply's text and any tool calls left unanswered, such as a question and its options. Claude Code only. It says nothing of whether the agent is waiting; a permission prompt is only on the live screen.",
     "examples": [
       {
         "args": {
@@ -5513,6 +5513,46 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "kind": "command",
     "requiresArgs": true,
     "title": "Submit text to owned terminal",
+  },
+  {
+    "category": "terminal",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Press named keys in a terminal to answer a CLI's own dialog (trust, permission, a list). A send can't: it types text then Enter, taking whatever is highlighted.",
+    "examples": undefined,
+    "id": "terminal.sendKeys",
+    "keywords": [
+      "key",
+      "press",
+      "dialog",
+      "trust",
+      "select",
+      "arrow",
+      "enter",
+      "escape",
+    ],
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Press keys in terminal",
+  },
+  {
+    "category": "terminal",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Press named keys in a terminal this connection created or was handed, to answer a CLI's own dialog (trust, permission, a list). Read the screen before and after.",
+    "examples": undefined,
+    "id": "terminal.sendKeysOwned",
+    "keywords": [
+      "key",
+      "press",
+      "dialog",
+      "trust",
+      "select",
+      "owned",
+    ],
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Press keys in owned terminal",
   },
   {
     "category": "terminal",
