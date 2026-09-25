@@ -30,9 +30,7 @@ function kitSources(dir: string, out: string[] = []): string[] {
 const ROOTS = [...kitSources(MOCKUP_DIR), path.join(TOUR_DIR, "scenes", "sceneParts.tsx")];
 
 /** The player runtime the kit's timeline hooks read; a boundary, not walked. */
-const RUNTIME = new Set(
-  ["useTourPlayer.ts", "TourPlayer.ts", "tourTypes.ts"].map((name) => path.join(TOUR_DIR, name))
-);
+const RUNTIME = new Set(["@daintreehq/tour", "@daintreehq/tour/react"]);
 
 const PACKAGES = new Set(["react", "lucide-react", "clsx", "tailwind-merge"]);
 
@@ -99,8 +97,9 @@ function violations(): { reached: Set<string>; offenders: string[] } {
       if (specifier.startsWith(".")) {
         const resolved = resolveRelative(specifier, file);
         if (resolved && ROOTS.includes(resolved)) pending.push(resolved);
-        else if (resolved && RUNTIME.has(resolved)) reached.add(resolved);
         else offenders.push(`${rel} -> ${specifier}`);
+      } else if (RUNTIME.has(specifier)) {
+        reached.add(specifier);
       } else if (!PACKAGES.has(specifier)) {
         offenders.push(`${rel} -> ${specifier}`);
       }
@@ -152,6 +151,6 @@ describe("mockup kit isolation", () => {
     const { reached, offenders } = violations();
     expect(offenders).toEqual([]);
     // The walk really followed the kit's edges: its timeline hooks come from the runtime.
-    expect([...reached].map((file) => path.basename(file))).toContain("useTourPlayer.ts");
+    expect([...reached]).toContain("@daintreehq/tour/react");
   });
 });
