@@ -44,13 +44,14 @@ vi.mock("../../utils.js", () => ({
     );
     return () => ipcMainMock.removeHandler(channel);
   },
-  typedHandleValidated: (channel: string, schema: SafeParseable, handler: unknown) => {
-    ipcMainMock.handle(channel, async (_e: unknown, ...args: unknown[]) => {
+  typedHandleWithContextValidated: (channel: string, schema: SafeParseable, handler: unknown) => {
+    ipcMainMock.handle(channel, async (event: unknown, ...args: unknown[]) => {
       const parsed = schema.safeParse(args[0]);
       if (!parsed.success) {
         throw new Error(`IPC validation failed: ${channel}`);
       }
-      return (handler as (payload: unknown) => unknown)(parsed.data);
+      const ctx = { endpoint: (event as { endpoint?: unknown } | null)?.endpoint };
+      return (handler as (ctx: unknown, payload: unknown) => unknown)(ctx, parsed.data);
     });
     return () => ipcMainMock.removeHandler(channel);
   },
@@ -61,6 +62,7 @@ vi.mock("../../../services/FileSearchService.js", () => ({
 }));
 
 import { ipcMain } from "electron";
+import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 import { CHANNELS } from "../../channels.js";
 import { registerFilesHandlers, isLfsPointer } from "../files.js";
 import { _resetHtmlPreviewTokensForTests } from "../../../setup/htmlPreviewTokens.js";
@@ -126,7 +128,65 @@ describe("files:read handler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetRemoteServicesForTest();
     fsMock.realpath.mockImplementation(async (p: string) => p);
+  });
+
+  describe("for a remote Shell's view", () => {
+    const remote = { endpoint: { kind: "remote-view", projectId: "proj-1" } };
+    const content = Buffer.from("hello\n", "utf-8");
+
+    beforeEach(() => {
+      fsMock.stat.mockResolvedValue({ size: content.length });
+      fsMock.open.mockResolvedValue(makeFileHandle(content));
+    });
+
+    it("reads under its own project folder or worktree", async () => {
+      const holdsRoot = vi.fn(async (_projectId: string, candidate: string) => candidate === root);
+      registerRemoteService("hostFileService", { holdsRoot } as never);
+      registerFilesHandlers();
+
+      await expect(getReadHandler()(remote, { path: file, rootPath: root })).resolves.toEqual({
+        content: "hello\n",
+      });
+      expect(holdsRoot).toHaveBeenCalledWith("proj-1", root);
+    });
+
+    it("refuses a root outside its project before touching the disk", async () => {
+      registerRemoteService("hostFileService", { holdsRoot: vi.fn(async () => false) } as never);
+      registerFilesHandlers();
+
+      await expect(
+        getReadHandler()(remote, { path: "/etc/passwd", rootPath: "/" })
+      ).rejects.toMatchObject({ name: "AppError", code: "OUTSIDE_ROOT" });
+      expect(fsMock.realpath).not.toHaveBeenCalled();
+      expect(fsMock.open).not.toHaveBeenCalled();
+    });
+
+    it("refuses when the view has no project or the host's file service isn't running", async () => {
+      registerFilesHandlers();
+      await expect(getReadHandler()(remote, { path: file, rootPath: root })).rejects.toMatchObject({
+        code: "OUTSIDE_ROOT",
+      });
+      registerRemoteService("hostFileService", { holdsRoot: vi.fn(async () => true) } as never);
+      await expect(
+        getReadHandler()(
+          { endpoint: { kind: "remote-view", projectId: null } },
+          { path: file, rootPath: root }
+        )
+      ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
+      expect(fsMock.open).not.toHaveBeenCalled();
+    });
+
+    it("leaves a local view free to name any root", async () => {
+      const holdsRoot = vi.fn(async () => false);
+      registerRemoteService("hostFileService", { holdsRoot } as never);
+      registerFilesHandlers();
+      await expect(
+        getReadHandler()({ endpoint: { kind: "local-view" } }, { path: file, rootPath: root })
+      ).resolves.toEqual({ content: "hello\n" });
+      expect(holdsRoot).not.toHaveBeenCalled();
+    });
   });
 
   it("throws AppError(LFS_POINTER) when the file is a git-lfs v1 pointer", async () => {

@@ -11,6 +11,7 @@ import {
   type HostDescriptor,
   type HostHandshakeInfo,
   type HostListEntry,
+  isLocalHostId,
   type OperationId,
   type OperationOutcome,
 } from "../../../shared/types/remoteHosts.js";
@@ -19,7 +20,9 @@ import type {
   DiscoveredHost,
   HostInstallPlan,
   HostProbeResult,
+  HostProjectSummary,
   InstallHostPayload,
+  ListHostProjectsPayload,
   InstallHostResult,
   PlanInstallPayload,
   SwitchWindowHostPayload,
@@ -50,6 +53,17 @@ function remoteHostsInUse(): boolean {
   if (Array.isArray(hosts) && hosts.length > 0) return true;
   if (store.get("hostMode")?.enabled === true) return true;
   return getRemoteService("hostServer") !== undefined;
+}
+
+/**
+ * This machine's projects as another window lists them. The store is loaded
+ * on first use: its constructor reads app paths at module load.
+ */
+async function listLocalProjects(): Promise<HostProjectSummary[]> {
+  const { projectStore } = await import("../../services/ProjectStore.js");
+  return projectStore
+    .getAllProjects()
+    .map(({ id, name, path, emoji }) => ({ id, name, path, ...(emoji ? { emoji } : {}) }));
 }
 
 export const remoteHostsNamespace = defineIpcNamespace({
@@ -130,6 +144,14 @@ export const remoteHostsNamespace = defineIpcNamespace({
       REMOTE_HOSTS_METHOD_CHANNELS.startHostMode,
       async (payload: { sshTarget: string }): Promise<HostProbeResult> =>
         requireRemoteService("hostSetup").startHostMode(payload)
+    ),
+    listHostProjects: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.listHostProjects,
+      async (payload: ListHostProjectsPayload): Promise<HostProjectSummary[]> => {
+        const hostId = (payload as Partial<ListHostProjectsPayload> | null)?.hostId;
+        if (typeof hostId === "string" && isLocalHostId(hostId)) return listLocalProjects();
+        return requireRemoteService("remoteHostsClient").listHostProjects(payload);
+      }
     ),
     isInUse: op(REMOTE_HOSTS_METHOD_CHANNELS.isInUse, (): boolean => remoteHostsInUse()),
     getLocalHandshake: op(REMOTE_HOSTS_METHOD_CHANNELS.getLocalHandshake, (): HostHandshakeInfo =>

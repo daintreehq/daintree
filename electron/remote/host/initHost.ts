@@ -3,6 +3,7 @@ import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { setAttachedFrontendCount } from "../../services/PowerSaveBlockerService.js";
 import { registerRemoteService } from "../runtime.js";
+import { MAX_PROJECT_EMOJI_LENGTH } from "./linkMethods.js";
 import { SessionHost, type SessionHostOptions, type SessionHostServer } from "./SessionHost.js";
 
 declare module "../runtime.js" {
@@ -28,6 +29,14 @@ export function initRemoteHostsHost(
       const project = projectStore.getProjectById(projectId);
       return project ? { projectId: project.id, path: project.path, name: project.name } : null;
     },
+    // An emoji the Shell's schema would refuse is dropped, not the whole list.
+    listProjects: () =>
+      projectStore.getAllProjects().map(({ id, name, path, emoji }) => ({
+        id,
+        name,
+        path,
+        ...(emoji && emoji.length <= MAX_PROJECT_EMOJI_LENGTH ? { emoji } : {}),
+      })),
     ...overrides,
   });
   const unregister = registerRemoteService("sessionHost", sessionHost);

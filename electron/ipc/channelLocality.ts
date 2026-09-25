@@ -712,6 +712,7 @@ export const CHANNEL_LOCALITY = {
   "remote-hosts:get-install-status": "shell",
   "remote-hosts:cancel-install": "shell",
   "remote-hosts:start-host-mode": "shell",
+  "remote-hosts:list-host-projects": "shell",
   "run-history:append": "host",
   "run-history:clear": "host",
   "run-history:get-records": "host",

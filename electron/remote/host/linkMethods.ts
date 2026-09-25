@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
 import type { HostPlatform } from "../../../shared/types/remoteHosts.js";
 
 /**
@@ -11,6 +12,8 @@ export const LinkMethod = {
   HOST_INFO: "host.info",
   /** Shell → Host: the folder a project lives in on the Host, for a view about to open it. */
   DESCRIBE_PROJECT: "host.describe-project",
+  /** Shell → Host: every project the Host has, for the Shell's other-hosts listings. */
+  LIST_PROJECTS: "host.list-projects",
   /** Host → Shell: these endpoints missed events; repaint them from a fresh snapshot. */
   ENDPOINT_RESYNC: "endpoint.resync",
 } as const;
@@ -26,6 +29,8 @@ export interface ProjectDescription {
   path: string;
   name: string;
 }
+
+export type HostProjectList = HostProjectSummary[];
 
 /** Why a Shell is told to resync: its events were dropped, or it was away. */
 export type EndpointResyncReason = "overflow" | "reattached";
@@ -55,6 +60,23 @@ export const ProjectDescriptionSchema = z
     name: z.string().max(1024),
   })
   .nullable();
+
+/** A Host's project list is bounded, so a hostile or broken Host can't flood the Shell. */
+export const MAX_LISTED_PROJECTS = 2000;
+export const MAX_PROJECT_EMOJI_LENGTH = 64;
+
+export const HostProjectListSchema = z
+  .array(
+    z
+      .object({
+        id: z.string().min(1).max(256),
+        name: z.string().max(1024),
+        path: hostPath,
+        emoji: z.string().max(MAX_PROJECT_EMOJI_LENGTH).optional(),
+      })
+      .strip()
+  )
+  .max(MAX_LISTED_PROJECTS);
 
 export const EndpointResyncPayloadSchema = z.object({
   endpointIds: z.array(endpointId).max(4096),

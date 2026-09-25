@@ -502,3 +502,21 @@ describe("save locally", () => {
     await expectEventuallyEmpty(downloads);
   });
 });
+
+describe("roots a remote view may name to the host's file readers", () => {
+  it("holds the project's folder and folders in it, and nothing outside", async () => {
+    const { service } = await setup();
+    await fs.mkdir(path.join(project, "src"));
+    await fs.symlink(outside, path.join(project, "escape"));
+
+    await expect(service.holdsRoot("p1", project)).resolves.toBe(true);
+    await expect(service.holdsRoot("p1", path.join(project, "src"))).resolves.toBe(true);
+    await expect(service.holdsRoot("p1", outside)).resolves.toBe(false);
+    await expect(service.holdsRoot("p1", path.join(project, "escape"))).resolves.toBe(false);
+    await expect(service.holdsRoot("p1", path.join(project, "missing"))).resolves.toBe(false);
+    await expect(service.holdsRoot("p2", project)).resolves.toBe(false);
+
+    service.dispose();
+    await expect(service.holdsRoot("p1", project)).resolves.toBe(false);
+  });
+});

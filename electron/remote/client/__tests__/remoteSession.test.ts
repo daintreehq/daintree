@@ -196,6 +196,11 @@ async function startHarness(
     setAttachedFrontendCount: (n) => frontendCounts.push(n),
     describeProject: (projectId) =>
       projectId === "proj-1" ? { projectId, path: "/srv/proj-1", name: "one" } : null,
+    listProjects: () => [
+      { id: "proj-1", name: "one", path: "/srv/proj-1", emoji: "🌲" },
+      // Only the listed fields cross the link, whatever else the store holds.
+      { id: "proj-2", name: "two", path: "/srv/proj-2", status: "active" } as never,
+    ],
     eventsHighWaterBytes: options.eventsLimits?.high,
     maxEndpointsPerSession: options.maxEndpoints,
   });
@@ -584,6 +589,23 @@ describe("remote session wiring", () => {
       name: "one",
     });
     await expect(connection.describeProject("nope")).resolves.toBeNull();
+  });
+
+  it("lists the host's projects without binding a view, and refuses while disconnected", async () => {
+    await startHarness();
+    const disconnected = h.manager.connect(HOST_ID);
+    if (disconnected.unavailableEnvelope() !== null) {
+      await expect(disconnected.listProjects()).rejects.toMatchObject({
+        code: "HOST_DISCONNECTED",
+      });
+    }
+    await connect();
+    const connection = h.manager.get(HOST_ID)!;
+    await expect(connection.listProjects()).resolves.toEqual([
+      { id: "proj-1", name: "one", path: "/srv/proj-1", emoji: "🌲" },
+      { id: "proj-2", name: "two", path: "/srv/proj-2" },
+    ]);
+    expect(getEndpointRegistry().getRemote()).toHaveLength(0);
   });
 
   it("closes endpoints of views that went away while the link was down once it resumes", async () => {

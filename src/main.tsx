@@ -41,6 +41,7 @@ import { installPluginDocumentRuntime } from "./services/plugin/pluginDocumentRu
 import { installProjectSwitchStatusTiming } from "./services/projectSwitchStatusTiming";
 import { installRunningPluginActions } from "./services/plugin/runningPluginActions";
 import { getSafeBootPromise } from "./lib/bootPromise";
+import { isRemoteHostsSupported } from "./lib/remoteHosts";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupScrollbarGutterWatch: (() => void) | undefined;
@@ -103,6 +104,15 @@ async function bootstrap() {
   // Same reason: main replays the running plugin actions at `did-finish-load`,
   // and its events reach only a listener that already exists.
   installRunningPluginActions();
+
+  // Off the entry chunk, and never loaded where remote hosts can't exist.
+  if (isRemoteHostsSupported()) {
+    void import("./components/Hosts/installHostProjectsLoader")
+      .then((m) => m.installHostProjectsLoader())
+      .catch((error: unknown) => {
+        console.warn("[Hosts] Couldn't install the host project listing:", error);
+      });
+  }
 
   // Kick off the agent-settings store so `App.tsx`, `Toolbar`, and the tray
   // all read from a normalized snapshot on cold boot. The install-aware

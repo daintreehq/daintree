@@ -146,8 +146,9 @@ function copyTreeGenerateAndCopyFile(deps: PickerSplitDeps): HybridSplit {
 }
 
 /**
- * The picker splits, by channel. Registered after the base splits so these
- * replace their placeholder refusals.
+ * The picker splits, by channel. The base splits have no entry for the dialog
+ * channels, so a remote window that reaches one before these are installed is
+ * refused as not remotable rather than shown a native dialog.
  */
 export function createPickerSplits(deps: PickerSplitDeps): Readonly<Record<string, HybridSplit>> {
   return {

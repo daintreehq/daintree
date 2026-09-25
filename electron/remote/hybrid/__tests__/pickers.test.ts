@@ -263,10 +263,10 @@ describe("copytree copy-as-file in a remote window", () => {
 });
 
 describe("installPickerSplits", () => {
-  it("registers over the placeholder refusals and removes only its own on dispose", () => {
+  it("registers the dialog splits and removes only its own on dispose", () => {
     const splits = new Map<string, unknown>();
     const placeholder = vi.fn();
-    splits.set(CHANNELS.PROJECT_OPEN_DIALOG, placeholder);
+    splits.set(CHANNELS.FORGE_AUDIT_EXPORT_LOG, placeholder);
     const dispatcher = {
       registerHybridSplit: vi.fn((channel: string, split: unknown) => {
         splits.set(channel, split);
@@ -276,8 +276,15 @@ describe("installPickerSplits", () => {
       }),
     };
     const dispose = installPickerSplits(dispatcher as never);
-    expect(splits.get(CHANNELS.PROJECT_OPEN_DIALOG)).not.toBe(placeholder);
-    expect(splits.has(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE)).toBe(true);
+    expect(splits.get(CHANNELS.FORGE_AUDIT_EXPORT_LOG)).not.toBe(placeholder);
+    for (const channel of [
+      CHANNELS.PROJECT_OPEN_DIALOG,
+      CHANNELS.PROJECT_LOCATE,
+      CHANNELS.PLUGIN_PICK_PATH,
+      CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE,
+    ]) {
+      expect(splits.has(channel), channel).toBe(true);
+    }
     dispose();
     expect(splits.has(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE)).toBe(false);
   });
