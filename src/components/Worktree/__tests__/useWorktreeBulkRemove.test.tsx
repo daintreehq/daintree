@@ -971,3 +971,120 @@ describe("useWorktreeBulkRemove — the queue no longer guillotines the batch (#
     }
   });
 });
+
+describe("useWorktreeBulkRemove — nested worktrees (#12789)", () => {
+  const parent = () => wt("parent", { path: "/repo/parent", branch: "feature/parent" });
+  const child = () => wt("child", { path: "/repo/parent/child", branch: "feature/child" });
+  const deletedIds = (): string[] =>
+    worktreeClientMock.delete.mock.calls.map((call: unknown[]) => String(call[0]));
+
+  it("removes a selected nested worktree before its ancestor starts", async () => {
+    let finishChild: () => void = () => {};
+    worktreeClientMock.delete.mockImplementation((id: string) =>
+      id === "child"
+        ? new Promise<void>((resolve) => {
+            finishChild = resolve;
+          })
+        : Promise.resolve()
+    );
+    const { hook } = setup(["parent", "child"], [parent(), child()]);
+    await openAndSettle(hook);
+
+    let confirmed!: Promise<void>;
+    act(() => {
+      confirmed = hook.result.current.handleConfirm();
+    });
+    await flush();
+    expect(deletedIds()).toEqual(["child"]);
+
+    await act(async () => {
+      finishChild();
+      await confirmed;
+    });
+    expect(deletedIds()).toEqual(["child", "parent"]);
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "success", title: "Removed 2 worktrees" })
+    );
+  });
+
+  it("keeps the ancestor when a nested worktree fails", async () => {
+    worktreeClientMock.delete.mockImplementation((id: string) =>
+      id === "child" ? Promise.reject(new Error("Filesystem busy")) : Promise.resolve()
+    );
+    const { hook } = setup(["parent", "child"], [parent(), child()]);
+    await openAndSettle(hook);
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+
+    expect(deletedIds()).toEqual(["child"]);
+    // The parent comes first in selection order, but its failure only echoes
+    // the child's, so the child's cause is the one shown.
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        title: "Couldn't remove worktrees",
+        message: "Filesystem busy",
+      })
+    );
+  });
+
+  it("keeps every ancestor above a failed nested worktree and runs the rest", async () => {
+    worktreeClientMock.delete.mockImplementation((id: string) =>
+      id === "child" ? Promise.reject(new Error("Filesystem busy")) : Promise.resolve()
+    );
+    const other = wt("other", { path: "/repo/other", branch: "feature/other" });
+    const grandchild = wt("grandchild", {
+      path: "/repo/parent/child/grandchild",
+      branch: "feature/grandchild",
+    });
+    const { hook } = setup(
+      ["parent", "child", "grandchild", "other"],
+      [parent(), child(), grandchild, other]
+    );
+    await openAndSettle(hook);
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+
+    const deleted = deletedIds();
+    expect(deleted.indexOf("grandchild")).toBeLessThan(deleted.indexOf("child"));
+    expect(deleted).not.toContain("parent");
+    expect(deleted).toContain("other");
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "warning", title: "Removed 2 of 4 worktrees" })
+    );
+    expect(logErrorMock).toHaveBeenCalledWith("Bulk remove failed for child", expect.anything());
+  });
+
+  it("names every failed nested worktree when it keeps the ancestor", async () => {
+    worktreeClientMock.delete.mockImplementation((id: string) =>
+      id === "parent" ? Promise.resolve() : Promise.reject(new Error("Filesystem busy"))
+    );
+    const second = wt("second", { path: "/repo/parent/second", branch: "feature/second" });
+    const { hook } = setup(["child", "second", "parent"], [parent(), child(), second]);
+    await openAndSettle(hook);
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+
+    expect(deletedIds()).not.toContain("parent");
+    expect(logErrorMock).toHaveBeenCalledTimes(2);
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", message: "Filesystem busy" })
+    );
+  });
+
+  it("does not order siblings whose names merely share a prefix", async () => {
+    worktreeClientMock.delete.mockResolvedValue(undefined);
+    const a = wt("a", { path: "/repo/wt" });
+    const b = wt("b", { path: "/repo/wt-other" });
+    const { hook } = setup(["a", "b"], [a, b]);
+    await openAndSettle(hook);
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+
+    expect(deletedIds()).toEqual(["a", "b"]);
+  });
+});

@@ -202,6 +202,9 @@ describe("WorkspaceService.deleteWorktree", () => {
 
     service["projectRootPath"] = "/test/root";
     service["git"] = mockSimpleGit as any;
+    // The nested-worktree guard reads git's registry fresh on every delete.
+    // Empty here so fixtures that only register monitors see exactly those.
+    vi.spyOn(service["listService"], "list").mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -1607,6 +1610,273 @@ describe("WorkspaceService.deleteWorktree", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("nested registered worktrees (#12789)", () => {
+    const originalPlatform = process.platform;
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    });
+
+    async function withPresentPaths(present: string[]): Promise<void> {
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+        if (present.includes(n(p as string))) return undefined;
+        throw enoent();
+      });
+    }
+
+    function removeCalls() {
+      return mockSimpleGit.raw.mock.calls.filter(
+        (c) => Array.isArray(c[0]) && c[0][0] === "worktree"
+      );
+    }
+
+    // Assigned rather than spied: `vi.spyOn` cannot name a private method
+    // without widening the service to `any`.
+    function stubTeardown(impl: () => Promise<void> = async () => {}) {
+      const teardown = vi.fn(impl);
+      service["runLifecycleTeardown"] = teardown;
+      return teardown;
+    }
+
+    function failureError(): string | undefined {
+      const call = mockSendEvent.mock.calls.find(
+        (c) => c[0]?.type === "delete-worktree-result" && c[0]?.success === false
+      );
+      return call?.[0]?.error;
+    }
+
+    it("refuses a parent that contains a registered worktree, naming it, before teardown", async () => {
+      await withPresentPaths(["/test/worktree", "/test/worktree/nested"]);
+      const teardownSpy = stubTeardown();
+      createAndRegisterMonitor();
+      createAndRegisterMonitor({ id: "/test/worktree/nested", path: "/test/worktree/nested" });
+
+      await service.deleteWorktree("req-nested", "/test/worktree");
+
+      expect(failureError()).toContain("/test/worktree/nested");
+      expect(teardownSpy).not.toHaveBeenCalled();
+      expect(removeCalls()).toEqual([]);
+      expect(service["monitors"].has("/test/worktree")).toBe(true);
+    });
+
+    it("is not bypassed by force", async () => {
+      await withPresentPaths(["/test/worktree", "/test/worktree/nested"]);
+      createAndRegisterMonitor();
+      createAndRegisterMonitor({ id: "/test/worktree/nested", path: "/test/worktree/nested" });
+
+      await service.deleteWorktree("req-nested-force", "/test/worktree", true);
+
+      expect(failureError()).toContain("/test/worktree/nested");
+      expect(removeCalls()).toEqual([]);
+    });
+
+    it("rejects through the port path when throwOnError is set", async () => {
+      await withPresentPaths(["/test/worktree", "/test/worktree/a/b"]);
+      createAndRegisterMonitor();
+      createAndRegisterMonitor({ id: "/test/worktree/a/b", path: "/test/worktree/a/b" });
+
+      await expect(
+        service.deleteWorktree("req-nested-port", "/test/worktree", true, false, "mut-1", true)
+      ).rejects.toThrow("/test/worktree/a/b");
+    });
+
+    it("catches a nested worktree git knows about before any monitor does", async () => {
+      await withPresentPaths(["/test/worktree", "/test/worktree/from-shell"]);
+      vi.mocked(service["listService"].list).mockResolvedValue([
+        { path: "/test/root", branch: "main", bare: false, isMainWorktree: true },
+        { path: "/test/worktree", branch: "feature/test", bare: false, isMainWorktree: false },
+        {
+          path: "/test/worktree/from-shell",
+          branch: "feature/shell",
+          bare: false,
+          isMainWorktree: false,
+        },
+      ]);
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-shell", "/test/worktree", true);
+
+      expect(vi.mocked(service["listService"].list)).toHaveBeenCalledWith({ forceRefresh: true });
+      expect(failureError()).toContain("/test/worktree/from-shell");
+      expect(removeCalls()).toEqual([]);
+    });
+
+    it("refuses when the worktree list cannot be read", async () => {
+      await withPresentPaths(["/test/worktree"]);
+      vi.mocked(service["listService"].list).mockRejectedValue(new Error("index.lock exists"));
+      const teardownSpy = stubTeardown();
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-list-fail", "/test/worktree", true);
+
+      expect(failureError()).toContain("index.lock exists");
+      expect(failureError()).not.toContain("undefined");
+      expect(teardownSpy).not.toHaveBeenCalled();
+      expect(removeCalls()).toEqual([]);
+    });
+
+    it("protects a main worktree nested inside the target", async () => {
+      await withPresentPaths(["/test/worktree", "/test/worktree/main"]);
+      createAndRegisterMonitor();
+      createAndRegisterMonitor({
+        id: "/test/worktree/main",
+        path: "/test/worktree/main",
+        isMainWorktree: true,
+      });
+
+      await service.deleteWorktree("req-main-nested", "/test/worktree", true);
+
+      expect(failureError()).toContain("/test/worktree/main");
+      expect(removeCalls()).toEqual([]);
+    });
+
+    it("still deletes the nested worktree itself", async () => {
+      await withPresentPaths(["/test/worktree", "/test/worktree/nested"]);
+      createAndRegisterMonitor();
+      createAndRegisterMonitor({ id: "/test/worktree/nested", path: "/test/worktree/nested" });
+
+      await service.deleteWorktree("req-child", "/test/worktree/nested");
+
+      expect(failureError()).toBeUndefined();
+      expect(service["monitors"].has("/test/worktree/nested")).toBe(false);
+      expect(service["monitors"].has("/test/worktree")).toBe(true);
+    });
+
+    it("does not treat a sibling whose name extends the parent's as nested", async () => {
+      await withPresentPaths(["/test/worktree", "/test/worktree-other"]);
+      createAndRegisterMonitor();
+      createAndRegisterMonitor({ id: "/test/worktree-other", path: "/test/worktree-other" });
+
+      await service.deleteWorktree("req-sibling", "/test/worktree");
+
+      expect(failureError()).toBeUndefined();
+      expect(service["monitors"].has("/test/worktree")).toBe(false);
+    });
+
+    it("skips a nested entry whose folder is already gone", async () => {
+      await withPresentPaths(["/test/worktree"]);
+      createAndRegisterMonitor();
+      createAndRegisterMonitor({ id: "/test/worktree/stale", path: "/test/worktree/stale" });
+
+      await service.deleteWorktree("req-stale", "/test/worktree");
+
+      expect(failureError()).toBeUndefined();
+      expect(service["monitors"].has("/test/worktree")).toBe(false);
+    });
+
+    it("counts a nested entry it cannot probe as present", async () => {
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+        const target = n(p as string);
+        if (target === "/test/worktree") return undefined;
+        if (target === "/test/worktree/nested")
+          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        throw enoent();
+      });
+      createAndRegisterMonitor();
+      createAndRegisterMonitor({ id: "/test/worktree/nested", path: "/test/worktree/nested" });
+
+      await service.deleteWorktree("req-eacces", "/test/worktree", true);
+
+      expect(failureError()).toContain("/test/worktree/nested");
+      expect(removeCalls()).toEqual([]);
+    });
+
+    it("matches across case and separators on Windows", async () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      await withPresentPaths(["C:/Repo/wt", "c:/repo/WT/nested"]);
+      createAndRegisterMonitor({ id: "C:\\Repo\\wt", path: "C:\\Repo\\wt" });
+      createAndRegisterMonitor({ id: "c:/repo/WT/nested", path: "c:/repo/WT/nested" });
+
+      await service.deleteWorktree("req-win", "C:\\Repo\\wt", true);
+
+      expect(failureError()).toContain("c:/repo/WT/nested");
+      expect(removeCalls()).toEqual([]);
+    });
+
+    it("probes every spelling that folds together, not just the first", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      // Two directories on a case-sensitive volume: the first listed is gone.
+      await withPresentPaths(["/test/worktree", "/test/worktree/child"]);
+      createAndRegisterMonitor();
+      createAndRegisterMonitor({ id: "/test/worktree/Child", path: "/test/worktree/Child" });
+      createAndRegisterMonitor({ id: "/test/worktree/child", path: "/test/worktree/child" });
+
+      await service.deleteWorktree("req-folded", "/test/worktree", true);
+
+      expect(failureError()).toContain("/test/worktree/child");
+      expect(removeCalls()).toEqual([]);
+    });
+
+    it("leaves phantom-entry recovery independent of the worktree list (#6669)", async () => {
+      // Target folder already gone: the prune branch deletes no files.
+      await withPresentPaths([]);
+      vi.mocked(service["listService"].list).mockRejectedValue(new Error("git not found"));
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-phantom", "/test/worktree");
+
+      expect(failureError()).toBeUndefined();
+      expect(service["monitors"].has("/test/worktree")).toBe(false);
+    });
+
+    it("re-checks before a lock retry", async () => {
+      vi.useFakeTimers();
+      try {
+        await withPresentPaths(["/test/worktree", "/test/worktree/during-retry"]);
+        let removeAttempts = 0;
+        mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+          if (args[0] === "worktree" && args[1] === "remove") {
+            removeAttempts += 1;
+            // Registered while the first attempt holds the lock.
+            createAndRegisterMonitor({
+              id: "/test/worktree/during-retry",
+              path: "/test/worktree/during-retry",
+            });
+            throw new Error("fatal: failed to delete '/test/worktree': Permission denied");
+          }
+          return undefined;
+        });
+        createAndRegisterMonitor();
+
+        const pending = service.deleteWorktree("req-retry-nested", "/test/worktree", true);
+        await vi.advanceTimersByTimeAsync(250);
+        await pending;
+
+        expect(removeAttempts).toBe(1);
+        expect(failureError()).toContain("/test/worktree/during-retry");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("compares case-sensitively on Linux", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      await withPresentPaths(["/test/worktree", "/test/Worktree/nested"]);
+      createAndRegisterMonitor();
+      createAndRegisterMonitor({ id: "/test/Worktree/nested", path: "/test/Worktree/nested" });
+
+      await service.deleteWorktree("req-linux", "/test/worktree");
+
+      expect(failureError()).toBeUndefined();
+    });
+
+    it("re-checks immediately before git worktree remove", async () => {
+      await withPresentPaths(["/test/worktree", "/test/worktree/late"]);
+      createAndRegisterMonitor();
+      // Registered while teardown runs: only the pre-removal re-check sees it.
+      stubTeardown(async () => {
+        createAndRegisterMonitor({ id: "/test/worktree/late", path: "/test/worktree/late" });
+      });
+
+      await service.deleteWorktree("req-late", "/test/worktree", true);
+
+      expect(failureError()).toContain("/test/worktree/late");
+      expect(removeCalls()).toEqual([]);
     });
   });
 });

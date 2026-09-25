@@ -13,6 +13,7 @@ import { logDebug } from "@/utils/logger";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { NESTED_WORKTREE_DELETE_MARKER } from "@shared/utils/nestedWorktrees";
 import { issueNumberBelongsToLinkedPr } from "@shared/utils/worktreeIssueProjection";
 import { worktreeNameFromId } from "@/lib/notificationSourceLabel";
 
@@ -242,6 +243,7 @@ const PERMANENT_ERROR_PATTERNS = [
   "Cannot delete branch:",
   BRANCH_KEPT_MARKER,
   "(detached HEAD)",
+  NESTED_WORKTREE_DELETE_MARKER,
 ];
 
 function isPermanentDeleteError(message: string): boolean {

@@ -5,6 +5,10 @@ import { existsSync } from "fs";
 import { stat, readFile, readdir, access, mkdir, realpath } from "fs/promises";
 import { resolve as pathResolve, isAbsolute, dirname } from "path";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
+import {
+  findNestedWorktreePaths,
+  nestedWorktreeDeleteMessage,
+} from "../../shared/utils/nestedWorktrees.js";
 import { sliceUtf8Window } from "../../shared/utils/boundedOutput.js";
 import {
   GIT_FILE_DIFF_MAX_BYTES,
@@ -4395,6 +4399,15 @@ export class WorkspaceService {
         throw new Error("Cannot delete the main worktree");
       }
 
+      // Before every other guard and before teardown: no consent covers this,
+      // so there is no reason to stop anything for a delete that cannot run.
+      // A checkout that is already gone has nothing left inside it to lose and
+      // its prune branch deletes no files, so the #6669 recovery path does not
+      // depend on the registry being readable.
+      if (!(await pathIsMissing(monitor.path))) {
+        await this.guardNestedWorktreeDelete(monitor);
+      }
+
       const wtChanges = monitor.getWorktreeChanges();
       if (!force && (wtChanges?.changedFileCount ?? 0) > 0) {
         const fileChanges = wtChanges?.changes ?? [];
@@ -4492,6 +4505,8 @@ export class WorkspaceService {
           // narrows the window rather than closing it; closing it needs a
           // prepare/commit host API, which is a separate change.
           const needsMechanicalForce = await this.guardSubmoduleDelete(monitor, worktreeId, force);
+          // Last, so no other await sits between it and the removal.
+          await this.guardNestedWorktreeDelete(monitor);
 
           const args = ["worktree", "remove"];
           if (force || needsMechanicalForce) {
@@ -4501,7 +4516,14 @@ export class WorkspaceService {
           // positional rather than parsed as a flag.
           args.push("--end-of-options", monitor.path);
           markHostPerformance("wtdelete.git-remove:start", { worktreeId });
-          const removeResult = await this.removeGitWorktreeWithRetry(this.git, args, monitor.path);
+          const removeResult = await this.removeGitWorktreeWithRetry(
+            this.git,
+            args,
+            monitor.path,
+            // A lock retry waits up to seconds between attempts; a worktree
+            // nested in that window must stop the next one.
+            () => this.guardNestedWorktreeDelete(monitor)
+          );
           markHostPerformance("wtdelete.git-remove:end", { worktreeId });
           if (removeResult === "stale") {
             try {
@@ -4618,6 +4640,52 @@ export class WorkspaceService {
       // resolves via the delete-worktree-result event, not the promise return).
       if (throwOnError) throw error;
     }
+  }
+
+  /**
+   * Refuse to delete a worktree whose directory holds another registered
+   * worktree. `git worktree remove` deletes the target directory recursively
+   * with no check for descendants, so the nested checkout goes with it — and a
+   * gitignored nested checkout leaves the parent looking clean. Nothing here is
+   * force-consentable: `force` means "discard this worktree's uncommitted
+   * changes", and bulk removal passes it for every target.
+   *
+   * The registry is git's own, read fresh, plus the monitors: a worktree added
+   * from a shell moments ago has no monitor yet. A registry that cannot be read
+   * refuses the delete rather than reading as "nothing nested". The main
+   * worktree is a candidate like any other — it cannot be deleted itself, but
+   * nothing stops an ancestor's delete from taking it.
+   *
+   * A nested worktree whose folder is definitively gone is skipped, or a stale
+   * entry would block its parent forever. A probe that cannot tell counts as
+   * present, which is the safe direction.
+   *
+   * Case is folded where the default filesystem is case-insensitive. On a
+   * case-sensitive APFS volume that can refuse a delete that was safe; the
+   * other direction loses a checkout.
+   */
+  private async guardNestedWorktreeDelete(monitor: WorktreeMonitor): Promise<void> {
+    let registered: string[];
+    try {
+      const records = await this.listService.list({ forceRefresh: true });
+      registered = records.filter((record) => !record.bare).map((record) => record.path);
+    } catch (error) {
+      throw new Error(
+        `Couldn't read the worktree list to check for worktrees inside this one: ${formatErrorMessage(error, "unknown error")}`,
+        { cause: error }
+      );
+    }
+    const candidates = [...registered, ...[...this.monitors.values()].map((m) => m.path)];
+    const caseInsensitive = process.platform === "win32" || process.platform === "darwin";
+    // Every spelling is probed: two that fold together on a case-sensitive
+    // volume can be two directories, one gone and one not.
+    const nested: string[] = [];
+    for (const candidate of findNestedWorktreePaths(monitor.path, candidates, {
+      caseInsensitive,
+    })) {
+      if (!(await pathIsMissing(candidate))) nested.push(candidate);
+    }
+    if (nested.length > 0) throw new Error(nestedWorktreeDeleteMessage(nested));
   }
 
   /**
@@ -5005,9 +5073,11 @@ export class WorkspaceService {
   private async removeGitWorktreeWithRetry(
     git: SimpleGit,
     args: string[],
-    worktreePath: string
+    worktreePath: string,
+    beforeRetry: () => Promise<void>
   ): Promise<"removed" | "stale"> {
     for (let attempt = 0; ; attempt++) {
+      if (attempt > 0) await beforeRetry();
       try {
         await git.raw(args);
         return "removed";
