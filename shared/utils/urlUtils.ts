@@ -147,6 +147,25 @@ export function isLocalhostUrl(url: string): boolean {
 }
 
 /**
+ * True for an http(s) loopback URL whose port is one of `forwardedPorts`: in a
+ * window bound to a remote host, the local ports forwarded to that host are
+ * the host's localhost, and every other local port is this machine's.
+ */
+export function isForwardedLoopbackUrl(url: string, forwardedPorts: ReadonlySet<number>): boolean {
+  if (forwardedPorts.size === 0) return false;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    if (parsed.username || parsed.password) return false;
+    if (!isLoopbackHostname(parsed.hostname)) return false;
+    const port = parsed.port ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
+    return forwardedPorts.has(port);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * True for the stable dev-preview proxy origin: an `http://*.localhost` subdomain (#9100).
  * Chromium maps every `*.localhost` host to loopback as a Secure Context, so these never reach
  * the public network — but `isLocalhostUrl` (exact loopback only) rejects them, so the

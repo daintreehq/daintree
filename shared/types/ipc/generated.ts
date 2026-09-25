@@ -1537,7 +1537,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("../plugin.js").PluginWorktreeStatus | null;
   };
   "port-forwards:forward": {
-    args: [_payload: import("./portForwards.js").ForwardPortPayload];
+    args: [payload: import("./portForwards.js").ForwardPortPayload];
     result: import("./portForwards.js").PortForward;
   };
   "port-forwards:list": {
@@ -1545,11 +1545,11 @@ export interface GeneratedIpcInvokeMap {
     result: import("./portForwards.js").PortForward[];
   };
   "port-forwards:list-host-ports": {
-    args: [_payload: { hostId: string }];
+    args: [payload: { hostId: string }];
     result: import("./portForwards.js").HostListeningPort[];
   };
   "port-forwards:stop": {
-    args: [_payload: { forwardId: string }];
+    args: [payload: { forwardId: string }];
     result: void;
   };
   "portal:close-tab": {

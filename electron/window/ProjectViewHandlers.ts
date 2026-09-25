@@ -34,6 +34,31 @@ import type { ViewEntry } from "./ProjectViewManagerTypes.js";
 import { rendererReloadNotice } from "./rendererReloadNotice.js";
 import { getTerminationIntent } from "../services/processTerminationIntent.js";
 
+/**
+ * Decides which URLs a webview in a remote-bound view may load: that host's
+ * forwarded ports instead of this machine's localhost. Returns null for a
+ * view that runs locally, which keeps the local rule.
+ */
+export type RemoteWebviewSrcGate = (webContentsId: number, src: string) => boolean | null;
+
+let remoteWebviewSrcGate: RemoteWebviewSrcGate | null = null;
+
+export function setRemoteWebviewSrcGate(gate: RemoteWebviewSrcGate | null): () => void {
+  remoteWebviewSrcGate = gate;
+  return () => {
+    if (remoteWebviewSrcGate === gate) remoteWebviewSrcGate = null;
+  };
+}
+
+/** Whether a view may attach a webview loading `src`. */
+export function isWebviewSrcAllowed(webContentsId: number, src: string): boolean {
+  const remote = remoteWebviewSrcGate?.(webContentsId, src) ?? null;
+  if (remote !== null) return remote;
+  // Dev-preview webviews load the stable proxy origin (dp-*.localhost), which
+  // isLocalhostUrl rejects — accept it explicitly (#9100).
+  return isLocalhostUrl(src) || isDevPreviewProxyUrl(src);
+}
+
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
 
@@ -77,9 +102,7 @@ export function setupViewHandlers(
     webPreferences: Electron.WebPreferences,
     params: Record<string, string>
   ) => {
-    // Dev-preview webviews load the stable proxy origin (dp-*.localhost), which
-    // isLocalhostUrl rejects — accept it explicitly (#9100).
-    const isAllowedLocalhostUrl = isLocalhostUrl(params.src) || isDevPreviewProxyUrl(params.src);
+    const isAllowedLocalhostUrl = isWebviewSrcAllowed(wc.id, params.src);
     const partition = params.partition ?? "";
     const isValidPartition =
       isBrowserPartition(partition) ||

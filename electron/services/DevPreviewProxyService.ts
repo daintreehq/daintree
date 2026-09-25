@@ -82,6 +82,23 @@ export type ResolveUpstream = (
 ) => DevPreviewUpstreamResolution | { port: number; isHttps: boolean } | null;
 
 /**
+ * Second chance for a subdomain the local resolver doesn't know: a preview
+ * whose dev server runs on the window's remote host, answered with the local
+ * port that forwards to it. Returns null synchronously when there is nothing
+ * to ask, so a machine with no remote hosts never waits on it.
+ */
+export type ResolveRemoteUpstream = (
+  subdomain: string
+) => Promise<RemoteUpstreamResolution | null> | null;
+
+/**
+ * A remote answer. `advertisedPort` is the port the dev server has on its own
+ * host when the local forward had to use another, so its absolute redirects
+ * to itself still land back on the preview origin.
+ */
+export type RemoteUpstreamResolution = DevPreviewUpstreamResolution & { advertisedPort?: number };
+
+/**
  * Failure report emitted toward the dev-preview diagnostics timeline. Carries the
  * subdomain (never the request path/body), the transport, a classified cause, and
  * the raw errno code when one exists. Purely observational — proxy behavior is
@@ -115,7 +132,14 @@ export class DevPreviewProxyService {
   // Weak keys: an aborted request is collected without an explicit delete.
   private readonly inFlightOrigins = new WeakMap<
     http.IncomingMessage,
-    { upstreamOrigin: string; upstreamProtocol: string; upstreamPort: string; proxyOrigin: URL }
+    {
+      upstreamOrigin: string;
+      upstreamProtocol: string;
+      upstreamPort: string;
+      /** The dev server's own port on a remote host, when the forward reaches it on another. */
+      advertisedPort: string | null;
+      proxyOrigin: URL;
+    }
   >();
   private actualPort = 0;
   private portFallback = false;
@@ -136,7 +160,8 @@ export class DevPreviewProxyService {
 
   constructor(
     private readonly resolveUpstreamFn: ResolveUpstream,
-    private readonly onDiagnostic?: (event: DevPreviewProxyDiagnostic) => void
+    private readonly onDiagnostic?: (event: DevPreviewProxyDiagnostic) => void,
+    private readonly resolveRemoteUpstreamFn?: ResolveRemoteUpstream
   ) {}
 
   /** The port the proxy actually bound to (43000, or an OS-assigned fallback). 0 until started. */
@@ -269,7 +294,7 @@ export class DevPreviewProxyService {
       return;
     }
 
-    const { subdomain, resolution } = this.resolveUpstream(req.headers.host);
+    const { subdomain, resolution } = await this.resolveWithRemote(req.headers.host);
     if (resolution.kind === "unknown-subdomain") {
       this.reportFailure(subdomain, "http", "no-session");
       this.send502(res, "No dev server is registered for this preview.");
@@ -287,7 +312,7 @@ export class DevPreviewProxyService {
       // and never disables verification for a remote host (#9974).
       const scheme = resolution.isHttps ? "https" : "http";
       const target = `${scheme}://${UPSTREAM_HOST}:${resolution.port}`;
-      this.rememberRequestOrigins(req, target);
+      this.rememberRequestOrigins(req, target, resolution.advertisedPort);
       await this.proxy!.web(req, res, {
         target,
         ...(resolution.isHttps ? { secure: false } : {}),
@@ -300,7 +325,11 @@ export class DevPreviewProxyService {
   }
 
   /** Snapshot the endpoints this request is being proxied between, for the response hook. */
-  private rememberRequestOrigins(req: http.IncomingMessage, target: string): void {
+  private rememberRequestOrigins(
+    req: http.IncomingMessage,
+    target: string,
+    advertisedPort?: number
+  ): void {
     const host = req.headers.host;
     if (!host) return;
     let proxyOrigin: URL;
@@ -323,6 +352,10 @@ export class DevPreviewProxyService {
       upstreamOrigin: upstream.origin,
       upstreamProtocol: upstream.protocol,
       upstreamPort: upstream.port,
+      advertisedPort:
+        advertisedPort !== undefined && String(advertisedPort) !== upstream.port
+          ? String(advertisedPort)
+          : null,
       proxyOrigin,
     });
   }
@@ -355,7 +388,9 @@ export class DevPreviewProxyService {
       return;
     }
     if (destination.protocol !== origins.upstreamProtocol) return;
-    if (destination.port !== origins.upstreamPort) return;
+    if (destination.port !== origins.upstreamPort && destination.port !== origins.advertisedPort) {
+      return;
+    }
     if (!LOOPBACK_HOSTNAMES.has(destination.hostname.toLowerCase())) return;
 
     // Retarget the parsed URL rather than rebuilding the string: `${pathname}${search}${hash}`
@@ -375,7 +410,7 @@ export class DevPreviewProxyService {
     this.sockets.add(socket);
     socket.once("close", () => this.sockets.delete(socket));
 
-    const { subdomain, resolution } = this.resolveUpstream(req.headers.host);
+    const { subdomain, resolution } = await this.resolveWithRemote(req.headers.host);
     if (resolution.kind !== "ok") {
       this.reportFailure(
         subdomain,
@@ -405,6 +440,23 @@ export class DevPreviewProxyService {
       const classified = this.classifyUpstreamError(err);
       this.reportFailure(subdomain, "ws", classified.cause, classified.code);
       socket.destroy();
+    }
+  }
+
+  /** Local resolution, then the remote host's for a subdomain this machine doesn't know. */
+  private async resolveWithRemote(host: string | undefined): Promise<{
+    subdomain: string | null;
+    resolution: RemoteUpstreamResolution;
+  }> {
+    const local = this.resolveUpstream(host);
+    if (local.resolution.kind !== "unknown-subdomain" || !local.subdomain) return local;
+    const pending = this.resolveRemoteUpstreamFn?.(local.subdomain);
+    if (!pending) return local;
+    try {
+      const remote = await pending;
+      return remote ? { subdomain: local.subdomain, resolution: remote } : local;
+    } catch {
+      return local;
     }
   }
 

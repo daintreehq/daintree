@@ -24,10 +24,42 @@ import type {
   DevPreviewProxyInfo,
   DevPreviewMintBrowserTokenResult,
   DevPreviewDiagnosticsResult,
+  DevPreviewUpstreamResolution,
 } from "../../../shared/types/ipc/devPreview.js";
 import type { DevPreviewSessionService as DevPreviewSessionServiceType } from "../../services/DevPreviewSessionService.js";
-import type { DevPreviewProxyService as DevPreviewProxyServiceType } from "../../services/DevPreviewProxyService.js";
+import type {
+  DevPreviewProxyService as DevPreviewProxyServiceType,
+  ResolveRemoteUpstream,
+} from "../../services/DevPreviewProxyService.js";
 import { getHibernationService } from "../../services/HibernationService.js";
+
+/**
+ * Resolves a preview subdomain this machine doesn't know to a dev server on
+ * the window's host, reached through a local forward. Installed by Remote
+ * Hosts; without it an unknown subdomain stays a 502 as before.
+ */
+export type RemoteDevPreviewResolver = ResolveRemoteUpstream;
+
+let remoteResolver: RemoteDevPreviewResolver | null = null;
+let liveSessionService: DevPreviewSessionServiceType | null = null;
+let liveProxyPort = 0;
+
+/** The port this machine's preview proxy listens on, or 0 before it has started. */
+export function getDevPreviewProxyPort(): number {
+  return liveProxyPort;
+}
+
+export function setRemoteDevPreviewResolver(resolver: RemoteDevPreviewResolver | null): () => void {
+  remoteResolver = resolver;
+  return () => {
+    if (remoteResolver === resolver) remoteResolver = null;
+  };
+}
+
+/** This machine's own answer for a subdomain, for a Shell whose preview runs here. */
+export function resolveLocalDevPreviewUpstream(subdomain: string): DevPreviewUpstreamResolution {
+  return liveSessionService?.resolveUpstream(subdomain) ?? { kind: "unknown-subdomain" };
+}
 
 export function registerDevPreviewHandlers(deps: HandlerDependencies): () => void {
   let sessionService: DevPreviewSessionServiceType | null = null;
@@ -51,10 +83,12 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
             // Failure reports land on the owning session's diagnostics timeline.
             // The session service may not exist yet — drop the report then; the
             // 502 body is the receipt for that case.
-            (event) => sessionService?.recordProxyDiagnostic(event)
+            (event) => sessionService?.recordProxyDiagnostic(event),
+            (subdomain) => (remoteResolver ? remoteResolver(subdomain) : null)
           );
           await svc.start();
           proxyService = svc;
+          liveProxyPort = svc.port;
           return svc;
         })
         .catch((err) => {
@@ -96,6 +130,7 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
               broadcastToRenderer(CHANNELS.DEV_PREVIEW_ALL_SESSIONS_CHANGED, payload);
             }
           );
+          liveSessionService = sessionService;
           return sessionService;
         })
         .catch((err) => {
@@ -272,9 +307,11 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
   return () => {
     unsubHibernation();
     if (sessionService) {
+      if (liveSessionService === sessionService) liveSessionService = null;
       sessionService.dispose();
     }
     if (proxyService) {
+      if (liveProxyPort === proxyService.port) liveProxyPort = 0;
       proxyService.dispose();
     }
     cleanups.forEach((dispose) => dispose());
