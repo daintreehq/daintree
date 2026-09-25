@@ -588,3 +588,101 @@ describe("pluginCapability consent bridge — decisions", () => {
     }
   });
 });
+
+// ── Host mode: consent goes to the frontend that drives the project ──
+
+import {
+  _resetPluginFrontendRoutingForTesting,
+  setPluginFrontendRouter,
+  type PluginFrontend,
+} from "../../../services/plugin/pluginFrontendRouting.js";
+import { PluginFrontendMethod } from "../../../services/plugin/pluginFrontendRequests.js";
+import type { ClientEndpoint } from "../../endpoint.js";
+
+describe("pluginCapability consent bridge — Host mode routing", () => {
+  let frontend: PluginFrontend = { kind: "local" };
+
+  beforeEach(() => {
+    _resetPluginFrontendRoutingForTesting();
+    setPluginFrontendRouter({ resolve: () => frontend, onChange: () => () => {} });
+  });
+
+  afterEach(() => {
+    _resetPluginFrontendRoutingForTesting();
+  });
+
+  it("denies at once when nobody is attached — no dialog here, no hang", async () => {
+    frontend = { kind: "none", reason: "vacant" };
+    const dispose = registerPluginCapabilityHandlers();
+    const settled = await startGatedCall();
+    expect(settled.ok).toBe(false);
+    expect((settled as { err: Error }).err.message).toMatch(/^PERMISSION_REQUIRED:/);
+    expect(harness!.appWebContents.send).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it("asks the driving remote frontend and honours its decision", async () => {
+    const request = vi.fn(async () => "approved-once");
+    frontend = {
+      kind: "remote",
+      endpoint: { request, isClosed: () => false } as unknown as ClientEndpoint,
+    };
+    const dispose = registerPluginCapabilityHandlers();
+    await expect(startGatedCall()).resolves.toEqual({ ok: true });
+    expect(request).toHaveBeenCalledWith(
+      PluginFrontendMethod.CONSENT,
+      {
+        pluginId: "acme.x",
+        pluginDisplayName: "Acme",
+        capability: "shell:exec",
+        declaredCapabilities: ["shell:exec"],
+      },
+      { timeoutMs: expect.any(Number) }
+    );
+    expect(harness!.appWebContents.send).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it("treats a remote answer it can't read, or a lost link, as undeliverable", async () => {
+    frontend = {
+      kind: "remote",
+      endpoint: {
+        request: vi.fn(async () => "yes please"),
+        isClosed: () => false,
+      } as unknown as ClientEndpoint,
+    };
+    const dispose = registerPluginCapabilityHandlers();
+    expect((await startGatedCall()).ok).toBe(false);
+    frontend = {
+      kind: "remote",
+      endpoint: {
+        request: vi.fn(async () => {
+          throw new Error("HOST_DISCONNECTED");
+        }),
+        isClosed: () => false,
+      } as unknown as ClientEndpoint,
+    };
+    expect((await startGatedCall()).ok).toBe(false);
+    dispose();
+  });
+});
+
+describe("pluginCapability consent bridge — a driver that lost the lease", () => {
+  afterEach(() => _resetPluginFrontendRoutingForTesting());
+
+  it("does not accept an approval from a window that no longer drives the project", async () => {
+    _resetPluginFrontendRoutingForTesting();
+    const former = { isClosed: () => false } as unknown as ClientEndpoint;
+    const current = { request: vi.fn(), isClosed: () => false } as unknown as ClientEndpoint;
+    let frontend: PluginFrontend = { kind: "remote", endpoint: former };
+    (former as { request: unknown }).request = vi.fn(async () => {
+      frontend = { kind: "remote", endpoint: current };
+      return "approved-and-pin";
+    });
+    setPluginFrontendRouter({ resolve: () => frontend, onChange: () => () => {} });
+    const dispose = registerPluginCapabilityHandlers();
+    const settled = await startGatedCall();
+    expect(settled.ok).toBe(false);
+    dispose();
+  });
+});

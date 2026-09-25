@@ -97,6 +97,14 @@ A plugin can put text in front of an agent two ways, and neither submits it. `ho
 
 That is the boundary for the hand-off APIs: through `sendToAgent` or a drag, a plugin can propose work to an agent, never start it. Two routes do start work. `host.sendToActiveAgent` with `{ submit: true }` submits, behind the same `agent:input` grant. And `host.dispatch("agent.launch", { prompt })` opens a new agent whose first turn is that prompt; it is a safe-tier action, so it needs no capability, but it only ever starts a fresh agent the user can see, never types into one already working. None of this constrains a plugin's own `main`, which can already do anything the user can — it bounds what the host-mediated path does on a plugin's behalf.
 
+## Plugins on a remote host
+
+A window can be attached to another machine running as a host. A plugin's main code runs on the host, next to the project, but its views run in the window's renderer, on the machine the person is sitting at, with the same `window.electron` as any view. So trusting a plugin from such a window also authorises its view code on this machine, and the trust banner, the capability consent dialog and the install confirmation say so and name both machines ("Trusting 'Graph View' on studio-01 also runs its view code on this Mac.").
+
+The rest follows from where the person is. Prompts, first-use capability consent, toasts and the clipboard go to the window that drives the project; the host asks that window's Daintree, which validates every request, scopes it to the window's own project and shows it through its own dialogs. First-use consent nobody is attached to answer is a denial. Opening files on the host's screen is refused for a driver on another machine. A view bundle is fetched from the host only for a window that drives a project which can see the plugin, and the window's cached copy is dropped once the project closes or the drive lease moves.
+
+A narrower bridge for views loaded from another machine is planned, not shipped.
+
 ## Agent MCP endpoints (`mcp:expose`)
 
 `contributes.agentMcp` lets a plugin serve tools to the agents running in Daintree's terminals (see [Agent extensions → Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints)). It is a new way for a plugin's code and data to reach an agent, and a new way for an agent to reach the plugin, so it carries its own consent and credential model on top of the capability contract above.

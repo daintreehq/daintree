@@ -44,7 +44,9 @@ import { getWebviewDialogService } from "../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { logWarn } from "../utils/logger.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { isValidRemoteHostId } from "../../shared/types/remoteHosts.js";
+import { parseRemotePluginAssetPath } from "../../shared/types/pluginRemoteView.js";
 
 /**
  * Resolve a `plugin://` authority to the plugin root that serves it.
@@ -1521,6 +1523,89 @@ async function proxyPluginTourAudio(
 }
 
 /**
+ * One `plugin://` asset a host served for a window attached to it. Only the
+ * status and bytes cross from the host: every response header is decided
+ * here, for this machine's requester, exactly as for a local asset.
+ */
+export interface RemotePluginAsset {
+  status: number;
+  body: Uint8Array | null;
+  /** Epoch ms the file last changed on the host, for the V8 code cache validator. */
+  lastModified?: number;
+}
+
+export type RemotePluginAssetProxy = (request: {
+  hostId: string;
+  authority: string;
+  /** Path on the host, still URL-encoded, without a leading slash. */
+  path: string;
+  method: "GET" | "HEAD";
+}) => Promise<RemotePluginAsset>;
+
+let remotePluginAssetProxy: RemotePluginAssetProxy | null = null;
+
+/** Installed by the remote-hosts client; the returned function removes it. */
+export function setRemotePluginAssetProxy(proxy: RemotePluginAssetProxy | null): () => void {
+  remotePluginAssetProxy = proxy;
+  return () => {
+    if (remotePluginAssetProxy === proxy) remotePluginAssetProxy = null;
+  };
+}
+
+async function serveRemotePluginAsset(
+  request: GlobalRequest,
+  target: { hostId: string; authority: string; path: string }
+): Promise<Response> {
+  const proxy = remotePluginAssetProxy;
+  if (!proxy) {
+    return new Response("Not Found", { status: 404, headers: buildPluginErrorHeaders() });
+  }
+  const method = request.method === "HEAD" ? "HEAD" : "GET";
+  let asset: RemotePluginAsset;
+  try {
+    asset = await proxy({ ...target, method });
+  } catch (err) {
+    logWarn("plugin.protocol.remote-failed", {
+      hostId: target.hostId,
+      reason: formatErrorMessage(err, "remote plugin asset fetch failed"),
+    });
+    return new Response("Bad Gateway", { status: 502, headers: buildPluginErrorHeaders() });
+  }
+  if (asset.status !== 200) {
+    const status = asset.status >= 400 && asset.status <= 599 ? asset.status : 502;
+    return new Response(status === 404 ? "Not Found" : "Unavailable", {
+      status,
+      headers: buildPluginErrorHeaders(),
+    });
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(target.path);
+  } catch {
+    decoded = target.path;
+  }
+  const assetPath = stripPluginViewGeneration(decoded)?.path ?? decoded;
+  const stats =
+    asset.lastModified !== undefined && Number.isFinite(asset.lastModified)
+      ? { mtime: new Date(asset.lastModified) }
+      : undefined;
+  const body =
+    method === "HEAD" || asset.body === null
+      ? null
+      : // A copy onto a plain ArrayBuffer: the link hands back views of a shared one.
+        new Uint8Array(asset.body).buffer;
+  return new Response(body, {
+    status: 200,
+    headers: buildPluginHeaders(
+      getMimeType(assetPath),
+      assetPath,
+      stats,
+      trustedAppCorsOrigin(request)
+    ),
+  });
+}
+
+/**
  * Create the plugin:// protocol handler.
  *
  * URL shape: `plugin://{authority}/{relative/path}`. The host segment is an
@@ -1559,6 +1644,18 @@ export function createPluginProtocolHandler(
         status: 404,
         headers: buildPluginErrorHeaders(),
       });
+    }
+
+    // A view of a window attached to another machine: its assets live on that
+    // host and are fetched from it, never resolved against this machine's disk
+    // (the authority was minted there, and an id alias could name a different
+    // local copy of the plugin).
+    const remote = parseRemotePluginAssetPath(url.pathname);
+    if (remote === "malformed") {
+      return new Response("Not Found", { status: 404, headers: buildPluginErrorHeaders() });
+    }
+    if (remote) {
+      return serveRemotePluginAsset(request, { ...remote, authority });
     }
 
     const pluginRoot = getPluginRoot(authority);
@@ -1850,6 +1947,15 @@ function resolvePluginTourAudio(
 /** Point tour remote-audio routes at the live registry; installed beside the root resolver. */
 export function setPluginTourAudioResolver(resolver: GetPluginTourAudio): void {
   cachedPluginTourAudioResolver = resolver;
+}
+
+/**
+ * Serve one of this machine's `plugin://` assets to a window attached from
+ * another machine, through the very handler local views use — same
+ * containment, same symlink and traversal defences.
+ */
+export function fetchLocalPluginAsset(request: GlobalRequest): Promise<Response> {
+  return createPluginProtocolHandler(resolvePluginRoot)(request);
 }
 
 export function registerPluginProtocol(getPluginRoot: GetPluginRootByAuthority): void {

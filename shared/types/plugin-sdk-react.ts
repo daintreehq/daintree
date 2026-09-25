@@ -19,6 +19,13 @@ export interface UseHostChannelResult<TArgs, TResult> {
   invoke: (args: TArgs) => Promise<TResult | undefined>;
   loading: boolean;
   error: Error | null;
+  /**
+   * The latest call failed because the link to the view's host is down
+   * (`error` is a `HostDisconnectedError` or `OutcomeUnknownError`). Cleared by
+   * the next call that gets through. Always `false` for a window on the
+   * plugin's own machine.
+   */
+  disconnected: boolean;
 }
 
 /**
