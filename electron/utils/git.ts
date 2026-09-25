@@ -625,6 +625,7 @@ export async function getWorktreeChangesWithStats(
 
   const fetchPromise = (async () => {
     const MAX_FILES_FOR_NUMSTAT = 100;
+    const MAX_UNTRACKED_FILES = 200;
     // stat instead of access: the (dev, ino) pair doubles as the validity
     // check for the static-info cache below. Error mapping is unchanged.
     let cwdStat: Stats;
@@ -740,6 +741,9 @@ export async function getWorktreeChangesWithStats(
       ];
       if (trackedChangedFiles.length <= MAX_FILES_FOR_NUMSTAT) {
         warnedLargeNumstat.delete(cwd);
+      }
+      if (status.not_added.length <= MAX_UNTRACKED_FILES) {
+        warnedLargeUntracked.delete(cwd);
       }
 
       // Early stat pass: gather (mtimeMs, size) for each tracked file so we can
@@ -956,7 +960,6 @@ export async function getWorktreeChangesWithStats(
       }
 
       const untrackedFiles = status.not_added;
-      const MAX_UNTRACKED_FILES = 200;
       const concurrencyLimit = 10;
 
       const limitedUntrackedFiles =
@@ -973,8 +976,6 @@ export async function getWorktreeChangesWithStats(
             limitedTo: MAX_UNTRACKED_FILES,
           });
         }
-      } else {
-        warnedLargeUntracked.delete(cwd);
       }
 
       for (let i = 0; i < limitedUntrackedFiles.length; i += concurrencyLimit) {
