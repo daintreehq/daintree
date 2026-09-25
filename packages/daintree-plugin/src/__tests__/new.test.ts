@@ -72,6 +72,9 @@ describe("scaffoldPlugin", () => {
         "utf8"
       );
       expect(skill).toMatch(/^---\nname: daintree-tour\ndescription: /);
+      // The skill's headless captures land here; they're evidence, not source.
+      const gitignore = await fs.readFile(path.join(result.dir, ".gitignore"), "utf8");
+      expect(gitignore.split("\n")).toContain(".tour-preview/");
     });
   }
 

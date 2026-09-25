@@ -53,6 +53,11 @@ export async function loadBundledSkill(
       { cause: error }
     );
   }
+  if (!files.includes("SKILL.md")) {
+    throw new Error(
+      `The bundled "${name}" skill in ${dir} has no SKILL.md; this daintree-plugin install is incomplete`
+    );
+  }
   const out: Record<string, string> = {};
   for (const rel of files.sort()) {
     out[`${skillInstallDir(name)}/${rel}`] = await fs.readFile(path.join(dir, rel), "utf8");

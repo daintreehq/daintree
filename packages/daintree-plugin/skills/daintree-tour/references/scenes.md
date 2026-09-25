@@ -18,7 +18,7 @@ The built-in scenes are the reference for how these are used together: <https://
 
 ## Anchors
 
-Mark every element the narration points at with `data-tour-anchor="name"`. `MockSpotlight targets`, `MockCursor` steps (`{ anchor: "name" }`) and the preview's capture all find elements by anchor and measure them from the render, so highlights and clicks stay on target however the layout shifts. Never hand-place a highlight or cursor over an element with coordinates.
+Mark every element the narration points at with `data-tour-anchor="name"`. `MockSpotlight targets`, the steps you give `useMockCursor` (`{ cue: "open", at: { anchor: "name" }, click: true }`) and the preview's capture all find elements by anchor and measure them from the render, so highlights and clicks stay on target however the layout shifts. Never hand-place a highlight or cursor over an element with coordinates.
 
 ## The style
 

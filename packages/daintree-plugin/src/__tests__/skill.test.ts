@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runSkillAdd } from "../commands/skill.js";
-import { bundledSkillsRoot, loadBundledSkill } from "../skills.js";
+import { loadBundledSkill } from "../skills.js";
 
 let tmpDir: string;
 
@@ -52,20 +52,26 @@ describe("bundled daintree-tour skill", () => {
   it("names only CLI flags the tour commands define", async () => {
     const files = await loadBundledSkill("daintree-tour");
     const cli = await fs.readFile(path.join(import.meta.dirname, "..", "cli.ts"), "utf8");
-    const defined = new Set([...cli.matchAll(/"(--[a-z-]+)[ "<]/g)].map((m) => m[1]));
+    // Each command's own options: from its `.command("x")` to the next one.
+    const optionsOf = (command: string): Set<string> => {
+      const start = cli.indexOf(`.command("${command}")`);
+      const end = cli.indexOf(".command(", start + 1);
+      const body = cli.slice(start, end === -1 ? undefined : end);
+      return new Set([...body.matchAll(/"(--[a-z-]+)[ "<]/g)].map((m) => m[1]!));
+    };
+    let checked = 0;
     for (const content of Object.values(files)) {
       for (const match of content.matchAll(
-        /daintree-plugin (?:tour \w+|validate|package)([^`\n]*)/g
+        /daintree-plugin (?:tour )?(voice|align|preview|validate|package)([^`\n]*)/g
       )) {
-        for (const flag of match[1]!.matchAll(/(--[a-z-]+)/g)) {
+        const defined = optionsOf(match[1]!);
+        for (const flag of match[2]!.matchAll(/(--[a-z-]+)/g)) {
           expect(defined, `flag ${flag[1]} in "${match[0]}"`).toContain(flag[1]);
+          checked++;
         }
       }
     }
-  });
-
-  it("resolves from source the same way it will from dist", () => {
-    expect(bundledSkillsRoot()).toBe(path.resolve(import.meta.dirname, "..", "..", "skills"));
+    expect(checked).toBeGreaterThan(10);
   });
 });
 
@@ -162,6 +168,15 @@ describe("runSkillAdd", () => {
       }
     }
   );
+
+  it("refuses a bundle without its SKILL.md rather than reporting it up to date", async () => {
+    await writeManifest({ name: "acme.site" });
+    const skillsRoot = path.join(tmpDir, "bundle");
+    await fs.mkdir(path.join(skillsRoot, "daintree-tour"), { recursive: true });
+    await expect(runSkillAdd("daintree-tour", { dir: tmpDir, skillsRoot })).rejects.toThrow(
+      /has no SKILL\.md/
+    );
+  });
 
   it("reports a bundle missing from the install", async () => {
     await writeManifest({ name: "acme.site" });

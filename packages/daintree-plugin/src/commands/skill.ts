@@ -98,6 +98,7 @@ export async function runSkillAdd(
 
   const files = await loadBundledSkill(name, opts.skillsRoot);
   const written: string[] = [];
+  const replacing = new Set<string>();
   const unchanged: string[] = [];
   const conflicts: string[] = [];
   for (const [rel, content] of Object.entries(files)) {
@@ -112,6 +113,7 @@ export async function runSkillAdd(
       unchanged.push(rel);
     } else if (opts.force) {
       written.push(rel);
+      replacing.add(rel);
     } else {
       conflicts.push(rel);
     }
@@ -125,7 +127,12 @@ export async function runSkillAdd(
   for (const rel of written) {
     const target = path.join(dir, rel);
     await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, files[rel]!, "utf8");
+    // A file the preflight saw as absent is created exclusively, so one that
+    // appeared since is refused rather than clobbered without --force.
+    await fs.writeFile(target, files[rel]!, {
+      encoding: "utf8",
+      flag: replacing.has(rel) ? "w" : "wx",
+    });
   }
 
   return {

@@ -79,7 +79,7 @@ Fix what you find, rebuild, recapture the affected chapters with `--only`, and l
 npx daintree-plugin validate
 ```
 
-This must pass: it checks the tour entry against the same schema Daintree loads it with. Then run whatever the plugin itself has — `npm test`, `npm run typecheck`, `npx tsc --noEmit` — only scripts that exist in `package.json`; if there are none, say so. `npx daintree-plugin package --dry-run` confirms the scene module and the `tours/<id>/*.ogg` files the manifest points at are in the package.
+This must pass: it checks the tour entry against the same schema Daintree loads it with. Then run whatever the plugin itself has — `npm test`, `npm run typecheck`, `npx tsc --noEmit` — only scripts that exist in `package.json`; if there are none, say so. Finally run `npx daintree-plugin package --dry-run --verbose` and check its file list yourself: the tour's `componentPath` and every local `audioUrl` in the tour's `chapters` must be in it. The packager doesn't check tour files for you, so a `.dntrignore` rule that drops them passes silently.
 
 ## Report
 
