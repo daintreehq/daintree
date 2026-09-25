@@ -49,6 +49,7 @@ import {
   truncateTextTail,
   readStringField,
   RESOURCE_BACKING_ACTIONS,
+  MCP_ASSISTANT_SERVER_INSTRUCTIONS,
   MCP_SERVER_INSTRUCTIONS,
   TIER_NOT_PERMITTED_CODE,
   CONFIRMATION_REQUIRED_CODE,
@@ -124,6 +125,7 @@ import {
 import type { TerminalAdoptionRecord } from "./terminalAdoption.js";
 import {
   NOTIFY_NOT_ELIGIBLE,
+  NOTIFY_KEY_TOOLS,
   NOTIFY_SEND_TOOLS,
   NOTIFY_VALIDATION_ERROR,
   TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
@@ -965,7 +967,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       // handler of ours is involved (#11541). Passed at construction because
       // that result is built once, at the handshake, and instructions have no
       // update notification — there is no later seam to set them from.
-      instructions: MCP_SERVER_INSTRUCTIONS,
+      // Daintree's own assistants carry these rules in their own prompts.
+      instructions: sessionStore.isRendererOwnedOrigin(sessionId)
+        ? MCP_ASSISTANT_SERVER_INSTRUCTIONS
+        : MCP_SERVER_INSTRUCTIONS,
     }
   );
 
@@ -2287,6 +2292,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 );
               }
               pendingNotify = await terminalNotify.prepareLaunch(pane, { replyLines });
+            } else if (NOTIFY_KEY_TOOLS.has(actionId)) {
+              const targetId = ownedResourceId ?? readStringArg(args, "terminalId");
+              if (targetId === undefined || targetId.length === 0) {
+                return refuse(NOTIFY_VALIDATION_ERROR, "`notify` needs a `terminalId`.");
+              }
+              pendingNotify = await terminalNotify.prepareKeys(pane, targetId, { replyLines });
             } else {
               const targetId = ownedResourceId ?? readStringArg(args, "terminalId");
               if (targetId === undefined || targetId.length === 0) {

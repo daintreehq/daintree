@@ -349,39 +349,50 @@ export function registerTerminalQueryActions(
           .describe(
             "A token from the text-submission capability. Adds that submission's delivery record to each entry. Requires `terminalIds`."
           ),
+        // `true` is what a model reaches for first; it reads as the defaults.
         includeOutput: z
-          .object({
-            lines: z
-              .number()
-              .int()
-              .min(1)
-              .max(50)
-              .default(20)
-              .describe(
-                "Number of trailing scrollback lines to include per terminal (max 50, default 20)."
-              ),
-            stripAnsi: z
-              .boolean()
-              .default(true)
-              .describe("Remove ANSI escape codes from `recentOutput` (default: true)."),
-          })
+          .union([
+            z.boolean(),
+            z.object({
+              lines: z
+                .number()
+                .int()
+                .min(1)
+                .max(50)
+                .default(20)
+                .describe(
+                  "Number of trailing scrollback lines to include per terminal (max 50, default 20)."
+                ),
+              stripAnsi: z
+                .boolean()
+                .default(true)
+                .describe("Remove ANSI escape codes from `recentOutput` (default: true)."),
+            }),
+          ])
           .optional()
           .describe(
-            "Opt-in. Adds `recentOutput` (last N scrollback lines), plus `lastOutputChangeAt` and `lastTypedInputAt` when observed. Off by default to keep responses small."
+            "Opt-in, `true` or options. Adds `recentOutput` (last N scrollback lines), plus `lastOutputChangeAt` and `lastTypedInputAt` when observed."
           ),
       })
       .optional(),
     resultSchema: TerminalStatusResultSchema,
     mcpOutputSchema: true,
     run: async (args: unknown) => {
-      const { terminalIds, worktreeId, location, includeOutput, submissionToken } = (args ??
-        {}) as {
+      const {
+        terminalIds,
+        worktreeId,
+        location,
+        includeOutput: includeOutputArg,
+        submissionToken,
+      } = (args ?? {}) as {
         terminalIds?: string[];
         worktreeId?: string;
         location?: "grid" | "dock" | "trash" | "background";
-        includeOutput?: { lines?: number; stripAnsi?: boolean };
+        includeOutput?: boolean | { lines?: number; stripAnsi?: boolean };
         submissionToken?: string;
       };
+      const includeOutput =
+        includeOutputArg === true ? {} : includeOutputArg === false ? undefined : includeOutputArg;
       if (submissionToken !== undefined && terminalIds === undefined) {
         throw new Error("terminal.getStatus requires `terminalIds` when `submissionToken` is set.");
       }
@@ -716,13 +727,13 @@ export function registerTerminalQueryActions(
         .min(1)
         .max(MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS)
         .describe(
-          `Identifies the terminals to watch (1-${MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS}), using panel ids from the terminal-listing capability. Closed or unknown ids count as already settled rather than failing the batch; each row's \`trackingState\` says which.`
+          `Terminals to watch (1-${MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS}). Closed or unknown ids count as settled rather than failing the batch; each row's \`trackingState\` says which.`
         ),
       mode: z
         .enum(["first", "all"])
         .optional()
         .describe(
-          "Whether to return as soon as any one terminal stops working (the default, for dispatching follow-up work as each agent frees up) or only once every terminal has stopped (a join barrier)."
+          "Return when any one terminal stops working (the default, to refill as each frees up) or only once all have (a join barrier)."
         ),
       timeoutMs: z
         .number()

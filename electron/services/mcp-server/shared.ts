@@ -699,6 +699,16 @@ export const MCP_SERVER_INSTRUCTIONS = [
 ].join("\n\n");
 
 /**
+ * The `instructions` for Daintree's own assistant sessions — the sidebar help
+ * assistant and the assistant pane. Each ships its own prompt that carries the
+ * rules above in fuller form, and Codex in code mode repeats a server's
+ * instructions inside every one of its tool descriptions, so the long text
+ * cost those sessions ~1 KB per tool each time the model looked a tool up.
+ */
+export const MCP_ASSISTANT_SERVER_INSTRUCTIONS =
+  "Daintree's control surface for its own assistant; your instruction file has the rules. `actions.search` finds a tool by intent.";
+
+/**
  * Creation-tool allowlist for per-session idempotency dedup. LLMs replay
  * tool calls during multi-step planning, especially across reconnects.
  * Inside the TTL window a duplicate call returns the original result

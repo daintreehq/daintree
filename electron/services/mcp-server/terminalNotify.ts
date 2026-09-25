@@ -372,7 +372,7 @@ function isAgentRecord(info: NotifyTerminalInfo): boolean {
   );
 }
 
-type NoticeSource = "send" | "launch" | "when-idle";
+type NoticeSource = "send" | "launch" | "when-idle" | "keys";
 
 type TargetEvent =
   | { kind: "state"; change: NotifyStateChange }
@@ -575,6 +575,40 @@ export class TerminalNotifyService {
         this.followSend(owner, notice, token).catch((err: unknown) => {
           console.error("[MCP] terminal notify: following a send failed:", err);
         });
+      },
+      cancel: () => {
+        if (settled) return;
+        settled = true;
+        if (this.isCurrent(owner, notice)) this.removeNotice(owner, notice);
+        this.maybeDispose(owner);
+      },
+    };
+  }
+
+  /**
+   * Keys with `notify`, most often the answer to a dialog that stopped an
+   * agent before its first turn. Keys carry no submission record, so settles
+   * count from when the keys were asked for; a notice whose keys start no work
+   * waits for the target's next turn.
+   */
+  async prepareKeys(
+    pane: OwnPane,
+    targetId: string,
+    options: NotifyOptions = {}
+  ): Promise<PendingNotify> {
+    const replyLines = options.replyLines ?? NOTIFY_REPLY_LINES_DEFAULT;
+    const preparedAt = this.now();
+    const { owner, notice } = await this.admit(pane, targetId, (owner) => {
+      const notice = this.addNotice(owner, targetId, "keys", undefined, replyLines);
+      this.publish(owner);
+      return { owner, notice };
+    });
+    let settled = false;
+    return {
+      complete: () => {
+        if (settled) return;
+        settled = true;
+        if (this.isCurrent(owner, notice)) this.activate(owner, notice, preparedAt);
       },
       cancel: () => {
         if (settled) return;
@@ -1574,16 +1608,23 @@ function publicDelivery(delivery: DeliveryState): TerminalNotifyDelivery {
 
 export const TERMINAL_NOTIFY_WHEN_IDLE_TOOL = "terminal.notifyWhenIdle";
 
-/** The submit paths that take `notify: true`. */
+/** The key paths that take `notify: true`. */
+export const NOTIFY_KEY_TOOLS: ReadonlySet<string> = new Set([
+  "terminal.sendKeys",
+  "terminal.sendKeysOwned",
+]);
+
+/** The submit and key paths that take `notify: true`. */
 export const NOTIFY_SEND_TOOLS: ReadonlySet<string> = new Set([
   "terminal.sendCommand",
   "terminal.sendCommandOwned",
   "agent.launch",
+  ...NOTIFY_KEY_TOOLS,
 ]);
 
 export type TerminalNotifyHandlers = Pick<
   TerminalNotifyService,
-  "whenIdle" | "prepareSend" | "prepareLaunch"
+  "whenIdle" | "prepareSend" | "prepareLaunch" | "prepareKeys"
 >;
 
 /**

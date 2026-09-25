@@ -157,8 +157,10 @@ function parseArgs(rawArgs: unknown): ParsedArgs {
     submissionToken = submissionTokenRaw;
   }
 
-  const includeOutputRaw = args["includeOutput"];
-  if (includeOutputRaw === undefined || includeOutputRaw === null) {
+  // `true` reads as the defaults, the same as the renderer's schema.
+  const includeOutputArg = args["includeOutput"];
+  const includeOutputRaw = includeOutputArg === true ? {} : includeOutputArg;
+  if (includeOutputRaw === undefined || includeOutputRaw === null || includeOutputRaw === false) {
     return {
       terminalIds,
       lines: DEFAULT_OUTPUT_LINES,
@@ -170,7 +172,7 @@ function parseArgs(rawArgs: unknown): ParsedArgs {
   if (typeof includeOutputRaw !== "object" || Array.isArray(includeOutputRaw)) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      "terminal.getStatus `includeOutput` must be an object."
+      "terminal.getStatus `includeOutput` must be `true` or an object."
     );
   }
   const includeOutput = includeOutputRaw as Record<string, unknown>;

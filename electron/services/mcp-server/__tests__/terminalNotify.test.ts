@@ -535,6 +535,35 @@ describe("TerminalNotifyService", () => {
     });
   });
 
+  describe("notify on keys", () => {
+    it("reports the turn the keys unblocked, counted from when they were asked for", async () => {
+      const h = setup();
+      h.client.terminals.set("t-dialog", atPrompt(Date.now() - 5_000));
+      h.client.screens.set("t-dialog", "Answer: 42");
+      h.settle("t-dialog");
+      await vi.advanceTimersByTimeAsync(50);
+      const pending = await h.service.prepareKeys(PANE, "t-dialog");
+      pending.complete({ terminalId: "t-dialog", keys: ["Enter"] });
+      await flushNotice();
+      // The settle before the keys is not this notice's.
+      expect(h.client.submitted).toEqual([]);
+
+      h.stateChange({ terminalId: "t-dialog", state: "working", previousState: "waiting" });
+      h.settle("t-dialog");
+      await flushNotice();
+
+      expect(h.client.submitted[0].text).toContain("t-dialog stopped working");
+      expect(h.client.submitted[0].text).toContain("Answer: 42");
+    });
+
+    it("leaves nothing behind when the keys are refused", async () => {
+      const h = setup();
+      const pending = await h.service.prepareKeys(PANE, "t-a");
+      pending.cancel();
+      expect(h.service.getPaneState(OWN)).toBeNull();
+    });
+  });
+
   describe("notify on a launch", () => {
     it("follows the terminal the launch reports", async () => {
       const h = setup();

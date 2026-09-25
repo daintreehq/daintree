@@ -15,4 +15,4 @@ Filesystem and `gh`, for reading only. Apart from the scratch folder a note in t
 
 ## Calling Tools from `exec`
 
-If your tools run through `exec`, call them as `tools.mcp__daintree__agent_launch(...)` (the action ID with dots as underscores) `tools.mcp__daintree_runbooks__search_runbooks(...)` and `tools.mcp__daintree_docs__search(...)`. Don't print `ALL_TOOLS`: every entry repeats the server's instructions, so the list is huge; a runbook's examples give the arguments. From a result print only `r.structuredContent`, since the whole object holds the same data twice. Launch several agents from one script.
+If your tools run through `exec`, call them as `tools.mcp__daintree__agent_launch(...)` (the action ID with dots as underscores) `tools.mcp__daintree_runbooks__search_runbooks(...)` and `tools.mcp__daintree_docs__search(...)`. Don't print `ALL_TOOLS`: every entry repeats the server's instructions, so the list is huge; a runbook's examples give the arguments. Print `r.structuredContent ?? r`: when there is structured content, the whole object holds it twice. Launch several agents from one script.

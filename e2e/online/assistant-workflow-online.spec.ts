@@ -39,6 +39,12 @@ const ASSISTANT_AGENT = process.env.DAINTREE_E2E_ASSISTANT_AGENT ?? "codex";
 const POLL_MS = 5_000;
 /** How long the assistant and every worker must sit still to call a turn over. */
 const QUIET_MS = 45_000;
+/**
+ * Answer worker trust dialogs as the user would. Off by default, so a run
+ * exercises the assistant's own dialog handling; on, it measures a user whose
+ * project every CLI already trusts.
+ */
+const AUTO_TRUST = process.env.DAINTREE_E2E_AUTO_TRUST === "1";
 const TRUST_DIALOG =
   /Trust this folder\?|Trust and continue|do you trust|trust the files in this folder|Is this a project you created or one you trust/i;
 
@@ -150,7 +156,11 @@ const SCENARIOS: Scenario[] = [
     ],
     timeoutMs: 10 * 60_000,
     check: ({ finalText, metrics }) => {
-      expect(metrics.launched, "Claude was never launched").toContain("claude");
+      // Closed as asked, so it is gone from the terminal list by now.
+      expect(
+        metrics.toolCalls.some((c) => /agent[._]launch/.test(c.input) && /claude/.test(c.input)),
+        "Claude was never launched"
+      ).toBe(true);
       expect(finalText, "the answer never reached the user").toMatch(/stock|warehouse|inventor/i);
     },
   },
@@ -498,7 +508,12 @@ for (const scenario of SCENARIOS) {
       cleanup?.();
     });
 
+    // eslint-disable-next-line no-empty-pattern -- Playwright requires an object-destructured fixture argument even when this Electron test uses none
     test(`${ASSISTANT_AGENT} assistant runs "${scenario.id}"`, async ({}, testInfo) => {
+      test.info().annotations.push({
+        type: "conditional-skip",
+        description: "opt-in: real agent CLIs on the user's own subscriptions",
+      });
       test.skip(!enabled, "set DAINTREE_E2E_ASSISTANT_WORKFLOW to this scenario id or `all`");
       test.setTimeout(scenario.timeoutMs + 5 * 60_000);
 
@@ -586,6 +601,7 @@ for (const scenario of SCENARIOS) {
       const answerTrustDialogs = async (terminals: TerminalInfo[]) => {
         for (const t of terminals) {
           if (t.isTrashed || trusted.has(t.id)) continue;
+          if (!AUTO_TRUST && t.id !== assistantId) continue;
           const text = await getTerminalTextById(page, t.id).catch(() => "");
           if (!TRUST_DIALOG.test(text.split("\n").slice(-30).join("\n"))) continue;
           trusted.add(t.id);

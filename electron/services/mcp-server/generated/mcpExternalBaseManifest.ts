@@ -1417,23 +1417,30 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         includeOutput: {
           description:
-            "Opt-in. Adds `recentOutput` (last N scrollback lines), plus `lastOutputChangeAt` and `lastTypedInputAt` when observed. Off by default to keep responses small.",
-          type: "object",
-          properties: {
-            lines: {
-              default: 20,
-              description:
-                "Number of trailing scrollback lines to include per terminal (max 50, default 20).",
-              type: "integer",
-              minimum: 1,
-              maximum: 50,
-            },
-            stripAnsi: {
-              default: true,
-              description: "Remove ANSI escape codes from `recentOutput` (default: true).",
+            "Opt-in, `true` or options. Adds `recentOutput` (last N scrollback lines), plus `lastOutputChangeAt` and `lastTypedInputAt` when observed.",
+          anyOf: [
+            {
               type: "boolean",
             },
-          },
+            {
+              type: "object",
+              properties: {
+                lines: {
+                  default: 20,
+                  description:
+                    "Number of trailing scrollback lines to include per terminal (max 50, default 20).",
+                  type: "integer",
+                  minimum: 1,
+                  maximum: 50,
+                },
+                stripAnsi: {
+                  default: true,
+                  description: "Remove ANSI escape codes from `recentOutput` (default: true).",
+                  type: "boolean",
+                },
+              },
+            },
+          ],
         },
       },
     },
@@ -2397,11 +2404,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             minLength: 1,
           },
           description:
-            "Identifies the terminals to watch (1-256), using panel ids from the terminal-listing capability. Closed or unknown ids count as already settled rather than failing the batch; each row's `trackingState` says which.",
+            "Terminals to watch (1-256). Closed or unknown ids count as settled rather than failing the batch; each row's `trackingState` says which.",
         },
         mode: {
           description:
-            "Whether to return as soon as any one terminal stops working (the default, for dispatching follow-up work as each agent frees up) or only once every terminal has stopped (a join barrier).",
+            "Return when any one terminal stops working (the default, to refill as each frees up) or only once all have (a join barrier).",
           type: "string",
           enum: ["first", "all"],
         },

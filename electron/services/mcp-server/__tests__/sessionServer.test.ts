@@ -43,6 +43,7 @@ import {
   unwrapDispatchResult,
   RESOLVED_WORKSPACE_META_KEY,
   withResolvedWorkspace,
+  MCP_ASSISTANT_SERVER_INSTRUCTIONS,
   MCP_SERVER_INSTRUCTIONS,
   MCP_SERVER_INSTRUCTIONS_MAX_BYTES,
   TIER_ALLOWLISTS,
@@ -398,6 +399,23 @@ describe("sessionServer initialize instructions", () => {
     const server = createSessionServer("session-instructions", fakeDeps());
 
     await expect(initializeClient(server)).resolves.toBe(MCP_SERVER_INSTRUCTIONS);
+  });
+
+  it("sends Daintree's own assistants the short instructions, and every other session the full ones", async () => {
+    for (const origin of ["help", "assistant-pane"]) {
+      const store = fakeSessionStore("core");
+      store.sessionOriginMap.set(`session-${origin}`, origin as never);
+      await expect(
+        initializeClient(
+          createSessionServer(`session-${origin}`, fakeDeps({ sessionStore: store }))
+        )
+      ).resolves.toBe(MCP_ASSISTANT_SERVER_INSTRUCTIONS);
+    }
+    const pane = fakeSessionStore("core");
+    pane.sessionOriginMap.set("session-pane", "external" as never);
+    await expect(
+      initializeClient(createSessionServer("session-pane", fakeDeps({ sessionStore: pane })))
+    ).resolves.toBe(MCP_SERVER_INSTRUCTIONS);
   });
 
   it("sends the same instructions regardless of session tier", async () => {
@@ -839,6 +857,7 @@ describe("terminal notices", () => {
       whenIdle: vi.fn().mockResolvedValue({ armed: true, terminalId: "t-a" }),
       prepareSend: vi.fn().mockResolvedValue(pending),
       prepareLaunch: vi.fn().mockResolvedValue(pending),
+      prepareKeys: vi.fn().mockResolvedValue(pending),
     };
     const dispatchAction = vi.fn().mockResolvedValue({
       result: { ok: true, result: { sent: true, terminalId: "t-a", submissionToken: "tok-1" } },
@@ -994,6 +1013,23 @@ describe("terminal notices", () => {
 
       expect(terminalNotify.prepareSend).toHaveBeenCalledWith(OWN_PANE, "t-a", {});
       expect(dispatchAction.mock.calls[0]?.[1]).toMatchObject({ replyLines: -1 });
+    });
+
+    it("arms a key press through its own path and strips the flag from the keys", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-keys-notify");
+
+      await callTool(server, {
+        name: "terminal.sendKeys",
+        arguments: { terminalId: "t-a", keys: ["Down", "Enter"], notify: true },
+      });
+
+      expect(terminalNotify.prepareKeys).toHaveBeenCalledWith(OWN_PANE, "t-a", {});
+      expect(terminalNotify.prepareSend).not.toHaveBeenCalled();
+      expect(dispatchAction.mock.calls[0]?.slice(0, 2)).toEqual([
+        "terminal.sendKeys",
+        { terminalId: "t-a", keys: ["Down", "Enter"] },
+      ]);
     });
 
     it("leaves a send without the flag alone", async () => {

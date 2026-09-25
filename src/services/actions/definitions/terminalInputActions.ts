@@ -13,6 +13,7 @@ import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import { NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 
 /**
  * What an interrupt request can honestly report (#12338).
@@ -83,6 +84,13 @@ const SendKeysArgsSchema = z.object({
     .describe(
       'Up to 16: Up, Down, Left, Right, Enter, Escape, Tab, Space, Backspace, or one lowercase letter or digit. Second option of a list: ["Down", "Enter"].'
     ),
+  // Acted on in main, like the send's: after answering a dialog, be told when
+  // the agent finishes the turn it unblocked.
+  notify: z
+    .boolean()
+    .optional()
+    .describe("As on a send: be told, with its reply, when the turn these keys unblock ends."),
+  replyLines: NotifyReplyLinesSchema,
 });
 
 const SendKeysResultSchema = z.object({
