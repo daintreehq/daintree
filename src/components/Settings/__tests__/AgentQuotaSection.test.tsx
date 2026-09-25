@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { CodexQuotaResult } from "@shared/types/ipc/agentQuota";
 
 const readQuota = vi.hoisted(() => vi.fn<() => Promise<CodexQuotaResult>>());
@@ -93,8 +93,84 @@ describe("AgentQuotaSection (#12797)", () => {
     await renderFor("codex");
 
     expect(screen.getByText("Stale reading")).toBeTruthy();
-    expect(meters()[0].getAttribute("aria-valuetext")).toBe("50% used, stale");
+    expect(meters()[0]?.getAttribute("aria-valuetext")).toBe("50% used, stale");
     expect(screen.getByText("Reset time has passed. Waiting for a new reading.")).toBeTruthy();
+  });
+});
+
+describe("AgentQuotaSection refresh (#12797)", () => {
+  it("marks a fresh reading stale once one of its windows has reset", async () => {
+    readQuota.mockResolvedValue({
+      status: "ok",
+      planType: null,
+      fetchedAt: NOW,
+      windows: [{ usedPercent: 50, windowDurationMins: 300, resetsAt: NOW - 1 }],
+    });
+    await renderFor("codex");
+    expect(screen.getByText("Stale reading")).toBeTruthy();
+    expect(screen.queryByText("Current reading")).toBeNull();
+  });
+
+  it("renders two windows of the same duration without dropping either", async () => {
+    readQuota.mockResolvedValue({
+      status: "ok",
+      planType: null,
+      fetchedAt: NOW,
+      windows: [
+        { usedPercent: 10, windowDurationMins: 300, resetsAt: null },
+        { usedPercent: 20, windowDurationMins: 300, resetsAt: null },
+      ],
+    });
+    await renderFor("codex");
+    expect(meters().map((m) => m.getAttribute("aria-valuenow"))).toEqual(["10", "20"]);
+  });
+
+  it("reads again on Retry", async () => {
+    readQuota.mockResolvedValueOnce({ status: "unavailable", reason: "timeout", fetchedAt: NOW });
+    await renderFor("codex");
+    readQuota.mockResolvedValueOnce({
+      status: "ok",
+      planType: null,
+      fetchedAt: NOW,
+      windows: [{ usedPercent: 30, windowDurationMins: 300, resetsAt: null }],
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+
+    expect(readQuota).toHaveBeenCalledTimes(2);
+    expect(meters().map((m) => m.getAttribute("aria-valuenow"))).toEqual(["30"]);
+  });
+
+  it("keeps the last good reading when a later refresh fails, and lets it age", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      readQuota.mockResolvedValueOnce({
+        status: "ok",
+        planType: null,
+        fetchedAt: NOW,
+        windows: [{ usedPercent: 60, windowDurationMins: 300, resetsAt: null }],
+      });
+      const view = render(<AgentQuotaSection agentId="codex" />);
+      await act(async () => {});
+      readQuota.mockResolvedValue({ status: "unavailable", reason: "read-failed", fetchedAt: NOW });
+
+      clock.now = NOW + 5 * 60_000;
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+      });
+      // The real minute clock re-renders on its own tick; the mock needs a nudge.
+      view.rerender(<AgentQuotaSection agentId="codex" />);
+
+      expect(readQuota).toHaveBeenCalledTimes(2);
+      expect(meters().map((m) => m.getAttribute("aria-valuenow"))).toEqual(["60"]);
+      expect(screen.getByText("Stale reading")).toBeTruthy();
+      expect(screen.queryByText("Quota unavailable")).toBeNull();
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
   });
 });
 

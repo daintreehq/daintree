@@ -35,7 +35,7 @@ function RateLimitChip({ observedAt }: { observedAt: number }) {
           aria-live="off"
           data-testid="terminal-rate-limit-badge"
         >
-          <TriangleAlert className="w-3 h-3 shrink-0 text-status-warning" aria-hidden="true" />
+          <TriangleAlert className="w-3 h-3 shrink-0" aria-hidden="true" />
           Rate limit seen
         </div>
       </TooltipTrigger>

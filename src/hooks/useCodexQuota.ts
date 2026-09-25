@@ -14,7 +14,10 @@ export const CODEX_QUOTA_POLL_MS = 60_000;
  * `fetchedAt` keeps ageing, so the caller shows it as stale rather than current,
  * which says more than swapping a known value for "unavailable".
  */
-export function useCodexQuota(enabled: boolean): CodexQuotaResult | null {
+export function useCodexQuota(enabled: boolean): {
+  result: CodexQuotaResult | null;
+  refresh: () => void;
+} {
   const [result, setResult] = useState<CodexQuotaResult | null>(null);
   const requestRef = useRef(0);
 
@@ -45,5 +48,5 @@ export function useCodexQuota(enabled: boolean): CodexQuotaResult | null {
 
   useVisibilityAwareInterval(refresh, CODEX_QUOTA_POLL_MS, enabled);
 
-  return enabled ? result : null;
+  return { result: enabled ? result : null, refresh };
 }

@@ -118,6 +118,8 @@ import {
 // `agentOutputContentSnapshot` baseline makes the skipped chunks' delta
 // accumulate into it rather than being lost.
 const AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS = 50;
+/** Minimum gap between two rate-limit observations from one pane (#12797). */
+const RATE_LIMIT_OBSERVATION_COOLDOWN_MS = 60_000;
 
 export interface TerminalProcessCallbacks {
   /**
@@ -258,6 +260,7 @@ export class TerminalProcess {
    * observation rather than one per repaint (#12797).
    */
   private rateLimitBannerVisible = false;
+  private lastRateLimitObservedAt = Number.NEGATIVE_INFINITY;
 
   private agentOutputForwarder!: AgentOutputForwarder;
 
@@ -2116,8 +2119,20 @@ export class TerminalProcess {
    * content (#12797).
    */
   private observeRateLimitBanner(lines: readonly string[], now: number): void {
-    const visible = this.isAgentLive && hasRateLimitMessage(lines);
-    if (visible && !this.rateLimitBannerVisible) {
+    // Agent attribution rather than `isAgentLive`: an agent that prints its
+    // limit and exits at once has already been marked exited by the time the
+    // trailing sample reads that last frame.
+    const t = this.terminalInfo;
+    const hasAgent = t.detectedAgentId !== undefined || t.launchAgentId !== undefined;
+    const visible = hasAgent && hasRateLimitMessage(lines);
+    // The cooldown absorbs a TUI repaint that blanks the banner for one frame,
+    // which would otherwise read as a fresh appearance each time.
+    if (
+      visible &&
+      !this.rateLimitBannerVisible &&
+      now - this.lastRateLimitObservedAt >= RATE_LIMIT_OBSERVATION_COOLDOWN_MS
+    ) {
+      this.lastRateLimitObservedAt = now;
       events.emit("agent:rate-limit-observed", {
         terminalId: this.id,
         observedAt: now,

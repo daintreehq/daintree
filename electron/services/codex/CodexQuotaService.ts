@@ -17,11 +17,16 @@ import type {
   CodexQuotaWindow,
 } from "../../../shared/types/ipc/agentQuota.js";
 
-/** Unavailable answers are cached too, so a signed-out user isn't re-probed per view. */
 const CACHE_TTL_MS = 30_000;
+/**
+ * Unavailable answers are cached briefly too, so a signed-out user isn't
+ * re-probed per open view, but short enough that Retry actually re-reads.
+ */
+const UNAVAILABLE_CACHE_TTL_MS = 5_000;
 
 let cached: CodexQuotaResult | null = null;
 let inFlight: Promise<CodexQuotaResult> | null = null;
+let generation = 0;
 
 function toWindow(raw: unknown): CodexQuotaWindow | null {
   if (!raw || typeof raw !== "object") return null;
@@ -31,7 +36,7 @@ function toWindow(raw: unknown): CodexQuotaWindow | null {
   }
   if (
     typeof windowDurationMins !== "number" ||
-    !Number.isFinite(windowDurationMins) ||
+    !Number.isInteger(windowDurationMins) ||
     windowDurationMins <= 0
   ) {
     return null;
@@ -100,10 +105,14 @@ async function fetchCodexQuota(): Promise<CodexQuotaResult> {
 
 /** Never rejects: every failure is an `unavailable` result. */
 export function readCodexQuota(): Promise<CodexQuotaResult> {
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return Promise.resolve(cached);
+  if (cached) {
+    const ttl = cached.status === "ok" ? CACHE_TTL_MS : UNAVAILABLE_CACHE_TTL_MS;
+    if (Date.now() - cached.fetchedAt < ttl) return Promise.resolve(cached);
+  }
   if (inFlight) return inFlight;
+  const requestGeneration = generation;
   const request = fetchCodexQuota().then((result) => {
-    cached = result;
+    if (requestGeneration === generation) cached = result;
     return result;
   });
   inFlight = request;
@@ -114,6 +123,7 @@ export function readCodexQuota(): Promise<CodexQuotaResult> {
 }
 
 export function resetCodexQuotaCacheForTests(): void {
+  generation++;
   cached = null;
   inFlight = null;
 }

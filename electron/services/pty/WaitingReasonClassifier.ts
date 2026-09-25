@@ -71,8 +71,17 @@ const RATE_LIMIT_PATTERNS: RegExp[] = [
   // last so it reads as a literal.
   /^[\s•●■▪*>❯›⟩│┃╎╭╰─⚠-]*you(?:'ve|'re|\s+(?:have|are))?\s+(?:hit|reached|exceeded|exhausted|(?:ran|run) out of)\s+(?:(?:a|the|your|our)\s+)?(?:(?:\d+[ -]?hour|hourly|daily|weekly|monthly|rolling|session)\s+){0,2}?(?:usage|rate)[ -]?limits?\b/i,
   /^[\s•●■▪*>❯›⟩│┃╎╭╰─⚠-]*you(?:'ve|'re|\s+(?:have|are))\s+(?:being|been)\s+rate[ -]?limited\b/i,
+];
+
+// Error-line shapes of a limit that the CLI itself prints. Unanchored in the
+// error list, where only the settled tail is read; the observation scans a
+// working pane too, where "handle 429 Too Many Requests" is ordinary prose.
+const LIMIT_ERROR_PATTERNS: RegExp[] = [
   /\bquota (?:exceeded|reached)\b/i,
   /\btoo many requests\b/i,
+];
+const LIMIT_ERROR_BANNER_PATTERNS: RegExp[] = [
+  /^[\s•●■▪*>❯›⟩│┃╎╭╰─⚠-]*(?:(?:error|warning)\s*:?\s*)?(?:\(?\d{3}\)?:?\s*)?(?:quota (?:exceeded|reached)|too many requests)\b/i,
 ];
 
 // Blocking-error markers. Precision over recall: only phrasings that rarely
@@ -81,6 +90,7 @@ const RATE_LIMIT_PATTERNS: RegExp[] = [
 // misclassify an ordinary prompt wait as an error wait.
 const ERROR_PATTERNS: RegExp[] = [
   ...RATE_LIMIT_PATTERNS,
+  ...LIMIT_ERROR_PATTERNS,
   /\boverloaded\b/i,
   /\bcredit balance is too low\b/i,
   /\bout of credits\b/i,
@@ -195,6 +205,7 @@ export function hasRateLimitMessage(lines: readonly string[]): boolean {
   for (const line of tail) {
     const stripped = stripAnsi(line);
     if (RATE_LIMIT_PATTERNS.some((p) => p.test(stripped))) return true;
+    if (LIMIT_ERROR_BANNER_PATTERNS.some((p) => p.test(stripped))) return true;
   }
   return false;
 }

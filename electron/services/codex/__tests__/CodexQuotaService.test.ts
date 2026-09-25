@@ -83,6 +83,14 @@ describe("normalizeCodexRateLimits", () => {
       { rateLimits: { primary: { usedPercent: 5, windowDurationMins: 0 } } },
     ],
     [
+      "a fractional duration",
+      { rateLimits: { primary: { usedPercent: 5, windowDurationMins: 90.5 } } },
+    ],
+    [
+      "a NaN percentage",
+      { rateLimits: { primary: { usedPercent: Number.NaN, windowDurationMins: 300 } } },
+    ],
+    [
       "one unreadable window beside a good one",
       { rateLimits: { primary: FIVE_HOURS, secondary: { usedPercent: "x" } } },
     ],
@@ -138,6 +146,34 @@ describe("readCodexQuota", () => {
     const [a, b] = await Promise.all([readCodexQuota(), readCodexQuota()]);
     expect(a).toBe(b);
     expect(runSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-reads an unavailable answer after 5s, so Retry isn't a no-op", async () => {
+    runSession.mockRejectedValue(new CodexAppServerError("protocol-error", "signed out"));
+    await readCodexQuota();
+    vi.advanceTimersByTime(4_000);
+    await readCodexQuota();
+    expect(runSession).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1_500);
+    await readCodexQuota();
+    expect(runSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let a read from before a reset overwrite the cache", async () => {
+    let finishStale: (value: unknown) => void = () => {};
+    runSession.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishStale = resolve;
+        })
+    );
+    const stale = readCodexQuota();
+    resetCodexQuotaCacheForTests();
+    respondWith(() => ({ rateLimits: { primary: WEEK } }));
+    const fresh = await readCodexQuota();
+    finishStale({ rateLimits: { primary: FIVE_HOURS } });
+    await stale;
+    expect(await readCodexQuota()).toBe(fresh);
   });
 
   it("serves the cache for 30s, then reads again", async () => {

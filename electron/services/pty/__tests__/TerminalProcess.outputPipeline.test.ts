@@ -309,15 +309,19 @@ describe("TerminalProcess rate-limit observation (#12797)", () => {
     ptyOnDataCallback = null;
   });
 
+  const unsubscribers: Array<() => void> = [];
+
   afterEach(() => {
-    events.removeAllListeners("agent:rate-limit-observed");
+    unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe());
     vi.useRealTimers();
     vi.clearAllTimers();
   });
 
   function collect() {
     const seen: Array<Record<string, unknown>> = [];
-    events.on("agent:rate-limit-observed", (payload) => seen.push({ ...payload }));
+    unsubscribers.push(
+      events.on("agent:rate-limit-observed", (payload) => seen.push({ ...payload }))
+    );
     return seen;
   }
 
@@ -336,9 +340,17 @@ describe("TerminalProcess rate-limit observation (#12797)", () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(seen).toHaveLength(1);
 
-    // Scroll it out of the scanned tail, then show it again.
+    // A repaint that drops it for a frame and brings it straight back is the
+    // same banner, not a second one.
     ptyOnDataCallback!("line\r\n".repeat(20));
     await vi.advanceTimersByTimeAsync(250);
+    ptyOnDataCallback!("■ You've hit your usage limit.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    // Gone for good, then a later limit is a new observation.
+    ptyOnDataCallback!("line\r\n".repeat(20));
+    await vi.advanceTimersByTimeAsync(60_000);
     ptyOnDataCallback!("■ You've hit your usage limit.\r\n");
     await vi.advanceTimersByTimeAsync(250);
     expect(seen).toHaveLength(2);

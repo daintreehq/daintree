@@ -33,7 +33,7 @@ describe("bridgePtyEvent", () => {
     });
   });
 
-  it("forwards a rate-limit observation with its timestamps only (#12797)", () => {
+  it("forwards a rate-limit observation (#12797)", () => {
     const payloads: unknown[] = [];
     events.on("agent:rate-limit-observed", (payload) => payloads.push(payload));
 

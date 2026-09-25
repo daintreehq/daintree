@@ -43,15 +43,23 @@ describe("TerminalRateLimitBadge (#12797)", () => {
 
     const badges = screen.queryAllByTestId("terminal-rate-limit-badge");
     expect(badges).toHaveLength(1);
-    expect(badges[0].textContent).toBe("Rate limit seen");
+    expect(badges[0]?.textContent).toBe("Rate limit seen");
   });
 
   it("disappears once the retention window has passed", () => {
     const observedAt = 1_700_000_000_000;
-    clock.now = observedAt + RATE_LIMIT_OBSERVATION_TTL_MS;
+    clock.now = observedAt + RATE_LIMIT_OBSERVATION_TTL_MS - 60_000;
     useRateLimitObservationStore.setState({ observedAtByTerminalId: { t1: observedAt } });
 
-    renderBadge("t1");
+    const view = renderBadge("t1");
+    expect(screen.queryByTestId("terminal-rate-limit-badge")).not.toBeNull();
+
+    clock.now = observedAt + RATE_LIMIT_OBSERVATION_TTL_MS;
+    view.rerender(
+      <TooltipProvider>
+        <TerminalRateLimitBadge terminalId="t1" />
+      </TooltipProvider>
+    );
     expect(screen.queryByTestId("terminal-rate-limit-badge")).toBeNull();
   });
 });

@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { useCodexQuota } from "@/hooks/useCodexQuota";
@@ -12,7 +13,8 @@ import {
 const UNAVAILABLE_COPY: Record<CodexQuotaUnavailableReason, string> = {
   "cli-missing": "Codex CLI isn't installed, so there's no quota to read",
   timeout: "Codex didn't answer in time. Daintree will ask again shortly.",
-  "read-failed": "Codex didn't report a quota. Signing in with ChatGPT makes it available.",
+  "read-failed":
+    "Codex didn't return a quota. It only reports one when signed in with ChatGPT, not an API key.",
   "unsupported-response": "Codex answered in a format Daintree doesn't read yet",
   "no-windows": "Codex didn't report any limit windows for this account",
 };
@@ -39,6 +41,10 @@ function formatReset(resetsAt: number, now: number): string {
   return `Resets ${day}, ${time}`;
 }
 
+function hasResetPassed(window: CodexQuotaWindow, now: number): boolean {
+  return window.resetsAt !== null && window.resetsAt <= now;
+}
+
 function QuotaWindowRow({
   window,
   now,
@@ -52,7 +58,7 @@ function QuotaWindowRow({
   const used = Math.round(window.usedPercent);
   // A reset that has passed means the reading describes a window that's over.
   // Showing 0% would be a guess, so the old figure stays, marked stale.
-  const resetPassed = window.resetsAt !== null && window.resetsAt <= now;
+  const resetPassed = hasResetPassed(window, now);
   const isStale = stale || resetPassed;
   const description =
     window.resetsAt === null
@@ -86,7 +92,7 @@ function QuotaWindowRow({
 }
 
 function CodexQuota() {
-  const result = useCodexQuota(true);
+  const { result, refresh } = useCodexQuota(true);
   const now = useGlobalMinuteClock();
 
   // Settings renders chrome immediately and fills in on resolve: an empty group
@@ -94,7 +100,7 @@ function CodexQuota() {
   if (result === null) {
     return (
       <SettingsGroup>
-        <SettingsRow label="Codex quota" description="Checking…" />
+        <SettingsRow label="Checking…" />
       </SettingsGroup>
     );
   }
@@ -102,20 +108,35 @@ function CodexQuota() {
   if (result.status === "unavailable") {
     return (
       <SettingsGroup>
-        <SettingsRow label="Quota unavailable" description={UNAVAILABLE_COPY[result.reason]} />
+        <SettingsRow
+          label="Quota unavailable"
+          description={UNAVAILABLE_COPY[result.reason]}
+          control={
+            <Button size="sm" variant="outline" onClick={refresh}>
+              Retry
+            </Button>
+          }
+        />
       </SettingsGroup>
     );
   }
 
   const stale = now - result.fetchedAt > CODEX_QUOTA_STALE_AFTER_MS;
+  const anyStale = stale || result.windows.some((window) => hasResetPassed(window, now));
   const checked = `Last checked ${formatTimeAgo(result.fetchedAt, now)}`;
   return (
     <SettingsGroup>
-      {result.windows.map((window) => (
-        <QuotaWindowRow key={window.windowDurationMins} window={window} now={now} stale={stale} />
+      {result.windows.map((window, index) => (
+        // Index-qualified: nothing stops two windows reporting the same duration.
+        <QuotaWindowRow
+          key={`${index}-${window.windowDurationMins}`}
+          window={window}
+          now={now}
+          stale={stale}
+        />
       ))}
       <SettingsRow
-        label={stale ? "Stale reading" : "Current reading"}
+        label={anyStale ? "Stale reading" : "Current reading"}
         description={result.planType ? `${checked} · ${result.planType} plan` : checked}
       />
     </SettingsGroup>

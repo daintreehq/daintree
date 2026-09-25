@@ -283,6 +283,7 @@ describe("hasRateLimitMessage (#12797)", () => {
     "\x1b[31m⚠ You've been rate limited\x1b[0m",
     "Error: 429 Too Many Requests",
     "quota exceeded for this model",
+    "│ 429: Too Many Requests",
   ])("sees a rate-limit banner: %s", (line) => {
     expect(hasRateLimitMessage(["some output", line, "> "])).toBe(true);
   });
@@ -294,6 +295,8 @@ describe("hasRateLimitMessage (#12797)", () => {
     "Error: unauthorized",
     "API overloaded, retrying",
     "Credit balance is too low",
+    "Retry with backoff when the API returns 429 Too Many Requests",
+    "The handler maps quota exceeded errors to a friendly message",
   ])("does not treat other failures or prose as a rate limit: %s", (line) => {
     expect(hasRateLimitMessage([line])).toBe(false);
   });
@@ -308,5 +311,6 @@ describe("hasRateLimitMessage (#12797)", () => {
 
   it("keeps classifying a rate-limit banner as an error wait", () => {
     expect(classifyWaitingReason(["You've hit your usage limit."], true)).toBe("error");
+    expect(classifyWaitingReason(["request failed: too many requests"], true)).toBe("error");
   });
 });
