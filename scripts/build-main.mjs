@@ -24,6 +24,22 @@ const external = [
   "avr-vad", // Silero VAD wrapper; loads its bundled .onnx via fs from its own dir (#9177)
 ];
 
+// Remote Hosts is macOS/Linux only. A Windows build compiles the gate to
+// `false`, so every `if (__DAINTREE_REMOTE_HOSTS__) { await import(...) }`
+// site drops the link and host-server modules from the bundle entirely.
+// DAINTREE_BUILD_TARGET_PLATFORM lets a cross-build name its target.
+const buildTargetPlatform = process.env.DAINTREE_BUILD_TARGET_PLATFORM || process.platform;
+const remoteHostsEnabled = buildTargetPlatform !== "win32";
+
+// Client and host must run the same source commit, so the commit is baked in.
+function resolveBuildCommit() {
+  if (process.env.DAINTREE_BUILD_COMMIT) return process.env.DAINTREE_BUILD_COMMIT;
+  if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA;
+  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" });
+  return result.status === 0 ? result.stdout.trim() : "unknown";
+}
+const buildCommit = resolveBuildCommit();
+
 const common = {
   bundle: true,
   minify: isProd,
@@ -36,6 +52,8 @@ const common = {
   pure: isProd ? ["console.log", "console.info", "console.warn", "console.debug"] : [],
   define: {
     "process.env.SENTRY_DSN": JSON.stringify(process.env.SENTRY_DSN || ""),
+    __DAINTREE_REMOTE_HOSTS__: JSON.stringify(remoteHostsEnabled),
+    __DAINTREE_BUILD_COMMIT__: JSON.stringify(buildCommit),
     // Strip E2E test backdoors from production builds (#9148). Replacing these
     // env-var reads with "" lets esbuild constant-fold the `=== "1"` checks to
     // false and dead-code-eliminate the `contextBridge.exposeInMainWorld` blocks

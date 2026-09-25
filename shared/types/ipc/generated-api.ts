@@ -190,6 +190,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["diff-media:read-file-versions"]["args"]
     ): Promise<IpcInvokeMap["diff-media:read-file-versions"]["result"]>;
   };
+  driveLease: {
+    get(
+      ...args: IpcInvokeMap["drive-lease:get"]["args"]
+    ): Promise<IpcInvokeMap["drive-lease:get"]["result"]>;
+    takeOver(
+      ...args: IpcInvokeMap["drive-lease:take-over"]["args"]
+    ): Promise<IpcInvokeMap["drive-lease:take-over"]["result"]>;
+  };
   eventInspector: {
     clear(
       ...args: IpcInvokeMap["event-inspector:clear"]["args"]
@@ -208,6 +216,20 @@ export interface GeneratedElectronAPI {
     statPaths(
       ...args: IpcInvokeMap["file-browser:stat-paths"]["args"]
     ): Promise<IpcInvokeMap["file-browser:stat-paths"]["result"]>;
+  };
+  fileTransfer: {
+    cancel(
+      ...args: IpcInvokeMap["file-transfer:cancel"]["args"]
+    ): Promise<IpcInvokeMap["file-transfer:cancel"]["result"]>;
+    download(
+      ...args: IpcInvokeMap["file-transfer:download"]["args"]
+    ): Promise<IpcInvokeMap["file-transfer:download"]["result"]>;
+    uploadBytes(
+      ...args: IpcInvokeMap["file-transfer:upload-bytes"]["args"]
+    ): Promise<IpcInvokeMap["file-transfer:upload-bytes"]["result"]>;
+    uploadLocalFile(
+      ...args: IpcInvokeMap["file-transfer:upload-local-file"]["args"]
+    ): Promise<IpcInvokeMap["file-transfer:upload-local-file"]["result"]>;
   };
   fileWatch: {
     fingerprint(
@@ -334,6 +356,32 @@ export interface GeneratedElectronAPI {
     updateConfig(
       ...args: IpcInvokeMap["hibernation:update-config"]["args"]
     ): Promise<IpcInvokeMap["hibernation:update-config"]["result"]>;
+  };
+  hostFiles: {
+    getPickerRoots(
+      ...args: IpcInvokeMap["host-files:get-picker-roots"]["args"]
+    ): Promise<IpcInvokeMap["host-files:get-picker-roots"]["result"]>;
+    listDirectory(
+      ...args: IpcInvokeMap["host-files:list-directory"]["args"]
+    ): Promise<IpcInvokeMap["host-files:list-directory"]["result"]>;
+  };
+  hostMetrics: {
+    getSnapshots(
+      ...args: IpcInvokeMap["host-metrics:get-snapshots"]["args"]
+    ): Promise<IpcInvokeMap["host-metrics:get-snapshots"]["result"]>;
+  };
+  hostMode: {
+    getStatus(
+      ...args: IpcInvokeMap["host-mode:get-status"]["args"]
+    ): Promise<IpcInvokeMap["host-mode:get-status"]["result"]>;
+    setEnabled(
+      ...args: IpcInvokeMap["host-mode:set-enabled"]["args"]
+    ): Promise<IpcInvokeMap["host-mode:set-enabled"]["result"]>;
+  };
+  hostSwitch: {
+    plan(
+      ...args: IpcInvokeMap["host-switch:plan"]["args"]
+    ): Promise<IpcInvokeMap["host-switch:plan"]["result"]>;
   };
   keepAwake: {
     getState(
@@ -515,6 +563,17 @@ export interface GeneratedElectronAPI {
     setTourProgress(
       ...args: IpcInvokeMap["onboarding:tour-set-progress"]["args"]
     ): Promise<IpcInvokeMap["onboarding:tour-set-progress"]["result"]>;
+  };
+  operations: {
+    cancel(
+      ...args: IpcInvokeMap["operations:cancel"]["args"]
+    ): Promise<IpcInvokeMap["operations:cancel"]["result"]>;
+    getStatus(
+      ...args: IpcInvokeMap["operations:get-status"]["args"]
+    ): Promise<IpcInvokeMap["operations:get-status"]["result"]>;
+    list(
+      ...args: IpcInvokeMap["operations:list"]["args"]
+    ): Promise<IpcInvokeMap["operations:list"]["result"]>;
   };
   osDnd: {
     getState(
@@ -756,6 +815,17 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["plugin-mcp:set-config"]["args"]
     ): Promise<IpcInvokeMap["plugin-mcp:set-config"]["result"]>;
   };
+  pluginParity: {
+    diff(
+      ...args: IpcInvokeMap["plugin-parity:diff"]["args"]
+    ): Promise<IpcInvokeMap["plugin-parity:diff"]["result"]>;
+    installOnHost(
+      ...args: IpcInvokeMap["plugin-parity:install-on-host"]["args"]
+    ): Promise<IpcInvokeMap["plugin-parity:install-on-host"]["result"]>;
+    updateOnHost(
+      ...args: IpcInvokeMap["plugin-parity:update-on-host"]["args"]
+    ): Promise<IpcInvokeMap["plugin-parity:update-on-host"]["result"]>;
+  };
   pluginProcess: {
     list(
       ...args: IpcInvokeMap["plugin-process:list"]["args"]
@@ -793,6 +863,20 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["portal:show-new-tab-menu"]["args"]
     ): Promise<IpcInvokeMap["portal:show-new-tab-menu"]["result"]>;
   };
+  portForwards: {
+    forward(
+      ...args: IpcInvokeMap["port-forwards:forward"]["args"]
+    ): Promise<IpcInvokeMap["port-forwards:forward"]["result"]>;
+    list(
+      ...args: IpcInvokeMap["port-forwards:list"]["args"]
+    ): Promise<IpcInvokeMap["port-forwards:list"]["result"]>;
+    listHostPorts(
+      ...args: IpcInvokeMap["port-forwards:list-host-ports"]["args"]
+    ): Promise<IpcInvokeMap["port-forwards:list-host-ports"]["result"]>;
+    stop(
+      ...args: IpcInvokeMap["port-forwards:stop"]["args"]
+    ): Promise<IpcInvokeMap["port-forwards:stop"]["result"]>;
+  };
   privacy: {
     clearCache(
       ...args: IpcInvokeMap["privacy:clear-cache"]["args"]
@@ -821,6 +905,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["project-history:peek"]["args"]
     ): Promise<IpcInvokeMap["project-history:peek"]["result"]>;
   };
+  projectMatch: {
+    find(
+      ...args: IpcInvokeMap["project-match:find"]["args"]
+    ): Promise<IpcInvokeMap["project-match:find"]["result"]>;
+  };
   projectPresence: {
     getSnapshot(
       ...args: IpcInvokeMap["project-presence:get-snapshot"]["args"]
@@ -833,6 +922,41 @@ export interface GeneratedElectronAPI {
     preview(
       ...args: IpcInvokeMap["project-relocation:preview"]["args"]
     ): Promise<IpcInvokeMap["project-relocation:preview"]["result"]>;
+  };
+  remoteHosts: {
+    add(
+      ...args: IpcInvokeMap["remote-hosts:add"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:add"]["result"]>;
+    connect(
+      ...args: IpcInvokeMap["remote-hosts:connect"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:connect"]["result"]>;
+    disconnect(
+      ...args: IpcInvokeMap["remote-hosts:disconnect"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:disconnect"]["result"]>;
+    discover(
+      ...args: IpcInvokeMap["remote-hosts:discover"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:discover"]["result"]>;
+    forget(
+      ...args: IpcInvokeMap["remote-hosts:forget"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:forget"]["result"]>;
+    getLocalHandshake(
+      ...args: IpcInvokeMap["remote-hosts:get-local-handshake"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:get-local-handshake"]["result"]>;
+    getWindowHost(
+      ...args: IpcInvokeMap["remote-hosts:get-window-host"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:get-window-host"]["result"]>;
+    list(
+      ...args: IpcInvokeMap["remote-hosts:list"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:list"]["result"]>;
+    probe(
+      ...args: IpcInvokeMap["remote-hosts:probe"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:probe"]["result"]>;
+    switchWindowHost(
+      ...args: IpcInvokeMap["remote-hosts:switch-window-host"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:switch-window-host"]["result"]>;
+    update(
+      ...args: IpcInvokeMap["remote-hosts:update"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:update"]["result"]>;
   };
   runHistory: {
     append(

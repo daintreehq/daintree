@@ -223,6 +223,28 @@ export interface NotificationSettings {
  * positional-arg `demo` namespace, etc.).
  */
 export interface ElectronAPI extends GeneratedElectronAPI {
+  // Remote Hosts namespaces with a push channel.
+  remoteHosts: GeneratedElectronAPI["remoteHosts"] & {
+    onEvent(callback: (event: import("./remoteHosts.js").RemoteHostsEvent) => void): () => void;
+  };
+  hostMode: GeneratedElectronAPI["hostMode"] & {
+    onEvent(callback: (event: import("./hostMode.js").HostModeEvent) => void): () => void;
+  };
+  driveLease: GeneratedElectronAPI["driveLease"] & {
+    onEvent(callback: (event: import("./driveLease.js").DriveLeaseEvent) => void): () => void;
+  };
+  operations: GeneratedElectronAPI["operations"] & {
+    onEvent(callback: (event: import("./operations.js").OperationsEvent) => void): () => void;
+  };
+  fileTransfer: GeneratedElectronAPI["fileTransfer"] & {
+    onEvent(callback: (event: import("./fileTransfer.js").FileTransferEvent) => void): () => void;
+  };
+  hostMetrics: GeneratedElectronAPI["hostMetrics"] & {
+    onEvent(callback: (event: import("./hostMetrics.js").HostMetricsEvent) => void): () => void;
+  };
+  portForwards: GeneratedElectronAPI["portForwards"] & {
+    onEvent(callback: (event: import("./portForwards.js").PortForwardsEvent) => void): () => void;
+  };
   // Invoke methods are generated; onWebglThresholds is the hand-wired push
   // listener for the webglBudget apply step (surface-view side).
   paintSurface: GeneratedElectronAPI["paintSurface"] & {

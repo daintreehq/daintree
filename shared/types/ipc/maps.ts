@@ -1395,6 +1395,15 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
  * IPC Event Contract Map
  */
 export interface IpcEventMap {
+  // Remote Hosts namespaces: one push channel each, carrying a discriminated union.
+  "remote-hosts:event": import("./remoteHosts.js").RemoteHostsEvent;
+  "host-mode:event": import("./hostMode.js").HostModeEvent;
+  "drive-lease:event": import("./driveLease.js").DriveLeaseEvent;
+  "operations:event": import("./operations.js").OperationsEvent;
+  "file-transfer:event": import("./fileTransfer.js").FileTransferEvent;
+  "host-metrics:event": import("./hostMetrics.js").HostMetricsEvent;
+  "port-forwards:event": import("./portForwards.js").PortForwardsEvent;
+
   // Worktree events
   "worktree:remove": { worktreeId: string };
   "worktree:activated": { worktreeId: string };

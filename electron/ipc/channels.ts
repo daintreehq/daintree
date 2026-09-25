@@ -1226,6 +1226,69 @@ export const CHANNELS = {
   // and an agent must never be able to grant itself a plugin's tools.
   PLUGIN_AGENT_MCP_LIST_PROJECT_ENDPOINTS: "plugin-agent-mcp:list-project-endpoints",
   PLUGIN_AGENT_MCP_SET_PROJECT_ENDPOINT_ENABLED: "plugin-agent-mcp:set-project-endpoint-enabled",
+
+  // Remote Hosts: remoteHosts (shell).
+  REMOTE_HOSTS_LIST: "remote-hosts:list",
+  REMOTE_HOSTS_ADD: "remote-hosts:add",
+  REMOTE_HOSTS_UPDATE: "remote-hosts:update",
+  REMOTE_HOSTS_FORGET: "remote-hosts:forget",
+  REMOTE_HOSTS_CONNECT: "remote-hosts:connect",
+  REMOTE_HOSTS_DISCONNECT: "remote-hosts:disconnect",
+  REMOTE_HOSTS_GET_WINDOW_HOST: "remote-hosts:get-window-host",
+  REMOTE_HOSTS_SWITCH_WINDOW_HOST: "remote-hosts:switch-window-host",
+  REMOTE_HOSTS_DISCOVER: "remote-hosts:discover",
+  REMOTE_HOSTS_PROBE: "remote-hosts:probe",
+  REMOTE_HOSTS_GET_LOCAL_HANDSHAKE: "remote-hosts:get-local-handshake",
+  REMOTE_HOSTS_EVENT: "remote-hosts:event",
+
+  // Remote Hosts: hostMode (shell).
+  HOST_MODE_GET_STATUS: "host-mode:get-status",
+  HOST_MODE_SET_ENABLED: "host-mode:set-enabled",
+  HOST_MODE_EVENT: "host-mode:event",
+
+  // Remote Hosts: driveLease (host).
+  DRIVE_LEASE_GET: "drive-lease:get",
+  DRIVE_LEASE_TAKE_OVER: "drive-lease:take-over",
+  DRIVE_LEASE_EVENT: "drive-lease:event",
+
+  // Remote Hosts: operations (host).
+  OPERATIONS_GET_STATUS: "operations:get-status",
+  OPERATIONS_LIST: "operations:list",
+  OPERATIONS_CANCEL: "operations:cancel",
+  OPERATIONS_EVENT: "operations:event",
+
+  // Remote Hosts: hostFiles (host).
+  HOST_FILES_LIST_DIRECTORY: "host-files:list-directory",
+  HOST_FILES_GET_PICKER_ROOTS: "host-files:get-picker-roots",
+
+  // Remote Hosts: fileTransfer (shell).
+  FILE_TRANSFER_UPLOAD_LOCAL_FILE: "file-transfer:upload-local-file",
+  FILE_TRANSFER_UPLOAD_BYTES: "file-transfer:upload-bytes",
+  FILE_TRANSFER_DOWNLOAD: "file-transfer:download",
+  FILE_TRANSFER_CANCEL: "file-transfer:cancel",
+  FILE_TRANSFER_EVENT: "file-transfer:event",
+
+  // Remote Hosts: hostSwitch (shell).
+  HOST_SWITCH_PLAN: "host-switch:plan",
+
+  // Remote Hosts: projectMatch (host).
+  PROJECT_MATCH_FIND: "project-match:find",
+
+  // Remote Hosts: hostMetrics (shell).
+  HOST_METRICS_GET_SNAPSHOTS: "host-metrics:get-snapshots",
+  HOST_METRICS_EVENT: "host-metrics:event",
+
+  // Remote Hosts: portForwards (shell).
+  PORT_FORWARDS_LIST: "port-forwards:list",
+  PORT_FORWARDS_FORWARD: "port-forwards:forward",
+  PORT_FORWARDS_STOP: "port-forwards:stop",
+  PORT_FORWARDS_LIST_HOST_PORTS: "port-forwards:list-host-ports",
+  PORT_FORWARDS_EVENT: "port-forwards:event",
+
+  // Remote Hosts: pluginParity (shell).
+  PLUGIN_PARITY_DIFF: "plugin-parity:diff",
+  PLUGIN_PARITY_INSTALL_ON_HOST: "plugin-parity:install-on-host",
+  PLUGIN_PARITY_UPDATE_ON_HOST: "plugin-parity:update-on-host",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

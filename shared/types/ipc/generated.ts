@@ -378,6 +378,14 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./diffMedia.js").DiffMediaReadFileVersionsPayload];
     result: import("./diffMedia.js").DiffMediaFileVersions;
   };
+  "drive-lease:get": {
+    args: [_payload: import("./driveLease.js").DriveLeaseProjectPayload];
+    result: import("../remoteHosts.js").DriveLeaseState;
+  };
+  "drive-lease:take-over": {
+    args: [_payload: import("./driveLease.js").DriveLeaseProjectPayload];
+    result: import("../remoteHosts.js").DriveLeaseState;
+  };
   "editor:discover": {
     args: [];
     result: import("../editor.js").DiscoveredEditor[];
@@ -412,6 +420,22 @@ export interface GeneratedIpcInvokeMap {
   "file-browser:stat-paths": {
     args: [payload: import("./fileBrowser.js").FileBrowserStatPathsPayload];
     result: import("./fileBrowser.js").FileBrowserStatPathsResult;
+  };
+  "file-transfer:cancel": {
+    args: [_payload: { opId: string }];
+    result: void;
+  };
+  "file-transfer:download": {
+    args: [_payload: import("./fileTransfer.js").DownloadPayload];
+    result: import("./fileTransfer.js").DownloadResult;
+  };
+  "file-transfer:upload-bytes": {
+    args: [_payload: import("./fileTransfer.js").UploadBytesPayload];
+    result: import("./fileTransfer.js").UploadResult;
+  };
+  "file-transfer:upload-local-file": {
+    args: [_payload: import("./fileTransfer.js").UploadLocalFilePayload];
+    result: import("./fileTransfer.js").UploadResult;
   };
   "file-watch:fingerprint": {
     args: [payload: import("./fileWatch.js").FileWatchFingerprintPayload];
@@ -848,6 +872,30 @@ export interface GeneratedIpcInvokeMap {
     args: [config: Partial<import("./hibernation.js").HibernationConfig>];
     result: import("./hibernation.js").HibernationConfig;
   };
+  "host-files:get-picker-roots": {
+    args: [];
+    result: import("./hostFiles.js").HostPickerRoots;
+  };
+  "host-files:list-directory": {
+    args: [_payload: import("./hostFiles.js").ListHostDirectoryPayload];
+    result: import("./hostFiles.js").HostDirectoryListing;
+  };
+  "host-metrics:get-snapshots": {
+    args: [];
+    result: import("./hostMetrics.js").HostMetricsSnapshot[];
+  };
+  "host-mode:get-status": {
+    args: [];
+    result: import("./hostMode.js").HostModeStatus;
+  };
+  "host-mode:set-enabled": {
+    args: [_payload: import("./hostMode.js").SetHostModePayload];
+    result: import("./hostMode.js").HostModeStatus;
+  };
+  "host-switch:plan": {
+    args: [_payload: import("./hostSwitch.js").HostSwitchPlanPayload];
+    result: import("./hostSwitch.js").HostSwitchPlan;
+  };
   "idle-background:get-config": {
     args: [];
     result: import("./idleBackgroundAutoClose.js").IdleBackgroundAutoCloseConfig;
@@ -1121,6 +1169,18 @@ export interface GeneratedIpcInvokeMap {
     args: [tourId: string, update: import("./maps.js").TourProgressUpdate];
     result: import("./maps.js").TourOnboardingState;
   };
+  "operations:cancel": {
+    args: [_payload: import("./operations.js").OperationIdPayload];
+    result: boolean;
+  };
+  "operations:get-status": {
+    args: [_payload: import("./operations.js").OperationIdPayload];
+    result: import("../remoteHosts.js").OperationOutcome;
+  };
+  "operations:list": {
+    args: [_payload: import("./operations.js").ListOperationsPayload];
+    result: import("../remoteHosts.js").OperationRecord[];
+  };
   "os-dnd:get-state": {
     args: [];
     result: boolean | undefined;
@@ -1197,6 +1257,18 @@ export interface GeneratedIpcInvokeMap {
   "plugin-mcp:set-config": {
     args: [config: import("./pluginMcp.js").PluginMcpConfig];
     result: import("./pluginMcp.js").PluginMcpConfig;
+  };
+  "plugin-parity:diff": {
+    args: [_payload: import("./pluginParity.js").PluginParityPayload];
+    result: import("./pluginParity.js").PluginParityRow[];
+  };
+  "plugin-parity:install-on-host": {
+    args: [_payload: import("./pluginParity.js").InstallOnHostPayload];
+    result: void;
+  };
+  "plugin-parity:update-on-host": {
+    args: [_payload: import("./pluginParity.js").InstallOnHostPayload];
+    result: void;
   };
   "plugin-process:list": {
     args: [pluginId?: string | undefined];
@@ -1458,6 +1530,22 @@ export interface GeneratedIpcInvokeMap {
     args: [path: string];
     result: import("../plugin.js").PluginWorktreeStatus | null;
   };
+  "port-forwards:forward": {
+    args: [_payload: import("./portForwards.js").ForwardPortPayload];
+    result: import("./portForwards.js").PortForward;
+  };
+  "port-forwards:list": {
+    args: [];
+    result: import("./portForwards.js").PortForward[];
+  };
+  "port-forwards:list-host-ports": {
+    args: [_payload: { hostId: string }];
+    result: import("./portForwards.js").HostListeningPort[];
+  };
+  "port-forwards:stop": {
+    args: [_payload: { forwardId: string }];
+    result: void;
+  };
   "portal:close-tab": {
     args: [payload: import("../portal.js").PortalCloseTabPayload];
     result: void;
@@ -1533,6 +1621,10 @@ export interface GeneratedIpcInvokeMap {
   "project-history:peek": {
     args: [];
     result: import("./project.js").ProjectHistoryTarget | null;
+  };
+  "project-match:find": {
+    args: [_payload: import("./projectMatch.js").FindProjectMatchPayload];
+    result: import("./projectMatch.js").ProjectMatchCandidate[];
   };
   "project-presence:get-snapshot": {
     args: [];
@@ -1630,6 +1722,50 @@ export interface GeneratedIpcInvokeMap {
   "project:sleep": {
     args: [projectId: string];
     result: import("./project.js").ProjectSleepResult;
+  };
+  "remote-hosts:add": {
+    args: [_payload: import("./remoteHosts.js").AddHostPayload];
+    result: import("../remoteHosts.js").HostDescriptor;
+  };
+  "remote-hosts:connect": {
+    args: [_payload: { hostId: string }];
+    result: import("../remoteHosts.js").HostConnectionState;
+  };
+  "remote-hosts:disconnect": {
+    args: [_payload: { hostId: string }];
+    result: void;
+  };
+  "remote-hosts:discover": {
+    args: [];
+    result: import("./remoteHosts.js").DiscoveredHost[];
+  };
+  "remote-hosts:forget": {
+    args: [_payload: { hostId: string }];
+    result: void;
+  };
+  "remote-hosts:get-local-handshake": {
+    args: [];
+    result: import("../remoteHosts.js").HostHandshakeInfo;
+  };
+  "remote-hosts:get-window-host": {
+    args: [];
+    result: import("./remoteHosts.js").WindowHostInfo;
+  };
+  "remote-hosts:list": {
+    args: [];
+    result: import("../remoteHosts.js").HostListEntry[];
+  };
+  "remote-hosts:probe": {
+    args: [_payload: { sshTarget: string }];
+    result: import("./remoteHosts.js").HostProbeResult;
+  };
+  "remote-hosts:switch-window-host": {
+    args: [_payload: import("./remoteHosts.js").SwitchWindowHostPayload];
+    result: void;
+  };
+  "remote-hosts:update": {
+    args: [_payload: import("./remoteHosts.js").UpdateHostPayload];
+    result: import("../remoteHosts.js").HostDescriptor;
   };
   "run-history:append": {
     args: [input: import("./runHistory.js").RunHistoryAppendInput];

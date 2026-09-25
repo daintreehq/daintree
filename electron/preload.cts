@@ -65,6 +65,17 @@ import { buildForgeRecommendationPreloadBindings } from "./ipc/handlers/forgeRec
 import { buildForgeCredentialImportPreloadBindings } from "./ipc/handlers/forgeCredentialImport.preload.js";
 import { buildSentryPreloadBindings } from "./ipc/handlers/sentry.preload.js";
 import { buildPrivacyPreloadBindings } from "./ipc/handlers/privacy.preload.js";
+import { buildRemoteHostsPreloadBindings } from "./ipc/handlers/remoteHosts.preload.js";
+import { buildHostModePreloadBindings } from "./ipc/handlers/hostMode.preload.js";
+import { buildDriveLeasePreloadBindings } from "./ipc/handlers/driveLease.preload.js";
+import { buildOperationsPreloadBindings } from "./ipc/handlers/operations.preload.js";
+import { buildHostFilesPreloadBindings } from "./ipc/handlers/hostFiles.preload.js";
+import { buildFileTransferPreloadBindings } from "./ipc/handlers/fileTransfer.preload.js";
+import { buildHostSwitchPreloadBindings } from "./ipc/handlers/hostSwitch.preload.js";
+import { buildProjectMatchPreloadBindings } from "./ipc/handlers/projectMatch.preload.js";
+import { buildHostMetricsPreloadBindings } from "./ipc/handlers/hostMetrics.preload.js";
+import { buildPortForwardsPreloadBindings } from "./ipc/handlers/portForwards.preload.js";
+import { buildPluginParityPreloadBindings } from "./ipc/handlers/pluginParity.preload.js";
 import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
 import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
 import { buildProjectPresencePreloadBindings } from "./ipc/handlers/projectPresence.preload.js";
@@ -2924,6 +2935,47 @@ function buildElectronApi(): ElectronAPI {
     },
 
     sentry: buildSentryPreloadBindings(_unwrappingInvoke),
+
+    // Remote Hosts (absent in effect on Windows: the handlers are never registered).
+    remoteHosts: {
+      ...buildRemoteHostsPreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["remote-hosts:event"]) => void) =>
+        _typedOn("remote-hosts:event", callback),
+    },
+    hostMode: {
+      ...buildHostModePreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["host-mode:event"]) => void) =>
+        _typedOn("host-mode:event", callback),
+    },
+    driveLease: {
+      ...buildDriveLeasePreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["drive-lease:event"]) => void) =>
+        _typedOn("drive-lease:event", callback),
+    },
+    operations: {
+      ...buildOperationsPreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["operations:event"]) => void) =>
+        _typedOn("operations:event", callback),
+    },
+    hostFiles: buildHostFilesPreloadBindings(_unwrappingInvoke),
+    fileTransfer: {
+      ...buildFileTransferPreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["file-transfer:event"]) => void) =>
+        _typedOn("file-transfer:event", callback),
+    },
+    hostSwitch: buildHostSwitchPreloadBindings(_unwrappingInvoke),
+    projectMatch: buildProjectMatchPreloadBindings(_unwrappingInvoke),
+    hostMetrics: {
+      ...buildHostMetricsPreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["host-metrics:event"]) => void) =>
+        _typedOn("host-metrics:event", callback),
+    },
+    portForwards: {
+      ...buildPortForwardsPreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["port-forwards:event"]) => void) =>
+        _typedOn("port-forwards:event", callback),
+    },
+    pluginParity: buildPluginParityPreloadBindings(_unwrappingInvoke),
 
     onboarding: {
       ...buildOnboardingPreloadBindings(_unwrappingInvoke),
