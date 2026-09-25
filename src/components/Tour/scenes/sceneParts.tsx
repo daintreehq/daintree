@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn } from "../mockup/cn";
 
 /** The empty grid, as a new worktree shows it: the launcher and nothing else. */
 export function MockEmptyGrid({ label, className }: { label: string; className?: string }) {

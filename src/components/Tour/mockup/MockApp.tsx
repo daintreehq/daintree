@@ -15,11 +15,15 @@ import {
   SquareTerminal,
   Zap,
 } from "lucide-react";
-import { DaintreeIcon, HollowCircle } from "@/components/icons";
-import { STATE_COLORS, STATE_PRIORITY } from "@/components/Worktree/terminalStateConfig";
-import { cn } from "@/lib/utils";
-import type { AgentState } from "@/types";
-import { MockAgentIcon, MockStateGlyph, type MockAgentId } from "./TourMock";
+import { cn } from "./cn";
+import {
+  resolveMockState,
+  useMockKit,
+  type MockAgent,
+  type MockAgentId,
+  type MockStateId,
+} from "./MockKitContext";
+import { MockAgentIcon, MockStateGlyph } from "./TourMock";
 
 /**
  * The whole Daintree window, compressed onto the 640×360 tour canvas. Every
@@ -47,8 +51,9 @@ export const GRID_RECT = {
   height: APP_LAYOUT.height - APP_LAYOUT.toolbarHeight - APP_LAYOUT.dockHeight - 16,
 } as const;
 
-/** Pinned agents in toolbar order. */
-export const TOOLBAR_AGENTS: readonly MockAgentId[] = ["claude", "codex", "antigravity"];
+/** Pinned agents in toolbar order. `ANCHOR` holds a measured point for each. */
+export const TOOLBAR_AGENTS = ["claude", "codex", "antigravity"] as const;
+export type ToolbarAgentId = (typeof TOOLBAR_AGENTS)[number];
 
 /**
  * Canvas centres of the frame's controls — where the pointer goes to "click"
@@ -74,7 +79,7 @@ export const ANCHOR = {
   "dock-launcher": { x: 174, y: 347 },
 } as const satisfies Record<string, { x: number; y: number }>;
 
-export function toolbarAgentPoint(agent: MockAgentId) {
+export function toolbarAgentPoint(agent: ToolbarAgentId) {
   return ANCHOR[`agent-${agent}`];
 }
 export const SIDEBAR_PLUS_POINT = ANCHOR["sidebar-plus"];
@@ -134,7 +139,7 @@ export interface MockWorktree {
   branch: string;
   selected?: boolean;
   /** Agent states, as the real card's session row of glyphs. */
-  states?: readonly AgentState[];
+  states?: readonly MockStateId[];
   /** Change counts, e.g. "+94 −4". */
   changes?: string;
   /** A trailing control on the changes row, as the real card's review button. */
@@ -156,7 +161,8 @@ export function MockWorktreeCard({
 }: MockWorktree) {
   // The card shows one glyph — its most urgent session's — as the real card's
   // priority rule does, never one glyph per agent.
-  const shown = states?.length ? STATE_PRIORITY.find((state) => states.includes(state)) : undefined;
+  const { statePriority } = useMockKit();
+  const shown = states?.length ? statePriority.find((state) => states.includes(state)) : undefined;
   return (
     <div
       data-tour-anchor={`worktree-${name}`}
@@ -207,6 +213,8 @@ export function MockWorktreeCard({
 
 /** The dock's waiting pill, as the real one: glyph, word, count. */
 export function MockWaitingPill({ count, className }: { count: number; className?: string }) {
+  const waiting = resolveMockState(useMockKit(), "waiting");
+  const Icon = waiting?.Icon;
   return (
     <span
       data-tour-anchor="dock-waiting"
@@ -215,7 +223,7 @@ export function MockWaitingPill({ count, className }: { count: number; className
         className
       )}
     >
-      <HollowCircle className={cn("size-2.5", STATE_COLORS.waiting)} />
+      {Icon && <Icon className={cn("size-2.5", waiting?.colorClass)} />}
       <span className="text-3xs font-medium text-text-primary">Waiting</span>
       <span className="text-3xs tabular-nums text-text-secondary">{count}</span>
     </span>
@@ -223,6 +231,8 @@ export function MockWaitingPill({ count, className }: { count: number; className
 }
 
 interface MockAppProps {
+  /** Agents pinned to the toolbar, in order. Defaults to the built-in three. */
+  toolbarAgents?: readonly (MockAgentId | MockAgent)[];
   /** Regions kept at full strength; the rest recede. Omit to show everything evenly. */
   focus?: readonly AppRegion[];
   worktrees: ReactNode;
@@ -239,6 +249,7 @@ interface MockAppProps {
 }
 
 export function MockApp({
+  toolbarAgents = TOOLBAR_AGENTS,
   focus,
   worktrees,
   grid,
@@ -248,6 +259,8 @@ export function MockApp({
   overlay,
   children,
 }: MockAppProps) {
+  const kit = useMockKit();
+  const AssistantIcon = kit.assistantIcon;
   return (
     <div className="absolute inset-0 flex flex-col bg-surface-canvas">
       <div
@@ -267,11 +280,14 @@ export function MockApp({
         </ToolbarButton>
         <Divider />
         <span data-tour-anchor="toolbar-agents" className="flex items-center gap-0.5">
-          {TOOLBAR_AGENTS.map((agent) => (
-            <ToolbarButton key={agent} anchor={`agent-${agent}`}>
-              <MockAgentIcon agent={agent} className="size-3.5" />
-            </ToolbarButton>
-          ))}
+          {toolbarAgents.map((agent) => {
+            const id = typeof agent === "string" ? agent : agent.id;
+            return (
+              <ToolbarButton key={id} anchor={`agent-${id}`}>
+                <MockAgentIcon agent={agent} className="size-3.5" />
+              </ToolbarButton>
+            );
+          })}
         </span>
         <Divider />
         <ToolbarButton anchor="terminal">
@@ -319,7 +335,7 @@ export function MockApp({
         </ToolbarButton>
         <Divider />
         <ToolbarButton anchor="assistant">
-          <DaintreeIcon className="size-3" />
+          {AssistantIcon && <AssistantIcon className="size-3" />}
         </ToolbarButton>
         <ToolbarButton anchor="portal">
           <MessageSquareMore aria-hidden="true" />
