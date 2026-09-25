@@ -1,3 +1,12 @@
+import type { PluginHostError } from "./remoteHosts.js";
+
+/**
+ * Structured, allowlisted error details that survive IPC serialization and
+ * the packaged-build sanitiser (unlike `context`, which is stripped). Keep
+ * every member small and free of paths, secrets and user content.
+ */
+export type AppErrorDetails = PluginHostError;
+
 /**
  * Discriminated codes carried by `AppError` (main process) and
  * `ClientAppError` (renderer) so callers can `e.code === "BINARY_FILE"`
@@ -49,4 +58,20 @@ export type AppErrorCode =
   | "STALE_GENERATION"
   | "PERSIST_FAILED"
   | "SESSION_NOT_FOUND"
+  // Remote Hosts. A plugin is missing on, or can't run on, the window's host;
+  // the details travel as `AppErrorDetails`.
+  | "PLUGIN_NOT_ON_HOST"
+  | "PLUGIN_INCOMPATIBLE"
+  // The link to the window's host is down. For a mutation this is an unknown
+  // outcome, not a failure: resolve it through the operation id.
+  | "HOST_DISCONNECTED"
+  | "OUTCOME_UNKNOWN"
+  | "HOST_VERSION_MISMATCH"
+  // An action that is inherently UI (focus a panel, open a dialog) was
+  // dispatched with no frontend attached to the host.
+  | "NO_FRONTEND_ATTACHED"
+  // A channel reached a host over the link that has no host-side meaning.
+  | "CHANNEL_NOT_REMOTABLE"
+  // Another frontend holds the drive lease for this project.
+  | "DRIVEN_ELSEWHERE"
   | "INTERNAL";
