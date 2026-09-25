@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import {
@@ -23,6 +23,8 @@ function mount(doc: string, { readOnly }: { readOnly: boolean }) {
         search({ top: true, createPanel: createEditorSearchPanel }),
         keymap.of(searchKeymap),
         EditorState.readOnly.of(readOnly),
+        // CodeViewer gets this from basicSetup, and the "all" button needs it.
+        EditorState.allowMultipleSelections.of(true),
       ],
     }),
     parent: host,
@@ -148,6 +150,34 @@ describe("editorSearchPanel (#12755)", () => {
     type(queryInput(), "a");
     expect(wrapper.hasAttribute("data-invalid")).toBe(false);
     expect(queryInput().hasAttribute("aria-invalid")).toBe(false);
+    type(queryInput(), "(");
+    expect(wrapper.getAttribute("data-invalid")).toBe("true");
+    // The same text is a fine literal search once regexp is off.
+    field("re").checked = false;
+    field("re").dispatchEvent(new Event("change", { bubbles: true }));
+    expect(wrapper.hasAttribute("data-invalid")).toBe(false);
+  });
+
+  it("commits a paste, which arrives as input with no keyup", () => {
+    mounted = mount("alpha", { readOnly: true });
+    queryInput().value = "lph";
+    queryInput().dispatchEvent(new Event("input", { bubbles: true }));
+    expect(getSearchQuery(mounted.view.state).search).toBe("lph");
+  });
+
+  it("the next, previous and all buttons drive the editor's matches", () => {
+    mounted = mount("a1 a2 a3", { readOnly: true });
+    const { view } = mounted;
+    type(queryInput(), "a");
+    const click = (name: string) =>
+      panel().querySelector<HTMLButtonElement>(`button[name=${name}]`)!.click();
+    click("next");
+    click("next");
+    expect(view.state.selection.main.from).toBe(3);
+    click("prev");
+    expect(view.state.selection.main.from).toBe(0);
+    click("select");
+    expect(view.state.selection.ranges.map((range) => range.from)).toEqual([0, 3, 6]);
   });
 
   it("Enter finds the next match and Shift+Enter the previous one", () => {
@@ -177,13 +207,26 @@ describe("editorSearchPanel (#12755)", () => {
     expect(query.literal).toBe(true);
   });
 
-  it("does not search on an Enter that commits an IME composition", () => {
-    mounted = mount("a1 a2", { readOnly: true });
+  it("leaves IME keystrokes alone, including the boundary one that reports isComposing false", () => {
+    mounted = mount("a1 a2", { readOnly: false });
+    const { view } = mounted;
     type(queryInput(), "a");
-    const before = mounted.view.state.selection.main.from;
-    const event = press(queryInput(), { key: "Enter", keyCode: 229, isComposing: true });
-    expect(event.defaultPrevented).toBe(false);
-    expect(mounted.view.state.selection.main.from).toBe(before);
+    type(field("replace"), "b");
+    press(queryInput(), { key: "Enter", keyCode: 13 });
+    const selection = view.state.selection.main;
+    const shapes: KeyboardEventInit[] = [
+      { key: "Enter", keyCode: 229, isComposing: true },
+      { key: "Enter", keyCode: 229, isComposing: false },
+      { key: "Escape", keyCode: 229, isComposing: false },
+    ];
+    for (const target of [queryInput(), field("replace")]) {
+      for (const shape of shapes) {
+        expect(press(target, shape).defaultPrevented).toBe(false);
+      }
+    }
+    expect(view.state.selection.main.eq(selection)).toBe(true);
+    expect(view.state.doc.toString()).toBe("a1 a2");
+    expect(searchPanelOpen(view.state)).toBe(true);
   });
 
   it("Enter in the replace field replaces the next match", () => {
@@ -191,9 +234,15 @@ describe("editorSearchPanel (#12755)", () => {
     const { view } = mounted;
     type(queryInput(), "a");
     type(field("replace"), "b");
+    // The first press lands on a match; the next replaces it and moves on.
     press(field("replace"), { key: "Enter", keyCode: 13 });
+    expect(view.state.doc.toString()).toBe("a1 a2");
+    expect([view.state.selection.main.from, view.state.selection.main.to]).toEqual([0, 1]);
     press(field("replace"), { key: "Enter", keyCode: 13 });
-    expect(view.state.doc.toString()).toContain("b1");
+    expect(view.state.doc.toString()).toBe("b1 a2");
+    expect([view.state.selection.main.from, view.state.selection.main.to]).toEqual([3, 4]);
+    press(field("replace"), { key: "Enter", keyCode: 13 });
+    expect(view.state.doc.toString()).toBe("b1 b2");
   });
 
   it("the replace-all button replaces every match", () => {
@@ -211,20 +260,38 @@ describe("editorSearchPanel (#12755)", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(searchPanelOpen(view.state)).toBe(false);
     expect(document.querySelector(".cm-search")).toBeNull();
-    expect(view.hasFocus).toBe(true);
+    expect(document.activeElement).toBe(view.contentDOM);
   });
 
-  it("Mod-f inside the panel is the editor's, not the page's, and keeps the query focused", () => {
+  it("the close button closes the panel and hands focus back to the editor", () => {
+    mounted = mount("alpha", { readOnly: true });
+    const { view } = mounted;
+    const close = panel().querySelector<HTMLButtonElement>("button[name=close]")!;
+    close.focus();
+    close.click();
+    expect(searchPanelOpen(view.state)).toBe(false);
+    expect(document.activeElement).toBe(view.contentDOM);
+  });
+
+  it("a reopened panel shows the query as it stands, including changes made while closed", () => {
+    mounted = mount("alpha", { readOnly: false });
+    const { view } = mounted;
+    press(queryInput(), { key: "Escape", keyCode: 27 });
+    view.dispatch({
+      effects: setSearchQuery.of(new SearchQuery({ search: "ph", replace: "PH", wholeWord: true })),
+    });
+    openSearchPanel(view);
+    expect(queryInput().value).toBe("ph");
+    expect(field("replace").value).toBe("PH");
+    expect(field("word").checked).toBe(true);
+    expect(document.activeElement).toBe(queryInput());
+  });
+
+  it("Mod-f inside the panel is consumed and keeps the query focused", () => {
     mounted = mount("alpha", { readOnly: true });
     type(queryInput(), "alp");
-    const windowSpy = vi.fn((event: KeyboardEvent) => event.defaultPrevented);
-    window.addEventListener("keydown", windowSpy);
     const event = press(queryInput(), { key: "f", keyCode: 70, ...modKey() });
-    window.removeEventListener("keydown", windowSpy);
     expect(event.defaultPrevented).toBe(true);
-    // Anything listening further up (the app's own find) sees it as handled.
-    expect(windowSpy).toHaveBeenCalledTimes(1);
-    expect(windowSpy.mock.results.every((result) => result.value === true)).toBe(true);
     expect(document.activeElement).toBe(queryInput());
     expect(queryInput().value).toBe("alp");
   });

@@ -171,12 +171,15 @@ class EditorSearchPanel implements Panel {
   }
 
   private keydown(event: KeyboardEvent): void {
+    // Keys that belong to an IME (committing a candidate, cancelling it) are
+    // neither a search nor a panel shortcut. Chromium can report the
+    // boundary keystroke with `isComposing` already false but keyCode 229.
+    if (event.isComposing || event.keyCode === 229) return;
     if (runScopeHandlers(this.view, event, "search-panel")) {
       event.preventDefault();
       return;
     }
-    // An Enter that commits an IME candidate is not a search.
-    if (event.key !== "Enter" || event.isComposing) return;
+    if (event.key !== "Enter") return;
     if (event.target === this.searchField) {
       event.preventDefault();
       (event.shiftKey ? findPrevious : findNext)(this.view);
@@ -189,8 +192,8 @@ class EditorSearchPanel implements Panel {
   update(update: ViewUpdate): void {
     for (const tr of update.transactions) {
       for (const effect of tr.effects) {
-        // Identity, not `eq()`: `eq()` ignores `literal` and `test`, and the
-        // panel's own commits come back as the very object it dispatched.
+        // Identity, not `eq()`: `eq()` ignores `literal`, and the panel's own
+        // commits come back as the very object it dispatched.
         if (effect.is(setSearchQuery) && effect.value !== this.query) this.setQuery(effect.value);
       }
     }

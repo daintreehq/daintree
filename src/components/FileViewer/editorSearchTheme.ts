@@ -19,8 +19,10 @@ export const editorSearchPanelTheme = EditorView.theme({
     color: "var(--theme-text-primary)",
     borderBottom: "1px solid var(--theme-border-default)",
   },
+  // The right inset clears the absolutely placed close button, so a field
+  // shrunk to a narrow pane never runs under it.
   ".cm-panel.cm-search": {
-    padding: "4px 8px",
+    padding: "4px 24px 4px 8px",
   },
   // The query is the app's search field (`editorSearchPanel.ts`) and brings its
   // own paint from search-field.css; this only seats it in the panel's row.
