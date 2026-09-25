@@ -1161,10 +1161,21 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
           fingerprint: JSON.stringify({ setUpstream: Boolean(payload.setUpstream) }),
         }
       : null;
-    const registry = getOperationRegistry();
-    const joined = input ? registry.join<void>(input) : null;
+    // Reached only for a named push, so a local push never constructs the
+    // registry.
+    const joined = input ? getOperationRegistry().join<void>(input) : null;
     if (joined) return joined;
-    if (pushingCwds.has(payload.cwd)) return;
+    if (pushingCwds.has(payload.cwd)) {
+      if (!input) return;
+      // An unnamed local push owns this cwd and has no record to join. Treating
+      // this as the silent no-op a local caller gets would report success for
+      // an opId that never resolves, so the named caller is told instead.
+      throw new AppError({
+        code: "VALIDATION",
+        message: "A push is already running for this worktree",
+        userMessage: "A push is already running for this worktree. Try again when it finishes.",
+      });
+    }
 
     checkRateLimit(CHANNELS.GIT_PUSH, 5, 10_000);
     validateCwd(payload?.cwd);
@@ -1172,7 +1183,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     pushingCwds.add(payload.cwd);
     try {
       if (input) {
-        await registry.run(input, (op) => runPush(ctx, payload, op));
+        await getOperationRegistry().run(input, (op) => runPush(ctx, payload, op));
       } else {
         await runPush(ctx, payload, untrackedOperationHandle());
       }
