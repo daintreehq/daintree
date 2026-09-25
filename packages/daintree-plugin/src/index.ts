@@ -18,6 +18,14 @@ export { runSchema } from "./commands/schema.js";
 export type { SchemaOptions } from "./commands/schema.js";
 export { runPackage } from "./commands/package.js";
 export type { PackageOptions, PackageResult } from "./commands/package.js";
+export { runTourAlign, runTourVoice } from "./commands/tour.js";
+export type {
+  TourAlignOptions,
+  TourChapterOutcome,
+  TourChapterReport,
+  TourCommandResult,
+  TourVoiceOptions,
+} from "./commands/tour.js";
 export { runInstall } from "./commands/install.js";
 export { runUninstall } from "./commands/uninstall.js";
 export { TEMPLATE_KINDS, type TemplateKind } from "./scaffold/templates.js";

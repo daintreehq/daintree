@@ -19,6 +19,10 @@
  * Word timestamps come from Inworld speech-to-text, so every scene cue lands
  * on the word you actually spoke — no hand-timing.
  *
+ * The Inworld calls, encoding, duration and alignment are the plugin CLI's own
+ * (`daintree-plugin tour voice|align`); only the chapters, the keyboard variants
+ * and publishing to R2 are ours.
+ *
  * Env: INWORLD_API_KEY (TTS and STT), CLOUDFLARE_API_TOKEN
  * (upload, via wrangler; CLOUDFLARE_ACCOUNT_ID if the token spans accounts).
  */
@@ -28,15 +32,20 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { basename, extname, join, resolve } from "node:path";
 import {
-  alignWordStarts,
-  buildTiming,
   narrationFingerprint,
   parseNarration,
-  stripDirectionTags,
   tourMinutes,
   type TourTimingManifest,
   type WordAlignment,
 } from "@daintreehq/tour";
+import { encodeOggOpus, oggOpusDuration } from "../../packages/daintree-plugin/src/tour/audio";
+import {
+  DEFAULT_STT_MODEL,
+  inworldKeyFromEnv,
+  synthesizeSpeech,
+  transcribeSpeech,
+} from "../../packages/daintree-plugin/src/tour/inworld";
+import { timeChapter } from "../../packages/daintree-plugin/src/tour/timing";
 import { TOUR_CHAPTERS } from "../../src/components/Tour/tourChapters";
 import { narrationVariants, TOUR_KEYBOARDS } from "../../src/components/Tour/tourKeys";
 import { resolveTourTimings } from "../../src/components/Tour/tourTiming";
@@ -47,9 +56,6 @@ import { TOUR_TIMING_MANIFEST } from "../../src/components/Tour/tourTiming.gener
 // folder and also marks chapters as current, so it changes with the voice.
 const INWORLD_VOICE = "Simon";
 const INWORLD_VOICE_SLUG = "simon";
-const INWORLD_MODEL = "inworld-tts-2";
-/** Inworld's own recogniser; `--stt-model` takes any model Inworld's STT endpoint routes. */
-const DEFAULT_STT_MODEL = "inworld/inworld-stt-1";
 const BUCKET = "daintree-assets";
 const CDN_ORIGIN = "https://cdn.daintree.org";
 const MANIFEST_PATH = resolve(
@@ -60,9 +66,6 @@ const SUMMARY_PATH = resolve(
   import.meta.dirname,
   "../../src/components/Tour/tourSummary.generated.ts"
 );
-const TAIL_SECONDS = 0.6;
-/** Below this share of words pinned to real speech, the cues can't be trusted. */
-const MIN_ALIGNED_SHARE = 0.6;
 
 interface Args {
   force: boolean;
@@ -96,97 +99,6 @@ function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is not set`);
   return value;
-}
-
-async function synthesize(text: string): Promise<{ audio: Buffer; alignment: WordAlignment }> {
-  const response = await fetch("https://api.inworld.ai/tts/v1/voice", {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${requireEnv("INWORLD_API_KEY")}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      text,
-      voiceId: INWORLD_VOICE,
-      modelId: INWORLD_MODEL,
-      audioConfig: { audioEncoding: "OGG_OPUS", sampleRateHertz: 48000 },
-      timestampType: "WORD",
-    }),
-  });
-  if (!response.ok) {
-    throw new Error(`Inworld TTS failed (${response.status}): ${await response.text()}`);
-  }
-  const body = (await response.json()) as {
-    audioContent: string;
-    timestampInfo?: { wordAlignment?: WordAlignment };
-  };
-  const alignment = body.timestampInfo?.wordAlignment;
-  if (!alignment) throw new Error("Inworld response carried no word alignment");
-  return {
-    audio: Buffer.from(body.audioContent, "base64"),
-    alignment: stripDirectionTags(alignment),
-  };
-}
-
-/**
- * Word timestamps for a real recording, from Inworld speech-to-text. The input
- * is the Ogg Opus file we publish, so the times are measured on exactly the
- * audio the app plays.
- */
-async function transcribeWords(file: string, modelId: string): Promise<WordAlignment> {
-  const response = await fetch("https://api.inworld.ai/stt/v1/transcribe", {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${requireEnv("INWORLD_API_KEY")}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      transcribeConfig: {
-        modelId,
-        language: "en-US",
-        audioEncoding: "OGG_OPUS",
-        sampleRateHertz: 48000,
-        numberOfChannels: 1,
-        includeWordTimestamps: true,
-      },
-      audioData: { content: readFileSync(file).toString("base64") },
-    }),
-  });
-  if (!response.ok) {
-    throw new Error(`Inworld STT failed (${response.status}): ${await response.text()}`);
-  }
-  const body = (await response.json()) as {
-    transcription?: {
-      wordTimestamps?: { word: string; startTimeMs: number; endTimeMs: number }[];
-    };
-  };
-  const words = body.transcription?.wordTimestamps ?? [];
-  return {
-    words: words.map((w) => w.word),
-    wordStartTimeSeconds: words.map((w) => w.startTimeMs / 1000),
-    wordEndTimeSeconds: words.map((w) => w.endTimeMs / 1000),
-  };
-}
-
-function toOggOpus(input: string, workDir: string): string {
-  const out = join(workDir, `${basename(input, extname(input))}.encoded.ogg`);
-  execFileSync(
-    "ffmpeg",
-    ["-y", "-loglevel", "error", "-i", input, "-ac", "1", "-c:a", "libopus", "-b:a", "48k", out],
-    { stdio: "inherit" }
-  );
-  return out;
-}
-
-function probeDuration(file: string): number {
-  const out = execFileSync(
-    "ffprobe",
-    ["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", file],
-    { encoding: "utf8" }
-  );
-  const duration = Number.parseFloat(out.trim());
-  if (!Number.isFinite(duration)) throw new Error(`Could not read duration of ${file}`);
-  return duration;
 }
 
 function findRecording(dir: string, key: string): string | null {
@@ -353,40 +265,42 @@ async function voiceVariant(
       return;
     }
     console.log(`→ ${key}: transcribing ${basename(recording)}`);
-    encoded = toOggOpus(recording, workDir);
-    alignment = await transcribeWords(encoded, args.sttModel);
+    encoded = join(workDir, `${basename(recording, extname(recording))}.encoded.ogg`);
+    await encodeOggOpus(recording, encoded);
+    alignment = await transcribeSpeech({
+      apiKey: inworldKeyFromEnv(),
+      audio: readFileSync(encoded),
+      model: args.sttModel,
+    });
   } else {
     console.log(`→ ${key}: voicing with ${INWORLD_VOICE_SLUG}`);
-    const result = await synthesize(parsed.spoken);
-    const raw = join(workDir, `${key}.tts.ogg`);
-    writeFileSync(raw, result.audio);
+    const result = await synthesizeSpeech({
+      apiKey: inworldKeyFromEnv(),
+      text: parsed.spoken,
+      voice: INWORLD_VOICE,
+    });
+    encoded = join(workDir, `${key}.tts.ogg`);
+    writeFileSync(encoded, result.audio);
     alignment = result.alignment;
-    encoded = raw;
   }
 
   const audioBytes = readFileSync(encoded);
   const contentHash = createHash("sha256").update(audioBytes).digest("hex").slice(0, 12);
   const objectKey = `tour/${voice}/${key}-${contentHash}.ogg`;
-  const duration = probeDuration(encoded) + TAIL_SECONDS;
-  const { starts, matched } = alignWordStarts(parsed.words, alignment);
-  const share = matched / parsed.words.length;
-  if (alignment.words.length === 0 || share < MIN_ALIGNED_SHARE) {
-    throw new Error(
-      `${key}: only ${matched}/${parsed.words.length} words lined up with the audio — ` +
-        "check the recording reads the narration as written. Nothing was published for it."
-    );
-  }
-  if (matched < parsed.words.length) {
-    console.log(`  ${matched}/${parsed.words.length} words matched; the rest are interpolated`);
-  }
   const url = `${CDN_ORIGIN}/${objectKey}`;
+  const { timing, matched, total } = timeChapter(
+    key,
+    parsed,
+    alignment,
+    oggOpusDuration(audioBytes),
+    args.upload ? url : null
+  );
+  if (matched < total) {
+    console.log(`  ${matched}/${total} words matched; the rest are interpolated`);
+  }
 
   if (args.upload) await upload(encoded, objectKey, url);
-  manifest.chapters[key] = {
-    ...buildTiming(parsed, starts, duration, args.upload ? url : null),
-    narrationHash,
-    voice,
-  };
+  manifest.chapters[key] = { ...timing, narrationHash, voice };
 }
 
 /**
