@@ -446,6 +446,8 @@ export class WorkspaceService {
   private readonly statusTiming = new StatusTimingRecorder();
   /** Admin dir → the loss last reported for it, so each is warned about once. */
   private readonly retainedPruneWarnings = new Map<string, string>();
+  /** Tail of the sweep chain — load, refresh and delete never sweep at once. */
+  private pruneSweepTail: Promise<void> = Promise.resolve();
   private pollQueue = new PQueue({
     concurrency: 3,
     timeout: POLL_QUEUE_TASK_TIMEOUT_MS,
@@ -4780,7 +4782,15 @@ export class WorkspaceService {
    * report is withdrawn when a later sweep no longer finds the entry at risk.
    * Best-effort throughout — nothing here may fail a load, refresh or delete.
    */
-  private async sweepPrunableWorktreeEntries(): Promise<void> {
+  private sweepPrunableWorktreeEntries(): Promise<void> {
+    // Serialized so one sweep's clean verdict is never acted on while another
+    // sweep is part-way through the same entry.
+    const run = this.pruneSweepTail.then(() => this.runPruneSweep());
+    this.pruneSweepTail = run.catch(() => undefined);
+    return run;
+  }
+
+  private async runPruneSweep(): Promise<void> {
     const rootPath = this.projectRootPath;
     if (!rootPath) return;
     let commonDir: string | null;
@@ -4813,7 +4823,9 @@ export class WorkspaceService {
     }
     if (!result.complete) return;
 
-    const current = new Set<string>();
+    // An entry a probe failed on is unsettled, not resolved: its warning, if
+    // any, stays until a sweep can actually look at it again.
+    const current = new Set<string>(result.unknown);
     for (const entry of result.retained) {
       current.add(entry.adminDir);
       if (this.retainedPruneWarnings.get(entry.adminDir) === entry.loss) continue;
@@ -4823,7 +4835,7 @@ export class WorkspaceService {
         type: "worktree-prune-retained",
         worktreePath: entry.worktreePath,
         adminDir: entry.adminDir,
-        message: `The worktree folder ${where} is gone, but its submodule repositories still hold ${entry.loss}. Daintree left its Git metadata in place instead of cleaning it up. The submodule repositories are under ${pathResolve(entry.adminDir, "modules")} — push the commits from there, then delete the worktree in Daintree.`,
+        message: `The folder ${where} is gone, but its submodule repositories still hold ${entry.loss}. Daintree kept them instead of cleaning up. Push those commits from the submodule repositories, then delete the worktree in Daintree.`,
       });
     }
     for (const adminDir of this.retainedPruneWarnings.keys()) {
@@ -5050,6 +5062,12 @@ export class WorkspaceService {
       const output = await withTimeout(
         git.raw([
           "--git-dir",
+          storeGitDir,
+          // An absorbed store's `core.worktree` names the submodule checkout,
+          // which is exactly what went missing, and git refuses to start
+          // (`cannot chdir`) — reading every such store as uninspectable. The
+          // walk touches no working tree, so any existing directory will do.
+          "--work-tree",
           storeGitDir,
           "log",
           `--format=%H${SUBMODULE_COMMIT_FIELD_SEPARATOR}%s`,

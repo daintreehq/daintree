@@ -1,5 +1,5 @@
-import { lstat, readFile, readdir, rm, stat } from "fs/promises";
-import { dirname, resolve as pathResolve } from "path";
+import { lstat, readFile, readdir, realpath, rm } from "fs/promises";
+import { dirname, isAbsolute, resolve as pathResolve, sep } from "path";
 import { withTimeout } from "../utils/withTimeout.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
@@ -28,6 +28,8 @@ export interface WorktreeAdminSweepResult {
   complete: boolean;
   removed: string[];
   retained: RetainedWorktreeAdminEntry[];
+  /** Entries left alone because a probe failed — neither safe nor settled. */
+  unknown: string[];
 }
 
 function isMissing(error: unknown): boolean {
@@ -74,13 +76,14 @@ export async function classifyWorktreeAdminEntry(
 
   let pointer: string;
   try {
+    // Git strips trailing CR/LF only; any other whitespace is part of the path.
     pointer = (
       await withTimeout(
         readFile(pathResolve(adminDir, "gitdir"), "utf-8"),
         timeoutMs,
         `worktree pointer read: ${adminDir}`
       )
-    ).trim();
+    ).replace(/[\r\n]+$/, "");
   } catch (error) {
     return isMissing(error)
       ? { kind: "eligible" }
@@ -88,15 +91,33 @@ export async function classifyWorktreeAdminEntry(
   }
   if (!pointer) return { kind: "eligible" };
 
-  // Relative to the entry directory, which is what `worktree.useRelativePaths`
-  // writes these against (git 2.48+); an absolute pointer discards the base.
-  const target = pathResolve(adminDir, pointer);
+  // A relative pointer (`worktree.useRelativePaths`, git 2.48+) is joined onto
+  // the entry's PHYSICAL path and left for the OS to walk, as git does. Letting
+  // `path.resolve` collapse `..` against a symlinked common dir would probe a
+  // different place than git and could call a live checkout missing.
+  let target: string;
+  if (isAbsolute(pointer)) {
+    target = pointer;
+  } else {
+    try {
+      const physical = await withTimeout(
+        realpath(adminDir),
+        timeoutMs,
+        `worktree entry realpath: ${adminDir}`
+      );
+      target = `${physical}${sep}${pointer}`;
+    } catch (error) {
+      return { kind: "unknown", reason: describeProbeError(error) };
+    }
+  }
   try {
-    await withTimeout(stat(target), timeoutMs, `worktree checkout probe: ${target}`);
+    // `lstat`, matching git's `file_exists`: a dangling `.git` symlink is still
+    // there as far as git is concerned, so the entry is not prunable.
+    await withTimeout(lstat(target), timeoutMs, `worktree checkout probe: ${target}`);
     return { kind: "ineligible" };
   } catch (error) {
     return isMissing(error)
-      ? { kind: "eligible", worktreePath: dirname(target) }
+      ? { kind: "eligible", worktreePath: dirname(pathResolve(target)) }
       : { kind: "unknown", reason: describeProbeError(error) };
   }
 }
@@ -126,7 +147,12 @@ export async function sweepWorktreeAdminEntries(options: {
 }): Promise<WorktreeAdminSweepResult> {
   const { commonDir, timeoutMs, assessLoss, onUnknown, onRemoveFailed } = options;
   const registry = pathResolve(commonDir, "worktrees");
-  const result: WorktreeAdminSweepResult = { complete: true, removed: [], retained: [] };
+  const result: WorktreeAdminSweepResult = {
+    complete: true,
+    removed: [],
+    retained: [],
+    unknown: [],
+  };
 
   let names: string[];
   try {
@@ -145,7 +171,10 @@ export async function sweepWorktreeAdminEntries(options: {
   for (const name of names) {
     const adminDir = pathResolve(registry, name);
     const before = await classifyWorktreeAdminEntry(adminDir, timeoutMs);
-    if (before.kind === "unknown") onUnknown?.(adminDir, before.reason);
+    if (before.kind === "unknown") {
+      result.unknown.push(adminDir);
+      onUnknown?.(adminDir, before.reason);
+    }
     if (before.kind !== "eligible") continue;
 
     const loss = await assessLoss(adminDir);
@@ -155,7 +184,10 @@ export async function sweepWorktreeAdminEntries(options: {
     }
 
     const after = await classifyWorktreeAdminEntry(adminDir, timeoutMs);
-    if (after.kind === "unknown") onUnknown?.(adminDir, after.reason);
+    if (after.kind === "unknown") {
+      result.unknown.push(adminDir);
+      onUnknown?.(adminDir, after.reason);
+    }
     if (after.kind !== "eligible") continue;
 
     try {

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceHostEventRouter } from "../WorkspaceHostEventRouter.js";
 import { CHANNELS } from "../../../ipc/channels.js";
@@ -33,13 +34,6 @@ vi.mock("../fileSearchCacheInvalidation.js", () => ({
 }));
 
 const statusTimingMock = vi.hoisted(() => ({ complete: vi.fn() }));
-
-const notifyErrorMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../../../ipc/errorHandlers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../ipc/errorHandlers.js")>()),
-  notifyError: notifyErrorMock,
-}));
 
 vi.mock("../../ProjectSwitchStatusTiming.js", () => ({
   projectSwitchStatusTiming: statusTimingMock,
@@ -171,7 +165,7 @@ describe("WorkspaceHostEventRouter", () => {
   });
 
   describe("worktree-prune-retained (#12790)", () => {
-    it("surfaces the kept entry through notifyError on the worktree it belongs to", () => {
+    it("shows the host's own explanation and offers the store location", () => {
       router.routeHostEvent(makeEntry(), {
         type: "worktree-prune-retained",
         adminDir: "/project/test/.git/worktrees/wt",
@@ -179,24 +173,32 @@ describe("WorkspaceHostEventRouter", () => {
         message: "its submodule repositories still hold 1 submodule commit",
       });
 
-      expect(notifyErrorMock).toHaveBeenCalledTimes(1);
-      const [error, options] = notifyErrorMock.mock.calls[0];
-      expect((error as Error).message).toContain("1 submodule commit");
-      expect(options).toMatchObject({
-        source: "worktree-prune",
-        context: { worktreeId: "/project/wt" },
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      const [channel, payload] = vi.mocked(broadcastToRenderer).mock.calls[0];
+      expect(channel).toBe(CHANNELS.NOTIFICATION_SHOW_TOAST);
+      expect(payload).toMatchObject({
+        type: "warning",
+        message: "its submodule repositories still hold 1 submodule commit",
+        action: {
+          ipcChannel: CHANNELS.CLIPBOARD_WRITE_TEXT,
+          data: path.join("/project/test/.git/worktrees/wt", "modules"),
+        },
       });
-      expect(broadcastToRenderer).not.toHaveBeenCalled();
     });
 
-    it("leaves the context empty for an entry whose pointer named no checkout", () => {
-      router.routeHostEvent(makeEntry(), {
-        type: "worktree-prune-retained",
-        adminDir: "/project/test/.git/worktrees/wt",
-        message: "submodule contents that could not be inspected",
-      });
+    it("keeps two retained entries from sharing one rate-limit bucket", () => {
+      for (const id of ["a", "b"]) {
+        router.routeHostEvent(makeEntry(), {
+          type: "worktree-prune-retained",
+          adminDir: `/project/test/.git/worktrees/${id}`,
+          message: "submodule contents that could not be inspected",
+        });
+      }
 
-      expect(notifyErrorMock.mock.calls[0][1].context).toBeUndefined();
+      const keys = vi
+        .mocked(broadcastToRenderer)
+        .mock.calls.map(([, payload]) => (payload as { rateLimitKey?: string }).rateLimitKey);
+      expect(new Set(keys).size).toBe(2);
     });
   });
 

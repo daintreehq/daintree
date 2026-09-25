@@ -1,9 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SimpleGit } from "simple-git";
 import type { WorkspaceService } from "../WorkspaceService.js";
+import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
 
 vi.mock("../../utils/parcelWatcherBackend.js", () => ({
   subscribeParcelWatcher: vi.fn(() => Promise.resolve({ unsubscribe: vi.fn() })),
@@ -20,93 +30,78 @@ const GIT_ENV = {
 };
 
 function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd, env: GIT_ENV, encoding: "utf-8" });
+  return execFileSync("git", ["-c", "protocol.file.allow=always", ...args], {
+    cwd,
+    env: GIT_ENV,
+    encoding: "utf-8",
+  });
 }
 
-/**
- * A module store as a submodule checkout leaves one under
- * `<worktree gitdir>/modules/<name>`: a full repository with one commit, which
- * is at stake unless a remote-tracking ref already holds it.
- */
-function moduleStore(tmp: string, name: string, subject: string, pushed: boolean): string {
-  const source = path.join(tmp, `source-${name}`);
-  git(tmp, "init", "-q", "-b", "main", source);
-  writeFileSync(path.join(source, "file.txt"), subject);
-  git(source, "add", "file.txt");
-  git(source, "commit", "-q", "-m", subject);
-  if (pushed) git(source, "update-ref", "refs/remotes/origin/main", "HEAD");
-  return path.join(source, ".git");
-}
+type RetainedEvent = Extract<WorkspaceHostEvent, { type: "worktree-prune-retained" }>;
 
 describe("WorkspaceService worktree cleanup keeps stranded submodule commits (#12790)", () => {
   let tmp: string;
   let root: string;
   let registry: string;
   let service: WorkspaceService;
-  const sendEvent = vi.fn();
+  let sendEvent: ReturnType<typeof vi.fn>;
 
-  beforeAll(async () => {
+  /**
+   * A linked worktree with a real, absorbed submodule, deleted outside
+   * Daintree: the checkout goes, `.git/worktrees/<name>/modules/lib` stays —
+   * with `core.worktree` still naming the vanished submodule checkout.
+   */
+  function phantomWithSubmodule(name: string, stranded?: string): void {
+    const checkout = path.join(tmp, name);
+    git(root, "worktree", "add", "-q", "-b", name, checkout);
+    git(checkout, "submodule", "update", "--init", "-q");
+    if (stranded) git(path.join(checkout, "lib"), "commit", "-q", "--allow-empty", "-m", stranded);
+    rmSync(checkout, { recursive: true, force: true });
+  }
+
+  function retainedEvents(): RetainedEvent[] {
+    return sendEvent.mock.calls
+      .map(([event]) => event as WorkspaceHostEvent)
+      .filter((event): event is RetainedEvent => event.type === "worktree-prune-retained");
+  }
+
+  beforeEach(async () => {
     tmp = mkdtempSync(path.join(realpathSync(os.tmpdir()), "worktree-prune-sweep-"));
+    const lib = path.join(tmp, "lib");
+    git(tmp, "init", "-q", "-b", "main", lib);
+    git(lib, "commit", "-q", "--allow-empty", "-m", "library");
     root = path.join(tmp, "repo");
     git(tmp, "init", "-q", "-b", "main", root);
-    git(root, "commit", "-q", "--allow-empty", "-m", "root");
-    git(root, "worktree", "add", "-q", "-b", "safe", path.join(tmp, "wt-safe"));
-    git(root, "worktree", "add", "-q", "-b", "at-risk", path.join(tmp, "wt-at-risk"));
-    git(root, "worktree", "add", "-q", "-b", "locked", path.join(tmp, "wt-locked"));
-    git(root, "worktree", "lock", path.join(tmp, "wt-locked"));
+    git(root, "submodule", "add", "-q", lib, "lib");
+    git(root, "commit", "-q", "-m", "add submodule");
     registry = path.join(root, ".git", "worktrees");
 
-    cpSync(
-      moduleStore(tmp, "safe", "already pushed", true),
-      path.join(registry, "wt-safe", "modules", "lib"),
-      { recursive: true }
-    );
-    cpSync(
-      moduleStore(tmp, "at-risk", "stranded submodule work", false),
-      path.join(registry, "wt-at-risk", "modules", "lib"),
-      { recursive: true }
-    );
-    cpSync(
-      moduleStore(tmp, "locked", "locked submodule work", false),
-      path.join(registry, "wt-locked", "modules", "lib"),
-      { recursive: true }
-    );
-
-    // Deleted outside Daintree: only the checkouts go, their metadata stays.
-    for (const name of ["wt-safe", "wt-at-risk", "wt-locked"]) {
-      rmSync(path.join(tmp, name), { recursive: true, force: true });
-    }
-
+    sendEvent = vi.fn();
     const { WorkspaceService } = await import("../WorkspaceService.js");
     service = new WorkspaceService(sendEvent);
     service["projectRootPath"] = root;
   });
 
-  afterAll(() => {
-    service?.dispose();
+  afterEach(() => {
+    service.dispose();
     rmSync(tmp, { recursive: true, force: true });
   });
 
   it("removes the safe phantom entry and keeps the one whose store holds unique commits", async () => {
+    phantomWithSubmodule("wt-safe");
+    phantomWithSubmodule("wt-at-risk", "stranded submodule work");
+
     await service["sweepPrunableWorktreeEntries"]();
 
     expect(existsSync(path.join(registry, "wt-safe"))).toBe(false);
     expect(existsSync(path.join(registry, "wt-at-risk"))).toBe(true);
-    expect(existsSync(path.join(registry, "wt-locked"))).toBe(true);
-
     // The stranded commit is still readable from the store that was kept.
-    const storeLog = git(
-      root,
-      "--git-dir",
-      path.join(registry, "wt-at-risk", "modules", "lib"),
-      "log",
-      "--format=%s"
+    const store = path.join(registry, "wt-at-risk", "modules", "lib");
+    expect(git(root, "--git-dir", store, "--work-tree", store, "log", "-1", "--format=%s")).toBe(
+      "stranded submodule work\n"
     );
-    expect(storeLog.trim()).toBe("stranded submodule work");
 
-    const warnings = sendEvent.mock.calls
-      .map(([event]) => event)
-      .filter((event) => event.type === "worktree-prune-retained");
+    const warnings = retainedEvents();
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatchObject({
       adminDir: path.join(registry, "wt-at-risk"),
@@ -115,25 +110,82 @@ describe("WorkspaceService worktree cleanup keeps stranded submodule commits (#1
     expect(warnings[0].message).toContain("stranded submodule work");
   });
 
-  it("does not repeat the warning on a later sweep that finds the same loss", async () => {
-    sendEvent.mockClear();
+  it("never touches a locked phantom entry", async () => {
+    phantomWithSubmodule("wt-locked", "locked submodule work");
+    git(root, "worktree", "lock", path.join(tmp, "wt-locked"));
+
     await service["sweepPrunableWorktreeEntries"]();
 
-    expect(existsSync(path.join(registry, "wt-at-risk"))).toBe(true);
-    expect(
-      sendEvent.mock.calls.filter(([event]) => event.type === "worktree-prune-retained")
-    ).toHaveLength(0);
+    expect(existsSync(path.join(registry, "wt-locked", "modules", "lib"))).toBe(true);
+    expect(retainedEvents()).toHaveLength(0);
   });
 
-  it("cleans the kept entry up once its commits reach a remote", async () => {
-    const store = path.join(registry, "wt-at-risk", "modules", "lib");
-    git(root, "--git-dir", store, "update-ref", "refs/remotes/origin/main", "HEAD");
+  it("warns once per loss, then cleans up once the commits reach a remote", async () => {
+    phantomWithSubmodule("wt-at-risk", "stranded submodule work");
 
+    await service["sweepPrunableWorktreeEntries"]();
+    await service["sweepPrunableWorktreeEntries"]();
+    expect(retainedEvents()).toHaveLength(1);
+
+    const store = path.join(registry, "wt-at-risk", "modules", "lib");
+    git(
+      root,
+      "--git-dir",
+      store,
+      "--work-tree",
+      store,
+      "update-ref",
+      "refs/remotes/origin/rescued",
+      "HEAD"
+    );
     await service["sweepPrunableWorktreeEntries"]();
 
     expect(existsSync(path.join(registry, "wt-at-risk"))).toBe(false);
     expect(service["retainedPruneWarnings"].size).toBe(0);
-    // Git agrees the registry now holds only the locked entry.
     expect(git(root, "worktree", "list", "--porcelain")).not.toContain("wt-at-risk");
+  });
+
+  it("keeps the warning while a later sweep cannot look at the entry", async () => {
+    phantomWithSubmodule("wt-at-risk", "stranded submodule work");
+    await service["sweepPrunableWorktreeEntries"]();
+    const adminDir = path.join(registry, "wt-at-risk");
+    expect(service["retainedPruneWarnings"].has(adminDir)).toBe(true);
+
+    // An unreadable pointer is a failed probe, not a resolution.
+    const pointer = path.join(adminDir, "gitdir");
+    const saved = readFileSync(pointer, "utf-8");
+    rmSync(pointer);
+    mkdirSync(pointer);
+    await service["sweepPrunableWorktreeEntries"]();
+    expect(service["retainedPruneWarnings"].has(adminDir)).toBe(true);
+
+    rmSync(pointer, { recursive: true });
+    writeFileSync(pointer, saved);
+    await service["sweepPrunableWorktreeEntries"]();
+    // Same loss as before, so no second warning.
+    expect(retainedEvents()).toHaveLength(1);
+  });
+
+  it("runs selectively through the refresh path, the way the 90s reconcile does", async () => {
+    phantomWithSubmodule("wt-safe");
+    phantomWithSubmodule("wt-at-risk", "stranded submodule work");
+    const { createHardenedGit } = await import("../../utils/hardenedGit.js");
+    const repoGit = (await createHardenedGit(root)) as SimpleGit;
+    service["git"] = repoGit;
+    service["gitBacked"] = true;
+    service["listService"].setGit(repoGit, root);
+    const synced: string[][] = [];
+    vi.spyOn(service, "syncMonitors").mockImplementation(async (worktrees) => {
+      synced.push(worktrees.map((wt) => wt.path));
+    });
+
+    await service["discoverAndSyncWorktrees"]();
+
+    expect(existsSync(path.join(registry, "wt-safe"))).toBe(false);
+    expect(existsSync(path.join(registry, "wt-at-risk", "modules", "lib"))).toBe(true);
+    // The sync sees the cleaned topology: the safe phantom is gone from it.
+    expect(synced).toHaveLength(1);
+    expect(synced[0]).not.toContain(path.join(tmp, "wt-safe"));
+    expect(retainedEvents()).toHaveLength(1);
   });
 });

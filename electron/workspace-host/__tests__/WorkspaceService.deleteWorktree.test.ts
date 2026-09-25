@@ -1473,7 +1473,7 @@ describe("WorkspaceService.deleteWorktree", () => {
     /** Answers the surviving store's rev walk; every other git call keeps the default. */
     function withStoreRevWalk(result: string | Error): void {
       mockSimpleGit.raw.mockImplementation(async (args: unknown) => {
-        if (Array.isArray(args) && args[0] === "--git-dir" && args[2] === "log") {
+        if (Array.isArray(args) && args[0] === "--git-dir" && args.includes("log")) {
           if (result instanceof Error) throw result;
           return result;
         }

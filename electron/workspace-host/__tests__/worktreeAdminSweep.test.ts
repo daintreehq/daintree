@@ -104,6 +104,55 @@ describe("worktreeAdminSweep", () => {
         kind: "unknown",
       });
     });
+
+    it("strips only a trailing CRLF from the pointer, as git does", async () => {
+      const checkout = liveCheckout("crlf-live");
+      const adminDir = path.join(registry, "crlf");
+      mkdirSync(adminDir);
+      writeFileSync(path.join(adminDir, "gitdir"), `${path.join(checkout, ".git")}\r\n`);
+      await expect(classifyWorktreeAdminEntry(adminDir, TIMEOUT_MS)).resolves.toEqual({
+        kind: "ineligible",
+      });
+    });
+
+    it("counts a dangling .git symlink as present, as git's file_exists does", async () => {
+      const checkout = path.join(tmp, "dangling");
+      mkdirSync(checkout);
+      symlinkSync(path.join(tmp, "nowhere"), path.join(checkout, ".git"));
+      const adminDir = entry("dangling", { checkout });
+      await expect(classifyWorktreeAdminEntry(adminDir, TIMEOUT_MS)).resolves.toEqual({
+        kind: "ineligible",
+      });
+    });
+
+    it("never treats a symlinked entry as one of git's", async () => {
+      const elsewhere = path.join(tmp, "elsewhere");
+      mkdirSync(elsewhere);
+      const adminDir = path.join(registry, "linked");
+      symlinkSync(elsewhere, adminDir);
+      await expect(classifyWorktreeAdminEntry(adminDir, TIMEOUT_MS)).resolves.toEqual({
+        kind: "ineligible",
+      });
+    });
+
+    it("walks a relative pointer from the physical entry path, not a symlinked alias", async () => {
+      // The common dir is reached through `alias -> deep/nested`, so `..` from
+      // the entry climbs out of `deep/nested` physically but out of `alias`
+      // lexically. The checkout is live at the physical location; a lexical
+      // resolve would call it missing and delete a live worktree's metadata.
+      const nested = path.join(tmp, "deep", "nested");
+      mkdirSync(path.join(nested, "repo", ".git", "worktrees", "rel"), { recursive: true });
+      symlinkSync(nested, path.join(tmp, "alias"));
+      const checkout = path.join(tmp, "deep", "wt");
+      mkdirSync(checkout);
+      writeFileSync(path.join(checkout, ".git"), "gitdir: somewhere\n");
+      const adminDir = path.join(tmp, "alias", "repo", ".git", "worktrees", "rel");
+      writeFileSync(path.join(adminDir, "gitdir"), `../../../../../wt/.git\n`);
+
+      await expect(classifyWorktreeAdminEntry(adminDir, TIMEOUT_MS)).resolves.toEqual({
+        kind: "ineligible",
+      });
+    });
   });
 
   describe("sweepWorktreeAdminEntries", () => {
@@ -165,6 +214,7 @@ describe("worktreeAdminSweep", () => {
       });
 
       expect(result.removed).toEqual([safe]);
+      expect(result.unknown).toEqual([unreadable]);
       expect(existsSync(unreadable)).toBe(true);
       expect(onUnknown).toHaveBeenCalledWith(unreadable, expect.any(String));
     });
@@ -195,7 +245,7 @@ describe("worktreeAdminSweep", () => {
           timeoutMs: TIMEOUT_MS,
           assessLoss: async () => null,
         })
-      ).resolves.toEqual({ complete: true, removed: [], retained: [] });
+      ).resolves.toEqual({ complete: true, removed: [], retained: [], unknown: [] });
     });
 
     it("reports a registry that could not be read as incomplete", async () => {

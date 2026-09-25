@@ -410,12 +410,19 @@ export class WorkspaceHostEventRouter {
       }
 
       case "worktree-prune-retained": {
-        notifyError(new Error(event.message), {
-          source: "worktree-prune",
-          // A worktree's id is its path, so this lands on the card the
-          // retained entry keeps showing as, when it has one.
-          context: event.worktreePath ? { worktreeId: event.worktreePath } : undefined,
-          retryability: "none",
+        // A toast rather than `notifyError`: the error path renders a generic
+        // title and body and keeps the message for "Copy details", and this
+        // one is only useful if the user reads where the commits are.
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          type: "warning",
+          title: "Kept submodule commits from a deleted worktree",
+          message: event.message,
+          rateLimitKey: `worktree-prune-retained:${event.adminDir}`,
+          action: {
+            label: "Copy folder path",
+            ipcChannel: CHANNELS.CLIPBOARD_WRITE_TEXT,
+            data: path.join(event.adminDir, "modules"),
+          },
         });
         break;
       }
