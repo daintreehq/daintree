@@ -1,4 +1,11 @@
 import type { SerializedError, IpcSuccessEnvelope, IpcErrorEnvelope } from "../types/ipc/errors.js";
+import type { AppErrorDetails } from "../types/appError.js";
+
+/**
+ * A serialized error that may carry `AppError.details`: allowlisted structured
+ * data that, unlike `context`, survives the packaged-build strip.
+ */
+export type SerializedAppError = SerializedError & { details?: AppErrorDetails };
 
 const KNOWN_ERROR_KEYS = new Set([
   "name",
@@ -14,6 +21,7 @@ const KNOWN_ERROR_KEYS = new Set([
   "syscall",
   "path",
   "context",
+  "details",
   "cause",
   "errors",
 ]);
@@ -103,7 +111,35 @@ function sanitizeCloneValue(value: unknown, seen: WeakSet<object>): unknown {
   return result;
 }
 
-export function serializeError(error: unknown, seen = new WeakSet<object>()): SerializedError {
+const APP_ERROR_DETAIL_CODES = new Set(["PLUGIN_NOT_ON_HOST", "PLUGIN_INCOMPATIBLE"]);
+
+/**
+ * `details` survives the packaged-build strip, so it is rebuilt from its
+ * allowlisted fields rather than copied: anything that is not a recognised
+ * detail shape is dropped.
+ */
+function pickAppErrorDetails(value: unknown): AppErrorDetails | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.code !== "string" || !APP_ERROR_DETAIL_CODES.has(raw.code)) return undefined;
+  if (typeof raw.pluginId !== "string" || typeof raw.hostId !== "string") return undefined;
+  if (raw.code === "PLUGIN_NOT_ON_HOST") {
+    return { code: "PLUGIN_NOT_ON_HOST", pluginId: raw.pluginId, hostId: raw.hostId };
+  }
+  // Its own visited set: callers often pass the same object as `context`,
+  // and sharing `seen` would collapse it to "[Circular]".
+  const reason = sanitizeCloneValue(raw.reason, new WeakSet<object>());
+  if (reason === null || typeof reason !== "object" || Array.isArray(reason)) return undefined;
+  if (typeof (reason as Record<string, unknown>).kind !== "string") return undefined;
+  return {
+    code: "PLUGIN_INCOMPATIBLE",
+    pluginId: raw.pluginId,
+    hostId: raw.hostId,
+    reason: reason as Extract<AppErrorDetails, { code: "PLUGIN_INCOMPATIBLE" }>["reason"],
+  };
+}
+
+export function serializeError(error: unknown, seen = new WeakSet<object>()): SerializedAppError {
   if (error === null || error === undefined) {
     return { name: "Error", message: String(error) };
   }
@@ -118,7 +154,7 @@ export function serializeError(error: unknown, seen = new WeakSet<object>()): Se
   seen.add(error);
 
   const err = error as Record<string, unknown>;
-  const serialized: SerializedError = {
+  const serialized: SerializedAppError = {
     name: typeof err.name === "string" ? err.name : "Error",
     message: typeof err.message === "string" ? err.message : String(error),
   };
@@ -145,6 +181,9 @@ export function serializeError(error: unknown, seen = new WeakSet<object>()): Se
       serialized.context = context as Record<string, unknown>;
     }
   }
+
+  const details = pickAppErrorDetails(err.details);
+  if (details !== undefined) serialized.details = details;
 
   if (err.cause !== undefined && err.cause !== null && typeof err.cause === "object") {
     serialized.cause = serializeError(err.cause, seen);
@@ -186,7 +225,7 @@ export function serializeError(error: unknown, seen = new WeakSet<object>()): Se
   return serialized;
 }
 
-export function deserializeError(serialized: SerializedError): Error {
+export function deserializeError(serialized: SerializedAppError): Error {
   const error = new Error(serialized.message);
   error.name = serialized.name;
 
@@ -214,6 +253,10 @@ export function deserializeError(serialized: SerializedError): Error {
 
   if (serialized.context !== undefined) {
     (error as unknown as Record<string, unknown>).context = serialized.context;
+  }
+
+  if (serialized.details !== undefined) {
+    (error as unknown as Record<string, unknown>).details = serialized.details;
   }
 
   if (serialized.cause !== undefined) {

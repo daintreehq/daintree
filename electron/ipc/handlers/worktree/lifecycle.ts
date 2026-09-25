@@ -261,8 +261,8 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       // renderer's receipt, because a posted port is not a delivered one. Any
       // shortfall throws so the error banner stays and Retry remains available,
       // rather than clearing the banner over a sidebar with no port (#12576).
-      const sender = ctx.event.sender;
-      if (!sender.isDestroyed()) {
+      const sender = ctx.event?.sender;
+      if (sender && !sender.isDestroyed()) {
         deps.worktreeService.attachDirectPort(windowId, sender);
         const host = deps.worktreeService.getHostForProject(project.path);
         const broker = deps.worktreePortBroker;

@@ -48,7 +48,7 @@ export function registerGitInitHandlers(): () => void {
       throw new Error("Invalid options object");
     }
 
-    const senderWindow = getWindowForWebContents(ctx.event.sender);
+    const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
 
     const {
       directoryPath,

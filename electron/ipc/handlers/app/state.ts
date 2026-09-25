@@ -1026,7 +1026,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       // Close the cold-start timeline for a view this window's manager
       // cold-started (input-ready log + trace mark); no-op for warm views.
       // Same per-window resolution as APP_VIEW_PAINTED below.
-      const senderWindow = getWindowForWebContents(ctx.event.sender);
+      const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
       const pvm =
         (senderWindow &&
           deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??
@@ -1041,7 +1041,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       // pending paint gate can release. Mirrors the multi-window resolution
       // pattern used by `project:switch`: prefer the per-window registry
       // entry, fall back to the global PVM ref for single-window setups.
-      const senderWindow = getWindowForWebContents(ctx.event.sender);
+      const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
       const pvm =
         (senderWindow &&
           deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??
@@ -1049,7 +1049,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       pvm?.signalViewPainted(ctx.webContentsId);
       // Flush any pending `daintree://` deep link now the view has painted — its
       // renderer-side listener is guaranteed mounted at this point (#9559).
-      notifyAppViewPainted(ctx.event.sender);
+      if (ctx.event) notifyAppViewPainted(ctx.event.sender);
     })
   );
 
@@ -1061,7 +1061,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       // background-color cover (#9679). Same per-window resolution as
       // APP_VIEW_PAINTED, but re-fireable across reactivations (unlike the
       // one-shot APP_VIEW_PAINTED).
-      const senderWindow = getWindowForWebContents(ctx.event.sender);
+      const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
       const pvm =
         (senderWindow &&
           deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??

@@ -85,7 +85,7 @@ export function registerGitCloneHandlers(): () => void {
       throw new Error("Invalid options object");
     }
 
-    const senderWindow = getWindowForWebContents(ctx.event.sender);
+    const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
 
     const { url, parentPath, folderName, shallowClone } = options;
 

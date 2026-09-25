@@ -52,6 +52,8 @@ function ctx(projectId: string | null): IpcContext {
     webContentsId: 1,
     senderWindow: null,
     projectId,
+    endpoint: {} as IpcContext["endpoint"],
+    client: {} as IpcContext["client"],
   };
 }
 

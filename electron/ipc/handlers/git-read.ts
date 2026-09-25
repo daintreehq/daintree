@@ -157,7 +157,7 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
       throw new Error(`Worktree not found: ${worktreeId}`);
     }
 
-    const senderWindowPulse = getWindowForWebContents(ctx.event.sender);
+    const senderWindowPulse = ctx.event && getWindowForWebContents(ctx.event.sender);
     const states = await deps.worktreeService.getAllStatesAsync(senderWindowPulse?.id);
     const mainWorktree = states.find((wt) => wt.isMainWorktree);
     const mainBranch = mainWorktree?.branch ?? "main";

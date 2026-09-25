@@ -189,7 +189,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     const currentProject = projectStore.getCurrentProject();
 
     if (currentProject && deps.worktreeService) {
-      const senderWindow = getWindowForWebContents(ctx.event.sender);
+      const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
       const windowId = senderWindow?.id ?? deps.mainWindow?.id;
       try {
         if (windowId !== undefined) {
@@ -276,7 +276,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
   handlers.push(typedHandle(CHANNELS.PROJECT_UPDATE, handleProjectUpdate));
 
   const handleProjectOpenDialog = async (ctx: import("../../types.js").IpcContext) => {
-    const senderWindow = getWindowForWebContents(ctx.event.sender);
+    const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
     const dialogOpts = {
       properties: ["openDirectory" as const, "createDirectory" as const],
       // Not "Open Git Repository": a folder without one is now openable too,
@@ -478,7 +478,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    const senderWindow = getWindowForWebContents(ctx.event.sender);
+    const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
     const openOpts: Electron.OpenDialogOptions = {
       title: `Locate "${project.name}"`,
       properties: ["openDirectory"],
