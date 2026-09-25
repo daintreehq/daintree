@@ -421,12 +421,16 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./fileBrowser.js").FileBrowserStatPathsPayload];
     result: import("./fileBrowser.js").FileBrowserStatPathsResult;
   };
+  "file-transfer:answer-host-pick": {
+    args: [payload: import("./fileTransfer.js").AnswerHostPickPayload];
+    result: void;
+  };
   "file-transfer:cancel": {
-    args: [_payload: { opId: string }];
+    args: [payload: { opId: string }];
     result: void;
   };
   "file-transfer:download": {
-    args: [_payload: import("./fileTransfer.js").DownloadPayload];
+    args: [payload: import("./fileTransfer.js").DownloadPayload];
     result: import("./fileTransfer.js").DownloadResult;
   };
   "file-transfer:upload-bytes": {
@@ -877,7 +881,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./hostFiles.js").HostPickerRoots;
   };
   "host-files:list-directory": {
-    args: [_payload: import("./hostFiles.js").ListHostDirectoryPayload];
+    args: [payload: import("./hostFiles.js").ListHostDirectoryPayload];
     result: import("./hostFiles.js").HostDirectoryListing;
   };
   "host-metrics:get-snapshots": {

@@ -222,6 +222,7 @@ export const CHANNEL_LOCALITY = {
   "events:push": "hybrid",
   "file-browser:list-directory": "host",
   "file-browser:stat-paths": "host",
+  "file-transfer:answer-host-pick": "shell",
   "file-transfer:cancel": "shell",
   "file-transfer:download": "shell",
   "file-transfer:event": "shell",

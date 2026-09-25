@@ -1,3 +1,5 @@
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
+
 /**
  * Shared classification + URL helpers for previewable (non-text) files.
  *
@@ -124,12 +126,39 @@ export function isFileContentsCopyCandidate(filePath: string): boolean {
 }
 
 /**
+ * The remote host this view's files live on, or null for a view of this
+ * machine. A remote view's preview URLs name the host so this machine's
+ * protocol handler fetches the host's file instead of reading its own copy of
+ * the same path.
+ */
+function viewRemoteHostId(): string | null {
+  const id = typeof window === "undefined" ? undefined : window.__DAINTREE_HOST_ID__?.id;
+  return id && id !== LOCAL_HOST_ID ? id : null;
+}
+
+/**
+ * `load` for this machine, `host/<hostId>/load` for a remote host. Local URLs
+ * keep exactly the shape they always had.
+ */
+function previewAuthority(hostId: string | null): string {
+  return hostId === null ? "load" : `host/${encodeURIComponent(hostId)}/load`;
+}
+
+function previewQuery(filePath: string, rootPath: string): string {
+  return `?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
+}
+
+/**
  * URL for the custom `daintree-file://` protocol, which serves a file from
  * inside a known root. Used as an `<img>` src so raster images never round-trip
  * through a base64 IPC read.
  */
-export function buildDaintreeFileUrl(filePath: string, rootPath: string): string {
-  return `daintree-file://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
+export function buildDaintreeFileUrl(
+  filePath: string,
+  rootPath: string,
+  hostId: string | null = viewRemoteHostId()
+): string {
+  return `daintree-file://${previewAuthority(hostId)}${previewQuery(filePath, rootPath)}`;
 }
 
 /**
@@ -139,11 +168,15 @@ export function buildDaintreeFileUrl(filePath: string, rootPath: string): string
  * (#12242). It is registered `standard: true`, the privilege the upstream report
  * behind the old blob detour identified as the missing one.
  */
-export function buildDaintreeMediaUrl(filePath: string, rootPath: string): string {
+export function buildDaintreeMediaUrl(
+  filePath: string,
+  rootPath: string,
+  hostId: string | null = viewRemoteHostId()
+): string {
   // Trailing `/` on the authority is written out rather than left to Chromium:
   // a `standard: true` scheme canonicalizes to it anyway, and matching that
   // shape here keeps the URL we set identical to the one the handler receives.
-  return `daintree-media://load/?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
+  return `daintree-media://${previewAuthority(hostId)}/${previewQuery(filePath, rootPath)}`;
 }
 
 /**
@@ -152,6 +185,10 @@ export function buildDaintreeMediaUrl(filePath: string, rootPath: string): strin
  * `frame-src`. Used as an iframe `src` so Chromium's built-in PDFium viewer
  * renders the document.
  */
-export function buildDaintreePdfUrl(filePath: string, rootPath: string): string {
-  return `daintree-pdf://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
+export function buildDaintreePdfUrl(
+  filePath: string,
+  rootPath: string,
+  hostId: string | null = viewRemoteHostId()
+): string {
+  return `daintree-pdf://${previewAuthority(hostId)}${previewQuery(filePath, rootPath)}`;
 }

@@ -218,6 +218,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["file-browser:stat-paths"]["result"]>;
   };
   fileTransfer: {
+    answerHostPick(
+      ...args: IpcInvokeMap["file-transfer:answer-host-pick"]["args"]
+    ): Promise<IpcInvokeMap["file-transfer:answer-host-pick"]["result"]>;
     cancel(
       ...args: IpcInvokeMap["file-transfer:cancel"]["args"]
     ): Promise<IpcInvokeMap["file-transfer:cancel"]["result"]>;

@@ -1,7 +1,9 @@
 import { defineIpcNamespace, op } from "../define.js";
 import { pendingRemoteHostsHandler } from "../../remote/pendingHandler.js";
+import { requireRemoteService } from "../../remote/runtime.js";
 import { FILE_TRANSFER_METHOD_CHANNELS } from "./fileTransfer.preload.js";
 import type {
+  AnswerHostPickPayload,
   DownloadPayload,
   DownloadResult,
   UploadBytesPayload,
@@ -24,13 +26,22 @@ export const fileTransferNamespace = defineIpcNamespace({
     ),
     download: op(
       FILE_TRANSFER_METHOD_CHANNELS.download,
-      async (_payload: DownloadPayload): Promise<DownloadResult> =>
-        pendingRemoteHostsHandler(FILE_TRANSFER_METHOD_CHANNELS.download)
+      async (ctx, payload: DownloadPayload): Promise<DownloadResult> =>
+        requireRemoteService("hostFileClient").download(ctx.webContentsId, payload),
+      { withContext: true }
     ),
     cancel: op(
       FILE_TRANSFER_METHOD_CHANNELS.cancel,
-      async (_payload: { opId: string }): Promise<void> =>
-        pendingRemoteHostsHandler(FILE_TRANSFER_METHOD_CHANNELS.cancel)
+      async (payload: { opId: string }): Promise<void> => {
+        if (typeof payload?.opId !== "string") return;
+        requireRemoteService("hostFileClient").cancel(payload.opId);
+      }
+    ),
+    answerHostPick: op(
+      FILE_TRANSFER_METHOD_CHANNELS.answerHostPick,
+      async (ctx, payload: AnswerHostPickPayload): Promise<void> =>
+        requireRemoteService("hostFileClient").answerHostPick(ctx.webContentsId, payload),
+      { withContext: true }
     ),
   },
 });
