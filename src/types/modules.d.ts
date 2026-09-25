@@ -1,7 +1,7 @@
 /// <reference types="electron" />
 
 declare module "react-diff-view" {
-  import { ComponentType, ReactNode } from "react";
+  import { ComponentType, MouseEvent, ReactNode } from "react";
 
   export type ViewType = "unified" | "split";
   export type DiffType = "add" | "delete" | "modify" | "rename" | "copy";
@@ -132,7 +132,22 @@ declare module "react-diff-view" {
     }) => string | undefined;
     /** Split view only: isolate text selection to the side the drag started on */
     optimizeSelection?: boolean;
+    /** Rows rendered after the change row whose change key matches */
+    widgets?: Record<string, ReactNode>;
+    /** Change keys drawn with the selected-change classes */
+    selectedChanges?: string[];
+    gutterEvents?: EventMap;
     children: (hunks: HunkData[]) => ReactNode;
+  }
+
+  /** Unified rows bind gutter events without a side; split rows pass it. */
+  export interface ChangeEventArgs {
+    side?: Side;
+    change: ChangeData | null;
+  }
+
+  export interface EventMap {
+    onClick?: (args: ChangeEventArgs, event: MouseEvent<HTMLElement>) => void;
   }
 
   export const Diff: ComponentType<DiffProps>;
