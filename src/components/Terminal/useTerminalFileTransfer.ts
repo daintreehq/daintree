@@ -78,6 +78,15 @@ function isDeliverablePath(filePath: string): boolean {
   return true;
 }
 
+/**
+ * The last not-yet-written drop per terminal id. Module scope rather than per
+ * hook: a pane that remounts under the same PTY must still queue behind a drop
+ * its previous mount accepted.
+ */
+const pendingDropWrites = new Map<string, Promise<void>>();
+
+const noop = (): void => {};
+
 interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
   terminalId: string;
   isInputLocked?: boolean;
@@ -405,40 +414,63 @@ export function useTerminalFileTransfer(
       const sources = resolveTransferSources(transfer);
       if (sources.length === 0) return;
 
-      const materialized = await materializeTransferSources(sources);
-      // Same re-checks as the image paste: the pane may have unmounted or
-      // locked, and the running agent changed, while the paths resolved.
-      if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
-      const paths = materialized.map((result) => result?.hostPath ?? "");
+      // What held the keyboard when the pointer let go. A remote host can take
+      // a while to resolve the paths; if the user has moved on to another
+      // surface by then, the late landing must not pull focus back to here.
+      const focusAtGesture = document.activeElement;
+      // Resolution starts now so drops still resolve concurrently, but each
+      // one writes only after the one before it on this terminal has: a small
+      // drop made second must not insert ahead of a large one made first.
+      const materializing = materializeTransferSources(sources);
+      const previous = pendingDropWrites.get(terminalId);
 
-      const isAgent = isAgentTerminal();
-      const deliverable = paths.filter(
-        (filePath): filePath is string => !!filePath && isDeliverablePath(filePath)
-      );
+      const landing = (async () => {
+        const materialized = await materializing;
+        if (previous) await previous;
+        // Same re-checks as the image paste: the pane may have unmounted or
+        // locked, and the running agent changed, while the paths resolved.
+        if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
+        const paths = materialized.map((result) => result?.hostPath ?? "");
 
-      if (deliverable.length === 0) return;
+        const isAgent = isAgentTerminal();
+        const deliverable = paths.filter(
+          (filePath): filePath is string => !!filePath && isDeliverablePath(filePath)
+        );
 
-      // Trailing space terminates the last token and leaves the caret ready for
-      // the next argument or prompt word, matching the hybrid input's drop.
-      writeSegments(buildSegments(deliverable, isAgent), isAgent);
+        if (deliverable.length === 0) return;
 
-      // The gesture already pointed at this terminal, so it ends the same way a
-      // click on it does: pane selected, keyboard here, ready to type about the
-      // paths that just landed (#11809). Once per accepted batch, and never for
-      // a drop the guards above discarded.
-      //
-      // Order matters. The preference is what `TerminalPane`'s focus effect
-      // reads to decide which sub-surface the newly selected pane hands the
-      // keyboard to, so leaving it on "hybridInput" would route the keyboard to
-      // the input bar even though the paths went to the PTY.
-      //
-      // xterm is focused directly rather than through the panel focus registry:
-      // the drop proves this wrapper is mounted, the target is unambiguously
-      // xterm, and the Assistant and Dev Preview consoles have no registry
-      // entry under their PTY id to route through in the first place.
-      usePanelStore.getState().setPreferredTerminalFocusTarget("xterm");
-      onDropSelectRef.current?.();
-      terminalInstanceService.focus(terminalId);
+        // Trailing space terminates the last token and leaves the caret ready for
+        // the next argument or prompt word, matching the hybrid input's drop.
+        writeSegments(buildSegments(deliverable, isAgent), isAgent);
+
+        const activeNow = document.activeElement;
+        if (activeNow !== focusAtGesture && activeNow && !container.contains(activeNow)) return;
+
+        // The gesture already pointed at this terminal, so it ends the same way a
+        // click on it does: pane selected, keyboard here, ready to type about the
+        // paths that just landed (#11809). Once per accepted batch, and never for
+        // a drop the guards above discarded.
+        //
+        // Order matters. The preference is what `TerminalPane`'s focus effect
+        // reads to decide which sub-surface the newly selected pane hands the
+        // keyboard to, so leaving it on "hybridInput" would route the keyboard to
+        // the input bar even though the paths went to the PTY.
+        //
+        // xterm is focused directly rather than through the panel focus registry:
+        // the drop proves this wrapper is mounted, the target is unambiguously
+        // xterm, and the Assistant and Dev Preview consoles have no registry
+        // entry under their PTY id to route through in the first place.
+        usePanelStore.getState().setPreferredTerminalFocusTarget("xterm");
+        onDropSelectRef.current?.();
+        terminalInstanceService.focus(terminalId);
+      })();
+
+      const settled = landing.then(noop, noop);
+      pendingDropWrites.set(terminalId, settled);
+      void settled.then(() => {
+        if (pendingDropWrites.get(terminalId) === settled) pendingDropWrites.delete(terminalId);
+      });
+      await settled;
     };
 
     // Use capture phase for paste so we intercept before xterm's own handler

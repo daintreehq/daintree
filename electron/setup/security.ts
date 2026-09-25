@@ -13,7 +13,7 @@ import { getIpcDispatcher, type InvokeEnveloper } from "../ipc/dispatcher.js";
 import { isIpcEnvelope, type IpcEnvelope } from "../../shared/types/ipc/errors.js";
 import { channelToCategory, type IpcChannelCategory } from "../ipc/utils.js";
 import { AppError } from "../utils/errorTypes.js";
-import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
+import { sanitizeErrorMessage, toTransportSafeError } from "../ipc/transportSafeError.js";
 import { getCurrentCorrelationId } from "../services/TelemetryService.js";
 
 /**
@@ -142,21 +142,12 @@ export function validateIpcInvokeEnvelope(channel: string, args: unknown[]): voi
   }
 }
 
-function sanitizePaths(msg: string): string {
-  return msg
-    .replace(/\/(?:Users|home|tmp|private|var)\/[^\s:]+/gi, "<path>")
-    .replace(/[A-Z]:[/\\](?:Users|Program Files|Windows|ProgramData)[^\s:]*/gi, "<path>")
-    .replace(/\\\\(?:[^\s\\]+)\\(?:[^\s:]+)/g, "<path>");
-}
-
 /**
  * @internal Exported for testing. Strip filesystem paths and pattern-known
  * secret sigils from an IPC error message before it leaves the main process.
- * Path normalization runs first so a token embedded inside a path is still
- * caught after the path is collapsed to `<path>`.
  */
 export function sanitizeErrorForRenderer(msg: string): string {
-  return scrubSecrets(sanitizePaths(msg));
+  return sanitizeErrorMessage(msg);
 }
 
 function sanitizedErrorEnvelope(channel: string, error: unknown): IpcEnvelope {
@@ -167,17 +158,11 @@ function sanitizedErrorEnvelope(channel: string, error: unknown): IpcEnvelope {
   if (correlationId !== undefined) {
     serialized.correlationId = correlationId;
   }
-  serialized.message = sanitizeErrorForRenderer(serialized.message);
-  if (typeof serialized.userMessage === "string") {
-    serialized.userMessage = sanitizeErrorForRenderer(serialized.userMessage);
-  }
-  // `details` is allowlisted structured data and deliberately survives.
-  serialized.stack = undefined;
-  serialized.path = undefined;
-  serialized.context = undefined;
-  serialized.cause = undefined;
-  serialized.properties = undefined;
-  return { __daintreeIpcEnvelope: true as const, ok: false as const, error: serialized };
+  return {
+    __daintreeIpcEnvelope: true as const,
+    ok: false as const,
+    error: toTransportSafeError(serialized),
+  };
 }
 
 function isWellFormedEnvelope(value: unknown): value is IpcEnvelope {

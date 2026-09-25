@@ -1,5 +1,6 @@
 import type { SerializedError, IpcSuccessEnvelope, IpcErrorEnvelope } from "../types/ipc/errors.js";
 import type { AppErrorDetails } from "../types/appError.js";
+import type { HostPlatform, PluginIncompatibleReason } from "../types/remoteHosts.js";
 
 /**
  * A serialized error that may carry `AppError.details`: allowlisted structured
@@ -111,32 +112,79 @@ function sanitizeCloneValue(value: unknown, seen: WeakSet<object>): unknown {
   return result;
 }
 
-const APP_ERROR_DETAIL_CODES = new Set(["PLUGIN_NOT_ON_HOST", "PLUGIN_INCOMPATIBLE"]);
+const HOST_PLATFORMS: ReadonlySet<string> = new Set<HostPlatform>(["darwin", "linux"]);
+const MAX_DETAIL_STRING_LENGTH = 256;
+const MAX_DETAIL_LIST_LENGTH = 32;
 
-/**
- * `details` survives the packaged-build strip, so it is rebuilt from its
- * allowlisted fields rather than copied: anything that is not a recognised
- * detail shape is dropped.
- */
-function pickAppErrorDetails(value: unknown): AppErrorDetails | undefined {
+function pickDetailString(value: unknown): string | undefined {
+  return typeof value === "string" ? value.slice(0, MAX_DETAIL_STRING_LENGTH) : undefined;
+}
+
+function pickHostPlatform(value: unknown): HostPlatform | undefined {
+  return typeof value === "string" && HOST_PLATFORMS.has(value)
+    ? (value as HostPlatform)
+    : undefined;
+}
+
+function pickIncompatibleReason(value: unknown): PluginIncompatibleReason | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;
-  if (typeof raw.code !== "string" || !APP_ERROR_DETAIL_CODES.has(raw.code)) return undefined;
-  if (typeof raw.pluginId !== "string" || typeof raw.hostId !== "string") return undefined;
-  if (raw.code === "PLUGIN_NOT_ON_HOST") {
-    return { code: "PLUGIN_NOT_ON_HOST", pluginId: raw.pluginId, hostId: raw.hostId };
+  switch (raw.kind) {
+    case "engine": {
+      const required = pickDetailString(raw.required);
+      const hostVersion = pickDetailString(raw.hostVersion);
+      if (required === undefined || hostVersion === undefined) return undefined;
+      return { kind: "engine", required, hostVersion };
+    }
+    case "platform": {
+      const hostPlatform = pickHostPlatform(raw.hostPlatform);
+      if (hostPlatform === undefined || !Array.isArray(raw.supported)) return undefined;
+      const supported: HostPlatform[] = [];
+      for (const entry of raw.supported.slice(0, MAX_DETAIL_LIST_LENGTH)) {
+        const platform = pickHostPlatform(entry);
+        if (platform === undefined) return undefined;
+        supported.push(platform);
+      }
+      return { kind: "platform", hostPlatform, supported };
+    }
+    case "remote-unsupported":
+      return { kind: "remote-unsupported" };
+    case "untrusted":
+      return { kind: "untrusted" };
+    case "unconfigured": {
+      if (!Array.isArray(raw.missing)) return undefined;
+      const missing: string[] = [];
+      for (const entry of raw.missing.slice(0, MAX_DETAIL_LIST_LENGTH)) {
+        const name = pickDetailString(entry);
+        if (name === undefined) return undefined;
+        missing.push(name);
+      }
+      return { kind: "unconfigured", missing };
+    }
+    default:
+      return undefined;
   }
-  // Its own visited set: callers often pass the same object as `context`,
-  // and sharing `seen` would collapse it to "[Circular]".
-  const reason = sanitizeCloneValue(raw.reason, new WeakSet<object>());
-  if (reason === null || typeof reason !== "object" || Array.isArray(reason)) return undefined;
-  if (typeof (reason as Record<string, unknown>).kind !== "string") return undefined;
-  return {
-    code: "PLUGIN_INCOMPATIBLE",
-    pluginId: raw.pluginId,
-    hostId: raw.hostId,
-    reason: reason as Extract<AppErrorDetails, { code: "PLUGIN_INCOMPATIBLE" }>["reason"],
-  };
+}
+
+/**
+ * `details` survives the packaged-build strip and crosses the link and the
+ * contextBridge, so it is rebuilt field by field from the `PluginHostError`
+ * union rather than copied: anything that is not exactly a recognised variant
+ * is dropped, and unknown fields never ride along.
+ */
+export function pickAppErrorDetails(value: unknown): AppErrorDetails | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const pluginId = pickDetailString(raw.pluginId);
+  const hostId = pickDetailString(raw.hostId);
+  if (pluginId === undefined || hostId === undefined) return undefined;
+  if (raw.code === "PLUGIN_NOT_ON_HOST") {
+    return { code: "PLUGIN_NOT_ON_HOST", pluginId, hostId };
+  }
+  if (raw.code !== "PLUGIN_INCOMPATIBLE") return undefined;
+  const reason = pickIncompatibleReason(raw.reason);
+  if (reason === undefined) return undefined;
+  return { code: "PLUGIN_INCOMPATIBLE", pluginId, hostId, reason };
 }
 
 export function serializeError(error: unknown, seen = new WeakSet<object>()): SerializedAppError {
@@ -255,8 +303,9 @@ export function deserializeError(serialized: SerializedAppError): Error {
     (error as unknown as Record<string, unknown>).context = serialized.context;
   }
 
-  if (serialized.details !== undefined) {
-    (error as unknown as Record<string, unknown>).details = serialized.details;
+  const details = pickAppErrorDetails(serialized.details);
+  if (details !== undefined) {
+    (error as unknown as Record<string, unknown>).details = details;
   }
 
   if (serialized.cause !== undefined) {

@@ -152,4 +152,6 @@ export interface IpcDispatcher<Ctx> {
   sendForEndpoint(invocation: EndpointInvocation, channel: string, args: unknown[]): void;
   setRemoteRouter(router: RemoteRouter | null): void;
   registerHybridSplit(channel: string, split: HybridSplit): () => void;
+  /** Admit a hybrid channel for link calls (the host-side leg of a split); refused otherwise. */
+  allowHybridOverLink(channel: string): () => void;
 }

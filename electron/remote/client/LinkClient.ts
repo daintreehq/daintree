@@ -222,8 +222,9 @@ export class LinkClient {
         if (message.lane !== Lane.CONTROL) return;
         if (message.kind === ControlKind.WELCOME) {
           // Open synchronously so frames that follow WELCOME in the same read
-          // are dispatched, not treated as pre-handshake traffic.
-          session.open();
+          // are accepted, not treated as pre-handshake traffic. They are held
+          // until the session listeners have attached their handlers.
+          session.open({ holdInbound: true });
           settle({ kind: "welcome", welcome: message.body });
         } else if (message.kind === ControlKind.REJECT) {
           settle({ kind: "reject", reject: message.body });
@@ -307,6 +308,7 @@ export class LinkClient {
         // A failing subscriber must not break the link.
       }
     }
+    session.releaseInbound();
   }
 
   private release(connection: LinkTransportConnection): Promise<void> {

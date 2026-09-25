@@ -390,6 +390,9 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
       if (plainRelaunch) focusWindow(liveWindow);
       return;
     }
+    // Without Host mode, a relaunch with nothing on screen behaves as it always
+    // has (the folder routing above still applies).
+    if (!opts.isHostModeActive?.()) return;
     if (!app.isReady() || !(opts.isLaunchSettled?.() ?? true)) {
       // The launch is still bringing up its own windows or its windowless
       // Host; decided once it has, against whatever is on screen then.
@@ -438,6 +441,13 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   });
 
   app.on("activate", () => {
+    // A windowless Host launch never opens a window of its own, so a Dock click
+    // before it settles is the user asking to see the app: answered on settle
+    // exactly like a plain relaunch.
+    if (opts.isHostModeActive?.() && (!app.isReady() || !(opts.isLaunchSettled?.() ?? true))) {
+      deferredRelaunch = { plainRelaunch: true };
+      return;
+    }
     // A Dock click during a slow startup fires `activate` before
     // `app.whenReady()` resolves; creating a BrowserWindow then throws. The
     // startup path in main.ts always creates the initial window once ready,

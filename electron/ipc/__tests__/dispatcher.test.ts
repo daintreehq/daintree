@@ -309,6 +309,29 @@ describe("invokeForEndpoint", () => {
     }
   );
 
+  it("refuses a hybrid channel over a link until a split admits it", async () => {
+    const handler = vi.fn(() => "host-half");
+    getIpcDispatcher().registerInvoke(HYBRID_CHANNEL, handler);
+    const { endpoint } = makeRemoteEndpoint();
+    const invocation = { endpoint, client: REMOTE_CLIENT };
+
+    const refused = await getIpcDispatcher().invokeForEndpoint(invocation, HYBRID_CHANNEL, []);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.error.code).toBe("CHANNEL_NOT_REMOTABLE");
+    expect(handler).not.toHaveBeenCalled();
+
+    const release = getIpcDispatcher().allowHybridOverLink(HYBRID_CHANNEL);
+    const allowed = await getIpcDispatcher().invokeForEndpoint(invocation, HYBRID_CHANNEL, []);
+    expect(allowed).toEqual({ __daintreeIpcEnvelope: true, ok: true, data: "host-half" });
+
+    release();
+    release();
+    const again = await getIpcDispatcher().invokeForEndpoint(invocation, HYBRID_CHANNEL, []);
+    expect(again.ok).toBe(false);
+    if (!again.ok) expect(again.error.code).toBe("CHANNEL_NOT_REMOTABLE");
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it("applies the arg-count cap and payload budget like an ipcMain call", async () => {
     const handler = vi.fn(() => "ran");
     cleanups.push(typedHandleWithContext(HOST_CHANNEL as never, handler as never));

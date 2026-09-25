@@ -344,7 +344,7 @@ function isAbortLikeError(err: unknown): boolean {
 /**
  * Install a plugin from a path produced by a drag-and-drop onto the Plugin
  * settings tab (#9295). The renderer resolves the native path via the
- * plugin-scoped `getDroppedFilePath` bridge and hands it here; main owns every
+ * `files.getDroppedFilePaths` bridge and hands it here; main owns every
  * trust gate via {@link validateDntrArchivePath} because the renderer can't be
  * trusted to validate before #9292 runs. All failures come back as structured
  * `{ status: "failed" }` data (never thrown) so the tab can render an inline

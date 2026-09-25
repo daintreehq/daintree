@@ -138,7 +138,7 @@ import {
 } from "./window/openWindowsTracker.js";
 import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
 import { startHostRuntime } from "./boot/hostBootstrap.js";
-import { resolveHostModeLaunch } from "./boot/hostModeLaunch.js";
+import { isHostModeRequested, resolveHostModeLaunch } from "./boot/hostModeLaunch.js";
 import { isRemoteHostsSupported } from "./remote/buildGate.js";
 
 // CRITICAL: Run IPC sender validation before any handlers are registered
@@ -389,7 +389,10 @@ if (!gotTheLock) {
   // use, so switching it on mid-session applies to the next close.
   const isHostModeEnabled = (): boolean =>
     isRemoteHostsSupported() && store.get("hostMode")?.enabled === true;
-  let hostModeLaunch = false;
+  // `--host-mode` is known from argv before `ready`, so a second launch or Dock
+  // click during the windowless startup is already treated as Host mode; the
+  // store-dependent cases are resolved once the app is ready.
+  let hostModeLaunch = isRemoteHostsSupported() && isHostModeRequested(process.argv);
   // Flips once the initial windows (or the windowless Host runtime) are up, so
   // a second launch before then doesn't open a window of its own.
   let launchSettled = false;

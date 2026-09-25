@@ -26,8 +26,11 @@ afterEach(async () => {
   await removeTempDir(dir);
 });
 
-async function pair() {
-  const p = await openSessionPair(dir);
+async function pair(
+  hostOptions: Parameters<typeof openSessionPair>[1] = {},
+  clientOptions: Parameters<typeof openSessionPair>[2] = {}
+) {
+  const p = await openSessionPair(dir, hostOptions, clientOptions);
   sessions.push(p.host, p.client);
   return p;
 }
@@ -259,5 +262,118 @@ describe("bulk transfer", () => {
     ]);
     expect(concat(toHost.sinks[0]!.chunks).equals(up)).toBe(true);
     expect(concat(toClient.sinks[0]!.chunks).equals(down)).toBe(true);
+  });
+  it("settles OUTCOME_UNKNOWN when the link drops after END but before the ack", async () => {
+    const { host, client } = await pair();
+    let committing = false;
+    host.transfers.setSinkFactory(() => ({
+      write() {},
+      commit: () => {
+        committing = true;
+        return new Promise<string>(() => {});
+      },
+      abort() {},
+    }));
+    const send = client.transfers.send(bytesTransferSource(crypto.randomBytes(1000)), {
+      name: "placed.bin",
+      destination: { kind: "inbox", bucket: "files" },
+    });
+    await waitFor(() => committing);
+    host.close("gone");
+    await expect(send).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+  });
+
+  it("sends a reason code, never the receiver's exception text", async () => {
+    const { host, client } = await pair();
+    host.transfers.setSinkFactory(() => ({
+      write() {
+        throw new Error("EACCES: open '/Users/alice/secret/inbox' token=ghp_abcdef123456");
+      },
+      commit: async () => "/x",
+      abort() {},
+    }));
+    const err = await client.transfers
+      .send(bytesTransferSource(crypto.randomBytes(1000)), {
+        name: "x.bin",
+        destination: { kind: "inbox", bucket: "files" },
+      })
+      .catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("The receiver could not save the file");
+    expect((err as Error).message).not.toMatch(/alice|ghp_/);
+  });
+
+  it("aborts the receiver with a reason code when the source fails", async () => {
+    const { host, client } = await pair();
+    const { sinks, factory } = memorySinks();
+    host.transfers.setSinkFactory(factory);
+    const source = {
+      ...bytesTransferSource(crypto.randomBytes(1000)),
+      read: async () => {
+        throw new Error("ENOENT: '/Users/alice/private.txt'");
+      },
+    };
+    await expect(
+      client.transfers.send(source, {
+        name: "gone.bin",
+        destination: { kind: "inbox", bucket: "files" },
+      })
+    ).rejects.toThrow(/private\.txt/);
+    await waitFor(() => sinks[0]?.aborted !== null && sinks[0]?.aborted !== undefined);
+    expect(sinks[0]!.aborted).toBe("source-failed");
+    expect(host.transfers.activeIncoming).toBe(0);
+  });
+
+  it("times out a transfer whose sink never finishes a write and frees the slot", async () => {
+    const { host, client } = await pair({ transfers: { inactivityTimeoutMs: 100 } });
+    let aborted: string | null = null;
+    host.transfers.setSinkFactory(() => ({
+      write: () => new Promise<void>(() => {}),
+      commit: async () => "/x",
+      abort(reason) {
+        aborted = reason;
+      },
+    }));
+    await expect(
+      client.transfers.send(bytesTransferSource(crypto.randomBytes(2 * 1024 * 1024)), {
+        name: "stuck.bin",
+        destination: { kind: "inbox", bucket: "files" },
+      })
+    ).rejects.toThrow(/timed out/);
+    expect(host.transfers.activeIncoming).toBe(0);
+    expect(client.transfers.activeOutgoing).toBe(0);
+    await waitFor(() => aborted === "timeout");
+  });
+
+  it("times out a commit that never settles on the receiving side", async () => {
+    const { host, client } = await pair({ transfers: { commitTimeoutMs: 100 } });
+    host.transfers.setSinkFactory(() => ({
+      write() {},
+      commit: () => new Promise<string>(() => {}),
+      abort() {},
+    }));
+    await expect(
+      client.transfers.send(bytesTransferSource(crypto.randomBytes(1000)), {
+        name: "slow-commit.bin",
+        destination: { kind: "inbox", bucket: "files" },
+      })
+    ).rejects.toThrow(/timed out/);
+    expect(host.transfers.activeIncoming).toBe(0);
+  });
+
+  it("reports OUTCOME_UNKNOWN when the sender's commit wait runs out", async () => {
+    const { host, client } = await pair({}, { transfers: { commitTimeoutMs: 100 } });
+    host.transfers.setSinkFactory(() => ({
+      write() {},
+      commit: () => new Promise<string>(() => {}),
+      abort() {},
+    }));
+    await expect(
+      client.transfers.send(bytesTransferSource(crypto.randomBytes(1000)), {
+        name: "unconfirmed.bin",
+        destination: { kind: "inbox", bucket: "files" },
+      })
+    ).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+    expect(client.transfers.activeOutgoing).toBe(0);
   });
 });

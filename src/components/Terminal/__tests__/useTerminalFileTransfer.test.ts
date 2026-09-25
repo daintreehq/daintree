@@ -1456,6 +1456,77 @@ describe("useTerminalFileTransfer hook", () => {
       expect(onDropSelect).not.toHaveBeenCalled();
     });
 
+    /** Holds each source until the test resolves that path by name. */
+    function holdEachMaterialize() {
+      const waiting = new Map<string, () => void>();
+      setRemoteMaterializer(
+        (source) =>
+          new Promise<MaterializeResult>((resolve) => {
+            const path = pathOf(source);
+            waiting.set(path, () => resolve({ hostPath: path, displayName: "x", bytes: null }));
+          })
+      );
+      return async (path: string) => {
+        await act(async () => {
+          waiting.get(path)!();
+          await settle();
+        });
+      };
+    }
+
+    it("writes drops in the order they were made, not the order they resolve", async () => {
+      const resolvePath = holdEachMaterialize();
+      renderFileTransferHook();
+      await dropFiles([fileAt("big.bin", "/Users/test/big.bin")]);
+      await dropFiles([fileAt("small.txt", "/Users/test/small.txt")]);
+
+      await resolvePath("/Users/test/small.txt");
+      expect(terminalClient.write).not.toHaveBeenCalled();
+
+      await resolvePath("/Users/test/big.bin");
+      expect(vi.mocked(terminalClient.write).mock.calls.map(([, data]) => data)).toEqual([
+        `${escapeShellArgOptional("/Users/test/big.bin")} `,
+        `${escapeShellArgOptional("/Users/test/small.txt")} `,
+      ]);
+    });
+
+    it("does not wait on an earlier drop the guards discarded", async () => {
+      const resolvePath = holdEachMaterialize();
+      const { rerender } = renderFileTransferHook({ isInputLocked: false });
+      await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+      rerender({ isInputLocked: true });
+      await resolvePath("/Users/test/a.ts");
+
+      rerender({ isInputLocked: false });
+      await dropFiles([fileAt("b.ts", "/Users/test/b.ts")]);
+      await resolvePath("/Users/test/b.ts");
+
+      expect(vi.mocked(terminalClient.write).mock.calls.map(([, data]) => data)).toEqual([
+        `${escapeShellArgOptional("/Users/test/b.ts")} `,
+      ]);
+    });
+
+    it("leaves focus where the user moved it while the drop resolved", async () => {
+      const { release } = holdMaterialize();
+      const onDropSelect = vi.fn();
+      renderFileTransferHook({ onDropSelect });
+      const elsewhere = document.createElement("input");
+      document.body.appendChild(elsewhere);
+      try {
+        await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+        elsewhere.focus();
+        await release();
+
+        // The paths still land where they were dropped; only the keyboard stays.
+        expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional("/Users/test/a.ts")} `);
+        expect(onDropSelect).not.toHaveBeenCalled();
+        expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
+        expect(terminalInstanceService.focus).not.toHaveBeenCalled();
+      } finally {
+        elsewhere.remove();
+      }
+    });
+
     it("formats for the program running when the drop lands, not when it started", async () => {
       const { release } = holdMaterialize();
       const { rerender } = renderFileTransferHook({ cwdProvider: () => CWD });
