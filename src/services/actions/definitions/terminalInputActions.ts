@@ -10,6 +10,7 @@ import { triggerPopStash, triggerStashInput } from "@/store/terminalInputStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isPtyPanel } from "@shared/types/panel";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
+import { tailCapturedOutput } from "@shared/utils/artifactParser";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
@@ -96,7 +97,15 @@ const SendKeysArgsSchema = z.object({
 const SendKeysResultSchema = z.object({
   terminalId: z.string(),
   keys: z.array(z.string()).describe("The keys written, in order. Not proof the CLI read them."),
+  screen: z
+    .string()
+    .optional()
+    .describe("The terminal's last lines shortly after the keys, to check the dialog went."),
 });
+
+/** How long after the last key the screen is read back. */
+const SEND_KEYS_SETTLE_MS = 700;
+const SEND_KEYS_SCREEN_LINES = 12;
 
 export function registerTerminalInputActions(
   actions: ActionRegistry,
@@ -370,7 +379,17 @@ export function registerTerminalInputActions(
         if (index > 0) await new Promise((resolve) => setTimeout(resolve, SEND_KEYS_GAP_MS));
         terminalClient.write(terminalId, keySequence(key));
       }
-      return { terminalId, keys };
+      // A wrong key on a dialog (Quit instead of Continue) shows up here, a
+      // call sooner than a separate read would find it.
+      await new Promise((resolve) => setTimeout(resolve, SEND_KEYS_SETTLE_MS));
+      const snapshot = await window.electron.terminal
+        .getSerializedState(terminalId)
+        .catch(() => null);
+      const screen =
+        snapshot === null
+          ? undefined
+          : tailCapturedOutput(snapshot.data, SEND_KEYS_SCREEN_LINES, true).content;
+      return { terminalId, keys, ...(screen ? { screen } : {}) };
     },
   }));
 

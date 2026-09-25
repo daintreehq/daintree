@@ -858,6 +858,7 @@ describe("terminal notices", () => {
       prepareSend: vi.fn().mockResolvedValue(pending),
       prepareLaunch: vi.fn().mockResolvedValue(pending),
       prepareKeys: vi.fn().mockResolvedValue(pending),
+      forgetTarget: vi.fn(),
     };
     const dispatchAction = vi.fn().mockResolvedValue({
       result: { ok: true, result: { sent: true, terminalId: "t-a", submissionToken: "tok-1" } },
@@ -1030,6 +1031,15 @@ describe("terminal notices", () => {
         "terminal.sendKeys",
         { terminalId: "t-a", keys: ["Down", "Enter"] },
       ]);
+    });
+
+    it("drops the pane's own notice for a terminal it closes", async () => {
+      const { terminalNotify, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-close-forgets");
+
+      await callTool(server, { name: "terminal.close", arguments: { terminalId: "t-a" } });
+
+      expect(terminalNotify.forgetTarget).toHaveBeenCalledWith(OWN_PANE, "t-a");
     });
 
     it("leaves a send without the flag alone", async () => {

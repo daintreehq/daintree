@@ -182,8 +182,13 @@ const SCENARIOS: Scenario[] = [
     messages: [FACTS_QUERY, "Great. Now close every agent except the winner."],
     timeoutMs: 30 * 60_000,
     check: ({ workers, finalText, metrics }) => {
+      // Losers are closed by the follow-up, so launches come from the transcript.
+      const launchCalls = metrics.toolCalls.filter((c) => /agent[._]launch/.test(c.input));
       for (const agent of FACT_WORKERS) {
-        expect(metrics.launched, `no ${agent} agent was launched`).toContain(agent);
+        expect(
+          launchCalls.some((c) => c.input.includes(`"${agent}"`) || c.input.includes(`'${agent}'`)),
+          `no ${agent} agent was launched`
+        ).toBe(true);
       }
       expect(finalText, "the assistant never reported a tally").toMatch(/point/i);
       expect(
@@ -479,7 +484,12 @@ async function submitViaHybridInput(page: Page, terminalId: string, text: string
   const editor = page.locator(`[data-hybrid-input-root="${terminalId}"] .cm-content`);
   await expect(editor).toBeVisible({ timeout: 30_000 });
   await editor.click();
-  await page.keyboard.insertText(text);
+  // One line at a time: a multi-line insert does not reach CodeMirror, and
+  // Shift+Enter is how a user breaks a line without submitting.
+  for (const [index, line] of text.split("\n").entries()) {
+    if (index > 0) await page.keyboard.press("Shift+Enter");
+    if (line.length > 0) await page.keyboard.insertText(line);
+  }
   await expect
     .poll(() => editor.innerText(), { timeout: 10_000 })
     .toContain(text.split("\n")[0].slice(0, 40));
@@ -598,10 +608,13 @@ for (const scenario of SCENARIOS) {
 
       // Trust dialogs, answered the way a user who trusts their own project would.
       const trusted = new Set<string>();
+      let assistantBusy = false;
       const answerTrustDialogs = async (terminals: TerminalInfo[]) => {
         for (const t of terminals) {
           if (t.isTrashed || trusted.has(t.id)) continue;
-          if (!AUTO_TRUST && t.id !== assistantId) continue;
+          // The assistant only before its first message: after that its screen
+          // quotes workers' dialogs, and Enter there would submit its draft.
+          if (t.id === assistantId ? assistantBusy : !AUTO_TRUST) continue;
           const text = await getTerminalTextById(page, t.id).catch(() => "");
           if (!TRUST_DIALOG.test(text.split("\n").slice(-30).join("\n"))) continue;
           trusted.add(t.id);
@@ -628,6 +641,7 @@ for (const scenario of SCENARIOS) {
         .toBe(true);
       await page.screenshot({ path: path.join(outDir, "00-assistant-ready.png") });
 
+      assistantBusy = true;
       const scenarioStarted = Date.now();
       let finalText = "";
       let shot = 1;

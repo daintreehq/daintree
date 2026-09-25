@@ -673,6 +673,21 @@ export class TerminalNotifyService {
     };
   }
 
+  /**
+   * The pane is closing `targetId` itself, so a notice saying it was closed
+   * would only cost a turn. Its pending notice goes; one that already fired
+   * stays, since it may quote a reply the pane has not read.
+   */
+  forgetTarget(pane: OwnPane, targetId: string): void {
+    const owner = this.existingOwner(pane);
+    if (owner === undefined) return;
+    const notice = owner.notices.get(targetId);
+    if (notice === undefined) return;
+    this.removeNotice(owner, notice);
+    this.maybeDispose(owner);
+    if (!owner.disposed) this.publish(owner);
+  }
+
   /** The chrome state for a pane, or null when it has nothing pending. */
   getPaneState(terminalId: string): PaneNotifyState | null {
     const owner = this.ownersByTerminal.get(terminalId);
@@ -1156,6 +1171,14 @@ export class TerminalNotifyService {
     if (change.lastHandback !== undefined && handbackMatches(notice, change.lastHandback)) {
       notice.handbackSeen = true;
     }
+    // The agent left its terminal, from whatever state: a CLI quit from its
+    // own dialog never worked, so waiting for a settle out of `working` would
+    // wait forever.
+    if (change.state === "exited") {
+      clearSettling(notice);
+      this.fire(owner, notice, { kind: "exit", handback: notice.handbackSeen });
+      return;
+    }
     if (change.state === "working") {
       // Judged by when things happened, not when they are being processed: a
       // settle replayed from history that lasted the full window before work
@@ -1608,6 +1631,12 @@ function publicDelivery(delivery: DeliveryState): TerminalNotifyDelivery {
 
 export const TERMINAL_NOTIFY_WHEN_IDLE_TOOL = "terminal.notifyWhenIdle";
 
+/** The closes after which a pane's own notice for the target is dropped. */
+export const NOTIFY_CLOSE_TOOLS: ReadonlySet<string> = new Set([
+  "terminal.close",
+  "terminal.closeOwned",
+]);
+
 /** The key paths that take `notify: true`. */
 export const NOTIFY_KEY_TOOLS: ReadonlySet<string> = new Set([
   "terminal.sendKeys",
@@ -1624,7 +1653,7 @@ export const NOTIFY_SEND_TOOLS: ReadonlySet<string> = new Set([
 
 export type TerminalNotifyHandlers = Pick<
   TerminalNotifyService,
-  "whenIdle" | "prepareSend" | "prepareLaunch" | "prepareKeys"
+  "whenIdle" | "prepareSend" | "prepareLaunch" | "prepareKeys" | "forgetTarget"
 >;
 
 /**

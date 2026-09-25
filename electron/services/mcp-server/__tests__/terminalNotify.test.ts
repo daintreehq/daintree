@@ -535,6 +535,32 @@ describe("TerminalNotifyService", () => {
     });
   });
 
+  describe("ends a notice cannot wait past", () => {
+    it("reports an agent that quit to its shell without ever working", async () => {
+      const h = setup();
+      h.client.terminals.set("t-dialog", atPrompt(Date.now() - 5_000));
+      const pending = await h.service.prepareKeys(PANE, "t-dialog");
+      pending.complete({ terminalId: "t-dialog", keys: ["Down", "Enter"] });
+
+      h.stateChange({ terminalId: "t-dialog", state: "exited", previousState: "waiting" });
+      await flushNotice();
+
+      expect(h.client.submitted[0].text).toContain("t-dialog exited");
+    });
+
+    it("says nothing about a terminal the pane closed itself", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+
+      h.service.forgetTarget(PANE, "t-a");
+      h.kill("t-a");
+      await flushNotice();
+
+      expect(h.client.submitted).toEqual([]);
+      expect(h.service.getPaneState(OWN)).toBeNull();
+    });
+  });
+
   describe("notify on keys", () => {
     it("reports the turn the keys unblocked, counted from when they were asked for", async () => {
       const h = setup();

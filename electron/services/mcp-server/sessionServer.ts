@@ -125,6 +125,7 @@ import {
 import type { TerminalAdoptionRecord } from "./terminalAdoption.js";
 import {
   NOTIFY_NOT_ELIGIBLE,
+  NOTIFY_CLOSE_TOOLS,
   NOTIFY_KEY_TOOLS,
   NOTIFY_SEND_TOOLS,
   NOTIFY_VALIDATION_ERROR,
@@ -2309,6 +2310,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             if (err instanceof TerminalNotifyError) return refuse(err.code, err.message);
             throw err;
           }
+        }
+
+        // A pane closing a terminal it asked about needs no notice saying so.
+        if (NOTIFY_CLOSE_TOOLS.has(actionId) && terminalNotify !== undefined) {
+          const pane = tier === "external" ? null : (resolveOwnPane?.() ?? null);
+          const targetId = ownedResourceId ?? readStringArg(args, "terminalId");
+          if (pane !== null && targetId !== undefined) terminalNotify.forgetTarget(pane, targetId);
         }
 
         // Short-circuit: terminal.waitUntilIdle runs in the main process. The
