@@ -444,7 +444,45 @@ describe("AgentModelCatalogService", () => {
     expect(result.models.map((m) => m.id)).toEqual(bundledIdsFor("gemini"));
   });
 
-  it("takes the codex CLI catalog as authoritative, dropping remote-only IDs", async () => {
+  it("offers only the curated codex models, dropping older generations the CLI still lists", async () => {
+    const execFileImpl = mockCodexCli([
+      { slug: "gpt-6-astra", display_name: "GPT-6-Astra", ...LISTED(1) },
+      { slug: "gpt-6-sol", display_name: "GPT-6-Sol", ...LISTED(2) },
+      { slug: "gpt-6-luna", display_name: "GPT-6-Luna", ...LISTED(3) },
+      { slug: "gpt-5.6-sol", display_name: "GPT-5.6-Sol", ...LISTED(4) },
+      { slug: "gpt-5.6-terra", display_name: "GPT-5.6-Terra", ...LISTED(7) },
+      { slug: "gpt-5.5", display_name: "GPT-5.5", ...LISTED(12) },
+    ]);
+
+    const service = new AgentModelCatalogService({
+      cachePath,
+      fetchImpl: mockFetch(makeCatalog()),
+      execFileImpl,
+    });
+
+    const result = await service.getResolvedModels("codex");
+
+    expect(result.models.map((m) => m.id)).toEqual(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
+  });
+
+  it("drops a curated codex model the installed CLI doesn't know", async () => {
+    const execFileImpl = mockCodexCli([
+      { slug: "gpt-6-sol", display_name: "GPT-6-Sol", ...LISTED(1) },
+      { slug: "gpt-6-luna", display_name: "GPT-6-Luna", ...LISTED(2) },
+    ]);
+
+    const service = new AgentModelCatalogService({
+      cachePath,
+      fetchImpl: mockFetch(makeCatalog()),
+      execFileImpl,
+    });
+
+    const result = await service.getResolvedModels("codex");
+
+    expect(result.models.map((m) => m.id)).toEqual(["gpt-6-sol", "gpt-6-luna"]);
+  });
+
+  it("takes an older codex CLI's own catalog when it knows none of the curated models", async () => {
     // Deliberately unequal to the remote catalog's 200_000 max, so reversing
     // the CLI-before-remote precedence would change the assertion below.
     const execFileImpl = mockCodexCli([

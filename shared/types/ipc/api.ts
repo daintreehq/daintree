@@ -2561,11 +2561,12 @@ export interface HelpAssistantSettings {
   /**
    * Model the assistant launches with, injected as `--model <id>` ahead of
    * {@link customArgs} so a `--model` in custom args still wins as the advanced
-   * override. Empty string means "use the CLI's default model" (no flag).
-   * Model IDs are agent-specific, so this is reset whenever the agent changes.
-   * Defaults to "".
+   * override. `null` means the agent's recommended assistant model
+   * (`AgentConfig.assistantDefaultModel`); empty string means "use the CLI's
+   * default model" (no flag). Model IDs are agent-specific, so this is reset to
+   * `null` whenever the agent changes. Defaults to `null`.
    */
-  modelId: string;
+  modelId: string | null;
   /** Whitespace-separated CLI flags appended at assistant launch (advanced override). Defaults to "". */
   customArgs: string;
   /**

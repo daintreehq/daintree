@@ -82,7 +82,7 @@ describe("registerHelpAssistantHandlers", () => {
       tier: "action",
       bypassPermissions: false,
       auditRetention: 7,
-      modelId: "",
+      modelId: null,
       customArgs: "",
       idleHibernateMinutes: 5,
       debugLogging: false,
@@ -106,7 +106,7 @@ describe("registerHelpAssistantHandlers", () => {
       tier: "system",
       bypassPermissions: true,
       auditRetention: 30,
-      modelId: "",
+      modelId: null,
       customArgs: "",
       idleHibernateMinutes: 5,
       debugLogging: false,
@@ -357,7 +357,7 @@ describe("registerHelpAssistantHandlers", () => {
       tier: "action",
       bypassPermissions: false,
       auditRetention: 7,
-      modelId: "",
+      modelId: null,
       customArgs: "",
       idleHibernateMinutes: 5,
       debugLogging: false,
@@ -577,6 +577,15 @@ describe("registerHelpAssistantHandlers", () => {
     expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", "");
   });
 
+  it("persists a null modelId so the agent's recommended model applies again", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: null });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", null);
+  });
+
   it("trims surrounding whitespace from modelId", async () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
@@ -664,10 +673,19 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toMatchObject({ modelId: "claude-opus-4-8" });
   });
 
-  it("sanitizes a corrupted stored modelId back to the empty-string default", async () => {
+  it("sanitizes a corrupted stored modelId back to the null default", async () => {
     storeMock.get.mockReturnValue({
       modelId: "sonnet;rm -rf /" as unknown as string,
     });
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    const result = await handler(null);
+    expect(result).toMatchObject({ modelId: null });
+  });
+
+  it("keeps a stored empty modelId as the explicit CLI-default choice", async () => {
+    storeMock.get.mockReturnValue({ modelId: "" });
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 

@@ -640,6 +640,97 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(options).toEqual(["Default (CLI default)", "Opus", "Sonnet"]);
   });
 
+  describe("recommended model default", () => {
+    function mockClaudeCatalog() {
+      window.electron.agentCapabilities.getResolvedModelList = vi.fn().mockResolvedValue({
+        agentId: "claude",
+        models: [
+          { id: "opus", name: "Opus", shortLabel: "Opus" },
+          { id: "sonnet", name: "Sonnet", shortLabel: "Sonnet" },
+        ],
+        contextWindow: 200_000,
+        source: "merged",
+      });
+    }
+
+    async function renderModelSelect(modelId: string | null) {
+      helpPanelState.preferredAgentId = "claude";
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "action" as const,
+          bypassPermissions: false,
+          auditRetention: 7,
+          modelId,
+          customArgs: "",
+        }),
+      });
+      mockClaudeCatalog();
+      render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      return (await screen.findByLabelText("Model")) as HTMLSelectElement;
+    }
+
+    it("shows the agent's recommended model when nothing is saved", async () => {
+      const select = await renderModelSelect(null);
+      await waitFor(() => expect(select.value).toBe("sonnet"));
+    });
+
+    it("shows the CLI default when the installed CLI doesn't offer the recommendation", async () => {
+      helpPanelState.preferredAgentId = "codex";
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "action" as const,
+          bypassPermissions: false,
+          auditRetention: 7,
+          modelId: null,
+          customArgs: "",
+        }),
+      });
+      window.electron.agentCapabilities.getResolvedModelList = vi.fn().mockResolvedValue({
+        agentId: "codex",
+        models: [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", shortLabel: "Sol" }],
+        contextWindow: null,
+        source: "merged",
+      });
+      render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+      await waitFor(() => expect(select.value).toBe("__default__"));
+      const values = Array.from(select.querySelectorAll("option")).map((o) => o.value);
+      expect(values).not.toContain("gpt-6-luna");
+    });
+
+    it("keeps an explicit CLI-default choice", async () => {
+      const select = await renderModelSelect("");
+      await waitFor(() => expect(select.value).toBe("__default__"));
+    });
+
+    it("stores CLI default as an empty string and the recommended model as no choice", async () => {
+      const select = await renderModelSelect("opus");
+      await waitFor(() => expect(select.value).toBe("opus"));
+
+      fireEvent.change(select, { target: { value: "__default__" } });
+      await waitFor(() =>
+        expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({ modelId: "" })
+      );
+
+      fireEvent.change(select, { target: { value: "sonnet" } });
+      await waitFor(() =>
+        expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({ modelId: null })
+      );
+    });
+  });
+
   it("changing the capability tier persists tier=system", async () => {
     const { container } = render(
       <SettingsValidationProvider>

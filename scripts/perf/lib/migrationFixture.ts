@@ -5,7 +5,7 @@
  * scenario file. That benchmark could not regress when the product did: it
  * measured a hand-written copy of the chain, so the only thing its oracle
  * proved was that the copy still ran. This fixture drives the shipped
- * `MigrationRunner` over the shipped `migrations` barrel (v0→v29), against a
+ * `MigrationRunner` over the shipped `migrations` barrel (v0→v30), against a
  * real `config.json` on disk opened through the product's own
  * `initializeStore()` — the same call `globalServicesInit` makes at boot.
  *

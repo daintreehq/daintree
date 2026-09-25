@@ -45,6 +45,7 @@ const {
     tier: "action" as const,
     bypassPermissions: false,
     auditRetention: 7,
+    modelId: "",
     customArgs: "",
   }),
   mockGetAgentVersion: vi.fn().mockResolvedValue({
@@ -516,6 +517,7 @@ function resetState() {
     tier: "action" as const,
     bypassPermissions: false,
     auditRetention: 7,
+    modelId: "",
     customArgs: "",
   });
   mockGetAgentVersion.mockReset();
@@ -852,6 +854,7 @@ describe("HelpPanel — customArgs threading", () => {
       tier: "action" as const,
       bypassPermissions: false,
       auditRetention: 7,
+      modelId: "",
       customArgs: "--model sonnet --verbose",
     });
     mockGetFolderPath.mockResolvedValue("/help");
@@ -877,6 +880,7 @@ describe("HelpPanel — customArgs threading", () => {
       tier: "action" as const,
       bypassPermissions: false,
       auditRetention: 7,
+      modelId: "",
       customArgs: "",
     });
     mockGetFolderPath.mockResolvedValue("/help");
@@ -900,6 +904,7 @@ describe("HelpPanel — customArgs threading", () => {
       tier: "action" as const,
       bypassPermissions: false,
       auditRetention: 7,
+      modelId: "",
       customArgs: "   \t  ",
     });
     mockGetFolderPath.mockResolvedValue("/help");
@@ -924,6 +929,7 @@ describe("HelpPanel — customArgs threading", () => {
       tier: "action" as const,
       bypassPermissions: false,
       auditRetention: 7,
+      modelId: "",
       customArgs: "--model sonnet",
     });
     mockGetFolderPath.mockResolvedValue("/help");
