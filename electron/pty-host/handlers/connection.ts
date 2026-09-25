@@ -176,6 +176,17 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
             // so every byte before the fence is in the snapshot and every
             // byte after it is not.
             const { id, requestId } = portMsg;
+            // Only a remote endpoint's synthetic connection (a negative id) ever
+            // resets, and only for terminals of the project it is scoped to. A
+            // local renderer port has no business asking for another window's
+            // snapshot; the bridge times out an unanswered fence on its own.
+            const connectionProject = windowId < 0 ? windowProjectMap.get(windowId) : undefined;
+            if (!connectionProject || ptyManager.getTerminal(id)?.projectId !== connectionProject) {
+              console.warn(
+                `[PtyHost] Ignoring serialize-fence for terminal ${id} on connection ${windowId}`
+              );
+              return;
+            }
             perWindowBatcher.flushTerminal(id);
             receivedPort.postMessage({ type: "serialize-fence", id, requestId });
             const answer = (state: unknown) => {

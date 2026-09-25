@@ -102,6 +102,7 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
   ): {
     controller: TerminalRestoreController;
     managed: ManagedTerminal;
+    writeData: ReturnType<typeof vi.fn>;
   } {
     const managed = {
       terminal,
@@ -117,11 +118,12 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
       isOpened: true,
       ...overrides,
     } as unknown as ManagedTerminal;
+    const writeData = vi.fn();
     const controller = new TerminalRestoreController({
       getInstance: (id) => (id === "t1" ? managed : undefined),
-      writeData: vi.fn(),
+      writeData,
     });
-    return { controller, managed };
+    return { controller, managed, writeData };
   }
 
   // No trailing newline: the cursor is parked inside a wrapped group, which is
@@ -648,6 +650,56 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
       await pane.restorer.fetchAndRestore("t1");
       await settle(terminal);
       expect(screen(terminal).lines[0]?.trimEnd()).toBe("prompt$");
+    });
+  });
+
+  describe("host reset", () => {
+    it("clears a visible screen when the reset carries no snapshot", async () => {
+      const live = makeTerminal(40, 5);
+      await writeAndFlush(live, "OLD SCREEN");
+      const { controller, managed } = makeController(live);
+
+      await controller.applyReset("t1", "", { cols: 40, rows: 5 });
+      await flush(live);
+      await Promise.resolve();
+
+      expect(readBuffer(live)).toEqual([]);
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+    });
+
+    it("a null reset supersedes a paused incremental restore and releases later output", async () => {
+      const live = makeTerminal(40, 5);
+      await writeAndFlush(live, "OLD SCREEN");
+      const { controller, managed, writeData } = makeController(live);
+
+      // Hold the incremental restore between its first and second chunk.
+      let releaseYield!: () => void;
+      const yieldGate = new Promise<void>((resolve) => (releaseYield = resolve));
+      let paused!: () => void;
+      const pausedAtYield = new Promise<void>((resolve) => (paused = resolve));
+      Reflect.set(controller, "yieldToUI", () => {
+        paused();
+        return yieldGate;
+      });
+
+      const large = "STALE-RESTORE\r\n".repeat(30_000);
+      const incremental = controller.restoreFromSerializedIncremental("t1", large);
+      await pausedAtYield;
+
+      void controller.applyReset("t1", null);
+      // Output that arrived after the reset, held while its window is open.
+      managed.deferredOutput.push({ data: "LIVE", chunkCount: 1, ackGeneration: 1 });
+
+      await flush(live);
+      await Promise.resolve();
+      releaseYield();
+      await expect(incremental).resolves.toBe(false);
+      await flush(live);
+
+      expect(readBuffer(live)).toEqual([]);
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+      expect(writeData).toHaveBeenCalledWith("t1", "LIVE", 1, undefined, 1);
+      expect(managed.deferredOutput).toEqual([]);
     });
   });
 });

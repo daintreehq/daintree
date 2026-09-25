@@ -2,8 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const m = vi.hoisted(() => ({
   override: null as ((wc: Electron.WebContents) => boolean) | null,
-  postTerminalPortToView: vi.fn(() => null),
+  postTerminalPortToView: vi.fn((_wc: Electron.WebContents): unknown => null),
 }));
+
+function fakeMainPort() {
+  const handlers = new Map<string, () => void>();
+  return {
+    postMessage: vi.fn(),
+    on: vi.fn((event: string, handler: () => void) => handlers.set(event, handler)),
+    start: vi.fn(),
+    close: vi.fn(),
+    fireClose: () => handlers.get("close")?.(),
+  };
+}
 
 vi.mock("../../../window/portDistribution.js", () => ({
   postTerminalPortToView: m.postTerminalPortToView,
@@ -63,6 +74,70 @@ describe("client terminal port override", () => {
       m.postTerminalPortToView.mockClear();
       expect(m.override!(wc)).toBe(true);
       expect(m.postTerminalPortToView).toHaveBeenCalledWith(wc);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("does not replace a live port when the view's document has not changed", () => {
+    const uninstall = installClientTerminalPortOverride(hostForView);
+    try {
+      hosts.set(11, "studio-01");
+      const wc = fakeWebContents(11);
+      m.postTerminalPortToView.mockImplementation(() => fakeMainPort());
+      const relay = attachClientTerminalRelay(fakeSession(), wc, "view-11", "studio-01");
+      expect(relay.hasRendererPort).toBe(true);
+      m.postTerminalPortToView.mockClear();
+
+      // A project switch or scratch re-distribution to the same live document.
+      expect(m.override!(wc)).toBe(true);
+      expect(m.override!(wc)).toBe(true);
+      expect(m.postTerminalPortToView).not.toHaveBeenCalled();
+    } finally {
+      uninstall();
+      m.postTerminalPortToView.mockImplementation(() => null);
+    }
+  });
+
+  it("re-delivers once the view navigates to a new document", () => {
+    const uninstall = installClientTerminalPortOverride(hostForView);
+    try {
+      hosts.set(11, "studio-01");
+      const wc = fakeWebContents(11);
+      m.postTerminalPortToView.mockImplementation(() => fakeMainPort());
+      attachClientTerminalRelay(fakeSession(), wc, "view-11", "studio-01");
+      m.postTerminalPortToView.mockClear();
+
+      // A same-document navigation keeps the renderer context and its port.
+      wc.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+      m.override!(wc);
+      expect(m.postTerminalPortToView).not.toHaveBeenCalled();
+
+      wc.emit("did-navigate");
+      m.override!(wc);
+      expect(m.postTerminalPortToView).toHaveBeenCalledTimes(1);
+
+      m.override!(wc);
+      expect(m.postTerminalPortToView).toHaveBeenCalledTimes(1);
+    } finally {
+      uninstall();
+      m.postTerminalPortToView.mockImplementation(() => null);
+    }
+  });
+
+  it("re-delivers when the delivered port has closed", () => {
+    const uninstall = installClientTerminalPortOverride(hostForView);
+    try {
+      hosts.set(11, "studio-01");
+      const wc = fakeWebContents(11);
+      const port = fakeMainPort();
+      m.postTerminalPortToView.mockImplementationOnce(() => port);
+      attachClientTerminalRelay(fakeSession(), wc, "view-11", "studio-01");
+      port.fireClose();
+      m.postTerminalPortToView.mockClear();
+
+      m.override!(wc);
+      expect(m.postTerminalPortToView).toHaveBeenCalledTimes(1);
     } finally {
       uninstall();
     }

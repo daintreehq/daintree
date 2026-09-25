@@ -16,6 +16,11 @@ import { wrapMainPort } from "./ports.js";
 interface RelayEntry {
   relay: ClientTerminalRelay;
   hostId: HostId;
+  /**
+   * The document the relay's port went to has navigated away (or is about
+   * to), so the next distribution must hand the new document its own port.
+   */
+  documentChanged: boolean;
   cleanup: () => void;
 }
 
@@ -43,11 +48,29 @@ export function attachClientTerminalRelay(
       },
     });
     const onDestroyed = () => detachClientTerminalRelay(wcId);
+    const markDocumentChanged = () => {
+      const current = relays.get(wcId);
+      if (current) current.documentChanged = true;
+    };
+    const onNavigation = (
+      details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>
+    ) => {
+      if (details.isMainFrame && !details.isSameDocument) markDocumentChanged();
+    };
     viewWebContents.once("destroyed", onDestroyed);
+    // Both ends of a navigation: a port posted between its start and commit
+    // reached the outgoing document, so the commit invalidates it again.
+    viewWebContents.on("did-start-navigation", onNavigation);
+    viewWebContents.on("did-navigate", markDocumentChanged);
     entry = {
       relay,
       hostId,
-      cleanup: () => viewWebContents.removeListener("destroyed", onDestroyed),
+      documentChanged: false,
+      cleanup: () => {
+        viewWebContents.removeListener("destroyed", onDestroyed);
+        viewWebContents.removeListener("did-start-navigation", onNavigation);
+        viewWebContents.removeListener("did-navigate", markDocumentChanged);
+      },
     };
     relays.set(wcId, entry);
     relay.deliverPort();
@@ -87,7 +110,7 @@ export function getClientTerminalRelay(webContentsId: number): ClientTerminalRel
 /**
  * Route local port distribution by the view's authoritative host, so the
  * paths that re-broker a view's port (load, reload, project switch) re-deliver
- * the relayed port for a remote view. A remote view whose endpoint has not
+ * the relayed port for a remote view whose document actually changed. A remote view whose endpoint has not
  * opened yet is still claimed: it waits for its relay rather than being handed
  * this machine's pty-host.
  */
@@ -100,8 +123,12 @@ export function installClientTerminalPortOverride(
     const entry = relays.get(targetWc.id);
     if (entry && entry.hostId !== hostId) {
       detachClientTerminalRelay(targetWc.id);
-    } else if (entry) {
-      entry.relay.deliverPort();
+    } else if (entry && (entry.documentChanged || !entry.relay.hasRendererPort)) {
+      // Only a new document (or a port that has gone away) needs a new port:
+      // re-delivering to a document that still holds a live one would make
+      // the relay treat it as a replacement and repaint every terminal from
+      // a snapshot on each project or scratch re-distribution.
+      if (entry.relay.deliverPort()) entry.documentChanged = false;
     }
     return true;
   });

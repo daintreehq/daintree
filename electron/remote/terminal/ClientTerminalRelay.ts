@@ -96,6 +96,11 @@ export class ClientTerminalRelay {
     return this.disposed;
   }
 
+  /** The renderer holds a port this relay delivered and has not seen close. */
+  get hasRendererPort(): boolean {
+    return this.port !== null;
+  }
+
   /** A resume call is outstanding (including the one every attach makes). */
   get resumeInFlight(): boolean {
     return this.resumesInFlight > 0;

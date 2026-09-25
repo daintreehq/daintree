@@ -196,10 +196,13 @@ describe("git push as an operation", () => {
     expect(events).toEqual([]);
   });
 
-  it("leaves a named caller out of an unnamed push, which it has no record to join", async () => {
+  it("refuses a named caller while an unnamed push, which it has no record to join, owns the cwd", async () => {
     const unnamed = push({});
     await pushStarted();
-    await push({ opId: "op-late" });
+    await expect(push({ opId: "op-late" })).rejects.toMatchObject({
+      code: "VALIDATION",
+      userMessage: expect.stringContaining("already running"),
+    });
     expect(pushCalls).toBe(1);
     expect(registry.status("op-late")).toEqual({ status: "unknown" });
     releasePush();

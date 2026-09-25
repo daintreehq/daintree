@@ -733,9 +733,13 @@ describe("worker-ingest dedicated ports (#10960)", () => {
         serializedAfter = h.windowPort.posted.length;
         return snapshot;
       });
-    h.handlers["connect-port"]({ windowId: 1 }, [h.windowPort] as never);
+    (h.ctx.ptyManager as unknown as { getTerminal: unknown }).getTerminal = vi.fn(() => ({
+      projectId: "proj-a",
+    }));
+    h.ctx.windowProjectMap.set(-7, "proj-a");
+    h.handlers["connect-port"]({ windowId: -7 }, [h.windowPort] as never);
     const bytes = new TextEncoder().encode("held");
-    h.ctx.rendererConnections.get(1)!.batcher.write("term-1", bytes, bytes.byteLength);
+    h.ctx.rendererConnections.get(-7)!.batcher.write("term-1", bytes, bytes.byteLength);
     expect(h.windowPort.posted).toEqual([]);
 
     h.windowPort.emit("message", {
@@ -752,6 +756,33 @@ describe("worker-ingest dedicated ports (#10960)", () => {
       requestId: 5,
       state: snapshot,
     });
+  });
+
+  it.each([
+    { label: "an ordinary local renderer port", windowId: 1, project: "proj-a" },
+    { label: "a remote connection scoped to another project", windowId: -7, project: "proj-b" },
+    { label: "a remote connection with no project", windowId: -7, project: null },
+  ])("ignores a serialize fence from $label", async ({ windowId, project }) => {
+    const h = makeWorkerIngestHarness();
+    const serialize = vi.fn(async () => ({ data: "SECRET", cols: 80, rows: 24 }));
+    const flushTerminal = vi.fn();
+    Object.assign(h.ctx.ptyManager, {
+      getSerializedStateAsync: serialize,
+      getTerminal: vi.fn(() => ({ projectId: "proj-a" })),
+    });
+    h.ctx.windowProjectMap.set(windowId, project);
+    h.handlers["connect-port"]({ windowId }, [h.windowPort] as never);
+    const batcher = h.ctx.rendererConnections.get(windowId)!.batcher;
+    vi.spyOn(batcher, "flushTerminal").mockImplementation(flushTerminal);
+
+    h.windowPort.emit("message", {
+      data: { type: "serialize-fence", id: "term-1", requestId: 5 },
+    });
+    await Promise.resolve();
+
+    expect(serialize).not.toHaveBeenCalled();
+    expect(flushTerminal).not.toHaveBeenCalled();
+    expect(h.windowPort.posted).toEqual([]);
   });
 
   it("engage without a dedicated connection never posts the marker", () => {

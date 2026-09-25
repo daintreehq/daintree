@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import type { CreateWorktreeOptions } from "../../../shared/types/git.js";
 import type {
   WorktreePortAction,
   WorktreePortResourceAction,
@@ -22,6 +23,32 @@ const worktreeId = z.string().min(1).max(4096);
 const rootPath = z.string().min(1).max(4096);
 const optionalEmpty = z.object({}).optional();
 
+/**
+ * Exactly the fields of `CreateWorktreeOptions` the workspace host reads.
+ * Anything else is stripped rather than forwarded, so a field added to the
+ * host later is never reachable from the link until it is declared here too.
+ */
+const CreateWorktreeOptionsSchema = z.object({
+  baseBranch: z.string().max(1024),
+  newBranch: z.string().max(1024),
+  path: z
+    .string()
+    .min(1)
+    .max(4096)
+    .refine((value) => !value.includes("\0"), "Null bytes not allowed"),
+  fromRemote: z.boolean().optional(),
+  useExistingBranch: z.boolean().optional(),
+  provisionResource: z.boolean().optional(),
+  worktreeMode: z.string().max(256).optional(),
+  sourcePrNumber: z.number().int().min(0).optional(),
+  sourcePrTitle: z.string().max(4096).optional(),
+  sourcePrUrl: z.string().max(4096).optional(),
+  sourcePrState: z.enum(["open", "closed", "merged"]).optional(),
+  sourcePrLinkedIssueNumber: z.number().int().min(0).optional(),
+  submoduleInit: z.enum(["inherit", "all", "none"]).optional(),
+  collisionPolicy: z.enum(["suffix", "error"]).optional(),
+}) satisfies z.ZodType<CreateWorktreeOptions>;
+
 const RESOURCE_ACTIONS = [
   "provision",
   "teardown",
@@ -37,11 +64,7 @@ const PAYLOAD_SCHEMAS = {
   refresh: z.object({ worktreeId: worktreeId.optional() }).optional(),
   "create-worktree": z.object({
     rootPath,
-    options: z.looseObject({
-      baseBranch: z.string().max(1024),
-      newBranch: z.string().max(1024),
-      path: z.string().min(1).max(4096),
-    }),
+    options: CreateWorktreeOptionsSchema,
   }),
   "delete-worktree": z.object({
     worktreeId,

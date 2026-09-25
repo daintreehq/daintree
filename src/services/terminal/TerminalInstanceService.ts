@@ -587,16 +587,14 @@ class TerminalInstanceService {
         (entry) => (entry.ackGeneration ?? 0) === generation
       );
     }
-    if (snapshot === null) {
-      // Nothing to repaint from (the host had no mirror, or the snapshot was
-      // too large to send): a cleared screen followed by live output.
-      managed.terminal.reset();
-      return;
-    }
-    void this.restoreController.restoreFetchedState(id, snapshot.data, {
-      cols: snapshot.cols,
-      rows: snapshot.rows,
-    });
+    // A null snapshot (no mirror, or too large to send) and an empty one both
+    // mean a cleared screen followed by live output; either way the reset must
+    // supersede any restore still in flight.
+    void this.restoreController.applyReset(
+      id,
+      snapshot?.data ?? null,
+      snapshot ? { cols: snapshot.cols, rows: snapshot.rows } : undefined
+    );
   }
 
   setGPUHardwareAvailable(available: boolean): void {
