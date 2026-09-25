@@ -25,6 +25,11 @@ A plugin scaffolded with `daintree-plugin new` already lists this package as a d
 | `tour voice` | Voice each chapter of a `contributes.tours` entry with Inworld TTS (`--voice`, default `Simon`; key from `INWORLD_API_KEY`), write the audio to `tours/<tourId>/` and the cue and caption timing into `plugin.json`. Narration is read from `tours/<tourId>.narration.json` (`{ "chapters": [{ "id", "narration" }] }`); only chapters whose narration or voice changed are re-voiced |
 | `tour align --recordings <dir>` | Time your own recordings (`<chapter-id>.wav`/`mp3`/`m4a`/`ogg`/`flac`/`aac`) instead: each is encoded to Ogg Opus in the plugin (needs `ffmpeg`), transcribed with word timestamps by Inworld, and aligned back to the narration's `[[cue]]` markers |
 | `tour preview` | Play and scrub the built tour in a browser without Daintree, with cue markers on the timeline and outlines on every `data-tour-anchor`; warns about stale or missing timing and about cues a scene waits on that the narration never marks. `--headless --out <dir>` captures a frame at each cue and writes `capture.json` with the anchor rectangles (needs `playwright-core`) |
+| `skill add [name]` | Copy a bundled Claude Code skill into the plugin's `.claude/skills/` (default `daintree-tour`); files that differ from this version's copy are refused unless `--force` |
+
+## Authoring a tour with Claude Code
+
+Every plugin scaffolded with `new` (except `--project`, since project plugins can't contribute tours) includes `.claude/skills/daintree-tour/`, a Claude Code skill that takes you from nothing to a working tour: it asks whether it's a plugin or panel tour, what to show, which voice, and where the Inworld key or your recordings are, then writes the manifest entry, the narration and the scenes, runs `tour voice` or `tour align`, reviews every `tour preview --headless` frame against the narration and Daintree's own tour, and runs `validate`. Start Claude Code in the plugin directory and ask for a tour, or run `/daintree-tour`. For a plugin created before this, run `npx daintree-plugin skill add`. The skill never writes your Inworld key to a file; it passes it to the one command that needs it through `INWORLD_API_KEY`.
 
 ## The usual loop
 

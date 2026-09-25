@@ -269,6 +269,7 @@ const GITIGNORE = `node_modules/
 dist/
 *.dntr
 .dev-marker
+.tour-preview/
 `;
 
 /**

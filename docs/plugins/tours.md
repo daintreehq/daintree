@@ -4,6 +4,8 @@ A plugin can ship a narrated welcome tour that plays in the same dialog as the D
 
 For the manifest field table on its own, see [Contribution points → Tours](./contribution-points.md#tours--shipped-installed-plugins).
 
+To have Claude Code author the tour with you, use the bundled `daintree-tour` skill: plugins scaffolded with `daintree-plugin new` already include it in `.claude/skills/daintree-tour/`, and `npx daintree-plugin skill add` copies it into an existing plugin. Start Claude Code in the plugin directory and ask for a tour, or run `/daintree-tour`.
+
 ## Two shapes
 
 |  | Plugin tour | Panel tour |

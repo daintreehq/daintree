@@ -75,6 +75,17 @@ describe("runPackage", () => {
     expect(result.files).toContain("dist/index.js");
   });
 
+  it("leaves the authoring skill and tour captures out of the archive", async () => {
+    await fixture();
+    await writeFile(".claude/skills/daintree-tour/SKILL.md", "---\nname: daintree-tour\n---\n");
+    await writeFile(".tour-preview/daintree/capture.json", "{}");
+    await writeFile(".gitignore", "dist/\nnode_modules/\n.tour-preview/\n");
+    const result = await runPackage({ dir: tmpDir, dryRun: true, skipBuild: true });
+    expect(result.files.some((f) => f.startsWith(".claude/"))).toBe(false);
+    expect(result.files.some((f) => f.startsWith(".tour-preview/"))).toBe(false);
+    expect(result.files).toContain("dist/index.js");
+  });
+
   it("includes source maps when sourcemaps=true", async () => {
     await fixture();
     const result = await runPackage({

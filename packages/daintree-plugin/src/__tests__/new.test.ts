@@ -64,6 +64,17 @@ describe("scaffoldPlugin", () => {
         .map((line) => line.trim())
         .filter((line) => line && !line.startsWith("#"));
       expect(activeRules).toEqual([]);
+
+      // Every installed-plugin scaffold carries the tour-authoring skill.
+      expect(result.files).toContain(".claude/skills/daintree-tour/SKILL.md");
+      const skill = await fs.readFile(
+        path.join(result.dir, ".claude", "skills", "daintree-tour", "SKILL.md"),
+        "utf8"
+      );
+      expect(skill).toMatch(/^---\nname: daintree-tour\ndescription: /);
+      // The skill's headless captures land here; they're evidence, not source.
+      const gitignore = await fs.readFile(path.join(result.dir, ".gitignore"), "utf8");
+      expect(gitignore.split("\n")).toContain(".tour-preview/");
     });
   }
 
@@ -485,6 +496,12 @@ describe("scaffoldPlugin --project", () => {
     expect(path.basename(result.dir)).toBe(result.scopedName);
     const manifest = await readJson(path.join(result.dir, "plugin.json"));
     expect(manifest.name).toBe(path.basename(result.dir));
+  });
+
+  it("leaves out the tour-authoring skill, since project plugins can't contribute tours", async () => {
+    const result = await scaffoldProject();
+    expect(result.files.some((file) => file.startsWith(".claude/"))).toBe(false);
+    await expect(fs.access(path.join(result.dir, ".claude"))).rejects.toThrow();
   });
 
   it("marks the manifest as project scope and passes the project-origin schema", async () => {

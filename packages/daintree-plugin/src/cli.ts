@@ -10,6 +10,8 @@ import { runDoctor } from "./commands/doctor.js";
 import { runSchema } from "./commands/schema.js";
 import { runTourAlign, runTourVoice, type TourCommandResult } from "./commands/tour.js";
 import { runTourPreview } from "./commands/tourPreview.js";
+import { runSkillAdd } from "./commands/skill.js";
+import { BUNDLED_SKILLS } from "./skills.js";
 import { CLI_VERSION } from "./version.js";
 
 function fail(message: string): never {
@@ -159,6 +161,33 @@ program
   .action(async (opts: { skipBuild?: boolean }) => {
     try {
       await runDev({ skipBuild: opts.skipBuild });
+    } catch (err) {
+      fail((err as Error).message);
+    }
+  });
+
+const skill = program
+  .command("skill")
+  .description("Add the Claude Code skills this CLI ships to a plugin's .claude/skills/");
+
+skill
+  .command("add")
+  .argument("[name]", `bundled skill (${BUNDLED_SKILLS.join(", ")})`, "daintree-tour")
+  .description(
+    "Copy a bundled skill into the current plugin; files that differ are refused unless --force"
+  )
+  .option("--force", "replace installed files that differ from this version's copy")
+  .action(async (name: string, opts: { force?: boolean }) => {
+    try {
+      const result = await runSkillAdd(name, { force: opts.force });
+      if (result.written.length === 0) {
+        console.log(`✓ ${result.name} is already up to date in ${result.installDir}`);
+      } else {
+        console.log(`✓ Added the ${result.name} skill to ${result.installDir}`);
+      }
+      console.log(
+        `  Start Claude Code in this directory and ask for a tour, or run /${result.name}`
+      );
     } catch (err) {
       fail((err as Error).message);
     }
