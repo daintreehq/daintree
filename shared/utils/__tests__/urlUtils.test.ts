@@ -9,6 +9,7 @@ import {
   stripAnsiAndOscCodes,
   isImplicitlyAllowedHost,
   isLoopbackHostname,
+  isForwardedLoopbackUrl,
 } from "../urlUtils.js";
 
 describe("urlUtils", () => {
@@ -601,5 +602,30 @@ describe("urlUtils", () => {
     ])("does not treat %s as loopback", (hostname) => {
       expect(isLoopbackHostname(hostname)).toBe(false);
     });
+  });
+});
+
+describe("isForwardedLoopbackUrl", () => {
+  const forwarded = new Set([5173, 80]);
+
+  it("accepts loopback URLs on a forwarded port", () => {
+    expect(isForwardedLoopbackUrl("http://localhost:5173/", forwarded)).toBe(true);
+    expect(isForwardedLoopbackUrl("https://127.0.0.1:5173/app", forwarded)).toBe(true);
+    expect(isForwardedLoopbackUrl("http://[::1]:5173", forwarded)).toBe(true);
+    expect(isForwardedLoopbackUrl("http://localhost/", forwarded)).toBe(true);
+  });
+
+  it("rejects other local ports, other hosts, other schemes and credentials", () => {
+    expect(isForwardedLoopbackUrl("http://localhost:3000/", forwarded)).toBe(false);
+    expect(isForwardedLoopbackUrl("https://localhost/", forwarded)).toBe(false);
+    expect(isForwardedLoopbackUrl("http://example.com:5173/", forwarded)).toBe(false);
+    expect(isForwardedLoopbackUrl("http://dp-a-b.localhost:5173/", forwarded)).toBe(false);
+    expect(isForwardedLoopbackUrl("ws://localhost:5173/", forwarded)).toBe(false);
+    expect(isForwardedLoopbackUrl("http://user:pw@localhost:5173/", forwarded)).toBe(false);
+    expect(isForwardedLoopbackUrl("not a url", forwarded)).toBe(false);
+  });
+
+  it("accepts nothing when no port is forwarded", () => {
+    expect(isForwardedLoopbackUrl("http://localhost:5173/", new Set())).toBe(false);
   });
 });
