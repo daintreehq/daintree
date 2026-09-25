@@ -4,9 +4,12 @@ import { isProjectViewCached } from "@/lib/viewCacheState";
 import { terminalClient } from "@/clients";
 import { LiveWorkerIngest } from "./workerParse/LiveWorkerIngest";
 import { createParseWorkerTransport } from "./workerParse/createParseWorkerTransport";
+import { buildMirrorApplyPayload } from "./workerParse/mirrorApply";
 import { isPaintFabricWorkerIngestEnabled } from "./paintFabric/paintFabricConfig";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+
+const EMPTY_SNAPSHOT_PAYLOAD = buildMirrorApplyPayload("");
 
 // Poll interval while the worker-ingest engage barrier waits for the normal
 // pipeline (ingest queue + pending xterm writes) to quiesce (#10960).
@@ -86,6 +89,12 @@ export class TerminalWorkerIngestController {
           if (!current) {
             callback?.();
             return;
+          }
+          // The dedicated worker port bypasses the service's onData ingress, so
+          // receipt (#12754) is stamped here. A snapshot always arrives wrapped
+          // in reset/clear sequences; only content beyond the wrapper counts.
+          if (source === "snapshot" ? data !== EMPTY_SNAPSHOT_PAYLOAD : data.length > 0) {
+            current.hasReceivedOutput = true;
           }
           // Direct write — snapshot applies and replays are pre-acked, so the
           // write controller's ack bookkeeping must never see them. Unseen

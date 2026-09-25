@@ -23,6 +23,15 @@ function classifyRestoreError(error: unknown): TerminalScrollbackRestoreError {
   return { type: "error", message: String(error), timestamp };
 }
 
+// Read through a function so the checks after an await aren't narrowed by the
+// entry guard: both fields change while the snapshot fetch is in flight.
+function hasBeenFed(managed: ManagedTerminal): boolean {
+  return managed.hasReceivedOutput === true || managed.deferredOutput.length > 0;
+}
+
+export type MissingOutputRecoveryOutcome =
+  "recovered" | "no-host-output" | "live-output" | "stale" | "failed";
+
 export interface RestoreControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
   // chunkCount travels with each replayed deferred batch: the batch's pending
@@ -281,6 +290,7 @@ export class TerminalRestoreController {
           this.replayDeferred(id, current);
         });
       });
+      managed.hasReceivedOutput = true;
       return true;
     } catch (error) {
       // The restore died synchronously (reset/resize/write threw). Put the pane
@@ -367,6 +377,7 @@ export class TerminalRestoreController {
           }
         }
 
+        managed.hasReceivedOutput = true;
         return true;
       } catch (error) {
         // Real failure during chunked replay (write timeout, xterm parse
@@ -506,6 +517,78 @@ export class TerminalRestoreController {
         this.replayDeferred(id, managed);
       }
       return false;
+    }
+  }
+
+  /**
+   * Repaint a pane that has never received output from whatever the host
+   * mirror holds (#12754). The snapshot fetch doubles as the observation: an
+   * empty mirror means the host has produced nothing either, which is ordinary
+   * silence and leaves the pane untouched.
+   *
+   * The restore window opens BEFORE the fetch so any live chunk that lands
+   * meanwhile is held, not painted. If one does arrive — or the pane was fed by
+   * any other path — output is flowing and the pane is not lost, so the attempt
+   * is abandoned without a reset and the held chunks are released in order.
+   * Resetting there would print the snapshot and then the held chunks it
+   * already contains.
+   */
+  async recoverMissingOutput(id: string): Promise<MissingOutputRecoveryOutcome> {
+    const managed = this.deps.getInstance(id);
+    if (!managed) return "stale";
+    if (managed.hasReceivedOutput) return "live-output";
+
+    const restoreGeneration = managed.restoreGeneration;
+    const restoreWindow = this.beginRestoreWindow(managed);
+    managed.lastScrollbackRestoreError = undefined;
+
+    const release = (): void => {
+      if (this.deps.getInstance(id) !== managed) return;
+      this.endRestoreWindow(managed, restoreWindow);
+      if (managed.restoreGeneration === restoreGeneration) {
+        this.replayDeferred(id, managed);
+      }
+    };
+
+    try {
+      const snapshot = await terminalClient.getSerializedState(id);
+
+      if (
+        this.deps.getInstance(id) !== managed ||
+        managed.restoreGeneration !== restoreGeneration
+      ) {
+        release();
+        return "stale";
+      }
+      if (hasBeenFed(managed)) {
+        release();
+        return "live-output";
+      }
+      if (!snapshot?.data) {
+        release();
+        return "no-host-output";
+      }
+
+      const restored = await this.restoreFetchedState(id, snapshot.data, snapshot);
+      if (restored) return "recovered";
+      release();
+      // The replay took its own generation, so a `false` with no classified
+      // error is a newer restore superseding it, not a replay that broke.
+      if (this.deps.getInstance(id) !== managed || !managed.lastScrollbackRestoreError) {
+        return "stale";
+      }
+      return "failed";
+    } catch (error) {
+      // Output that arrived while the fetch was failing proves the pane is
+      // being fed; a failed fetch says nothing about lost output then.
+      const fed = hasBeenFed(managed);
+      const superseded =
+        this.deps.getInstance(id) !== managed || managed.restoreGeneration !== restoreGeneration;
+      if (!fed && !superseded) managed.lastScrollbackRestoreError = classifyRestoreError(error);
+      logError(`Failed to fetch state to recover terminal ${id}`, error);
+      release();
+      if (fed) return "live-output";
+      return superseded ? "stale" : "failed";
     }
   }
 

@@ -237,6 +237,20 @@ export interface ManagedTerminal {
   terminalOpenStartedAt?: number;
   hasEmittedFirstWriteMark?: boolean;
 
+  // Sticky receipt flag (#12754): true once any host output or restored
+  // snapshot has reached this xterm. Unlike hasEmittedFirstWriteMark it is not
+  // reset on re-attach — it describes the buffer, not the mount. A pane that
+  // never gets it is the only candidate for missing-output recovery.
+  hasReceivedOutput?: boolean;
+  // Missing-output recovery bookkeeping (TerminalOutputRecovery): when the
+  // watchdog first saw this pane on-screen and never-fed, when the next probe
+  // may run, whether one is in flight, and how many recoveries failed.
+  outputRecoveryFirstSeenAt?: number;
+  outputRecoveryNextProbeAt?: number;
+  outputRecoveryInFlight?: boolean;
+  outputRecoveryFailures?: number;
+  outputRecoveryGaveUp?: boolean;
+
   // One-shot flag (#9702): a fullWakeForVisibilityRestore was requested while
   // this terminal was mid-attach (isAttaching) and skipped to avoid racing the
   // attach. Consumed by notifyAttachSettledWaiters, which re-runs the wake once

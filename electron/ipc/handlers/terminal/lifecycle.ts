@@ -32,6 +32,7 @@ import {
 import { store } from "../../../store.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { withTimeout } from "../../../utils/withTimeout.js";
+import { armSpawnConfirmation, settleSpawnConfirmation } from "./spawnConfirmation.js";
 import type {
   AgentSessionBookmarkMetadata,
   AgentSessionRecord,
@@ -989,6 +990,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       safeCommand.length > 0 && !commandLaunchShell ? `${safeCommand}\r` : undefined;
 
     try {
+      armSpawnConfirmation(id);
       // Every terminal is an interactive shell. Agent launches inject their
       // command after the shell's first prompt renders — never `exec`'d over
       // the shell, so when the agent exits the shell reclaims the foreground.
@@ -1042,6 +1044,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
       return id;
     } catch (error) {
+      settleSpawnConfirmation(id);
       // If we minted an MCP pane config above and the PTY spawn never landed,
       // revoke it now so we don't leak per-pane tokens or config files.
       mcpPaneConfigService.revokePaneConfig(id).catch(() => {
@@ -1135,6 +1138,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
       }
+      // Before any await: a restart's respawn arms a fresh window for this id,
+      // and it must not be the one this kill clears.
+      settleSpawnConfirmation(id);
       // Capture a resume record before tearing down an agent terminal. The info
       // snapshot must precede the kill (it's gone afterward), and gracefulKill —
       // not a bare kill — is what extracts the session id, so route agent

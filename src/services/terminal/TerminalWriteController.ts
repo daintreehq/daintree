@@ -216,6 +216,13 @@ export class TerminalWriteController {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 
+    // Stamped before the deferral branch on purpose: a chunk held behind a
+    // restore window has still reached this pane, and missing-output recovery
+    // reads this to abort rather than reset over output that is merely queued.
+    if ((typeof data === "string" ? data.length : data.byteLength) > 0) {
+      managed.hasReceivedOutput = true;
+    }
+
     if (managed.isSerializedRestoreInProgress) {
       // Defer WITHOUT settling any ledger. The batch's pending port-ack FIFO
       // entries, the host's queued-byte ledger, and the ingest inFlightBytes

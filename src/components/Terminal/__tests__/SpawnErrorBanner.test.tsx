@@ -53,6 +53,7 @@ const ALL_SPAWN_ERROR_CODES: readonly SpawnErrorCode[] = [
   "DISCONNECTED",
   "PENDING_SPAWNS_CAPPED",
   "TERMINAL_ALREADY_LIVE",
+  "SPAWN_TIMEOUT",
   "UNKNOWN",
 ] as const;
 
@@ -132,6 +133,7 @@ describe("SpawnErrorBanner", () => {
     ["ENOTDIR", "Invalid working directory"],
     ["PENDING_SPAWNS_CAPPED", "Too many pending restarts"],
     ["TERMINAL_ALREADY_LIVE", "Terminal already running"],
+    ["SPAWN_TIMEOUT", "Terminal hasn't started"],
     ["UNKNOWN", "Couldn't start terminal"],
   ] as const)("renders the expected title for %s", (code, expected) => {
     renderBanner(code);
