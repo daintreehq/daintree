@@ -17,8 +17,8 @@ function importsOf(file: string): string[] {
   // `from "x"`, a bare `import "x"`, and `import("x")` — every way a module can
   // load another, in either quote.
   const specifiers =
-    /\sfrom\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/gm;
-  return [...source.matchAll(specifiers)].map((match) => (match[1] ?? match[2] ?? match[3])!);
+    /\sfrom\s+(["'])(.+?)\1|^\s*import\s+(["'])(.+?)\3|\bimport\(\s*(["'])(.+?)\5\s*\)/gm;
+  return [...source.matchAll(specifiers)].map((match) => (match[2] ?? match[4] ?? match[6])!);
 }
 
 /** A relative `./x.js` specifier as the source file it names, relative to `src/`. */
