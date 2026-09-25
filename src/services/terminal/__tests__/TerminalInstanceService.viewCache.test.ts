@@ -85,6 +85,7 @@ type ViewCacheTestService = {
   rendererPolicy: {
     applyRendererPolicy: (id: string, tier: TerminalRefreshTier) => void;
     reassertBackgroundTier: (id: string) => void;
+    getLastBackendTier: (id: string) => "active" | "background" | undefined;
     deps: {
       onTierApplied?: (id: string, tier: TerminalRefreshTier, managed: ManagedTerminal) => void;
     };
@@ -196,9 +197,9 @@ describe("TerminalInstanceService project-view cache and window visibility (#125
   it("re-asserts the background cadence for a pane that was already background", () => {
     // Another window showing this project may have raised the host cadence
     // since this view last sent it; the policy alone would send nothing.
-    const resend = vi
-      .spyOn(service.rendererPolicy, "reassertBackgroundTier")
-      .mockImplementation(() => {});
+    // Called through: the reassert records the background baseline, so the
+    // suppression pass that follows does not send it twice.
+    const resend = vi.spyOn(service.rendererPolicy, "reassertBackgroundTier");
     service.instances.set(
       "hidden",
       makeManaged({ lastAppliedTier: TerminalRefreshTier.BACKGROUND })
@@ -208,11 +209,7 @@ describe("TerminalInstanceService project-view cache and window visibility (#125
     emit("cached");
 
     expect(resend.mock.calls).toEqual([["hidden"]]);
-    // The already-background pane's apply is a same-tier no-op in the real policy.
-    expect(applyPolicy.mock.calls).toEqual([
-      ["hidden", TerminalRefreshTier.BACKGROUND],
-      ["shown", TerminalRefreshTier.BACKGROUND],
-    ]);
+    expect(applyPolicy.mock.calls).toEqual([["shown", TerminalRefreshTier.BACKGROUND]]);
   });
 
   it("keeps measured sizes through a cache-driven demotion but not an ordinary one", () => {
@@ -289,9 +286,11 @@ describe("TerminalInstanceService project-view cache and window visibility (#125
     service.instances.set("a", makeManaged());
     emit("cached");
 
+    applyPolicy.mockClear();
     emit("revealed");
 
     expect(renderSuspension.resumeXtermRender).toHaveBeenCalledTimes(1);
+    expect(applyPolicy).toHaveBeenCalledWith("a", TerminalRefreshTier.VISIBLE);
     vi.advanceTimersByTime(60_000);
     expect(releaseContext).not.toHaveBeenCalled();
   });
@@ -434,6 +433,46 @@ describe("TerminalInstanceService project-view cache and window visibility (#125
     ).toBe(false);
     service.burstController.onPtyWrite("a");
     expect(applyPolicy).not.toHaveBeenCalled();
+  });
+
+  it("tells the host a hidden window's already-background panes are background", () => {
+    // A cold-created BACKGROUND pane records its backend tier as "active".
+    const resend = vi
+      .spyOn(service.rendererPolicy, "reassertBackgroundTier")
+      .mockImplementation(() => {});
+    vi.spyOn(service.rendererPolicy, "getLastBackendTier").mockImplementation((id) =>
+      id === "seeded" ? "active" : "background"
+    );
+    service.instances.set(
+      "seeded",
+      makeManaged({ lastAppliedTier: TerminalRefreshTier.BACKGROUND })
+    );
+    service.instances.set(
+      "settled",
+      makeManaged({ lastAppliedTier: TerminalRefreshTier.BACKGROUND })
+    );
+    service.instances.set("shown", makeManaged({ lastAppliedTier: TerminalRefreshTier.VISIBLE }));
+
+    setHidden(true);
+
+    expect(resend.mock.calls).toEqual([["seeded"]]);
+    expect(applyPolicy.mock.calls).toEqual([["shown", TerminalRefreshTier.BACKGROUND]]);
+  });
+
+  it("restores tiers once for a cached view that goes active then revealed", () => {
+    const focused = makeManaged({
+      isFocused: true,
+      getRefreshTier: () => TerminalRefreshTier.FOCUSED,
+    });
+    service.instances.set("a", focused);
+    emit("cached");
+    applyPolicy.mockClear();
+
+    emit("active");
+    emit("revealed");
+
+    expect(applyPolicy.mock.calls).toEqual([["a", TerminalRefreshTier.FOCUSED]]);
+    expect(pinFocus).toHaveBeenCalledTimes(1);
   });
 
   it("stops following window visibility after dispose", () => {

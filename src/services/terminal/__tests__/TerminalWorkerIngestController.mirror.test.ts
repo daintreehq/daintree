@@ -86,6 +86,25 @@ describe("TerminalWorkerIngestController mirror writes", () => {
     mirror = deps.mirror;
   });
 
+  it("does not engage the worker for a hidden-window demotion (#12798)", () => {
+    // Worker snapshots would replace a hidden window's full buffer with a
+    // truncated mirror, and agents and MCP there still read it.
+    vi.stubGlobal("document", { hidden: true });
+    try {
+      const controller = new TerminalWorkerIngestController({
+        getInstance: () => managed,
+        getQueuedBytes: () => 0,
+        resumeFlush: vi.fn(),
+        incrementUnseen,
+        fetchAndRestore: vi.fn(async () => true),
+      });
+      controller.applyWorkerIngestPolicy("t1", TerminalRefreshTier.BACKGROUND, managed);
+      expect(controller.getIngest("t1")).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("flags a snapshot apply as Daintree's own clear until its parse callback", () => {
     const onApplied = vi.fn();
     applySnapshotToMirror(mirror, "first", onApplied);

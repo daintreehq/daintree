@@ -485,9 +485,6 @@ class TerminalInstanceService {
    * there keep streaming and MCP keeps reading current buffers.
    */
   private suppressViewResources(): void {
-    for (const id of this.instances.keys()) {
-      this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
-    }
     this.clearSuppressedWebGLReleaseTimer();
     this.suppressedWebGLReleaseTimer = setTimeout(() => {
       this.suppressedWebGLReleaseTimer = null;
@@ -501,6 +498,15 @@ class TerminalInstanceService {
         this.webGLManager.releaseContext(id);
       }
     }, SUPPRESSED_VIEW_WEBGL_RELEASE_DELAY_MS);
+    for (const [id, managed] of this.instances) {
+      if (managed.lastAppliedTier !== TerminalRefreshTier.BACKGROUND) {
+        this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+      } else if (this.rendererPolicy.getLastBackendTier(id) !== "background") {
+        // A cold-created BACKGROUND pane records its backend tier as "active"
+        // on purpose, and the policy would send nothing for a same-tier apply.
+        this.rendererPolicy.reassertBackgroundTier(id);
+      }
+    }
   }
 
   /**
