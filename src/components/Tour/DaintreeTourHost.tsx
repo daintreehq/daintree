@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import type { TourOnboardingState } from "@shared/types";
 import { getOnboardingState } from "@/clients/onboardingClient";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { TOUR_CHAPTERS } from "./tourChapters";
+import { TOUR_CHAPTER_TITLES } from "./tourSummary.generated";
 import { DAINTREE_TOUR_COMPLETED_EVENT, OPEN_DAINTREE_TOUR_EVENT } from "./tourEvents";
 
 const LazyTourDialog = lazy(() => import("./TourDialog").then((m) => ({ default: m.TourDialog })));
@@ -73,6 +73,6 @@ export function DaintreeTourHost() {
 
 /** Resume where an unfinished tour was left; a finished one starts over. */
 export function resolveOpenState(tour: TourOnboardingState): OpenState {
-  const resume = !tour.completed && tour.lastChapter < TOUR_CHAPTERS.length;
+  const resume = !tour.completed && tour.lastChapter < TOUR_CHAPTER_TITLES.length;
   return { initialChapter: resume ? tour.lastChapter : 0, initialMuted: tour.muted };
 }

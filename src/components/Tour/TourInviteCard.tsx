@@ -5,18 +5,13 @@ import { Button } from "@/components/ui/button";
 import { getOnboardingState } from "@/clients/onboardingClient";
 import { cn } from "@/lib/utils";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { TOUR_CHAPTERS } from "./tourChapters";
-import { resolveTourTimings } from "./tourTiming";
+// The summary, not tourChapters/tourTiming: this card renders at startup, and
+// those pull the narration, cue manifest and parser in with them.
+import { TOUR_CHAPTER_TITLES, TOUR_MINUTES } from "./tourSummary.generated";
 import { DAINTREE_TOUR_COMPLETED_EVENT, openDaintreeTour } from "./tourEvents";
 
 /** How long the "find it in Help" note stays after the invitation is turned down. */
 const DISMISSED_NOTE_MS = 4000;
-
-/** The tour's length in whole minutes, from the same timings the player uses. */
-export function tourMinutes(): number {
-  const seconds = resolveTourTimings().reduce((sum, timing) => sum + timing.duration, 0);
-  return Math.max(1, Math.round(seconds / 60));
-}
 
 type InviteState =
   | { kind: "hidden" }
@@ -26,7 +21,7 @@ type InviteState =
 
 export function inviteStateFor(tour: TourOnboardingState): InviteState {
   if (tour.completed || tour.dismissed) return { kind: "hidden" };
-  if (tour.lastChapter > 0 && tour.lastChapter < TOUR_CHAPTERS.length) {
+  if (tour.lastChapter > 0 && tour.lastChapter < TOUR_CHAPTER_TITLES.length) {
     return { kind: "resume", chapter: tour.lastChapter };
   }
   return { kind: "invite" };
@@ -129,8 +124,8 @@ export function TourInviteCard({ className }: { className?: string }) {
             </h3>
             <p className="mt-1 text-xs leading-relaxed text-text-secondary">
               {resuming
-                ? `You stopped at chapter ${state.chapter + 1} of ${TOUR_CHAPTERS.length}: ${TOUR_CHAPTERS[state.chapter]!.title}.`
-                : `A narrated walkthrough of worktrees, agents, the Assistant and more, about ${tourMinutes()} minutes. Skip any chapter.`}
+                ? `You stopped at chapter ${state.chapter + 1} of ${TOUR_CHAPTER_TITLES.length}: ${TOUR_CHAPTER_TITLES[state.chapter]!}.`
+                : `A narrated walkthrough of worktrees, agents, the Assistant and more, about ${TOUR_MINUTES} minutes. Skip any chapter.`}
             </p>
             <div className="mt-4 flex items-center gap-2">
               {/* Outline, not a fill: the launcher above is this surface's lead action. */}
@@ -170,7 +165,7 @@ export function TourWelcomeLink({ enabled }: { enabled: boolean }) {
     >
       {state.kind === "resume"
         ? "Pick up where you left off in the Daintree Tour"
-        : `New here? Take the ${tourMinutes()}-minute tour`}
+        : `New here? Take the ${TOUR_MINUTES}-minute tour`}
     </button>
   );
 }

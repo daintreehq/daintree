@@ -28,3 +28,9 @@ export function resolveTourTimings(
 ): TourChapterTiming[] {
   return chapters.map((chapter) => resolveChapterTiming(chapter, manifest));
 }
+
+/** The tour's length in whole minutes, as the invitation quotes it. */
+export function tourMinutes(timings: readonly TourChapterTiming[] = resolveTourTimings()): number {
+  const seconds = timings.reduce((sum, timing) => sum + timing.duration, 0);
+  return Math.max(1, Math.round(seconds / 60));
+}
