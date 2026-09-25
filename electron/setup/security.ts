@@ -9,6 +9,8 @@ import {
 } from "../../shared/utils/ipcErrorSerialization.js";
 import { FAULT_MODE_ENABLED, applyInvokeFault, initFaultRegistry } from "../ipc/faultRegistry.js";
 import { markIpcSecurityReady } from "../ipc/ipcGuard.js";
+import { getIpcDispatcher, type InvokeEnveloper } from "../ipc/dispatcher.js";
+import { isIpcEnvelope, type IpcEnvelope } from "../../shared/types/ipc/errors.js";
 import { channelToCategory, type IpcChannelCategory } from "../ipc/utils.js";
 import { AppError } from "../utils/errorTypes.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
@@ -157,10 +159,84 @@ export function sanitizeErrorForRenderer(msg: string): string {
   return scrubSecrets(sanitizePaths(msg));
 }
 
+function sanitizedErrorEnvelope(channel: string, error: unknown): IpcEnvelope {
+  if (!app.isPackaged) return wrapError(error);
+  const correlationId = getCurrentCorrelationId();
+  console.error(`[IPC] Error on channel ${channel} [${correlationId}]:`, error);
+  const serialized = serializeError(error);
+  if (correlationId !== undefined) {
+    serialized.correlationId = correlationId;
+  }
+  serialized.message = sanitizeErrorForRenderer(serialized.message);
+  if (typeof serialized.userMessage === "string") {
+    serialized.userMessage = sanitizeErrorForRenderer(serialized.userMessage);
+  }
+  // `details` is allowlisted structured data and deliberately survives.
+  serialized.stack = undefined;
+  serialized.path = undefined;
+  serialized.context = undefined;
+  serialized.cause = undefined;
+  serialized.properties = undefined;
+  return { __daintreeIpcEnvelope: true as const, ok: false as const, error: serialized };
+}
+
+function isWellFormedEnvelope(value: unknown): value is IpcEnvelope {
+  if (!isIpcEnvelope(value)) return false;
+  if (value.ok) return true;
+  const error: unknown = value.error;
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    typeof (error as Record<string, unknown>).name === "string" &&
+    typeof (error as Record<string, unknown>).message === "string"
+  );
+}
+
+/**
+ * The single envelope path for every invocation, whether it arrived through
+ * `ipcMain` or over a link: arg-count and payload budget, fault injection,
+ * success wrapping, and the packaged-build error sanitiser.
+ *
+ * @internal Exported for testing.
+ */
+export const runEnvelopedInvoke: InvokeEnveloper = async (channel, args, call, options) => {
+  try {
+    validateIpcInvokeEnvelope(channel, args);
+    if (FAULT_MODE_ENABLED) {
+      const stub = await applyInvokeFault(channel);
+      if (stub) return wrapSuccess(stub.value);
+    }
+    const result = await call();
+    if (options?.verbatim) {
+      if (!isWellFormedEnvelope(result)) {
+        throw new AppError({
+          code: "INTERNAL",
+          message: `Forwarded call on ${channel} returned a malformed envelope`,
+        });
+      }
+      return result;
+    }
+    return wrapSuccess(result);
+  } catch (error) {
+    return sanitizedErrorEnvelope(channel, error);
+  }
+};
+
+function untrustedSenderEnvelope(channel: string, senderUrl: string | undefined): IpcEnvelope {
+  return wrapError(
+    new Error(
+      `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || "unknown"}`
+    )
+  );
+}
+
 // Wrap ipcMain.handle globally to enforce sender validation on ALL IPC handlers
 // This must run before any handlers are registered
 export function enforceIpcSenderValidation(): void {
   if (FAULT_MODE_ENABLED) initFaultRegistry();
+
+  const dispatcher = getIpcDispatcher();
+  dispatcher.setInvokeEnveloper(runEnvelopedInvoke);
 
   const originalHandle = ipcMain.handle.bind(ipcMain);
   const originalHandleOnce = ipcMain.handleOnce?.bind(ipcMain);
@@ -172,41 +248,9 @@ export function enforceIpcSenderValidation(): void {
     return originalHandle(channel, async (event, ...args) => {
       const senderUrl = event.senderFrame?.url;
       if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
-        return wrapError(
-          new Error(
-            `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || "unknown"}`
-          )
-        );
+        return untrustedSenderEnvelope(channel, senderUrl);
       }
-      try {
-        validateIpcInvokeEnvelope(channel, args);
-        if (FAULT_MODE_ENABLED) {
-          const stub = await applyInvokeFault(channel);
-          if (stub) return wrapSuccess(stub.value);
-        }
-        const result = await listener(event, ...args);
-        return wrapSuccess(result);
-      } catch (error) {
-        if (app.isPackaged) {
-          const correlationId = getCurrentCorrelationId();
-          console.error(`[IPC] Error on channel ${channel} [${correlationId}]:`, error);
-          const serialized = serializeError(error);
-          if (correlationId !== undefined) {
-            serialized.correlationId = correlationId;
-          }
-          serialized.message = sanitizeErrorForRenderer(serialized.message);
-          if (typeof serialized.userMessage === "string") {
-            serialized.userMessage = sanitizeErrorForRenderer(serialized.userMessage);
-          }
-          serialized.stack = undefined;
-          serialized.path = undefined;
-          serialized.context = undefined;
-          serialized.cause = undefined;
-          serialized.properties = undefined;
-          return { __daintreeIpcEnvelope: true as const, ok: false as const, error: serialized };
-        }
-        return wrapError(error);
-      }
+      return dispatcher.dispatchLocalInvoke(channel, event, args, listener);
     });
   } as typeof ipcMain.handle;
 
@@ -218,41 +262,9 @@ export function enforceIpcSenderValidation(): void {
       return originalHandleOnce(channel, async (event, ...args) => {
         const senderUrl = event.senderFrame?.url;
         if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
-          return wrapError(
-            new Error(
-              `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || "unknown"}`
-            )
-          );
+          return untrustedSenderEnvelope(channel, senderUrl);
         }
-        try {
-          validateIpcInvokeEnvelope(channel, args);
-          if (FAULT_MODE_ENABLED) {
-            const stub = await applyInvokeFault(channel);
-            if (stub) return wrapSuccess(stub.value);
-          }
-          const result = await listener(event, ...args);
-          return wrapSuccess(result);
-        } catch (error) {
-          if (app.isPackaged) {
-            const correlationId = getCurrentCorrelationId();
-            console.error(`[IPC] Error on channel ${channel} [${correlationId}]:`, error);
-            const serialized = serializeError(error);
-            if (correlationId !== undefined) {
-              serialized.correlationId = correlationId;
-            }
-            serialized.message = sanitizeErrorForRenderer(serialized.message);
-            if (typeof serialized.userMessage === "string") {
-              serialized.userMessage = sanitizeErrorForRenderer(serialized.userMessage);
-            }
-            serialized.stack = undefined;
-            serialized.path = undefined;
-            serialized.context = undefined;
-            serialized.cause = undefined;
-            serialized.properties = undefined;
-            return { __daintreeIpcEnvelope: true as const, ok: false as const, error: serialized };
-          }
-          return wrapError(error);
-        }
+        return dispatcher.dispatchLocalInvoke(channel, event, args, listener);
       });
     } as typeof ipcMain.handleOnce;
   }
@@ -274,7 +286,7 @@ export function enforceIpcSenderValidation(): void {
         );
         return;
       }
-      return listener(event, ...args);
+      return dispatcher.dispatchLocalSend(channel, event, args, listener);
     };
 
     if (!onListenerMap.has(channel)) onListenerMap.set(channel, new Map());

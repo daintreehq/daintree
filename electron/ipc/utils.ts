@@ -23,6 +23,10 @@ import {
 import { AppError } from "../utils/errorTypes.js";
 import { assertIpcSecurityReady } from "./ipcGuard.js";
 import { isE2EFaultMode } from "../setup/runtimeFlags.js";
+import type { ClientEndpoint } from "./endpoint.js";
+import { getIpcDispatcher } from "./dispatcher.js";
+import { getEndpointRegistry } from "./endpointRegistry.js";
+import { getLocalClientRef, getLocalEndpoint } from "./localEndpoint.js";
 
 /**
  * Parse the first argument of an IPC payload against a Zod schema. On
@@ -372,6 +376,33 @@ export function sendToRenderer(
   }
 }
 
+function sendToEndpoints(
+  endpoints: readonly ClientEndpoint[],
+  exclude: ReadonlySet<number> | null,
+  channel: string,
+  args: unknown[]
+): void {
+  for (const endpoint of endpoints) {
+    if (endpoint.kind !== "remote-view" || endpoint.isClosed()) continue;
+    if (exclude?.has(endpoint.handle)) continue;
+    try {
+      endpoint.send({ type: "event", channel, args });
+    } catch {
+      // A closing link must not break delivery to the remaining endpoints.
+    }
+  }
+}
+
+function broadcastToRemoteEndpoints(
+  exclude: ReadonlySet<number> | null,
+  channel: string,
+  args: unknown[]
+): void {
+  const registry = getEndpointRegistry();
+  if (!registry.hasRemote()) return;
+  sendToEndpoints(registry.getRemote(), exclude, channel, args);
+}
+
 export function broadcastToRenderer(channel: string, ...args: unknown[]): void {
   for (const wc of getAllAppWebContents()) {
     if (!wc.isDestroyed()) {
@@ -382,6 +413,7 @@ export function broadcastToRenderer(channel: string, ...args: unknown[]): void {
       }
     }
   }
+  broadcastToRemoteEndpoints(null, channel, args);
 }
 
 /**
@@ -442,6 +474,10 @@ export function broadcastToProjectRenderersExcept(
         // Silently ignore send failures during window initialization/disposal.
       }
     }
+    const registry = getEndpointRegistry();
+    if (registry.hasRemote()) {
+      sendToEndpoints(registry.getForProject(projectId), exclude, channel, args);
+    }
     return;
   }
   if (exclude && exclude.size > 0) {
@@ -453,6 +489,7 @@ export function broadcastToProjectRenderersExcept(
         // Silently ignore send failures during window initialization/disposal.
       }
     }
+    broadcastToRemoteEndpoints(exclude, channel, args);
     return;
   }
   broadcastToRenderer(channel, ...args);
@@ -475,6 +512,9 @@ export function broadcastToProjectRenderersExcept(
  * reach cached views to stop a voice that started before caching. State
  * broadcasts likewise stay global — cached views have no replay path on warm
  * reactivation (#9490).
+ *
+ * A remote endpoint counts as visible: whether its view is cached is known
+ * only to its own Shell.
  */
 export function broadcastToVisibleRenderers(channel: string, ...args: unknown[]): void {
   for (const wc of getAllAppWebContents()) {
@@ -487,11 +527,91 @@ export function broadcastToVisibleRenderers(channel: string, ...args: unknown[])
       }
     }
   }
+  broadcastToRemoteEndpoints(null, channel, args);
 }
 
+/**
+ * Reply to the renderer that made this call. A remote endpoint has no window,
+ * so its push goes through the endpoint; a local sender with no window still
+ * gets nothing, as before.
+ */
 export function sendToRendererContext(ctx: IpcContext, channel: string, ...args: unknown[]): void {
-  if (ctx.senderWindow === null) return;
+  if (ctx.senderWindow === null) {
+    const endpoint = ctx.endpoint as ClientEndpoint | undefined;
+    if (endpoint?.kind !== "remote-view" || endpoint.isClosed()) return;
+    try {
+      endpoint.send({ type: "event", channel, args });
+    } catch {
+      // Silently ignore send failures on a closing link.
+    }
+    return;
+  }
   sendToRenderer(ctx.senderWindow, channel, ...args);
+}
+
+type InvokeRunner = (args: unknown[], run: () => unknown) => unknown;
+
+/**
+ * Wrap handler execution in the perf-capture marks. With capture disabled the
+ * runner calls straight through, so synchronous handlers stay synchronous.
+ */
+function createInvokeRunner(channel: string): InvokeRunner {
+  if (!isPerformanceCaptureEnabled()) return (_args, run) => run();
+  let requestCounter = 0;
+  return async (args, run) => {
+    const traceId = `${channel}-${Date.now().toString(36)}-${(++requestCounter).toString(36)}`;
+    const startedAt = performance.now();
+    markPerformance(PERF_MARKS.IPC_REQUEST_START, {
+      channel,
+      traceId,
+      argCount: args.length,
+    });
+
+    let responsePayload: unknown;
+    let errored = false;
+
+    try {
+      responsePayload = await run();
+      return responsePayload;
+    } catch (error) {
+      errored = true;
+      throw error;
+    } finally {
+      const durationMs = performance.now() - startedAt;
+      markPerformance(PERF_MARKS.IPC_REQUEST_END, {
+        channel,
+        traceId,
+        durationMs,
+        ok: !errored,
+      });
+      sampleIpcTiming(channel, durationMs, {
+        traceId,
+        requestPayload: args,
+        responsePayload,
+        errored,
+      });
+    }
+  };
+}
+
+/**
+ * Register one invoke handler with both transports: `ipcMain` for local views
+ * (whose listener gets the real event) and the dispatcher for calls that
+ * arrive over a link (whose listener gets a context built from the endpoint).
+ */
+function registerInvokeHandler(
+  channel: string,
+  local: (event: Electron.IpcMainInvokeEvent, args: unknown[]) => unknown,
+  remote: (ctx: IpcContext, args: unknown[]) => unknown
+): () => void {
+  ipcMain.handle(channel, (event, ...args) => local(event, args));
+  const unregister = getIpcDispatcher().registerInvoke(channel, (ctx, ...args) =>
+    remote(ctx, args)
+  );
+  return () => {
+    unregister();
+    ipcMain.removeHandler(channel);
+  };
 }
 
 export function typedHandle<K extends keyof IpcInvokeMap>(
@@ -503,54 +623,13 @@ export function typedHandle<K extends keyof IpcInvokeMap>(
     | ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>
 ): () => void {
   assertIpcSecurityReady(channel as string);
-  const captureEnabled = isPerformanceCaptureEnabled();
-  let requestCounter = 0;
-
-  // Fast path: when perf capture is disabled, skip the async wrapper so
-  // synchronous handlers stay synchronous (preserves existing behavior for
-  // handlers that returned values directly when registered via ipcMain.handle).
-  if (!captureEnabled) {
-    ipcMain.handle(channel as string, (_event, ...args) =>
-      handler(...(args as IpcInvokeMap[K]["args"]))
-    );
-    return () => ipcMain.removeHandler(channel as string);
-  }
-
-  ipcMain.handle(channel as string, async (_event, ...args) => {
-    const traceId = `${String(channel)}-${Date.now().toString(36)}-${(++requestCounter).toString(36)}`;
-    const startedAt = performance.now();
-    markPerformance(PERF_MARKS.IPC_REQUEST_START, {
-      channel: channel as string,
-      traceId,
-      argCount: args.length,
-    });
-
-    let responsePayload: ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]> | undefined;
-    let errored = false;
-
-    try {
-      responsePayload = await handler(...(args as IpcInvokeMap[K]["args"]));
-      return responsePayload;
-    } catch (error) {
-      errored = true;
-      throw error;
-    } finally {
-      const durationMs = performance.now() - startedAt;
-      markPerformance(PERF_MARKS.IPC_REQUEST_END, {
-        channel: channel as string,
-        traceId,
-        durationMs,
-        ok: !errored,
-      });
-      sampleIpcTiming(channel as string, durationMs, {
-        traceId,
-        requestPayload: args,
-        responsePayload,
-        errored,
-      });
-    }
-  });
-  return () => ipcMain.removeHandler(channel as string);
+  const run = createInvokeRunner(channel as string);
+  const invoke = (args: unknown[]) => handler(...(args as IpcInvokeMap[K]["args"]));
+  return registerInvokeHandler(
+    channel as string,
+    (_event, args) => run(args, () => invoke(args)),
+    (_ctx, args) => run(args, () => invoke(args))
+  );
 }
 
 /**
@@ -597,11 +676,19 @@ export function typedHandleValidated<K extends keyof IpcInvokeMap, S extends z.Z
  */
 function buildIpcContext(event: Electron.IpcMainInvokeEvent): IpcContext {
   const webContentsId = event.sender.id;
+  // Resolved on first read: most local handlers never touch the endpoint, and
+  // creating one subscribes to the sender's `destroyed` event.
+  let endpoint: ClientEndpoint | undefined;
   return {
     event,
     webContentsId,
     senderWindow: getWindowForWebContents(event.sender),
     projectId: getProjectForWebContents(webContentsId),
+    get endpoint(): ClientEndpoint {
+      endpoint ??= getLocalEndpoint(event.sender);
+      return endpoint;
+    },
+    client: getLocalClientRef(),
   };
 }
 
@@ -615,54 +702,17 @@ export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
     | ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>
 ): () => void {
   assertIpcSecurityReady(channel as string);
-  const captureEnabled = isPerformanceCaptureEnabled();
-  let requestCounter = 0;
-
-  if (!captureEnabled) {
-    ipcMain.handle(channel as string, (event, ...args) => {
+  const run = createInvokeRunner(channel as string);
+  const invoke = (ctx: IpcContext, args: unknown[]) =>
+    handler(ctx, ...(args as IpcInvokeMap[K]["args"]));
+  return registerInvokeHandler(
+    channel as string,
+    (event, args) => {
       const ctx = buildIpcContext(event);
-      return handler(ctx, ...(args as IpcInvokeMap[K]["args"]));
-    });
-    return () => ipcMain.removeHandler(channel as string);
-  }
-
-  ipcMain.handle(channel as string, async (event, ...args) => {
-    const ctx = buildIpcContext(event);
-
-    const traceId = `${String(channel)}-${Date.now().toString(36)}-${(++requestCounter).toString(36)}`;
-    const startedAt = performance.now();
-    markPerformance(PERF_MARKS.IPC_REQUEST_START, {
-      channel: channel as string,
-      traceId,
-      argCount: args.length,
-    });
-
-    let responsePayload: ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]> | undefined;
-    let errored = false;
-
-    try {
-      responsePayload = await handler(ctx, ...(args as IpcInvokeMap[K]["args"]));
-      return responsePayload;
-    } catch (error) {
-      errored = true;
-      throw error;
-    } finally {
-      const durationMs = performance.now() - startedAt;
-      markPerformance(PERF_MARKS.IPC_REQUEST_END, {
-        channel: channel as string,
-        traceId,
-        durationMs,
-        ok: !errored,
-      });
-      sampleIpcTiming(channel as string, durationMs, {
-        traceId,
-        requestPayload: args,
-        responsePayload,
-        errored,
-      });
-    }
-  });
-  return () => ipcMain.removeHandler(channel as string);
+      return run(args, () => invoke(ctx, args));
+    },
+    (ctx, args) => run(args, () => invoke(ctx, args))
+  );
 }
 
 /**
@@ -709,6 +759,7 @@ export function typedBroadcast<K extends keyof IpcEventMap>(
       }
     }
   }
+  broadcastToRemoteEndpoints(null, channel as string, [payload]);
 }
 
 export function typedSend<K extends keyof IpcEventMap>(

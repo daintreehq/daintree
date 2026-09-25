@@ -11,12 +11,22 @@ import type { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import type { ProjectViewManager } from "../window/ProjectViewManager.js";
 import type { WorktreePortBroker } from "../services/WorktreePortBroker.js";
+import type { ClientEndpoint, ClientRef } from "./endpoint.js";
 
+/**
+ * Per-request context. A local view's call carries its real `event` and
+ * `senderWindow`; a call that arrived over a link has neither (both null) and
+ * a negative `webContentsId` (the endpoint handle), so replies and pushes must
+ * go through `endpoint` (see `sendToRendererContext`). `senderWindow` is a
+ * Shell concept and is never set for a remote endpoint.
+ */
 export interface IpcContext {
-  event: Electron.IpcMainInvokeEvent;
+  event: Electron.IpcMainInvokeEvent | null;
   webContentsId: number;
   senderWindow: BrowserWindow | null;
   projectId: string | null;
+  endpoint: ClientEndpoint;
+  client: ClientRef;
 }
 
 export interface HandlerDependencies {

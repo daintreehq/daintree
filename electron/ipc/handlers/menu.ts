@@ -169,8 +169,8 @@ export const menuNamespace = defineIpcNamespace({
           // The sender's own zoom factor, not the window's app view: the rect
           // was measured in the sender's CSS pixels, so only that view's zoom
           // converts it back to device-independent window coordinates.
-          const sender = ctx.event.sender;
-          if (!sender.isDestroyed()) {
+          const sender = ctx.event?.sender;
+          if (sender && !sender.isDestroyed()) {
             anchor = resolveApplicationMenuAnchor(
               payload,
               win.getContentBounds(),

@@ -102,7 +102,14 @@ import {
 import type { IpcContext } from "../../types.js";
 
 function ctx(webContentsId: number): IpcContext {
-  return { event: {} as never, webContentsId, senderWindow: null, projectId: null };
+  return {
+    event: {} as never,
+    webContentsId,
+    senderWindow: null,
+    projectId: null,
+    endpoint: {} as IpcContext["endpoint"],
+    client: {} as IpcContext["client"],
+  };
 }
 
 /** Start a gated call and capture its settlement without an unhandled rejection. */

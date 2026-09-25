@@ -402,8 +402,11 @@ async function awaitPendingOutgoingPersist(projectId: string): Promise<void> {
   }
 }
 
-function resolveProjectViewManager(deps: HandlerDependencies, event: Electron.IpcMainInvokeEvent) {
-  const senderWindow = getWindowForWebContents(event.sender);
+function resolveProjectViewManager(
+  deps: HandlerDependencies,
+  event: Electron.IpcMainInvokeEvent | null
+) {
+  const senderWindow = event && getWindowForWebContents(event.sender);
   const pvmCtx = senderWindow ? deps.windowRegistry?.getByWindowId(senderWindow.id) : undefined;
   return pvmCtx?.services?.projectViewManager ?? deps.projectViewManager;
 }
@@ -432,7 +435,7 @@ function resolveOutgoingProjectId(
 
   // Startup gap: the restored view loads before `registerInitialView` binds it,
   // and can send IPC in between. Its URL is the only per-sender identity there.
-  const fromUrl = getProjectIdFromSenderUrl(ctx.event.sender);
+  const fromUrl = ctx.event && getProjectIdFromSenderUrl(ctx.event.sender);
   if (fromUrl && projectStore.getProjectById(fromUrl)) return fromUrl;
 
   // An unbound view (a fresh Cmd+N welcome window) has no project layout of its
@@ -464,7 +467,7 @@ function captureSwitchOperation(
   incomingProjectId: string,
   action: SwitchOperation["action"]
 ): SwitchOperation {
-  const senderWindow = getWindowForWebContents(ctx.event.sender);
+  const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
   const projectViewManager = resolveProjectViewManager(deps, ctx.event);
   return Object.freeze({
     action,

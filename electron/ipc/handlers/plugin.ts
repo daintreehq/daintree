@@ -1017,7 +1017,7 @@ async function handleReportPanelLifecycle(
   (await getPluginService()).ingestPanelLifecycleEvents(
     ctx.webContentsId,
     events,
-    ctx.event.sender
+    ctx.event?.sender
   );
 }
 
@@ -1030,7 +1030,7 @@ async function handleReportPanelInventory(
   (await getPluginService()).ingestPanelInventory(
     ctx.webContentsId,
     nonPluginPanelIds,
-    ctx.event.sender
+    ctx.event?.sender
   );
 }
 
@@ -1349,7 +1349,7 @@ async function handleGetAuditConfig(): Promise<PluginAuditConfig> {
  * mirroring the `plugin:invoke` trust check.
  */
 async function handleClearAuditLog(ctx: IpcContext): Promise<void> {
-  const senderUrl = ctx.event.senderFrame?.url;
+  const senderUrl = ctx.event?.senderFrame?.url;
   if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
     const safeUrl = senderUrl
       ? scrubSecrets(senderUrl.slice(0, UNTRUSTED_URL_MAX_CHARS))

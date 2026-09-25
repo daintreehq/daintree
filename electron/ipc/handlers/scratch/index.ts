@@ -108,7 +108,7 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           // Resolve the per-window ProjectViewManager (the same view manager handles
           // scratches; PVM is keyed on opaque string IDs and has no entity-type
           // assumptions, so a UUID scratch ID coexists with SHA256 project IDs).
-          const senderWindow = getWindowForWebContents(ctx.event.sender);
+          const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
           const pvmCtx = senderWindow
             ? deps.windowRegistry?.getByWindowId(senderWindow.id)
             : undefined;
@@ -189,8 +189,8 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           if (windowId !== undefined && senderWindow && deps.windowRegistry) {
             const wctx = deps.windowRegistry.getByWindowId(senderWindow.id);
             if (wctx) {
-              const targetWc = activeView?.webContents ?? ctx.event.sender;
-              if (!targetWc.isDestroyed()) {
+              const targetWc = activeView?.webContents ?? ctx.event?.sender;
+              if (targetWc && !targetWc.isDestroyed()) {
                 distributePortsToView(senderWindow, wctx, targetWc, deps.ptyClient ?? null);
               }
             }
@@ -222,7 +222,7 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
             throw new Error(`Scratch not found: ${scratchId}`);
           }
 
-          const senderWindow = getWindowForWebContents(ctx.event.sender);
+          const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
           const dialogOpts: Electron.OpenDialogOptions = {
             title: "Save scratch as project",
             buttonLabel: "Save here",

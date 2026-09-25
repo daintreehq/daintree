@@ -41,6 +41,13 @@ export function resolveScopedProjectForIpcContext(
   ctx: IpcContext,
   deps?: HandlerDependencies
 ): ScopedProjectResolution | null {
+  // A call that arrived over a link has no local window or view: resolve from
+  // the endpoint's binding and never fall back to the global current project.
+  if (ctx.event === null) {
+    return ctx.projectId
+      ? resolveWorkspaceById(ctx.projectId)
+      : { project: null, workspaceId: null };
+  }
   const senderWindow = ctx.senderWindow ?? getWindowForWebContents(ctx.event.sender);
   const pvm =
     (senderWindow &&

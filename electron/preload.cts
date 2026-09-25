@@ -729,21 +729,33 @@ ipcRenderer.on(
  * added fields like `code`. Only `message` and `stack` survive. The encoded
  * prefix below is decoded by the renderer-side `isClientAppError` guard
  * (`src/utils/clientAppError.ts`), which restores `e.name`, `e.code`,
- * `e.userMessage`, and the cleaned `e.message` on the caught error.
+ * `e.userMessage`, `e.details`, and the cleaned `e.message` on the caught
+ * error.
  *
  * Format: `[AppError|<code>] <original message>`
  *      or `[AppError|<code>|<urlencoded userMessage>] <original message>`
+ * An optional `|#<urlencoded JSON details>` segment follows the code and any
+ * userMessage.
  */
 function _reconstructAppError(serialized: {
   name: string;
   message: string;
   code?: string;
   userMessage?: string;
+  details?: unknown;
 }): Error {
   const code = serialized.code ?? "UNKNOWN";
   const userMsgPart =
     serialized.userMessage !== undefined ? `|${encodeURIComponent(serialized.userMessage)}` : "";
-  const encoded = `[AppError|${code}${userMsgPart}] ${serialized.message}`;
+  let detailsPart = "";
+  if (serialized.details !== undefined && serialized.details !== null) {
+    try {
+      detailsPart = `|#${encodeURIComponent(JSON.stringify(serialized.details))}`;
+    } catch {
+      detailsPart = "";
+    }
+  }
+  const encoded = `[AppError|${code}${userMsgPart}${detailsPart}] ${serialized.message}`;
   const error = new Error(encoded);
   // Standard properties — set for callers in the same realm. They don't
   // survive the contextBridge crossing; the message prefix is the source
@@ -752,6 +764,9 @@ function _reconstructAppError(serialized: {
   (error as Error & { code: AppErrorCode }).code = serialized.code as AppErrorCode;
   if (serialized.userMessage !== undefined) {
     (error as Error & { userMessage: string }).userMessage = serialized.userMessage;
+  }
+  if (serialized.details !== undefined) {
+    (error as Error & { details: unknown }).details = serialized.details;
   }
   return error;
 }
