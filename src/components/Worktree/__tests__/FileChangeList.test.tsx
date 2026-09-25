@@ -627,12 +627,7 @@ describe("FileChangeList — scroll containment (#12828)", () => {
     expect(container.querySelectorAll(".contain-paint").length).toBe(1);
 
     rerender(
-      <FileChangeList
-        changes={changes}
-        rootPath={ROOT}
-        className="p-2 bg-surface-inset"
-        isStale
-      />
+      <FileChangeList changes={changes} rootPath={ROOT} className="p-2 bg-surface-inset" isStale />
     );
     const stale = container.querySelector<HTMLElement>(".surface-stale");
     expect(stale?.classList.contains("contain-paint")).toBe(true);
