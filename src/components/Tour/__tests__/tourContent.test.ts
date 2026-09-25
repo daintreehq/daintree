@@ -3,11 +3,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TOUR_CHAPTERS } from "../tourChapters";
 import { narrationFingerprint, parseNarration } from "../tourNarration";
-import { resolveChapterTiming } from "../tourTiming";
+import { TOUR_CHAPTER_TITLES, TOUR_MINUTES } from "../tourSummary.generated";
+import { resolveChapterTiming, resolveTourTimings, tourMinutes } from "../tourTiming";
 import { TOUR_TIMING_MANIFEST } from "../tourTiming.generated";
 import type { TourTimingManifest } from "../tourTypes";
 
-const SCENES_DIR = join(__dirname, "..", "scenes");
+const TOUR_DIR = join(__dirname, "..");
+const SCENES_DIR = join(TOUR_DIR, "scenes");
 const SCENE_FILES: Record<string, string> = {
   welcome: "WelcomeScene.tsx",
   worktrees: "WorktreesScene.tsx",
@@ -75,6 +77,34 @@ describe("tour content", () => {
       );
     }
   });
+});
+
+// The invitation renders at startup and reads only the summary, so the summary
+// has to say what the player would.
+describe("tour summary", () => {
+  it("quotes the length the player's timings add up to", () => {
+    expect(TOUR_MINUTES, "the tour summary is stale — run npm run tour:audio").toBe(
+      tourMinutes(resolveTourTimings())
+    );
+  });
+
+  it("lists the chapter titles in play order", () => {
+    expect(TOUR_CHAPTER_TITLES, "the tour summary is stale — run npm run tour:audio").toEqual(
+      TOUR_CHAPTERS.map((chapter) => chapter.title)
+    );
+  });
+
+  // One static import of these from a startup module pulls the narration, the
+  // cue manifest and the parser back into the first-render graph.
+  it.each(["TourInviteCard.tsx", "DaintreeTourHost.tsx", "tourSummary.generated.ts"])(
+    "%s stays off the narration, timing and parser modules",
+    (file) => {
+      const source = readFileSync(join(TOUR_DIR, file), "utf8");
+      expect(source).not.toMatch(
+        /from "\.\/(tourChapters|tourTiming|tourTiming\.generated|tourNarration)"/
+      );
+    }
+  );
 });
 
 describe("resolveChapterTiming", () => {
