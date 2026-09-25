@@ -41,23 +41,20 @@ const DIFF_ROW: Record<DiffKind, string> = {
   delete: "bg-diff-delete-background",
 };
 
-// The card's review icon, and the commit button inside the review. The card is
-// the third in the sidebar; measured from the render.
+// The card's review icon, where its tooltip hangs. The card is the third in the
+// sidebar; measured from the render.
 const REVIEW_BUTTON = { x: 134, y: 243 };
-const PANE_INPUT = { x: GRID_RECT.x + 80, y: GRID_RECT.y + GRID_RECT.height - 11 };
-const COMMIT_BUTTON = {
-  x: GRID_RECT.x + GRID_RECT.width - 44,
-  y: GRID_RECT.y + GRID_RECT.height - 16,
-};
+const PANE_INPUT = { anchor: "claude-input", dx: -154, dy: 6 };
+const COMMIT_BUTTON = { anchor: "review-commit-push", dx: 13, dy: 5 };
 // The message is written before the pointer reaches Commit & Push.
 const COMMIT_TYPED = { cue: "commit", offset: 1.6 } as const;
 const FILES_CUE = { cue: "files", offset: -0.3 } as const;
 
-const CURSOR: readonly CursorStep[] = [
+export const CURSOR: readonly CursorStep[] = [
   { cue: "ask", offset: -0.5, at: PANE_INPUT },
   { cue: "ask", at: PANE_INPUT, click: true },
-  { cue: "open", offset: -0.6, at: REVIEW_BUTTON },
-  { cue: "open", offset: 0.55, at: REVIEW_BUTTON, click: true },
+  { cue: "open", offset: -0.6, at: { anchor: "review-commit" } },
+  { cue: "open", offset: 0.55, at: { anchor: "review-commit" }, click: true },
   { cue: "commit", offset: 1.6, at: COMMIT_BUTTON },
   { cue: "commit", offset: 2.3, at: COMMIT_BUTTON, click: true },
 ];
@@ -162,7 +159,10 @@ function ReviewSurface({
           />
           {!typing && <span className="text-text-secondary">Commit message…</span>}
         </div>
-        <span className="flex h-6 items-center gap-1 rounded-md bg-text-primary px-2.5 text-3xs font-medium text-text-inverse">
+        <span
+          data-tour-anchor="review-commit-push"
+          className="flex h-6 items-center gap-1 rounded-md bg-text-primary px-2.5 text-3xs font-medium text-text-inverse"
+        >
           Commit &amp; Push
         </span>
       </div>

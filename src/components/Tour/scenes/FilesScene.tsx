@@ -1,6 +1,6 @@
 import { ChevronDown, FileCode, FileText, Folder, FolderTree, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ANCHOR, GRID_RECT, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
+import { MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
   MockCursor,
   MockLines,
@@ -24,24 +24,20 @@ const PICKED_PATH = "src/components/Header.tsx";
 
 // Once the file browser opens, the grid holds two equal columns — the real
 // grid's reflow — with the browser on the left and Claude on the right.
-const COLUMN = (GRID_RECT.width - 6) / 2;
-const rowAt = (i: number) => ({ x: GRID_RECT.x + 40, y: GRID_RECT.y + 34 + i * 16 });
-const CLAUDE_INPUT = {
-  x: GRID_RECT.x + COLUMN + 6 + COLUMN / 2,
-  y: GRID_RECT.y + GRID_RECT.height - 11,
-};
-const CLAUDE_BODY = { x: CLAUDE_INPUT.x, y: GRID_RECT.y + 110 };
+const PICKED_ROW = { anchor: `tree-${TREE[PICKED]!.name}`, dx: -20, dy: -4 };
+const CLAUDE_INPUT = { anchor: "claude-input", dy: 6 };
+const CLAUDE_BODY = { anchor: "claude-body", dy: -32 };
 const DRAGGING = "Header.tsx";
 
-const CURSOR: readonly CursorStep[] = [
-  { cue: "open", at: ANCHOR["file-browser"] },
-  { cue: "open", offset: 0.5, at: ANCHOR["file-browser"], click: true },
-  { cue: "pick", at: rowAt(PICKED) },
-  { cue: "pick", offset: 0.5, at: rowAt(PICKED), click: true },
+export const CURSOR: readonly CursorStep[] = [
+  { cue: "open", at: { anchor: "file-browser" } },
+  { cue: "open", offset: 0.5, at: { anchor: "file-browser" }, click: true },
+  { cue: "pick", at: PICKED_ROW },
+  { cue: "pick", offset: 0.5, at: PICKED_ROW, click: true },
   // Press on the file, carry it across Claude's terminal, and let go on the
   // prompt bar exactly as the voice says "drops".
-  { cue: "ref", at: rowAt(PICKED) },
-  { cue: "ref", offset: 0.3, at: rowAt(PICKED), modifier: DRAGGING },
+  { cue: "ref", at: PICKED_ROW },
+  { cue: "ref", offset: 0.3, at: PICKED_ROW, modifier: DRAGGING },
   { cue: "ref", offset: 0.8, at: CLAUDE_BODY, modifier: DRAGGING },
   { cue: "drop", offset: -0.5, at: CLAUDE_INPUT, modifier: DRAGGING },
   { cue: "drop", at: CLAUDE_INPUT, click: true },
@@ -55,6 +51,7 @@ function FileBrowser({ picked, lifted }: { picked: boolean; lifted: boolean }) {
           {TREE.map((row, i) => (
             <span
               key={row.name}
+              data-tour-anchor={`tree-${row.name}`}
               className={cn(
                 "flex h-[15px] items-center gap-1 rounded-sm px-1 text-3xs transition-colors duration-150 ease-out",
                 i === PICKED && picked

@@ -24,13 +24,13 @@ import { MockEmptyGrid, MockMenu, MockSearchField, MockSpotlight } from "./scene
 const ISSUES = ANCHOR["forge-issues"];
 const LIST = { x: 290, y: ISSUES.y + 14, width: 216 };
 // Clicking an issue opens it on the forge; a worktree comes from the row's
-// actions menu. #51 is the second row; its menu button is measured from the render.
+// actions menu. #51 is the second row; the menu opens under its button.
 const ISSUE_MENU = { x: 487, y: 91 };
 const ROW_MENU = { x: ISSUE_MENU.x - 132, y: ISSUE_MENU.y + 10, width: 140 };
-const CREATE_ITEM = { x: ROW_MENU.x + 50, y: ROW_MENU.y + 17 };
+const CREATE_ITEM = { anchor: "issue-actions-0", dx: -20 };
 
 const DIALOG = { x: 230, y: 90, width: 250 };
-const CREATE_BUTTON = { x: 417, y: 189 };
+const CREATE_BUTTON = { anchor: "github-create" };
 const BRANCH = "feature/issue-51-dark-mode-for-settings";
 
 const ISSUES_LIST = [
@@ -40,11 +40,11 @@ const ISSUES_LIST = [
   ["#45 Add order history", "5d"],
 ] as const;
 
-const CURSOR: readonly CursorStep[] = [
-  { cue: "list", at: ISSUES },
-  { cue: "list", offset: 0.5, at: ISSUES, click: true },
-  { cue: "pick", at: ISSUE_MENU },
-  { cue: "pick", offset: 0.5, at: ISSUE_MENU, click: true },
+export const CURSOR: readonly CursorStep[] = [
+  { cue: "list", at: { anchor: "forge-issues" } },
+  { cue: "list", offset: 0.5, at: { anchor: "forge-issues" }, click: true },
+  { cue: "pick", at: { anchor: "issue-51-menu" } },
+  { cue: "pick", offset: 0.5, at: { anchor: "issue-51-menu" }, click: true },
   { cue: "choose", at: CREATE_ITEM },
   { cue: "choose", offset: 0.5, at: CREATE_ITEM, click: true },
   { cue: "create", at: CREATE_BUTTON },

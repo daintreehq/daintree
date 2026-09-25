@@ -51,41 +51,20 @@ export const GRID_RECT = {
   height: APP_LAYOUT.height - APP_LAYOUT.toolbarHeight - APP_LAYOUT.dockHeight - 16,
 } as const;
 
-/** Pinned agents in toolbar order. `ANCHOR` holds a measured point for each. */
+/** Pinned agents in toolbar order. */
 export const TOOLBAR_AGENTS = ["claude", "codex", "antigravity"] as const;
-export type ToolbarAgentId = (typeof TOOLBAR_AGENTS)[number];
 
 /**
- * Canvas centres of the frame's controls — where the pointer goes to "click"
- * them. Measured from the render, not computed: after changing the frame's
- * layout, open tour-preview.html and run `__tourAnchors()` in the console to
- * re-measure, then update this table.
+ * Canvas centres of the frame controls that menus and tooltips hang from. The
+ * pointer never reads these — it targets `data-tour-anchor` names measured from
+ * the render. After changing the frame's layout, open tour-preview.html and run
+ * `__tourAnchors()` in the console to re-measure, then update this table.
  */
 export const ANCHOR = {
   launcher: { x: 51, y: 14 },
-  "agent-claude": { x: 84, y: 14 },
-  "agent-codex": { x: 106, y: 14 },
-  "agent-antigravity": { x: 128, y: 14 },
-  terminal: { x: 161, y: 14 },
-  "file-browser": { x: 183, y: 14 },
-  forge: { x: 455, y: 14 },
   "forge-issues": { x: 443, y: 14 },
   "copy-context": { x: 523, y: 14 },
-  palette: { x: 545, y: 14 },
-  assistant: { x: 600, y: 14 },
-  portal: { x: 622, y: 14 },
-  "sidebar-arm": { x: 119, y: 46 },
-  "sidebar-plus": { x: 139, y: 46 },
-  "dock-launcher": { x: 174, y: 347 },
 } as const satisfies Record<string, { x: number; y: number }>;
-
-export function toolbarAgentPoint(agent: ToolbarAgentId) {
-  return ANCHOR[`agent-${agent}`];
-}
-export const SIDEBAR_PLUS_POINT = ANCHOR["sidebar-plus"];
-/** "Select terminals to arm" — the sidebar header's lightning bolt. */
-export const SIDEBAR_ARM_POINT = ANCHOR["sidebar-arm"];
-export const DOCK_WAITING_POINT = { x: APP_LAYOUT.width - 40, y: APP_LAYOUT.height - 14 } as const;
 
 export type AppRegion = "toolbar" | "sidebar" | "grid" | "dock" | "right";
 

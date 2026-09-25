@@ -4,6 +4,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import { TOUR_SCENES } from "../TourStage";
 import { DAINTREE_MOCK_KIT } from "../daintreeMockKit";
 import { MockKitContext } from "../mockup/MockKitContext";
+import type { CursorStep } from "../mockup/TourMock";
+import { CURSOR as AGENTS_CURSOR } from "../scenes/AgentsScene";
+import { CURSOR as ASSISTANT_CURSOR } from "../scenes/AssistantScene";
+import { CURSOR as CONTEXT_CURSOR } from "../scenes/ContextScene";
+import { CURSOR as FILES_CURSOR } from "../scenes/FilesScene";
+import { CURSOR as FLEET_CURSOR } from "../scenes/FleetScene";
+import { CURSOR as GITHUB_CURSOR } from "../scenes/GitHubScene";
+import { CURSOR as PREVIEW_CURSOR } from "../scenes/PreviewScene";
+import { CURSOR as REVIEW_CURSOR } from "../scenes/ReviewScene";
+import { CURSOR as STATE_CURSOR } from "../scenes/StateScene";
+import { CURSOR as WORKTREES_CURSOR } from "../scenes/WorktreesScene";
 import { TOUR_CHAPTERS } from "../tourChapters";
 import { TourPlayer, type TourAudio } from "@daintreehq/tour";
 import { TourPlayerContext } from "@daintreehq/tour/react";
@@ -59,6 +70,19 @@ function sceneAt(chapterId: string, t: number, keyboard: TourKeyboard = "mac"): 
   return container;
 }
 
+const SCENE_CURSORS: Record<string, readonly CursorStep[]> = {
+  agents: AGENTS_CURSOR,
+  assistant: ASSISTANT_CURSOR,
+  context: CONTEXT_CURSOR,
+  files: FILES_CURSOR,
+  fleet: FLEET_CURSOR,
+  github: GITHUB_CURSOR,
+  preview: PREVIEW_CURSOR,
+  review: REVIEW_CURSOR,
+  state: STATE_CURSOR,
+  worktrees: WORKTREES_CURSOR,
+};
+
 const APP_CHAPTERS = TOUR_CHAPTERS.map((c) => c.id).filter((id) => id !== "outro");
 
 function worktreeNames(canvas: HTMLElement): string[] {
@@ -88,6 +112,36 @@ describe("tour scenes", () => {
           `${id}@${t.toFixed(2)}: "${target}" sits in a dimmed region`
         ).toBeNull();
       }
+      cleanup();
+    }
+  });
+
+  // The pointer is placed by measuring the anchor it names, so a step whose
+  // anchor isn't rendered at that moment leaves the pointer somewhere else.
+  it.each(Object.keys(SCENE_CURSORS))("%s: every cursor anchor is rendered at its step", (id) => {
+    const chapter = TOUR_CHAPTERS.find((c) => c.id === id)!;
+    const cues = resolveChapterTiming(chapter).cues;
+    const steps = SCENE_CURSORS[id]!;
+    const startOf = (step: CursorStep) => {
+      const cue = cues[step.cue];
+      expect(cue, `${id}: cue "${step.cue}"`).toBeDefined();
+      return cue! + (step.offset ?? 0);
+    };
+    for (const step of steps) {
+      if (!("anchor" in step.at)) continue;
+      // A moment inside the step: before whichever step takes over next.
+      const start = startOf(step);
+      const next = Math.min(...steps.map(startOf).filter((at) => at > start), start + 0.02);
+      expect(start, `${id}: "${step.cue}" step starts inside the chapter`).toBeGreaterThanOrEqual(
+        0
+      );
+      const t = (start + next) / 2;
+      const canvas = sceneAt(id, t);
+      const matches = canvas.querySelectorAll(`[data-tour-anchor="${step.at.anchor}"]`);
+      expect(matches.length, `${id}@${t.toFixed(2)}: "${step.at.anchor}" rendered once`).toBe(1);
+      expect(canvas.querySelector("[data-tour-cursor]")?.getAttribute("data-tour-cursor")).toBe(
+        step.at.anchor
+      );
       cleanup();
     }
   });

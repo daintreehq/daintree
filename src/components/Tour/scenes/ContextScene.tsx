@@ -15,14 +15,15 @@ import { tourShortcutHint } from "../tourKeys";
 import { MockMenu, MockSpotlight, MockTooltip } from "./sceneParts";
 
 const COPY = ANCHOR["copy-context"];
-const PORTAL = ANCHOR.portal;
+const COPY_BUTTON = { anchor: "copy-context" };
+const PORTAL = { anchor: "portal" };
 // Copy context is a menu; its first item copies the whole worktree.
 const MENU = { width: 176, x: COPY.x - 166, y: COPY.y + 14 };
-const COPY_FULL = { x: MENU.x + 60, y: MENU.y + 13 };
+const COPY_FULL = { anchor: "menu-0", dx: -28, dy: -3 };
 
-const CURSOR: readonly CursorStep[] = [
-  { cue: "copy", at: COPY },
-  { cue: "copy", offset: 0.5, at: COPY, click: true },
+export const CURSOR: readonly CursorStep[] = [
+  { cue: "copy", at: COPY_BUTTON },
+  { cue: "copy", offset: 0.5, at: COPY_BUTTON, click: true },
   { cue: "copy", offset: 1.0, at: COPY_FULL },
   { cue: "copy", offset: 1.5, at: COPY_FULL, click: true },
   { cue: "portal", at: PORTAL },

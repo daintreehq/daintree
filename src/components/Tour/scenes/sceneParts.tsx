@@ -1,6 +1,7 @@
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { cn } from "../mockup/cn";
+import { ANCHOR_SETTLE_MS, canvasSize, measureAnchor } from "../mockup/tourAnchors";
 
 /** The empty grid, as a new worktree shows it: the launcher and nothing else. */
 export function MockEmptyGrid({ label, className }: { label: string; className?: string }) {
@@ -49,26 +50,21 @@ interface Hole {
 }
 
 const SPOTLIGHT_PAD = 3;
-// Re-measure once the target's own entry transition (200ms) has settled.
-const SETTLE_MS = 260;
 
-/** Canvas-space rectangles of the named `data-tour-anchor` elements. */
-function measureAnchors(from: Element, targets: readonly string[]): Hole[] {
-  const canvas = from.closest<HTMLElement>("[data-tour-canvas]");
-  if (!canvas || canvas.offsetWidth === 0) return [];
-  const box = canvas.getBoundingClientRect();
-  const scale = box.width / canvas.offsetWidth;
-  const maxX = canvas.offsetWidth - 1;
-  const maxY = canvas.offsetHeight - 1;
+/** Canvas-space rectangles of the named `data-tour-anchor` elements, padded for the ring. */
+function measureHoles(from: Element, targets: readonly string[]): Hole[] {
+  const size = canvasSize(from);
+  if (!size) return [];
+  const maxX = size.width - 1;
+  const maxY = size.height - 1;
   return targets.flatMap((target) => {
-    const el = canvas.querySelector(`[data-tour-anchor="${target}"]`);
-    if (!el) return [];
-    const r = el.getBoundingClientRect();
+    const r = measureAnchor(from, target);
+    if (!r) return [];
     // Clamped to the canvas so a ring on an edge-hugging element draws whole.
-    const x = Math.max(1, (r.left - box.left) / scale - SPOTLIGHT_PAD);
-    const y = Math.max(1, (r.top - box.top) / scale - SPOTLIGHT_PAD);
-    const right = Math.min(maxX, (r.right - box.left) / scale + SPOTLIGHT_PAD);
-    const bottom = Math.min(maxY, (r.bottom - box.top) / scale + SPOTLIGHT_PAD);
+    const x = Math.max(1, r.x - SPOTLIGHT_PAD);
+    const y = Math.max(1, r.y - SPOTLIGHT_PAD);
+    const right = Math.min(maxX, r.x + r.width + SPOTLIGHT_PAD);
+    const bottom = Math.min(maxY, r.y + r.height + SPOTLIGHT_PAD);
     return [{ x, y, width: right - x, height: bottom - y }];
   });
 }
@@ -94,9 +90,9 @@ export function MockSpotlight({
     const el = ref.current;
     if (!el || !visible) return;
     const names = key.split("|").filter(Boolean);
-    const measure = () => setHoles(measureAnchors(el, names));
+    const measure = () => setHoles(measureHoles(el, names));
     measure();
-    const timer = window.setTimeout(measure, SETTLE_MS);
+    const timer = window.setTimeout(measure, ANCHOR_SETTLE_MS);
     return () => window.clearTimeout(timer);
   }, [key, visible]);
 

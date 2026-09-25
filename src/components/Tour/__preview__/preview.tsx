@@ -37,7 +37,10 @@ applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
 document.body.style.background = "var(--color-surface-canvas)";
 document.body.style.margin = "0";
 
-/** Canvas-space centres of every `data-tour-anchor`, for refreshing `ANCHOR` in MockApp.tsx. */
+/**
+ * Canvas-space centres of every `data-tour-anchor`, for refreshing `ANCHOR` in
+ * MockApp.tsx and for working out a cursor step's `dx`/`dy` from its anchor.
+ */
 Reflect.set(window, "__tourAnchors", () => {
   const canvas = document.querySelector<HTMLElement>("[data-tour-canvas]");
   if (!canvas) return {};
