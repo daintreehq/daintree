@@ -44,6 +44,7 @@ export class WorkspaceHostEventRouter {
   private inotifyLimitToastSent = false;
   private emfileLimitToastSent = false;
   private cloudTeardownFailureToastKeys = new Set<string>();
+  private pruneRetainedToastKeys = new Set<string>();
 
   private pendingSysWorktreeUpdates = new Map<string, WorktreeSnapshot>();
   private sysWorktreeUpdateTimer: ReturnType<typeof setTimeout> | null = null;
@@ -405,6 +406,31 @@ export class WorkspaceHostEventRouter {
           source: "worktree-lifecycle",
           context: { worktreeId: event.worktreeId },
           retryability: "user-gated",
+        });
+        break;
+      }
+
+      case "worktree-prune-retained": {
+        // A toast rather than `notifyError`: the error path renders a generic
+        // title and body and keeps the message for "Copy details", and this
+        // one is only useful if the user reads where the commits are.
+        //
+        // The host re-reports on every sweep; a warning counts as shown only
+        // once a view of this project was attached to receive it, so one
+        // raised during a prewarm is shown on the next reconcile instead.
+        const key = `${entry.projectPath}\0${event.adminDir}\0${event.message}`;
+        if (this.pruneRetainedToastKeys.has(key) || entry.directPortViews.size === 0) break;
+        this.pruneRetainedToastKeys.add(key);
+        sendToEntryWindows(entry, CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          type: "warning",
+          title: "Kept submodule commits from a deleted worktree",
+          message: event.message,
+          rateLimitKey: `worktree-prune-retained:${event.adminDir}`,
+          action: {
+            label: "Copy folder path",
+            ipcChannel: CHANNELS.CLIPBOARD_WRITE_TEXT,
+            data: path.join(event.adminDir, "modules"),
+          },
         });
         break;
       }

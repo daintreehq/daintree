@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceHostEventRouter } from "../WorkspaceHostEventRouter.js";
 import { CHANNELS } from "../../../ipc/channels.js";
@@ -160,6 +161,65 @@ describe("WorkspaceHostEventRouter", () => {
       expect(fileSearchCacheInvalidatorMock.handleWorktreeRemoved).toHaveBeenCalledWith(
         "/project/test/wt"
       );
+    });
+  });
+
+  describe("worktree-prune-retained (#12790)", () => {
+    const retained = (adminDir = "/project/test/.git/worktrees/wt") =>
+      ({
+        type: "worktree-prune-retained",
+        adminDir,
+        worktreePath: "/project/wt",
+        message: "its submodule repositories still hold 1 submodule commit",
+      }) as const;
+
+    function viewEntry(): { entry: ProcessEntry; send: ReturnType<typeof vi.fn> } {
+      const send = vi.fn();
+      const entry = makeEntry({
+        directPortViews: new Map([[7, { isDestroyed: () => false, send }]]) as never,
+      });
+      return { entry, send };
+    }
+
+    it("shows the host's explanation in this project's views, with the store location", () => {
+      const { entry, send } = viewEntry();
+
+      router.routeHostEvent(entry, retained());
+
+      expect(send).toHaveBeenCalledTimes(1);
+      const [channel, payload] = send.mock.calls[0];
+      expect(channel).toBe(CHANNELS.NOTIFICATION_SHOW_TOAST);
+      expect(payload).toMatchObject({
+        type: "warning",
+        message: "its submodule repositories still hold 1 submodule commit",
+        action: {
+          ipcChannel: CHANNELS.CLIPBOARD_WRITE_TEXT,
+          data: path.join("/project/test/.git/worktrees/wt", "modules"),
+        },
+      });
+      // Scoped to the owning project, not every window.
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+    });
+
+    it("shows each kept entry once, however often the host re-reports it", () => {
+      const { entry, send } = viewEntry();
+
+      router.routeHostEvent(entry, retained());
+      router.routeHostEvent(entry, retained());
+      router.routeHostEvent(entry, retained("/project/test/.git/worktrees/other"));
+
+      expect(send).toHaveBeenCalledTimes(2);
+    });
+
+    it("holds a warning raised before any view attached until one can show it", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, retained());
+
+      const send = vi.fn();
+      entry.directPortViews.set(7, { isDestroyed: () => false, send } as never);
+      router.routeHostEvent(entry, retained());
+
+      expect(send).toHaveBeenCalledTimes(1);
     });
   });
 

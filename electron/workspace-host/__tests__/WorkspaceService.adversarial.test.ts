@@ -25,6 +25,8 @@ vi.mock("../../utils/logger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../utils/logger.js")>()),
   logWarn: logWarnMock,
 }));
+/** The private sweep, reachable for spying. */
+type SweepHost = { sweepPrunableWorktreeEntries: () => Promise<void> };
 
 const mockSimpleGit = {
   raw: vi.fn(),
@@ -545,12 +547,15 @@ describe("WorkspaceService adversarial", () => {
         service["topologyWatcher"] as unknown as { startWatcher: () => Promise<void> },
         "startWatcher"
       );
+      const sweep = vi.spyOn(service as unknown as SweepHost, "sweepPrunableWorktreeEntries");
       mockSimpleGit.checkIsRepo.mockRejectedValue(simpleGitCwdDeniedError());
 
       await service.loadProject("req-probe", "/repo", "ws-probe");
 
-      // Everything the gate stands in front of. `worktree prune` in particular
-      // WRITES into `.git`, and this is a folder we could not even probe.
+      // Everything the gate stands in front of. The stale-entry sweep in
+      // particular DELETES from `.git`, and this is a folder we could not even
+      // probe.
+      expect(sweep).not.toHaveBeenCalled();
       expect(listService.setGit).not.toHaveBeenCalled();
       expect(listService.list).not.toHaveBeenCalled();
       expect(listService.mapToWorktrees).not.toHaveBeenCalled();
@@ -598,8 +603,17 @@ describe("WorkspaceService adversarial", () => {
 
       sentEvents.length = 0;
       mockSimpleGit.checkIsRepo.mockResolvedValue(true);
+      const sweep = vi.spyOn(service as unknown as SweepHost, "sweepPrunableWorktreeEntries");
 
       await service.loadProject("req-retry", "/repo", "ws-probe");
+      // A proven repository gets the stale-entry sweep, and never the bare
+      // `worktree prune` it replaced (#12790).
+      expect(sweep).toHaveBeenCalledTimes(1);
+      expect(
+        mockSimpleGit.raw.mock.calls.some(
+          (c) => Array.isArray(c[0]) && c[0][0] === "worktree" && c[0][1] === "prune"
+        )
+      ).toBe(false);
       sentEvents.length = 0;
       service.getAllStates("states-retry");
 

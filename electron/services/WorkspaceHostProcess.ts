@@ -1268,6 +1268,7 @@ export class WorkspaceHostProcess extends EventEmitter {
       case "issue-detected":
       case "issue-not-found":
       case "lifecycle-setup-error":
+      case "worktree-prune-retained":
       case "copytree:progress":
       case "inotify-limit-reached":
       case "emfile-limit-reached":
