@@ -132,11 +132,10 @@ export async function detectNativeModulePlatforms(dir: string): Promise<PluginPl
 }
 
 function declaredPlatforms(info: LoadedPluginInfo): PluginPlatform[] | null {
-  // Declared in the manifest schema; not yet on the shared manifest type.
-  const declared = (info.manifest as { platforms?: unknown }).platforms;
-  if (!Array.isArray(declared)) return null;
+  const declared = info.manifest.platforms;
+  if (!declared) return null;
   const known = new Set<string>(PLUGIN_PLATFORMS);
-  const list = declared.filter((entry): entry is PluginPlatform => known.has(entry as string));
+  const list = declared.filter((entry) => known.has(entry));
   return list.length > 0 ? list : null;
 }
 

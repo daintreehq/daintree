@@ -115,6 +115,12 @@ const m = vi.hoisted(() => {
     installProjectsHost: vi.fn(),
     uninstallProjectsHost: vi.fn(() => record("uninstall projects host")),
     installPluginHost: vi.fn(),
+    installPluginParityClient: vi.fn(),
+    uninstallPluginParityClient: vi.fn(() => record("uninstall plugin parity client")),
+    installPluginInstallSplits: vi.fn(() => record("install plugin install splits")),
+    uninstallPluginInstallSplits: vi.fn(() => record("uninstall plugin install splits")),
+    installPluginParityHost: vi.fn(),
+    uninstallPluginParityHost: vi.fn(() => record("uninstall plugin parity host")),
     uninstallPluginHost: vi.fn(() => record("uninstall plugin host")),
     attachHostPluginAssets: vi.fn(),
     hostFilesDispose: vi.fn(() => record("host files dispose")),
@@ -310,6 +316,20 @@ vi.mock("../plugins/install.js", () => ({
     return m.uninstallPluginHost;
   }),
   attachHostPluginAssets: m.attachHostPluginAssets,
+}));
+vi.mock("../plugins/parity/install.js", () => ({
+  installPluginParityClient: vi.fn((deps: unknown) => {
+    m.installPluginParityClient(deps);
+    return m.uninstallPluginParityClient;
+  }),
+  installPluginInstallSplits: vi.fn(() => {
+    m.installPluginInstallSplits();
+    return m.uninstallPluginInstallSplits;
+  }),
+  installPluginParityHost: vi.fn((server: unknown) => {
+    m.installPluginParityHost(server);
+    return m.uninstallPluginParityHost;
+  }),
 }));
 vi.mock("../ports/clientInstall.js", () => ({
   installPortForwardClient: vi.fn((deps: unknown) => {
@@ -572,6 +592,28 @@ describe("startRemoteHosts", () => {
     expect(m.uninstallHostSwitchService).toHaveBeenCalledTimes(1);
   });
 
+  it("installs plugin parity with the client and the plugin install splits on first use, over the base ones", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(m.client.client.connect).not.toHaveBeenCalled();
+    expect(m.installPluginParityClient).toHaveBeenCalledWith({
+      client: m.client.client,
+      sessionFor: m.client.sessionFor,
+    });
+    expect(m.installPluginInstallSplits).not.toHaveBeenCalled();
+
+    m.clientHooks.current.onFirstUse?.();
+    expect(m.installPluginInstallSplits).toHaveBeenCalledTimes(1);
+    // They replace the base refusals for the install channels, so they must register after them.
+    expect(m.calls.indexOf("install hybrid splits")).toBeGreaterThanOrEqual(0);
+    expect(m.calls.indexOf("install hybrid splits")).toBeLessThan(
+      m.calls.indexOf("install plugin install splits")
+    );
+
+    await stopRemoteHosts();
+    expect(m.uninstallPluginInstallSplits).toHaveBeenCalledTimes(1);
+    expect(m.uninstallPluginParityClient).toHaveBeenCalledTimes(1);
+  });
+
   it("installs the plugin client only on first use, on the client's endpoint feed", async () => {
     await startRemoteHosts({ hostMode: false });
     expect(m.installPluginClient).not.toHaveBeenCalled();
@@ -790,17 +832,20 @@ describe("startRemoteHosts", () => {
     expect(m.installHostPortService).not.toHaveBeenCalled();
     expect(m.installProjectsHost).not.toHaveBeenCalled();
     expect(m.installPluginHost).not.toHaveBeenCalled();
+    expect(m.installPluginParityHost).not.toHaveBeenCalled();
 
     const hostMode = getRemoteService("hostMode")!;
     await hostMode.startListening();
     expect(m.installHostPortService).toHaveBeenCalledWith(m.server);
     expect(m.installProjectsHost).toHaveBeenCalledWith(m.server);
     expect(m.installPluginHost).toHaveBeenCalledTimes(1);
+    expect(m.installPluginParityHost).toHaveBeenCalledWith(m.server);
 
     await hostMode.stopListening();
     expect(m.uninstallHostPortService).toHaveBeenCalledTimes(1);
     expect(m.uninstallProjectsHost).toHaveBeenCalledTimes(1);
     expect(m.uninstallPluginHost).toHaveBeenCalledTimes(1);
+    expect(m.uninstallPluginParityHost).toHaveBeenCalledTimes(1);
   });
 
   it("serves plugin assets for opened endpoints and moves them to a resumed link", async () => {
@@ -1012,12 +1057,14 @@ describe("stopRemoteHosts", () => {
       "uninstall plugin client",
       "uninstall host upload client",
       "uninstall host file client",
+      "uninstall plugin install splits",
       "uninstall clipboard splits",
       "uninstall picker splits",
       "uninstall worktree override",
       "uninstall terminal override",
       "advertise.stop",
       "uninstall plugin host",
+      "uninstall plugin parity host",
       "uninstall projects host",
       "uninstall host port service",
       "host uploads dispose",
@@ -1026,6 +1073,7 @@ describe("stopRemoteHosts", () => {
       "host.dispose",
       "server.close",
       "uninstall port forward client",
+      "uninstall plugin parity client",
       "uninstall host switch service",
       "client.dispose",
     ]);

@@ -18,13 +18,9 @@ export function pluginInstallRefusal(
   manifest: PluginManifest,
   context: { platform: string; blocklist: ParsedPluginBlocklist | null }
 ): PluginInstallRefusal | null {
-  const declared = (manifest as { platforms?: unknown }).platforms;
-  if (Array.isArray(declared) && declared.length > 0 && !declared.includes(context.platform)) {
-    return {
-      kind: "platform",
-      platform: context.platform,
-      supported: declared.filter((entry): entry is PluginPlatform => typeof entry === "string"),
-    };
+  const declared = manifest.platforms;
+  if (declared && declared.length > 0 && !(declared as string[]).includes(context.platform)) {
+    return { kind: "platform", platform: context.platform, supported: [...declared] };
   }
   const match = findPluginBlocklistMatch(context.blocklist, {
     name: manifest.name,

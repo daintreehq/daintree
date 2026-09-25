@@ -1118,6 +1118,12 @@ export interface PluginManifest {
    * placeholder instead. Absent means `"supported"`.
    */
   remote?: "supported" | "unsupported";
+  /**
+   * The operating systems (Node `process.platform` names) the package has a
+   * build for. Absent means any; only a plugin shipping native modules for one
+   * OS needs it, and installing it on another machine is refused up front.
+   */
+  platforms?: Array<"darwin" | "linux" | "win32">;
   capabilities?: PluginCapability[];
   /**
    * Per-capability scope bindings that attenuate the compound-capability

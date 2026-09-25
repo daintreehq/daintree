@@ -20,6 +20,7 @@ import {
 import { installClipboardSplits } from "./hybrid/clipboard.js";
 import { installPickerSplits } from "./hybrid/pickers.js";
 import { installPluginClient } from "./plugins/install.js";
+import { installPluginInstallSplits, installPluginParityClient } from "./plugins/parity/install.js";
 import { installPortForwardClient } from "./ports/clientInstall.js";
 import { installHostSwitchService } from "./projects/clientInstall.js";
 import { registerRemoteService } from "./runtime.js";
@@ -81,6 +82,8 @@ function startClient(): void {
     teardowns.push(installPickerSplits());
     // Replaces the base splits' refusals for paste and attach, so it must follow them.
     teardowns.push(installClipboardSplits());
+    // A `.dntr` dropped or picked here installs on the view's host; replaces the base refusals.
+    teardowns.push(installPluginInstallSplits());
     const endpointFeed = {
       onEndpointOpened: client.onEndpointOpened,
       onEndpointClosed: client.onEndpointClosed,
@@ -149,6 +152,10 @@ function startClient(): void {
   // so they work with no local view on it and cost nothing until a host is used.
   teardowns.push(
     installHostSwitchService({ client: client.client, sessionFor: client.sessionFor })
+  );
+  // Plugin comparison and install-on-host, reached from Settings with no view needed.
+  teardowns.push(
+    installPluginParityClient({ client: client.client, sessionFor: client.sessionFor })
   );
   const hostEntry = (hostId: string) =>
     client.client.list().find((entry) => entry.descriptor.id === hostId);
