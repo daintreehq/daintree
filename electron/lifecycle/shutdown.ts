@@ -89,7 +89,16 @@ export interface ShutdownDeps {
   getStopDiskSpaceMonitor: () => (() => void) | null;
   setStopDiskSpaceMonitor: (v: (() => void) | null) => void;
   windowRegistry?: import("../window/WindowRegistry.js").WindowRegistry;
+  /**
+   * Stops Remote Hosts (link server, client links) when they were started.
+   * Injected by main.ts, the only place allowed to load the remote modules.
+   */
+  stopRemoteHosts?: () => Promise<void>;
 }
+
+// Remote Hosts stop before the graceful kill so no remote frontend is still
+// driving a terminal while it is journaled. Bounded like every other step here.
+const REMOTE_HOSTS_STOP_BUDGET_MS = 2_000;
 
 let isConfirmingQuit = false;
 
@@ -232,6 +241,21 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
     drainRateLimitQueues();
   } catch (err) {
     console.warn("[MAIN] Rate-limit queue drain at quit failed:", err);
+  }
+
+  if (deps.stopRemoteHosts) {
+    const stopRemoteHosts = deps.stopRemoteHosts;
+    await settleWithin(
+      (async () => {
+        try {
+          await stopRemoteHosts();
+        } catch (err) {
+          console.warn("[MAIN] Remote hosts stop failed:", err);
+        }
+      })(),
+      REMOTE_HOSTS_STOP_BUDGET_MS,
+      "remote hosts stop"
+    );
   }
 
   const ptyClient = deps.getPtyClient();

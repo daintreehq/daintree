@@ -380,6 +380,55 @@ describe("registerShutdownHandler", () => {
     expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalled();
   });
 
+  it("stops Remote Hosts before any PTY is killed or disposed", async () => {
+    const order: string[] = [];
+    const ptyClient = {
+      gracefulKillByProject: vi.fn(async () => []),
+      getPartialGracefulKillResults: vi.fn(() => []),
+      getAllTerminalsAsync: vi.fn(async () => {
+        order.push("pty-enumerate");
+        return [];
+      }),
+      finishAgentSessionCaptures: vi.fn(async () => ({ complete: true, pending: 0 })),
+      dispose: vi.fn(() => {
+        order.push("pty-dispose");
+      }),
+    };
+    const stopRemoteHosts = vi.fn(async () => {
+      order.push("remote-stop");
+    });
+    const { beforeQuitCb } = await setup({
+      getPtyClient: vi.fn(() => ptyClient as never),
+      stopRemoteHosts,
+    });
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(stopRemoteHosts).toHaveBeenCalledOnce();
+    expect(order[0]).toBe("remote-stop");
+    expect(order).toContain("pty-dispose");
+  });
+
+  it("finishes a clean shutdown when stopping Remote Hosts fails", async () => {
+    const stopRemoteHosts = vi.fn(async () => {
+      throw new Error("link server wedged");
+    });
+    const { beforeQuitCb } = await setup({ stopRemoteHosts });
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(stopRemoteHosts).toHaveBeenCalledOnce();
+    expect(appMock.exit).toHaveBeenCalledWith(0);
+  });
+
   it("runs cleanup without dialog on signal shutdown even with active agents", async () => {
     signalShutdownMock.isSignalShutdown.mockReturnValue(true);
     quitWarningMock.getActiveAgentCount.mockReturnValue(3);
