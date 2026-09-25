@@ -28,6 +28,7 @@ const agentNotificationServiceMock = vi.hoisted(() => ({
   syncWatchedPanels: vi.fn(),
   acknowledgeWaiting: vi.fn(),
   acknowledgeWorkingPulse: vi.fn(),
+  setSessionMuteUntil: vi.fn(),
   removeOwner: vi.fn(),
 }));
 
@@ -457,6 +458,43 @@ describe("notifications IPC adversarial", () => {
       release();
       expect(relay).toHaveBeenCalledWith(5, CHANNELS.NOTIFICATION_SYNC_WATCHED, [["t1"]]);
       expect(agentNotificationServiceMock.syncWatchedPanels).not.toHaveBeenCalled();
+    });
+
+    it("applies a session mute here and also relays it to the view's host", async () => {
+      const relay = vi.fn(() => true);
+      const release = setNotificationHostRelay(relay);
+      const payload = { timestampMs: 1_700_000_000_000 };
+      getListener(CHANNELS.NOTIFICATION_SESSION_MUTE_SET)(
+        fakeEvent(createSender(5)) as Electron.IpcMainEvent,
+        payload
+      );
+      await drainMicrotasks();
+      release();
+      expect(relay).toHaveBeenCalledWith(5, CHANNELS.NOTIFICATION_SESSION_MUTE_SET, [payload]);
+      expect(agentNotificationServiceMock.setSessionMuteUntil).toHaveBeenCalledWith(
+        1_700_000_000_000
+      );
+    });
+
+    it("relays nothing for a malformed session mute", async () => {
+      const relay = vi.fn(() => true);
+      const release = setNotificationHostRelay(relay);
+      getListener(CHANNELS.NOTIFICATION_SESSION_MUTE_SET)(
+        fakeEvent(createSender(5)) as Electron.IpcMainEvent,
+        { timestampMs: Number.NaN }
+      );
+      await drainMicrotasks();
+      release();
+      expect(relay).not.toHaveBeenCalled();
+      expect(agentNotificationServiceMock.setSessionMuteUntil).not.toHaveBeenCalled();
+    });
+
+    it("applies a session mute a remote Shell relayed over the link", async () => {
+      linkListener(CHANNELS.NOTIFICATION_SESSION_MUTE_SET)(remoteContext(-3).ctx, {
+        timestampMs: 42,
+      });
+      await drainMicrotasks();
+      expect(agentNotificationServiceMock.setSessionMuteUntil).toHaveBeenCalledWith(42);
     });
   });
 });

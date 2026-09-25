@@ -58,6 +58,15 @@ vi.mock("@/clients", () => ({
   },
 }));
 
+const { resolveUnknownOutcomeMock } = vi.hoisted(() => ({ resolveUnknownOutcomeMock: vi.fn() }));
+
+// A lost answer is resolved against the host's record; the real resolver waits on a live link.
+vi.mock("@/utils/resolveUnknownOutcome", () => ({
+  isUnknownOutcomeError: (error: unknown) =>
+    error instanceof Error && error.message.includes("OUTCOME_UNKNOWN"),
+  resolveUnknownOutcome: resolveUnknownOutcomeMock,
+}));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch: dispatchMock,
@@ -315,6 +324,38 @@ describe("CloneRepoDialog", () => {
       });
       // Stop names the clone it launched, so it cancels that one and no other.
       expect(cancelCloneMock).toHaveBeenCalledWith(cloneRepoMock.mock.calls[0]?.[0]?.opId);
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+    }
+  });
+
+  it("opens the host's clone when the answer was lost but the host finished it", async () => {
+    cloneRepoMock.mockRejectedValueOnce(new Error("[AppError|OUTCOME_UNKNOWN] link dropped"));
+    resolveUnknownOutcomeMock.mockResolvedValueOnce({
+      status: "succeeded",
+      result: { clonedPath: "/srv/my-repo" },
+    });
+    const onSuccess = vi.fn();
+    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+    try {
+      render(<CloneRepoDialog isOpen={true} onSuccess={onSuccess} onCancel={vi.fn()} />);
+      fireEvent.click(screen.getByRole("radio", { name: "New window" }));
+      fireEvent.change(screen.getByLabelText(/^url$/i), {
+        target: { value: "https://github.com/user/my-repo.git" },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Clone" }));
+      });
+
+      const opId = cloneRepoMock.mock.calls[0]?.[0]?.opId;
+      expect(resolveUnknownOutcomeMock).toHaveBeenCalledWith(opId, expect.anything());
+      fireEvent.click(await screen.findByRole("button", { name: "Open in new window" }));
+      expect(onSuccess).toHaveBeenCalledWith("/srv/my-repo", expect.anything(), {
+        disposition: "new",
+      });
     } finally {
       delete window.__DAINTREE_HOST_ID__;
     }

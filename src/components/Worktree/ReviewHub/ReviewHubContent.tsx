@@ -95,6 +95,7 @@ import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients/systemClient";
 import { forgeClient } from "@/clients/forgeClient";
 import { mintRemoteOperationId } from "@/clients/operationsClient";
+import { runHostOperation } from "@/hooks/useHostConnection";
 import { actionService } from "@/services/ActionService";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -1334,9 +1335,14 @@ export function ReviewHubContent({
     useGitForcePushStore.getState().clearRecovery(worktreePath);
     try {
       const opId = mintRemoteOperationId();
-      await (opId
-        ? window.electron.git.push(worktreePath, undefined, opId)
-        : window.electron.git.push(worktreePath));
+      await runHostOperation(
+        opId,
+        () =>
+          opId
+            ? window.electron.git.push(worktreePath, undefined, opId)
+            : window.electron.git.push(worktreePath),
+        { fromResult: () => undefined }
+      );
       setPushError(null);
       setPushAnnouncement(announcedTarget ? `Pushed to ${announcedTarget}` : "Push complete");
     } catch (err) {

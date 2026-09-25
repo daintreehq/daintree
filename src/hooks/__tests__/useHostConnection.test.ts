@@ -62,6 +62,21 @@ function holder(overrides: Partial<DriveLeaseHolder> = {}): DriveLeaseHolder {
   };
 }
 
+/** The lease as the host reports it to one view. */
+function leaseView(
+  leaseHolder: DriveLeaseHolder | null,
+  drivingHere: boolean,
+  projectId = "proj-1"
+): DriveLeaseEvent["state"] {
+  return {
+    projectId,
+    holder: leaseHolder,
+    drivingHere,
+    isHolderEndpoint: false,
+    viewerIsHostLocal: false,
+  };
+}
+
 function installElectron() {
   let hostListener: ((event: RemoteHostsEvent) => void) | null = null;
   let leaseListener: ((event: DriveLeaseEvent) => void) | null = null;
@@ -245,16 +260,14 @@ describe("host connection sync", () => {
     const stop = startHostConnectionSync();
     await flush();
 
-    emitLease({ type: "changed", state: { projectId: "proj-1", holder: holder() } });
+    emitLease({ type: "changed", state: leaseView(holder(), false) });
     expect(getTerminalInputBlock()).toEqual({ kind: "driven-elsewhere", driverName: "greg-mbp" });
 
-    emitLease({ type: "changed", state: { projectId: "other", holder: null } });
+    emitLease({ type: "changed", state: leaseView(null, true, "other") });
     expect(getTerminalInputBlock()).not.toBeNull();
 
-    emitLease({
-      type: "changed",
-      state: { projectId: "proj-1", holder: holder({ isHostLocal: true }) },
-    });
+    // Taken back by this machine: the host says this view drives again.
+    emitLease({ type: "changed", state: leaseView(holder({ isHostLocal: true }), true) });
     expect(getTerminalInputBlock()).toBeNull();
     stop();
   });
@@ -268,16 +281,9 @@ describe("lease and reconnect races", () => {
     electron.driveLease.get.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
     const stop = startHostConnectionSync();
     await flush();
-    emitLease({
-      type: "changed",
-      state: {
-        projectId: "proj-1",
-        holder: holder(),
-        heldByYou: false,
-      } as DriveLeaseEvent["state"],
-    });
+    emitLease({ type: "changed", state: leaseView(holder(), false) });
     expect(getTerminalInputBlock()?.kind).toBe("driven-elsewhere");
-    answer({ projectId: "proj-1", holder: null });
+    answer(leaseView(null, true));
     await flush();
     expect(getTerminalInputBlock()?.kind).toBe("driven-elsewhere");
     stop();
@@ -310,17 +316,13 @@ describe("lease and reconnect races", () => {
 });
 
 describe("drivenElsewhereBy", () => {
-  it("prefers the host's per-view answer and never guesses for a remote view", () => {
-    expect(drivenElsewhereBy(null, true)).toBeNull();
-    expect(drivenElsewhereBy({ projectId: "p", holder: null }, false)).toBeNull();
-    expect(drivenElsewhereBy({ projectId: "p", holder: holder() }, true)).toBeNull();
-    expect(drivenElsewhereBy({ projectId: "p", holder: holder(), heldByYou: false }, true)).toBe(
-      "greg-mbp"
-    );
-    expect(
-      drivenElsewhereBy({ projectId: "p", holder: holder(), heldByYou: true }, false)
-    ).toBeNull();
-    expect(drivenElsewhereBy({ projectId: "p", holder: holder() }, false)).toBe("greg-mbp");
+  it("locks only when a holder exists and the host says this view isn't driving", () => {
+    expect(drivenElsewhereBy(null)).toBeNull();
+    expect(drivenElsewhereBy(leaseView(null, true))).toBeNull();
+    // Another window of the holder's machine still drives.
+    expect(drivenElsewhereBy(leaseView(holder(), true))).toBeNull();
+    expect(drivenElsewhereBy(leaseView(holder(), false))).toBe("greg-mbp");
+    expect(drivenElsewhereBy(leaseView(holder({ isHostLocal: true }), false))).toBe("greg-mbp");
   });
 });
 
