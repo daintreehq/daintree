@@ -740,36 +740,9 @@ A tour without `panelKind` is a **plugin tour**, offered from Help and the comma
 | `chapters[].audioUrl` | yes | A plugin-relative audio file, an `https://` URL on a host listed in `audioHosts`, or `null` for a silent chapter. |
 | `chapters[].narrationHash` | yes | The 8-character lowercase hex fingerprint of the narration the timing was generated from. |
 
-**The scene module.** `componentPath` is imported only when the tour opens, never at startup, and must default-export the scenes by chapter id:
+**Shipping one.** [Tours](./tours.md) is the full guide: the file layout, a minimal tour to copy, writing narration with `[[cue]]` markers, building scenes with `@daintreehq/tour/kit` and the mock Daintree window, the anchor-naming contract, voicing with `daintree-plugin tour voice` or your own recordings with `tour align`, previewing with `tour preview`, and the house style every tour is held to. In short: you write the narration and a scene module that default-exports `{ scenes, chapterTitles?, mockKit? }`, and the CLI writes `chapters` for you.
 
-```js
-import { useCue } from "@daintreehq/tour/react";
-
-function Intro() {
-  const shown = useCue("open-preview");
-  return <div className={shown ? "text-category-amber-text" : "text-text-secondary"}>…</div>;
-}
-
-export default {
-  scenes: { intro: Intro, publish: Publish },
-  // Optional. A chapter without a title is titled by its id.
-  chapterTitles: { intro: "Meet the site builder", publish: "Go live" },
-  // Optional mock-app data, as `@daintreehq/tour/mock-app` components read it.
-  mockKit: undefined,
-};
-```
-
-Scenes take no props and animate off the manifest's cues through `@daintreehq/tour/react`, which the host import map resolves to its own player, so a raw module can bare-import `react` and `@daintreehq/tour/*` exactly as a raw view does. Every chapter needs a scene; a module that fails to import, times out after 10 seconds, or is missing one opens nothing and tells the user. Each scene renders inside the plugin style root, so its classes compile scoped exactly as they do in a plugin view, and the design contract's tokens — `category-*` included — are available to style your own additions beside the kit's.
-
-**Audio.** A plugin-relative `audioUrl` resolves from the plugin root, not from `componentPath`. A remote one is fetched by Daintree on the player's behalf from the URL in your manifest, and every redirect must stay on an `audioHosts` entry; the request never names a destination, so nothing else is reachable through it. Audio that is missing, refused or blocked leaves the chapter playing silently with its captions.
-
-A malformed tour is reported with the offending path, like any other malformed contribution: `daintree-plugin validate` and the installer refuse it, and at load Daintree logs the issues and drops only that tour, so the rest of the plugin still loads. Exceeding the tour cap is still a whole-manifest error. `audioHosts` entries are ASCII (punycode) hostnames. Tours are refused under `scope: "project"`.
-
-**Generating the timing.** You don't write `chapters` by hand. Put the narration in `tours/<tourId>.narration.json` as `{ "chapters": [{ "id": "intro", "narration": "This is the [[open-preview]] site builder." }] }`, where `[[cue-id]]` marks the word a scene cue fires on and `[warmly]`-style tags direct the voice, then run `daintree-plugin tour voice`. It voices each chapter with Inworld TTS (`--voice`, default `Simon`, key from `INWORLD_API_KEY`), writes the audio to `tours/<tourId>/`, and writes each chapter's duration, cues, captions, `audioUrl` and `narrationHash` into this entry, in narration order. Re-running only re-voices chapters whose narration or voice changed. To use your own recordings instead, run `daintree-plugin tour align --recordings <dir>` with one `<chapter-id>.wav` (or `mp3`, `m4a`, `ogg`, `flac`, `aac`) per chapter: each is encoded to Ogg Opus with `ffmpeg`, transcribed with word timestamps, and aligned back to the cues. Neither command uploads anything: the audio ships inside the plugin. Add the narration file and your source recordings to `.dntrignore` if you don't want them in the package.
-
-**The scene module.** `componentPath` is your built browser module (build it with `@daintreehq/plugin-vite`, which leaves `react` and `@daintreehq/tour` for the host to supply). Its default export maps each chapter id to the component that draws it: `export default { intro: IntroScene, publish: PublishScene }`. Each scene renders on the fixed 640×360 tour canvas and reads the timeline with `useCue` and the other hooks from `@daintreehq/tour/react`.
-
-**Previewing.** `daintree-plugin tour preview` serves the tour in your browser without Daintree: pick a chapter, play or scrub it with its audio, see each cue as a marker on the timeline, and see every `data-tour-anchor` outlined on the canvas. It plays the built module against the React and `@daintreehq/tour` in your plugin's `node_modules`, styled with Daintree's design tokens (`--theme <id>` picks a built-in theme). It warns when a chapter's timing is stale against its narration (it previews the old timing until you re-voice), when a chapter has no timing yet (it previews an estimate), and when a scene waits on a cue the narration never marks, which would never fire. `--headless --out <dir>` captures a frame at the start and at each cue of every chapter instead, after letting the scene settle (`--settle <ms>`, default 750), and writes `capture.json` beside the frames with each frame's cue, time and the canvas-space rectangle of every anchor on screen, so a check can confirm the cursor and highlights land where the narration says. Headless capture needs `playwright-core` and a Chromium (`npx playwright-core install chromium`).
+A malformed tour is reported with the offending path, like any other malformed contribution: `daintree-plugin validate` and the installer refuse it, and at load Daintree logs the issues and drops only that tour, so the rest of the plugin still loads. Exceeding the cap of 10 tours is still a whole-manifest error. Audio that is missing, refused or blocked leaves the chapter playing silently with its captions. Tours are refused under `scope: "project"`.
 
 ## Surfaces — _Shipped (project scope only)_
 

@@ -117,25 +117,30 @@ function isComponent(value: unknown): boolean {
   return typeof value === "object" && value !== null && "$$typeof" in value;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /**
- * The tour module's contract: a default export mapping each chapter id to the
- * component that draws it. Returns what's wrong, or null when every chapter
- * has a scene.
+ * The tour module's contract, the same one Daintree loads it by: a default
+ * export of `{ scenes, chapterTitles?, mockKit? }`, where `scenes` maps each
+ * chapter id to the component that draws it. Returns what's wrong, or null
+ * when every chapter has a scene.
  */
 export function sceneMapProblem(module: unknown, chapterIds: string[]): string | null {
-  const scenes =
-    typeof module === "object" && module !== null
-      ? (module as { default?: unknown }).default
-      : undefined;
-  if (typeof scenes !== "object" || scenes === null || Array.isArray(scenes)) {
-    return "The tour module must default-export an object mapping each chapter id to its scene component, e.g. export default { intro: IntroScene }";
+  const exported = isRecord(module) ? module.default : undefined;
+  if (!isRecord(exported)) {
+    return "The tour module must default-export { scenes, chapterTitles?, mockKit? }, e.g. export default { scenes: { intro: IntroScene } }";
   }
-  const record = scenes as Record<string, unknown>;
-  const missing = chapterIds.filter((id) => !Object.hasOwn(record, id));
+  const scenes = exported.scenes;
+  if (!isRecord(scenes)) {
+    return "The tour module's default export has no scenes object; export default { scenes: { intro: IntroScene } }";
+  }
+  const missing = chapterIds.filter((id) => !Object.hasOwn(scenes, id));
   if (missing.length > 0) {
-    return `The tour module's default export has no scene for ${missing.map((id) => `"${id}"`).join(", ")}`;
+    return `The tour module's scenes have no scene for ${missing.map((id) => `"${id}"`).join(", ")}`;
   }
-  const invalid = chapterIds.filter((id) => !isComponent(record[id]));
+  const invalid = chapterIds.filter((id) => !isComponent(scenes[id]));
   if (invalid.length > 0) {
     return `The scene for ${invalid.map((id) => `"${id}"`).join(", ")} is not a React component`;
   }

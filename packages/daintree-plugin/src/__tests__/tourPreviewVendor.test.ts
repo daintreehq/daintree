@@ -36,7 +36,13 @@ const FAKE_TOUR: Record<string, string> = {
     'export function TourCanvas({ children }) { return jsx("div", { className: "bg-surface-canvas", "data-tour-canvas": "", children: [jsx(Search, {}), children] }); }',
     "export function measureAnchor() { return null; }",
   ].join("\n"),
-  "dist/mock-app.js": 'export { TourCanvas as MockApp } from "./kit.js";\n',
+  "dist/mock-app.js": [
+    'import { createContext } from "react";',
+    'export { TourCanvas as MockApp } from "./kit.js";',
+    "export const EMPTY_MOCK_KIT = {};",
+    "export const MockKitContext = createContext(EMPTY_MOCK_KIT);",
+    "",
+  ].join("\n"),
 };
 
 let tmpDir: string;

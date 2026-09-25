@@ -15,6 +15,7 @@ import { createRoot } from "react-dom/client";
 import { TourPlayer, type TourChapterTiming } from "@daintreehq/tour";
 import { TourPlayerContext, useTourPlayerState } from "@daintreehq/tour/react";
 import { TOUR_CANVAS, TourCanvas, measureAnchor } from "@daintreehq/tour/kit";
+import { EMPTY_MOCK_KIT, MockKitContext, type MockKit } from "@daintreehq/tour/mock-app";
 import {
   CONFIG_ELEMENT_ID,
   PREVIEW_HANDLE,
@@ -308,11 +309,13 @@ function Preview({
   player,
   views,
   scenes,
+  mockKit,
 }: {
   player: TourPlayer;
   /** Per chapter, the player with that chapter's timing pinned. */
   views: TourPlayer[];
   scenes: Record<string, ComponentType>;
+  mockKit: MockKit;
 }) {
   const state = useTourPlayerState(player);
   const [outlines, setOutlines] = useState(!capture);
@@ -321,21 +324,23 @@ function Preview({
 
   const stage = (
     <TourPlayerContext.Provider value={views[state.chapterIndex]!}>
-      <TourCanvas
-        canvasKey={chapter.id}
-        className="tp-stage"
-        wrapStage={(canvas) => (
-          <SceneBoundary key={chapter.id} chapterId={chapter.id}>
-            {canvas}
-          </SceneBoundary>
-        )}
-      >
-        <Suspense fallback={null}>
-          <Scene />
-          <SceneMounted chapterId={chapter.id} />
-        </Suspense>
-        {outlines && <AnchorOutlines key={chapter.id} player={player} />}
-      </TourCanvas>
+      <MockKitContext.Provider value={mockKit}>
+        <TourCanvas
+          canvasKey={chapter.id}
+          className="tp-stage"
+          wrapStage={(canvas) => (
+            <SceneBoundary key={chapter.id} chapterId={chapter.id}>
+              {canvas}
+            </SceneBoundary>
+          )}
+        >
+          <Suspense fallback={null}>
+            <Scene />
+            <SceneMounted chapterId={chapter.id} />
+          </Suspense>
+          {outlines && <AnchorOutlines key={chapter.id} player={player} />}
+        </TourCanvas>
+      </MockKitContext.Provider>
     </TourPlayerContext.Provider>
   );
 
@@ -411,7 +416,16 @@ async function main(): Promise<void> {
     root.render(<Failure message={problem} />);
     return;
   }
-  const scenes = (module as { default: Record<string, ComponentType> }).default;
+  const exported = (
+    module as { default: { scenes: Record<string, ComponentType>; mockKit?: unknown } }
+  ).default;
+  const { scenes } = exported;
+  // Daintree draws a plugin tour's mock window from the module's own kit, or
+  // from an empty one, never from the app; the preview does the same.
+  const mockKit =
+    typeof exported.mockKit === "object" && exported.mockKit !== null
+      ? (exported.mockKit as MockKit)
+      : EMPTY_MOCK_KIT;
 
   const timings = config.chapters.map((chapter) => ({
     ...chapter.timing,
@@ -462,7 +476,7 @@ async function main(): Promise<void> {
     },
   } satisfies Partial<TourPreviewHandle>);
 
-  root.render(<Preview player={player} views={views} scenes={scenes} />);
+  root.render(<Preview player={player} views={views} scenes={scenes} mockKit={mockKit} />);
   await sceneRendered(config.chapters[player.getState().chapterIndex]!.id);
   handle.ready = true;
 }
