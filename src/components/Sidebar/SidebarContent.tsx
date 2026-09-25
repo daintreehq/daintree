@@ -613,7 +613,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const handleRetryPendingCreation = useCallback(
     (pendingCreation: PendingCreation) => {
       dismissPendingCreation(pendingCreation.path);
-      openCreateDialog(null, { initialBranchInput: pendingCreation.branch });
+      openCreateDialog(null, {
+        initialBranchInput: pendingCreation.branch,
+        initialRecipeId: pendingCreation.recipeId,
+        initialAgentId: pendingCreation.agentId,
+        initialPrompt: pendingCreation.prompt,
+      });
     },
     [dismissPendingCreation, openCreateDialog]
   );
@@ -1583,6 +1588,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             initialPR={createDialog.initialPR}
             initialRecipeId={createDialog.initialRecipeId}
             initialBranchInput={createDialog.initialBranchInput}
+            initialAgentId={createDialog.initialAgentId}
+            initialPrompt={createDialog.initialPrompt}
           />
         </Suspense>
       </ErrorBoundary>

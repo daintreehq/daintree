@@ -23,10 +23,19 @@ interface CreateDialogState {
   initialPR: PR | null;
   initialRecipeId: string | null;
   initialBranchInput: string | null;
+  initialAgentId: string | null;
+  initialPrompt: string | null;
   onCreated?: (worktreeId: string) => void;
 }
 
-export interface PendingCreation {
+/** What a failed creation's Retry reopens the dialog with. The prompt stays in memory only. */
+export interface PendingCreationDraft {
+  recipeId?: string | null;
+  agentId?: string | null;
+  prompt?: string;
+}
+
+export interface PendingCreation extends PendingCreationDraft {
   path: string;
   branch: string;
   startedAt: number;
@@ -322,7 +331,7 @@ interface WorktreeSelectionState {
   ) => void;
   setPendingWorktree: (id: string | null) => void;
   applyPendingWorktreeSelection: (worktreeId: string) => void;
-  addPendingCreation: (path: string, meta: { branch: string }) => void;
+  addPendingCreation: (path: string, meta: { branch: string } & PendingCreationDraft) => void;
   resolvePendingCreation: (path: string) => void;
   failPendingCreation: (path: string, error: string) => void;
   dismissPendingCreation: (path: string) => void;
@@ -354,6 +363,8 @@ interface WorktreeSelectionState {
     options?: {
       initialRecipeId?: string | null;
       initialBranchInput?: string | null;
+      initialAgentId?: string | null;
+      initialPrompt?: string | null;
       onCreated?: (worktreeId: string) => void;
     }
   ) => void;
@@ -701,6 +712,8 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     initialPR: null,
     initialRecipeId: null,
     initialBranchInput: null,
+    initialAgentId: null,
+    initialPrompt: null,
     onCreated: undefined,
   },
   bulkCreateDialog: {
@@ -935,8 +948,8 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       if (existing && existing.status === "creating") return state;
       const next = new Map(state.pendingCreations);
       next.set(path, {
+        ...meta,
         path,
-        branch: meta.branch,
         startedAt: Date.now(),
         status: "creating",
       });
@@ -1133,6 +1146,8 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialPR: null,
         initialRecipeId: options?.initialRecipeId ?? null,
         initialBranchInput: options?.initialBranchInput ?? null,
+        initialAgentId: options?.initialAgentId ?? null,
+        initialPrompt: options?.initialPrompt ?? null,
         onCreated: options?.onCreated,
       },
     });
@@ -1158,6 +1173,8 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialPR: pr,
         initialRecipeId: null,
         initialBranchInput: null,
+        initialAgentId: null,
+        initialPrompt: null,
         onCreated: undefined,
       },
     });
@@ -1171,6 +1188,8 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialPR: null,
         initialRecipeId: null,
         initialBranchInput: null,
+        initialAgentId: null,
+        initialPrompt: null,
         onCreated: undefined,
       },
     }),
@@ -1422,6 +1441,8 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialPR: null,
         initialRecipeId: null,
         initialBranchInput: null,
+        initialAgentId: null,
+        initialPrompt: null,
         onCreated: undefined,
       },
       bulkCreateDialog: {

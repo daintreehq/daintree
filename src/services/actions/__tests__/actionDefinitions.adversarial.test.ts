@@ -363,6 +363,8 @@ beforeEach(() => {
       initialPR: null,
       initialRecipeId: null,
       initialBranchInput: null,
+      initialAgentId: null,
+      initialPrompt: null,
     },
     crossDiffDialog: { isOpen: false, initialWorktreeId: null },
     _policyGeneration: 0,
