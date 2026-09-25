@@ -786,6 +786,43 @@
   vertical-align: top;
 }
 
+/* Review notes (#12794). The open draft's range rides the library's
+   selected-change classes, whose stock fill is a fixed light-theme yellow. */
+.diff-viewer .diff-code-selected,
+.diff-viewer .diff-gutter-selected {
+  background-color: color-mix(in oklab, var(--color-status-info) 18%, transparent);
+  color: inherit;
+}
+
+.diff-viewer .diff-widget-content {
+  padding: 0;
+}
+
+/* The table is max-content wide, so the thread pins to the scroller's left
+   edge rather than stretching across (or scrolling out of) a wide file. */
+.diff-viewer .diff-note-thread {
+  position: sticky;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(42rem, 80vw);
+  padding: 0.5rem 0.75rem;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  white-space: normal;
+}
+
+.diff-viewer .diff-note {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-panel-elevated);
+}
+
+.diff-viewer .diff-note[data-stale] {
+  border-color: color-mix(in oklab, var(--color-status-warning) 55%, var(--color-border-default));
+}
+
 @media (forced-colors: active) {
   /* Diff viewer: author backgrounds are stripped to Canvas, so insert/delete
      state rides on the gutter's textual +/- markers plus a system-color edge

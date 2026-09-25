@@ -55,6 +55,10 @@ import { DiffViewer, FULL_FILE_MAX_LINES } from "@/components/Worktree/DiffViewe
 import type { FullFileUnavailableReason } from "@/components/Worktree/DiffViewer";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import type { DiffViewerAnnotations } from "@/components/Worktree/DiffViewer";
+import { useDiffNotesStore } from "@/store/diffNotesStore";
+import type { DiffNoteDeliveryResult } from "@/hooks/useDiffNoteDelivery";
+import { DiffNotesSendMenu, sendDiffNotes, type DiffNoteSendRequest } from "./DiffNotesSendMenu";
 import { IconToggle } from "@/components/FileViewer/IconToggle";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
@@ -147,6 +151,13 @@ const LazyRenderedMarkdownDiff = lazy(() =>
     default: m.RenderedMarkdownDiff,
   }))
 );
+
+const NOTE_SENT_STATUS_MS = 5000;
+
+function describeNotesSent(result: Extract<DiffNoteDeliveryResult, { ok: true }>): string {
+  const sent = `Pasted ${result.sent} ${result.sent === 1 ? "note" : "notes"} into ${result.targetTitle}`;
+  return result.kept > 0 ? `${sent} · ${result.kept} still pending` : sent;
+}
 
 export interface DiffPaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -365,6 +376,41 @@ export function DiffPane({
   const toggleViewed = useDiffViewedStore((state) => state.toggleViewed);
   const currentEntry = currentIndex === -1 ? undefined : changeSet?.[currentIndex];
   const isViewed = currentEntry ? viewedSet.has(currentEntry.viewedKey) : false;
+
+  // Every diff source this pane renders is a local diff of the worktree, so
+  // each one can take notes for an agent working there.
+  const annotations = useMemo<DiffViewerAnnotations | undefined>(
+    () => (worktreePath ? { worktreePath } : undefined),
+    [worktreePath]
+  );
+  const hasPendingNotes = useDiffNotesStore(
+    useCallback(
+      (state) =>
+        worktreePath !== "" &&
+        Object.values(state.notes).some((note) => note.worktreePath === worktreePath),
+      [worktreePath]
+    )
+  );
+  // A failed send keeps its notes pending and names what failed, with a retry
+  // aimed at the same agent and scope; a delivered one says where it went.
+  const [noteSend, setNoteSend] = useState<{
+    request: DiffNoteSendRequest;
+    result: DiffNoteDeliveryResult;
+  } | null>(null);
+  const handleNoteSendResult = useCallback(
+    (request: DiffNoteSendRequest, result: DiffNoteDeliveryResult) => {
+      setNoteSend({ request, result });
+    },
+    []
+  );
+  useEffect(() => {
+    if (!noteSend?.result.ok) return;
+    const timer = setTimeout(() => setNoteSend(null), NOTE_SENT_STATUS_MS);
+    return () => clearTimeout(timer);
+  }, [noteSend]);
+  useEffect(() => {
+    setNoteSend(null);
+  }, [worktreePath]);
 
   // Forces a fresh request in video, audio and PDF mode — the diff content hooks
   // don't carry those bytes, so Refresh has to re-request the protocol URL itself.
@@ -1312,6 +1358,7 @@ export function DiffPane({
                   diff={content}
                   viewType={diffViewType}
                   rootPath={worktreePath}
+                  annotations={annotations}
                   source={wantsFullFile ? source : undefined}
                   fullFile={wantsFullFile}
                   onFullFileVerdict={handleFullFileVerdict}
@@ -1332,7 +1379,33 @@ export function DiffPane({
         </div>
       </div>
 
-      {(isWorkspace || currentEntry !== undefined) && (
+      {noteSend && !noteSend.result.ok && (
+        <InlineStatusBanner
+          icon={XCircle}
+          severity="error"
+          layout="pane"
+          title="Couldn't send notes"
+          description={noteSend.result.message}
+          action={{
+            id: "retry-send-notes",
+            label: "Retry",
+            icon: RefreshCw,
+            variant: "dangerFilled",
+            onClick: () => {
+              const { request } = noteSend;
+              handleNoteSendResult(
+                request,
+                sendDiffNotes(worktreePath, filePath ?? "", request.targetId, request.scope)
+              );
+            },
+            ariaLabel: "Retry sending notes",
+          }}
+          onClose={() => setNoteSend(null)}
+          closeAriaLabel="Dismiss send error"
+        />
+      )}
+
+      {(isWorkspace || currentEntry !== undefined || hasPendingNotes) && (
         <div
           data-testid="diff-pane-footer"
           className="flex items-center justify-between gap-3 px-4 py-1.5 border-t border-border-strong bg-surface-panel shrink-0"
@@ -1388,6 +1461,20 @@ export function DiffPane({
                   <TooltipContent side="top">Next file (])</TooltipContent>
                 </Tooltip>
               </>
+            )}
+          </div>
+          <div className="flex items-center gap-2 min-w-0">
+            {noteSend?.result.ok && (
+              <span role="status" className="truncate text-xs text-text-secondary">
+                {describeNotesSent(noteSend.result)}
+              </span>
+            )}
+            {worktreePath && filePath && (
+              <DiffNotesSendMenu
+                worktreePath={worktreePath}
+                filePath={filePath}
+                onResult={handleNoteSendResult}
+              />
             )}
           </div>
           {currentEntry && worktreePath && (

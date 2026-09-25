@@ -777,6 +777,7 @@ export default tseslint.config(
       "src/components/Worktree/DiffViewer.tsx",
       "src/components/Worktree/diffEditSuppression.ts",
       "src/components/Worktree/diffMovedUtils.ts",
+      "src/components/Worktree/diffNotes.ts",
       "src/components/Worktree/diffRefractor.ts",
       "src/components/Worktree/diffTokenRanges.ts",
       "src/components/Worktree/diffTokenizePipeline.ts",

@@ -14,6 +14,7 @@ import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
   ReactElement,
+  ReactNode,
   Ref,
   RefCallback,
 } from "react";
@@ -29,6 +30,7 @@ import {
 import type {
   ChangeData,
   DiffType,
+  EventMap,
   HunkData,
   HunkTokens,
   RenderGutter,
@@ -51,8 +53,10 @@ import {
   FileQuestion,
   FileWarning,
   FileX,
+  MessageSquarePlus,
   UnfoldVertical,
 } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { join } from "@shared/utils/path";
 import { getLanguageForFile } from "@/components/FileViewer/languageUtils";
 import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
@@ -72,6 +76,18 @@ import type { SideRanges } from "./diffTokenRanges";
 import { isLanguageFailed } from "./diffRefractor";
 import { diffTokenizeClient } from "@/services/DiffTokenizeService";
 import { formatBytes } from "@/lib/formatBytes";
+import { selectDiffNotes, useDiffNotesStore } from "@/store/diffNotesStore";
+import {
+  buildDiffLineIndex,
+  hashLineRange,
+  lineForChange,
+  placeDiffNote,
+  sortDiffNotes,
+  type DiffNote,
+  type DiffNoteAnchor,
+  type DiffNoteSide,
+} from "./diffNotes";
+import { DiffNoteCard, DiffNoteComposer, type DiffNoteCardPlacement } from "./DiffNoteWidgets";
 
 export { _resetLangStateForTests, _flushLangLoadsForTests } from "./diffRefractor";
 
@@ -132,6 +148,15 @@ export interface DiffViewerProps {
   onToggleCollapse?: () => void;
   /** Fired after a file's token pass commits (highlighting, search marks) — the signal that .diff-search-match spans are scannable */
   onTokensRendered?: () => void;
+  /**
+   * Enables review notes for a local diff of this worktree. Omit for diffs
+   * whose lines can't be handed back to an agent working in a worktree.
+   */
+  annotations?: DiffViewerAnnotations;
+}
+
+export interface DiffViewerAnnotations {
+  worktreePath: string;
 }
 
 /**
@@ -420,6 +445,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
     onRetry,
     onToggleCollapse,
     onTokensRendered,
+    annotations,
   },
   ref
 ) {
@@ -630,6 +656,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           fullFile={effectiveFullFile}
           onToggleCollapse={onToggleCollapse}
           onTokensRendered={onTokensRendered}
+          annotations={annotations}
         />
       ))}
     </div>
@@ -752,7 +779,14 @@ interface FileDiffProps {
   onToggleCollapse?: () => void;
   /** Fired after this file's token pass commits */
   onTokensRendered?: () => void;
+  annotations?: DiffViewerAnnotations;
 }
+
+const EMPTY_NOTES: readonly DiffNote[] = [];
+const EMPTY_KEYS: string[] = [];
+
+type DiffNoteDraft =
+  { kind: "file" } | { kind: "lines"; side: DiffNoteSide; startLine: number; endLine: number };
 
 function FileDiff({
   file,
@@ -765,6 +799,7 @@ function FileDiff({
   fullFile,
   onToggleCollapse,
   onTokensRendered,
+  annotations,
 }: FileDiffProps) {
   const relPath = getFilePath(file);
   const language = useMemo(() => {
@@ -861,6 +896,138 @@ function FileDiff({
     },
     [movedKeys]
   );
+
+  const notesWorktree = annotations?.worktreePath ?? "";
+  const notesEnabled = notesWorktree !== "" && relPath !== "";
+  const fileNotes = useDiffNotesStore(
+    useShallow((state) =>
+      notesEnabled ? selectDiffNotes(state, notesWorktree, relPath) : EMPTY_NOTES
+    )
+  );
+  const [noteDraft, setNoteDraft] = useState<DiffNoteDraft | null>(null);
+  useEffect(() => {
+    setNoteDraft(null);
+  }, [file]);
+
+  // Anchors are checked against every rendered row, expanded context included,
+  // so a note written on revealed context still matches once it is revealed.
+  const renderedLineIndex = useMemo(
+    () => (notesEnabled ? buildDiffLineIndex(renderedHunks) : null),
+    [notesEnabled, renderedHunks]
+  );
+  const visibleChangeKeys = useMemo(() => {
+    if (!notesEnabled || isCollapsed) return null;
+    const keys = new Set<string>();
+    for (const hunk of visibleHunks) {
+      for (const change of hunk.changes) keys.add(getChangeKey(change));
+    }
+    return keys;
+  }, [notesEnabled, isCollapsed, visibleHunks]);
+
+  const draftPlacement = useMemo<{
+    anchor: DiffNoteAnchor;
+    keys: string[];
+  } | null>(() => {
+    if (!noteDraft) return null;
+    if (noteDraft.kind === "file") return { anchor: { kind: "file" }, keys: [] };
+    if (!renderedLineIndex) return null;
+    const { side, startLine, endLine } = noteDraft;
+    const contentHash = hashLineRange(renderedLineIndex, side, startLine, endLine);
+    if (contentHash === null) return null;
+    const lines = side === "old" ? renderedLineIndex.old : renderedLineIndex.new;
+    const keys: string[] = [];
+    for (let line = startLine; line <= endLine; line++) {
+      const info = lines.get(line);
+      if (info) keys.push(info.key);
+    }
+    return { anchor: { kind: "lines", side, startLine, endLine, contentHash }, keys };
+  }, [noteDraft, renderedLineIndex]);
+
+  const closeNoteDraft = useCallback(() => setNoteDraft(null), []);
+
+  // Notes that can't sit under their lines — file notes, stale ones, and any
+  // whose rows are collapsed or not yet revealed — are listed above the table
+  // so none of them drops out of sight.
+  const { rowNotes, detachedNotes } = useMemo(() => {
+    const rows = new Map<string, DiffNote[]>();
+    const detached: { note: DiffNote; placement: DiffNoteCardPlacement }[] = [];
+    if (!renderedLineIndex) return { rowNotes: rows, detachedNotes: detached };
+    for (const note of sortDiffNotes(fileNotes)) {
+      const placement = placeDiffNote(note, renderedLineIndex);
+      if (placement.status === "anchored" && visibleChangeKeys?.has(placement.widgetKey)) {
+        const existing = rows.get(placement.widgetKey);
+        if (existing) existing.push(note);
+        else rows.set(placement.widgetKey, [note]);
+      } else {
+        detached.push({
+          note,
+          placement:
+            placement.status === "stale" || placement.status === "unplaced"
+              ? placement.status
+              : undefined,
+        });
+      }
+    }
+    return { rowNotes: rows, detachedNotes: detached };
+  }, [fileNotes, renderedLineIndex, visibleChangeKeys]);
+
+  const draftWidgetKey =
+    draftPlacement && draftPlacement.anchor.kind === "lines"
+      ? draftPlacement.keys[draftPlacement.keys.length - 1]
+      : undefined;
+
+  const widgets = useMemo(() => {
+    if (rowNotes.size === 0 && !draftWidgetKey) return undefined;
+    const result: Record<string, ReactNode> = {};
+    const keys = new Set(rowNotes.keys());
+    if (draftWidgetKey) keys.add(draftWidgetKey);
+    for (const key of keys) {
+      result[key] = (
+        <div className="diff-note-thread">
+          {rowNotes.get(key)?.map((note) => (
+            <DiffNoteCard key={note.id} note={note} />
+          ))}
+          {key === draftWidgetKey && draftPlacement && (
+            <DiffNoteComposer
+              worktreePath={notesWorktree}
+              filePath={relPath}
+              anchor={draftPlacement.anchor}
+              onDone={closeNoteDraft}
+            />
+          )}
+        </div>
+      );
+    }
+    return result;
+  }, [rowNotes, draftWidgetKey, draftPlacement, notesWorktree, relPath, closeNoteDraft]);
+
+  // Click a line number to note that line; shift-click extends the open draft
+  // across a contiguous run of rows on the same side.
+  const gutterEvents = useMemo<EventMap | undefined>(() => {
+    if (!notesEnabled) return undefined;
+    return {
+      onClick: ({ change }, event) => {
+        const target = change ? lineForChange(change) : null;
+        if (!target) return;
+        const { side: noteSide, line } = target;
+        setNoteDraft((current) => {
+          if (event.shiftKey && current?.kind === "lines" && current.side === noteSide) {
+            const startLine = Math.min(current.startLine, line);
+            const endLine = Math.max(current.endLine, line);
+            if (
+              renderedLineIndex &&
+              hashLineRange(renderedLineIndex, noteSide, startLine, endLine) !== null
+            ) {
+              return { kind: "lines", side: noteSide, startLine, endLine };
+            }
+          }
+          return { kind: "lines", side: noteSide, startLine: line, endLine: line };
+        });
+      },
+    };
+  }, [notesEnabled, renderedLineIndex]);
+
+  const selectedChanges = draftPlacement?.keys.length ? draftPlacement.keys : EMPTY_KEYS;
 
   const searchRanges = useMemo(
     () => (searchQuery && !isCollapsed ? computeSearchRanges(visibleHunks, searchQuery) : null),
@@ -1277,6 +1444,9 @@ function FileDiff({
         renderGutter={renderGutter}
         renderToken={renderTokenWithInvisibles}
         generateLineClassName={generateLineClassName}
+        widgets={widgets}
+        selectedChanges={selectedChanges}
+        gutterEvents={gutterEvents}
         optimizeSelection
       >
         {renderHunkRows}
@@ -1354,6 +1524,17 @@ function FileDiff({
                 {deletions > 0 && <span className="text-status-danger">-{deletions}</span>}
               </span>
             )}
+            {notesEnabled && (
+              <button
+                type="button"
+                onClick={() => setNoteDraft({ kind: "file" })}
+                title="Add file note"
+                aria-label="Add file note"
+                className="shrink-0 flex items-center px-1.5 py-0.5 rounded-[var(--radius-sm)] hover:bg-tint/5 hover:text-text-primary transition-colors"
+              >
+                <MessageSquarePlus className="w-3 h-3" />
+              </button>
+            )}
             {rawText && (
               <button
                 onClick={() => void handleCopyFileDiff()}
@@ -1375,6 +1556,21 @@ function FileDiff({
               </button>
             )}
           </div>
+        </div>
+      )}
+      {notesEnabled && (detachedNotes.length > 0 || draftPlacement?.anchor.kind === "file") && (
+        <div className="diff-note-thread" data-testid="diff-file-notes">
+          {detachedNotes.map(({ note, placement }) => (
+            <DiffNoteCard key={note.id} note={note} placement={placement} />
+          ))}
+          {draftPlacement?.anchor.kind === "file" && (
+            <DiffNoteComposer
+              worktreePath={notesWorktree}
+              filePath={relPath}
+              anchor={draftPlacement.anchor}
+              onDone={closeNoteDraft}
+            />
+          )}
         </div>
       )}
       {collapseDecision.collapse && (
