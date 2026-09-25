@@ -8,6 +8,7 @@ import { runUninstall } from "./commands/uninstall.js";
 import { runDev } from "./commands/dev.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runSchema } from "./commands/schema.js";
+import { runTourAlign, runTourVoice, type TourCommandResult } from "./commands/tour.js";
 import { CLI_VERSION } from "./version.js";
 
 function fail(message: string): never {
@@ -161,6 +162,82 @@ program
       fail((err as Error).message);
     }
   });
+
+function parseOnly(value: string): string[] {
+  return value
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+}
+
+function printTourResult(result: TourCommandResult): void {
+  for (const chapter of result.chapters) {
+    if (chapter.stale) {
+      console.log(`⚠  ${chapter.id}: timing is stale — its narration changed since it was made`);
+    } else if (chapter.estimated) {
+      console.log(`⚠  ${chapter.id}: no audio yet — estimated timing, plays silent`);
+    }
+  }
+  console.log(`✓ Wrote timing for tour "${result.tourId}" to ${result.manifestPath}`);
+}
+
+const tour = program
+  .command("tour")
+  .description("Voice a tour's narration and time its cues from the audio");
+
+tour
+  .command("voice")
+  .description(
+    "Voice each chapter with Inworld TTS (key from INWORLD_API_KEY) and write the audio and timing into the plugin"
+  )
+  .option("--tour <id>", "which contributes.tours entry (needed when there are several)")
+  .option("--narration <file>", "narration file (default: tours/<tourId>.narration.json)")
+  .option("--voice <id>", "Inworld voice id", "Simon")
+  .option("--model <id>", "Inworld TTS model id")
+  .option("--only <ids>", "comma-separated chapter ids", parseOnly)
+  .option("--force", "re-voice every chapter, even ones whose narration is unchanged")
+  .action(
+    async (opts: {
+      tour?: string;
+      narration?: string;
+      voice: string;
+      model?: string;
+      only?: string[];
+      force?: boolean;
+    }) => {
+      try {
+        printTourResult(await runTourVoice({ ...opts, log: (line) => console.log(line) }));
+      } catch (err) {
+        fail((err as Error).message);
+      }
+    }
+  );
+
+tour
+  .command("align")
+  .description(
+    "Time your own recordings (<chapter-id>.wav|mp3|m4a|ogg|flac|aac) with Inworld speech-to-text; needs ffmpeg"
+  )
+  .requiredOption("--recordings <dir>", "folder of per-chapter recordings")
+  .option("--tour <id>", "which contributes.tours entry (needed when there are several)")
+  .option("--narration <file>", "narration file (default: tours/<tourId>.narration.json)")
+  .option("--stt-model <id>", "Inworld STT model id")
+  .option("--only <ids>", "comma-separated chapter ids", parseOnly)
+  .action(
+    async (opts: {
+      recordings: string;
+      tour?: string;
+      narration?: string;
+      sttModel?: string;
+      only?: string[];
+    }) => {
+      try {
+        printTourResult(await runTourAlign({ ...opts, log: (line) => console.log(line) }));
+      } catch (err) {
+        fail((err as Error).message);
+      }
+    }
+  );
 
 program.parseAsync(process.argv).catch((err) => {
   fail((err as Error).message);

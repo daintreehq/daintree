@@ -1,0 +1,369 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+vi.mock("../tour/audio.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../tour/audio.js")>();
+  return {
+    ...actual,
+    // ffmpeg is not a test dependency; the fixture recordings are already Ogg Opus.
+    encodeOggOpus: vi.fn(async (input: string, output: string) => {
+      await fs.copyFile(input, output);
+    }),
+  };
+});
+
+import { runTourAlign, runTourVoice } from "../commands/tour.js";
+import { oggOpusDuration } from "../tour/audio.js";
+import { TourContributionSchema } from "../../../../electron/schemas/plugin.js";
+import { narrationFingerprint, parseNarration } from "../../../tour/src/tourNarration.js";
+
+const API_KEY = "c2VjcmV0LWlkOnNlY3JldC1rZXk=";
+const PRE_SKIP = 312;
+
+function oggPage(
+  headerType: number,
+  granule: bigint,
+  serial: number,
+  seq: number,
+  payload: Buffer
+) {
+  const header = Buffer.alloc(27);
+  header.write("OggS", 0, "latin1");
+  header[4] = 0;
+  header[5] = headerType;
+  header.writeBigInt64LE(granule, 6);
+  header.writeUInt32LE(serial, 14);
+  header.writeUInt32LE(seq, 18);
+  const segments: number[] = [];
+  let left = payload.length;
+  while (left >= 255) {
+    segments.push(255);
+    left -= 255;
+  }
+  segments.push(left);
+  header[26] = segments.length;
+  return Buffer.concat([header, Buffer.from(segments), payload]);
+}
+
+/** A structurally valid Ogg Opus stream `seconds` long (the packets are not real audio). */
+function oggOpus(seconds: number, serial = 7): Buffer {
+  const head = Buffer.alloc(19);
+  head.write("OpusHead", 0, "latin1");
+  head[8] = 1;
+  head[9] = 1;
+  head.writeUInt16LE(PRE_SKIP, 10);
+  head.writeUInt32LE(48000, 12);
+  const tags = Buffer.from("OpusTags\0\0\0\0\0\0\0\0", "latin1");
+  const end = BigInt(Math.round(seconds * 48000) + PRE_SKIP);
+  return Buffer.concat([
+    oggPage(2, 0n, serial, 0, head),
+    oggPage(0, 0n, serial, 1, tags),
+    oggPage(0, end / 2n, serial, 2, Buffer.alloc(300, 1)),
+    oggPage(4, end, serial, 3, Buffer.alloc(40, 2)),
+  ]);
+}
+
+function alignmentFor(text: string, step = 0.4) {
+  const words = text.split(/\s+/).filter(Boolean);
+  return {
+    words,
+    wordStartTimeSeconds: words.map((_, i) => 0.2 + i * step),
+    wordEndTimeSeconds: words.map((_, i) => 0.2 + i * step + step * 0.8),
+  };
+}
+
+let tmpDir: string;
+
+const NARRATION = {
+  chapters: [
+    { id: "intro", narration: "Welcome to the [[panel]] panel. [warmly] It is great." },
+    { id: "wrap", narration: "That is [[done]] everything." },
+  ],
+};
+
+async function writePlugin(tours: unknown[], narration: unknown = NARRATION) {
+  await fs.writeFile(
+    path.join(tmpDir, "plugin.json"),
+    JSON.stringify({ name: "acme.demo", version: "1.0.0", contributes: { tours } }, null, 2)
+  );
+  await fs.mkdir(path.join(tmpDir, "tours"), { recursive: true });
+  await fs.writeFile(
+    path.join(tmpDir, "tours", "welcome.narration.json"),
+    JSON.stringify(narration)
+  );
+}
+
+const TOUR = { id: "welcome", title: "Welcome", componentPath: "dist/tour.js", chapters: [] };
+
+async function readTour() {
+  const manifest = JSON.parse(await fs.readFile(path.join(tmpDir, "plugin.json"), "utf8"));
+  return manifest.contributes.tours[0];
+}
+
+/** Inworld TTS double: voices whatever text it is sent, word for word, directions stripped. */
+function ttsFetch(seconds = 3) {
+  return vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { text: string };
+    return new Response(
+      JSON.stringify({
+        audioContent: oggOpus(seconds).toString("base64"),
+        timestampInfo: { wordAlignment: alignmentFor(body.text) },
+      }),
+      { status: 200 }
+    );
+  });
+}
+
+beforeEach(async () => {
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-tour-test-"));
+});
+
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  await fs.rm(tmpDir, { recursive: true, force: true });
+});
+
+describe("oggOpusDuration", () => {
+  it("reads the final granule minus pre-skip at 48 kHz", () => {
+    expect(oggOpusDuration(oggOpus(2.5))).toBeCloseTo(2.5, 5);
+  });
+
+  it("rejects bytes that are not Ogg Opus", () => {
+    expect(() => oggOpusDuration(Buffer.from("RIFF0000WAVE"))).toThrow(/Not an Ogg stream/);
+  });
+
+  it("ignores trailing pages from another logical stream", () => {
+    const chained = Buffer.concat([oggOpus(2), oggPage(4, 999_999n, 99, 0, Buffer.alloc(8))]);
+    expect(oggOpusDuration(chained)).toBeCloseTo(2, 5);
+  });
+});
+
+describe("runTourVoice", () => {
+  it("voices every chapter, writes audio into the plugin and schema-valid timing", async () => {
+    await writePlugin([TOUR]);
+    const fetch = ttsFetch();
+    const result = await runTourVoice({ dir: tmpDir, apiKey: API_KEY, fetch });
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe("https://api.inworld.ai/tts/v1/voice");
+    const sent = JSON.parse(String(init?.body));
+    expect(sent.voiceId).toBe("Simon");
+    expect(sent.text).toBe("Welcome to the panel. [warmly] It is great.");
+    expect((init?.headers as Record<string, string>).Authorization).toBe(`Basic ${API_KEY}`);
+
+    expect(result.chapters.map((c) => [c.id, c.outcome])).toEqual([
+      ["intro", "voiced"],
+      ["wrap", "voiced"],
+    ]);
+    const tour = await readTour();
+    expect(TourContributionSchema.safeParse(tour).success).toBe(true);
+    const [intro] = tour.chapters;
+    expect(intro.id).toBe("intro");
+    expect(intro.audioUrl).toBe("tours/welcome/intro.simon.ogg");
+    // "panel" is the fourth word; the double starts word i at 0.2 + 0.4i.
+    expect(intro.cues.panel).toBeCloseTo(1.4, 3);
+    expect(intro.duration).toBeCloseTo(3.6, 3);
+    expect(intro.narrationHash).toBe(
+      narrationFingerprint(parseNarration(NARRATION.chapters[0]!.narration))
+    );
+    const audio = await fs.readFile(path.join(tmpDir, "tours/welcome/intro.simon.ogg"));
+    expect(oggOpusDuration(audio)).toBeCloseTo(3, 5);
+  });
+
+  it("re-voices only chapters whose narration changed", async () => {
+    await writePlugin([TOUR]);
+    await runTourVoice({ dir: tmpDir, apiKey: API_KEY, fetch: ttsFetch() });
+
+    const rerun = ttsFetch();
+    const unchanged = await runTourVoice({ dir: tmpDir, apiKey: API_KEY, fetch: rerun });
+    expect(rerun).not.toHaveBeenCalled();
+    expect(unchanged.chapters.every((c) => c.outcome === "up-to-date")).toBe(true);
+
+    await fs.writeFile(
+      path.join(tmpDir, "tours", "welcome.narration.json"),
+      JSON.stringify({
+        chapters: [NARRATION.chapters[0], { id: "wrap", narration: "That is [[done]] all." }],
+      })
+    );
+    const edited = ttsFetch();
+    const result = await runTourVoice({ dir: tmpDir, apiKey: API_KEY, fetch: edited });
+    expect(edited).toHaveBeenCalledTimes(1);
+    expect(result.chapters.map((c) => c.outcome)).toEqual(["up-to-date", "voiced"]);
+  });
+
+  it("re-voices when the voice changes, and with --force", async () => {
+    await writePlugin([TOUR]);
+    await runTourVoice({ dir: tmpDir, apiKey: API_KEY, fetch: ttsFetch() });
+
+    const other = ttsFetch();
+    await runTourVoice({ dir: tmpDir, apiKey: API_KEY, fetch: other, voice: "Ashley" });
+    expect(other).toHaveBeenCalledTimes(2);
+    expect((await readTour()).chapters[0].audioUrl).toBe("tours/welcome/intro.ashley.ogg");
+
+    const forced = ttsFetch();
+    await runTourVoice({
+      dir: tmpDir,
+      apiKey: API_KEY,
+      fetch: forced,
+      voice: "Ashley",
+      force: true,
+    });
+    expect(forced).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives chapters outside --only an estimate so the manifest still validates", async () => {
+    await writePlugin([TOUR]);
+    const result = await runTourVoice({
+      dir: tmpDir,
+      apiKey: API_KEY,
+      fetch: ttsFetch(),
+      only: ["wrap"],
+    });
+    expect(result.chapters[0]).toMatchObject({
+      id: "intro",
+      outcome: "not-selected",
+      estimated: true,
+    });
+    const tour = await readTour();
+    expect(tour.chapters[0].audioUrl).toBeNull();
+    expect(TourContributionSchema.safeParse(tour).success).toBe(true);
+  });
+
+  it("drops chapters the narration no longer lists and keeps other manifest fields", async () => {
+    await writePlugin([
+      {
+        ...TOUR,
+        audioHosts: ["cdn.example.com"],
+        chapters: [{ id: "gone", duration: 1, audioUrl: null, narrationHash: "00000000" }],
+      },
+    ]);
+    await runTourVoice({ dir: tmpDir, apiKey: API_KEY, fetch: ttsFetch() });
+    const tour = await readTour();
+    expect(tour.chapters.map((c: { id: string }) => c.id)).toEqual(["intro", "wrap"]);
+    expect(tour.audioHosts).toEqual(["cdn.example.com"]);
+    expect(tour.title).toBe("Welcome");
+  });
+
+  it("reads the key from INWORLD_API_KEY and fails clearly without it", async () => {
+    await writePlugin([TOUR]);
+    vi.stubEnv("INWORLD_API_KEY", "");
+    await expect(runTourVoice({ dir: tmpDir, fetch: ttsFetch() })).rejects.toThrow(
+      "INWORLD_API_KEY is not set"
+    );
+    vi.stubEnv("INWORLD_API_KEY", API_KEY);
+    const fetch = ttsFetch();
+    await runTourVoice({ dir: tmpDir, fetch });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("never lets the key into an error message", async () => {
+    await writePlugin([TOUR]);
+    const fetch = vi.fn(
+      async () => new Response(`bad credentials: Basic ${API_KEY}`, { status: 401 })
+    );
+    const error = await runTourVoice({ dir: tmpDir, apiKey: API_KEY, fetch }).catch((e) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toMatch(/Inworld TTS failed \(401\)/);
+    expect(error.message).not.toContain(API_KEY);
+  });
+
+  it("refuses timing when too few words line up, leaving the plugin untouched", async () => {
+    await writePlugin([TOUR]);
+    const before = await fs.readFile(path.join(tmpDir, "plugin.json"), "utf8");
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            audioContent: oggOpus(2).toString("base64"),
+            timestampInfo: { wordAlignment: alignmentFor("something else entirely spoken") },
+          })
+        )
+    );
+    await expect(runTourVoice({ dir: tmpDir, apiKey: API_KEY, fetch })).rejects.toThrow(
+      /words lined up/
+    );
+    expect(await fs.readFile(path.join(tmpDir, "plugin.json"), "utf8")).toBe(before);
+    await expect(fs.stat(path.join(tmpDir, "tours/welcome/intro.simon.ogg"))).rejects.toThrow();
+  });
+
+  it("needs --tour when several tours are declared, and a declared tour at all", async () => {
+    await writePlugin([TOUR, { ...TOUR, id: "other" }]);
+    await expect(runTourVoice({ dir: tmpDir, apiKey: API_KEY })).rejects.toThrow(/--tour/);
+    await expect(runTourVoice({ dir: tmpDir, apiKey: API_KEY, tour: "nope" })).rejects.toThrow(
+      /No tour "nope"/
+    );
+    await writePlugin([]);
+    await expect(runTourVoice({ dir: tmpDir, apiKey: API_KEY })).rejects.toThrow(
+      /declares no contributes.tours/
+    );
+  });
+
+  it("rejects narration that names an unknown --only chapter or breaks the cue grammar", async () => {
+    await writePlugin([TOUR]);
+    await expect(runTourVoice({ dir: tmpDir, apiKey: API_KEY, only: ["missing"] })).rejects.toThrow(
+      /--only names no chapter/
+    );
+    await writePlugin([TOUR], { chapters: [{ id: "intro", narration: "Ends on a cue [[late]]" }] });
+    await expect(runTourVoice({ dir: tmpDir, apiKey: API_KEY })).rejects.toThrow(
+      /has no word after it/
+    );
+  });
+});
+
+describe("runTourAlign", () => {
+  it("times the author's recordings and keeps chapters that have none", async () => {
+    await writePlugin([TOUR]);
+    const recordings = path.join(tmpDir, "takes");
+    await fs.mkdir(recordings);
+    await fs.writeFile(path.join(recordings, "intro.ogg"), oggOpus(4));
+
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.transcribeConfig.includeWordTimestamps).toBe(true);
+      const words = "Welcome to the panel. It is great.".split(" ");
+      return new Response(
+        JSON.stringify({
+          transcription: {
+            wordTimestamps: words.map((word, i) => ({
+              word,
+              startTimeMs: 100 + i * 500,
+              endTimeMs: 500 + i * 500,
+            })),
+          },
+        })
+      );
+    });
+    const logs: string[] = [];
+    const result = await runTourAlign({
+      dir: tmpDir,
+      apiKey: API_KEY,
+      fetch,
+      recordings,
+      log: (line) => logs.push(line),
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]![0]).toBe("https://api.inworld.ai/stt/v1/transcribe");
+    expect(result.chapters.map((c) => [c.id, c.outcome])).toEqual([
+      ["intro", "aligned"],
+      ["wrap", "no-recording"],
+    ]);
+    const tour = await readTour();
+    expect(tour.chapters[0].audioUrl).toBe("tours/welcome/intro.recorded.ogg");
+    expect(tour.chapters[0].cues.panel).toBeCloseTo(1.6, 3);
+    expect(tour.chapters[0].duration).toBeCloseTo(4.6, 3);
+    expect(tour.chapters[1].audioUrl).toBeNull();
+    expect(TourContributionSchema.safeParse(tour).success).toBe(true);
+    expect(logs.join("\n")).not.toContain(API_KEY);
+  });
+
+  it("fails when the recordings folder is missing", async () => {
+    await writePlugin([TOUR]);
+    await expect(
+      runTourAlign({ dir: tmpDir, apiKey: API_KEY, recordings: path.join(tmpDir, "nope") })
+    ).rejects.toThrow(/Recordings folder not found/);
+  });
+});

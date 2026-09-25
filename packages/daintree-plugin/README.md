@@ -22,6 +22,8 @@ A plugin scaffolded with `daintree-plugin new` already lists this package as a d
 | `dev` | Hot-reload loop: link the plugin into the running Daintree and rebuild on every save |
 | `doctor <projectRoot>` | Check a project's `.daintree/plugins/` against the working tree and git index (built, ESM, tracked, not gitignored) and report the running host's trust state; `--offline` skips the host query |
 | `schema` | Print the JSON Schema for `plugin.json`, generated from the same Zod schema the host loads with |
+| `tour voice` | Voice each chapter of a `contributes.tours` entry with Inworld TTS (`--voice`, default `Simon`; key from `INWORLD_API_KEY`), write the audio to `tours/<tourId>/` and the cue and caption timing into `plugin.json`. Narration is read from `tours/<tourId>.narration.json` (`{ "chapters": [{ "id", "narration" }] }`); only chapters whose narration or voice changed are re-voiced |
+| `tour align --recordings <dir>` | Time your own recordings (`<chapter-id>.wav`/`mp3`/`m4a`/`ogg`/`flac`/`aac`) instead: each is encoded to Ogg Opus in the plugin (needs `ffmpeg`), transcribed with word timestamps by Inworld, and aligned back to the narration's `[[cue]]` markers |
 
 ## The usual loop
 
