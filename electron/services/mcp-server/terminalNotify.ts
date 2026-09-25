@@ -263,8 +263,13 @@ export function extractNoticeReply(
   if (endAtHandback) {
     let marker = -1;
     for (let i = rows.length - 1; i >= 0; i--) {
-      // The echoed instruction carries the placeholder; the agent's own line does not.
-      if (HANDBACK_END_LINE.test(rows[i]) && !rows[i].includes(HANDBACK_SUMMARY_PLACEHOLDER)) {
+      // The echoed instruction carries the placeholder, on this row or, when
+      // the echo wrapped before its END, on the row above; the agent's own
+      // marker never does.
+      const echoed =
+        rows[i].includes(HANDBACK_SUMMARY_PLACEHOLDER) ||
+        (i > 0 && rows[i - 1].includes(HANDBACK_SUMMARY_PLACEHOLDER));
+      if (HANDBACK_END_LINE.test(rows[i]) && !echoed) {
         marker = i;
         break;
       }
@@ -414,6 +419,8 @@ interface FiredEntry {
   notice: FiredNotice;
   /** The reply being read off the target's screen; delivery waits for it. */
   capture?: Promise<void>;
+  /** How to read the reply again just before delivery; absent for no quote. */
+  quote?: { lines: number; endAtHandback: boolean };
   /** The line that carries it, while that line's outcome is unknown. */
   wakeToken?: string;
 }
@@ -1254,6 +1261,7 @@ export class TerminalNotifyService {
       },
     };
     if (notice.replyLines > 0 && (observation.kind === "state" || observation.kind === "exit")) {
+      entry.quote = { lines: notice.replyLines, endAtHandback: observation.handback };
       const capture = this.captureReply(entry, notice.replyLines, observation.handback);
       entry.capture = capture;
       void capture.finally(() => {
@@ -1290,6 +1298,28 @@ export class TerminalNotifyService {
     } catch (err) {
       console.error("[MCP] terminal notify: reading a reply failed:", err);
     }
+  }
+
+  /**
+   * Read each quote again just before it is typed. A notice can fire in a
+   * pause the agent makes before printing its answer (Grok's thinking preview
+   * carries its drafted reply, marker and all), and delivery waits at least
+   * the coalesce window and often the asking pane's turn, so the screen then
+   * is usually the complete reply. A target working again keeps the quote
+   * from when it stopped, which is the one this notice is about.
+   */
+  private async refreshReplies(owner: PaneOwner, client: TerminalNotifyPtyClient): Promise<void> {
+    const entries = owner.fired.filter(
+      (entry) => entry.wakeToken === undefined && entry.quote !== undefined
+    );
+    await Promise.all(
+      entries.map(async (entry) => {
+        const info = await client.getTerminalAsync(entry.notice.terminalId).catch(() => null);
+        if (info === null || info.agentState === "working") return;
+        const quote = entry.quote!;
+        await this.captureReply(entry, quote.lines, quote.endAtHandback);
+      })
+    );
   }
 
   private handleOwnStateChanged(owner: PaneOwner, payload: NotifyStateChange): void {
@@ -1404,6 +1434,7 @@ export class TerminalNotifyService {
         .filter((entry) => entry.wakeToken === undefined && entry.capture !== undefined)
         .map((entry) => entry.capture);
       if (captures.length > 0) await Promise.all(captures);
+      await this.refreshReplies(owner, client);
       info = await client.getTerminalAsync(owner.terminalId);
     } catch {
       info = null;

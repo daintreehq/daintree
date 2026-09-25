@@ -472,7 +472,7 @@ describe("TerminalNotifyService", () => {
       );
     });
 
-    it("reads the screen as it stood when the notice fired", async () => {
+    it("keeps the quote from when it stopped once the terminal is working again", async () => {
       const h = setup();
       h.client.screens.set("t-new", "Fact: octopuses have three hearts.");
       const pending = await h.service.prepareLaunch(PANE, { replyLines: 5 });
@@ -486,6 +486,20 @@ describe("TerminalNotifyService", () => {
 
       expect(h.client.submitted[0].text).toContain("octopuses have three hearts");
       expect(h.client.submitted[0].text).not.toContain("typed later");
+    });
+
+    it("reads the reply again at delivery, when the agent printed it after the notice fired", async () => {
+      const h = setup();
+      h.client.screens.set("t-a", "Thinking... draft");
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+
+      h.settle("t-a");
+      await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + 10);
+      h.client.terminals.set("t-a", atPrompt(Date.now()));
+      h.client.screens.set("t-a", "Thinking... draft\nFact: the Pig War of 1859.");
+      await flushNotice();
+
+      expect(h.client.submitted[0].text).toContain("Fact: the Pig War of 1859.");
     });
 
     it("quotes nothing when asked for no lines", async () => {
@@ -1112,6 +1126,23 @@ describe("TerminalNotifyService", () => {
           "DAINTREE-DONE-abc123: gave a fact END-abc123",
         ].join("\n")
       );
+    });
+
+    it("never cuts at an echoed instruction that wrapped before its END", () => {
+      const screen = [
+        "  message with this line exactly, replacing <summary> with a one-line",
+        "  plain-text summary (it may be empty): DAINTREE-DONE-abc123: <summary>",
+        "  END-abc123",
+        "Fact: honey never spoils.",
+        "DAINTREE-DONE-abc123: gave a fact END-abc123",
+        "› Ask Codex to do anything",
+      ].join("\n");
+      expect(extractNoticeReply(screen, 40, true)?.text.endsWith("gave a fact END-abc123")).toBe(
+        true
+      );
+      expect(
+        extractNoticeReply(screen.split("\n").slice(0, 4).join("\n"), 40, true)?.text
+      ).toContain("Fact: honey never spoils.");
     });
 
     it("never cuts at the echoed instruction when the agent printed no marker", () => {
