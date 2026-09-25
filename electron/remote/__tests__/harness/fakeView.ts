@@ -29,6 +29,9 @@ export class FakeView {
   readonly tokens: string[] = [];
   portsReceived = 0;
   autoAck = true;
+  /** Every message the renderer's worktree port received, in order. */
+  readonly worktreeMessages: Array<Record<string, unknown>> = [];
+  private worktreePort: FakeMessagePortMain | null = null;
 
   private port: FakeMessagePortMain | null = null;
   private destroyed = false;
@@ -43,6 +46,8 @@ export class FakeView {
     emitter.postMessage = (channel, message, transfer) => {
       if (channel === "terminal-port-token") {
         this.tokens.push((message as { token: string }).token);
+      } else if (channel === "worktree-port") {
+        this.adoptWorktreePort(transfer![0] as FakeMessagePortMain);
       } else if (channel === "terminal-port") {
         const token = (message as { token: string }).token;
         if (this.tokens.at(-1) !== token) throw new Error("terminal port without its token");
@@ -57,6 +62,36 @@ export class FakeView {
 
   get hasPort(): boolean {
     return this.port !== null && !this.port.isClosed;
+  }
+
+  get hasWorktreePort(): boolean {
+    return this.worktreePort !== null && !this.worktreePort.isClosed;
+  }
+
+  /** What the preload's worktree client sends: `{id, action, payload}`, answered `{id, result | error}`. */
+  worktreeRequest(
+    id: string,
+    action: string,
+    payload?: unknown,
+    timeoutMs = 10_000
+  ): Promise<Record<string, unknown>> {
+    const port = this.worktreePort;
+    if (!port) throw new Error(`view ${this.id} has no worktree port`);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`view ${this.id}: no worktree reply to ${id}`)),
+        timeoutMs
+      );
+      const onMessage = (event: { data: unknown }) => {
+        const reply = event.data as Record<string, unknown>;
+        if (reply?.id !== id) return;
+        clearTimeout(timer);
+        port.removeListener("message", onMessage);
+        resolve(reply);
+      };
+      port.on("message", onMessage);
+      port.postMessage({ id, action, payload });
+    });
   }
 
   write(id: string, data: string): void {
@@ -113,12 +148,24 @@ export class FakeView {
     if (this.destroyed) return;
     this.destroyed = true;
     this.port?.close();
+    this.worktreePort?.close();
     this.webContents.emit("destroyed");
   }
 
   private post(message: PortMessage): void {
     if (!this.port) throw new Error(`view ${this.id} has no terminal port`);
     this.port.postMessage(message);
+  }
+
+  private adoptWorktreePort(port: FakeMessagePortMain): void {
+    this.worktreePort?.close();
+    this.worktreePort = port;
+    port.on("message", (event: { data: unknown }) => {
+      if (this.worktreePort === port) {
+        this.worktreeMessages.push(event.data as Record<string, unknown>);
+      }
+    });
+    port.start();
   }
 
   private adopt(port: FakeMessagePortMain): void {

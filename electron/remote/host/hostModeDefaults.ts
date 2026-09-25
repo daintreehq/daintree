@@ -10,6 +10,7 @@ import { HostAdvertiser } from "./advertise.js";
 import { runCommand, spawnOwnedProcess } from "./hostCommands.js";
 import { hostLocation, startHostListener } from "./hostListener.js";
 import { HostModeService, type HostModeSettings } from "./HostModeService.js";
+import type { HostSocketLocation } from "./hostSocketPath.js";
 import {
   createLaunchAgentController,
   createSystemdUserController,
@@ -68,10 +69,13 @@ function broadcastLocal(status: HostModeStatus): void {
   }
 }
 
-export function createHostModeService(): HostModeService {
+export function createHostModeService(
+  options: { location?: HostSocketLocation } = {}
+): HostModeService {
+  const { location } = options;
   let socketPath: string | null = null;
   try {
-    socketPath = hostLocation().socketPath;
+    socketPath = (location ?? hostLocation()).socketPath;
   } catch {
     // Reported through the listener's own error when it tries to start.
   }
@@ -80,7 +84,7 @@ export function createHostModeService(): HostModeService {
     readSettings,
     writeSettings: (next) => store.set("hostMode", next),
     socketPath,
-    startListener: (signal) => startHostListener({ signal }),
+    startListener: (signal) => startHostListener({ signal, location }),
     startAtLogin: startAtLoginController(),
     createAdvertiser: (onChange) =>
       new HostAdvertiser({

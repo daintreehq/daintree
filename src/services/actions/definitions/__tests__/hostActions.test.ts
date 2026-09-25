@@ -16,6 +16,7 @@ vi.mock("@/components/Hosts/hostMenuRequests", () => ({
 
 import { createActionDefinitions } from "../../actionDefinitions";
 import { registerHostActions } from "../hostActions";
+import { registerPortActions } from "../portActions";
 import { requestHostMenu } from "@/components/Hosts/hostMenuRequests";
 import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 import {
@@ -118,6 +119,18 @@ describe("host action registration", () => {
     supported.value = false;
     const registry = createActionDefinitions(callbacks());
     for (const id of HOST_ACTION_IDS) expect(registry.has(id), id).toBe(false);
+  });
+
+  it("registers nothing from the gated registrars where it isn't, including actions added later", () => {
+    const gated: ActionRegistry = new Map();
+    registerHostActions(gated, callbacks());
+    registerPortActions(gated, callbacks());
+    expect([...gated.keys()]).toEqual(
+      expect.arrayContaining([...HOST_ACTION_IDS, "host.forwardPort"])
+    );
+    supported.value = false;
+    const registry = createActionDefinitions(callbacks());
+    for (const id of gated.keys()) expect(registry.has(id), id).toBe(false);
   });
 });
 

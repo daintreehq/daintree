@@ -2,15 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type net from "node:net";
-import type { WebContents } from "electron";
 import type { IpcEnvelope } from "../../../../shared/types/ipc/errors.js";
-import { toHostScopedKey, type HostDescriptor } from "../../../../shared/types/remoteHosts.js";
+import { toHostScopedKey } from "../../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../../ipc/channels.js";
-import { getIpcDispatcher } from "../../../ipc/dispatcher.js";
-import {
-  _resetEndpointRegistryForTesting,
-  getEndpointRegistry,
-} from "../../../ipc/endpointRegistry.js";
+import { _resetEndpointRegistryForTesting } from "../../../ipc/endpointRegistry.js";
+import { registerDriveLeaseHandlers } from "../../../ipc/handlers/driveLease.js";
+import { registerFileTransferHandlers } from "../../../ipc/handlers/fileTransfer.js";
 import { registerOperationsHandlers } from "../../../ipc/handlers/operations.js";
 import { _resetIpcGuardForTesting } from "../../../ipc/ipcGuard.js";
 import { _resetLocalEndpointsForTesting } from "../../../ipc/localEndpoint.js";
@@ -18,62 +15,67 @@ import type { PtyClient } from "../../../services/PtyClient.js";
 import { _resetDriveLeaseServiceForTesting } from "../../../services/DriveLeaseService.js";
 import { _resetOperationRegistryForTest } from "../../../services/operations/index.js";
 import { enforceIpcSenderValidation } from "../../../setup/security.js";
-import { setPtyClientRef } from "../../../window/serviceRefs.js";
-import { HostRegistry, type RemoteHostsStore } from "../../client/HostRegistry.js";
-import { RemoteHostManager, type ViewSink } from "../../client/RemoteHostManager.js";
-import { RemoteRouterImpl } from "../../client/RemoteRouter.js";
+import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
+import { WorktreePortBroker } from "../../../services/WorktreePortBroker.js";
+import {
+  setPtyClientRef,
+  setWorkspaceClientRef,
+  setWorktreePortBrokerRef,
+} from "../../../window/serviceRefs.js";
+import { startRemoteHosts, stopRemoteHosts } from "../../boot.js";
+import type { RemoteHostManager } from "../../client/RemoteHostManager.js";
 import { createDirectTransport, type LinkTransport } from "../../client/transport.js";
-import { WindowHostBinding } from "../../client/WindowHostBinding.js";
-import { HostServer } from "../../host/HostServer.js";
-import { hostSocketLocation } from "../../host/hostSocketPath.js";
-import type { RemoteViewEndpoint } from "../../host/RemoteViewEndpoint.js";
-import { SessionHost } from "../../host/SessionHost.js";
-import { TEST_HANDSHAKE } from "../../link/__tests__/linkTestUtils.js";
+import type { HostServer } from "../../host/HostServer.js";
+import { hostSocketLocation, type HostSocketLocation } from "../../host/hostSocketPath.js";
+import type { SessionHost } from "../../host/SessionHost.js";
 import type { LinkSession } from "../../link/session.js";
-import type { TransferSink } from "../../link/transfer.js";
+import { _resetRemoteServicesForTest, requireRemoteService } from "../../runtime.js";
 import type { ClientTerminalRelay } from "../../terminal/ClientTerminalRelay.js";
-import {
-  attachClientTerminalRelay,
-  detachClientTerminalRelayFor,
-  disposeAllClientTerminalRelays,
-  getClientTerminalRelay,
-} from "../../terminal/clientAttach.js";
-import {
-  attachTerminalBridge,
-  detachTerminalBridge,
-  disposeAllTerminalBridges,
-} from "../../terminal/hostAttach.js";
+import { getClientTerminalRelay } from "../../terminal/clientAttach.js";
 import type { TerminalStreamBridge } from "../../terminal/TerminalStreamBridge.js";
-import { closeAllFakePorts, invokeHandlers, resetIpcMain } from "./fakeElectron.js";
+import { closeAllFakePorts, invokeHandlers, resetIpcMain, sendListeners } from "./fakeElectron.js";
 import { FakePtyHost } from "./fakePtyHost.js";
 import { FakeView, liveViews, projectKeys } from "./fakeView.js";
+import { createFakeWorkspaceClient, FakeWorkspaceHost } from "./fakeWorkspaceHost.js";
+import { harnessState, resetHarnessState, type HarnessProject } from "./harnessState.js";
 import { waitUntil } from "./poll.js";
 
 export const HOST_ID = "studio-01";
+export const PROJECT_IDS = ["proj-1", "proj-2"] as const;
 
 /**
- * Host and Shell in one process, joined by a real Unix socket: a HostServer +
- * SessionHost + per-endpoint TerminalStreamBridge on one side, a
- * RemoteHostManager (LinkClient over the direct transport) + RemoteRouter +
- * per-view ClientTerminalRelay on the other, both on this process's
- * dispatcher and endpoint registry. The stream wiring mirrors `boot.ts`.
- * Only Electron and the pty-host are fakes.
+ * Host and Shell in one process, joined by a real Unix socket, started by the
+ * real `startRemoteHosts` with Host mode on: the Shell dials this process's
+ * own Host-mode listener through a direct socket transport instead of ssh.
+ * Only Electron, the pty-host, the persistent stores and the OS-facing
+ * helpers (mDNS) are fakes; see `harnessState` and the test file's mocks.
  */
 export interface RemoteHarness {
   dir: string;
+  /** The host's `os.tmpdir()` for this run, which holds its upload inbox. */
+  hostTmpDir: string;
   pty: FakePtyHost;
-  server: HostServer;
-  sessionHost: SessionHost;
+  /** The host's project records (real directories under `dir`). */
+  projects: Map<string, HarnessProject>;
+  /** Each project's workspace host, by project id. */
+  workspaceHosts: Map<string, FakeWorkspaceHost>;
+  /** Host mode's server and session host, as boot registered them. */
+  server(): HostServer;
+  sessionHost(): SessionHost;
   manager: RemoteHostManager;
   /** Host-side bridges by the Shell's endpoint id. */
   bridges: Map<string, TerminalStreamBridge>;
   addView(webContentsId: number, projectId: string): FakeView;
   invoke(channel: string, view: FakeView, ...args: unknown[]): Promise<IpcEnvelope>;
+  /** What the view's `ipcRenderer.send` does: every `ipcMain.on` listener for the channel. */
+  send(channel: string, view: FakeView, ...args: unknown[]): void;
   connect(): Promise<void>;
+  isConnected(): boolean;
   /** Open the view's endpoint and wait until its terminal stream is flowing. */
   openStreams(
     view: FakeView
   ): Promise<{ relay: ClientTerminalRelay; bridge: TerminalStreamBridge }>;
+  streamsFlowing(view: FakeView): boolean;
   /** Kill the client's socket and keep it from redialling; resolves once both sides noticed. */
   dropLink(): Promise<void>;
   /** Let the client redial; resolves once the session is back and streams have resumed. */
@@ -83,16 +85,6 @@ export interface RemoteHarness {
   dispose(): Promise<void>;
 }
 
-function memoryStore(): RemoteHostsStore {
-  let value: { hosts: HostDescriptor[] } | undefined;
-  return {
-    get: () => value,
-    set: (_key, next) => {
-      value = next;
-    },
-  };
-}
-
 function senderEvent(id: number) {
   return {
     sender: { id, isDestroyed: () => false, send: () => undefined, once: () => undefined },
@@ -100,101 +92,90 @@ function senderEvent(id: number) {
   };
 }
 
-/** Receives bulk transfers on the host and throws the bytes away. */
-function discardSink(): TransferSink {
-  return {
-    write: () => undefined,
-    commit: async () => "/dev/null",
-    abort: () => undefined,
-  };
+export async function startRemoteHarness(): Promise<RemoteHarness> {
+  const teardowns: Array<() => unknown> = [];
+  try {
+    return await buildHarness(teardowns);
+  } catch (error) {
+    // A failed start must not leave its socket, env or services behind for the next test.
+    for (const teardown of teardowns.splice(0).reverse()) {
+      try {
+        await teardown();
+      } catch {
+        // Keep undoing the rest.
+      }
+    }
+    throw error;
+  }
 }
 
-export async function startRemoteHarness(
-  options: { resumeGraceMs?: number } = {}
-): Promise<RemoteHarness> {
+async function buildHarness(teardowns: Array<() => unknown>): Promise<RemoteHarness> {
   resetIpcMain();
   _resetIpcGuardForTesting();
   _resetEndpointRegistryForTesting();
   _resetLocalEndpointsForTesting();
   _resetOperationRegistryForTest();
+  _resetRemoteServicesForTest();
   // The lease service binds the endpoint registry it was made with, and names
   // endpoints of the session it last saw: each harness needs its own.
   _resetDriveLeaseServiceForTesting(null);
   enforceIpcSenderValidation();
 
-  const teardowns: Array<() => unknown> = [];
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "drh-"));
+  // Real paths throughout: host containment compares canonical paths.
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "drh-")));
   teardowns.push(() => fs.rm(dir, { recursive: true, force: true }));
+  resetHarnessState(path.join(dir, "shell"));
+  await fs.mkdir(harnessState.userDataDir, { recursive: true });
+  for (const id of PROJECT_IDS) {
+    const projectPath = path.join(dir, "projects", id);
+    await fs.mkdir(projectPath, { recursive: true });
+    harnessState.projects.set(id, { id, name: id, path: projectPath });
+  }
   teardowns.push(() => {
     closeAllFakePorts();
     liveViews.clear();
     projectKeys.clear();
     _resetOperationRegistryForTest();
     _resetDriveLeaseServiceForTesting(null);
+    _resetRemoteServicesForTest();
   });
 
   const pty = new FakePtyHost();
   setPtyClientRef(pty.client as unknown as PtyClient);
   teardowns.push(() => setPtyClientRef(null));
+  // The broker is real; only the workspace hosts behind it are fakes.
+  const workspaceHosts = new Map<string, FakeWorkspaceHost>();
+  const hostsByPath = new Map<string, FakeWorkspaceHost>();
+  for (const project of harnessState.projects.values()) {
+    const host = new FakeWorkspaceHost(project.path);
+    workspaceHosts.set(project.id, host);
+    hostsByPath.set(project.path, host);
+  }
+  setWorktreePortBrokerRef(new WorktreePortBroker());
+  setWorkspaceClientRef(createFakeWorkspaceClient(hostsByPath) as unknown as WorkspaceClient);
+  teardowns.push(() => {
+    setWorkspaceClientRef(null);
+    setWorktreePortBrokerRef(null);
+  });
   teardowns.push(registerOperationsHandlers());
-
-  // ---- Host ----
-  const location = hostSocketLocation({ platform: "darwin", userDataDir: dir });
-  const server = new HostServer({
-    location,
-    handshake: TEST_HANDSHAKE,
-    hostName: "studio",
-    resumeGraceMs: options.resumeGraceMs ?? 60_000,
-    session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+  teardowns.push(registerDriveLeaseHandlers());
+  teardowns.push(registerFileTransferHandlers());
+  // The host's temp dir (its upload inbox) lives in this run's directory.
+  const previousTmpDir = process.env.TMPDIR;
+  const hostTmpDir = path.join(dir, "host-tmp");
+  await fs.mkdir(hostTmpDir, { recursive: true });
+  process.env.TMPDIR = hostTmpDir;
+  teardowns.push(() => {
+    if (previousTmpDir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmpDir;
   });
-  const sessionHost = new SessionHost(server, {
-    dispatcher: getIpcDispatcher(),
-    registry: getEndpointRegistry(),
-    describeProject: (projectId) => ({ projectId, path: `/srv/${projectId}`, name: projectId }),
+
+  // The Shell reaches the host over a direct socket; closing it (and
+  // refusing to redial) stands in for the network going away.
+  const location: HostSocketLocation = hostSocketLocation({
+    platform: "darwin",
+    userDataDir: path.join(dir, "host"),
   });
-  teardowns.push(() => server.close());
-  teardowns.push(() => sessionHost.dispose());
-  teardowns.push(() => disposeAllTerminalBridges());
-
-  const bridges = new Map<string, TerminalStreamBridge>();
-  const endpointsBySession = new Map<string, Map<string, RemoteViewEndpoint>>();
-  const attachHostStreams = (session: LinkSession, endpoint: RemoteViewEndpoint) => {
-    bridges.set(endpoint.clientEndpointId, attachTerminalBridge(session, endpoint));
-  };
-  teardowns.push(
-    sessionHost.onEndpointOpened((endpoint, handle) => {
-      let endpoints = endpointsBySession.get(handle.sessionId);
-      if (!endpoints) {
-        endpoints = new Map();
-        endpointsBySession.set(handle.sessionId, endpoints);
-      }
-      endpoints.set(endpoint.endpointId, endpoint);
-      endpoint.onClose(() => endpointsBySession.get(handle.sessionId)?.delete(endpoint.endpointId));
-      const link = handle.link();
-      if (link) attachHostStreams(link, endpoint);
-    })
-  );
-  teardowns.push(
-    server.onSession((ctx) => {
-      ctx.session.transfers.setSinkFactory(discardSink);
-      if (!ctx.resumed) return;
-      for (const endpoint of endpointsBySession.get(ctx.sessionId)?.values() ?? []) {
-        if (!endpoint.isClosed()) attachHostStreams(ctx.session, endpoint);
-      }
-    })
-  );
-  teardowns.push(
-    server.onSessionExpired(({ sessionId }) => {
-      const endpoints = endpointsBySession.get(sessionId);
-      endpointsBySession.delete(sessionId);
-      for (const endpointId of endpoints?.keys() ?? []) detachTerminalBridge(endpointId);
-    })
-  );
-  await server.listen();
-
-  // ---- Shell ----
-  const registry = new HostRegistry(memoryStore());
-  registry.add({ name: HOST_ID, sshTarget: "studio.example" });
   const sockets: net.Socket[] = [];
   let allowConnect = true;
   const direct = createDirectTransport({ discoveryPath: location.discoveryPath });
@@ -206,70 +187,22 @@ export async function startRemoteHarness(
       return connection;
     },
   };
-  const hostOf = (webContentsId: number) =>
-    projectKeys.get(webContentsId)?.startsWith(`${HOST_ID}:`) ? HOST_ID : null;
-  const sink: ViewSink = {
-    send(webContentsId, channel, args) {
-      const view = liveViews.get(webContentsId);
-      if (!view || view.webContents.isDestroyed()) return false;
-      view.webContents.send(channel, ...args);
-      return true;
-    },
-    watch(webContentsId, onGone) {
-      const wc = liveViews.get(webContentsId)?.webContents;
-      if (!wc) {
-        queueMicrotask(onGone);
-        return () => undefined;
-      }
-      wc.once("destroyed", onGone);
-      return () => wc.removeListener("destroyed", onGone);
-    },
-    resync(webContentsId, _hostId, reason) {
-      liveViews.get(webContentsId)?.resyncs.push(reason);
-    },
-    hostOf,
-  };
-  const manager = new RemoteHostManager({
-    registry,
+
+  teardowns.push(() => stopRemoteHosts());
+  await startRemoteHosts({
+    hostMode: true,
+    hostLocation: location,
     createTransport: () => transport,
-    handshake: () => TEST_HANDSHAKE,
-    client: { clientId: "client-1", clientName: "greg-mbp", platform: "darwin" },
-    views: sink,
-    session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
-    backoff: { initialMs: 10, maxMs: 40, jitter: 0 },
   });
-  const router = new RemoteRouterImpl(manager, new WindowHostBinding(), {
-    projectKeyFor: (id) => projectKeys.get(id) ?? null,
-    windowIdFor: () => null,
-  });
-  getIpcDispatcher().setRemoteRouter(router);
-  teardowns.push(() => manager.disposeAll());
-  teardowns.push(() => getIpcDispatcher().setRemoteRouter(null));
+  const booted = harnessState.client;
+  if (!booted) throw new Error("boot did not start the Remote Hosts client");
+  const added = booted.client.add({ name: HOST_ID, sshTarget: "studio.example" });
+  if (added.id !== HOST_ID) throw new Error(`unexpected host id ${added.id}`);
 
-  let currentSession: LinkSession | null = null;
-  teardowns.push(
-    manager.onEndpointOpened((hostId, { session, webContentsId, endpointId }) => {
-      currentSession = session;
-      if (hostOf(webContentsId) !== hostId) return;
-      const view = liveViews.get(webContentsId);
-      if (!view || view.webContents.isDestroyed()) return;
-      attachClientTerminalRelay(
-        session,
-        view.webContents as unknown as WebContents,
-        endpointId,
-        hostId
-      );
-    })
-  );
-  teardowns.push(
-    manager.onEndpointClosed((hostId, { webContentsId, endpointId }) => {
-      detachClientTerminalRelayFor(webContentsId, hostId, endpointId);
-    })
-  );
-  teardowns.push(() => disposeAllClientTerminalRelays());
-
+  const manager = booted.manager;
   const connection = () => manager.get(HOST_ID);
   const isConnected = () => connection()?.unavailableEnvelope() === null;
+  const bridges = harnessState.bridges;
 
   const streamsFlowing = (view: FakeView) => {
     const relay = getClientTerminalRelay(view.id);
@@ -279,9 +212,12 @@ export async function startRemoteHarness(
 
   const harness: RemoteHarness = {
     dir,
+    hostTmpDir,
     pty,
-    server,
-    sessionHost,
+    projects: harnessState.projects,
+    workspaceHosts,
+    server: () => requireRemoteService("hostServer"),
+    sessionHost: () => requireRemoteService("sessionHost"),
     manager,
     bridges,
     addView(webContentsId, projectId) {
@@ -295,10 +231,17 @@ export async function startRemoteHarness(
       if (!listener) throw new Error(`no handler for ${channel}`);
       return listener(senderEvent(view.id), ...args) as Promise<IpcEnvelope>;
     },
+    send(channel, view, ...args) {
+      for (const listener of [...(sendListeners.get(channel) ?? [])]) {
+        listener(senderEvent(view.id), ...args);
+      }
+    },
     async connect() {
-      manager.connect(HOST_ID);
+      const readiness = await booted.client.connectAndWait(HOST_ID, 10_000);
+      if (readiness !== "ready") throw new Error(`host not ready: ${String(readiness)}`);
       await waitUntil(isConnected, "the Shell to connect");
     },
+    isConnected,
     async openStreams(view) {
       // Any host call opens the view's endpoint; operations:list is a real host handler.
       const envelope = await harness.invoke(CHANNELS.OPERATIONS_LIST, view, {});
@@ -307,12 +250,13 @@ export async function startRemoteHarness(
       const relay = getClientTerminalRelay(view.id)!;
       return { relay, bridge: bridges.get(relay.endpointId)! };
     },
+    streamsFlowing,
     async dropLink() {
       allowConnect = false;
       for (const socket of sockets.splice(0)) socket.destroy();
       await waitUntil(
         () =>
-          server.sessions.length === 0 &&
+          harness.server().sessions.length === 0 &&
           !isConnected() &&
           [...liveViews.keys()].every((id) => !getClientTerminalRelay(id)?.isAttached),
         "both sides to see the link drop"
@@ -331,8 +275,9 @@ export async function startRemoteHarness(
       );
     },
     clientSession() {
-      if (!currentSession || !currentSession.isOpen) throw new Error("no open client session");
-      return currentSession;
+      const session = connection()?.currentSession;
+      if (!session || !session.isOpen) throw new Error("no open client session");
+      return session;
     },
     async dispose() {
       for (const teardown of teardowns.splice(0).reverse()) await teardown();
