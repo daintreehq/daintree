@@ -92,6 +92,9 @@ export function oggOpusDuration(bytes: Buffer): number {
     offset = bodyEnd;
   }
 
+  // Without its end page the file was cut short at a page boundary, and the
+  // last granule seen would under-report the length.
+  if (serial !== null && !ended) throw new Error("Ogg stream is truncated (no end page)");
   if (finalGranule === null || preSkip === null) throw new Error("Ogg Opus stream has no audio");
   const samples = finalGranule - BigInt(preSkip);
   if (samples <= 0n) throw new Error("Ogg Opus stream has no audio");

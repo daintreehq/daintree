@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import { newCommand } from "./commands/newCommand.js";
 import { runValidate } from "./commands/validate.js";
 import { runPackage } from "./commands/package.js";
@@ -164,10 +164,12 @@ program
   });
 
 function parseOnly(value: string): string[] {
-  return value
+  const ids = value
     .split(",")
     .map((id) => id.trim())
     .filter(Boolean);
+  if (ids.length === 0) throw new InvalidArgumentError("name at least one chapter id");
+  return ids;
 }
 
 function printTourResult(result: TourCommandResult): void {

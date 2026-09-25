@@ -62,11 +62,23 @@ async function post(auth: InworldAuth, url: string, label: string, body: unknown
     throw new Error(redact(`${label} request failed: ${transportError}`, auth.apiKey));
   }
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
+    // Redact before truncating, or a key cut at the limit would leak its prefix.
+    const text = redact(await response.text().catch(() => ""), auth.apiKey);
     const detail = text.length > ERROR_BODY_LIMIT ? `${text.slice(0, ERROR_BODY_LIMIT)}…` : text;
-    throw new Error(redact(`${label} failed (${response.status}): ${detail}`, auth.apiKey));
+    throw new Error(`${label} failed (${response.status}): ${detail}`);
   }
-  return (await response.json()) as unknown;
+  let parsed: unknown;
+  let unreadable = false;
+  try {
+    parsed = await response.json();
+  } catch {
+    // A parse error quotes the body; report the failure without it.
+    unreadable = true;
+  }
+  if (unreadable || typeof parsed !== "object" || parsed === null) {
+    throw new Error(`${label} returned a response that is not a JSON object`);
+  }
+  return parsed;
 }
 
 /** An error body could echo the request back; the key must never reach a terminal or log. */
@@ -122,7 +134,10 @@ export async function transcribeSpeech(opts: TranscribeOptions): Promise<WordAli
     };
   };
   const model = opts.model ?? DEFAULT_STT_MODEL;
-  const words = body.transcription?.wordTimestamps ?? [];
+  const raw = body.transcription?.wordTimestamps ?? [];
+  if (!Array.isArray(raw))
+    throw new Error(`Inworld STT (${model}) returned malformed word timestamps`);
+  const words = raw;
   if (words.length === 0) {
     throw new Error(
       `Inworld STT (${model}) returned no word timestamps; pick a model that does with --stt-model`
@@ -131,6 +146,8 @@ export async function transcribeSpeech(opts: TranscribeOptions): Promise<WordAli
   if (
     words.some(
       (w) =>
+        typeof w !== "object" ||
+        w === null ||
         typeof w.word !== "string" ||
         !Number.isFinite(w.startTimeMs) ||
         !Number.isFinite(w.endTimeMs) ||
