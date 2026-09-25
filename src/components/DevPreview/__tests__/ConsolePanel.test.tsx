@@ -338,6 +338,16 @@ describe("accessibility", () => {
     expect(expanded.getAttribute("aria-expanded")).toBe("true");
   });
 
+  it("exposes expand state on an expandable object argument", () => {
+    seedConsoleRow({
+      args: [{ type: "object", objectId: "o1", description: "Object", preview: "{a: 1}" }],
+    });
+    render(<ConsolePanel paneId={mockPaneId} webContentsId={1} />);
+
+    const toggle = screen.getByRole("button", { name: /\{a: 1\}/ });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("keeps the row copy button label constant after copying", () => {
     seedConsoleRow({ summaryText: "stable label" });
     renderPanel();
@@ -345,5 +355,131 @@ describe("accessibility", () => {
     const button = screen.getByRole("button", { name: "Copy console message" });
     fireEvent.click(button);
     expect(screen.getByRole("button", { name: "Copy console message" })).toBeTruthy();
+  });
+});
+
+describe("stack traces", () => {
+  const appFrame = (name: string, line = 1) => ({
+    functionName: name,
+    url: `http://localhost:5173/src/${name}.ts?t=123`,
+    lineNumber: line,
+    columnNumber: 1,
+  });
+  const libFrame = (name: string) => ({
+    functionName: name,
+    url: `http://localhost:5173/node_modules/.vite/deps/${name}.js?v=1`,
+    lineNumber: 1,
+    columnNumber: 1,
+  });
+  const stackToggle = () => screen.queryByRole("button", { name: /stack trace/i });
+
+  it("names every row's source but offers the full stack only where it is worth reading", () => {
+    const callFrames = [appFrame("loadOrders", 12)];
+    const offered: Record<string, boolean> = {};
+    for (const [level, cdpType] of [
+      ["log", "log"],
+      ["info", "info"],
+      ["log", "trace"],
+      ["warning", "warning"],
+      ["error", "error"],
+    ] as const) {
+      useConsoleCaptureStore.setState({ messages: new Map(), counters: new Map() });
+      seedConsoleRow({ level, cdpType, stackTrace: { callFrames } });
+      const { unmount } = renderPanel();
+      const location = screen.getByTitle(/loadOrders\.ts\?t=123:12:1$/);
+      // Short at rest; the full path for assistive tech and keyboard focus.
+      expect(location.textContent).toContain("loadOrders.ts:12");
+      expect(screen.getByText("Source: src/loadOrders.ts:12:1")).toBeTruthy();
+      offered[cdpType] = stackToggle() !== null;
+      unmount();
+    }
+    expect(offered).toEqual({ log: false, info: false, trace: true, warning: true, error: true });
+  });
+
+  it("shows an uncaught exception's stack once, opened, instead of inside its message", () => {
+    const callFrames = [appFrame("computeTotals", 42), appFrame("CartSummary", 18)];
+    seedConsoleRow({
+      level: "error",
+      summaryText:
+        "TypeError: nope\n    at computeTotals (http://localhost:5173/src/computeTotals.ts:42:1)\n    at CartSummary (http://localhost:5173/src/CartSummary.ts:18:1)",
+      stackTrace: { callFrames },
+    });
+    renderPanel();
+
+    expect(screen.getByText("TypeError: nope")).toBeTruthy();
+    expect(screen.getAllByText("computeTotals")).toHaveLength(1);
+    expect(stackToggle()!.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("copies an uncaught exception's frames once", () => {
+    seedConsoleRow({
+      level: "error",
+      summaryText: "TypeError: nope\n    at handler (http://x/main.js:3:7)",
+      stackTrace: {
+        callFrames: [
+          { functionName: "handler", url: "http://x/main.js", lineNumber: 3, columnNumber: 7 },
+        ],
+      },
+    });
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy console message" }));
+    const text = writeText.mock.calls[0]![0];
+    expect(text.match(/at handler/g)).toHaveLength(1);
+    expect(text).toContain("TypeError: nope\n  at handler (http://x/main.js:3:7)");
+  });
+
+  it("wires the disclosure to the frame list it controls", () => {
+    seedConsoleRow({ level: "warning", stackTrace: { callFrames: [appFrame("render")] } });
+    renderPanel();
+
+    const toggle = stackToggle()!;
+    const list = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+    expect(list).toBeTruthy();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(list.hidden).toBe(true);
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(list.hidden).toBe(false);
+    expect(list.textContent).toContain("render");
+  });
+
+  it("keeps a row's stack open after the list unmounts and remounts it", () => {
+    seedConsoleRow({ level: "error", stackTrace: { callFrames: [appFrame("render")] } });
+    renderPanel();
+
+    fireEvent.click(stackToggle()!);
+    // Filtering the row away unmounts it, as scrolling it out of a
+    // virtualized list does; the panel must still know it was opened.
+    const filter = screen.getByLabelText("Filter console messages");
+    fireEvent.change(filter, { target: { value: "no such row" } });
+    expect(stackToggle()).toBeNull();
+    fireEvent.change(filter, { target: { value: "" } });
+    expect(stackToggle()!.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("folds runs of library frames behind their own disclosure", () => {
+    seedConsoleRow({
+      level: "error",
+      stackTrace: {
+        callFrames: [appFrame("mine"), libFrame("beginWork"), libFrame("workLoop")],
+      },
+    });
+    renderPanel();
+
+    fireEvent.click(stackToggle()!);
+    const run = screen.getByRole("button", { name: /2 library frames/ });
+    expect(run.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByText("beginWork").closest("[hidden]")).toBeTruthy();
+
+    fireEvent.click(run);
+    expect(screen.getByText("beginWork").closest("[hidden]")).toBeNull();
+
+    // An opened run survives its row unmounting, like the outer disclosure.
+    const filter = screen.getByLabelText("Filter console messages");
+    fireEvent.change(filter, { target: { value: "no such row" } });
+    fireEvent.change(filter, { target: { value: "" } });
+    expect(screen.getByText("beginWork").closest("[hidden]")).toBeNull();
   });
 });

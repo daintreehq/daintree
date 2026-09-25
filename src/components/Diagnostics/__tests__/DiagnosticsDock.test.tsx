@@ -39,7 +39,6 @@ vi.mock("../DiagnosticsActions", () => ({
   LogsActions: () => null,
   EventsActions: () => null,
   TelemetryActions: () => null,
-  PerfActions: () => null,
 }));
 
 vi.mock("@/store/perfMetricsStore", () => {
@@ -135,6 +134,36 @@ describe("DiagnosticsDock — roving tabindex on the tab strip", () => {
     fireEvent.keyDown(tablist, { key: "ArrowRight" });
     expect(useDiagnosticsStore.getState().activeTab).toBe("logs");
     expect(document.activeElement).toBe(tabs[1]);
+  });
+
+  it("reaching Problems by keyboard promotes errors exactly as a click does", () => {
+    useDiagnosticsStore.setState({ activeTab: "logs" });
+    const promoteErrors = vi.fn();
+    useErrorStore.setState({ promoteErrors });
+    const { container } = render(<DiagnosticsDock />);
+    const tablist = container.querySelector('[role="tablist"]') as HTMLDivElement;
+    const tabs = Array.from(tablist.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    tabs.find((t) => t.dataset.tab === "logs")!.focus();
+
+    fireEvent.keyDown(tablist, { key: "ArrowLeft" });
+    expect(useDiagnosticsStore.getState().activeTab).toBe("problems");
+    expect(promoteErrors).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(tablist, { key: "ArrowRight" });
+    fireEvent.click(tabs.find((t) => t.dataset.tab === "problems")!);
+    expect(promoteErrors).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives the tab panel a focus stop so empty content is still reachable", () => {
+    // APG tabs: a panel whose content may open with nothing focusable is itself
+    // in the tab sequence. Empty Problems and no-project Perf are such panels.
+    for (const tab of ["problems", "logs", "events", "telemetry", "perf", "whySlow"] as const) {
+      useDiagnosticsStore.setState({ activeTab: tab });
+      const { container, unmount } = render(<DiagnosticsDock />);
+      const panel = container.querySelector<HTMLElement>('[role="tabpanel"]');
+      expect(panel?.tabIndex).toBe(0);
+      unmount();
+    }
   });
 
   it("ArrowLeft from the first tab wraps to the last", () => {

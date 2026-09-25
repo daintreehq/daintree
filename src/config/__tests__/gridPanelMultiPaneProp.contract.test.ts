@@ -7,12 +7,12 @@ import ts from "typescript";
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
 
-// `ContentPanel`'s `isMultiPanelGrid` prop defaults to `true`, and every grid
-// chrome branch is gated on it. A grid host that forgets to pass it therefore
-// gets multi-pane chrome on a lone pane — silently, because the default is a
-// plausible value rather than a crash. `GridPanel`'s missing-definition
-// fallback did exactly that until #11837, so an unavailable plugin pane was
-// the one lone pane in the app wearing full-strength selection chrome.
+// `ContentPanel`'s `isMultiPanelGrid` prop defaults to `true`, and every
+// ambient grid state (agent-state borders, arming, hibernation) is gated on
+// it. A grid host that forgets to pass it therefore gets multi-pane chrome on
+// a lone pane — silently, because the default is a plausible value rather
+// than a crash. `GridPanel`'s missing-definition fallback did exactly that
+// until #11837.
 //
 // Source enforcement rather than a rendering assertion is deliberate: the
 // prop's absence is invisible to any test that renders `ContentPanel`

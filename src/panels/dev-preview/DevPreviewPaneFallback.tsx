@@ -8,7 +8,7 @@ export function DevPreviewPaneFallback(props: BasePanelProps) {
     <ContentPanel {...props} kind="dev-preview">
       <div className="relative h-full">
         <Skeleton label={LOADING_LABEL} className="h-full bg-surface-canvas" />
-        <SkeletonHint className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto" />
+        <SkeletonHint className="absolute bottom-8 inset-x-4 flex justify-center pointer-events-auto" />
       </div>
     </ContentPanel>
   );

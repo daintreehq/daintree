@@ -38,6 +38,7 @@ vi.mock("../logger.js", () => ({
 import {
   getLatestTrackedFileMtime,
   getWorktreeChangesWithStats,
+  capCommitBody,
   listCommits,
   invalidateWorktreeCache,
   __clearPerFileDiffStatCacheForTesting,
@@ -190,8 +191,10 @@ describe("getWorktreeChangesWithStats last commit metadata", () => {
     const authorUnixSeconds = committerUnixSeconds - 86_400;
     mockGit.raw.mockImplementation((args: string[]) => {
       if (args[0] === "rev-parse") return Promise.resolve(`head-oid\n${cwd}`);
-      if (args.includes("--format=%ct%x09%an%x09%ae%x09%s")) {
-        return Promise.resolve(`${committerUnixSeconds}\tAda\tada@example.com\tShip activity`);
+      if (args.includes("--format=%ct%x09%an%x09%ae%x09%s%x00%b")) {
+        return Promise.resolve(
+          `${committerUnixSeconds}\tAda\tada@example.com\tShip activity\0Why it ships.\n\tIndented\n`
+        );
       }
       if (args[0] === "log") {
         return Promise.resolve(`${authorUnixSeconds}\tAda\tada@example.com\tShip activity`);
@@ -204,6 +207,8 @@ describe("getWorktreeChangesWithStats last commit metadata", () => {
     expect(result.lastCommitTimestampMs).toBe(committerUnixSeconds * 1000);
     expect(result.lastCommitMessage).toBe("Ship activity");
     expect(result.lastCommitAuthor).toEqual({ name: "Ada", email: "ada@example.com" });
+    // The body is split at the NUL, so a tab inside it never leaks into the subject.
+    expect(result.lastCommitBody).toBe("Why it ships.\n\tIndented");
   });
 });
 
@@ -1330,5 +1335,21 @@ describe("getWorktreeChangesWithStats cancellation (#12460)", () => {
     await expect(cancelled).rejects.toThrow("aborted");
     await expect(fresh).resolves.toMatchObject({ changedFileCount: 0 });
     expect(vi.mocked(createHardenedGit)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("capCommitBody", () => {
+  it("keeps the trailer block when a long body is capped", () => {
+    const trailers = "Co-authored-by: Sam Okafor <sam@helios.dev>";
+    const body = `${"prose ".repeat(900)}\n\n${trailers}`;
+    const capped = capCommitBody(body);
+    expect(capped.length).toBeLessThanOrEqual(4000);
+    expect(capped.endsWith(trailers)).toBe(true);
+  });
+
+  it("leaves a body under the cap untouched", () => {
+    expect(capCommitBody("short\n\nCo-authored-by: A <a@x>")).toBe(
+      "short\n\nCo-authored-by: A <a@x>"
+    );
   });
 });

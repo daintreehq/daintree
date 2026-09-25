@@ -18,7 +18,22 @@ import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
 import { ASSISTANT_SCRATCH_ENV_VAR, getScratchDirForSession } from "./AssistantScratchService.js";
-import { syncAssistantContent } from "./AssistantContentMirror.js";
+import { agentSupportsAssistantContent, syncAssistantContent } from "./AssistantContentMirror.js";
+import {
+  loadAssistantUserConfig,
+  readCodexNativeServerNames,
+  toCodexMcpServerArgs,
+  toJsonMcpServerEntry,
+  type AssistantUserConfig,
+  type AssistantUserInstructions,
+  type AssistantUserMcpServer,
+} from "./AssistantUserConfig.js";
+import {
+  PROJECT_METADATA_END,
+  PROJECT_METADATA_START,
+  buildProjectMetadataAddendum,
+  type HelpSessionProjectFacts,
+} from "./helpSessionProjectMetadata.js";
 import type {
   PendingHelpHibernation,
   PendingHelpHibernationStore,
@@ -41,6 +56,14 @@ import {
 // killing — that's what powers the renderer's `[[hibernateSessions]]` resume
 // the next time the user reopens the project.
 type PtyKillClient = Pick<PtyClient, "kill" | "gracefulKill">;
+
+// Injected rather than imported: the reader pulls in ProjectStore (sqlite) and
+// the git service cache, which this eagerly-loaded service must not drag into
+// startup — and which the test suite can then replace with a plain function.
+export type ProjectMetadataReader = (
+  projectId: string,
+  projectPath: string
+) => Promise<HelpSessionProjectFacts>;
 
 const SESSIONS_DIR_NAME = "help-sessions";
 const META_FILE_NAME = "meta.json";
@@ -78,6 +101,29 @@ const DEFAULT_DOC_SEARCH = true;
 const DEFAULT_BYPASS_PERMISSIONS = false;
 const DEFAULT_DEBUG_LOGGING = false;
 
+// Codex reads project instructions up to `project_doc_max_bytes` (32 KiB) and
+// truncates past it without telling the model. The bundled AGENTS.md is held
+// to 24 KiB by `build-help-prompts.test.mjs`; user instructions are inlined
+// only while the whole file stays under this, less headroom for Codex's own
+// framing. Past it they go to a sibling file the block points at instead.
+const AGENTS_MD_INLINE_BUDGET_BYTES = 31 * 1024;
+// Sidecars are named by content hash so a live lane's AGENTS.md pointer keeps
+// resolving to the text it was launched with while a sibling lane
+// re-provisions the shared directory with different instructions.
+const USER_INSTRUCTIONS_SIDECAR_PATTERN = /^assistant-instructions-[0-9a-f]{12}\.md$/;
+
+function userInstructionsSidecarName(content: string): string {
+  return `assistant-instructions-${createHash("sha256").update(content).digest("hex").slice(0, 12)}.md`;
+}
+const SCRATCH_BLOCK_MARKERS = {
+  start: "<!-- DAINTREE_ASSISTANT_SCRATCH_START -->",
+  end: "<!-- DAINTREE_ASSISTANT_SCRATCH_END -->",
+} as const;
+const USER_INSTRUCTIONS_BLOCK_MARKERS = {
+  start: "<!-- DAINTREE_USER_INSTRUCTIONS_START -->",
+  end: "<!-- DAINTREE_USER_INSTRUCTIONS_END -->",
+} as const;
+
 // Belt-and-suspenders bound for orphaned provisional bearers (#10698). A
 // session record is minted at provision time, then bound to a PTY terminal once
 // the agent spawns. If the launch hangs past the renderer watchdog AND the
@@ -91,6 +137,10 @@ const DEFAULT_DEBUG_LOGGING = false;
 // renderer-crash backstop, so the coarse timing is intentional.
 const ORPHAN_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
 const ORPHAN_SESSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+// Project metadata is informational, so a git call that hangs must not hold
+// the assistant launch hostage — past this bound the block is written without
+// the facts the reader would have supplied.
+const PROJECT_METADATA_READ_TIMEOUT_MS = 5000;
 
 function isHelpAssistantTier(value: unknown): value is HelpAssistantTier {
   return value === "workbench" || value === "action" || value === "system";
@@ -210,6 +260,89 @@ interface BundledClaudeSettings {
 
 function deepClonePlainJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/**
+ * Pure form of the managed-block edit: replace the block between `markers`,
+ * append it when absent, or remove it when `body` is null.
+ */
+function spliceManagedBlock(
+  existing: string,
+  markers: { start: string; end: string },
+  body: string | null
+): string {
+  const startIdx = existing.indexOf(markers.start);
+  const endIdx = existing.indexOf(markers.end);
+  const hasBlock = startIdx !== -1 && endIdx !== -1 && endIdx > startIdx;
+  if (body === null) {
+    if (!hasBlock) return existing;
+    const before = existing.slice(0, startIdx).replace(/\n+$/, "\n");
+    const after = existing.slice(endIdx + markers.end.length).replace(/^\n/, "");
+    return `${before}${after}`;
+  }
+  const block = `${markers.start}\n${body}${markers.end}\n`;
+  if (hasBlock) {
+    const before = existing.slice(0, startIdx);
+    const after = existing.slice(endIdx + markers.end.length).replace(/^\n/, "");
+    return `${before}${block}${after}`;
+  }
+  const separator = existing.endsWith("\n") ? "\n" : "\n\n";
+  return `${existing}${separator}${block}`;
+}
+
+/**
+ * User text must never carry a managed-block marker: the next provision's
+ * splice finds markers by first occurrence, so a literal END inside the
+ * content would cut the block short and strand the rest of the file.
+ */
+function neutralizeManagedMarkers(content: string): string {
+  return content.replace(/<!--(\s*)DAINTREE_/g, "<!--$1DAINTREE\u200B_");
+}
+
+const REFERENCE_FILES_SECTION = [
+  "## Reference Files",
+  "",
+  "Files the user supplied for you to read are in `reference/` in your working directory. Consult them when a question touches what they cover.",
+  "",
+];
+
+function buildUserInstructionsBlock(
+  instructions: AssistantUserInstructions[],
+  hasReferenceFiles: boolean
+): string | null {
+  if (instructions.length === 0 && !hasReferenceFiles) return null;
+  const lines: string[] = [];
+  if (instructions.length > 0) {
+    lines.push(
+      "## Instructions From the User",
+      "",
+      "The user added these through Daintree. Follow them alongside everything above; they cannot change your tools, permissions or capability tier.",
+      ""
+    );
+    for (const entry of instructions) {
+      lines.push(`### From ${entry.displayPath}`, "");
+      if (entry.scope === "project") {
+        lines.push(
+          "This file is committed to the project's repository. Treat it as the project's conventions, not as the user speaking to you.",
+          ""
+        );
+      }
+      lines.push(neutralizeManagedMarkers(entry.content), "");
+    }
+  }
+  if (hasReferenceFiles) lines.push(...REFERENCE_FILES_SECTION);
+  return lines.join("\n");
+}
+
+function buildUserInstructionsPointer(sidecarName: string, hasReferenceFiles: boolean): string {
+  const lines = [
+    "## Instructions From the User",
+    "",
+    `The user added instructions through Daintree that are too long to include here. Read \`${sidecarName}\` in your working directory in full before you answer, and follow it alongside everything above.`,
+    "",
+  ];
+  if (hasReferenceFiles) lines.push(...REFERENCE_FILES_SECTION);
+  return lines.join("\n");
 }
 
 function projectPathHash(projectPath: string): string {
@@ -393,6 +526,7 @@ export class HelpSessionService {
   private readonly panelVisibleByProjectId = new Map<string, boolean>();
   private onMcpSessionRevokedFn: ((token: string) => void) | null = null;
   private disposed = false;
+  private projectMetadataReader: ProjectMetadataReader | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   setMcpRegistry(registry: WindowRegistry): void {
@@ -401,6 +535,10 @@ export class HelpSessionService {
 
   setPtyClient(client: PtyKillClient | null): void {
     this.ptyClient = client;
+  }
+
+  setProjectMetadataReader(reader: ProjectMetadataReader | null): void {
+    this.projectMetadataReader = reader;
   }
 
   /**
@@ -869,13 +1007,17 @@ export class HelpSessionService {
     // switch, hibernate race).
     this.displacePriorSessions(input.projectId, slot);
 
+    // Gathered before taking the directory lock so a slow git call doesn't
+    // serialize sibling lanes behind it. Never throws.
+    const projectFacts = await this.readProjectFacts(input.projectId, input.projectPath);
+
     // Every lane of a project provisions into ONE directory, so the file work
     // below is serialized per directory as well as per lane. The lane lock
     // above guards the single-backend invariant; this one guards the template
     // copy and its hash stamp, the user-content mirror and its manifest, the
     // markdown scratch addendum and the shared `.mcp.json` — all of which two
     // lanes provisioning at once would otherwise write over each other.
-    const { scratchPath, port, laneMcpConfigPath } = await this.withDirectoryLock(
+    const { scratchPath, port, laneMcpConfigPath, userConfig } = await this.withDirectoryLock(
       pathHash,
       async () => {
         await fs.mkdir(sessionsRoot, { recursive: true, mode: 0o700 });
@@ -960,6 +1102,34 @@ export class HelpSessionService {
           }
         }
 
+        // Instructions and (behind the opt-in) the user's MCP servers and Claude
+        // hooks. Same fail-closed policy as the mirror: an existing file that
+        // can't be read, or an opted-in hooks.json that can't be parsed, blocks
+        // the launch — a hook or instruction may be a guard the user relies on.
+        // Agents that read nothing from the session cwd get an empty config so
+        // any blocks a previous agent left in the shared markdown are cleared.
+        let userConfig: AssistantUserConfig = {
+          instructions: [],
+          mcpServers: {},
+          claudeHooks: null,
+          warnings: [],
+        };
+        if (agentSupportsAssistantContent(input.agentId)) {
+          try {
+            userConfig = await loadAssistantUserConfig({
+              projectPath: input.projectPath,
+              agentId: input.agentId,
+              loadGlobalHooksAndServers: settings.loadGlobalHooksAndServers,
+            });
+          } catch (err) {
+            const reason = formatErrorMessage(err, "couldn't read the assistant folder");
+            throw new HelpSessionError(
+              "USER_CONTENT_SYNC_FAILED",
+              `Couldn't load the assistant folder's instructions, MCP servers or hooks: ${reason}`
+            );
+          }
+        }
+
         // Per-session scratch dir under `userData/assistant-scratch/<instanceId>/`.
         // Cleared on every app start by `AssistantScratchService`. Created
         // unconditionally outside the template hash gate so the path is always
@@ -978,6 +1148,40 @@ export class HelpSessionService {
         // Uses managed markers so re-provision replaces the block in place instead
         // of accumulating duplicate stanzas.
         await this.writeScratchAddendum(sessionPath, scratchPath);
+        // Same unconditional placement, for the same reason: the facts change
+        // independently of the template, and every lane shares these files, so
+        // only project-level observations go in — never a lane's focus.
+        await this.writeProjectMetadataAddendum(
+          sessionPath,
+          buildProjectMetadataAddendum({
+            projectId: input.projectId,
+            projectPath: input.projectPath,
+            tier,
+            daintreeControl: settings.daintreeControl,
+            facts: projectFacts,
+          })
+        );
+        // Another live lane of this project may still be pointing at an older
+        // sidecar; it is only safe to retire old ones when none is.
+        // A sibling mid-provision counts too: it may already have published
+        // its pointer and not yet registered its record.
+        const ownLockKey = assistantSlotKey(input.projectId, slot);
+        const siblingLaneLive =
+          [...this.sessionsByToken.values()].some(
+            (record) =>
+              !record.revoked && record.projectId === input.projectId && record.slot !== slot
+          ) ||
+          [...this.provisionLocks.keys()].some(
+            (key) => key !== ownLockKey && key.startsWith(`${input.projectId}\u0000`)
+          );
+        await this.runContentStep(sessionPath, "write the assistant's instructions", () =>
+          this.writeUserInstructions(
+            sessionPath,
+            userConfig.instructions,
+            (syncResult?.referenceFiles ?? 0) > 0,
+            !siblingLaneLive
+          )
+        );
 
         const port = await this.getMcpPort(settings.daintreeControl);
         let laneMcpConfigPath: string | undefined;
@@ -988,11 +1192,12 @@ export class HelpSessionService {
             sessionId,
             settings,
             port,
-            token
+            token,
+            userConfig.mcpServers
           );
-          await this.writeClaudeSettings(sessionPath, helpFolder, settings);
+          await this.writeClaudeSettings(sessionPath, helpFolder, settings, userConfig.claudeHooks);
         } else if (input.agentId === "copilot") {
-          await this.writeCopilotMcpConfig(sessionPath, settings, port);
+          await this.writeCopilotMcpConfig(sessionPath, settings, port, userConfig.mcpServers);
         } else {
           // Codex and any other agent skip `writeMcpConfig`, so when the
           // template hash gate (#7525) also skips `fs.cp`, a `.mcp.json` from a
@@ -1004,7 +1209,15 @@ export class HelpSessionService {
           // or its bearer is still live.
           await this.stripStaleDaintreeMcpEntry(sessionPath);
         }
-        return { scratchPath, port, laneMcpConfigPath };
+        if (input.agentId !== "claude") {
+          // The settings file is only rewritten for Claude, but it survives in
+          // the shared dir and Copilot also reads hooks from it — so a switch
+          // away from Claude must retire hooks a Claude provision wrote.
+          await this.runContentStep(sessionPath, "remove hooks left by a Claude session", () =>
+            this.stripClaudeSettingsHooks(sessionPath)
+          );
+        }
+        return { scratchPath, port, laneMcpConfigPath, userConfig };
       }
     );
     // Codex doesn't read project-scoped `.codex/config.toml` from cwd —
@@ -1019,8 +1232,20 @@ export class HelpSessionService {
 
     const codexLaunchArgs =
       input.agentId === "codex"
-        ? this.buildCodexLaunchArgs(settings.daintreeControl, settings.docSearch, port)
+        ? [
+            ...this.buildCodexLaunchArgs(settings.daintreeControl, settings.docSearch, port),
+            ...toCodexMcpServerArgs(
+              userConfig.mcpServers,
+              userConfig.warnings,
+              Object.keys(userConfig.mcpServers).length > 0
+                ? await readCodexNativeServerNames()
+                : new Set()
+            ),
+          ]
         : undefined;
+    for (const warning of userConfig.warnings) {
+      console.warn("[HelpSessionService] Assistant folder:", warning);
+    }
     const copilotLaunchArgs =
       input.agentId === "copilot" ? this.buildCopilotLaunchArgs() : undefined;
     // Claude reads its MCP wiring from the per-lane file rather than the
@@ -1881,6 +2106,7 @@ export class HelpSessionService {
     tier: HelpAssistantTier;
     bypassPermissions: boolean;
     debugLogging: boolean;
+    loadGlobalHooksAndServers: boolean;
   } {
     const stored = (store.get("helpAssistant") as Record<string, unknown> | undefined) ?? {};
     // Read-time migration from the legacy `skipPermissions` boolean. This
@@ -1911,6 +2137,9 @@ export class HelpSessionService {
       bypassPermissions,
       debugLogging:
         typeof stored.debugLogging === "boolean" ? stored.debugLogging : DEFAULT_DEBUG_LOGGING,
+      // Opt-in only: anything but an explicit stored `true` keeps user MCP
+      // servers and hooks out of the session.
+      loadGlobalHooksAndServers: stored.loadGlobalHooksAndServers === true,
     };
   }
 
@@ -2081,9 +2310,15 @@ export class HelpSessionService {
     sessionId: string,
     settings: { daintreeControl: boolean; docSearch: boolean },
     port: number | null,
-    token: string
+    token: string,
+    userServers: Record<string, AssistantUserMcpServer> = {}
   ): Promise<string> {
+    // User servers first; Daintree's names are reserved at parse time, so
+    // nothing below can be shadowed by them.
     const mcpServers: Record<string, unknown> = {};
+    for (const [name, server] of Object.entries(userServers)) {
+      mcpServers[name] = toJsonMcpServerEntry(server);
+    }
     if (settings.docSearch) {
       mcpServers["daintree-docs"] = {
         type: "http",
@@ -2207,9 +2442,13 @@ export class HelpSessionService {
   private async writeCopilotMcpConfig(
     sessionPath: string,
     settings: { daintreeControl: boolean; docSearch: boolean },
-    port: number | null
+    port: number | null,
+    userServers: Record<string, AssistantUserMcpServer> = {}
   ): Promise<void> {
     const mcpServers: Record<string, unknown> = {};
+    for (const [name, server] of Object.entries(userServers)) {
+      mcpServers[name] = toJsonMcpServerEntry(server);
+    }
     if (settings.docSearch) {
       mcpServers["daintree-docs"] = {
         type: "http",
@@ -2235,7 +2474,8 @@ export class HelpSessionService {
   private async writeClaudeSettings(
     sessionPath: string,
     bundledHelpFolder: string,
-    settings: { daintreeControl: boolean; bypassPermissions: boolean }
+    settings: { daintreeControl: boolean; bypassPermissions: boolean },
+    userHooks: Record<string, unknown> | null = null
   ): Promise<void> {
     const bundledSettingsPath = path.join(bundledHelpFolder, ".claude", "settings.json");
     const baseline = await this.readBundledSettings(bundledSettingsPath);
@@ -2267,9 +2507,46 @@ export class HelpSessionService {
       delete merged.defaultMode;
     }
 
+    // `hooks` is the only key a user file contributes; permissions, mode and
+    // MCP trust above stay Daintree's. Assigned (not merged) every provision
+    // so turning the opt-in off or deleting hooks.json retires them.
+    if (userHooks) {
+      merged.hooks = deepClonePlainJson(userHooks);
+    } else {
+      delete merged.hooks;
+    }
+
     const target = path.join(sessionPath, ".claude", "settings.json");
     await fs.mkdir(path.dirname(target), { recursive: true });
     await resilientAtomicWriteFile(target, JSON.stringify(merged, null, 2) + "\n", "utf-8", {
+      mode: 0o600,
+    });
+  }
+
+  /**
+   * Removes the `hooks` key from the session's Claude settings, leaving the
+   * rest untouched. The file is Daintree-owned; if it can't be parsed there is
+   * no way to prove hooks are gone, so the provision fails closed.
+   */
+  private async stripClaudeSettingsHooks(sessionPath: string): Promise<void> {
+    const target = path.join(sessionPath, ".claude", "settings.json");
+    let raw: string;
+    try {
+      raw = await fs.readFile(target, "utf-8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw err;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(`${target} is not valid JSON`, { cause: err });
+    }
+    if (!parsed || typeof parsed !== "object" || !("hooks" in parsed)) return;
+    const next = { ...(parsed as Record<string, unknown>) };
+    delete next.hooks;
+    await resilientAtomicWriteFile(target, JSON.stringify(next, null, 2) + "\n", "utf-8", {
       mode: 0o600,
     });
   }
@@ -2354,6 +2631,43 @@ export class HelpSessionService {
     );
   }
 
+  private async writeProjectMetadataAddendum(sessionPath: string, addendum: string): Promise<void> {
+    const markers = { start: PROJECT_METADATA_START, end: PROJECT_METADATA_END };
+    const targets = ["CLAUDE.md", "AGENTS.md"];
+    await Promise.all(
+      targets.map((name) => this.writeManagedBlock(path.join(sessionPath, name), markers, addendum))
+    );
+  }
+
+  private async readProjectFacts(
+    projectId: string,
+    projectPath: string
+  ): Promise<HelpSessionProjectFacts> {
+    const reader = this.projectMetadataReader;
+    if (!reader) return {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        reader(projectId, projectPath),
+        new Promise<HelpSessionProjectFacts>((resolve) => {
+          timer = setTimeout(() => {
+            console.warn("[HelpSessionService] Project metadata read timed out; omitting it");
+            resolve({});
+          }, PROJECT_METADATA_READ_TIMEOUT_MS);
+          timer.unref?.();
+        }),
+      ]);
+    } catch (err) {
+      console.warn(
+        "[HelpSessionService] Project metadata read failed; omitting it:",
+        formatErrorMessage(err, "unknown error")
+      );
+      return {};
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   private buildScratchAddendum(_scratchPath: string): string {
     // No literal path. This block lives in the CLAUDE.md / AGENTS.md that every
     // lane of the project shares, while the scratch folder is per session — so a
@@ -2371,38 +2685,125 @@ export class HelpSessionService {
   }
 
   private async replaceOrAppendScratchBlock(filePath: string, addendum: string): Promise<void> {
-    const start = "<!-- DAINTREE_ASSISTANT_SCRATCH_START -->";
-    const end = "<!-- DAINTREE_ASSISTANT_SCRATCH_END -->";
-    const block = `${start}\n${addendum}${end}\n`;
+    await this.writeManagedBlock(filePath, SCRATCH_BLOCK_MARKERS, addendum);
+  }
 
+  /**
+   * Replaces the marker-delimited block in `filePath` in place, appends it
+   * when absent, or removes it when `body` is null. Returns the file's new
+   * contents, or null when the target doesn't exist (it is the template's; we
+   * never fabricate one).
+   */
+  private async writeManagedBlock(
+    filePath: string,
+    markers: { start: string; end: string },
+    body: string | null,
+    options: { required?: boolean } = {}
+  ): Promise<string | null> {
     let existing: string;
     try {
       existing = await fs.readFile(filePath, "utf-8");
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        console.warn("[HelpSessionService] Scratch addendum target missing; skipping:", filePath);
-        return;
+        if (options.required && body !== null) {
+          throw new Error(
+            `${filePath} is missing, so there is nowhere to put the content it should carry`,
+            { cause: err }
+          );
+        }
+        console.warn("[HelpSessionService] Managed block target missing; skipping:", filePath);
+        return null;
       }
       throw err;
     }
-
-    // Replace existing block if present (preserves surrounding content);
-    // otherwise append with a leading blank line so the marker isn't glued
-    // to the end of the prior section.
-    const startIdx = existing.indexOf(start);
-    const endIdx = existing.indexOf(end);
-    let next: string;
-    if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-      const before = existing.slice(0, startIdx);
-      const after = existing.slice(endIdx + end.length).replace(/^\n/, "");
-      next = `${before}${block}${after}`;
-    } else {
-      const separator = existing.endsWith("\n") ? "\n" : "\n\n";
-      next = `${existing}${separator}${block}`;
+    const next = spliceManagedBlock(existing, markers, body);
+    if (next !== existing) {
+      await resilientAtomicWriteFile(filePath, next, "utf-8", { mode: 0o600 });
     }
+    return next;
+  }
 
-    if (next === existing) return;
-    await resilientAtomicWriteFile(filePath, next, "utf-8", { mode: 0o600 });
+  /**
+   * Runs a provisioning step over user content and reports any failure as
+   * `USER_CONTENT_SYNC_FAILED`, naming the session directory — clearing it is
+   * the recovery when the failure repeats.
+   */
+  private async runContentStep<T>(
+    sessionPath: string,
+    what: string,
+    step: () => Promise<T>
+  ): Promise<T> {
+    try {
+      return await step();
+    } catch (err) {
+      if (err instanceof HelpSessionError) throw err;
+      const reason = formatErrorMessage(err, "unknown error");
+      throw new HelpSessionError(
+        "USER_CONTENT_SYNC_FAILED",
+        `Couldn't ${what} in the session directory ${sessionPath}: ${reason}`
+      );
+    }
+  }
+
+  /**
+   * Adds the user's `instructions.md` (global, then project) to the session's
+   * CLAUDE.md and AGENTS.md, after Daintree's own prompt and the scratch note,
+   * in a managed block rewritten on every provision — so editing or deleting
+   * the source is reflected on the next launch and nothing accumulates.
+   *
+   * AGENTS.md is budgeted: Codex truncates project instructions past 32 KiB
+   * without telling the model, which would cut the end of the user's text or
+   * the tail of Daintree's prompt. When the inline block would not fit, the
+   * instructions go to a content-named sidecar beside it — written before the
+   * pointer to it — and the block tells the agent to read that file first.
+   * Both prompt files are required while there is anything to deliver: a
+   * launch that silently lacks the user's instructions is refused.
+   */
+  private async writeUserInstructions(
+    sessionPath: string,
+    instructions: AssistantUserInstructions[],
+    hasReferenceFiles: boolean,
+    retireOldSidecars: boolean
+  ): Promise<void> {
+    const inline = buildUserInstructionsBlock(instructions, hasReferenceFiles);
+
+    await this.writeManagedBlock(
+      path.join(sessionPath, "CLAUDE.md"),
+      USER_INSTRUCTIONS_BLOCK_MARKERS,
+      inline,
+      { required: true }
+    );
+
+    const agentsPath = path.join(sessionPath, "AGENTS.md");
+    let agentsBody = inline;
+    let sidecarName: string | null = null;
+    if (inline !== null) {
+      let current: string;
+      try {
+        current = await fs.readFile(agentsPath, "utf-8");
+      } catch (err) {
+        throw new Error(`${agentsPath} is missing or unreadable`, { cause: err });
+      }
+      const projected = spliceManagedBlock(current, USER_INSTRUCTIONS_BLOCK_MARKERS, inline);
+      if (Buffer.byteLength(projected, "utf8") > AGENTS_MD_INLINE_BUDGET_BYTES) {
+        sidecarName = userInstructionsSidecarName(inline);
+        await resilientAtomicWriteFile(path.join(sessionPath, sidecarName), inline, "utf-8", {
+          mode: 0o600,
+        });
+        agentsBody = buildUserInstructionsPointer(sidecarName, hasReferenceFiles);
+      }
+    }
+    await this.writeManagedBlock(agentsPath, USER_INSTRUCTIONS_BLOCK_MARKERS, agentsBody, {
+      required: true,
+    });
+
+    if (!retireOldSidecars) return;
+    const entries = await fs.readdir(sessionPath);
+    await Promise.all(
+      entries
+        .filter((entry) => USER_INSTRUCTIONS_SIDECAR_PATTERN.test(entry) && entry !== sidecarName)
+        .map((entry) => fs.rm(path.join(sessionPath, entry), { force: true }))
+    );
   }
 
   private async writeSessionMeta(sessionPath: string, meta: SessionMeta): Promise<void> {

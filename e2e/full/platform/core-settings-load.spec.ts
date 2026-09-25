@@ -81,9 +81,9 @@ test.describe.serial("Core: Settings Pages Load", () => {
         timeout: T_SHORT,
       });
 
-      // App subtab (default) should show the accent color section
+      // App subtab (default) should show the accent color control
       const settingsPanel = window.locator('[role="dialog"]');
-      await expect(settingsPanel.locator('section[aria-label="Accent color"]')).toBeVisible({
+      await expect(settingsPanel.getByText("Accent color", { exact: true })).toBeVisible({
         timeout: T_SHORT,
       });
     });
@@ -201,8 +201,10 @@ test.describe.serial("Core: Settings Pages Load", () => {
       timeout: T_MEDIUM,
     });
 
-    // Worktree Path Pattern section should be visible
-    await expect(window.locator("text=Worktree Path Pattern")).toBeVisible({ timeout: T_SHORT });
+    // The path pattern control should be visible.
+    await expect(window.getByRole("heading", { name: "Path pattern" })).toBeVisible({
+      timeout: T_SHORT,
+    });
   });
 
   test("Toolbar tab loads", async () => {
@@ -218,7 +220,9 @@ test.describe.serial("Core: Settings Pages Load", () => {
     const { window } = ctx;
 
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Environment" }).click();
-    await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
+    await expect(
+      window.getByRole("heading", { name: /environment variables/i }).first()
+    ).toBeVisible({
       timeout: T_SHORT,
     });
   });
@@ -247,7 +251,7 @@ test.describe.serial("Core: Settings Pages Load", () => {
 
     await window
       .locator(SEL.settings.navSidebar)
-      .getByRole("tab", { name: "Code Forge", exact: true })
+      .getByRole("tab", { name: "Code forge", exact: true })
       .click();
     await expect(window.locator("h3", { hasText: "Code Forge" })).toBeVisible({
       timeout: T_SHORT,
@@ -345,7 +349,9 @@ test.describe.serial("Core: Settings Pages Load", () => {
       await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Variables" }).click();
 
       // The EnvironmentVariablesEditor heading should appear
-      await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
+      await expect(
+        window.getByRole("heading", { name: /environment variables/i }).first()
+      ).toBeVisible({
         timeout: T_SHORT,
       });
 
@@ -378,22 +384,23 @@ test.describe.serial("Core: Settings Pages Load", () => {
     });
 
     await test.step("Open Worktree Setup tab and verify Resource Environments", async () => {
-      await window
-        .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
-        .click();
+      await window.locator(SEL.settings.projectAutomationTab).click();
 
       // The Resource Environments heading should appear (scoped to the automation panel)
       const automationPanel = window.locator("#settings-panel-project\\:automation");
-      await expect(automationPanel.locator("h2", { hasText: "Resource Environments" })).toBeVisible(
+      await expect(automationPanel.locator("h4", { hasText: "Resource environments" })).toBeVisible(
         {
           timeout: T_SHORT,
         }
       );
 
-      // Default worktree mode section should be visible (scoped to automation panel)
-      await expect(automationPanel.locator("text=Default worktree mode")).toBeVisible({
+      // The empty state offers the first environment; mode choices appear after one exists.
+      await expect(
+        automationPanel.getByText("Add an environment to run worktrees off this machine")
+      ).toBeVisible({
         timeout: T_SHORT,
       });
+      await expect(automationPanel.getByText("Default worktree mode")).toHaveCount(0);
     });
 
     await test.step("Close settings dialog", async () => {

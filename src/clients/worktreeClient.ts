@@ -6,7 +6,11 @@ import type {
   AttachIssuePayload,
   IssueAssociation,
 } from "@shared/types";
-import type { LifecycleCommandReview, WorktreeCreateResult } from "@shared/types/worktree";
+import type {
+  LifecycleCommandReview,
+  WorktreeCreateResult,
+  WorktreeTeardownPreview,
+} from "@shared/types/worktree";
 import type { PRServiceStatus } from "@shared/types/workspace-host";
 import type { WorktreeChanges } from "@shared/types/git";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
@@ -162,6 +166,18 @@ export const worktreeClient = {
       worktreeId,
     });
     return risk;
+  },
+
+  /**
+   * The teardown commands a delete of this worktree would run first, and
+   * which of them it would skip for want of approval. `null` when the
+   * worktree's monitor no longer exists.
+   */
+  getDeleteTeardownPreview: async (worktreeId: string): Promise<WorktreeTeardownPreview | null> => {
+    const { preview } = await window.electron.worktreePort.request("get-delete-teardown-preview", {
+      worktreeId,
+    });
+    return preview;
   },
 
   attachIssue: (payload: AttachIssuePayload): Promise<void> => {

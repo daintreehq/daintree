@@ -1,14 +1,14 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import type { AgentPreset } from "@/config/agents";
 
 /**
  * Preset selector — replaces the native `<select>` + `<optgroup>` that can't
- * render color swatches inline. Uses a Popover listbox following the
- * AgentSelectorDropdown pattern, so we get color dots per preset name and
- * grouped sections ("CCR Routes" / "Custom") with proper visual separation.
+ * render color swatches inline. A Popover listbox with a colour dot per preset
+ * and grouped sections ("CCR routes" / "Project shared" / "Custom").
  *
  * No search input — preset lists are small (typically 2-6 items). If this
  * grows past ~15 the AgentSelectorDropdown filter pattern can be ported.
@@ -23,6 +23,9 @@ export interface PresetSelectorProps {
   customPresets: AgentPreset[];
   onChange: (presetId: string | undefined) => void;
   agentColor: string;
+  /** Wires the trigger to the row label that names it. */
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
 }
 
 type Item = {
@@ -31,6 +34,8 @@ type Item = {
   color: string;
   source: "default" | "ccr" | "project" | "custom";
 };
+
+const DEFAULT_LABEL = "Default settings";
 
 function stripCcrPrefix(name: string): string {
   return name.replace(/^CCR:\s*/, "");
@@ -44,12 +49,17 @@ export function PresetSelector({
   customPresets,
   onChange,
   agentColor,
+  "aria-labelledby": ariaLabelledBy,
+  "aria-describedby": ariaDescribedBy,
 }: PresetSelectorProps) {
   const [open, setOpen] = useState(false);
+  const listboxId = useId();
+  const valueId = useId();
+  const listboxRef = useRef<HTMLDivElement>(null);
 
   const selectedItem = useMemo((): Item => {
     if (!selectedPresetId) {
-      return { id: "", label: "Default (all worktrees)", color: agentColor, source: "default" };
+      return { id: "", label: DEFAULT_LABEL, color: agentColor, source: "default" };
     }
     // Match precedence order from getMergedPresets: custom wins over project
     // wins over CCR on ID collision. Resolve the badge/label against the
@@ -83,26 +93,116 @@ export function PresetSelector({
     }
     // Stale selection — fall back to default presentation but don't clear
     // state here (the parent clears stale IDs on launch).
-    return { id: "", label: "Default (no overrides)", color: agentColor, source: "default" };
+    return { id: "", label: DEFAULT_LABEL, color: agentColor, source: "default" };
   }, [selectedPresetId, ccrPresets, projectPresets, customPresets, agentColor]);
+
+  // Flat option order, in the order the groups render, for arrow-key movement.
+  const options: Item[] = [
+    { id: "", label: DEFAULT_LABEL, color: agentColor, source: "default" },
+    ...ccrPresets.map((f): Item => ({
+      id: f.id,
+      label: f.displayTitle ?? stripCcrPrefix(f.name),
+      color: f.color ?? agentColor,
+      source: "ccr",
+    })),
+    ...projectPresets.map((f): Item => ({
+      id: f.id,
+      label: f.displayTitle ?? f.name,
+      color: f.color ?? agentColor,
+      source: "project",
+    })),
+    ...customPresets.map((f): Item => ({
+      id: f.id,
+      label: f.displayTitle ?? f.name,
+      color: f.color ?? agentColor,
+      source: "custom",
+    })),
+  ];
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((o) => o.id === (selectedPresetId ?? "") && o.source === selectedItem.source)
+  );
+  const [activeIndex, setActiveIndex] = useState(selectedIndex);
+
+  const optionDomId = (index: number) => `${listboxId}-option-${index}`;
 
   const handleSelect = (id: string) => {
     onChange(id || undefined);
     setOpen(false);
   };
 
+  const handleOpenChange = (next: boolean) => {
+    if (next) setActiveIndex(selectedIndex);
+    setOpen(next);
+  };
+
+  // One tab stop: focus sits on the listbox and the arrows move the active option,
+  // which `aria-activedescendant` announces. Enter or Space picks it.
+  const handleListKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const last = options.length - 1;
+    const move = (index: number) => {
+      e.preventDefault();
+      setActiveIndex(index);
+      document.getElementById(optionDomId(index))?.scrollIntoView?.({ block: "nearest" });
+    };
+    switch (e.key) {
+      case "ArrowDown":
+        move(Math.min(activeIndex + 1, last));
+        break;
+      case "ArrowUp":
+        move(Math.max(activeIndex - 1, 0));
+        break;
+      case "Home":
+        move(0);
+        break;
+      case "End":
+        move(last);
+        break;
+      case "Enter":
+      case " ": {
+        const option = options[activeIndex];
+        if (option) {
+          e.preventDefault();
+          handleSelect(option.id);
+        }
+        break;
+      }
+    }
+  };
+
+  const renderOption = (item: Item, index: number, testid: string) => (
+    <PresetOption
+      key={`${item.source}-${item.id}`}
+      domId={optionDomId(index)}
+      item={item}
+      isSelected={item.source === selectedItem.source && item.id === selectedItem.id}
+      isActive={index === activeIndex}
+      onSelect={handleSelect}
+      onHover={() => setActiveIndex(index)}
+      testid={testid}
+    />
+  );
+
+  const ccrStart = 1;
+  const projectStart = ccrStart + ccrPresets.length;
+  const customStart = projectStart + projectPresets.length;
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <button
           type="button"
           aria-expanded={open}
           aria-haspopup="listbox"
+          // The row label names the control; the value span says what it is set to.
+          aria-labelledby={ariaLabelledBy ? `${ariaLabelledBy} ${valueId}` : undefined}
+          aria-describedby={ariaDescribedBy}
           className={cn(
             "flex items-center gap-2 w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)]",
-            "border border-border-strong bg-surface-canvas text-text-primary",
-            "hover:border-daintree-accent/50 transition-colors",
-            "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50"
+            "border border-border-strong bg-surface-canvas text-text-primary transition-colors",
+            // Radix hands focus back to the trigger when the list closes, so a `focus:`
+            // indicator stayed lit after every pick — accent only for keyboard focus.
+            "focus:outline-hidden focus-visible:border-accent-primary"
           )}
           data-testid="preset-selector-trigger"
         >
@@ -111,27 +211,13 @@ export function PresetSelector({
             style={{ backgroundColor: selectedItem.color }}
             aria-hidden="true"
           />
-          <span className="flex-1 text-left truncate">{selectedItem.label}</span>
-          {selectedItem.source === "ccr" && (
-            <span
-              className="text-4xs uppercase tracking-wide text-text-secondary bg-daintree-text/5 px-1 py-0.5 rounded shrink-0"
-              aria-hidden="true"
-            >
-              CCR
-            </span>
-          )}
-          {selectedItem.source === "project" && (
-            <span
-              className="text-4xs uppercase tracking-wide text-text-secondary bg-daintree-text/5 px-1 py-0.5 rounded shrink-0"
-              aria-hidden="true"
-            >
-              Project
-            </span>
-          )}
+          <span id={valueId} className="flex-1 text-left truncate">
+            {selectedItem.label}
+          </span>
           <ChevronDown
             size={14}
             className={cn(
-              "shrink-0 text-daintree-text/40 transition-transform",
+              "shrink-0 text-text-secondary transition-transform",
               open && "rotate-180"
             )}
           />
@@ -143,65 +229,50 @@ export function PresetSelector({
         className="p-1"
         style={{ width: "var(--radix-popover-trigger-width)" }}
         data-testid="preset-selector-listbox"
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          listboxRef.current?.focus();
+          // Bring the current preset's row, and its rail, into view on opening.
+          document.getElementById(optionDomId(activeIndex))?.scrollIntoView?.({ block: "nearest" });
+        }}
       >
-        <div role="listbox" aria-label="Preset" className="overflow-y-auto max-h-80">
-          <PresetOption
-            id=""
-            label="Default (all worktrees)"
-            color={agentColor}
-            isSelected={!selectedPresetId}
-            onSelect={handleSelect}
-            testid="preset-option-default"
-          />
+        <div
+          ref={listboxRef}
+          id={listboxId}
+          role="listbox"
+          aria-label="Preset"
+          tabIndex={0}
+          aria-activedescendant={optionDomId(activeIndex)}
+          onKeyDown={handleListKeyDown}
+          // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- focus is drawn on the aria-activedescendant option by PALETTE_ROW_CLASS (fill + leading rail)
+          className="overflow-y-auto max-h-80 focus:outline-hidden"
+        >
+          {renderOption(options[0]!, 0, "preset-option-default")}
           {ccrPresets.length > 0 && (
-            <>
-              <Divider label="CCR Routes" />
-              {ccrPresets.map((f) => (
-                <PresetOption
-                  key={f.id}
-                  id={f.id}
-                  label={f.displayTitle ?? stripCcrPrefix(f.name)}
-                  color={f.color ?? agentColor}
-                  badge="CCR"
-                  isSelected={selectedPresetId === f.id}
-                  onSelect={handleSelect}
-                  testid={`preset-option-${f.id}`}
-                />
-              ))}
-            </>
+            <div role="group" aria-label="CCR routes">
+              <Divider label="CCR routes" />
+              {options
+                .slice(ccrStart, projectStart)
+                .map((item, i) => renderOption(item, ccrStart + i, `preset-option-${item.id}`))}
+            </div>
           )}
           {projectPresets.length > 0 && (
-            <>
-              <Divider label="Project Shared" />
-              {projectPresets.map((f) => (
-                <PresetOption
-                  key={`project-${f.id}`}
-                  id={f.id}
-                  label={f.displayTitle ?? f.name}
-                  color={f.color ?? agentColor}
-                  badge="Project"
-                  isSelected={selectedPresetId === f.id}
-                  onSelect={handleSelect}
-                  testid={`preset-option-project-${f.id}`}
-                />
-              ))}
-            </>
+            <div role="group" aria-label="Project shared">
+              <Divider label="Project shared" />
+              {options
+                .slice(projectStart, customStart)
+                .map((item, i) =>
+                  renderOption(item, projectStart + i, `preset-option-project-${item.id}`)
+                )}
+            </div>
           )}
           {customPresets.length > 0 && (
-            <>
+            <div role="group" aria-label="Custom">
               <Divider label="Custom" />
-              {customPresets.map((f) => (
-                <PresetOption
-                  key={f.id}
-                  id={f.id}
-                  label={f.displayTitle ?? f.name}
-                  color={f.color ?? agentColor}
-                  isSelected={selectedPresetId === f.id}
-                  onSelect={handleSelect}
-                  testid={`preset-option-${f.id}`}
-                />
-              ))}
-            </>
+              {options
+                .slice(customStart)
+                .map((item, i) => renderOption(item, customStart + i, `preset-option-${item.id}`))}
+            </div>
           )}
         </div>
       </PopoverContent>
@@ -212,8 +283,9 @@ export function PresetSelector({
 function Divider({ label }: { label: string }) {
   return (
     <div
-      className="px-2 pt-1.5 pb-0.5 text-3xs font-medium uppercase tracking-wide text-text-secondary"
+      className="px-2 pt-2 pb-1 text-xs font-medium text-text-secondary"
       data-testid={`preset-group-${label.toLowerCase().replace(/\s+/g, "-")}`}
+      aria-hidden="true"
     >
       {label}
     </div>
@@ -221,56 +293,54 @@ function Divider({ label }: { label: string }) {
 }
 
 function PresetOption({
-  id,
-  label,
-  color,
-  badge,
+  domId,
+  item,
   isSelected,
+  isActive,
   onSelect,
+  onHover,
   testid,
 }: {
-  id: string;
-  label: string;
-  color: string;
-  badge?: string;
+  domId: string;
+  item: Item;
   isSelected: boolean;
+  isActive: boolean;
   onSelect: (id: string) => void;
+  onHover: () => void;
   testid?: string;
 }) {
   return (
     <div
+      id={domId}
       role="option"
-      aria-selected={isSelected}
+      // The palettes' contract: `aria-selected` is the row Enter acts on, and the
+      // shared row class draws it as a fill plus a leading `selection-outline` rail
+      // (3:1 where the fill alone is ~1.1:1). The committed value is `aria-current`
+      // with a check mark, so the two never compete for one treatment.
+      aria-selected={isActive}
+      aria-current={isSelected ? "true" : undefined}
       data-testid={testid}
-      onClick={() => onSelect(id)}
+      onClick={() => onSelect(item.id)}
+      onMouseMove={onHover}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onSelect(id);
+          e.stopPropagation();
+          onSelect(item.id);
         }
       }}
-      tabIndex={0}
       className={cn(
-        "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm",
-        "hover:bg-overlay-soft focus:bg-overlay-soft focus:outline-hidden",
-        "focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-        isSelected && "text-text-primary font-medium bg-overlay-selected"
+        PALETTE_ROW_CLASS,
+        "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm text-text-primary",
+        isSelected && "font-medium"
       )}
     >
       <span
         className="w-2.5 h-2.5 rounded-full shrink-0 border border-border-default"
-        style={{ backgroundColor: color }}
+        style={{ backgroundColor: item.color }}
         aria-hidden="true"
       />
-      <span className="flex-1 truncate">{label}</span>
-      {badge && (
-        <span
-          className="text-4xs uppercase tracking-wide text-text-secondary bg-daintree-text/5 px-1 py-0.5 rounded"
-          aria-hidden="true"
-        >
-          {badge}
-        </span>
-      )}
+      <span className="flex-1 truncate">{item.label}</span>
       {isSelected && <Check size={12} className="shrink-0" aria-hidden="true" />}
     </div>
   );

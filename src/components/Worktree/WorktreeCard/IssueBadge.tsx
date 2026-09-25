@@ -1,6 +1,5 @@
 import { cn } from "@/lib/utils";
 import { CircleDot, CloudOff } from "lucide-react";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { useIssueTooltip } from "@/hooks/useForgeTooltip";
 import { useForgeBadgeTooltip } from "./hooks/useForgeBadgeTooltip";
@@ -9,9 +8,10 @@ import { useForgeBadgeFreshness } from "./hooks/useForgeBadgeFreshness";
 import { freshnessClass } from "@/components/Layout/FreshnessUtils";
 import {
   IssueTooltipContent,
-  TooltipLoading,
   TokenMissingTooltip,
-  FreshnessMetaItem,
+  describeIssueTooltip,
+  TooltipFallback,
+  HOVER_CARD_EVENT_FENCE,
   type TooltipFreshness,
 } from "./ForgeTooltipContent";
 
@@ -52,9 +52,7 @@ export function IssueBadge({
   // first 400ms rather than flashing the number, then fall through (#8079).
   // Title preservation for *unchanged* issue numbers is handled upstream in
   // the store, so this gate only fires on genuine issue-number transitions.
-  const isColdTitleGap = useColdNumberGap(issueNumber, issueTitle);
-  const showColdFallback = useDohertyGate(isColdTitleGap);
-  const showTooltipLoading = useDohertyGate(loading);
+  const hideColdNumber = useColdNumberGap(issueNumber, issueTitle);
 
   const { freshnessLevel, freshnessCause, rateLimitResetAt, now } = useForgeBadgeFreshness("issue");
 
@@ -71,6 +69,10 @@ export function IssueBadge({
       // Rich hover card whose body IS the content — exempt from the global
       // dialog-transition dismissal (issue #11030).
       dismissOnDialogTransition={false}
+      // The app-wide provider makes tooltip content pass-through. A card this
+      // size must stay up while the pointer crosses onto it to read it (WCAG
+      // SC 1.4.13, hoverable), so this one opts back in.
+      disableHoverableContent={false}
     >
       <TooltipTrigger asChild>
         <button
@@ -85,7 +87,9 @@ export function IssueBadge({
           aria-disabled={!isActive || undefined}
           aria-label={
             missingCredential
-              ? "Add a forge access token to see issue details"
+              ? // Which item, then the action: the badge still names what it's for
+                // even though clicking it now opens Settings.
+                `Issue #${issueNumber}${issueTitle ? `: ${issueTitle}` : ""}. Add a forge access token to see issue details`
               : issueTitle
                 ? `Open issue #${issueNumber}: ${issueTitle}`
                 : `Open issue #${issueNumber}`
@@ -95,7 +99,7 @@ export function IssueBadge({
             className={cn(
               "shrink-0",
               isHeadline ? "w-3.5 h-3.5" : "w-3 h-3",
-              missingCredential ? "text-text-muted" : "text-pr-open"
+              missingCredential ? "text-text-secondary" : "text-pr-open"
             )}
             aria-hidden="true"
           />
@@ -104,7 +108,7 @@ export function IssueBadge({
               "truncate flex-1 min-w-0",
               underlineOnHover && "hover:underline",
               missingCredential
-                ? "text-text-muted"
+                ? "text-text-secondary"
                 : isHeadline
                   ? isActive
                     ? "text-text-primary font-medium"
@@ -113,11 +117,11 @@ export function IssueBadge({
             )}
           >
             {issueTitle ||
-              (isColdTitleGap && !showColdFallback ? null : (
+              (hideColdNumber ? null : (
                 <span
                   className={cn(
                     "font-mono",
-                    missingCredential ? "text-text-muted" : "text-pr-open"
+                    missingCredential ? "text-text-secondary" : "text-pr-open"
                   )}
                 >
                   #{issueNumber}
@@ -125,24 +129,33 @@ export function IssueBadge({
               ))}
           </span>
           {showPausedGlyph && (
-            <CloudOff className="w-3 h-3 shrink-0 text-text-muted" aria-hidden="true" />
+            <CloudOff className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden="true" />
           )}
         </button>
       </TooltipTrigger>
-      <TooltipContent side="right" align="start" className="p-3">
+      <TooltipContent
+        side="right"
+        align="start"
+        className="p-3"
+        {...HOVER_CARD_EVENT_FENCE}
+        aria-label={
+          data && !missingCredential
+            ? describeIssueTooltip(data, freshness, { includeTitle: !issueTitle })
+            : undefined
+        }
+      >
         {missingCredential ? (
           <TokenMissingTooltip type="issue" />
-        ) : showTooltipLoading ? (
-          <TooltipLoading />
         ) : data ? (
           <IssueTooltipContent data={data} freshness={freshness} />
-        ) : error ? (
-          <span className="text-xs text-text-secondary">Failed to load issue details</span>
         ) : (
-          <span className="text-xs text-text-secondary">Issue #{issueNumber}</span>
-        )}
-        {!data && (
-          <FreshnessMetaItem freshness={freshness} className="text-2xs text-text-muted mt-1" />
+          <TooltipFallback
+            type="issue"
+            number={issueNumber}
+            title={issueTitle}
+            status={loading ? "loading" : error ? "failed" : "idle"}
+            freshness={freshness}
+          />
         )}
       </TooltipContent>
     </Tooltip>

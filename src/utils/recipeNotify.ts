@@ -1,4 +1,5 @@
 import { notify } from "@/lib/notify";
+import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
 import type { RecipeSpawnResults } from "@/store/recipeStore";
 
 export interface RecipeSpawnNotifyContext {
@@ -21,6 +22,9 @@ export function notifyRecipeSpawnFailures(
   { recipeName, projectId }: RecipeSpawnNotifyContext = {}
 ): void {
   if (results.failed.length === 0) return;
+  // Every missing terminal is one the user chose not to open at the panel-limit
+  // confirm. They answered it a moment ago; a failure toast would blame the limit.
+  if (results.failed.every((f) => f.error === PANEL_LIMIT_DECLINED_REASON)) return;
 
   const total = results.spawned.length + results.failed.length;
   const name = recipeName ? `'${recipeName}'` : "the recipe";

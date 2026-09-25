@@ -223,8 +223,14 @@ describe("host.mcp.registerTools", () => {
     await host.mcp.registerTools("data", { list_transactions: tool() });
 
     expect(() => host.mcp.registerTools("data", { "Bad-Name": tool() })).toThrow();
+    expect(() =>
+      host.mcp.registerTools("data", {
+        list_transactions: tool({ inputSchema: { type: "object", $async: true } }),
+      })
+    ).toThrow(/async/);
 
     expect(registered().tools.map((t) => t.name)).toEqual(["list_transactions"]);
+    expect(registered().tools[0].checkInput({})).toBeNull();
   });
 
   describe("rejects the whole roster", () => {
@@ -261,6 +267,29 @@ describe("host.mcp.registerTools", () => {
         "data",
         { list: tool({ outputSchema: { type: "array" } as never }) },
         /outputSchema must be a plain object with type "object"/,
+      ],
+      [
+        "for a schema that refers outside itself",
+        "data",
+        {
+          list: tool({
+            inputSchema: { type: "object", properties: { a: { $ref: "https://example.com/a" } } },
+          }),
+        },
+        /^Plugin ".*" mcp\.registerTools\("data"\): tool "list" inputSchema references "https:\/\/example\.com\/a"/,
+      ],
+      [
+        "for an output schema naming a format the host does not know",
+        "data",
+        {
+          list: tool({
+            outputSchema: {
+              type: "object",
+              properties: { at: { type: "string", format: "when" } },
+            },
+          }),
+        },
+        /tool "list" outputSchema cannot be compiled: unknown format "when"/,
       ],
     ];
 

@@ -78,4 +78,24 @@ describe("CopyableCommand", () => {
     await Promise.resolve();
     expect(writeTextMock).toHaveBeenCalledWith("brew install kiro");
   });
+
+  it("wraps at path boundaries without changing the text or what is copied", async () => {
+    const command = "curl -fsSL https://opencode.ai/install | bash";
+    const { container } = renderWithProviders(<CopyableCommand command={command} wrap />);
+    const text = container.querySelector("span.font-mono, span.flex-1")!;
+    expect(text.textContent).toBe(command);
+    expect(text.className).not.toContain("truncate");
+    // One break opportunity per "/" (three here), never inside a path segment.
+    expect(text.querySelectorAll("wbr")).toHaveLength(3);
+    fireEvent.click(screen.getByLabelText("Copy command to clipboard"));
+    await Promise.resolve();
+    expect(writeTextMock).toHaveBeenCalledWith(command);
+  });
+
+  it("truncates on one line by default", () => {
+    const { container } = renderWithProviders(<CopyableCommand command="npm install -g a/b" />);
+    const text = container.querySelector("span.flex-1")!;
+    expect(text.className).toContain("truncate");
+    expect(text.querySelectorAll("wbr")).toHaveLength(0);
+  });
 });

@@ -513,6 +513,26 @@ describe("worktree error banners (issue #12087)", () => {
         expect(onCardClick).not.toHaveBeenCalled();
       }
     );
+
+    it.each([["Retry"], ["Dismiss"]])(
+      "hands focus to the card when %s clears the error and removes the banner",
+      (label) => {
+        function Card({ shown }: { shown: boolean }) {
+          return (
+            <div data-worktree-row="">
+              <button type="button" data-card-select-overlay="" aria-label="Select worktree" />
+              {shown && renderBanner({ onRetry: () => {}, onDismiss: () => {} })}
+            </div>
+          );
+        }
+        const { rerender } = render(<Card shown />);
+        const button = screen.getByRole("button", { name: label });
+        button.focus();
+        expect(document.activeElement).toBe(button);
+        rerender(<Card shown={false} />);
+        expect(document.activeElement?.hasAttribute("data-card-select-overlay")).toBe(true);
+      }
+    );
   });
 
   it("renders no action buttons when neither handler is supplied", () => {

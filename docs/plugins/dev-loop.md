@@ -2,7 +2,9 @@
 
 The `daintree-plugin` CLI provides the plugin author's tooling. Install it as a dev dependency or use `npx`.
 
-> `daintree-plugin` is not yet published on npm — the `npm install --save-dev daintree-plugin` and `npx daintree-plugin` commands below return E404 today. The CLI lives in-repo at `packages/daintree-plugin` and the publish pipeline exists (`.github/workflows/release-packages.yml`, fired by a `daintree-plugin-v*` tag), so this is waiting on a release rather than on the tooling. Until it ships: run the CLI from a Daintree checkout (`npm run -w daintree-plugin …`), or build plugins by hand (see [Getting started](./getting-started.md)) and sideload them manually (see [Distribution → Sideload](./distribution.md#sideload)).
+> Working inside the Daintree repo itself? The CLI is the workspace package at `packages/daintree-plugin`; after `npm run packages:build` you can run that local build directly with `node packages/daintree-plugin/dist/cli.js <command>` instead of the published one.
+
+> **Maintainers.** All four packages (`@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, `daintree-plugin`, `create-daintree-plugin`) are on npm at 0.1.0, and every release follows the same procedure: the version bump rides a normal PR to `develop`, reaches `main` with the next app release, and the per-package tag (`sdk-v*`, `plugin-vite-v*`, `daintree-plugin-v*`, `create-daintree-plugin-v*`) is cut from `main`. `.github/workflows/release-packages.yml` fires on those tags and publishes every package whose version is not yet on the registry, authenticating with npm Trusted Publishing (OIDC, no stored token). The `release-packages` skill in `.claude/skills/release-packages/` drives it end to end — which packages changed, the pre-1.0 version cascade through dependents and the scaffold's pinned ranges, the bump PR and the tags. The one case the workflow cannot cover is a package that has never been published, since npm registers a trusted publisher only against an existing package: a new package's first version goes up by hand, then the workflow takes over.
 
 ```bash
 npm install --save-dev daintree-plugin
@@ -20,12 +22,12 @@ Scaffolds a new plugin project. Interactive — prompts for publisher, display n
 npx daintree-plugin new my-plugin [--publisher acme] [--template command|view|mcp|full] [--project] [--yes]
 ```
 
-Every prompt has a flag, so the whole thing runs unattended: `--yes` skips the prompts and accepts defaults, and requires both a positional name and `--publisher`. That is the form to use from CI or from an agent.
+`--publisher` and `--template` pre-fill their prompts and skip them; the display name has no flag and is only ever asked for interactively. For an unattended run, `--yes` skips every prompt: it requires a positional name and `--publisher`, defaults the template to `command`, and derives the display name from the plugin name (`issue-helper` → `Issue Helper`). That is the form to use from CI or from an agent.
 
 Creates `./my-plugin/` with:
 
 - `plugin.json` — starter manifest
-- `package.json` — npm dev deps (`@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, Vite, TypeScript). Note: `@daintreehq/plugin-sdk` and `@daintreehq/plugin-vite` are not yet published, so `npm install` against this generated `package.json` will fail today — see the caveat at the top of this page.
+- `package.json` — npm dev deps (`@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, `daintree-plugin`, Vite, TypeScript), each pinned to a caret range of the version the CLI was released with
 - `vite.config.ts` — pre-configured for plugin builds
 - `tsconfig.json`
 - `src/` — starter code based on template choice
@@ -47,7 +49,7 @@ The project root is the nearest ancestor of the current directory holding a `.da
 Alongside the usual template files it emits:
 
 - `plugin.json` with `"scope": "project"`
-- a `dev` script running `vite build --watch` (plus `dev:server` for the `mcp` and `full` templates, since one `vite build` runs one config at a time)
+- a `dev` script running `vite build --watch`. Only the `command` and `view` templates are accepted with `--project`: `mcp` and `full` scaffold `contributes.mcpServers`, which a project-scoped manifest may not declare, so the command refuses them instead of writing a manifest the host would decline to load (use `contributes.agentMcp` to serve tools from a project plugin)
 - `vite.config.ts` with **inline** source maps and absolute `sources`, so DevTools breakpoints land in the real `.tsx` without a sidecar `.map` having to be served over `plugin://`
 - a watcher recipe in `<projectRoot>/.daintree/recipes/`, so Daintree can bring the build up with the rest of the project environment
 - a `.gitignore` that force-includes `dist/`, and a `README.md` explaining why
@@ -59,7 +61,7 @@ The one case the generated file cannot fix is a project that ignores `.daintree/
 
 ### The edit loop
 
-For a live hot-reload loop, use [`daintree-plugin dev`](#daintree-plugin-dev) below. The manual package-and-install loop is still available — it's the right choice when you want to exercise the exact production load path, or whenever the CLI isn't on hand (it's unpublished today; see the caveat at the top of this page — package and install by hand following [Distribution → Sideload](./distribution.md#sideload)). The manual loop:
+For a live hot-reload loop, use [`daintree-plugin dev`](#daintree-plugin-dev) below. The manual package-and-install loop is still available — it's the right choice when you want to exercise the exact production load path, and it is also what you fall back on when the CLI isn't on hand (package and install by hand following [Distribution → Sideload](./distribution.md#sideload)). The manual loop:
 
 ```bash
 cd my-plugin
@@ -110,7 +112,7 @@ What it does, in order:
 
 1. Validates the manifest (the same check as `daintree-plugin validate`); a manifest error aborts before anything is linked.
 2. Builds the plugin once (`vite build`) so `dist/<main>` exists before Daintree loads it. `--skip-build` skips this initial build — the watcher in step 5 still rebuilds on every save.
-3. Symlinks the plugin directory into `~/.daintree/plugins/{pluginId}` and writes a `.dev-marker` file at the link root. The marker's presence is what routes the plugin through Daintree's hot-reload worker instead of the normal in-process load path. (A real directory already at that path is treated as an installed plugin and left untouched.)
+3. Symlinks the plugin directory into `~/.daintree/plugins/{pluginId}` and writes a `.dev-marker` file at the link root. The marker's presence is what makes Daintree treat the directory as a dev plugin — watched for rebuilds and badged **DEV** — rather than as a normally installed one. Either way the plugin runs in a `utilityProcess` worker, exactly as an installed plugin does; only Daintree's built-in plugins load in-process. (A real directory already at that path is treated as an installed plugin and left untouched.)
 4. Asks the running Daintree to load and activate the plugin (the `plugin.dev.start` IPC).
 5. Starts `vite build --watch`. Daintree watches the plugin **root** — `plugin.json`, `dist/` and the `.dev-marker` count as the artifact; `src/` is ignored, because a source write says nothing about whether a loadable build exists yet. Once a rebuild settles (a ~200 ms trailing debounce, then a short quiet period the bytes must survive unchanged, so a half-written `dist/` is never imported), the whole plugin is reconciled against what is on disk: the manifest is re-read, contributions are re-registered, views are republished under a fresh generation, and the backend worker is replaced. A save therefore reloads manifest, views and backend together as one artifact generation — not just the worker. A `plugin.json` you are midway through editing is reported rather than acted on, and leaves the running version up until the next save. Dev plugins carry a **DEV** badge on their entry in Preferences so you can tell at a glance which installed plugins are pinned to a local dev folder.
 
@@ -164,6 +166,22 @@ npx daintree-plugin uninstall acme.linear-planner [--delete-settings]
 ```
 
 Equivalent to Preferences → Plugins → Uninstall. User-scope settings are **kept** by default so an API token survives a reinstall; `--delete-settings` removes them. Project-scope settings under a repository's `.daintree/` are never touched either way. TOFU consent pins are always revoked, so a reinstall re-prompts rather than inheriting prior approvals.
+
+### `daintree-plugin doctor <projectRoot>`
+
+```bash
+npx daintree-plugin doctor . [--offline]
+```
+
+`validate` plus the checks that only make sense for a project's committed plugins: walks every directory under `<projectRoot>/.daintree/plugins/`, validates each manifest under the project rules, and confirms that `main` and every view `componentPath` exist in the working tree, parse as ESM, are in the git index (`git ls-files --error-unmatch`), and are not matched by any `.gitignore` rule. These are working-tree and index checks, not a check of committed contents: a staged-but-uncommitted build passes, and a tracked file whose committed copy is stale is not caught, so a clean run catches the common ways a plugin stays local (an ignored or untracked `dist/`) without proving that a fresh clone loads it. It also asks the running Daintree what it has decided about the project (trust state, and each plugin's load state) and prints that as information — host status never affects the result or the exit code. `--offline` skips that query for CI.
+
+### `daintree-plugin schema`
+
+```bash
+npx daintree-plugin schema [--project] [--out plugin.schema.json]
+```
+
+Prints the JSON Schema for `plugin.json`, generated from the same Zod schema the host loads with, so an editor can complete and check the manifest against the contract rather than the prose. `--project` emits the project-plugin variant, `--out` writes to a file instead of stdout. It is structural only: the cross-field rules the host enforces at load (a view's id naming a declared panel, the contribution types refused under project scope, the reserved `daintree.*` namespace) are Zod refinements that the generated schema omits, so a manifest that passes the editor can still be refused by `validate`.
 
 ## Debugging
 
@@ -230,12 +248,12 @@ If neither explains it:
 
 ## Testing
 
-> `@daintreehq/plugin-testing` (`packages/plugin-testing`) exists and is workspace-linked, but is not yet published to npm (see [Status](./README.md)) — import it by relative path outside the workspace. It re-exports `createMockHost` and its record types from `shared/testing/createMockHost.ts`. The example below mirrors `plugins/sample/hello-daintree/__tests__/activate.test.ts`.
+> `createMockHost` ships as the `@daintreehq/plugin-sdk/testing` entry of the SDK and installs from npm with the rest of it (`npm install --save-dev @daintreehq/plugin-sdk`); inside the Daintree repo the workspace link resolves the same import to the local build. The entry re-exports the mock and its record types. The example below mirrors `plugins/sample/hello-daintree/__tests__/activate.test.ts`.
 
 ```ts
 // src/plan-from-issue.test.ts
 import { describe, it, expect } from "vitest";
-import { createMockHost } from "@daintreehq/plugin-testing"; // workspace-linked; not yet on npm
+import { createMockHost } from "@daintreehq/plugin-sdk/testing";
 import planFromIssue from "./plan-from-issue";
 
 describe("plan-from-issue", () => {
@@ -249,18 +267,17 @@ describe("plan-from-issue", () => {
 });
 ```
 
-`createMockHost` implements the `PluginHostApi` surface with in-memory state, mirrors the real host's validation and capability gating, and records every call for assertion — dispatched actions land on `host.dispatchedActions` as `{ actionId, args }` (the `DispatchedActionRecord` type), alongside `registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, and the rest. Good for covering handler logic without spinning up an Electron instance. See [Host API → Testing against a mock host](./host-api.md#testing-against-a-mock-host).
+`createMockHost` implements the `PluginHostApi` surface with in-memory state and records the calls a plugin makes for assertion — dispatched actions land on `host.dispatchedActions` as `{ actionId, args }` (the `DispatchedActionRecord` type), alongside `registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, and the rest. It validates argument shapes the way the real host does (`registerAction` descriptors, toast and badge options, channel names, quick-pick items) and gates `getAgentState` / `sendToActiveAgent` on the `capabilities` you pass in, so a malformed call fails the test rather than the app. Good for covering handler logic without spinning up an Electron instance. [Host API → Testing against a mock host](./host-api.md#testing-against-a-mock-host) lists what the mock deliberately does not model — process handles, filesystem containment, git, the manifest gates — so a test that passes against it is not proof the real host will accept the plugin.
 
 ### Testing a raw-ESM project plugin
 
-A hand-written project plugin has no build and no SDK import, and the same mock host tests it. Import `createMockHost` by relative path from a Daintree checkout, import your worker entry by file URL, and drive the handlers exactly the way `PluginService` does: context first, payload second. That last part is the point of the test, because it is the convention a first plugin gets wrong.
+A hand-written project plugin has no build and no SDK import at runtime, and the same mock host tests it. Add `@daintreehq/plugin-sdk` and `vitest` as devDependencies — a `package.json` beside the plugin is test tooling only; the host loads `plugin.json` and `dist/` and never reads it — then import `createMockHost` from the SDK's `testing` entry, import your worker entry by file URL, and drive the handlers exactly the way `PluginService` does: context first, payload second. That last part is the point of the test, because it is the convention a first plugin gets wrong.
 
 ```ts
-// test/worker.test.ts — run from inside the Daintree checkout, or point the
-// relative import at yours.
+// test/worker.test.ts
 import { pathToFileURL } from "node:url";
 import { describe, it, expect } from "vitest";
-import { createMockHost } from "../../../shared/testing/createMockHost";
+import { createMockHost } from "@daintreehq/plugin-sdk/testing";
 
 const ctx = { projectId: "p1", worktreeId: "w1", webContentsId: 1, pluginId: "acme.dashboard" };
 
@@ -281,7 +298,7 @@ describe("worker", () => {
 });
 ```
 
-The view mounts under jsdom with the bridge stubbed. `dist/panel.js` bare-imports `react`, which the app resolves through its import map; under vitest it resolves from `node_modules`, so run the test where `react` is installed (the Daintree checkout, or add it as a devDependency of the plugin).
+The view mounts under jsdom with the bridge stubbed. `dist/panel.js` bare-imports `react`, which the app resolves through its import map; under vitest it resolves from `node_modules`, so add `react` and `react-dom` as devDependencies of the plugin (or run the test inside the Daintree checkout, where they are already installed).
 
 ```ts
 // test/panel.test.tsx
@@ -314,7 +331,7 @@ it("renders the worktree name it pulls on mount", async () => {
 });
 ```
 
-A headless-Daintree Playwright harness for full-lifecycle E2E (contribution registration, MCP spawn) is planned but does not exist yet — there's no `@daintreehq/plugin-testing/electron` entry point today.
+A headless-Daintree Playwright harness for full-lifecycle E2E (contribution registration, MCP spawn) is planned but does not exist yet — `@daintreehq/plugin-sdk/testing` is the in-memory mock only; there is no Electron-backed entry point today.
 
 ## Publishing to npm (optional)
 
@@ -324,9 +341,7 @@ If you publish `@daintreehq/plugin-sdk`-dependent utilities or shared code as np
 
 Recommended CI setup for plugins published to GitHub Releases:
 
-> The `daintree-plugin` commands in this workflow are not yet published on npm and will return E404 today. This YAML shows the intended setup once the CLI ships.
->
-> (This is a workflow for **your** plugin's repository. Daintree's own package-publishing workflow is `.github/workflows/release-packages.yml`, which is a different thing.)
+> This is a workflow for **your** plugin's repository. Daintree's own package-publishing workflow is `.github/workflows/release-packages.yml`, which is a different thing.
 
 ```yaml
 # .github/workflows/release.yml

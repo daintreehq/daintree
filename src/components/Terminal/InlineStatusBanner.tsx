@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, type CSSProperties } from "react";
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button, type ButtonProps } from "@/components/ui/button";
+import { ARIA_DISABLED_INERT_CLASSES } from "@/components/ui/ariaDisabled";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWindowControlsInset, useTitleBarSurface } from "@/components/ui/WindowControlsInset";
 import { getVisibleTabbableElements, restoreFocusTo } from "@/lib/accessibility";
@@ -44,6 +45,13 @@ interface BaseInlineStatusBannerProps {
   title: React.ReactNode;
   description?: React.ReactNode;
   contextLine?: string;
+  /**
+   * How `contextLine` gives way when it is wider than the banner. `end` (the
+   * default) clips the tail. `middle` is for a path: it clips the middle and
+   * keeps the final segment, which is the part that says which directory or
+   * file this is. The full value stays in the tooltip either way.
+   */
+  contextLineTruncate?: "end" | "middle";
   animated?: boolean;
   className?: string;
   role?: "alert" | "status";
@@ -59,7 +67,9 @@ interface BaseInlineStatusBannerProps {
   /**
    * Keep the dismiss button in place but inert. A banner that unmounts its ×
    * while an action is in flight shifts every control beside it; one that
-   * disables it holds the row still.
+   * disables it holds the row still. Like a disabled action, it stays
+   * focusable (`aria-disabled`), so a keyboard user on it isn't dropped to
+   * <body> when it turns inert.
    */
   closeDisabled?: boolean;
   /**
@@ -70,8 +80,23 @@ interface BaseInlineStatusBannerProps {
    * dismiss last — and drops them beneath the text only when the container
    * is too narrow to hold both. For a banner that lives in a column of
    * strips and has one sentence to say beneath its title.
+   *
+   * `pane` is the strip's behaviour tuned for a banner inside a pane, with or
+   * without a description: controls trail the text while the pane is wider
+   * than 28rem, and drop beneath it, aligned past the glyph, once it is not —
+   * the width a pane gets in a 2x2 grid on a laptop.
+   *
+   * `inline` is the lightest tier, for a routine advisory a pane raises often:
+   * one row with the controls straight after the text and the dismiss straight
+   * after them, so on a wide pane the eye never crosses empty width to act on
+   * or clear it. Below `error` it draws no severity wash — the glyph alone
+   * carries the severity over a neutral lift, because a coloured band on
+   * something the user causes several times a day is what trains them to stop
+   * reading it. An error keeps its wash: something the user asked for failed.
+   * `description` sits on the same line as the title; `descriptionExtras` is
+   * not rendered.
    */
-  layout?: "stacked" | "strip";
+  layout?: "stacked" | "strip" | "pane" | "inline";
   /**
    * Secondary control rendered after the action buttons and before the
    * dismiss (e.g. a Popover trigger, a ghost link). This is the escape hatch
@@ -190,11 +215,33 @@ const BUTTON_VARIANT: Record<ButtonVariant, NonNullable<ButtonProps["variant"]>>
   dangerFilled: "outline",
 };
 
+/**
+ * The mono metadata line. A middle-truncated path splits at its last separator
+ * so the head gives way first and the final segment stays readable.
+ */
+function ContextLine({ text, truncate }: { text: string; truncate: "end" | "middle" }) {
+  const split = truncate === "middle" ? text.replace(/[\\/]+$/, "").search(/[\\/][^\\/]*$/) : -1;
+  if (split <= 0) {
+    return (
+      <p className="text-xs font-mono mt-1 truncate text-text-secondary" title={text}>
+        {text}
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs font-mono mt-1 flex min-w-0 text-text-secondary" title={text}>
+      <span className="truncate">{text.slice(0, split)}</span>
+      <span className="shrink-0 max-w-[75%] truncate">{text.slice(split)}</span>
+    </p>
+  );
+}
+
 export function InlineStatusBanner({
   icon,
   title,
   description,
   contextLine,
+  contextLineTruncate = "end",
   severity = "error",
   animated = true,
   className,
@@ -361,25 +408,31 @@ export function InlineStatusBanner({
   // single-line layout under another name.
   const stacked = !!hasDescription && layout === "stacked";
   const isStrip = !!hasDescription && layout === "strip";
+  const isPane = layout === "pane";
+  const isInline = layout === "inline";
+  const wrapsControls = isStrip || isPane;
 
   const handleClose = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (closeDisabled) return;
     onClose?.();
   };
 
   const closeButtonEl = onClose ? (
     <Button
       variant="ghost"
-      size="icon-sm"
+      size={isInline ? "icon-xs" : "icon-sm"}
       onClick={handleClose}
-      disabled={closeDisabled}
+      aria-disabled={closeDisabled || undefined}
       aria-label={closeAriaLabel}
       className={cn(
         "shrink-0",
+        closeDisabled && ARIA_DISABLED_INERT_CLASSES,
         isTitleBarSurface && "app-no-drag",
         // Once the strip's controls drop beneath the text, the × keeps the
         // right edge, in the column every neighbouring strip's × occupies.
-        isStrip && "@max-[52rem]/banner:ml-auto"
+        isStrip && "@max-[52rem]/banner:ml-auto",
+        isPane && "@max-[28rem]/banner:ml-auto"
       )}
     >
       <X aria-hidden="true" />
@@ -397,31 +450,127 @@ export function InlineStatusBanner({
 
   const showControlsRow = !!trailingSlot || (!stacked && !!onClose) || actionList.length > 0;
 
+  // A stacked banner shows its dismiss in the title row's corner, but it comes
+  // last in the DOM, after the recovery: tabbing into a failure should land on
+  // the fix, not on the way to throw the failure away. The title-bar surface
+  // keeps it in the row, where the window-controls inset still applies.
+  const trailingClose = stacked && !!closeButton && !isTitleBarSurface;
+
+  const controlsRow = showControlsRow ? (
+    <div
+      data-banner-controls
+      className={cn(
+        "flex items-center shrink-0",
+        // Stacked controls wrap within their own row: two labelled actions and
+        // an overflow trigger are wider than the narrowest pane a grid leaves.
+        stacked ? "gap-2 ml-6 flex-wrap gap-y-1" : "gap-1",
+        // Inline controls are 24px and overhang the 20px text line by 2px each
+        // side rather than setting its height, so the glyph lines up with the
+        // title whether or not the controls wrap, and each control keeps 6px
+        // of the row's padding clear above and below instead of touching the
+        // band's edges. The group wraps within itself too: three actions and
+        // a × are wider than the narrowest pane a grid can leave.
+        isInline && "-my-0.5 shrink min-w-0 flex-wrap gap-y-1",
+        // Beneath the text, the controls line up with it, past the glyph.
+        // 52rem leaves the text column a real measure just above the
+        // break: three actions and a dismiss run to ~400px, and a column
+        // narrower than ~360px wraps a one-sentence description to four
+        // lines before it would ever drop the controls.
+        // Padding, not margin: a full-basis row with a margin runs past the
+        // container, and the flush-right × with it.
+        // The row itself wraps once it is beneath the text: a grid squeezed
+        // by a wide sidebar can be narrower than three actions and a ×.
+        isStrip &&
+          "@max-[52rem]/banner:basis-full @max-[52rem]/banner:pl-6 @max-[52rem]/banner:flex-wrap @max-[52rem]/banner:gap-y-1",
+        isPane &&
+          "@max-[28rem]/banner:basis-full @max-[28rem]/banner:pl-6 @max-[28rem]/banner:flex-wrap @max-[28rem]/banner:gap-y-1",
+        // `.app-no-drag *` carries the opt-out down to every control in the
+        // row, including nested popover triggers.
+        isTitleBarSurface && "app-no-drag"
+      )}
+      // A busy or disabled Button opts out of hit-testing, so a click on it
+      // lands on this row instead — and would otherwise bubble on to the
+      // pane and activate it. The controls never mean "select the pane".
+      onClick={(e) => e.stopPropagation()}
+    >
+      {actionList.map((action) => {
+        const variant = BUTTON_VARIANT[action.variant ?? "primary"];
+        const buttonEl = (
+          <Button
+            key={action.id}
+            variant={variant}
+            size={action.iconOnly ? (isInline ? "icon-xs" : "icon-sm") : "sm"}
+            // A raised, shadowed button reads louder than a routine one-line
+            // notice should; the ring alone marks it as a control. `sm` type
+            // on the `xs` height: the `xs` size's 10px label is too small to
+            // be the one thing on the row the user acts on.
+            className={cn(
+              isInline && "shadow-none inset-shadow-none",
+              isInline && !action.iconOnly && "h-6 px-2.5",
+              action.disabled && !action.loading && ARIA_DISABLED_INERT_CLASSES
+            )}
+            // `aria-disabled`, not `disabled`: most of these flip while the
+            // banner stays up (Restart → Restarting…), and a natively disabled
+            // button drops the keyboard user's focus to <body> as it does.
+            aria-disabled={action.disabled || undefined}
+            loading={action.loading}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (action.disabled) return;
+              action.onClick();
+            }}
+            aria-label={action.ariaLabel}
+          >
+            {action.icon && <action.icon aria-hidden="true" />}
+            {!action.iconOnly && action.label}
+          </Button>
+        );
+
+        return action.title ? (
+          <Tooltip key={action.id}>
+            <TooltipTrigger asChild>{buttonEl}</TooltipTrigger>
+            <TooltipContent side="bottom">{action.title}</TooltipContent>
+          </Tooltip>
+        ) : (
+          <React.Fragment key={action.id}>{buttonEl}</React.Fragment>
+        );
+      })}
+      {trailingSlot}
+      {/* Dismiss sits after every other control, at the row's end, in both
+          layouts — never between two controls, where it reads as a third
+          action. */}
+      {!stacked && closeButton}
+    </div>
+  ) : null;
+
   return (
     <div
       ref={rootRef}
       className={cn(
         stacked
           ? "flex flex-col gap-2 px-3 py-2 shrink-0"
-          : "flex items-center justify-between gap-3 px-3 py-2 shrink-0",
+          : isInline
+            ? "flex items-start px-3 py-2 shrink-0 border-b border-divider"
+            : "flex items-center justify-between gap-3 px-3 py-2 shrink-0",
         // The strip wraps its controls beneath the text once the container is
         // narrower than a two-line sentence plus three actions can share.
-        isStrip && "@container/banner flex-wrap gap-y-2",
+        wrapsControls && "@container/banner flex-wrap gap-y-2",
         // Scoped, not bare: `transition` carries box-shadow, every colour
         // property and filter along with it, and this banner's entry is an
         // opacity-and-slide. 250ms is BANNER_ENTER_DURATION from the motion
         // scale, which is what generates this utility.
         shouldAnimate && "transition-[opacity,translate] duration-250",
         shouldAnimate && (isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2"),
-        isNeutral && "bg-overlay-subtle",
+        (isNeutral || (isInline && severity !== "error")) && "bg-overlay-subtle",
         // The native caption strip is a fixed 48px tall. A shorter banner would
         // let the tint applied to that strip bleed over the toolbar beneath it,
         // so a title-bar banner always fills the band it is colouring.
         isTitleBarSurface && "relative min-h-12 app-drag-region",
+        trailingClose && "relative",
         className
       )}
       style={{
-        ...(isNeutral
+        ...(isNeutral || (isInline && severity !== "error")
           ? undefined
           : {
               backgroundColor: `color-mix(in oklab, var(${colorVar}) ${TINT_PERCENT}, transparent)`,
@@ -439,29 +588,39 @@ export function InlineStatusBanner({
       {/* The band's tint and this glyph carry the severity; the text does not.
           Severity-coloured type failed 4.5:1 on most themes, and a title that
           is only legible on some of them is not a title. */}
-      <div className={cn("flex items-start gap-2 min-w-0", isStrip && "flex-1")}>
+      <div className={cn("flex items-start gap-2 min-w-0", wrapsControls && "flex-1")}>
         <IconComponent
+          data-severity-glyph=""
           className={cn("w-4 h-4 shrink-0 mt-0.5", isNeutral && "text-text-secondary")}
           style={isNeutral ? undefined : { color: `var(${colorVar})` }}
           aria-hidden="true"
         />
-        {hasDescription ? (
+        {isInline ? (
+          // The controls flow with the text rather than sitting in a column of
+          // their own: they follow the sentence on a wide pane, and on a narrow
+          // one they wrap beneath it, starting where the text starts.
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="text-sm font-medium text-text-primary">{title}</span>
+            {description && <span className="text-xs text-text-secondary">{description}</span>}
+            {controlsRow}
+          </div>
+        ) : hasDescription ? (
           <div className="flex-1 min-w-0">
-            <div className="flex justify-between items-start gap-2">
-              <span className="text-sm font-medium text-text-primary">{title}</span>
-              {stacked && closeButton && <div className="-mt-1 -mr-1">{closeButton}</div>}
+            <div className={cn("flex justify-between items-start gap-2", trailingClose && "pr-8")}>
+              {/* A title can carry an unbroken token — a hostname, a path — wider
+                  than the column. Let it shrink and break there rather than
+                  push the controls out of the band. */}
+              <span className="min-w-0 wrap-anywhere text-sm font-medium text-text-primary">
+                {title}
+              </span>
+              {stacked && closeButton && !trailingClose && (
+                <div className="-mt-1 -mr-1">{closeButton}</div>
+              )}
             </div>
             {description && (
               <p className="text-xs mt-0.5 break-words text-text-secondary">{description}</p>
             )}
-            {contextLine && (
-              <p
-                className="text-xs font-mono mt-1 truncate text-text-secondary"
-                title={contextLine}
-              >
-                {contextLine}
-              </p>
-            )}
+            {contextLine && <ContextLine text={contextLine} truncate={contextLineTruncate} />}
             {isTitleBarSurface && descriptionExtras ? (
               <div className="app-no-drag">{descriptionExtras}</div>
             ) : (
@@ -469,72 +628,14 @@ export function InlineStatusBanner({
             )}
           </div>
         ) : (
-          <span className="text-sm font-medium text-text-primary">{title}</span>
+          <span className="min-w-0 wrap-anywhere text-sm font-medium text-text-primary">
+            {title}
+          </span>
         )}
       </div>
 
-      {showControlsRow && (
-        <div
-          data-banner-controls
-          className={cn(
-            "flex items-center shrink-0",
-            stacked ? "gap-2 ml-6" : "gap-1",
-            // Beneath the text, the controls line up with it, past the glyph.
-            // 52rem leaves the text column a real measure just above the
-            // break: three actions and a dismiss run to ~400px, and a column
-            // narrower than ~360px wraps a one-sentence description to four
-            // lines before it would ever drop the controls.
-            // Padding, not margin: a full-basis row with a margin runs past the
-            // container, and the flush-right × with it.
-            // The row itself wraps once it is beneath the text: a grid squeezed
-            // by a wide sidebar can be narrower than three actions and a ×.
-            isStrip &&
-              "@max-[52rem]/banner:basis-full @max-[52rem]/banner:pl-6 @max-[52rem]/banner:flex-wrap @max-[52rem]/banner:gap-y-1",
-            // `.app-no-drag *` carries the opt-out down to every control in the
-            // row, including nested popover triggers.
-            isTitleBarSurface && "app-no-drag"
-          )}
-          // A busy or disabled Button opts out of hit-testing, so a click on it
-          // lands on this row instead — and would otherwise bubble on to the
-          // pane and activate it. The controls never mean "select the pane".
-          onClick={(e) => e.stopPropagation()}
-        >
-          {actionList.map((action) => {
-            const variant = BUTTON_VARIANT[action.variant ?? "primary"];
-            const buttonEl = (
-              <Button
-                key={action.id}
-                variant={variant}
-                size={action.iconOnly ? "icon-sm" : "sm"}
-                disabled={action.disabled}
-                loading={action.loading}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  action.onClick();
-                }}
-                aria-label={action.ariaLabel}
-              >
-                {action.icon && <action.icon aria-hidden="true" />}
-                {!action.iconOnly && action.label}
-              </Button>
-            );
-
-            return action.title ? (
-              <Tooltip key={action.id}>
-                <TooltipTrigger asChild>{buttonEl}</TooltipTrigger>
-                <TooltipContent side="bottom">{action.title}</TooltipContent>
-              </Tooltip>
-            ) : (
-              <React.Fragment key={action.id}>{buttonEl}</React.Fragment>
-            );
-          })}
-          {trailingSlot}
-          {/* Dismiss sits after every other control, at the row's end, in both
-              layouts — never between two controls, where it reads as a third
-              action. */}
-          {!stacked && closeButton}
-        </div>
-      )}
+      {!isInline && controlsRow}
+      {trailingClose && <div className="absolute top-1 right-2">{closeButton}</div>}
     </div>
   );
 }

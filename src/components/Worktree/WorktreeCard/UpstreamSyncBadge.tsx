@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { actionService } from "@/services/ActionService";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { CloudOff, KeyRound } from "@/components/icons";
+import type { LucideIcon } from "lucide-react";
+import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 
 interface UpstreamSyncBadgeProps {
   aheadCount: number | undefined;
@@ -39,10 +42,8 @@ interface UpstreamSyncBadgeProps {
    * only the compact marker abbreviates.
    */
   hasNoUpstream?: boolean;
-  fetchIntervalMs?: number;
 }
 
-const STALENESS_MULTIPLIER = 1.5;
 const FLASH_DURATION_MS = 250;
 
 export function UpstreamSyncBadge({
@@ -61,7 +62,6 @@ export function UpstreamSyncBadge({
   baseMatchesUpstream,
   baseCompareRef,
   hasNoUpstream,
-  fetchIntervalMs,
 }: UpstreamSyncBadgeProps) {
   const hasAhead = aheadCount !== undefined && aheadCount > 0;
   const hasBehind = behindCount !== undefined && behindCount > 0;
@@ -171,10 +171,8 @@ export function UpstreamSyncBadge({
     return () => window.clearTimeout(safetyTimer);
   }, [displayedAhead, displayedBehind, displayedBaseAhead, displayedBaseBehind]);
 
-  const isStale = useMemo(() => {
-    if (lastFetchedAt == null || fetchIntervalMs == null) return false;
-    return Date.now() - lastFetchedAt > fetchIntervalMs * STALENESS_MULTIPLIER;
-  }, [lastFetchedAt, fetchIntervalMs]);
+  // Keeps the tooltip's "Last fetched" age moving between fetches.
+  const nowMs = useGlobalMinuteClock();
 
   const handleSignInClick = useCallback(
     (event: React.MouseEvent) => {
@@ -195,203 +193,255 @@ export function UpstreamSyncBadge({
     [authProviderId]
   );
 
-  if (fetchAuthFailed && hasAuthFailedSignIn) {
+  const isAuthActionable = fetchAuthFailed && hasAuthFailedSignIn;
+
+  // One mark at the end of the line, and only for a fetch that actually
+  // failed. Age alone never earns one: fetching pauses on purpose while no
+  // window has focus and stretches under a rate-limit throttle, so an overdue
+  // fetch is almost always the cadence working as designed — the same reason
+  // the PR and issue badges dropped their age glyph. The age lives in the
+  // tooltip as "Last fetched". Worst first, so a line never carries two: an
+  // auth failure is the only one the user has to act on.
+  // The failure and the way out of it are separate facts. Without a matched
+  // forge provider there is no reconnect to offer, but the fetches are still
+  // suspended and the counts still frozen, so the key stays and only the
+  // button goes.
+  const status: SyncStatus | null = fetchAuthFailed
+    ? "auth"
+    : fetchNetworkFailed
+      ? "unreachable"
+      : null;
+  const StatusIcon = status ? STATUS_ICONS[status] : null;
+  const noUpstream = hasNoUpstream === true;
+  // Nothing to say, and nothing wrong with saying nothing. A degraded fetch
+  // still earns a mark with no counts beside it: on the main card an empty
+  // line reads as "in sync", which is the one claim a failed fetch cannot make.
+  if (!showUpstreamDelta && !showBaseSegment && !noUpstream && status === null) return null;
+
+  const upstreamSentence = showUpstreamDelta
+    ? `Upstream: ${describeDrift(hasAhead ? aheadCount : 0, hasBehind ? behindCount : 0)}`
+    : null;
+  // Label first, ref once, in the collapsed alarm pill's own formula
+  // (`formatAlarmDetail`): the old `2 ahead of origin/develop, 7 behind
+  // origin/develop` named the ref twice and put it last, where it was the part
+  // most likely to wrap. Ahead before behind here, matching ↑ ↓ on the line.
+  const baseSentence =
+    showBaseDivergence && compareLabel
+      ? `Base (${compareLabel}): ${describeDrift(baseAheadCount ?? 0, baseBehindCount ?? 0)}`
+      : showBaseResting && compareLabel
+        ? `Base (${compareLabel}): in sync`
+        : null;
+  const lastFetched =
+    lastFetchedAt != null
+      ? formatRelativeTime(lastFetchedAt, Math.max(nowMs, lastFetchedAt))
+      : null;
+  // The actionable variant carries its own title, so only the passive auth
+  // failure needs the sentence here.
+  const statusSentence =
+    status === "auth" && !isAuthActionable
+      ? "Authentication failed, fetches paused"
+      : status === "unreachable"
+        ? "Couldn't reach the remote"
+        : null;
+  const localBaseNote = comparedWithLocalBase && showBaseSegment;
+  // Everything the tooltip says, in the order it says it, so none of it is
+  // reachable by pointer alone.
+  const accessibleSummary = [
+    statusSentence,
+    upstreamSentence,
+    baseSentence,
+    localBaseNote ? "Remote comparison unavailable" : null,
+    noUpstream ? "No upstream branch configured" : null,
+    isFetchInFlight ? "Fetching now" : null,
+    lastFetched ? `Last fetched ${lastFetched}` : null,
+  ]
+    .filter(Boolean)
+    .join(". ");
+
+  const line = (
+    <>
+      {showUpstreamDelta && hasAhead && (
+        <span className="text-status-success shrink-0">↑{aheadCount}</span>
+      )}
+      {showUpstreamDelta && hasBehind && (
+        <span className="text-status-warning shrink-0">↓{behindCount}</span>
+      )}
+      {showBaseSegment && (
+        <>
+          {/* `text-secondary`, not `text-muted`: this names the branch the
+              counts beside it are counted against, so it is the only thing
+              that makes them mean anything, and `text-muted` has no contrast
+              floor on the darkest palettes. The line is 11px under two
+              brighter rows; that is where its de-emphasis comes from.
+
+              Δ means drift, so it cannot carry the resting state: ≡ says the
+              two are the same commit, which is the whole content of the
+              resting line.
+
+              The only thing on this line allowed to shrink. Everything beside
+              it is shrink-0, so a base branch long enough to outgrow the card
+              ellipsizes here instead of pushing the counts and the marks off
+              the right edge, and the tooltip still names it in full. Glyph and
+              name stay one text run so the ellipsis eats the name. */}
+          <span className="text-text-secondary min-w-0 truncate" data-testid="upstream-sync-base">
+            {showBaseDivergence ? "Δ" : "≡"} {baseBranchName}
+          </span>
+          {displayedBaseAhead != null && (
+            <span className="text-status-success shrink-0">↑{displayedBaseAhead}</span>
+          )}
+          {displayedBaseBehind != null && (
+            <span className="text-status-warning shrink-0">↓{displayedBaseBehind}</span>
+          )}
+        </>
+      )}
+      {/* Same tier as the branch name — never text-muted. Known on its own
+          (the tracking config says so), so it does not wait for a base
+          relationship to hang off; with nothing before it the separator
+          would dangle, so it goes. */}
+      {noUpstream && (
+        <span className="text-text-secondary shrink-0" data-testid="upstream-sync-unpushed">
+          {showUpstreamDelta || showBaseSegment ? "· local" : "local"}
+        </span>
+      )}
+      {StatusIcon && status && (
+        <StatusIcon
+          className={cn("w-3 h-3 shrink-0", STATUS_TONES[status])}
+          data-testid="upstream-sync-status"
+          data-status={status}
+          aria-hidden="true"
+        />
+      )}
+    </>
+  );
+
+  // Both variants explain themselves with the same body, so a truncated name,
+  // the counts and the fetch state read the same whichever one is showing.
+  const detail = (
+    <>
+      {/* The qualification comes before the counts it qualifies: read in the
+          other order, the numbers have already been believed. */}
+      {statusSentence && (
+        <div
+          className={
+            status === "unreachable" || status === "auth" ? "text-status-warning" : undefined
+          }
+          data-testid={status === "unreachable" ? "upstream-sync-network-warning" : undefined}
+        >
+          {statusSentence}
+        </div>
+      )}
+      {upstreamSentence && <div>{upstreamSentence}</div>}
+      {baseSentence && <div className="break-words">{baseSentence}</div>}
+      <div className="mt-1 text-text-secondary empty:hidden">
+        {localBaseNote && (
+          <div data-testid="upstream-sync-local-base">Remote comparison unavailable</div>
+        )}
+        {noUpstream && <div>No upstream branch configured</div>}
+        {/* The age stays while a fetch runs: the numbers on screen are still
+            that old until the answer lands. */}
+        {isFetchInFlight && <div>Fetching now</div>}
+        {lastFetched && <div>Last fetched {lastFetched}</div>}
+      </div>
+    </>
+  );
+
+  if (isAuthActionable) {
     return (
-      // autoDismiss={false}: the pill can ellipsize the base name now, so this
-      // tooltip is the only place to read it in full — a full-text reveal, which
-      // `tooltip.tsx` exempts from the 2.5s deadline meant for transient hints.
+      // autoDismiss={false}: the pill can ellipsize the base name, so this
+      // tooltip is the only place to read it in full — a full-text reveal,
+      // which `tooltip.tsx` exempts from the 2.5s deadline meant for hints.
       <Tooltip autoDismiss={false}>
         <TooltipTrigger asChild>
           <button
             type="button"
             onClick={handleSignInClick}
             data-no-dnd
-            className={cn(
-              "flex items-center text-3xs font-mono tabular-nums cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-              containerGapClass
-            )}
+            className="group flex items-center w-fit max-w-full min-w-0 -my-1 py-1 text-left text-3xs font-mono tabular-nums cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
             data-testid="upstream-sync-indicator"
             data-fetch-auth-failed="true"
-            aria-label="Forge authentication failed — click to reconnect"
+            aria-label={`Forge authentication failed — click to reconnect${
+              accessibleSummary ? `. ${accessibleSummary}` : ""
+            }`}
           >
             {/* min-w-0: this row is a flex *item* of the button above it, so
                 its own automatic minimum size is its min-content width — the
-                whole unbroken branch name, since the label below sets
-                white-space: nowrap. Without this the row refuses to shrink and
-                the label never gets narrow enough to ellipsize. The normal
-                variant has no equivalent level: its row is a cross-axis child
-                of the card's column, where min-width: auto resolves to 0. */}
-            <span className="flex items-center gap-1.5 text-text-muted min-w-0">
-              {showUpstreamDelta && hasAhead && <span className="shrink-0">↑{aheadCount}</span>}
-              {showUpstreamDelta && hasBehind && <span className="shrink-0">↓{behindCount}</span>}
-              {showBaseSegment && (
-                <>
-                  <span className="min-w-0 truncate" data-testid="upstream-sync-base">
-                    {showBaseDivergence ? "Δ" : "≡"} {baseBranchName}
-                  </span>
-                  {displayedBaseAhead != null && (
-                    <span className="shrink-0">↑{displayedBaseAhead}</span>
-                  )}
-                  {displayedBaseBehind != null && (
-                    <span className="shrink-0">↓{displayedBaseBehind}</span>
-                  )}
-                  {hasNoUpstream && (
-                    <span className="shrink-0" data-testid="upstream-sync-unpushed">
-                      · local
-                    </span>
-                  )}
-                </>
-              )}
-              {!showUpstreamDelta && !showBaseSegment && <span>—</span>}
+                whole unbroken branch name, since the label sets white-space:
+                nowrap. Without this the row refuses to shrink and the label
+                never gets narrow enough to ellipsize. */}
+            <span className={cn("flex items-center min-w-0", containerGapClass)}>
+              {line}
+              {/* The verb is what makes a line of metadata read as a control.
+                  shrink-0 with the counts: a long base name gives way first. */}
+              <span className="text-status-warning shrink-0 font-sans group-hover:underline">
+                Reconnect
+              </span>
             </span>
           </button>
         </TooltipTrigger>
         <TooltipContent side="right" className="text-xs">
           <div>Forge authentication failed</div>
-          <div className="text-text-secondary mt-0.5">Click to reconnect your code forge</div>
-          {/* The pill can now ellipsize the base name, and this variant's copy
-              never said what it was. Without this line the auth state is the
-              one place a truncated name has nowhere to be read in full. */}
-          {showBaseSegment && baseBranchName && (
-            <div className="text-text-muted break-words">Compared with {compareLabel}</div>
-          )}
-          {lastFetchedAt != null && (
-            <div className="text-text-muted">Last fetched {formatRelativeTime(lastFetchedAt)}</div>
-          )}
+          <div className="mb-1 text-text-secondary">Click to reconnect your code forge</div>
+          {detail}
         </TooltipContent>
       </Tooltip>
     );
   }
 
-  if (!showUpstreamDelta && !showBaseSegment) return null;
-
   return (
     // Same full-text reveal as the auth-failed variant above.
     <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
+        {/* A tab stop, like the PR and issue badges beside it: the compare
+            ref, the freshness and a clipped base name exist only in the
+            tooltip, so a trigger keyboard focus cannot reach leaves them to
+            the pointer alone. role="img" + the summary as its name, because
+            the glyph run on its own is spoken as "upwards arrow one, Greek
+            capital letter delta". */}
         <span
+          role="img"
+          tabIndex={0}
+          aria-label={accessibleSummary}
           className={cn(
-            "flex items-center text-3xs font-mono tabular-nums",
+            "flex items-center w-fit max-w-full text-3xs font-mono tabular-nums rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
             containerGapClass,
-            isFlashing && "animate-upstream-badge-flash",
-            fetchNetworkFailed && "opacity-75",
-            isStale && !isFetchInFlight && "opacity-50 transition-opacity duration-150"
+            isFlashing && "animate-upstream-badge-flash"
           )}
           data-testid="upstream-sync-indicator"
           data-fetch-in-flight={isFetchInFlight ? "true" : undefined}
           data-fetch-network-failed={fetchNetworkFailed ? "true" : undefined}
-          data-stale={isStale ? "true" : undefined}
           onAnimationEnd={() => setIsFlashing(false)}
         >
-          {showUpstreamDelta && hasAhead && (
-            <span className="text-status-success shrink-0">↑{aheadCount}</span>
-          )}
-          {showUpstreamDelta && hasBehind && (
-            <span className="text-status-warning shrink-0">↓{behindCount}</span>
-          )}
-          {showBaseSegment && (
-            <>
-              {/* `text-secondary`, not `text-muted/60`: this names the branch
-                  the counts beside it are counted against, so it is the only
-                  thing that makes them mean anything. `text-muted` has no
-                  contrast floor on the darkest palettes and the /60 halved
-                  what was left — 1.45:1 on namib, 2.06:1 on bondi, so the
-                  branch name dropped out of a line whose green +N stayed
-                  legible beside it. The line is already 11px and sits under
-                  two brighter rows; that is where its de-emphasis comes
-                  from.
-
-                  Δ means drift, so it cannot carry the resting state: a bare
-                  `Δ develop` beside a `Δ develop ↑3` would claim a divergence
-                  it does not have. ≡ says the two are the same commit, which
-                  is the whole content of the resting line. */}
-              {/* The only thing on this line allowed to shrink. Everything
-                  beside it is shrink-0, so a base branch long enough to
-                  outgrow the card ellipsizes here instead of pushing the
-                  counts and the · local marker off the right edge — they are
-                  the state the line exists to carry, and the tooltip below
-                  still names the branch in full. Glyph and name stay one text
-                  run so the ellipsis eats the name from the right. */}
-              <span
-                className="text-text-secondary min-w-0 truncate"
-                data-testid="upstream-sync-base"
-              >
-                {showBaseDivergence ? "Δ" : "≡"} {baseBranchName}
-              </span>
-              {hasBaseAhead && (
-                <span className="text-status-success shrink-0">↑{baseAheadCount}</span>
-              )}
-              {hasBaseBehind && (
-                <span className="text-status-warning shrink-0">↓{baseBehindCount}</span>
-              )}
-              {/* Same tier as the branch name it qualifies, so it inherits the
-                  same contrast reasoning — never text-muted. */}
-              {hasNoUpstream && (
-                <span className="text-text-secondary shrink-0" data-testid="upstream-sync-unpushed">
-                  · local
-                </span>
-              )}
-            </>
-          )}
+          {line}
         </span>
       </TooltipTrigger>
       <TooltipContent side="right" className="text-xs">
-        {showUpstreamDelta && (
-          <div>
-            {hasAhead && (
-              <span>
-                {aheadCount} commit{aheadCount !== 1 ? "s" : ""} ahead
-              </span>
-            )}
-            {hasAhead && hasBehind && <span>, </span>}
-            {hasBehind && (
-              <span>
-                {behindCount} commit{behindCount !== 1 ? "s" : ""} behind
-              </span>
-            )}
-            <span> upstream</span>
-          </div>
-        )}
-        {showBaseDivergence && baseBranchName && (
-          <div className="text-text-muted/70 break-words">
-            {hasBaseAhead && (
-              <span>
-                {baseAheadCount} ahead of {compareLabel}
-              </span>
-            )}
-            {hasBaseAhead && hasBaseBehind && <span>, </span>}
-            {hasBaseBehind && (
-              <span>
-                {baseBehindCount} behind {compareLabel}
-              </span>
-            )}
-          </div>
-        )}
-        {showBaseResting && baseBranchName && (
-          <div className="text-text-muted break-words">In sync with {compareLabel}</div>
-        )}
-        {comparedWithLocalBase && showBaseSegment && (
-          <div className="text-text-muted" data-testid="upstream-sync-local-base">
-            Remote comparison unavailable
-          </div>
-        )}
-        {hasNoUpstream && showBaseSegment && (
-          <div className="text-text-muted">No upstream branch configured</div>
-        )}
-        {fetchNetworkFailed && (
-          <div className="text-status-warning/80" data-testid="upstream-sync-network-warning">
-            Couldn't reach the remote
-          </div>
-        )}
-        {isStale && lastFetchedAt != null && (
-          <div className="text-text-muted/70">
-            Stale (last fetched {formatRelativeTime(lastFetchedAt)})
-          </div>
-        )}
-        {!isStale && lastFetchedAt != null && (
-          <div className="text-text-muted">Last fetched {formatRelativeTime(lastFetchedAt)}</div>
-        )}
+        {detail}
       </TooltipContent>
     </Tooltip>
   );
+}
+
+type SyncStatus = "auth" | "unreachable";
+
+// The app's own vocabulary for each: KeyRound is what the collapsed alarm pill
+// already shows for broken forge credentials, CloudOff what the PR and issue
+// badges show when the forge is out of reach.
+const STATUS_ICONS: Record<SyncStatus, LucideIcon> = {
+  auth: KeyRound,
+  unreachable: CloudOff,
+};
+
+// Warning only for the one the user has to act on. An unreachable remote
+// recovers on its own, so it sits at the branch name's tier and do not compete with the
+// ↓ counts, which are the line's warning-toned news.
+const STATUS_TONES: Record<SyncStatus, string> = {
+  auth: "text-status-warning",
+  unreachable: "text-text-secondary",
+};
+
+function describeDrift(ahead: number, behind: number): string {
+  const commits = (n: number) => `${n} commit${n === 1 ? "" : "s"}`;
+  if (ahead > 0 && behind > 0) return `${commits(ahead)} ahead, ${behind} behind`;
+  if (ahead > 0) return `${commits(ahead)} ahead`;
+  return `${commits(behind)} behind`;
 }

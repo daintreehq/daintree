@@ -2,8 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
+const tooltipProps = vi.fn();
 vi.mock("@/components/ui/tooltip", () => ({
-  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children, ...props }: { children: React.ReactNode; autoDismiss?: boolean }) => {
+    tooltipProps(props);
+    return <>{children}</>;
+  },
   TooltipContent: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="tooltip-content">{children}</div>
   ),
@@ -93,6 +97,38 @@ describe("HostMemoryPauseIndicator", () => {
       expect(text).not.toMatch(/\ball\b|\bevery\b/i);
     }
   );
+
+  it("tells a live pause from a lifted one without the tooltip", () => {
+    const pipFor = (paused: boolean) => {
+      useHostMemoryPauseStore.setState({
+        snapshot: { active: true, paused, stalled: false },
+        visible: true,
+      });
+      const { unmount } = render(<HostMemoryPauseIndicator />);
+      const state = screen.getByTestId("host-memory-pause-pip").getAttribute("data-visible");
+      unmount();
+      return state;
+    };
+
+    // The warning pip marks output held right now; a lifted pause drops it.
+    expect(pipFor(true)).toBe("true");
+    expect(pipFor(false)).toBe("false");
+  });
+
+  it("keeps its explanation up for as long as it is hovered or focused", () => {
+    useHostMemoryPauseStore.setState({
+      snapshot: { active: true, paused: true, stalled: false },
+      visible: true,
+    });
+    tooltipProps.mockClear();
+
+    render(<HostMemoryPauseIndicator />);
+
+    // The shared tooltip otherwise times out after a hint-length window,
+    // which is shorter than it takes to read this body (WCAG 1.4.13).
+    expect(tooltipProps).toHaveBeenCalled();
+    for (const [props] of tooltipProps.mock.calls) expect(props.autoDismiss).toBe(false);
+  });
 
   it("opens Why am I slow? when clicked", () => {
     useHostMemoryPauseStore.setState({

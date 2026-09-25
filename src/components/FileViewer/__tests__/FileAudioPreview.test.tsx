@@ -71,7 +71,7 @@ describe("FileAudioPreview", () => {
       <FileAudioPreview filePath="/repo/track.mp3" rootPath="/repo" label="track.mp3" />
     );
 
-    expect(getByRole("status").getAttribute("aria-busy")).toBe("true");
+    expect(getByRole("status").getAttribute("aria-live")).toBe("polite");
     expect(container.querySelector("audio")).toBeNull();
   });
 

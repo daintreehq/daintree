@@ -7,6 +7,7 @@ import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
 import {
   navigateToAgentSettings,
   addCustomPreset,
+  confirmPresetDelete,
   removeCcrConfig,
   countPresetOptions,
   getPresetOptionLabels,
@@ -135,6 +136,7 @@ test.describe.serial("Presets: Edge Cases & Resilience (97–100)", () => {
         .locator(`[aria-label="Delete ${added.name}"]`);
       if (await deleteBtn.isVisible({ timeout: T_SHORT }).catch(() => false)) {
         await deleteBtn.click({ force: true, noWaitAfter: true });
+        await confirmPresetDelete(ctx.window);
       } else {
         await ctx.window.evaluate(async (id) => {
           const dispatch = (
@@ -189,7 +191,7 @@ test.describe.serial("Presets: Edge Cases & Resilience (97–100)", () => {
     const labels = await getPresetOptionLabels(ctx.window);
     const distinctLabels = new Set(labels.map((l) => l.trim()));
     const expectedLabels = new Set<string>([
-      "Default (all worktrees)",
+      "Default settings",
       ...presetsAfter.map((p) => p.name),
     ]);
     expect(distinctLabels).toEqual(expectedLabels);

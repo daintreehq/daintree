@@ -60,6 +60,7 @@ import type {
 } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
+import type { PanelReloadResult } from "../../../shared/types/plugin.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 import { actionHandlerArityHint, appendHandlerHint } from "./pluginHandlerHints.js";
 import { abortErrorFor } from "./pluginAbortError.js";
@@ -882,6 +883,18 @@ export class PluginDevWorkerHostProxy {
           durationMs: options?.durationMs,
         }),
       dispatch: (actionId, args) => this.call<ActionDispatchResult>("dispatch", { actionId, args }),
+      // Relayed like dispatch; the real host validates, authorizes against its
+      // own binding, and routes. Only `panelId` crosses — the worker cannot
+      // name whose panel it is (#12610). Degrades to "unavailable" on unload,
+      // matching the real host.
+      reloadPanel: (panelId) => {
+        if (typeof panelId !== "string" || panelId.trim().length === 0) {
+          return Promise.reject(
+            new Error(`Plugin "${this.pluginId}" reloadPanel: panelId must be a non-empty string`)
+          );
+        }
+        return this.callWithGrace<PanelReloadResult>("reloadPanel", { panelId }, "unavailable");
+      },
       // Built-in action catalog (#10561). list/get relay over the port like
       // dispatch; canDispatch is derived locally from get() (no extra
       // round-trip), mirroring the real host. callWithGrace resolves the

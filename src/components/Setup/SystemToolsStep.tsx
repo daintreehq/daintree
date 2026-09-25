@@ -30,13 +30,17 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
   const check: PrerequisiteCheckResult | null = loading ? null : state;
   const needsInstall = check && (!check.available || !check.meetsMinVersion);
   const installBlocks = needsInstall ? getInstallBlocksForOS(check) : null;
-  const [expanded, setExpanded] = useState(false);
   const label = spec.label || spec.tool;
+  // A missing required tool opens on its install steps: the remedy is the
+  // point of the card, not something to discover behind a disclosure.
+  const [expanded, setExpanded] = useState(false);
+  const blocking = !!needsInstall && spec.severity === "fatal";
+  const showSteps = expanded || blocking;
   const versionMismatch =
     check?.available && !check.meetsMinVersion && check.minVersion && check.version;
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30">
+    <div className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30">
       <div className="flex items-center gap-3 px-3 py-2.5">
         <StatusIcon check={check} loading={loading} />
         <div className="flex-1 min-w-0">
@@ -51,15 +55,17 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
                 v{check.version} → v{check.minVersion}+
               </span>
             )}
-            {installBlocks && (
+            {/* No disclosure while the steps are mandatory: a toggle that
+                cannot fold them would be a control that does nothing. */}
+            {installBlocks && !blocking && (
               <button
                 type="button"
-                onClick={() => setExpanded((v) => !v)}
-                aria-expanded={expanded}
+                onClick={() => setExpanded(!showSteps)}
+                aria-expanded={showSteps}
                 aria-controls={`install-panel-${spec.tool}`}
                 className="inline-flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline shrink-0"
               >
-                {expanded ? (
+                {showSteps ? (
                   <ChevronDown className="w-3 h-3" />
                 ) : (
                   <ChevronRight className="w-3 h-3" />
@@ -70,7 +76,8 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
             {check.installUrl && (
               <a
                 href={check.installUrl}
-                className="inline-flex items-center gap-1 text-2xs text-daintree-text/40 hover:text-text-primary shrink-0"
+                aria-label={`Open the ${label} download page`}
+                className="inline-flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary shrink-0"
                 onClick={(e) => {
                   e.preventDefault();
                   void systemClient.openExternal(check.installUrl!);
@@ -87,7 +94,7 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
         ) : null}
       </div>
       {installBlocks && (
-        <div id={`install-panel-${spec.tool}`} hidden={!expanded} className="px-3 pb-3 space-y-2">
+        <div id={`install-panel-${spec.tool}`} hidden={!showSteps} className="px-3 pb-3 space-y-2">
           {installBlocks.map((block, i) => (
             <InstallBlock key={i} block={block} />
           ))}
@@ -105,7 +112,7 @@ export function StatusIcon({
   loading: boolean;
 }) {
   if (loading) {
-    return <Loader2 className="w-4 h-4 text-daintree-text/30 animate-spin shrink-0" />;
+    return <Loader2 className="w-4 h-4 text-text-secondary animate-spin shrink-0" />;
   }
   if (check?.available && check.meetsMinVersion) {
     return <CircleCheck className="w-4 h-4 text-status-success shrink-0" />;

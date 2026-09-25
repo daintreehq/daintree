@@ -14,6 +14,7 @@ import { logErrorWithContext } from "@/utils/errorContext";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { issueNumberBelongsToLinkedPr } from "@shared/utils/worktreeIssueProjection";
+import { worktreeNameFromId } from "@/lib/notificationSourceLabel";
 
 /**
  * How long a `worktree-removed` tombstone suppresses a late `worktree-update`
@@ -370,8 +371,8 @@ export interface WorktreeViewState {
    * poll — including polls where nothing user-visible changed — so comparing
    * it in `snapshotsEqual` forced a new `worktrees` Map identity per poll and
    * fanned every quiet tick out to every whole-map subscriber. Freshness
-   * consumers (the WorktreeHeader pill, WorktreeCard's revalidate gate) read
-   * this map per-id instead. The `lastGitStatusCheckedAt` field still present
+   * consumers (WorktreeCard's hover-revalidate gate) read this map per-id
+   * instead. The `lastGitStatusCheckedAt` field still present
    * on stored snapshots reflects the last content change, not the last poll —
    * always read freshness from here.
    */
@@ -1668,7 +1669,8 @@ async function runDeleteAsync(
     // unconditionally and use `getByWorktree` only to decide whether to
     // surface a toast.
     const worktreeBefore = get().worktrees.get(worktreeId);
-    const worktreeName = worktreeBefore?.name ?? worktreeBefore?.branch ?? worktreeId;
+    const worktreeName =
+      worktreeBefore?.name ?? worktreeBefore?.branch ?? worktreeNameFromId(worktreeId);
     const existingDevPreview = await window.electron.devPreview.getByWorktree({ worktreeId });
     const hadDevPreview = existingDevPreview !== null;
     await window.electron.devPreview.stopByWorktree({ worktreeId });
@@ -2195,6 +2197,7 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.lastFetchedAt === b.lastFetchedAt &&
     a.fetchAuthFailed === b.fetchAuthFailed &&
     a.fetchNetworkFailed === b.fetchNetworkFailed &&
+    a.hasRemote === b.hasRemote &&
     a.isFetchInFlight === b.isFetchInFlight &&
     a.matchedForgeProviderId === b.matchedForgeProviderId &&
     a.worktreeMode === b.worktreeMode &&
@@ -2266,6 +2269,7 @@ function worktreeChangesEqual(
     // moves without changing any other field here still has to churn identity.
     a.headOid === b.headOid &&
     a.lastCommitMessage === b.lastCommitMessage &&
+    a.lastCommitBody === b.lastCommitBody &&
     a.lastCommitTimestampMs === b.lastCommitTimestampMs &&
     a.lastCommitAuthor?.name === b.lastCommitAuthor?.name &&
     a.lastCommitAuthor?.email === b.lastCommitAuthor?.email

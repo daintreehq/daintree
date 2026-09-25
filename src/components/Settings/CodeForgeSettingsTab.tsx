@@ -1,19 +1,11 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useMemo,
-  Suspense,
-  type ComponentType,
-  type ReactNode,
-} from "react";
-import { GitBranch, Key, Check, AlertCircle, ScrollText } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, useMemo, Suspense } from "react";
+import { Check } from "lucide-react";
 import type { ForgeProviderContribution, ForgeProviderEntry } from "@shared/types";
 import type { ForgeAuditRecord, ForgeAuditStats } from "@shared/types/ipc/forge";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types/ipc/forge";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   ForgeProviderSelectorDropdown,
@@ -23,14 +15,13 @@ import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import { ForgeIntegrationsTab } from "./ForgeIntegrationsTab";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsSection } from "./SettingsSection";
+import { SettingsActions, SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { ForgeAuditLogViewer } from "./ForgeAuditLogViewer";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
-import { appClient } from "@/clients";
+import { ErrorRetryRow } from "@/components/Settings/auditLogParts";
 import { logError } from "@/utils/logger";
-
-type ForgeIcon = ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
 
 const GENERAL_ID = "general";
 const CREDENTIAL_RESULT_DISPLAY_MS = 5000;
@@ -84,18 +75,36 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
   const [auditCopied, setAuditCopied] = useState(false);
   const [auditExported, setAuditExported] = useState(false);
   const [showAuditClearConfirm, setShowAuditClearConfirm] = useState(false);
-  const [developerMode, setDeveloperMode] = useState(false);
+  // A failed read is not an empty log, and a failed copy/export/clear is not silence.
+  const [auditRecordsFailed, setAuditRecordsFailed] = useState(false);
+  const [auditConfigFailed, setAuditConfigFailed] = useState(false);
+  const [auditOpError, setAuditOpError] = useState<string | null>(null);
   const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshAuditRecords = useCallback(async (): Promise<void> => {
     try {
-      const [recordsResult, statsResult] = await Promise.allSettled([
+      const [recordsResult, statsResult, configResult] = await Promise.allSettled([
         window.electron.forgeAudit.getRecords(),
         window.electron.forgeAudit.getStats(),
+        window.electron.forgeAudit.getConfig(),
       ]);
-      if (recordsResult.status === "fulfilled") setAuditRecords(recordsResult.value);
-      else logError("Failed to load forge audit log", recordsResult.reason);
+      // Refresh is also the retry for a failed config read, so it re-reads that too.
+      if (configResult.status === "fulfilled") {
+        setAuditEnabled(configResult.value.enabled);
+        setAuditMaxRecords(configResult.value.maxRecords);
+        setAuditConfigFailed(false);
+      } else {
+        setAuditConfigFailed(true);
+        logError("Failed to load forge audit config", configResult.reason);
+      }
+      if (recordsResult.status === "fulfilled") {
+        setAuditRecords(recordsResult.value);
+        setAuditRecordsFailed(false);
+      } else {
+        setAuditRecordsFailed(true);
+        logError("Failed to load forge audit log", recordsResult.reason);
+      }
       if (statsResult.status === "fulfilled") setAuditStats(statsResult.value);
       else logError("Failed to load forge audit stats", statsResult.reason);
     } catch (err) {
@@ -109,28 +118,26 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
       window.electron.forgeAudit.getConfig(),
       window.electron.forgeAudit.getRecords(),
       window.electron.forgeAudit.getStats(),
-      appClient.getState(),
     ])
-      .then(([cfgResult, recordsResult, statsResult, stateResult]) => {
+      .then(([cfgResult, recordsResult, statsResult]) => {
         if (cancelled) return;
         if (cfgResult.status === "fulfilled") {
           setAuditEnabled(cfgResult.value.enabled);
           setAuditMaxRecords(cfgResult.value.maxRecords);
         } else {
+          setAuditConfigFailed(true);
           logError("Failed to load forge audit config", cfgResult.reason);
         }
         if (recordsResult.status === "fulfilled") {
           setAuditRecords(recordsResult.value);
         } else {
+          setAuditRecordsFailed(true);
           logError("Failed to load forge audit log", recordsResult.reason);
         }
         if (statsResult.status === "fulfilled") {
           setAuditStats(statsResult.value);
         } else {
           logError("Failed to load forge audit stats", statsResult.reason);
-        }
-        if (stateResult.status === "fulfilled" && stateResult.value?.developerMode) {
-          setDeveloperMode(stateResult.value.developerMode.enabled === true);
         }
         setAuditLoading(false);
       })
@@ -156,25 +163,30 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
       const cfg = await window.electron.forgeAudit.setEnabled(next);
       setAuditEnabled(cfg.enabled);
       setAuditMaxRecords(cfg.maxRecords);
+      setAuditOpError(null);
     } catch (err) {
       logError("Failed to toggle forge audit log", err);
+      setAuditOpError("Couldn't change recording");
     }
   }, [auditEnabled]);
 
   const handleAuditCopy = useCallback(async (toCopy: ForgeAuditRecord[]) => {
     try {
       await navigator.clipboard.writeText(JSON.stringify(toCopy, null, 2));
+      setAuditOpError(null);
       setAuditCopied(true);
       if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
       auditCopyTimeoutRef.current = setTimeout(() => setAuditCopied(false), COPY_FEEDBACK_MS);
     } catch (err) {
       logError("Failed to copy forge audit log", err);
+      setAuditOpError("Couldn't copy the records");
     }
   }, []);
 
   const handleAuditExport = useCallback(async (toExport: ForgeAuditRecord[]) => {
     try {
       const saved = await window.electron.forgeAudit.exportLog(toExport);
+      setAuditOpError(null);
       if (saved) {
         setAuditExported(true);
         if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
@@ -182,18 +194,21 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
       }
     } catch (err) {
       logError("Failed to export forge audit log", err);
+      setAuditOpError("Couldn't export the records");
     }
   }, []);
 
   const handleAuditClear = useCallback(async () => {
     try {
       await window.electron.forgeAudit.clearLog();
+      setAuditOpError(null);
       setAuditRecords([]);
       setAuditStats((prev) =>
         prev ? { ...prev, anomalySignals: [], anomalySuppressed: true } : prev
       );
     } catch (err) {
       logError("Failed to clear forge audit log", err);
+      setAuditOpError("Couldn't clear the log");
     } finally {
       setShowAuditClearConfirm(false);
     }
@@ -232,74 +247,65 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
     : null;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {loadError && <SettingsLoadErrorBanner message={loadError} onRetry={retryAction} />}
 
-      <div className="space-y-4">
-        <div>
-          <h4 className="text-sm font-medium mb-1">Code Forge</h4>
-          <p className="text-xs text-text-secondary select-text">
-            Configure forge providers and authentication
-          </p>
-        </div>
+      <ForgeProviderSelectorDropdown
+        providerOptions={providerOptions}
+        activeSubtab={effectiveSubtab}
+        onSubtabChange={onSubtabChange}
+      />
 
-        <ForgeProviderSelectorDropdown
-          providerOptions={providerOptions}
-          activeSubtab={effectiveSubtab}
-          onSubtabChange={onSubtabChange}
-        />
-
-        {isGeneral && (
-          <>
-            <ForgeIntegrationsTab />
-            <SettingsSection
-              icon={ScrollText}
-              title="Forge audit log"
-              description="Records every forge provider call — list / get / assign / validateToken — with redacted argument summaries. Use it to triage slow providers, failure clusters, and unexpected anomalies surfaced by the audit health snapshot."
-            >
-              <div className="flex flex-col gap-4">
-                <SettingsSwitchCard
-                  id="forge-audit-enable"
-                  title="Record forge provider calls"
-                  subtitle="Append a record each time a forge provider method is invoked"
-                  isEnabled={auditEnabled}
-                  onChange={() => void handleAuditEnabledToggle()}
-                  ariaLabel="Toggle forge audit log"
-                />
-                <ForgeAuditLogViewer
-                  records={auditRecords}
-                  loading={auditLoading}
-                  maxRecords={auditMaxRecords}
-                  anomalySignals={auditStats?.anomalySignals}
-                  anomalySuppressed={auditStats?.anomalySuppressed ?? true}
-                  onRefresh={refreshAuditRecords}
-                  onCopy={handleAuditCopy}
-                  onExport={handleAuditExport}
-                  onClear={() => setShowAuditClearConfirm(true)}
-                  copyFlashActive={auditCopied}
-                  exportFlashActive={auditExported}
-                  developerMode={developerMode}
-                />
-              </div>
-            </SettingsSection>
-          </>
-        )}
-
-        {!isGeneral && selectedEntry && (
-          <ForgeProviderCard
-            name={selectedEntry.contribution.name}
-            iconSlotId={selectedEntry.contribution.slots?.icon}
+      {isGeneral && (
+        <>
+          <ForgeIntegrationsTab />
+          <SettingsSection
+            title="Forge audit log"
+            description={`Each call Daintree makes to a forge provider, with arguments redacted, for tracing slow or failing providers. Keeps the last ${auditMaxRecords.toLocaleString()} calls on this machine.`}
           >
-            <ProviderPanel
-              providerId={makeForgeProviderId(
-                selectedEntry.pluginId,
-                selectedEntry.contribution.id
-              )}
-              entry={selectedEntry}
+            <SettingsGroup>
+              <SettingsSwitchCard
+                id="forge-audit-enable"
+                title="Record forge provider calls"
+                subtitle="Turning this off stops new records; the ones below stay until cleared"
+                isEnabled={auditEnabled}
+                onChange={() => void handleAuditEnabledToggle()}
+                disabled={auditConfigFailed}
+                disabledReason="Couldn't read whether recording is on. Refresh the log below to try again."
+              />
+            </SettingsGroup>
+            <ForgeAuditLogViewer
+              records={auditRecords}
+              loading={auditLoading}
+              maxRecords={auditMaxRecords}
+              anomalySignals={auditStats?.anomalySignals}
+              anomalySuppressed={auditStats?.anomalySuppressed ?? true}
+              onRefresh={refreshAuditRecords}
+              onCopy={handleAuditCopy}
+              onExport={handleAuditExport}
+              onClear={() => setShowAuditClearConfirm(true)}
+              copyFlashActive={auditCopied}
+              exportFlashActive={auditExported}
+              loadError={
+                auditRecordsFailed ? (
+                  <ErrorRetryRow
+                    message="The forge audit log couldn't be read"
+                    onRetry={() => void refreshAuditRecords()}
+                  />
+                ) : undefined
+              }
+              actionError={auditOpError}
             />
-          </ForgeProviderCard>
-        )}
-      </div>
+          </SettingsSection>
+        </>
+      )}
+
+      {!isGeneral && selectedEntry && (
+        <ProviderPanel
+          providerId={makeForgeProviderId(selectedEntry.pluginId, selectedEntry.contribution.id)}
+          entry={selectedEntry}
+        />
+      )}
 
       <ConfirmDialog
         isOpen={showAuditClearConfirm}
@@ -307,49 +313,18 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
         onConfirm={() => void handleAuditClear()}
         onClose={() => setShowAuditClearConfirm(false)}
         title="Clear forge audit log?"
-        description="This permanently deletes all recorded forge provider calls on this machine. New calls will still be recorded."
-        confirmLabel="Clear log"
+        description={`This permanently deletes ${auditRecords.length === 1 ? "1 recorded forge call" : `${auditRecords.length} recorded forge calls`} on this machine.${auditEnabled ? " New calls will still be recorded." : ""}`}
+        confirmLabel="Clear audit log"
+        zIndex="nested"
       />
     </div>
   );
 }
 
 /**
- * Provider brand icon resolved through the provider's `slots.icon` builtin-view
- * ref. Falls back to a neutral `GitBranch` glyph when the provider declares no
- * icon slot or the owning plugin's view is unregistered/disabled.
- */
-function ProviderIcon({ slotId, className }: { slotId?: string; className?: string }) {
-  const SlotIcon = useBuiltinView<{ className?: string; "aria-hidden"?: boolean }>(slotId ?? "");
-  const Icon: ForgeIcon = SlotIcon ?? GitBranch;
-  return <Icon className={className} aria-hidden={true} />;
-}
-
-interface ForgeProviderCardProps {
-  name: string;
-  iconSlotId?: string;
-  children: ReactNode;
-}
-
-function ForgeProviderCard({ name, iconSlotId, children }: ForgeProviderCardProps) {
-  return (
-    <div className="rounded-[var(--radius-lg)] border border-border-default bg-surface p-4 space-y-4">
-      <div className="flex items-center gap-3 pb-3 border-b border-border-default">
-        <ProviderIcon slotId={iconSlotId} className="w-6 h-6 text-text-primary" />
-        <div>
-          <h4 className="text-sm font-medium text-text-primary">{name} settings</h4>
-          <p className="text-xs text-text-secondary select-text">
-            Configure {name} authentication and integrations
-          </p>
-        </div>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-/**
- * Body of a provider's settings card. A provider-owned panel contributed via
+ * Body of a provider's settings. The selector above names the provider with its icon,
+ * so the body opens straight on its sections rather than a second identity heading.
+ * A provider-owned panel contributed via
  * `slots.settingsTab` wins (the slot resolves null while the owning plugin is
  * disabled, so disabling genuinely removes the plugin's settings interface);
  * otherwise the host renders the generic credential form built from the
@@ -390,7 +365,7 @@ function ProviderSettingsBody({ providerId, pluginId, contribution }: ProviderSe
     // token-recovery surfaces target — generic for any provider, regardless
     // of whether the provider ships its own settings slot or uses the host
     // credential form below.
-    <div className="space-y-4" id="forge-access-token">
+    <div className="space-y-8" id="forge-access-token">
       {credentialFields.length > 0 ? (
         <GenericCredentialForm
           providerId={providerId}
@@ -398,28 +373,28 @@ function ProviderSettingsBody({ providerId, pluginId, contribution }: ProviderSe
           fields={credentialFields}
         />
       ) : (
-        <p className="text-xs text-text-secondary">
-          {contribution.kind === "local"
-            ? "Local provider — no authentication needed"
-            : "No configuration needed"}
-        </p>
+        <SettingsSection title="Authentication">
+          <SettingsGroup>
+            <SettingsEmptyRow>
+              {contribution.kind === "local"
+                ? `${contribution.name} works locally, so there's nothing to sign in to`
+                : `${contribution.name} needs no credentials`}
+            </SettingsEmptyRow>
+          </SettingsGroup>
+        </SettingsSection>
       )}
 
-      <div className="space-y-2 pt-2 border-t border-border-default">
-        <p className="text-xs text-text-secondary font-mono">{pluginId}</p>
-        {capabilities && capabilities.length > 0 && (
-          <div>
-            <p className="text-xs font-medium text-text-secondary mb-1">Capabilities</p>
-            <ul className="text-xs text-text-secondary space-y-0.5">
-              {capabilities.map((cap) => (
-                <li key={cap} className="list-disc list-inside">
-                  {cap}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
+      <SettingsSection title="Provider">
+        <SettingsGroup>
+          <SettingsRow
+            label="Plugin"
+            description={<span className="font-mono break-all">{pluginId}</span>}
+          />
+          {capabilities && capabilities.length > 0 && (
+            <SettingsRow label="Supports" description={capabilities.join(", ")} />
+          )}
+        </SettingsGroup>
+      </SettingsSection>
     </div>
   );
 }
@@ -445,6 +420,11 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   const [result, setResult] = useState<CredentialResult>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [hasCredential, setHasCredential] = useState(false);
+  const [credentialKnown, setCredentialKnown] = useState(false);
+  const [statusFailed, setStatusFailed] = useState(false);
+  const [statusAttempt, setStatusAttempt] = useState(0);
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
   // Synchronous in-flight guard: `isSaving` state updates are batched and the
   // re-render is deferred, so two rapid event dispatches could both pass an
   // `isSaving`-derived check before the first commit. The ref flips
@@ -466,34 +446,37 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
       setResult(null);
       setErrorMessage(null);
       setHasCredential(false);
+      setCredentialKnown(false);
     }
 
     window.electron.forge
       .getCredentialStatus(providerId)
       .then((status) => {
-        if (!cancelled) setHasCredential(status.hasCredential);
+        if (cancelled) return;
+        setHasCredential(status.hasCredential);
+        setCredentialKnown(true);
+        setStatusFailed(false);
       })
       .catch((err) => {
         if (cancelled) return;
+        setStatusFailed(true);
         logError("Failed to load forge credential status", err);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [providerId]);
+  }, [providerId, statusAttempt]);
 
+  // Only a success fades. An error carries the fix and stays until the input changes.
   useEffect(() => {
-    if (!result) return;
-    const timer = setTimeout(() => {
-      setResult(null);
-      setErrorMessage(null);
-    }, CREDENTIAL_RESULT_DISPLAY_MS);
+    if (result !== "success") return;
+    const timer = setTimeout(() => setResult(null), CREDENTIAL_RESULT_DISPLAY_MS);
     return () => clearTimeout(timer);
   }, [result]);
 
   const primaryId = primaryFieldId(fields);
-  const canSave = !isSaving && (values[primaryId] ?? "").trim().length > 0;
+  const canSave = !isSaving && !isClearing && (values[primaryId] ?? "").trim().length > 0;
 
   const handleSave = async () => {
     if (!canSave || savingRef.current) return;
@@ -527,6 +510,12 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   };
 
   const handleClear = async () => {
+    setConfirmingClear(false);
+    // Save and Clear share one synchronous guard, so the final credential never
+    // depends on which of two overlapping writes lands last.
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setIsClearing(true);
     try {
       await window.electron.forge.clearCredential(providerId);
       setValues({});
@@ -537,94 +526,128 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
       logError("Failed to clear forge credentials", error);
       setResult("error");
       setErrorMessage("Couldn't clear credentials");
+    } finally {
+      savingRef.current = false;
+      setIsClearing(false);
     }
   };
 
   return (
-    <div
-      className="rounded-[var(--radius-lg)] border border-border-default bg-daintree-bg/30 p-4 space-y-3"
-      data-testid="forge-credential-form"
-    >
-      <div>
-        <h5 className="text-sm font-medium text-text-primary flex items-center gap-2">
-          <Key className="w-4 h-4 text-daintree-text/70" aria-hidden="true" />
-          Authentication
-        </h5>
-        <p className="text-xs text-text-secondary mt-0.5 select-text">
-          Credentials are validated against {providerName} before they're saved
-        </p>
-      </div>
-
-      {hasCredential && (
-        <div className="flex items-center gap-1 text-xs text-text-secondary">
-          <Check className="w-3 h-3" />
-          {providerName} connected
-        </div>
-      )}
-
-      <div className="space-y-3">
-        {fields.map((field) => (
-          <div key={field.id} className="space-y-1">
-            <label
-              htmlFor={`forge-cred-${field.id}`}
-              className="text-xs font-medium text-text-secondary"
-            >
-              {field.label}
-            </label>
-            <input
-              id={`forge-cred-${field.id}`}
-              type={field.type === "password" ? "password" : "text"}
-              value={values[field.id] ?? ""}
-              onChange={(e) => setValues((prev) => ({ ...prev, [field.id]: e.target.value }))}
-              placeholder={field.placeholder}
-              aria-label={field.label}
-              autoComplete={field.type === "password" ? "new-password" : "off"}
-              className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
-              disabled={isSaving}
+    <div data-testid="forge-credential-form">
+      <SettingsSection
+        title="Authentication"
+        description={`Credentials are validated against ${providerName} before they're saved`}
+      >
+        <SettingsGroup>
+          {statusFailed && !credentialKnown && (
+            <SettingsRow
+              label="Status"
+              description="Couldn't read whether credentials are saved"
+              control={
+                <Button variant="outline" size="sm" onClick={() => setStatusAttempt((n) => n + 1)}>
+                  Retry
+                </Button>
+              }
             />
-            {field.helpText && (
-              <p className="text-xs text-text-secondary select-text">{field.helpText}</p>
-            )}
-          </div>
-        ))}
-      </div>
-
-      <div className="flex gap-2">
-        <Button
-          onClick={handleSave}
-          disabled={!canSave}
-          loading={isSaving}
-          size="sm"
-          aria-label="Save credentials"
-          className="min-w-[70px]"
-        >
-          Save
-        </Button>
-        {hasCredential && (
-          <Button
-            onClick={handleClear}
-            variant="outline"
-            size="sm"
-            aria-label="Clear credentials"
-            className="text-status-error border-border-default hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+          )}
+          {credentialKnown && (
+            <SettingsRow
+              label="Status"
+              control={
+                <span className="flex items-center gap-1 text-xs text-text-secondary">
+                  {hasCredential && <Check className="w-3 h-3" aria-hidden="true" />}
+                  {hasCredential ? "Credentials saved" : "No credentials saved"}
+                </span>
+              }
+            />
+          )}
+          {fields.map((field) => (
+            <SettingsRow
+              key={field.id}
+              label={field.label}
+              description={field.helpText}
+              layout="stacked"
+              error={
+                result === "error" && field.id === primaryId ? (
+                  <span role="alert">{errorMessage || "Couldn't save credentials"}</span>
+                ) : undefined
+              }
+              control={({ descriptionId }) => (
+                <Input
+                  id={`forge-cred-${field.id}`}
+                  type={field.type === "password" ? "password" : "text"}
+                  value={values[field.id] ?? ""}
+                  onChange={(e) => {
+                    setValues((prev) => ({ ...prev, [field.id]: e.target.value }));
+                    if (result === "error") {
+                      setResult(null);
+                      setErrorMessage(null);
+                    }
+                  }}
+                  placeholder={field.placeholder}
+                  aria-label={field.label}
+                  aria-describedby={descriptionId}
+                  aria-invalid={result === "error" && field.id === primaryId ? true : undefined}
+                  autoComplete={field.type === "password" ? "new-password" : "off"}
+                  disabled={isSaving}
+                />
+              )}
+            />
+          ))}
+          <SettingsActions
+            status={
+              result === "success" ? (
+                <span className="flex items-center gap-1">
+                  <Check className="w-3 h-3" aria-hidden="true" />
+                  Checked and saved
+                </span>
+              ) : null
+            }
           >
-            Clear credentials
-          </Button>
+            <Button
+              variant="contrast"
+              onClick={handleSave}
+              disabled={!canSave}
+              loading={isSaving}
+              size="sm"
+              aria-label="Save credentials"
+            >
+              Save
+            </Button>
+          </SettingsActions>
+        </SettingsGroup>
+        {/* Unknown still offers Clear: a stored credential that can't be read must stay removable. */}
+        {(hasCredential || (statusFailed && !credentialKnown)) && (
+          <SettingsGroup>
+            <SettingsRow
+              label="Stored credentials"
+              description={`Clearing removes Daintree's copy; ${providerName} features stop until you add them again`}
+              control={
+                <Button
+                  onClick={() => setConfirmingClear(true)}
+                  disabled={isSaving}
+                  loading={isClearing}
+                  variant="ghost-danger"
+                  size="sm"
+                  aria-label="Clear credentials"
+                >
+                  Clear credentials
+                </Button>
+              }
+            />
+          </SettingsGroup>
         )}
-      </div>
-
-      {result === "success" && (
-        <p className="text-xs text-status-success flex items-center gap-1">
-          <Check className="w-3 h-3" />
-          Credentials saved
-        </p>
-      )}
-      {result === "error" && (
-        <p className="text-xs text-status-error flex items-center gap-1">
-          <AlertCircle className="w-3 h-3" />
-          {errorMessage || "Couldn't save credentials"}
-        </p>
-      )}
+      </SettingsSection>
+      <ConfirmDialog
+        isOpen={confirmingClear}
+        variant="destructive"
+        onConfirm={() => void handleClear()}
+        onClose={() => setConfirmingClear(false)}
+        title={`Clear ${providerName} credentials?`}
+        description={`Daintree's copy is deleted. ${providerName} issues, pull requests and pulse data stop until you add credentials again.`}
+        confirmLabel="Clear credentials"
+        zIndex="nested"
+      />
     </div>
   );
 }

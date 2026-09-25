@@ -10,7 +10,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { TOOLBAR_UNPIN_LABEL } from "./toolbarMenuStrings";
 
@@ -36,7 +36,7 @@ export function ToolbarSettingsButton({
   onPreloadSettings,
   "data-toolbar-item": dataToolbarItem,
 }: ToolbarSettingsButtonProps) {
-  const settingsShortcut = useKeybindingDisplay("app.settings");
+  const settingsShortcut = useEffectiveCombo("app.settings");
   const settingsAriaShortcut = useAriaKeyshortcuts("app.settings");
   const settingsHover = useShortcutHintHover("app.settings");
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
@@ -44,32 +44,34 @@ export function ToolbarSettingsButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              data-toolbar-item={dataToolbarItem}
-              onClick={onSettings}
-              onPointerEnter={(e) => {
-                onPreloadSettings?.();
-                settingsHover.onPointerEnter(e);
-              }}
-              onPointerLeave={settingsHover.onPointerLeave}
-              onPointerDown={settingsHover.onPointerDown}
-              onFocus={settingsHover.onFocus}
-              onBlur={settingsHover.onBlur}
-              className={toolbarIconButtonClass}
-              aria-label="Open settings"
-              aria-keyshortcuts={settingsAriaShortcut}
-            >
-              <SlidersHorizontal />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {createTooltipContent("Open settings", settingsShortcut)}
-          </TooltipContent>
-        </Tooltip>
+        <span className="inline-flex">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                data-toolbar-item={dataToolbarItem}
+                onClick={onSettings}
+                onPointerEnter={(e) => {
+                  onPreloadSettings?.();
+                  settingsHover.onPointerEnter(e);
+                }}
+                onPointerLeave={settingsHover.onPointerLeave}
+                onPointerDown={settingsHover.onPointerDown}
+                onFocus={settingsHover.onFocus}
+                onBlur={settingsHover.onBlur}
+                className={toolbarIconButtonClass}
+                aria-label="Open settings"
+                aria-keyshortcuts={settingsAriaShortcut}
+              >
+                <SlidersHorizontal />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {createTooltipContent("Open settings", settingsShortcut)}
+            </TooltipContent>
+          </Tooltip>
+        </span>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
         {SETTINGS_CONTEXT_MENU_TABS.map(({ tab, label }) => (

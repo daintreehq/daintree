@@ -43,6 +43,9 @@ const LINEAGE_BACKOFF_CEILING_MS = 5_000;
  */
 const CENSUS_IDLE_RETIRE_MS = BACKOFF_CEILING_MS;
 
+/** Rows in a pane's per-process resource breakdown. */
+const BREAKDOWN_LIMIT = 10;
+
 export interface ProcessInfo {
   pid: number;
   ppid: number;
@@ -79,6 +82,12 @@ export interface LineageLedgerHook {
 
 type RefreshCallback = () => void;
 type RefreshOutcome = "changed" | "unchanged" | "error";
+
+/** Last path segment, for either separator; a bare name comes back unchanged. */
+function executableBasename(comm: string): string {
+  const cut = Math.max(comm.lastIndexOf("/"), comm.lastIndexOf("\\"));
+  return cut >= 0 && cut < comm.length - 1 ? comm.slice(cut + 1) : comm;
+}
 
 export class ProcessTreeCache {
   private cache: Map<number, ProcessInfo> = new Map();
@@ -717,12 +726,14 @@ export class ProcessTreeCache {
   /**
    * Get aggregated resource summary for a process tree.
    * Includes the root process and all descendants.
-   * Breakdown is capped at 10 entries sorted by CPU descending.
+   * Breakdown is capped at 10 entries sorted by CPU descending, always keeping
+   * the largest resident process.
    */
   getTreeResourceSummary(rootPid: number): {
     cpuPercent: number;
     memoryKb: number;
     breakdown: Array<{ pid: number; comm: string; cpuPercent: number; memoryKb: number }>;
+    processCount: number;
   } | null {
     const rootProcess = this.cache.get(rootPid);
     if (!rootProcess) return null;
@@ -760,12 +771,18 @@ export class ProcessTreeCache {
       }
     }
 
-    // Sort by CPU descending, cap at 10
+    // Sort by CPU descending, cap at 10 — but never cap away the largest
+    // resident process: a quiet language server holding gigabytes is exactly
+    // the row a memory-red badge needs to name.
     breakdown.sort((a, b) => b.cpuPercent - a.cpuPercent);
+    const shown = breakdown.slice(0, BREAKDOWN_LIMIT);
+    const heaviest = breakdown.reduce((max, p) => (p.memoryKb > max.memoryKb ? p : max));
+    if (!shown.includes(heaviest)) shown[shown.length - 1] = heaviest;
     return {
       cpuPercent: totalCpu,
       memoryKb: totalMemory,
-      breakdown: breakdown.slice(0, 10),
+      breakdown: shown,
+      processCount: breakdown.length,
     };
   }
 
@@ -845,7 +862,11 @@ export class ProcessTreeCache {
         .slice(0, topPerKey)
         .map((p) => ({
           pid: p.pid,
-          comm: p.comm,
+          // macOS `ps -o comm` reports the executable's full path, not its
+          // name, so a basename has to be taken here for the promise above to
+          // hold — the raw value put the user's home directory in every
+          // consumer's label.
+          comm: executableBasename(p.comm),
           cpuPercent: p.cpuPercent,
           memoryKb: p.rssKb,
         }));

@@ -3,7 +3,7 @@ import { RequestError } from "@octokit/request-error";
 import { GraphqlResponseError } from "@octokit/graphql";
 import type { RequestOptions, OctokitResponse } from "@octokit/types";
 
-import { parseGitHubError } from "../GitHubErrors.js";
+import { parseGitHubError, rateLimitMessage } from "../GitHubErrors.js";
 import { GitHubAuth, captureAuthMetadata } from "../GitHubAuth.js";
 import { gitHubRateLimitService } from "../GitHubRateLimitService.js";
 
@@ -314,5 +314,19 @@ describe("parseGitHubError", () => {
         /^GitHub secondary rate limit triggered\. Resuming in /
       );
     });
+  });
+});
+
+describe("rateLimitMessage", () => {
+  it("writes two units above a minute, the second as two digits, like the toolbar panel", () => {
+    const now = Date.now();
+    for (const seconds of [5, 59, 61, 600, 3_599, 3_600, 3_661, 7_530]) {
+      const message = rateLimitMessage("primary", now + seconds * 1_000);
+      const countdown = /Resets in (.+)\.$/.exec(message)![1]!;
+      if (seconds >= 60) expect(countdown.split(" "), message).toHaveLength(2);
+      for (const unit of countdown.split(" ").slice(1)) {
+        expect(unit, message).toMatch(/^\d{2}[a-z]$/);
+      }
+    }
   });
 });

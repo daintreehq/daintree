@@ -329,12 +329,61 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Search documentation");
 
-    const toggle = screen.getByLabelText("Allow the assistant to search Daintree documentation");
+    const toggle = screen.getByRole("switch", { name: "Search documentation" });
     fireEvent.click(toggle);
 
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({ docSearch: false });
     });
+  });
+
+  it("marks the behavior switches modified only when they differ from their defaults, and resets them", async () => {
+    installApi({
+      getSettings: vi.fn().mockResolvedValue({
+        docSearch: false,
+        daintreeControl: false,
+        tier: "action" as const,
+        bypassPermissions: false,
+        auditRetention: 7,
+      }),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Search documentation");
+
+    const docReset = await screen.findByLabelText("Reset Search documentation to default");
+    const controlReset = screen.getByLabelText("Reset Daintree control to default");
+
+    fireEvent.click(docReset);
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({ docSearch: true });
+    });
+    fireEvent.click(controlReset);
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+        daintreeControl: true,
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Reset Search documentation to default")).toBeNull();
+      expect(screen.queryByLabelText("Reset Daintree control to default")).toBeNull();
+    });
+  });
+
+  it("does not mark the behavior switches modified at their defaults", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Search documentation");
+
+    expect(screen.queryByLabelText("Reset Search documentation to default")).toBeNull();
+    expect(screen.queryByLabelText("Reset Daintree control to default")).toBeNull();
   });
 
   it("hides the debug logging toggle unless the Daintree Assistant agent is selected", async () => {
@@ -436,9 +485,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     // The assistant has no dangerous-args entry, so no flag may be claimed.
     expect(container.textContent).not.toContain("--dangerously");
 
-    const toggle = screen.getByLabelText(
-      "Auto-approve Daintree Assistant actions during help sessions"
-    );
+    const toggle = screen.getByRole("switch", { name: "Auto-approve assistant actions" });
     fireEvent.click(toggle);
 
     await waitForContent(container, "acts without asking");
@@ -470,9 +517,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     // The switch stays disabled until the initial settings and MCP-status loads
     // both settle, and the heading above renders before that — clicking while
     // it's still disabled would drop the event and time out downstream.
-    const toggle = screen.getByLabelText(
-      "Auto-approve Daintree Assistant actions during help sessions"
-    );
+    const toggle = screen.getByRole("switch", { name: "Auto-approve assistant actions" });
     await waitFor(() => {
       expect(toggle.hasAttribute("disabled")).toBe(false);
     });
@@ -483,7 +528,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       "New sessions are limited to the Daintree actions the Action capability tier allows"
     );
 
-    fireEvent.change(screen.getByLabelText("Capability tier"), { target: { value: "system" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^System/ }));
 
     await waitForContent(
       container,
@@ -603,14 +648,29 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Capability tier");
 
-    const select = screen.getByLabelText("Capability tier") as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "system" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^System/ }));
 
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
         tier: "system",
       });
     });
+  });
+
+  it("keeps one sentence of tier consequence visible and the full account behind the disclosure", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Capability tier");
+
+    expect(container.textContent).toContain("Full in-app orchestration");
+    expect(container.textContent).not.toContain("Most assistance tasks need this");
+
+    fireEvent.click(screen.getByRole("button", { name: /what this tier allows/i }));
+
+    expect(container.textContent).toContain("Most assistance tasks need this");
   });
 
   it("rotate key opens confirm dialog; confirming calls mcpServer.rotateApiKey", async () => {
@@ -928,6 +988,38 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(labels).not.toContain("Codex");
   });
 
+  // A failed catalog read is not "this agent has no models": hiding the row would hide
+  // a saved model override along with the way to recover.
+  it("keeps the Model row with Retry when the model catalog fails to load", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    const getResolvedModelList = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("catalog down"))
+      .mockResolvedValue({
+        agentId: "claude",
+        models: [{ id: "opus", name: "Opus", shortLabel: "Opus" }],
+        contextWindow: 200_000,
+        source: "merged",
+      });
+    window.electron.agentCapabilities.getResolvedModelList = getResolvedModelList;
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Couldn't load this agent's models");
+    expect(screen.getByLabelText("Model")).toBeTruthy();
+
+    // The select stub wraps its row in a <label>, which renames nested buttons; find by text.
+    fireEvent.click(screen.getByText("Retry", { selector: "button" }));
+
+    await waitFor(() => expect(getResolvedModelList).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(container.textContent).not.toContain("Couldn't load this agent's models")
+    );
+  });
+
   it("does not render a Preferred model section", async () => {
     const { container } = render(
       <SettingsValidationProvider>
@@ -938,6 +1030,50 @@ describe("DaintreeAssistantSettingsTab", () => {
 
     expect(container.textContent).not.toContain("Preferred model");
     expect(screen.queryByLabelText("Model")).toBeNull();
+  });
+
+  // Until the saved values arrive the switches show defaults; a click then would
+  // overwrite a real setting with one the user never saw. Retry has to recover.
+  it("keeps settings inert after a failed load, and Retry brings them back", async () => {
+    let resolveRetry: (() => void) | undefined;
+    const retryGate = new Promise<void>((r) => {
+      resolveRetry = r;
+    });
+    const loaded = {
+      docSearch: false,
+      daintreeControl: true,
+      tier: "action" as const,
+      bypassPermissions: false,
+      auditRetention: 7,
+      customArgs: "",
+    };
+    const getSettings = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("EACCES: permission denied"))
+      .mockImplementation(() => retryGate.then(() => loaded));
+    installApi({ getSettings });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Couldn't load assistant settings");
+
+    const toggle = screen.getByRole("switch", { name: "Search documentation" });
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    // While the retry is in flight the defaults are still on screen, so they stay inert.
+    await waitFor(() => expect(getSettings).toHaveBeenCalledTimes(2));
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    resolveRetry?.();
+
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+      expect(toggle.getAttribute("data-state")).toBe("unchecked");
+    });
+    expect(container.textContent).not.toContain("Couldn't load assistant settings");
   });
 
   it("keeps settings visible when MCP status load fails", async () => {
@@ -962,17 +1098,17 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "Couldn't load MCP status");
 
     await waitFor(() => {
-      const docSearchToggle = screen.getByLabelText(
-        "Allow the assistant to search Daintree documentation"
-      );
+      const docSearchToggle = screen.getByRole("switch", {
+        name: "Search documentation",
+      });
       expect(docSearchToggle.getAttribute("data-state")).toBe("unchecked");
     });
   });
 
-  it("surfaces a setSettings IPC failure as an inline error banner", async () => {
-    installApi({
-      setSettings: vi.fn().mockRejectedValue(new Error("disk full")),
-    });
+  it("rolls a rejected save back and offers Retry on the affected group until a save lands", async () => {
+    const setSettings = vi.fn().mockRejectedValueOnce(new Error("disk full"));
+    setSettings.mockResolvedValue(undefined);
+    installApi({ setSettings });
 
     const { container } = render(
       <SettingsValidationProvider>
@@ -981,9 +1117,110 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Search documentation");
 
-    fireEvent.click(screen.getByLabelText("Allow the assistant to search Daintree documentation"));
+    const toggle = screen.getByRole("switch", { name: "Search documentation" });
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+    });
+    expect(toggle.getAttribute("data-state")).toBe("checked");
+    fireEvent.click(toggle);
 
-    await waitForContent(container, "disk full");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't save that change");
+    // Rolled back: the switch shows the persisted value, not the attempted one.
+    expect(
+      screen.getByRole("switch", { name: "Search documentation" }).getAttribute("data-state")
+    ).toBe("checked");
+    // Inline on the Behavior group, ahead of its switches — not at the page bottom.
+    const behaviorSwitch = screen.getByRole("switch", { name: "Search documentation" });
+    expect(
+      alert.compareDocumentPosition(behaviorSwitch) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      alert.compareDocumentPosition(screen.getByLabelText("Capability tier")) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(setSettings).toHaveBeenCalledTimes(2);
+    });
+    expect(setSettings).toHaveBeenLastCalledWith({ docSearch: false });
+    await waitFor(() => {
+      expect(screen.queryByText("Couldn't save that change")).toBeNull();
+    });
+    expect(
+      screen.getByRole("switch", { name: "Search documentation" }).getAttribute("data-state")
+    ).toBe("unchecked");
+  });
+
+  it("clears a group's save error when a later save in that group succeeds", async () => {
+    const setSettings = vi.fn().mockRejectedValueOnce(new Error("disk full"));
+    setSettings.mockResolvedValue(undefined);
+    installApi({ setSettings });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Search documentation");
+    const toggle = screen.getByRole("switch", { name: "Search documentation" });
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(toggle);
+    await screen.findByText("Couldn't save that change");
+
+    fireEvent.click(screen.getByRole("switch", { name: /Daintree control/ }));
+    await waitFor(() => {
+      expect(setSettings).toHaveBeenCalledWith({ daintreeControl: false });
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Couldn't save that change")).toBeNull();
+    });
+  });
+
+  it("marks debug logging and bypass permissions modified away from their defaults, and resets them", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "daintree-assistant"]);
+    helpPanelState.preferredAgentId = "daintree-assistant";
+    installApi({
+      getSettings: vi.fn().mockResolvedValue({
+        docSearch: true,
+        daintreeControl: true,
+        tier: "action" as const,
+        bypassPermissions: true,
+        auditRetention: 7,
+        modelId: "",
+        customArgs: "",
+        idleHibernateMinutes: 5,
+        debugLogging: true,
+      }),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Debug logging");
+
+    fireEvent.click(await screen.findByLabelText("Reset Debug logging to default"));
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+        debugLogging: false,
+      });
+    });
+    fireEvent.click(screen.getByLabelText("Reset Auto-approve assistant actions to default"));
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+        bypassPermissions: false,
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Reset Debug logging to default")).toBeNull();
+      expect(screen.queryByLabelText("Reset Auto-approve assistant actions to default")).toBeNull();
+    });
   });
 
   it("does not flash 'Copied' when clipboard.writeText rejects", async () => {
@@ -1033,11 +1270,13 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Audit log retention");
 
-    const select = screen.getByLabelText("Audit log retention") as HTMLSelectElement;
-    const optionLabels = Array.from(select.options).map((o) => o.label);
-    expect(optionLabels).toEqual(["7 days (default)", "30 days", "Off"]);
+    const group = screen.getByRole("radiogroup", { name: "Audit log retention" });
+    const optionLabels = within(group)
+      .getAllByRole("radio")
+      .map((o) => o.textContent);
+    expect(optionLabels).toEqual(["7 days", "30 days", "Off"]);
 
-    fireEvent.change(select, { target: { value: "30" } });
+    fireEvent.click(within(group).getByRole("radio", { name: "30 days" }));
 
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
@@ -1233,7 +1472,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "Audit log retention");
 
     expect(container.textContent).not.toContain("skip logging entirely");
-    expect(container.textContent).toContain("recorded separately");
+    expect(container.textContent).toContain("kept separately");
   });
 
   it("renders turn-outcome diagnostics in the privacy section after expanding advanced diagnostics", async () => {
@@ -1246,11 +1485,11 @@ describe("DaintreeAssistantSettingsTab", () => {
 
     // Diagnostics are collapsed by default — the turn-outcome block is unmounted
     // until the disclosure is opened.
-    expect(container.textContent).not.toContain("Turn outcomes by class");
+    expect(container.textContent).not.toContain("Clear turn outcomes");
 
     fireEvent.click(screen.getByRole("button", { name: "Advanced diagnostics" }));
 
-    await waitForContent(container, "Turn outcomes by class");
+    await waitForContent(container, "Clear turn outcomes");
   });
 
   it("renders the recording toggle in the privacy section, on by default", async () => {
@@ -1314,6 +1553,31 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "audit ipc failed");
     // Recording state holds at the last known-good value on failure.
     expect(screen.getByLabelText("Capture audit log").getAttribute("aria-checked")).toBe("true");
+  });
+
+  // Unread, the switch would show its optimistic "on" as if it were the real setting.
+  it("holds the recording switch and offers Retry when the audit config can't be read", async () => {
+    const getAuditConfig = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("ipc down"))
+      .mockResolvedValue({ enabled: false, maxRecords: 500 });
+    installApi({}, { getAuditConfig });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Couldn't read the audit settings");
+    const toggle = screen.getByLabelText("Capture audit log");
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+    });
   });
 
   it("reflects recording-off state loaded from getAuditConfig", async () => {

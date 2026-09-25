@@ -34,13 +34,15 @@ test.describe.serial("Full: Global Environment Variable Inheritance", () => {
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Environment" }).click();
-    await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
+    await expect(
+      window.getByRole("heading", { name: /environment variables/i }).first()
+    ).toBeVisible({
       timeout: T_SHORT,
     });
 
-    // Description should mention "global"
+    // The global tab explains the scope even without an open project.
     const description = window.locator("#environment-variables");
-    await expect(description.locator("text=Global environment variables")).toBeVisible({
+    await expect(description.getByRole("heading", { name: "Global variables" })).toBeVisible({
       timeout: T_SHORT,
     });
 
@@ -57,7 +59,9 @@ test.describe.serial("Full: Global Environment Variable Inheritance", () => {
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Environment" }).click();
-    await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
+    await expect(
+      window.getByRole("heading", { name: /environment variables/i }).first()
+    ).toBeVisible({
       timeout: T_SHORT,
     });
 
@@ -102,7 +106,9 @@ test.describe.serial("Full: Global Environment Variable Inheritance", () => {
 
     // Click Variables tab
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Variables" }).click();
-    await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
+    await expect(
+      window.getByRole("heading", { name: /environment variables/i }).first()
+    ).toBeVisible({
       timeout: T_SHORT,
     });
 

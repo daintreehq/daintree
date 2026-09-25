@@ -9,10 +9,26 @@ const clientMocks = vi.hoisted(() => ({
 
 vi.mock("@/clients/pluginClient", () => ({ pluginClient: clientMocks }));
 
+const panelState = vi.hoisted(() => ({
+  panelsById: {} as Record<string, { id: string; kind?: string; title: string }>,
+}));
+
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: { getState: () => panelState },
+}));
+
 import { registerPluginActions } from "../pluginActions";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import {
+  registerUserViewReload,
+  resetPluginPanelLifecycleForTests,
+  setViewUnsavedChanges,
+} from "@/services/plugin/pluginPanelLifecycle";
+import { usePluginPanelReloadConfirmStore } from "@/store/pluginPanelReloadConfirmStore";
+import { ConfirmationStagedError } from "../../confirmationStaged";
+import { DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
 
 /**
  * These actions ignore the callbacks entirely — they reach main through the
@@ -397,5 +413,153 @@ describe("result schemas", () => {
     const def = definition("plugin.reloadProject");
     const result = await run("plugin.reloadProject");
     expect(def.resultSchema?.safeParse(result).success).toBe(true);
+  });
+});
+
+describe("plugin.reloadPanel (#12611)", () => {
+  beforeEach(() => {
+    resetPluginPanelLifecycleForTests();
+    usePluginPanelReloadConfirmStore.setState({ pending: null, approvedPanelId: null });
+    panelState.panelsById = {
+      "plugin-1": { id: "plugin-1", kind: "acme.dashboard", title: "Dashboard" },
+      "file-1": { id: "file-1", kind: "file", title: "README.md" },
+      "term-1": { id: "term-1", kind: "terminal", title: "Shell" },
+    };
+  });
+
+  it("is an MCP-safe manifest entry: explicit panelId, unrepeatable, closed to plugins", () => {
+    const def = definition("plugin.reloadPanel");
+    expect(def.danger).toBe("safe");
+    expect(def.nonRepeatable).toBe(true);
+    expect(def.denyPluginDispatch).toBe(true);
+    expect((DENY_PLUGIN_DISPATCH_ACTION_IDS as readonly string[]).includes(def.id)).toBe(true);
+    expect(def.mcpOutputSchema).toBe(true);
+    expect(def.mcpAnnotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
+    expect(def.argsSchema?.safeParse({}).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ panelId: "" }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ panelId: "plugin-1" }).success).toBe(true);
+  });
+
+  it("hands the reload to the mounted view and reports it scheduled", async () => {
+    const handler = vi.fn();
+    registerUserViewReload("plugin-1", handler);
+    const def = definition("plugin.reloadPanel");
+
+    const result = await run("plugin.reloadPanel", { panelId: "plugin-1" });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ panelId: "plugin-1", outcome: "scheduled" });
+    expect(def.resultSchema?.safeParse(result).success).toBe(true);
+  });
+
+  it("reports a panel with no mounted view as not mounted", async () => {
+    const result = await run("plugin.reloadPanel", { panelId: "plugin-1" });
+    expect(result).toEqual({ panelId: "plugin-1", outcome: "not-mounted" });
+  });
+
+  it("refuses an unknown panel and one that is not a plugin's", async () => {
+    await expect(run("plugin.reloadPanel", { panelId: "nope" })).rejects.toThrow(/No panel/);
+    await expect(run("plugin.reloadPanel", { panelId: "file-1" })).rejects.toThrow(
+      /not a plugin panel/
+    );
+    await expect(run("plugin.reloadPanel", { panelId: "term-1" })).rejects.toThrow(
+      /not a plugin panel/
+    );
+  });
+
+  it("stages the confirmation instead of reloading a view with unsaved work", async () => {
+    const handler = vi.fn();
+    registerUserViewReload("plugin-1", handler);
+    setViewUnsavedChanges("plugin-1", {}, true);
+
+    await expect(run("plugin.reloadPanel", { panelId: "plugin-1" })).rejects.toBeInstanceOf(
+      ConfirmationStagedError
+    );
+    expect(handler).not.toHaveBeenCalled();
+    expect(usePluginPanelReloadConfirmStore.getState().pending).toEqual({
+      panelId: "plugin-1",
+      panelTitle: "Dashboard",
+    });
+  });
+
+  it("stages it for an agent too: no argument skips the dialog", async () => {
+    const handler = vi.fn();
+    registerUserViewReload("plugin-1", handler);
+    setViewUnsavedChanges("plugin-1", {}, true);
+
+    await expect(
+      run(
+        "plugin.reloadPanel",
+        { panelId: "plugin-1", confirmed: true },
+        { dispatchSource: "agent", hostConfirmed: true }
+      )
+    ).rejects.toBeInstanceOf(ConfirmationStagedError);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("reloads once after the user approves, then asks again", async () => {
+    const handler = vi.fn();
+    registerUserViewReload("plugin-1", handler);
+    setViewUnsavedChanges("plugin-1", {}, true);
+    usePluginPanelReloadConfirmStore.getState().approve("plugin-1");
+
+    await expect(run("plugin.reloadPanel", { panelId: "plugin-1" })).resolves.toEqual({
+      panelId: "plugin-1",
+      outcome: "scheduled",
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    await expect(run("plugin.reloadPanel", { panelId: "plugin-1" })).rejects.toBeInstanceOf(
+      ConfirmationStagedError
+    );
+  });
+
+  it("leaves an approval for its own panel when another panel reloads", async () => {
+    panelState.panelsById["plugin-2"] = { id: "plugin-2", kind: "acme.dashboard", title: "Two" };
+    usePluginPanelReloadConfirmStore.getState().approve("plugin-1");
+
+    await run("plugin.reloadPanel", { panelId: "plugin-2" });
+
+    expect(usePluginPanelReloadConfirmStore.getState().consumeApproval("plugin-1")).toBe(true);
+  });
+
+  it("spends the approval even when the approved panel has gone", async () => {
+    usePluginPanelReloadConfirmStore.getState().approve("gone-1");
+
+    await expect(run("plugin.reloadPanel", { panelId: "gone-1" })).rejects.toThrow(/No panel/);
+    expect(usePluginPanelReloadConfirmStore.getState().approvedPanelId).toBeNull();
+  });
+
+  it("stages through ActionService for an agent, as a recognisable staged confirmation", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const { isStagedConfirmation } = await import("../../confirmationStaged");
+    const service = new ActionService();
+    service.register(definition("plugin.reloadPanel"));
+    const handler = vi.fn();
+    registerUserViewReload("plugin-1", handler);
+    setViewUnsavedChanges("plugin-1", {}, true);
+
+    for (const args of [{ panelId: "plugin-1" }, { panelId: "plugin-1", confirmed: true }]) {
+      const result = await service.dispatch("plugin.reloadPanel", args, { source: "agent" });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(isStagedConfirmation(result.error)).toBe(true);
+    }
+    expect(handler).not.toHaveBeenCalled();
+    expect(usePluginPanelReloadConfirmStore.getState().pending?.panelId).toBe("plugin-1");
+  });
+
+  it("does not let one panel's approval cover another", async () => {
+    panelState.panelsById["plugin-2"] = { id: "plugin-2", kind: "acme.dashboard", title: "Two" };
+    setViewUnsavedChanges("plugin-2", {}, true);
+    usePluginPanelReloadConfirmStore.getState().approve("plugin-1");
+
+    await expect(run("plugin.reloadPanel", { panelId: "plugin-2" })).rejects.toBeInstanceOf(
+      ConfirmationStagedError
+    );
   });
 });

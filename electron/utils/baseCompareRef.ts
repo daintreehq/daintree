@@ -34,7 +34,7 @@ export interface BaseCompareRefGit {
 }
 
 /** `git remote` — names only, no URLs, no network. */
-async function readRemotesWithStatus(
+export async function readRemotesWithStatus(
   git: BaseCompareRefGit
 ): Promise<{ availableRemotes: string[]; succeeded: boolean }> {
   try {

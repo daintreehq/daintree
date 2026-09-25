@@ -7,6 +7,13 @@ import {
 } from "../../../window/webContentsRegistry.js";
 import { getProjectIdFromSenderUrl } from "../../projectContext.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
+import {
+  claimProjectActivation,
+  findOtherProjectOwner,
+  hasLiveProjectView,
+  redirectToProjectOwner,
+  type ProjectOwner,
+} from "../../../window/projectOwnership.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { probeGitMarker } from "../../../services/projectOpenPreflight.js";
 import { AppError } from "../../../utils/errorTypes.js";
@@ -48,6 +55,7 @@ import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { Project } from "../../../types/index.js";
 import type {
   ProjectSwitchOutgoingState,
+  ProjectSwitchResult,
   ProjectSwitchTrace,
 } from "../../../../shared/types/ipc/project.js";
 import type { TabGroup } from "../../../../shared/types/panel.js";
@@ -63,7 +71,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState,
     options?: { focusIntent?: ProjectFocusOnActivateIntent; trace?: ProjectSwitchTrace }
-  ) => {
+  ): Promise<ProjectSwitchResult> => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
@@ -78,71 +86,85 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     const requestedAt = Date.now();
     markMainReceived(trace, operation);
 
-    // After the capture but before anything acts on it. The capture is a pure
-    // synchronous snapshot and has to stay one: read after an await, the
-    // sender's view→project binding can be moved by a concurrent switch in the
-    // same window. Throwing here simply discards it, and everything with a side
-    // effect the sender couldn't undo still lies further down.
-    await assertProjectRepositoryIntact(project);
+    const owner = findOwnerElsewhere(deps, operation);
+    if (owner) return redirectToProjectOwner(owner, project, options?.focusIntent);
 
-    const { outgoingProjectId, projectViewManager: pvm } = operation;
+    const releaseClaim = claimProjectActivation(projectId, operation.windowId);
+    try {
+      // After the capture but before anything acts on it. The capture is a pure
+      // synchronous snapshot and has to stay one: read after an await, the
+      // sender's view→project binding can be moved by a concurrent switch in the
+      // same window. Throwing here simply discards it, and everything with a side
+      // effect the sender couldn't undo still lies further down.
+      await assertProjectRepositoryIntact(project);
 
-    // Started concurrently with the view swap — the incoming view never reads
-    // the outgoing project's state file — and awaited before returning so the
-    // IPC contract (state persisted before resolve) is preserved.
-    const persistOutgoing = persistOutgoingProjectState(outgoingState, operation);
-    trackOutgoingPersist(outgoingProjectId, persistOutgoing);
+      const { outgoingProjectId, projectViewManager: pvm } = operation;
 
-    if (pvm) {
-      // Record the focus intent on the PVM instance BEFORE switchTo so the
-      // cached-view fast path can pick it up synchronously and the cold-start
-      // path can read it after the paint gate resolves. PVM owns the lifecycle
-      // (consumed exactly once or discarded on timeout/error).
-      if (options?.focusIntent) {
-        pvm.setPendingFocusIntent(projectId, options.focusIntent);
-      }
-      // Rapid switch-back: a cold-start hydrate of the target must not read
-      // its state file while a previous switch's persist is still writing it.
-      await awaitPendingOutgoingPersist(projectId);
-      markPerformance(PERF_MARKS.PROJECT_SWITCH_PENDING_PERSIST_DONE, { switchId: trace.switchId });
-      try {
-        await activateProjectView(deps, operation, pvm, project, {
-          logPrefix: "[ProjectSwitch]",
-          resumeWorkspace: true,
-          trace,
-          requestedAt,
+      // Started concurrently with the view swap — the incoming view never reads
+      // the outgoing project's state file — and awaited before returning so the
+      // IPC contract (state persisted before resolve) is preserved.
+      const persistOutgoing = persistOutgoingProjectState(outgoingState, operation);
+      trackOutgoingPersist(outgoingProjectId, persistOutgoing);
+
+      if (pvm) {
+        // Record the focus intent on the PVM instance BEFORE switchTo so the
+        // cached-view fast path can pick it up synchronously and the cold-start
+        // path can read it after the paint gate resolves. PVM owns the lifecycle
+        // (consumed exactly once or discarded on timeout/error).
+        if (options?.focusIntent) {
+          pvm.setPendingFocusIntent(projectId, options.focusIntent);
+        }
+        // Rapid switch-back: a cold-start hydrate of the target must not read
+        // its state file while a previous switch's persist is still writing it.
+        await awaitPendingOutgoingPersist(projectId);
+        markPerformance(PERF_MARKS.PROJECT_SWITCH_PENDING_PERSIST_DONE, {
+          switchId: trace.switchId,
         });
-        await persistOutgoing;
+        try {
+          await activateProjectView(deps, operation, pvm, project, {
+            logPrefix: "[ProjectSwitch]",
+            resumeWorkspace: true,
+            trace,
+            requestedAt,
+            onSwapSettled: releaseClaim,
+          });
+          await persistOutgoing;
+        } finally {
+          // In `finally`, not after the awaits: once the swap has run, the PVM
+          // binding has moved (or been rolled back), so the gates must converge on
+          // whatever state we actually landed in — including when the outgoing
+          // persist rejects after a visually successful activation.
+          refreshProjectMenuState();
+          notificationService.refreshTitles();
+        }
+        return { outcome: "switched", project };
+      }
+
+      await persistOutgoing;
+      // Legacy (non-PVM) path bypasses WorkspaceHostPool.loadProject, so the
+      // pool's switch-away background demotion never fires. Pause the outgoing
+      // project and resume the incoming one explicitly so background projects
+      // stop full-rate polling here too (#10743).
+      if (deps.worktreeService) {
+        if (outgoingProjectId && outgoingProjectId !== projectId) {
+          const previousPath = projectStore.getProjectById(outgoingProjectId)?.path;
+          if (previousPath) {
+            deps.worktreeService.pauseProject(previousPath);
+          }
+        }
+        deps.worktreeService.resumeProject(project.path);
+      }
+      try {
+        return {
+          outcome: "switched",
+          project: await projectSwitchService.switchProject(projectId),
+        };
       } finally {
-        // In `finally`, not after the awaits: once the swap has run, the PVM
-        // binding has moved (or been rolled back), so the gates must converge on
-        // whatever state we actually landed in — including when the outgoing
-        // persist rejects after a visually successful activation.
         refreshProjectMenuState();
         notificationService.refreshTitles();
       }
-      return project;
-    }
-
-    await persistOutgoing;
-    // Legacy (non-PVM) path bypasses WorkspaceHostPool.loadProject, so the
-    // pool's switch-away background demotion never fires. Pause the outgoing
-    // project and resume the incoming one explicitly so background projects
-    // stop full-rate polling here too (#10743).
-    if (deps.worktreeService) {
-      if (outgoingProjectId && outgoingProjectId !== projectId) {
-        const previousPath = projectStore.getProjectById(outgoingProjectId)?.path;
-        if (previousPath) {
-          deps.worktreeService.pauseProject(previousPath);
-        }
-      }
-      deps.worktreeService.resumeProject(project.path);
-    }
-    try {
-      return await projectSwitchService.switchProject(projectId);
     } finally {
-      refreshProjectMenuState();
-      notificationService.refreshTitles();
+      releaseClaim();
     }
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_SWITCH, handleProjectSwitch));
@@ -152,7 +174,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState,
     options?: { trace?: ProjectSwitchTrace }
-  ) => {
+  ): Promise<ProjectSwitchResult> => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
@@ -175,48 +197,62 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     const requestedAt = Date.now();
     markMainReceived(trace, operation);
 
-    await assertProjectRepositoryIntact(project);
+    const owner = findOwnerElsewhere(deps, operation);
+    if (owner) return redirectToProjectOwner(owner, project);
 
-    const { outgoingProjectId, projectViewManager: pvm } = operation;
+    const releaseClaim = claimProjectActivation(projectId, operation.windowId);
+    try {
+      await assertProjectRepositoryIntact(project);
 
-    // Sender-scoped no-op check: skip the persist only when THIS window is
-    // already displaying the target. The global pointer answers a different
-    // question — with a second window open it can equal the target while the
-    // sender still has its own outgoing layout to save (#11101).
-    let persistOutgoing: Promise<void> = Promise.resolve();
-    if (outgoingProjectId !== projectId) {
-      persistOutgoing = persistOutgoingProjectState(outgoingState, operation);
-      trackOutgoingPersist(outgoingProjectId, persistOutgoing);
-    }
+      const { outgoingProjectId, projectViewManager: pvm } = operation;
 
-    if (pvm) {
-      await awaitPendingOutgoingPersist(projectId);
-      markPerformance(PERF_MARKS.PROJECT_SWITCH_PENDING_PERSIST_DONE, { switchId: trace.switchId });
-      try {
-        await activateProjectView(deps, operation, pvm, project, {
-          logPrefix: "[ProjectReopen]",
-          markActive: true,
-          resumeWorkspace: true,
-          trace,
-          requestedAt,
+      // Sender-scoped no-op check: skip the persist only when THIS window is
+      // already displaying the target. The global pointer answers a different
+      // question — with a second window open it can equal the target while the
+      // sender still has its own outgoing layout to save (#11101).
+      let persistOutgoing: Promise<void> = Promise.resolve();
+      if (outgoingProjectId !== projectId) {
+        persistOutgoing = persistOutgoingProjectState(outgoingState, operation);
+        trackOutgoingPersist(outgoingProjectId, persistOutgoing);
+      }
+
+      if (pvm) {
+        await awaitPendingOutgoingPersist(projectId);
+        markPerformance(PERF_MARKS.PROJECT_SWITCH_PENDING_PERSIST_DONE, {
+          switchId: trace.switchId,
         });
-        await persistOutgoing;
+        try {
+          await activateProjectView(deps, operation, pvm, project, {
+            logPrefix: "[ProjectReopen]",
+            markActive: true,
+            resumeWorkspace: true,
+            trace,
+            requestedAt,
+            onSwapSettled: releaseClaim,
+          });
+          await persistOutgoing;
+        } finally {
+          refreshProjectMenuState();
+          notificationService.refreshTitles();
+        }
+        return { outcome: "switched", project };
+      }
+
+      await persistOutgoing;
+      if (deps.worktreeService) {
+        deps.worktreeService.resumeProject(project.path);
+      }
+      try {
+        return {
+          outcome: "switched",
+          project: await projectSwitchService.reopenProject(projectId),
+        };
       } finally {
         refreshProjectMenuState();
         notificationService.refreshTitles();
       }
-      return project;
-    }
-
-    await persistOutgoing;
-    if (deps.worktreeService) {
-      deps.worktreeService.resumeProject(project.path);
-    }
-    try {
-      return await projectSwitchService.reopenProject(projectId);
     } finally {
-      refreshProjectMenuState();
-      notificationService.refreshTitles();
+      releaseClaim();
     }
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_REOPEN, handleProjectReopen));
@@ -224,17 +260,27 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
   return () => handlers.forEach((cleanup) => cleanup());
 }
 
-function hasLiveView(
-  pvm: ReturnType<typeof resolveProjectViewManager>,
-  projectId: string
-): boolean {
-  try {
-    return Boolean(
-      pvm?.getAllViews().some((v) => v.projectId === projectId && !v.view.webContents.isDestroyed())
-    );
-  } catch {
-    return false;
-  }
+/**
+ * The other window that already owns the target, if any (#12596). One live view
+ * per project across the app, so a request for a project another window holds
+ * goes to that window instead of opening a second view here.
+ *
+ * Read from the synchronous capture, before the handler's first await — another
+ * window's switch landing in between could otherwise move ownership between the
+ * check and the redirect (#11131) — and ahead of the PVM/legacy split, so neither
+ * path opens a duplicate (#9865). A requester that already holds a view of the
+ * project creates nothing new by activating it, so it is never redirected.
+ */
+function findOwnerElsewhere(
+  deps: HandlerDependencies,
+  operation: SwitchOperation
+): ProjectOwner | null {
+  const { incomingProjectId, projectViewManager, windowId } = operation;
+  if (hasLiveProjectView(projectViewManager, incomingProjectId)) return null;
+  return findOtherProjectOwner(deps.windowRegistry, incomingProjectId, {
+    windowId,
+    projectViewManager,
+  });
 }
 
 function resolveSwitchTrace(trace: ProjectSwitchTrace | undefined): ProjectSwitchTrace {
@@ -574,6 +620,13 @@ type ActivateOptions = {
   trace: ProjectSwitchTrace;
   /** `Date.now()` when main received the request — the origin of the status timing. */
   requestedAt: number;
+  /**
+   * Runs once the view swap has settled either way. From then on the manager's
+   * own inventory answers who owns the project, so the activation claim that
+   * covered the gap before it is released here rather than after the long
+   * worktree-load tail, during which this window may already have moved on.
+   */
+  onSwapSettled?: () => void;
 };
 
 async function activateProjectView(
@@ -636,11 +689,15 @@ async function activateProjectView(
     // A target with no live view is about to hydrate from scratch and will ask
     // for its backend terminal inventory ~240 ms from now, once React is up.
     // Start that pty-host fetch here so the answer is waiting when it does.
-    if (deps.ptyClient && !hasLiveView(pvm, projectId)) {
+    if (deps.ptyClient && !hasLiveProjectView(pvm, projectId)) {
       const ptyClient = deps.ptyClient;
       void prefetchTerminalInventory(projectId, (id) => buildTerminalInventory(ptyClient, id));
     }
-    swapResult = await pvm.switchTo(projectId, project.path, trace);
+    try {
+      swapResult = await pvm.switchTo(projectId, project.path, trace);
+    } finally {
+      options.onSwapSettled?.();
+    }
   } catch (error) {
     // The swap failed and rolled back to the previous view, but the early
     // loadProject may have already pointed windowToProject at the failed

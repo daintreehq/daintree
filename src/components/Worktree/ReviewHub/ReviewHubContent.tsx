@@ -32,12 +32,12 @@ import {
   ArrowUpFromLine,
   ChevronRight,
   AlertTriangle,
-  CircleAlert,
   GitBranch,
 } from "lucide-react";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
+import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
@@ -82,7 +82,6 @@ import {
 // list. The modals open only on row click, so the chunk fetch overlaps user
 // think-time; useKeepMounted gates the first mount so nothing is fetched (or
 // rendered) until a diff is actually opened.
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -206,6 +205,11 @@ export function ReviewHubContent({
   const [forgeErrorCode, setForgeErrorCode] = useState<string | undefined>(undefined);
   const [forgeProviderId, setForgeProviderId] = useState<string | null>(null);
   const [showPushDetails, setShowPushDetails] = useState(false);
+  // Dismissing the banner hides the presentation only. The failure itself stays
+  // in `pushError`, so readiness gating is unchanged and the rail takes the
+  // `push-failed` blocker back; the next failed attempt shows the banner again.
+  const [pushBannerDismissed, setPushBannerDismissed] = useState(false);
+  const showPushBanner = pushError !== null && !pushBannerDismissed;
   const [pushProgress, setPushProgress] = useState<Map<string, PushProgressEvent>>(new Map());
   const [pushTargetBranch, setPushTargetBranch] = useState<string | null>(null);
   const [isPushing, setIsPushing] = useState(false);
@@ -226,7 +230,6 @@ export function ReviewHubContent({
   );
   const setStoreViewed = useDiffViewedStore((state) => state.setViewed);
   const [diffMode, setDiffMode] = useState<DiffMode>("working-tree");
-  const [pullRebaseConfirmOpen, setPullRebaseConfirmOpen] = useState(false);
   const [pullRebasing, setPullRebasing] = useState(false);
   const isPullRebasingRef = useRef(false);
   const [baseBranchFiles, setBaseBranchFiles] = useState<CrossWorktreeFile[] | null>(null);
@@ -834,7 +837,7 @@ export function ReviewHubContent({
    * see the note at the `ReadinessRail` call site. Never used for gating.
    */
   const railSummary = useMemo<ReviewReadinessSummary>(() => {
-    if (!pushError) return readinessSummary;
+    if (!showPushBanner) return readinessSummary;
     const drop = (items: ReviewReadinessItem[]) => items.filter((i) => i.id !== "push-failed");
     const blockers = drop(readinessSummary.blockers);
     const warnings = drop(readinessSummary.warnings);
@@ -859,7 +862,7 @@ export function ReviewHubContent({
       infos: drop(readinessSummary.infos),
       nextActions: drop(readinessSummary.nextActions),
     };
-  }, [readinessSummary, pushError]);
+  }, [readinessSummary, showPushBanner]);
 
   const refresh = useCallback(async () => {
     if (!worktreePath) return;
@@ -959,6 +962,7 @@ export function ReviewHubContent({
 
   useEffect(() => {
     setShowPushDetails(false);
+    setPushBannerDismissed(false);
   }, [pushError]);
 
   // Read the latest initialCommitMessage without re-running the open/close
@@ -1393,27 +1397,6 @@ export function ReviewHubContent({
     [fileListExpanded, setFileListExpanded, worktreePath]
   );
 
-  const handleReadinessCta = useCallback(
-    (cta: ReviewReadinessCta) => {
-      switch (cta.kind) {
-        case "focus-conflicts":
-        case "focus-staged":
-          // The file list only renders in working-tree mode; flip back first so
-          // the focus targets exist by the time handleFocusBlocker's rAF runs.
-          setDiffMode("working-tree");
-          handleFocusBlocker(cta.kind === "focus-conflicts" ? "conflicts" : "staged-files");
-          return;
-        case "pull-rebase":
-          setPullRebaseConfirmOpen(true);
-          return;
-        case "open-pr":
-          void systemClient.openExternal(cta.url);
-          return;
-      }
-    },
-    [handleFocusBlocker]
-  );
-
   const handlePullRebase = useCallback(async () => {
     if (isPullRebasingRef.current) return;
     isPullRebasingRef.current = true;
@@ -1441,6 +1424,39 @@ export function ReviewHubContent({
       setPullRebasing(false);
     }
   }, [worktreePath, refresh]);
+
+  // Confirmed through the same dialog the `git.pullRebase` action uses, so the
+  // Review Hub CTA shows the upstream, the incoming commits and the replay set
+  // rather than two counts. It used to open its own count-only confirm, which
+  // made the same operation look different depending on where it was started.
+  const confirmPullRebase = useCallback(async () => {
+    const confirmed = await useGitPullRebaseConfirmStore
+      .getState()
+      .requestConfirmation(worktreePath);
+    if (!confirmed) return;
+    await handlePullRebase();
+  }, [worktreePath, handlePullRebase]);
+
+  const handleReadinessCta = useCallback(
+    (cta: ReviewReadinessCta) => {
+      switch (cta.kind) {
+        case "focus-conflicts":
+        case "focus-staged":
+          // The file list only renders in working-tree mode; flip back first so
+          // the focus targets exist by the time handleFocusBlocker's rAF runs.
+          setDiffMode("working-tree");
+          handleFocusBlocker(cta.kind === "focus-conflicts" ? "conflicts" : "staged-files");
+          return;
+        case "pull-rebase":
+          void confirmPullRebase();
+          return;
+        case "open-pr":
+          void systemClient.openExternal(cta.url);
+          return;
+      }
+    },
+    [handleFocusBlocker, confirmPullRebase]
+  );
 
   /**
    * The banner CTA dispatches the action rather than opening a dialog of its
@@ -1941,7 +1957,6 @@ export function ReviewHubContent({
             severity="error"
             role="status"
             ariaLive="polite"
-            icon={CircleAlert}
             title={actionError.title}
             description={actionError.detail}
             onClose={() => setActionError(null)}
@@ -1952,7 +1967,7 @@ export function ReviewHubContent({
             }}
           />
         )}
-        {pushError && (
+        {pushError && showPushBanner && (
           <PushErrorBanner
             pushError={pushError}
             behindCount={behindCount}
@@ -1969,8 +1984,9 @@ export function ReviewHubContent({
               )
             }
             onRetryPush={() => void handleRetryPush()}
-            onPullRebase={() => setPullRebaseConfirmOpen(true)}
+            onPullRebase={() => void confirmPullRebase()}
             onForcePush={() => void handleForcePush()}
+            onDismiss={() => setPushBannerDismissed(true)}
           />
         )}
 
@@ -2049,7 +2065,6 @@ export function ReviewHubContent({
                   severity="error"
                   role="status"
                   ariaLive="polite"
-                  icon={CircleAlert}
                   title={`Couldn't compare with ${mainBranch}`}
                   description={baseBranchError}
                   action={{
@@ -2151,7 +2166,6 @@ export function ReviewHubContent({
                   <InlineStatusBanner
                     severity="error"
                     role="alert"
-                    icon={CircleAlert}
                     title="Couldn't load changes"
                     description={loadError}
                     action={{
@@ -2206,7 +2220,7 @@ export function ReviewHubContent({
                         // the pane contradicting itself.
                         description={
                           pushError
-                            ? "Nothing left to commit — resolve the push above to publish them."
+                            ? `Nothing left to commit — resolve the push above to publish ${aheadCount === 1 ? "it" : "them"}.`
                             : "Nothing left to commit — these commits just aren't on the remote yet."
                         }
                         action={
@@ -2430,52 +2444,6 @@ export function ReviewHubContent({
             />
           )}
       </div>
-
-      <ConfirmDialog
-        isOpen={pullRebaseConfirmOpen}
-        onClose={() => setPullRebaseConfirmOpen(false)}
-        // Fixed, matching `GitPullRebaseConfirmDialog` (#11980). It used to
-        // interpolate `status?.currentBranch ?? "current branch"`, so a confirm
-        // opened before the status read landed asked to rebase a branch called
-        // "current branch" — and the dialog's accessible name then changed
-        // underneath the user without being re-announced. What is known about
-        // the operation belongs in the description, which can hold a pending
-        // state honestly.
-        title="Pull and rebase local commits?"
-        // Names no base ref. A rebase replays onto the UPSTREAM and rewrites the
-        // branch, so naming the local branch here read as "onto <branch>" — the
-        // exact inversion `GitPullRebaseConfirmDialog`'s Onto/Rewrites pair
-        // exists to prevent. This surface has no upstream ref to put there
-        // instead, so it states the counts and stops (#11980).
-        description={
-          <span>
-            Replays{" "}
-            {aheadCount != null ? (
-              <span className="font-medium text-text-primary">
-                {aheadCount} local commit{aheadCount === 1 ? "" : "s"}
-              </span>
-            ) : (
-              "your local commits"
-            )}{" "}
-            on top of{" "}
-            {behindCount != null ? (
-              <span className="font-medium text-text-primary">
-                {behindCount} incoming commit{behindCount === 1 ? "" : "s"}
-              </span>
-            ) : (
-              "the incoming commits"
-            )}{" "}
-            from the remote. Each replayed commit becomes a new commit with a different hash.
-          </span>
-        }
-        confirmLabel="Pull and rebase"
-        cancelLabel="Cancel"
-        variant="destructive"
-        onConfirm={() => {
-          setPullRebaseConfirmOpen(false);
-          void handlePullRebase();
-        }}
-      />
     </>
   );
 }

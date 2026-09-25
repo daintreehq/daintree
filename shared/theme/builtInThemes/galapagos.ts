@@ -134,7 +134,7 @@ export const theme: BuiltInThemeSource = {
     "pulse-control-hover-bg": "rgba(255,255,255,0.05)",
     "pulse-empty-bg": "#1F2D29",
     // Sea-green heat ramp climbing to the accent at heat-4.
-    "pulse-heat-1": "#1F332B",
+    "pulse-heat-1": "#243E33",
     "pulse-heat-2": "#2D5747",
     "pulse-heat-3": "#377B62",
     "pulse-heat-4": "#4A9E7F",

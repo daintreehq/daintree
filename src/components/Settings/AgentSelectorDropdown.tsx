@@ -1,8 +1,12 @@
 import { useState, useEffect, useRef, type ComponentType, type CSSProperties } from "react";
 import { cn } from "@/lib/utils";
-import { Settings2, ChevronDown, Search } from "lucide-react";
+import { Settings2, ChevronDown, ShieldOff, Check } from "lucide-react";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
 import { BrandMark } from "@/components/icons";
+import type { AgentAvailabilityState } from "@shared/types";
+import { getAgentHealth } from "./agentHealth";
 
 export interface AgentOption {
   id: string;
@@ -10,6 +14,7 @@ export interface AgentOption {
   color: string;
   Icon: ComponentType<{ size?: number; style?: CSSProperties; className?: string }>;
   selected: boolean;
+  availability: AgentAvailabilityState | undefined;
   dangerousEnabled: boolean;
   hasCustomFlags: boolean;
 }
@@ -50,15 +55,29 @@ export function AgentSelectorDropdown({
     setActiveIndex(q && items.length > 1 ? 1 : 0);
   }, [filterQuery]); // eslint-disable-line react-hooks/exhaustive-deps -- items derived from filterQuery
 
+  // On every opening too, not only when the cursor moves: reopening on the same
+  // late-list agent would otherwise leave its row, and the rail marking it, off-screen.
   useEffect(() => {
-    activeItemRef.current?.scrollIntoView({ block: "nearest" });
-  }, [activeIndex]);
+    if (!open) return;
+    const frame = requestAnimationFrame(() =>
+      activeItemRef.current?.scrollIntoView({ block: "nearest" })
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [activeIndex, open]);
 
   useEffect(() => {
-    if (!open) {
-      setFilterQuery("");
-    }
+    if (!open) setFilterQuery("");
   }, [open]);
+
+  // The cursor opens on the page being shown, so Enter straight away is a no-op
+  // rather than a jump back to General.
+  const handleOpenChange = (next: boolean) => {
+    if (next) {
+      const current = [GENERAL_ID, ...agentOptions.map((a) => a.id)].indexOf(activeSubtab);
+      setActiveIndex(Math.max(0, current));
+    }
+    setOpen(next);
+  };
 
   const handleSelect = (id: string) => {
     onSubtabChange(id);
@@ -88,7 +107,7 @@ export function AgentSelectorDropdown({
     activeSubtab !== GENERAL_ID ? agentOptions.find((a) => a.id === activeSubtab) : null;
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -97,9 +116,10 @@ export function AgentSelectorDropdown({
           data-testid="agent-selector-trigger"
           className={cn(
             "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-            "border border-border-default bg-surface-canvas text-text-primary",
-            "hover:border-daintree-accent/50 transition-colors",
-            "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50"
+            "border border-border-strong bg-surface-canvas text-text-primary transition-colors",
+            // Radix hands focus back to the trigger when the list closes, so a `focus:`
+            // indicator stayed lit after every pick — accent only for keyboard focus.
+            "focus:outline-hidden focus-visible:border-accent-primary"
           )}
         >
           {selectedAgent ? (
@@ -108,39 +128,18 @@ export function AgentSelectorDropdown({
                 <selectedAgent.Icon size={16} />
               </BrandMark>
               <span className="flex-1 text-left truncate">{selectedAgent.name}</span>
-              {(!selectedAgent.selected || selectedAgent.dangerousEnabled) && (
-                <span className="flex items-center gap-1">
-                  {!selectedAgent.selected && (
-                    <>
-                      <span
-                        className="status-mark w-1.5 h-1.5 rounded-full bg-daintree-text/30"
-                        aria-hidden="true"
-                      />
-                      <span className="sr-only">Not in workflow</span>
-                    </>
-                  )}
-                  {selectedAgent.dangerousEnabled && (
-                    <>
-                      <span
-                        className="status-mark w-1.5 h-1.5 rounded-full bg-status-error"
-                        aria-hidden="true"
-                      />
-                      <span className="sr-only">Skip permissions enabled</span>
-                    </>
-                  )}
-                </span>
-              )}
+              <AgentStatusMarks agent={selectedAgent} />
             </>
           ) : (
             <>
-              <Settings2 size={16} className="text-daintree-text/60" />
+              <Settings2 size={16} className="text-text-secondary" />
               <span className="flex-1 text-left truncate">General</span>
             </>
           )}
           <ChevronDown
             size={14}
             className={cn(
-              "shrink-0 text-daintree-text/40 transition-transform",
+              "shrink-0 text-text-secondary transition-transform",
               open && "rotate-180"
             )}
           />
@@ -153,27 +152,23 @@ export function AgentSelectorDropdown({
         style={{ width: "var(--radix-popover-trigger-width)" }}
         onEscapeKeyDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border-default">
-          <Search size={14} className="shrink-0 text-daintree-text/40" aria-hidden="true" />
-          <input
-            ref={inputRef}
-            type="text"
-            autoFocus
-            placeholder="Filter agents…"
-            value={filterQuery}
-            onChange={(e) => setFilterQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            role="combobox"
-            aria-label="Filter agents"
-            aria-expanded={open}
-            aria-autocomplete="list"
-            aria-controls="agent-selector-list"
-            aria-activedescendant={
-              items[activeIndex] ? `agent-selector-item-${items[activeIndex].id}` : undefined
-            }
-            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
-          />
-        </div>
+        <PopoverSearchField
+          ref={inputRef}
+          autoFocus
+          placeholder="Filter agents…"
+          value={filterQuery}
+          onChange={(e) => setFilterQuery(e.target.value)}
+          onKeyDown={handleKeyDown}
+          role="combobox"
+          aria-label="Filter agents"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          aria-controls="agent-selector-list"
+          aria-activedescendant={
+            items[activeIndex] ? `agent-selector-item-${items[activeIndex].id}` : undefined
+          }
+          className="h-8 text-xs"
+        />
         <div
           role="listbox"
           id="agent-selector-list"
@@ -191,20 +186,22 @@ export function AgentSelectorDropdown({
                 ref={isActive ? activeItemRef : undefined}
                 id={`agent-selector-item-${item.id}`}
                 role="option"
-                aria-selected={isSelected}
-                data-highlighted={isActive || undefined}
+                // The palettes' contract (paletteRowStyles): `aria-selected` is the row
+                // Enter acts on, drawn as a fill plus a leading rail; the page being
+                // shown is `aria-current` with a check.
+                aria-selected={isActive}
+                aria-current={isSelected ? "page" : undefined}
                 onClick={() => handleSelect(item.id)}
                 onMouseEnter={() => setActiveIndex(index)}
                 className={cn(
-                  "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm",
-                  isActive && "bg-overlay-selected",
-                  isSelected && "text-text-primary font-medium",
-                  !isActive && !isSelected && "text-text-primary"
+                  PALETTE_ROW_CLASS,
+                  "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm text-text-primary",
+                  isSelected && "font-medium"
                 )}
               >
                 {item.kind === "general" ? (
                   <>
-                    <Settings2 size={16} className="shrink-0 text-daintree-text/60" />
+                    <Settings2 size={16} className="shrink-0 text-text-secondary" />
                     <div className="flex-1 min-w-0">
                       <div className="truncate">General</div>
                       <div className="text-xs text-text-secondary truncate">Global settings</div>
@@ -216,30 +213,10 @@ export function AgentSelectorDropdown({
                       <item.agent.Icon size={16} />
                     </BrandMark>
                     <span className="flex-1 min-w-0 truncate">{item.agent.name}</span>
-                    {(!item.agent.selected || item.agent.dangerousEnabled) && (
-                      <span className="flex items-center gap-1 shrink-0">
-                        {!item.agent.selected && (
-                          <>
-                            <span
-                              className="status-mark w-1.5 h-1.5 rounded-full bg-daintree-text/30"
-                              aria-hidden="true"
-                            />
-                            <span className="sr-only">Not in workflow</span>
-                          </>
-                        )}
-                        {item.agent.dangerousEnabled && (
-                          <>
-                            <span
-                              className="status-mark w-1.5 h-1.5 rounded-full bg-status-error"
-                              aria-hidden="true"
-                            />
-                            <span className="sr-only">Skip permissions enabled</span>
-                          </>
-                        )}
-                      </span>
-                    )}
+                    <AgentStatusMarks agent={item.agent} />
                   </>
                 )}
+                {isSelected && <Check size={12} className="shrink-0" aria-hidden="true" />}
               </div>
             );
           })}
@@ -251,5 +228,36 @@ export function AgentSelectorDropdown({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * What the picker says about an agent without opening it: whether it is usable on this
+ * machine, and whether it skips permission prompts. Each is a glyph and words rather
+ * than a coloured dot — a dot alone could not tell "not installed" from "blocked", and
+ * said nothing at all to anyone who can't see its colour. Ready agents show nothing.
+ */
+function AgentStatusMarks({ agent }: { agent: AgentOption }) {
+  const health = getAgentHealth(agent.availability);
+  const statusLabel =
+    health.kind === "attention" || health.kind === "missing" ? health.label : null;
+  if (!statusLabel && !agent.dangerousEnabled) return null;
+  return (
+    <span className="flex shrink-0 items-center gap-3 font-normal">
+      {agent.dangerousEnabled && (
+        <span className="flex items-center gap-1" title="Skips permission prompts">
+          <ShieldOff className="h-3.5 w-3.5 text-status-error" aria-hidden="true" />
+          <span className="sr-only">Skips permission prompts</span>
+        </span>
+      )}
+      {statusLabel && (
+        <span className="flex items-center gap-1.5" data-agent-status={statusLabel}>
+          {health.kind === "attention" && (
+            <health.Icon className="h-3.5 w-3.5 text-status-warning" aria-hidden="true" />
+          )}
+          <span className="text-xs text-text-secondary">{statusLabel}</span>
+        </span>
+      )}
+    </span>
   );
 }

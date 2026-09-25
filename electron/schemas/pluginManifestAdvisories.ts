@@ -90,8 +90,8 @@ export async function collectManifestAdvisories({
 
   if (!manifest.engines?.daintree) {
     // `>=0.11.0` (open-ended), not `^0.11.0`: the caret on a 0.x minor resolves
-    // to `>=0.11.0 <0.12.0`, which the host's engine gate rejects on every
-    // release past 0.11.
+    // to `>=0.11.0 <0.12.0`, which the host warns about on every release past
+    // 0.11.
     warnings.push("engines.daintree omitted — consider pinning a range, e.g. >=0.11.0");
   }
 
@@ -167,7 +167,7 @@ export async function collectManifestAdvisories({
 /**
  * `engines.daintree` must be an open-ended lower bound, never a caret. Under
  * semver's 0.x rule `^0.11.0` means `>=0.11.0 <0.12.0`, so a caret written
- * against today's release is refused by the host's engine gate on every release
+ * against today's release loads with a "may not work" warning on every release
  * after it. The manifest schema only checks that the range parses, so this is
  * the one place the rule is mechanically enforced.
  *
@@ -176,5 +176,5 @@ export async function collectManifestAdvisories({
 export function caretEngineAdvisory(range: string | undefined): string | null {
   if (!range || !range.trimStart().startsWith("^")) return null;
   const lowerBound = range.trim().slice(1).trim();
-  return `engines.daintree "${range}" is a caret range — under semver's 0.x rule it resolves to a single minor and the host refuses the plugin on every release after it. Write ">=${lowerBound}" instead.`;
+  return `engines.daintree "${range}" is a caret range — under semver's 0.x rule it resolves to a single minor and the host warns that the plugin may not work on every release after it. Write ">=${lowerBound}" instead.`;
 }

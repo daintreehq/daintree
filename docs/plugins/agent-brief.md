@@ -33,7 +33,7 @@ The whole design exists so that an agent working in a fresh worktree can write a
 | The shape of the contribution you're adding — panels, views, commands, toolbar buttons, context menus, keybindings, settings | [contribution-points.md](./contribution-points.md) |
 | What `host` can do inside `activate()`, and the calling conventions | [host-api.md](./host-api.md) |
 | What your view gets in the DOM, and how to style it so it reads as native | [views.md](./views.md) |
-| Working patterns: pull then push, watch and badge, open files, launch an agent, own the canvas | [patterns.md](./patterns.md) |
+| Working patterns: pull then push, watch and badge, refresh when the user comes back, open files, launch an agent, own the canvas | [patterns.md](./patterns.md) |
 | What the capability tokens actually mean, and what they don't | [trust-model.md](./trust-model.md) |
 | The watcher loop and the `daintree-plugin` CLI | [dev-loop.md](./dev-loop.md) |
 
@@ -62,7 +62,7 @@ Sixteen things an agent gets wrong on the first attempt, grouped by how the fail
 1. **`"scope": "project"` is required.** A manifest without it, found under `.daintree/plugins/`, is rejected as `project_scope_required`. The same manifest _with_ it, installed into `~/.daintree/plugins/`, is rejected the other way.
 2. **Every panel needs `color` as well as `iconId`.** Both are required, and a missing `color` is the single most common reason a hand-written manifest is refused. Any CSS colour works; `var(--theme-category-orange)` is the convention for plugin panels.
 3. **A view's `id` must equal a panel's `id`.** The loader attaches a view to a panel kind by matching ids, and a view matching no panel is rejected outright rather than ignored. `surfaces.*.viewId` must likewise name a declared view, and that view's panel must not be `hasPty: true`.
-4. **`engines.daintree` must be an open-ended lower bound — never a caret.** `^0.11.0` means `>=0.11.0 <0.12.0` under semver's 0.x rule, so a caret is refused on every release after the one you wrote it against. Write `>=0.11.0`.
+4. **`engines.daintree` must be an open-ended lower bound — never a caret.** `^0.11.0` means `>=0.11.0 <0.12.0` under semver's 0.x rule, so a caret draws a compatibility warning on every release after the one you wrote it against. Write `>=0.11.0`.
 5. **Eight contribution types are refused under `scope: "project"`**: `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `processTools`, `mcpServers`, `forgeProviders`. Each error names the structural reason. See the table in [project-local.md](./project-local.md#what-a-project-plugin-may-contribute). To give agents tools, declare `agentMcp` instead — it is allowed here (see [Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints)).
 
 **Loads, and stays inert.**
@@ -89,7 +89,7 @@ Two more things that are not failures, and get misread as one. A new manifest id
 
 ## The zero-build skeleton
 
-The `daintree-plugin` CLI is not on npm yet, so `npx daintree-plugin new --project` returns E404 outside this repository. That is survivable, because neither half of a plugin has to be compiled: the **view** is imported by the renderer as browser ESM, where a bare `react` specifier resolves through the host's import map, and the **worker entry** is imported by Node in a utility process. Hand-write both and you need no toolchain at all.
+`npx daintree-plugin new --project` scaffolds a project plugin with a Vite build, but neither half of a plugin has to be compiled: the **view** is imported by the renderer as browser ESM, where a bare `react` specifier resolves through the host's import map, and the **worker entry** is imported by Node in a utility process. Hand-write both and you need no toolchain at all.
 
 Treat this as a load probe — the smallest thing that provably activates and renders. Grow it once it works.
 
@@ -210,7 +210,7 @@ export default function Panel({ panelId, pluginId }) {
 
 Use the `pluginId` prop rather than hardcoding your manifest name — for a project plugin the runtime id is an instance key, not the manifest id.
 
-What the no-build path costs: the React hooks in `@daintreehq/plugin-sdk/react` resolve only in a bundle built with `@daintreehq/plugin-vite`, so a raw view uses the `window.electron.plugin` bridge directly as above; and the view can import `react` plus its own relative modules, but not arbitrary bare npm specifiers, TypeScript, JSX, or CSS files. If you need those, build inside a Daintree checkout where the workspace packages resolve — outside one there is no published toolchain yet. [dev-loop.md](./dev-loop.md) covers the watcher.
+What the no-build path costs: the React hooks in `@daintreehq/plugin-sdk/react` resolve only in a bundle built with `@daintreehq/plugin-vite`, so a raw view uses the `window.electron.plugin` bridge directly as above; and the view can import `react` plus its own relative modules, but not arbitrary bare npm specifiers, TypeScript, JSX, or CSS files. If you need those, add the toolchain — `npm install --save-dev @daintreehq/plugin-sdk @daintreehq/plugin-vite daintree-plugin`, or scaffold with `npx daintree-plugin new --project` — and build with Vite. [dev-loop.md](./dev-loop.md) covers the watcher.
 
 ## Styling: use Tailwind
 

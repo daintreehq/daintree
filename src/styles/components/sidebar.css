@@ -271,6 +271,34 @@ html[data-dragging="true"]
   }
 }
 
+/* A session row's grip, in the card's Active sessions list: the card grip's
+   reveal at row scope. Absent at rest, so the list reads as sessions rather
+   than as a column of handles; in on pointer hover over the row, and on
+   keyboard focus anywhere in it — `:has(:focus-visible)`, not
+   `:focus-within`, so clicking a row to arm it does not strand a grip on it.
+   `pointer-events` follows the opacity: an invisible grip must not take the
+   click meant for the gutter it sits in. Same two timings as the card grip,
+   for the same reason. */
+[data-session-grip] {
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--duration-75) var(--ease-out-expo),
+    color var(--duration-150) var(--ease-out-expo);
+}
+
+[data-session-row]:hover [data-session-grip],
+[data-session-row]:has(:focus-visible) [data-session-grip] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@variant reduce-motion {
+  [data-session-grip] {
+    transition: none;
+  }
+}
+
 .sidebar-action-button:hover {
   background: var(--sidebar-action-hover-bg, var(--theme-overlay-hover));
 }

@@ -85,7 +85,8 @@ describe("GitHubResourceListSkeleton", () => {
     const { container } = render(<GitHubResourceListSkeleton />);
     const status = container.querySelector('[role="status"]');
     expect(status).not.toBeNull();
-    expect(status?.getAttribute("aria-busy")).toBe("true");
+    expect(status?.getAttribute("aria-live")).toBe("polite");
+    expect(status?.closest('[aria-busy="true"]')).toBeNull();
     expect(status?.getAttribute("aria-label")).toBe("Loading GitHub results");
   });
 

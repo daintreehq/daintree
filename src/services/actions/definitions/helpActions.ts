@@ -20,6 +20,7 @@ import {
 import { logError } from "@/utils/logger";
 import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
+import { openDaintreeTour } from "@/components/Tour/tourEvents";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { getAssistantSupportedAgentIds } from "@shared/config/agentRegistry";
 
@@ -224,7 +225,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
             "Daintree's assistant services didn't start. Check assistant settings, then try again.";
         } else if (code === "USER_CONTENT_SYNC_FAILED") {
           message =
-            "Daintree couldn't refresh this project's assistant commands and skills, so the session didn't start. Try again.";
+            "Daintree couldn't load this project's assistant folder, so the session didn't start. Try again.";
         } else if (code === "MIXED_AGENT_LANES") {
           message =
             "Another session in this project is running a different agent. Sessions of one project share a folder and use one agent, so stop that session first or open this one with the same agent.";
@@ -356,6 +357,21 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     keywords: ["onboarding", "checklist", "welcome", "tutorial"],
     run: async () => {
       window.dispatchEvent(new CustomEvent("daintree:show-getting-started"));
+    },
+  }));
+
+  actions.set("help.tour.show", () => ({
+    id: "help.tour.show",
+    title: "Daintree Tour",
+    description: "Play the narrated tour of Daintree's essentials",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    nonRepeatable: true,
+    scope: "renderer",
+    keywords: ["tour", "tutorial", "walkthrough", "onboarding", "intro", "video"],
+    run: async () => {
+      openDaintreeTour();
     },
   }));
 

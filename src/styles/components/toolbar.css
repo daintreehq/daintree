@@ -63,8 +63,8 @@
    * the snap to 150ms and override the cva's intent. Same for box-shadow: the armed-state
    * inset ring is the result of an intentional click or keypress and should snap too. */
   transition:
-    color 150ms ease,
-    background-color 150ms ease;
+    color 150ms ease-out,
+    background-color 150ms ease-out;
 }
 
 .toolbar-icon-button:hover {
@@ -188,25 +188,56 @@
   overflow-clip-margin: 4px;
 }
 
-/* Split-button seam: persistent 1px hairline at rest so the chevron half
- * reads as a separate control. The color chain mirrors .toolbar-divider so
- * per-theme --toolbar-divider overrides apply identically. Suppressed when
- * the chevron dropdown is open via the named group/agent-split parent: the
- * chevron's armed-state inset ring (above) would otherwise stack with this
- * 1px right border and read as a 2px smudge on light themes (same failure
- * the L97-117 comment block above documents). Forced-colors mode keeps a
- * 1px system-color edge so the seam survives Windows High Contrast. */
-.toolbar-agent-split-seam {
-  border-right-color: var(--toolbar-divider, var(--theme-border-divider));
+/* Preset split button (AgentButton). One control at rest: no seam, so nothing
+ * in an agent run can be mistaken for a group divider — a permanent full-height
+ * hairline read as a stronger boundary than the real dividers either side of
+ * it. On hover, focus or while its menu is open the pair shares a quiet wash
+ * and a short partition appears, which is when "which half does what" matters.
+ * The hovered half still takes the ordinary control fill on top of the wash.
+ * Gated on data-split-live so a chevron that can't open (#8131) never draws as
+ * a second half. */
+.toolbar-agent-split {
+  border-radius: var(--radius-md);
+  transition: background-color 150ms ease-out;
 }
 
-.group\/agent-split:has(.toolbar-agent-button[data-state="open"]) .toolbar-agent-split-seam {
-  border-right-color: transparent;
+/* aria-expanded, not data-state: the chevron is also a tooltip trigger, and
+ * the tooltip's own data-state lands on the same element. */
+.toolbar-agent-split[data-split-live="true"]:is(:hover, :focus-within),
+.toolbar-agent-split:has(.toolbar-agent-split-toggle[aria-expanded="true"]) {
+  background: var(--theme-overlay-hover);
 }
 
+.toolbar-agent-split-toggle::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--toolbar-divider, var(--theme-border-divider));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease-out;
+}
+
+.toolbar-agent-split[data-split-live="true"]:is(:hover, :focus-within)
+  .toolbar-agent-split-toggle::before {
+  opacity: 1;
+}
+
+/* The open chevron's armed ring already draws that edge; a partition on top
+ * doubles it into a 2px smudge on light themes. */
+.toolbar-agent-split .toolbar-agent-split-toggle[aria-expanded="true"]::before {
+  opacity: 0;
+}
+
+/* Forced colors drops the wash, so the partition is the only thing left that
+ * says the button has two halves — keep it drawn at rest there. */
 @media (forced-colors: active) {
-  .toolbar-agent-split-seam {
-    border-right-color: ButtonText;
+  .toolbar-agent-split[data-split-live="true"] .toolbar-agent-split-toggle::before {
+    opacity: 1;
+    background: ButtonText;
   }
 }
 
@@ -218,6 +249,54 @@
   background: var(--_bg);
   border-color: var(--_border);
   box-shadow: var(--_shadow);
+}
+
+/* Segment dividers and end radii live here rather than as `divide-x` on the
+ * container. `divide-x` borders every child but the DOM-last one, and the
+ * DOM-last child is the absolutely positioned status stripe — so the visually
+ * last segment kept a right border that doubled the container's own edge.
+ * Keying on `[data-stat-segment]` (the pills and the trailing indicator slots)
+ * also lets the end segments carry the container's radius: the pills' focus
+ * ring is drawn inset (the container's overflow-hidden clips an outward one),
+ * and an inset ring on a square corner would be cut by the rounded clip. The
+ * container's own radius sits just outside its clip curve, so the ring's
+ * corner stays whole. */
+
+.toolbar-stats > [data-stat-segment] ~ [data-stat-segment] {
+  border-inline-start: 1px solid var(--_divider);
+}
+
+.toolbar-stats > :nth-child(1 of [data-stat-segment]) {
+  border-start-start-radius: var(--toolbar-pill-radius, var(--radius-md));
+  border-end-start-radius: var(--toolbar-pill-radius, var(--radius-md));
+}
+
+.toolbar-stats > :nth-last-child(1 of [data-stat-segment]) {
+  border-start-end-radius: var(--toolbar-pill-radius, var(--radius-md));
+  border-end-end-radius: var(--toolbar-pill-radius, var(--radius-md));
+}
+
+/* Open segment: the fill alone matched hover exactly, and the old outward
+ * `ring-1` was clipped by the container and dropped by forced colors. An inset
+ * edge inside the segment says "this one owns the open panel" without moving
+ * anything. The keyboard ring stays a separate, stronger outline. */
+.toolbar-stat-pill[aria-expanded="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--theme-border-strong);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+@media (forced-colors: active) {
+  .toolbar-stat-pill[aria-expanded="true"]::after {
+    border-color: ButtonText;
+  }
+
+  .toolbar-stat-pill:focus-visible {
+    outline-color: Highlight;
+  }
 }
 
 /* The stat pills transition opacity, background-color and scale as Tailwind
@@ -259,12 +338,12 @@
    * on light themes) rather than replacing it. Replacing erased the capsule fill
    * on hover; layering preserves it. Press-scale is owned by the base Button cva,
    * so transform stays out of the transition. */
-  transition: color 150ms ease;
+  transition: color 150ms ease-out;
 }
 
 /* Surface-lift overlay. Sits above the pill's background fill but below its
  * content — direct children are lifted to z-index 1 so the tint never washes out
- * the label. Fading opacity keeps the Tier 1 150ms ease without animating the
+ * the label. Fading opacity keeps the Tier 1 150ms ease-out without animating the
  * background-image layer (gradients can't be transitioned). Hover paints the
  * elevated overlay; armed/active escalate to emphasis (raised on light). */
 .toolbar-project-pill::before {
@@ -276,7 +355,7 @@
   pointer-events: none;
   opacity: 0;
   background: var(--toolbar-control-hover-bg, var(--theme-overlay-elevated));
-  transition: opacity 150ms ease;
+  transition: opacity 150ms ease-out;
 }
 
 .toolbar-project-pill > * {
@@ -328,6 +407,18 @@
   border-color: var(--_border);
   color: var(--_fg);
   font-size: var(--_size);
+  transition: color 150ms ease;
+}
+
+/* The hover, armed and pressed overlays brighten the fill under the chip's own
+ * translucent wash, and on several dark themes secondary text falls under 4.5:1
+ * against that composite. The branch steps up the text ramp while the pill is
+ * lifted, which also reads as the whole pill answering the pointer. */
+.toolbar-project-pill:hover .toolbar-project-chip,
+.toolbar-project-pill:active .toolbar-project-chip,
+.toolbar-project-pill[aria-expanded="true"] .toolbar-project-chip,
+.toolbar-project-pill[data-state="open"] .toolbar-project-chip {
+  --_fg: var(--theme-text-primary);
 }
 
 .toolbar-project-meta {
@@ -378,12 +469,11 @@
  *      - ring-surface-sidebar — semantic-status pips on a colored dot
  *        (AssistantButton MCP/agent pips, AgentButton, LauncherMenuButton
  *        running-state pip, plus LauncherMenuButton's separate discovery
- *        badge — see `showDiscoveryBadge` in LauncherMenuButton.tsx). Ring
- *        color matches the toolbar / sidebar surface (they share a token
- *        across themes) so the gap reads as a clean cut-out.
- *      - ring-daintree-bg/60 — ambient muted indicator (NotificationCenter
- *        dot, bg-daintree-text/50 base). The softer canvas-tinted ring blends
- *        with the overlay-elevated hover state.
+ *        badge — see `showDiscoveryBadge` in LauncherMenuButton.tsx), and
+ *        the NotificationCenter unread dot, which takes the same ring on a
+ *        neutral text-secondary fill. Ring color matches the toolbar /
+ *        sidebar surface (they share a token across themes) so the gap reads
+ *        as a clean cut-out.
  *      - No ring — .toolbar-problems-badge (size is the differentiator, see
  *        rule 3) and VoiceRecordingToolbarButton (inline live-audio dot, not
  *        a .toolbar-badge and out of scope here). .toolbar-overflow-badge
@@ -480,8 +570,8 @@
   transition:
     display 120ms allow-discrete,
     opacity 120ms ease,
-    color 150ms ease,
-    background-color 150ms ease;
+    color 150ms ease-out,
+    background-color 150ms ease-out;
 }
 
 [data-toolbar-overflow-trigger][data-visible="true"] {
@@ -490,8 +580,8 @@
   transition:
     display 200ms allow-discrete,
     opacity 200ms ease,
-    color 150ms ease,
-    background-color 150ms ease;
+    color 150ms ease-out,
+    background-color 150ms ease-out;
 
   @starting-style {
     opacity: 0;
@@ -505,7 +595,7 @@
 .toolbar-overflow-badge {
   background-color: var(--overflow-badge-color);
   transition:
-    --overflow-badge-color 150ms ease,
+    --overflow-badge-color 150ms ease-out,
     display 120ms allow-discrete,
     opacity 120ms ease,
     transform 120ms ease;
@@ -544,7 +634,7 @@
 .toolbar-problems-badge {
   background-color: var(--problems-dot-color);
   transition:
-    --problems-dot-color 150ms ease,
+    --problems-dot-color 150ms ease-out,
     display 120ms allow-discrete,
     opacity 120ms ease,
     transform 120ms ease;
@@ -595,8 +685,8 @@
     transition:
       display 0s,
       opacity 200ms ease,
-      color 150ms ease,
-      background-color 150ms ease;
+      color 150ms ease-out,
+      background-color 150ms ease-out;
   }
 }
 
@@ -641,7 +731,8 @@
 
   .toolbar-badge,
   .toolbar-overflow-badge,
-  .toolbar-problems-badge {
+  .toolbar-problems-badge,
+  .toolbar-menu-pip {
     outline: 2px solid Canvas;
   }
 

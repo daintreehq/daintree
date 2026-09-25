@@ -11,11 +11,11 @@ import {
   ZoomIn,
   ZoomOut,
   Camera,
-  Maximize2,
   SquareTerminal,
   Code,
   Smartphone,
   PanelRight,
+  Ellipsis,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -24,15 +24,28 @@ import type { NormalizeResult } from "./browserUtils";
 import { actionService } from "@/services/ActionService";
 import { useUrlHistoryStore, getFrecencySuggestions } from "@/store/urlHistoryStore";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ViewportControls } from "./ViewportControls";
 import type { ViewportPresetId } from "@shared/types/panel";
+import type { UrlHistoryEntry } from "@shared/types/browser";
 import type {
   BrowserNavigationHistoryEntry,
   BrowserNavigationHistorySnapshot,
 } from "@shared/types/browser";
-import { VIEWPORT_PRESET_LIST } from "@/panels/dev-preview/viewportPresets";
 import { logError } from "@/utils/logger";
+import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
 
 const LONG_PRESS_MS = 400;
+const COMPACT_ROW_WIDTH = 640;
 const COPIED_FEEDBACK_RESET_MS = 2000;
 
 const ZOOM_PRESETS = [
@@ -45,7 +58,7 @@ const ZOOM_PRESETS = [
   { value: 2.0, label: "200%" },
 ];
 const ZOOM_VALUES = ZOOM_PRESETS.map((preset) => preset.value);
-const EMPTY_ENTRIES: import("@shared/types/browser").UrlHistoryEntry[] = [];
+const EMPTY_ENTRIES: UrlHistoryEntry[] = [];
 
 interface BrowserToolbarProps {
   terminalId?: string;
@@ -69,11 +82,19 @@ interface BrowserToolbarProps {
   viewportDpr?: 1 | 2 | 3;
   viewportFit?: boolean;
   validateUrl?: (url: string) => NormalizeResult;
+  /**
+   * The address a person sees, edits and copies for `url`, when that differs from
+   * the URL the webview is on (the dev preview's proxy origin). History entries go
+   * through it too. Navigation still takes whatever `validateUrl` returns.
+   */
+  toAddress?: (url: string) => string;
   onNavigate: (url: string) => void;
   onBack: () => void;
   onForward: () => void;
   onGoToHistoryIndex?: (index: number) => void;
   onReload: () => void;
+  /** Cancels an in-flight load; while loading, Reload becomes Stop. */
+  onStop?: () => void;
   onHardReload?: () => void;
   onOpenExternal: () => void;
   onPromoteToPortal?: () => void;
@@ -110,11 +131,13 @@ export function BrowserToolbar({
   viewportFit = false,
   extraActions,
   validateUrl,
+  toAddress,
   onNavigate,
   onBack,
   onForward,
   onGoToHistoryIndex,
   onReload,
+  onStop,
   onHardReload,
   onOpenExternal,
   onPromoteToPortal,
@@ -127,7 +150,8 @@ export function BrowserToolbar({
   onViewportDprChange,
   onViewportFitToggle,
 }: BrowserToolbarProps) {
-  const [inputValue, setInputValue] = useState(getDisplayUrl(url));
+  const address = toAddress ? toAddress(url) : url;
+  const [inputValue, setInputValue] = useState(getDisplayUrl(address));
   const [isEditing, setIsEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -231,19 +255,49 @@ export function BrowserToolbar({
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const chipRowRef = useRef<HTMLDivElement>(null);
-  const dprRowRef = useRef<HTMLDivElement>(null);
   const lastViewportPresetRef = useRef<ViewportPresetId>("iphone");
-  const [chipFocusedIndex, setChipFocusedIndex] = useState<number>(-1);
+  // Below this width the row keeps the route readable by moving Copy URL and the
+  // console toggle into More, rather than letting the address shrink to nothing.
+  const [rowElement, setRowElement] = useState<HTMLDivElement | null>(null);
+  const [isCompact, setIsCompact] = useState(false);
+  useResizeObserverRaf(rowElement, (entry) => {
+    setIsCompact(entry.contentRect.width < COMPACT_ROW_WIDTH);
+  });
+  const [isZoomPopoverOpen, setIsZoomPopoverOpen] = useState(false);
+  const copyButtonRef = useRef<HTMLButtonElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const zoomClosedOutsideRef = useRef(false);
+  const errorId = useId();
   const listboxId = useId();
 
   const projectEntries = useUrlHistoryStore(
     (state) => (projectId ? state.entries[projectId] : undefined) ?? EMPTY_ENTRIES
   );
 
-  const suggestions = useMemo(
-    () => (isEditing && projectId ? getFrecencySuggestions(projectEntries, inputValue) : []),
-    [isEditing, projectId, projectEntries, inputValue]
+  // Matched against the address people see and type, never the URL underneath:
+  // a dev preview's history is stored on its proxy origin, and "localhost:5173/da"
+  // has to find the dashboard. Rows keep the stored URL for navigation and removal.
+  const suggestions = useMemo(() => {
+    if (!isEditing || !projectId) return [];
+    if (!toAddress) return getFrecencySuggestions(projectEntries, inputValue);
+    // Keyed by the projected object, not its address: a proxy URL and the
+    // upstream URL it stands for project to the same address, and reversing
+    // through that string would hand back the wrong stored entry.
+    const stored = new Map<UrlHistoryEntry, UrlHistoryEntry>();
+    for (const entry of projectEntries) {
+      stored.set({ ...entry, url: toAddress(entry.url) }, entry);
+    }
+    const seen = new Set<string>();
+    return getFrecencySuggestions([...stored.keys()], inputValue).flatMap((shown) => {
+      const entry = stored.get(shown);
+      if (!entry || seen.has(shown.url)) return [];
+      seen.add(shown.url);
+      return [entry];
+    });
+  }, [isEditing, projectId, projectEntries, inputValue, toAddress]);
+  const addressOf = useCallback(
+    (target: string) => getDisplayUrl(toAddress ? toAddress(target) : target),
+    [toAddress]
   );
 
   useEffect(() => {
@@ -256,112 +310,10 @@ export function BrowserToolbar({
   }, [viewportPreset]);
 
   useEffect(() => {
-    const container = chipRowRef.current;
-    if (!container) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const buttons = Array.from(
-        container.querySelectorAll<HTMLButtonElement>("button[role='radio']:not(:disabled)")
-      );
-      if (buttons.length === 0) return;
-
-      const currentIndex = buttons.findIndex((b) => b === document.activeElement);
-
-      let nextIndex = currentIndex;
-
-      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-        e.preventDefault();
-        nextIndex = currentIndex < buttons.length - 1 ? currentIndex + 1 : 0;
-      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-        e.preventDefault();
-        nextIndex = currentIndex > 0 ? currentIndex - 1 : buttons.length - 1;
-      } else if (e.key === "Home") {
-        e.preventDefault();
-        nextIndex = 0;
-      } else if (e.key === "End") {
-        e.preventDefault();
-        nextIndex = buttons.length - 1;
-      } else if ((e.key === " " || e.key === "Enter") && currentIndex >= 0) {
-        e.preventDefault();
-        const button = buttons[currentIndex];
-        if (!button) return;
-        const presetId = button.getAttribute("data-viewport-preset-id") as ViewportPresetId | null;
-        if (presetId && button.getAttribute("aria-checked") !== "true") {
-          onViewportPresetChange?.(presetId);
-        }
-        return;
-      }
-
-      if (nextIndex !== currentIndex && nextIndex >= 0 && nextIndex < buttons.length) {
-        const nextButton = buttons[nextIndex];
-        nextButton?.focus();
-        setChipFocusedIndex(nextIndex);
-        // APG radiogroup contract: selection follows focus. Activate the newly
-        // focused chip immediately rather than requiring Space/Enter.
-        const presetId = nextButton?.getAttribute(
-          "data-viewport-preset-id"
-        ) as ViewportPresetId | null;
-        if (presetId && nextButton?.getAttribute("aria-checked") !== "true") {
-          onViewportPresetChange?.(presetId);
-        }
-      }
-    };
-
-    container.addEventListener("keydown", handleKeyDown as unknown as EventListener);
-    return () =>
-      container.removeEventListener("keydown", handleKeyDown as unknown as EventListener);
-  }, [onViewportPresetChange, viewportPreset]);
-
-  useEffect(() => {
-    const container = dprRowRef.current;
-    if (!container) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const buttons = Array.from(
-        container.querySelectorAll<HTMLButtonElement>("button[role='radio']:not(:disabled)")
-      );
-      if (buttons.length === 0) return;
-
-      const currentIndex = buttons.findIndex((b) => b === document.activeElement);
-      let nextIndex: number;
-
-      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-        e.preventDefault();
-        nextIndex = currentIndex < buttons.length - 1 ? currentIndex + 1 : 0;
-      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-        e.preventDefault();
-        nextIndex = currentIndex > 0 ? currentIndex - 1 : buttons.length - 1;
-      } else if (e.key === "Home") {
-        e.preventDefault();
-        nextIndex = 0;
-      } else if (e.key === "End") {
-        e.preventDefault();
-        nextIndex = buttons.length - 1;
-      } else {
-        return;
-      }
-
-      if (nextIndex !== currentIndex && nextIndex >= 0 && nextIndex < buttons.length) {
-        const nextButton = buttons[nextIndex];
-        nextButton?.focus();
-        // APG radiogroup contract: selection follows focus.
-        const dprValue = Number(nextButton?.getAttribute("data-dpr"));
-        if ((dprValue === 1 || dprValue === 2 || dprValue === 3) && onViewportDprChange) {
-          onViewportDprChange(dprValue);
-        }
-      }
-    };
-
-    container.addEventListener("keydown", handleKeyDown as unknown as EventListener);
-    return () =>
-      container.removeEventListener("keydown", handleKeyDown as unknown as EventListener);
-  }, [onViewportDprChange, viewportPreset, viewportDpr]);
-
-  useEffect(() => {
     if (!isEditing) {
-      setInputValue(getDisplayUrl(url));
+      setInputValue(getDisplayUrl(address));
     }
-  }, [url, isEditing]);
+  }, [address, isEditing]);
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -369,6 +321,8 @@ export function BrowserToolbar({
       const result = validateUrl ? validateUrl(inputValue) : normalizeBrowserUrl(inputValue);
       if (result.error) {
         setError(result.error);
+        setIsDropdownOpen(false);
+        setHighlightedIndex(-1);
         return;
       }
       if (result.url) {
@@ -388,10 +342,10 @@ export function BrowserToolbar({
 
   const handleFocus = useCallback(() => {
     setIsEditing(true);
-    setInputValue(url);
+    setInputValue(address);
     if (selectOnFocusTimerRef.current) clearTimeout(selectOnFocusTimerRef.current);
     selectOnFocusTimerRef.current = setTimeout(() => inputRef.current?.select(), 0);
-  }, [url]);
+  }, [address]);
 
   const handleBlur = useCallback(
     (e: React.FocusEvent) => {
@@ -400,9 +354,9 @@ export function BrowserToolbar({
       setIsDropdownOpen(false);
       setHighlightedIndex(-1);
       setError(null);
-      setInputValue(getDisplayUrl(url));
+      setInputValue(getDisplayUrl(address));
     },
-    [url]
+    [address]
   );
 
   const handleKeyDown = useCallback(
@@ -439,7 +393,7 @@ export function BrowserToolbar({
           if (projectId) {
             useUrlHistoryStore.getState().removeUrl(projectId, entry.url);
           }
-          announceHistoryChange(`Removed ${getDisplayUrl(entry.url)} from history`);
+          announceHistoryChange(`Removed ${addressOf(entry.url)} from history`);
           const remaining = suggestions.length - 1;
           if (remaining === 0) {
             setIsDropdownOpen(false);
@@ -456,14 +410,22 @@ export function BrowserToolbar({
         inputRef.current?.blur();
       }
     },
-    [isDropdownOpen, suggestions, highlightedIndex, onNavigate, projectId, announceHistoryChange]
+    [
+      isDropdownOpen,
+      suggestions,
+      highlightedIndex,
+      onNavigate,
+      projectId,
+      announceHistoryChange,
+      addressOf,
+    ]
   );
 
   const handleCopy = useCallback(async () => {
     try {
       const result = await actionService.dispatch(
         "browser.copyUrl",
-        { terminalId, url },
+        { terminalId, url: address },
         { source: "user" }
       );
       if (!result.ok) {
@@ -475,7 +437,7 @@ export function BrowserToolbar({
     } catch (err) {
       logError("Failed to copy URL", err);
     }
-  }, [terminalId, url]);
+  }, [terminalId, address]);
 
   const handleCaptureScreenshot = useCallback(async () => {
     if (!onCaptureScreenshot) return;
@@ -550,11 +512,26 @@ export function BrowserToolbar({
   }, [url]);
 
   const buttonClass =
-    "toolbar-icon-button p-1.5 rounded disabled:opacity-30 disabled:cursor-not-allowed";
+    "toolbar-icon-button shrink-0 p-1.5 rounded-[var(--radius-md)] disabled:opacity-30 disabled:cursor-not-allowed";
+  const actionClass = cn(buttonClass, "text-text-secondary aria-pressed:text-text-primary");
 
   // The stored preference survives the dev server stopping, but with no terminal
   // behind it there is no drawer to show, so the toggle must not read as pressed.
   const isConsoleShown = canToggleConsole && isConsoleOpen;
+  const showStop = isLoading && Boolean(onStop);
+  const consoleInMenu = isCompact && Boolean(onToggleConsole);
+  const hasMoreMenu = Boolean(onZoomChange || onToggleDevTools || onPromoteToPortal || isCompact);
+  // The chip stays while its popover is open, so stepping through 100% keeps the
+  // controls under the pointer; it goes once the popover closes at the default.
+  const showZoomChip = Boolean(onZoomChange) && (isNonDefaultZoom || isZoomPopoverOpen);
+
+  // The resting address reads host-then-route, with the route carrying the weight:
+  // the host is the same on every page of a dev server, the route is what changed.
+  const displayText = getDisplayUrl(address);
+  const slashAt = displayText.search(/[/?#]/);
+  const displayHost = slashAt === -1 ? displayText : displayText.slice(0, slashAt);
+  const displayRoute = slashAt === -1 ? "" : displayText.slice(slashAt);
+  const showStyledAddress = !isEditing && Boolean(displayText);
 
   // A disabled button receives no pointer events, so its tooltip needs a wrapper to
   // hover. Only while disabled: focus-restore suppression marks the focused element,
@@ -564,11 +541,7 @@ export function BrowserToolbar({
       type="button"
       onClick={onToggleConsole}
       disabled={!canToggleConsole}
-      className={cn(
-        buttonClass,
-        "disabled:pointer-events-none",
-        isConsoleShown && "text-text-primary"
-      )}
+      className={cn(actionClass, "disabled:pointer-events-none")}
       aria-label="Toggle console"
       aria-pressed={isConsoleShown}
     >
@@ -580,15 +553,118 @@ export function BrowserToolbar({
       type="button"
       onClick={onOpenExternal}
       disabled={!canOpenExternal}
-      className={cn(buttonClass, "disabled:pointer-events-none")}
+      className={cn(actionClass, "disabled:pointer-events-none")}
       aria-label="Open in browser"
     >
       <ExternalLink className="w-4 h-4" />
     </button>
   );
 
+  const historyMenu = (dir: "back" | "forward") => {
+    const entries = dir === "back" ? recentBackEntries : recentForwardEntries;
+    if (longPressDir !== dir || entries.length === 0) return null;
+    return (
+      <div
+        ref={longPressDropdownRef}
+        className="absolute left-0 top-full mt-1 z-50 min-w-[220px] rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
+      >
+        {entries.map((entry) => (
+          <button
+            key={entry.index}
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              setLongPressDir(null);
+              onGoToHistoryIndex?.(entry.index);
+            }}
+            className="w-full text-left px-2.5 py-1.5 hover:bg-overlay-medium transition-colors flex flex-col gap-0.5"
+          >
+            <span className="text-xs text-text-primary truncate">{entry.title || entry.url}</span>
+            <span className="text-2xs text-text-secondary truncate">{entry.url}</span>
+          </button>
+        ))}
+      </div>
+    );
+  };
+
+  const navButton = (dir: "back" | "forward") => {
+    const enabled = dir === "back" ? canGoBack : canGoForward;
+    const tooltip = dir === "back" ? backTooltip || "Go back" : forwardTooltip || "Go forward";
+    return (
+      <div className="relative flex">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <button
+                type="button"
+                onPointerDown={(e) => handlePointerDown(dir, e)}
+                onPointerUp={(e) => handlePointerUp(dir, e)}
+                onPointerLeave={clearLongPress}
+                onPointerCancel={clearLongPress}
+                // Pointer presses navigate on pointer-up so a long press can open
+                // history instead; Enter and Space only ever produce a click.
+                onClick={(e) => {
+                  if (e.detail !== 0) return;
+                  if (dir === "back") onBack();
+                  else onForward();
+                }}
+                disabled={!enabled}
+                className={cn(buttonClass, "disabled:pointer-events-none")}
+                aria-label={tooltip}
+                data-testid={dir === "back" ? "browser-back" : "browser-forward"}
+              >
+                {dir === "back" ? (
+                  <ArrowLeft className="w-4 h-4" />
+                ) : (
+                  <ArrowRight className="w-4 h-4" />
+                )}
+              </button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{tooltip}</TooltipContent>
+        </Tooltip>
+        {historyMenu(dir)}
+      </div>
+    );
+  };
+
+  const zoomStepper = (
+    <div className="flex items-center gap-0.5">
+      <button
+        type="button"
+        onClick={() => handleZoomStep("out")}
+        disabled={!canZoomOut}
+        className={cn(buttonClass, "p-1")}
+        aria-label="Zoom out"
+      >
+        <ZoomOut className="w-4 h-4" />
+      </button>
+      <span className="min-w-12 px-1 text-center text-xs font-medium tabular-nums text-text-primary">
+        {currentZoomLabel}
+      </span>
+      <button
+        type="button"
+        onClick={() => handleZoomStep("in")}
+        disabled={!canZoomIn}
+        className={cn(buttonClass, "p-1")}
+        aria-label="Zoom in"
+      >
+        <ZoomIn className="w-4 h-4" />
+      </button>
+      <button
+        type="button"
+        onClick={handleZoomReset}
+        disabled={!isNonDefaultZoom}
+        className="toolbar-icon-button ml-1 px-2 py-1 rounded-[var(--radius-md)] text-xs font-medium text-text-primary disabled:opacity-40"
+        aria-label="Reset zoom"
+      >
+        Reset
+      </button>
+    </div>
+  );
+
   return (
-    <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
+    <div data-testid="browser-toolbar" className="bg-surface border-b border-overlay">
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {historyAnnouncement}
       </span>
@@ -598,564 +674,492 @@ export function BrowserToolbar({
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {screenshotCopied ? "Screenshot copied to clipboard" : ""}
       </span>
-      {/* Navigation buttons */}
-      <div className="relative">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex">
-              <button
-                type="button"
-                onPointerDown={(e) => handlePointerDown("back", e)}
-                onPointerUp={(e) => handlePointerUp("back", e)}
-                onPointerLeave={clearLongPress}
-                onPointerCancel={clearLongPress}
-                disabled={!canGoBack}
-                className={cn(buttonClass, "disabled:pointer-events-none")}
-                aria-label={backTooltip || "Go back"}
-                data-testid="browser-back"
-              >
-                <ArrowLeft className="w-4 h-4" />
-              </button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{backTooltip || "Go back"}</TooltipContent>
-        </Tooltip>
-        {longPressDir === "back" && recentBackEntries.length > 0 && (
-          <div
-            ref={longPressDropdownRef}
-            className="absolute left-0 top-full mt-1 z-50 min-w-[220px] rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
-          >
-            {recentBackEntries.map((entry) => (
-              <button
-                key={entry.index}
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  setLongPressDir(null);
-                  onGoToHistoryIndex?.(entry.index);
-                }}
-                className="w-full text-left px-2.5 py-1.5 hover:bg-overlay-medium transition-colors flex flex-col gap-0.5"
-              >
-                <span className="text-xs text-text-primary truncate">
-                  {entry.title || entry.url}
-                </span>
-                <span className="text-2xs text-text-secondary truncate">{entry.url}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      <div className="relative">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex">
-              <button
-                type="button"
-                onPointerDown={(e) => handlePointerDown("forward", e)}
-                onPointerUp={(e) => handlePointerUp("forward", e)}
-                onPointerLeave={clearLongPress}
-                onPointerCancel={clearLongPress}
-                disabled={!canGoForward}
-                className={cn(buttonClass, "disabled:pointer-events-none")}
-                aria-label={forwardTooltip || "Go forward"}
-                data-testid="browser-forward"
-              >
-                <ArrowRight className="w-4 h-4" />
-              </button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{forwardTooltip || "Go forward"}</TooltipContent>
-        </Tooltip>
-        {longPressDir === "forward" && recentForwardEntries.length > 0 && (
-          <div
-            ref={longPressDropdownRef}
-            className="absolute left-0 top-full mt-1 z-50 min-w-[220px] rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
-          >
-            {recentForwardEntries.map((entry) => (
-              <button
-                key={entry.index}
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  setLongPressDir(null);
-                  onGoToHistoryIndex?.(entry.index);
-                }}
-                className="w-full text-left px-2.5 py-1.5 hover:bg-overlay-medium transition-colors flex flex-col gap-0.5"
-              >
-                <span className="text-xs text-text-primary truncate">
-                  {entry.title || entry.url}
-                </span>
-                <span className="text-2xs text-text-secondary truncate">{entry.url}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={(e) => {
-              if (e.shiftKey && onHardReload) {
-                onHardReload();
-              } else {
-                onReload();
-              }
-            }}
-            className={cn(buttonClass, isLoading && "animate-spin")}
-            aria-label="Reload"
-            data-testid="browser-reload"
-          >
-            <RotateCw className="w-4 h-4" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          {onHardReload ? "Reload (Shift+click for hard reload)" : "Reload"}
-        </TooltipContent>
-      </Tooltip>
-
-      {/* Zoom controls */}
-      {onZoomChange && (
-        <div className="flex items-center gap-0.5 rounded-md bg-overlay-subtle p-0.5">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <button
-                  type="button"
-                  onClick={() => handleZoomStep("out")}
-                  disabled={!canZoomOut}
-                  className={cn(buttonClass, "disabled:pointer-events-none")}
-                  aria-label="Zoom out"
-                >
-                  <ZoomOut className="w-3.5 h-3.5" />
-                </button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Zoom out</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <button
-                  type="button"
-                  onClick={handleZoomReset}
-                  disabled={!isNonDefaultZoom}
-                  className={cn(
-                    "px-1.5 py-1 rounded text-xs font-medium text-text-primary transition-colors",
-                    "hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-                  )}
-                  aria-label="Reset zoom"
-                >
-                  {currentZoomLabel}
-                </button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Reset zoom to 100%</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <button
-                  type="button"
-                  onClick={() => handleZoomStep("in")}
-                  disabled={!canZoomIn}
-                  className={cn(buttonClass, "disabled:pointer-events-none")}
-                  aria-label="Zoom in"
-                >
-                  <ZoomIn className="w-3.5 h-3.5" />
-                </button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Zoom in</TooltipContent>
-          </Tooltip>
-        </div>
-      )}
-
-      {/* Viewport preset selector (dev-preview only) */}
-      {onViewportPresetChange && (
-        <div className="flex items-center gap-1">
+      <div ref={setRowElement} className="flex items-center gap-2 px-2 py-1.5">
+        <div className="flex shrink-0 items-center gap-0.5">
+          {navButton("back")}
+          {navButton("forward")}
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 type="button"
-                onClick={() => {
-                  if (viewportPreset) {
-                    onViewportPresetChange(undefined);
+                onClick={(e) => {
+                  if (showStop) {
+                    onStop?.();
+                  } else if (e.shiftKey && onHardReload) {
+                    onHardReload();
                   } else {
-                    onViewportPresetChange(lastViewportPresetRef.current);
+                    onReload();
                   }
                 }}
-                className={cn(buttonClass, viewportPreset && "text-text-primary")}
-                aria-label="Viewport preset"
-                aria-pressed={!!viewportPreset}
+                className={buttonClass}
+                aria-label={showStop ? "Stop loading" : "Reload"}
+                data-testid="browser-reload"
               >
-                <Smartphone className="w-4 h-4" />
+                {showStop ? <X className="w-4 h-4" /> : <RotateCw className="w-4 h-4" />}
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Viewport preset</TooltipContent>
+            <TooltipContent side="bottom">
+              {showStop
+                ? "Stop loading"
+                : onHardReload
+                  ? "Reload (Shift+click for hard reload)"
+                  : "Reload"}
+            </TooltipContent>
           </Tooltip>
-          {viewportPreset && (
+        </div>
+
+        {/* Address */}
+        <div ref={containerRef} className="relative flex-1 min-w-36">
+          <form onSubmit={handleSubmit}>
+            <div className="relative flex items-center">
+              {isHttps ? (
+                <Lock
+                  data-testid="browser-url-scheme-lock"
+                  aria-hidden="true"
+                  className="absolute left-2 w-3.5 h-3.5 text-text-secondary pointer-events-none"
+                />
+              ) : (
+                <Globe
+                  data-testid="browser-url-scheme-globe"
+                  aria-hidden="true"
+                  className="absolute left-2 w-3.5 h-3.5 text-text-secondary pointer-events-none"
+                />
+              )}
+              <input
+                ref={inputRef}
+                type="text"
+                data-testid="browser-address-bar"
+                role="combobox"
+                aria-label="Address bar"
+                aria-autocomplete="list"
+                aria-expanded={isDropdownOpen}
+                aria-controls={listboxId}
+                aria-activedescendant={
+                  isDropdownOpen && highlightedIndex >= 0
+                    ? `${listboxId}-option-${highlightedIndex}`
+                    : undefined
+                }
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? errorId : undefined}
+                value={inputValue}
+                onChange={(e) => {
+                  // A commit leaves the field focused but out of editing, so typing
+                  // again has to bring editing back or it lands under the overlay.
+                  setIsEditing(true);
+                  setInputValue(e.target.value);
+                  setError(null);
+                }}
+                onFocus={handleFocus}
+                onBlur={handleBlur}
+                onKeyDown={handleKeyDown}
+                autoComplete="off"
+                spellCheck={false}
+                className={cn(
+                  "w-full h-7 pl-7 text-xs rounded-[var(--radius-md)]",
+                  showZoomChip ? (isCompact ? "pr-16" : "pr-20") : isCompact ? "pr-2" : "pr-8",
+                  "bg-surface-canvas border border-overlay",
+                  "focus:outline-hidden focus:border-border-strong",
+                  "focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                  "text-text-primary placeholder:text-text-placeholder",
+                  showStyledAddress && "text-transparent",
+                  error &&
+                    "border-status-error focus:border-status-error focus-visible:outline-status-error"
+                )}
+                placeholder={displayHost || "localhost:3000"}
+              />
+              {showStyledAddress && (
+                <div
+                  aria-hidden="true"
+                  data-testid="browser-address-display"
+                  className={cn(
+                    // One pixel down to sit on the input's own text line, so focusing the
+                    // field swaps the overlay for the value without a visible jump.
+                    "pointer-events-none absolute inset-y-0 left-7 flex items-center min-w-0 text-xs translate-y-px",
+                    showZoomChip
+                      ? isCompact
+                        ? "right-16"
+                        : "right-20"
+                      : isCompact
+                        ? "right-2"
+                        : "right-8"
+                  )}
+                >
+                  {!(isCompact && displayRoute) && (
+                    <span
+                      className={cn(
+                        "min-w-0 truncate [flex-shrink:1000]",
+                        displayRoute ? "text-text-secondary" : "text-text-primary"
+                      )}
+                    >
+                      {displayHost}
+                    </span>
+                  )}
+                  {displayRoute && (
+                    <span className="min-w-0 truncate text-left text-text-primary [direction:rtl]">
+                      <bdi>{displayRoute}</bdi>
+                    </span>
+                  )}
+                </div>
+              )}
+              <div className="absolute right-0.5 flex items-center gap-0.5">
+                {showZoomChip && (
+                  <Popover open={isZoomPopoverOpen} onOpenChange={setIsZoomPopoverOpen}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <PopoverTrigger asChild>
+                          <button
+                            type="button"
+                            className="toolbar-icon-button flex h-6 items-center gap-1 px-1.5 rounded-[var(--radius-sm)] text-2xs font-medium tabular-nums text-text-primary"
+                            aria-label={`Zoom ${currentZoomLabel}`}
+                            data-testid="browser-zoom-indicator"
+                          >
+                            {zoomFactor < 1 ? (
+                              <ZoomOut className="w-3 h-3 text-text-secondary" aria-hidden="true" />
+                            ) : (
+                              <ZoomIn className="w-3 h-3 text-text-secondary" aria-hidden="true" />
+                            )}
+                            {currentZoomLabel}
+                          </button>
+                        </PopoverTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Zoom</TooltipContent>
+                    </Tooltip>
+                    <PopoverContent
+                      align="end"
+                      className="w-auto p-1"
+                      onInteractOutside={() => {
+                        zoomClosedOutsideRef.current = true;
+                      }}
+                      onCloseAutoFocus={() => {
+                        // Back at 100% the chip unmounts with the popover, so the
+                        // restore aims at nothing and focus falls to the body. A
+                        // press outside owns focus itself and is left alone; any
+                        // other close lands on the chip's neighbour instead.
+                        const closedOutside = zoomClosedOutsideRef.current;
+                        zoomClosedOutsideRef.current = false;
+                        if (isNonDefaultZoom || closedOutside) return;
+                        requestAnimationFrame(() => {
+                          if (document.activeElement !== document.body) return;
+                          const fallback = copyButtonRef.current ?? moreButtonRef.current;
+                          fallback?.focus({ preventScroll: true });
+                        });
+                      }}
+                    >
+                      {zoomStepper}
+                    </PopoverContent>
+                  </Popover>
+                )}
+                {!isCompact && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        ref={copyButtonRef}
+                        type="button"
+                        onClick={handleCopy}
+                        disabled={!address}
+                        className="toolbar-icon-button flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary disabled:opacity-30 disabled:pointer-events-none"
+                        aria-label="Copy URL"
+                      >
+                        {copied ? (
+                          <Check className="w-3.5 h-3.5 text-status-success" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Copy URL</TooltipContent>
+                  </Tooltip>
+                )}
+              </div>
+            </div>
+            {error && (
+              <div
+                id={errorId}
+                role="alert"
+                className="absolute left-0 mt-1 max-w-full text-xs text-status-error surface-overlay shadow-overlay border border-status-error rounded-[var(--radius-md)] px-2 py-1 z-10"
+              >
+                {error}
+              </div>
+            )}
+          </form>
+
+          {isDropdownOpen && suggestions.length > 0 && (
             <div
-              ref={chipRowRef}
-              role="radiogroup"
-              aria-label="Select viewport preset"
-              className="flex items-center gap-0.5 rounded-md bg-overlay-subtle p-0.5"
+              ref={dropdownRef}
+              id={listboxId}
+              role="listbox"
+              className="absolute left-0 right-0 top-full mt-1 z-50 rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
             >
-              {VIEWPORT_PRESET_LIST.map((preset, index) => {
-                const isSelected = viewportPreset === preset.id;
+              {suggestions.map((entry, index) => {
+                const entryAddress = addressOf(entry.url);
                 return (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={isSelected}
-                    aria-label={preset.label}
-                    data-viewport-preset-id={preset.id}
-                    tabIndex={
-                      chipFocusedIndex >= 0
-                        ? chipFocusedIndex === index
-                          ? 0
-                          : -1
-                        : isSelected
-                          ? 0
-                          : -1
-                    }
-                    onClick={() => {
-                      if (!isSelected) onViewportPresetChange(preset.id);
+                  <div
+                    key={entry.url}
+                    id={`${listboxId}-option-${index}`}
+                    role="option"
+                    aria-selected={index === highlightedIndex}
+                    onMouseEnter={() => setHighlightedIndex(index)}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      setIsEditing(false);
+                      setIsDropdownOpen(false);
+                      setHighlightedIndex(-1);
+                      onNavigate(entry.url);
                     }}
-                    onFocus={() => setChipFocusedIndex(index)}
-                    onBlur={() => setChipFocusedIndex(-1)}
                     className={cn(
-                      "toolbar-icon-button px-1.5 py-1 rounded text-xs font-medium",
-                      isSelected ? "text-text-primary" : "text-text-secondary"
+                      "group/row w-full text-left px-2.5 py-1.5 flex items-center gap-2 cursor-pointer",
+                      index === highlightedIndex ? "bg-overlay-medium" : "hover:bg-overlay-soft"
                     )}
                   >
-                    {preset.label}
-                  </button>
+                    {entry.favicon ? (
+                      <span className="relative w-4 h-4 shrink-0">
+                        <img
+                          src={entry.favicon}
+                          alt=""
+                          className="w-4 h-4 rounded-[var(--radius-sm)] object-contain"
+                          onError={(e) => {
+                            const img = e.target as HTMLImageElement;
+                            img.style.display = "none";
+                            const fallback = img.nextElementSibling;
+                            if (fallback) (fallback as HTMLElement).style.display = "";
+                          }}
+                        />
+                        <Globe
+                          className="w-4 h-4 text-text-secondary absolute inset-0"
+                          style={{ display: "none" }}
+                        />
+                      </span>
+                    ) : (
+                      <Globe className="w-4 h-4 shrink-0 text-text-secondary" />
+                    )}
+                    <div className="flex-1 min-w-0 flex flex-col gap-0.5 text-left">
+                      {entry.title && (
+                        <span className="text-xs text-text-primary truncate">{entry.title}</span>
+                      )}
+                      <span className="text-xs text-text-secondary truncate">{entryAddress}</span>
+                    </div>
+                    {projectId && (
+                      <button
+                        type="button"
+                        tabIndex={-1}
+                        aria-hidden="true"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          useUrlHistoryStore.getState().removeUrl(projectId, entry.url);
+                          announceHistoryChange(`Removed ${entryAddress} from history`);
+                          const remaining = suggestions.length - 1;
+                          if (remaining === 0) {
+                            setIsDropdownOpen(false);
+                            setHighlightedIndex(-1);
+                          } else if (index === highlightedIndex && highlightedIndex >= remaining) {
+                            setHighlightedIndex(remaining - 1);
+                          }
+                        }}
+                        className="shrink-0 p-0.5 rounded-[var(--radius-sm)] opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 hover:bg-overlay-strong transition-opacity text-text-secondary hover:text-text-primary"
+                        aria-label={`Remove ${entryAddress} from history`}
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
                 );
               })}
             </div>
           )}
-          {viewportPreset && (
-            <>
-              <div aria-hidden="true" className="toolbar-divider w-px h-5 shrink-0" />
-              <div className="flex items-center gap-1">
-                {onViewportRotateToggle && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={onViewportRotateToggle}
-                        className={cn(buttonClass, viewportRotated && "text-text-primary")}
-                        aria-label="Rotate viewport"
-                        aria-pressed={viewportRotated}
-                      >
-                        <RotateCw className="w-4 h-4" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">
-                      {viewportRotated ? "Portrait" : "Landscape"}
-                    </TooltipContent>
-                  </Tooltip>
+        </div>
+
+        {/* Tools that look into the page */}
+        <div className="flex shrink-0 items-center gap-0.5">
+          {extraActions}
+          {onViewportPresetChange && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (viewportPreset) {
+                      onViewportPresetChange(undefined);
+                    } else {
+                      onViewportPresetChange(lastViewportPresetRef.current);
+                    }
+                  }}
+                  className={actionClass}
+                  aria-label="Device mode"
+                  aria-pressed={!!viewportPreset}
+                >
+                  <Smartphone className="w-4 h-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {viewportPreset ? "Exit device mode" : "Preview on a device"}
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {onToggleConsole && !consoleInMenu && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {canToggleConsole ? (
+                  consoleButton
+                ) : (
+                  <span className="inline-flex">{consoleButton}</span>
                 )}
-                {onViewportDprChange && (
-                  <div
-                    ref={dprRowRef}
-                    role="radiogroup"
-                    aria-label="Device pixel ratio"
-                    className="flex items-center gap-0.5 rounded-md bg-overlay-subtle p-0.5"
-                  >
-                    {([1, 2, 3] as const).map((dpr) => {
-                      const isSelected = viewportDpr === dpr;
-                      return (
-                        <button
-                          key={dpr}
-                          type="button"
-                          role="radio"
-                          aria-checked={isSelected}
-                          aria-label={`Device pixel ratio ${dpr}x`}
-                          data-dpr={dpr}
-                          tabIndex={isSelected ? 0 : -1}
-                          onClick={() => {
-                            if (!isSelected) onViewportDprChange(dpr);
-                          }}
-                          className={cn(
-                            "toolbar-icon-button px-1.5 py-1 rounded text-xs font-medium",
-                            isSelected ? "text-text-primary" : "text-text-secondary"
-                          )}
-                        >
-                          {dpr}×
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-                {onViewportFitToggle && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={onViewportFitToggle}
-                        className={cn(buttonClass, viewportFit && "text-text-primary")}
-                        aria-label="Zoom to fit"
-                        aria-pressed={viewportFit}
-                      >
-                        <Maximize2 className="w-4 h-4" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Zoom to fit</TooltipContent>
-                  </Tooltip>
-                )}
-              </div>
-            </>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {isConsoleShown ? "Hide console" : "Show console"}
+              </TooltipContent>
+            </Tooltip>
           )}
         </div>
-      )}
 
-      {/* URL input */}
-      <div ref={containerRef} className="relative flex-1 min-w-0">
-        <form onSubmit={handleSubmit}>
-          <div className="relative flex items-center">
-            {isHttps ? (
-              <Lock
-                data-testid="browser-url-scheme-lock"
-                aria-hidden="true"
-                className="absolute left-2 w-3.5 h-3.5 text-daintree-text/40 pointer-events-none"
-              />
-            ) : (
-              <Globe
-                data-testid="browser-url-scheme-globe"
-                aria-hidden="true"
-                className="absolute left-2 w-3.5 h-3.5 text-daintree-text/40 pointer-events-none"
-              />
-            )}
-            <input
-              ref={inputRef}
-              type="text"
-              data-testid="browser-address-bar"
-              role="combobox"
-              aria-label="Address bar"
-              aria-autocomplete="list"
-              aria-expanded={isDropdownOpen}
-              aria-controls={listboxId}
-              aria-activedescendant={
-                isDropdownOpen && highlightedIndex >= 0
-                  ? `${listboxId}-option-${highlightedIndex}`
-                  : undefined
-              }
-              value={inputValue}
-              onChange={(e) => {
-                setInputValue(e.target.value);
-                setError(null);
-              }}
-              onFocus={handleFocus}
-              onBlur={handleBlur}
-              onKeyDown={handleKeyDown}
-              autoComplete="off"
-              spellCheck={false}
-              className={cn(
-                "w-full pl-7 pr-2 py-1 text-xs rounded",
-                "bg-surface-canvas border border-overlay",
-                "focus:outline-hidden focus:border-border-strong",
-                "focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                "text-text-primary placeholder:text-text-placeholder",
-                error && "border-status-error/50"
-              )}
-              placeholder="localhost:3000"
-            />
-          </div>
-          {error && (
-            <div className="absolute mt-1 text-xs text-status-error bg-surface-canvas border border-status-error/30 rounded px-2 py-1 z-10">
-              {error}
-            </div>
-          )}
-        </form>
-
-        {isDropdownOpen && suggestions.length > 0 && (
-          <div
-            ref={dropdownRef}
-            id={listboxId}
-            role="listbox"
-            className="absolute left-0 right-0 top-full mt-1 z-50 rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
-          >
-            {suggestions.map((entry, index) => (
-              <div
-                key={entry.url}
-                id={`${listboxId}-option-${index}`}
-                role="option"
-                aria-selected={index === highlightedIndex}
-                onMouseEnter={() => setHighlightedIndex(index)}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  setIsEditing(false);
-                  setIsDropdownOpen(false);
-                  setHighlightedIndex(-1);
-                  onNavigate(entry.url);
-                }}
-                className={cn(
-                  "group/row w-full text-left px-2.5 py-1.5 flex items-center gap-2 cursor-pointer",
-                  index === highlightedIndex ? "bg-overlay-medium" : "hover:bg-overlay-soft"
-                )}
-              >
-                {entry.favicon ? (
-                  <span className="relative w-4 h-4 shrink-0">
-                    <img
-                      src={entry.favicon}
-                      alt=""
-                      className="w-4 h-4 rounded-sm object-contain"
-                      onError={(e) => {
-                        const img = e.target as HTMLImageElement;
-                        img.style.display = "none";
-                        const fallback = img.nextElementSibling;
-                        if (fallback) (fallback as HTMLElement).style.display = "";
-                      }}
-                    />
-                    <Globe
-                      className="w-4 h-4 text-daintree-text/30 absolute inset-0"
-                      style={{ display: "none" }}
-                    />
-                  </span>
-                ) : (
-                  <Globe className="w-4 h-4 shrink-0 text-daintree-text/30" />
-                )}
-                <div className="flex-1 min-w-0 flex flex-col gap-0.5 text-left">
-                  {entry.title && (
-                    <span className="text-xs text-text-primary truncate">{entry.title}</span>
+        {/* Taking the page somewhere else */}
+        <div className="flex shrink-0 items-center gap-0.5">
+          {onCaptureScreenshot && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleCaptureScreenshot}
+                  disabled={!isWebviewReady}
+                  className={cn(
+                    actionClass,
+                    "disabled:hover:bg-transparent disabled:hover:shadow-none"
                   )}
-                  <span className="text-xs text-text-secondary truncate">{entry.url}</span>
-                </div>
-                {projectId && (
-                  <button
-                    type="button"
-                    tabIndex={-1}
-                    aria-hidden="true"
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      useUrlHistoryStore.getState().removeUrl(projectId, entry.url);
-                      announceHistoryChange(`Removed ${getDisplayUrl(entry.url)} from history`);
-                      const remaining = suggestions.length - 1;
-                      if (remaining === 0) {
-                        setIsDropdownOpen(false);
-                        setHighlightedIndex(-1);
-                      } else if (index === highlightedIndex && highlightedIndex >= remaining) {
-                        setHighlightedIndex(remaining - 1);
-                      }
-                    }}
-                    className="shrink-0 p-0.5 rounded opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 hover:bg-overlay-strong transition-opacity text-daintree-text/40 hover:text-daintree-text/70"
-                    aria-label={`Remove ${getDisplayUrl(entry.url)} from history`}
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
+                  aria-label="Copy screenshot to clipboard"
+                >
+                  {screenshotCopied ? (
+                    <Check className="w-4 h-4 text-status-success" />
+                  ) : (
+                    <Camera className="w-4 h-4" />
+                  )}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Copy screenshot to clipboard</TooltipContent>
+            </Tooltip>
+          )}
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              {canOpenExternal ? (
+                openExternalButton
+              ) : (
+                <span className="inline-flex">{openExternalButton}</span>
+              )}
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Open in browser</TooltipContent>
+          </Tooltip>
+
+          {hasMoreMenu && (
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      ref={moreButtonRef}
+                      type="button"
+                      className={actionClass}
+                      aria-label="More page actions"
+                      data-testid="browser-more-actions"
+                    >
+                      {copied && isCompact ? (
+                        <Check className="w-4 h-4 text-status-success" />
+                      ) : (
+                        <Ellipsis className="w-4 h-4" />
+                      )}
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">More page actions</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" className="min-w-[200px]">
+                {isCompact && (
+                  <>
+                    <DropdownMenuItem disabled={!address} onSelect={() => void handleCopy()}>
+                      <Copy className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Copy URL
+                    </DropdownMenuItem>
+                    {consoleInMenu && (
+                      <DropdownMenuCheckboxItem
+                        checked={isConsoleShown}
+                        disabled={!canToggleConsole}
+                        onSelect={() => onToggleConsole?.()}
+                      >
+                        Console
+                      </DropdownMenuCheckboxItem>
+                    )}
+                    {(onZoomChange || onToggleDevTools || onPromoteToPortal) && (
+                      <DropdownMenuSeparator />
+                    )}
+                  </>
                 )}
-              </div>
-            ))}
-          </div>
-        )}
+                {onZoomChange && (
+                  <>
+                    <DropdownMenuLabel className="flex items-center justify-between">
+                      Zoom
+                      <span className="tabular-nums text-text-secondary">{currentZoomLabel}</span>
+                    </DropdownMenuLabel>
+                    <DropdownMenuItem
+                      disabled={!canZoomIn}
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        handleZoomStep("in");
+                      }}
+                    >
+                      <ZoomIn className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Zoom in
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={!canZoomOut}
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        handleZoomStep("out");
+                      }}
+                    >
+                      <ZoomOut className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Zoom out
+                    </DropdownMenuItem>
+                    <DropdownMenuItem disabled={!isNonDefaultZoom} onSelect={handleZoomReset}>
+                      <span className="w-3.5 mr-2" aria-hidden="true" />
+                      Actual size
+                    </DropdownMenuItem>
+                  </>
+                )}
+                {onZoomChange && (onToggleDevTools || onPromoteToPortal) && (
+                  <DropdownMenuSeparator />
+                )}
+                {onToggleDevTools && (
+                  <DropdownMenuItem disabled={!isWebviewReady} onSelect={onToggleDevTools}>
+                    <Code className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    Toggle DevTools
+                  </DropdownMenuItem>
+                )}
+                {onPromoteToPortal && (
+                  <DropdownMenuItem
+                    onSelect={onPromoteToPortal}
+                    data-testid="browser-promote-portal"
+                  >
+                    <PanelRight className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    Open in Portal
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
       </div>
 
-      {/* Action buttons */}
-      <div aria-hidden="true" className="toolbar-divider w-px h-5 shrink-0" />
-      {extraActions}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button type="button" onClick={handleCopy} className={buttonClass} aria-label="Copy URL">
-            {copied ? (
-              <Check className="w-4 h-4 text-status-success" />
-            ) : (
-              <Copy className="w-4 h-4" />
-            )}
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Copy URL</TooltipContent>
-      </Tooltip>
-
-      {onCaptureScreenshot && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={handleCaptureScreenshot}
-              disabled={!isWebviewReady}
-              className={cn(
-                buttonClass,
-                "disabled:hover:bg-transparent disabled:hover:shadow-none"
-              )}
-              aria-label="Copy screenshot to clipboard"
-            >
-              {screenshotCopied ? (
-                <Check className="w-4 h-4 text-status-success" />
-              ) : (
-                <Camera className="w-4 h-4" />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Copy screenshot to clipboard</TooltipContent>
-        </Tooltip>
+      {viewportPreset && onViewportPresetChange && (
+        <ViewportControls
+          preset={viewportPreset}
+          rotated={viewportRotated}
+          dpr={viewportDpr}
+          fit={viewportFit}
+          onPresetChange={onViewportPresetChange}
+          onRotateToggle={onViewportRotateToggle}
+          onDprChange={onViewportDprChange}
+          onFitToggle={onViewportFitToggle}
+        />
       )}
-
-      {onToggleConsole && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            {canToggleConsole ? (
-              consoleButton
-            ) : (
-              <span className="inline-flex">{consoleButton}</span>
-            )}
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {isConsoleShown ? "Hide console" : "Show console"}
-          </TooltipContent>
-        </Tooltip>
-      )}
-
-      {onToggleDevTools && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={onToggleDevTools}
-              disabled={!isWebviewReady}
-              className={cn(
-                buttonClass,
-                "disabled:hover:bg-transparent disabled:hover:shadow-none"
-              )}
-              aria-label="Toggle DevTools"
-            >
-              <Code className="w-4 h-4" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Open DevTools</TooltipContent>
-        </Tooltip>
-      )}
-
-      {onPromoteToPortal && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={onPromoteToPortal}
-              className={buttonClass}
-              aria-label="Open in Portal"
-              data-testid="browser-promote-portal"
-            >
-              <PanelRight className="w-4 h-4" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Open in Portal</TooltipContent>
-        </Tooltip>
-      )}
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          {canOpenExternal ? (
-            openExternalButton
-          ) : (
-            <span className="inline-flex">{openExternalButton}</span>
-          )}
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Open in browser</TooltipContent>
-      </Tooltip>
     </div>
   );
 }

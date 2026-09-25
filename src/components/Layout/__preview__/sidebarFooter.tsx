@@ -12,9 +12,8 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useKeepAwakeStore } from "@/store/keepAwakeStore";
 import { usePanelStore } from "@/store/panelStore";
-import { QuickRun } from "@/components/Project/QuickRun";
-import { ProjectPluginIndicator } from "@/components/Plugin/ProjectPluginIndicator";
-import { SidebarStatusBar } from "../SidebarStatusBar";
+import { useProjectPluginStore } from "@/store/projectPluginStore";
+import { SidebarFooter } from "../SidebarFooter";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { Project, RunCommand } from "@shared/types";
@@ -134,11 +133,13 @@ interface Fixture {
  * reading. Process presence and agent activity are separate axes on purpose —
  * the strip reports the first in words and the second with its mark.
  */
-function seedStats(runningProjects: number, totalMemoryMB: number, workingAgents = 1): void {
-  const projects = Array.from({ length: 4 }, (_, i) => ({
-    id: `proj-${i}`,
-    name: ["Daintree", "Assistant", "Backend", "Site builder"][i]!,
-  }));
+function seedStats(
+  runningProjects: number,
+  totalMemoryMB: number,
+  workingAgents = 1,
+  names: readonly string[] = ["Daintree", "Assistant", "Backend", "Site builder"]
+): void {
+  const projects = names.map((name, i) => ({ id: `proj-${i}`, name }));
   const stats: ProjectStatusMap = {};
   projects.forEach((p, i) => {
     const running = i < runningProjects;
@@ -159,6 +160,94 @@ function seedStats(runningProjects: number, totalMemoryMB: number, workingAgents
 
 let PROJECT_LIST: Array<{ id: string; name: string }> = [];
 let APP_MEMORY_MB = 1240;
+
+/**
+ * The shape of a real heavy session, taken from the owner's own popover: twenty
+ * registered projects, seven with terminals, and most of the rest idle. Sparse
+ * fixtures hid exactly what made the popover a wall of text — thirteen rows of
+ * "0 terms ~0MB" and a nineteen-row process table.
+ */
+const BUSY_PROJECT_NAMES = [
+  "Daintree",
+  "PageSugar",
+  "LifePlan",
+  "BusinessBenchmark",
+  "Daintree Website",
+  "Assistant Backend",
+  "Claude Commands",
+  "Everkinetic",
+  "Assistant Lab",
+  "Video Scripting",
+  "Daintree Assistant",
+  "Video Editor",
+  "SearchSocket",
+  "YouTube Thumbnails",
+  "RuinWeave",
+  "CandidCue",
+  "Personal Bio",
+  "Writing",
+  "SpokenAir",
+  "ask-google",
+] as const;
+
+/** terminals and measured MB per running project, in list order. */
+const BUSY_TERMINALS: ReadonlyArray<[number, number]> = [
+  [4, 2048],
+  [1, 1741],
+  [1, 704],
+  [1, 500],
+  [2, 1741],
+  [2, 3379],
+  [1, 445],
+];
+
+const BUSY_PROCESSES = [
+  ["Tab", "Daintree view", 512, 0.2],
+  ["Tab", "LifePlan view", 450, 0],
+  ["Tab", "PageSugar view", 419, 0],
+  ["Tab", "Daintree Website view", 366, 0.6],
+  ["Browser", "Browser", 364, 0.2],
+  ["Utility", "daintree-pty-host", 329, 0.2],
+  ["Tab", "Claude Commands view", 244, 0],
+  ["GPU", "GPU", 196, 0.2],
+  ["Tab", "Tab", 170, 0],
+  ["Utility", "daintree-workspace-host", 118, 0],
+  ["Utility", "daintree-workspace-host", 94, 0],
+  ["Utility", "daintree-workspace-host", 92, 0],
+  ["Utility", "daintree-workspace-host", 86, 0],
+  ["Utility", "daintree-workspace-host", 84, 0],
+  ["Utility", "daintree-plugin-prod", 79, 0],
+  ["Utility", "daintree-workspace-host", 78, 0],
+  ["Utility", "daintree-pty-host", 72, 0],
+  ["Utility", "daintree-watchdog", 58, 0],
+  ["Utility", "Network Service", 57, 0],
+] as const;
+
+let WORKLOAD_BY_PROJECT: Array<{
+  projectId: string | null;
+  terminalCount: number;
+  processCount: number;
+  memoryMb: number;
+  topProcesses: never[];
+}> = [];
+let TERMINAL_WORKLOAD_MB = 0;
+
+/** Seed the popover's reads for the busy session. */
+function seedBusySession(): void {
+  seedStats(7, 3868, 3, BUSY_PROJECT_NAMES);
+  WORKLOAD_BY_PROJECT = [
+    ...BUSY_TERMINALS.map(([terminals, mb], i) => ({
+      projectId: `proj-${i}`,
+      terminalCount: terminals,
+      processCount: terminals * 3,
+      memoryMb: mb,
+      topProcesses: [],
+    })),
+    // A terminal opened outside any project — the remainder row.
+    { projectId: null, terminalCount: 1, processCount: 2, memoryMb: 182, topProcesses: [] },
+  ];
+  TERMINAL_WORKLOAD_MB = WORKLOAD_BY_PROJECT.reduce((sum, p) => sum + p.memoryMb, 0);
+}
 
 /** Reset everything a fixture might have set, so one sweep can't leak into the next. */
 function baseline(): void {
@@ -183,11 +272,14 @@ function baseline(): void {
     error: null,
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  useProjectPluginStore.setState({ projectId: null, plugins: [], trust: null });
   useKeepAwakeStore.setState({
     visible: true,
     state: { config: { enabled: true, onBattery: false }, isBlocking: true, revision: 1 },
     loadError: null,
   });
+  WORKLOAD_BY_PROJECT = [];
+  TERMINAL_WORKLOAD_MB = 0;
   seedStats(1, 1240);
 }
 
@@ -273,6 +365,18 @@ export const FIXTURES: Record<string, Fixture> = {
     },
   },
 
+  /**
+   * The owner's real session: seven of twenty projects running. Captured with
+   * the readout's popover open, since that breakdown is the thing under review.
+   */
+  "busy-session": {
+    what: "seven of twenty projects running, the resource breakdown's real load",
+    seed: () => {
+      baseline();
+      seedBusySession();
+    },
+  },
+
   /** Both toggles lit, so their active treatment can be compared to their rest one. */
   "toggles-active": {
     what: "auto-restart on, output set to Dock",
@@ -283,6 +387,35 @@ export const FIXTURES: Record<string, Fixture> = {
       } catch {
         // defaults to off, which the fixture label will contradict — acceptable
       }
+    },
+  },
+
+  /**
+   * All three strips at once. The plugin row only renders when the project has
+   * something to act on, so no other fixture shows the stack whose leading
+   * glyphs have to share one column.
+   */
+  "plugin-row": {
+    what: "a project plugin switched off — every footer strip stacked",
+    seed: () => {
+      baseline();
+      useProjectPluginStore.setState({
+        projectId: PROJECT_ID,
+        plugins: [
+          {
+            projectId: PROJECT_ID,
+            id: "acme.deploy",
+            displayName: "Deploy",
+            version: "1.0.0",
+            capabilities: [],
+            dirName: "deploy",
+            state: "blocked",
+            muted: true,
+            collidesWithGlobal: false,
+          },
+        ],
+        trust: { projectId: PROJECT_ID, decision: "enabled", enabled: true, persisted: true },
+      });
     },
   },
 
@@ -305,6 +438,138 @@ export const FIXTURES: Record<string, Fixture> = {
       setCurrentViewStore(store);
       CURRENT_STORE = store;
       useWorktreeSelectionStore.setState({ activeWorktreeId: LONG_BRANCH.id });
+    },
+  },
+
+  /**
+   * A real monorepo's worth of suggestions: pins that came from scripts and
+   * pins typed by hand, a long run of detected scripts, and history with the
+   * kind of command lines people actually paste. Four suggestions hid how the
+   * menu behaves once it has to scroll and once rows have to be told apart.
+   */
+  "long-suggestions": {
+    what: "three pins, fourteen scripts and six history entries",
+    seed: () => {
+      baseline();
+      const scripts: RunCommand[] = [
+        { id: "r-dev", name: "dev", command: "npm run dev", description: "Main + Renderer (Vite)" },
+        { id: "r-test", name: "test", command: "npm test", description: "vitest" },
+        {
+          id: "r-check",
+          name: "check",
+          command: "npm run check",
+          description: "typecheck + 12 codegen/guard checks + lint ratchet + format:check",
+        },
+        { id: "r-build", name: "build", command: "npm run build", description: "production build" },
+        {
+          id: "r-fix",
+          name: "fix",
+          command: "npm run fix",
+          description: "prettier + eslint --fix",
+        },
+        { id: "r-rebuild", name: "rebuild", command: "npm run rebuild" },
+        { id: "r-typecheck", name: "typecheck", command: "npm run typecheck" },
+        { id: "r-lint", name: "lint", command: "npm run lint" },
+        { id: "r-format", name: "format", command: "npm run format" },
+        { id: "r-e2e", name: "test:e2e", command: "npm run test:e2e", description: "Playwright" },
+        { id: "r-codegen", name: "codegen:ipc", command: "npm run codegen:ipc" },
+        { id: "r-db", name: "db:generate", command: "npm run db:generate" },
+        {
+          id: "r-packages",
+          name: "packages:build",
+          command: "npm run packages:build",
+          description: "Build every plugin SDK workspace package",
+        },
+        { id: "r-help", name: "build:help", command: "npm run build:help" },
+      ];
+      const saved: RunCommand[] = [
+        {
+          id: "s-dev",
+          name: "Dev server",
+          command: "npm run dev",
+          preferredLocation: "grid",
+          preferredAutoRestart: true,
+        },
+        {
+          id: "s-check",
+          name: "check",
+          command: "npm run check",
+          preferredLocation: "dock",
+        },
+        {
+          id: "s-docs",
+          name: "Docs preview",
+          command: "npx serve docs --listen 4000 --no-clipboard",
+          description: "Pinned from history",
+          preferredLocation: "dock",
+        },
+      ];
+      useProjectSettingsStore.setState({
+        settings: { runCommands: saved },
+        detectedRunners: scripts,
+        allDetectedRunners: scripts,
+      });
+      const now = Date.now();
+      const history = [
+        "npm test -- src/components/Project/__tests__/QuickRun.test.tsx",
+        "git log --oneline -20",
+        "DAINTREE_SHOT_FOOTER=1 npx playwright test --project=screenshots sidebar-footer-review",
+        "docker compose up -d postgres redis",
+        "ls -la",
+        "npm run test:e2e -- e2e/full/panels/core-light-theme-smoke.spec.ts",
+      ].map((command, i) => ({ command, timestamp: now - i * 60_000 }));
+      try {
+        localStorage.setItem(`daintree_cmd_history_${PROJECT_ID}`, JSON.stringify(history));
+      } catch {
+        // history is then empty, which the capture will show
+      }
+    },
+  },
+
+  /** A fresh project: nothing detected, nothing pinned, nothing run yet. */
+  "no-suggestions": {
+    what: "no scripts detected, nothing pinned, no history",
+    seed: () => {
+      baseline();
+      useProjectSettingsStore.setState({
+        settings: { runCommands: [] },
+        detectedRunners: [],
+        allDetectedRunners: [],
+      });
+    },
+  },
+
+  /** Every task status at once, and more tasks than the list shows. */
+  "many-tasks": {
+    what: "seven QuickRun tasks — running, restarting, failed, finished — past the cap",
+    seed: () => {
+      baseline();
+      const panels = [
+        task("t-dev", "npm run dev", { startedAt: Date.now() - 1_325_000 }),
+        task("t-docs", "npx serve docs --listen 4000 --no-clipboard", {
+          startedAt: Date.now() - 604_000,
+        }),
+        task("t-watch", "npm run test -- --watch src/components/Project", {
+          isRestarting: true,
+          exitBehavior: "restart",
+        }),
+        task("t-check", "npm run check", {
+          runtimeStatus: "exited",
+          exitCode: 2,
+          startedAt: Date.now() - 181_000,
+        }),
+        task("t-build", "npm run build", {
+          runtimeStatus: "exited",
+          exitCode: 0,
+          startedAt: Date.now() - 12_000,
+        }),
+        task("t-lint", "npm run lint", { startedAt: Date.now() - 31_000 }),
+        task("t-e2e", "npm run test:e2e", { startedAt: Date.now() - 8_000 }),
+      ];
+      usePanelStore.setState({
+        panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
+        panelIds: panels.map((p) => p.id),
+      });
     },
   },
 
@@ -386,7 +651,35 @@ installPreviewShims({
     getDiagnosticsInfo: async () => ({
       uptimeSeconds: 7_400,
       eventLoopP99Ms: 12,
-      systemAvailableMB: 18_400,
+      systemAvailableMB: 15_770,
+    }),
+    getProcessMetrics: async () =>
+      BUSY_PROCESSES.map(([type, name, memoryMB, cpuPercent], i) => ({
+        pid: 64_500 + i * 17,
+        type,
+        name,
+        memoryMB,
+        cpuPercent,
+      })),
+    getHeapStats: async () => ({ usedMB: 56, limitMB: 4096, percent: 1.4, externalMB: 12 }),
+    getMemorySnapshot: async () => ({
+      timestamp: Date.now(),
+      electron: {
+        available: true,
+        totalWorkingSetMb: APP_MEMORY_MB,
+        processCount: BUSY_PROCESSES.length,
+        sampledAt: Date.now(),
+      },
+      terminalWorkloads: {
+        available: true,
+        stale: false,
+        ageMs: 1_000,
+        sampledAt: Date.now(),
+        totalMemoryMb: TERMINAL_WORKLOAD_MB,
+        processCount: 24,
+        terminalCount: 12,
+        byProject: WORKLOAD_BY_PROJECT,
+      },
     }),
   }),
 });
@@ -433,9 +726,7 @@ function Preview() {
           case — it is here so the two strips are reviewed as the pair they
           form, since they share chrome, row height, dot and type. */}
       <div data-footer-region className="flex flex-col">
-        <QuickRun projectId={PROJECT_ID} />
-        <ProjectPluginIndicator />
-        <SidebarStatusBar />
+        <SidebarFooter projectId={PROJECT_ID} />
       </div>
     </div>
   );

@@ -42,10 +42,30 @@ export function computeHardwareDefaults(totalMemoryBytes: number): {
   return { soft: 32, confirm: 64, hard: 100 };
 }
 
+/** The operations that open panels in a batch. */
+export type PanelLimitBatchSource = { kind: "recipe"; name: string } | { kind: "clone-layout" };
+
+/**
+ * What a batch spawn is asking to do, captured when it asks. The thresholds are
+ * snapshots so the dialog explains the decision that was actually made, even if
+ * Settings changes while it is open.
+ */
+export interface PanelLimitConfirmRequest {
+  /** Panels already open before the batch. */
+  currentCount: number;
+  /** Panels the batch asked for. */
+  requestedCount: number;
+  /** Panels that will open if confirmed — `requestedCount` trimmed to the hard limit. */
+  allowedCount: number;
+  confirmationLimit: number;
+  hardLimit: number;
+  /** What is opening the batch, so the dialog can name it. */
+  source?: PanelLimitBatchSource;
+}
+
 interface PendingConfirmation {
   resolve: (ok: boolean) => void;
-  panelCount: number;
-  memoryMB: number | null;
+  request: PanelLimitConfirmRequest;
 }
 
 interface PanelLimitState {
@@ -69,7 +89,7 @@ interface PanelLimitState {
   setHardLimit: (limit: number) => void;
   setWarningsDisabled: (disabled: boolean) => void;
   dismissSoftWarning: (currentCount: number) => void;
-  requestConfirmation: (panelCount: number, memoryMB: number | null) => Promise<boolean>;
+  requestConfirmation: (request: PanelLimitConfirmRequest) => Promise<boolean>;
   resolveConfirmation: (ok: boolean) => void;
   initializeFromHardware: () => Promise<void>;
   resetToHardwareDefaults: () => Promise<void>;
@@ -220,7 +240,7 @@ export const usePanelLimitStore = create<PanelLimitState>()(
         set({ lastSoftWarningDismissedAt: currentCount });
       },
 
-      requestConfirmation: (panelCount: number, memoryMB: number | null): Promise<boolean> => {
+      requestConfirmation: (request: PanelLimitConfirmRequest): Promise<boolean> => {
         const existing = get().pendingConfirm;
         if (existing) {
           existing.resolve(false);
@@ -228,7 +248,7 @@ export const usePanelLimitStore = create<PanelLimitState>()(
 
         return new Promise<boolean>((resolve) => {
           set((state) => ({
-            pendingConfirm: { resolve, panelCount, memoryMB },
+            pendingConfirm: { resolve, request },
             requestSeq: state.requestSeq + 1,
           }));
         });
@@ -332,18 +352,21 @@ export function _resetInitPromise(): void {
  * in `addPanel` would read the same stale count for every panel in the burst
  * and under-enforce the ceiling. Callers run this once up front against the
  * pre-batch `currentCount`, spawn only the returned `allowed` count with
- * `bypassLimits: true`, and report the rest as "Panel limit reached". The
- * confirmation dialog (if the burst crosses the confirm threshold) is awaited
- * here, before the batch opens, so it never renders mid-commit. See #9165.
+ * `bypassLimits: true`, and report the rest as "Panel limit reached" — or, when
+ * `declined`, as `PANEL_LIMIT_DECLINED_REASON`. The confirmation dialog
+ * (if the burst crosses the confirm threshold) is awaited here, before the
+ * batch opens, so it never renders mid-commit. See #9165.
  *
  * @returns `allowed` — how many of the requested panels may be spawned now
- *   (0 when the hard limit is already reached or the user declines the confirm).
+ *   (0 when the hard limit is already reached or the user declines the confirm);
+ *   `declined` — true only when the user answered the confirm with no.
  */
 export async function preflightSpawnBatchLimit(
   currentCount: number,
-  requestedCount: number
-): Promise<{ allowed: number }> {
-  if (requestedCount <= 0) return { allowed: 0 };
+  requestedCount: number,
+  options: { source?: PanelLimitBatchSource } = {}
+): Promise<{ allowed: number; declined: boolean }> {
+  if (requestedCount <= 0) return { allowed: 0, declined: false };
 
   const { confirmationLimit, hardLimit, warningsDisabled, requestConfirmation } =
     usePanelLimitStore.getState();
@@ -358,7 +381,7 @@ export async function preflightSpawnBatchLimit(
       duration: 5000,
       context: { eventKind: "uiFeedback" },
     });
-    return { allowed: 0 };
+    return { allowed: 0, declined: false };
   }
 
   const allowed = Math.min(available, requestedCount);
@@ -369,11 +392,16 @@ export async function preflightSpawnBatchLimit(
   // keep the blocking confirm even though `addPanel` dropped it for single adds
   // (#10547). The batch crosses the confirm threshold when `projected > confirmationLimit`.
   if (!warningsDisabled && projected > confirmationLimit) {
-    // Pass `null` for memory rather than firing an extra metrics IPC before the
-    // batch — the dialog renders without the memory hint, never blocks on it.
-    const confirmed = await requestConfirmation(projected, null);
-    if (!confirmed) return { allowed: 0 };
+    const confirmed = await requestConfirmation({
+      currentCount,
+      requestedCount,
+      allowedCount: allowed,
+      confirmationLimit,
+      hardLimit,
+      ...(options.source ? { source: options.source } : {}),
+    });
+    if (!confirmed) return { allowed: 0, declined: true };
   }
 
-  return { allowed };
+  return { allowed, declined: false };
 }

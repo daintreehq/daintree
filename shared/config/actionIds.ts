@@ -56,6 +56,7 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.inject",
   "worktree.getAvailableBranch",
   "worktree.waitUntilReady",
+  "worktree.waitForPullRequest",
   "worktree.createWithRecipe",
   "worktree.compareDiff",
   "worktree.reviewReadiness",
@@ -119,6 +120,10 @@ export const BUILT_IN_ACTION_IDS = [
   // -- sessionRestoreActions --
   "sessionRestore.getConfig",
   "sessionRestore.updateConfig",
+
+  // -- windowOpeningActions --
+  "windowOpening.getConfig",
+  "windowOpening.updateConfig",
 
   // -- hibernationActions --
   "hibernation.getConfig",
@@ -274,6 +279,7 @@ export const BUILT_IN_ACTION_IDS = [
   "project.getAll",
   "project.getCurrent",
   "project.add",
+  "project.openInNewWindow",
   "project.switch",
   "project.update",
   "project.remove",
@@ -294,6 +300,7 @@ export const BUILT_IN_ACTION_IDS = [
   "plugin.validate",
   "plugin.diagnostics",
   "plugin.reloadProject",
+  "plugin.reloadPanel",
   "plugin.reloadWindow",
   "project.getStats",
   "project.settings.open",
@@ -511,6 +518,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- helpActions --
   "help.gettingStarted.show",
+  "help.tour.show",
   "help.displayImage",
   "help.openCommandsFolder",
 
@@ -565,6 +573,9 @@ export type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
 // the build instead of silently leaving a stale entry here (#8341).
 export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "plugin.reloadWindow",
+  // Plugins reload their own views through the rationed `requestReload` prop;
+  // this would reach any panel, unrationed (#12611).
+  "plugin.reloadPanel",
   "terminal.sendCommand",
   "terminal.sendCommandOwned",
   "terminal.injectOwned",

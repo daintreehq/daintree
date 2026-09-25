@@ -749,6 +749,43 @@ describe("DiagnosticsCollector adversarial", () => {
     });
   });
 
+  it("WHY_SLOW_SEPARATES_MEMORY_GOVERNOR_HOLDS_FROM_BACKLOG (#12375)", async () => {
+    // A terminal held only by the memory governor isn't output outrunning the
+    // renderer; one also held by the IPC queue still is.
+    const held = (terminalId: string, heldTokens: string[]) => ({
+      terminalId,
+      flowStatus: null,
+      heldTokens,
+      isSuspended: false,
+      activityTier: "VISIBLE",
+      pausedDurationMs: 1_000,
+      droppedBytes: 0,
+      dropCount: 0,
+      lastDropAt: null,
+    });
+    const deps = {
+      ptyClient: {
+        getAllTerminalsAsync: async () => [],
+        getFlowControlSnapshotAsync: async () => ({
+          totalPendingBytes: 0,
+          terminals: [
+            held("a", ["resource-governor"]),
+            held("b", ["resource-governor"]),
+            held("c", ["ipc-queue", "resource-governor"]),
+            { ...held("d", []), pausedDurationMs: null },
+          ],
+        }),
+      },
+    } as unknown as import("../../ipc/types.js").HandlerDependencies;
+
+    const pending = diagnostics.collectWhySlowSnapshot(deps);
+    await vi.advanceTimersByTimeAsync(4_000);
+    const snap = (await pending) as { pty: { pausedCount: number; memoryPausedCount: number } };
+
+    expect(snap.pty.pausedCount).toBe(3);
+    expect(snap.pty.memoryPausedCount).toBe(2);
+  });
+
   it("WHY_SLOW_MEMORY_ATTRIBUTION_LEAKS_NO_COMMAND_LINES_OR_PATHS", async () => {
     // Terminal workload memory must reach both the whySlow snapshot and the
     // memoryAttribution export as process BASENAMES only — a command line or

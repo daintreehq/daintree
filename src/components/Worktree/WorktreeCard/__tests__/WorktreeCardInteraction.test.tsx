@@ -60,11 +60,11 @@ describe("WorktreeCard interaction-state axes (issue #6963)", () => {
     expect(cardSource).not.toContain("z-50 bg-overlay-soft border-2 border-overlay");
   });
 
-  it("suppresses the grid hover-shadow lift while a drag is active", () => {
-    // The guard has to sit on whichever element paints the lift. That is
-    // `OverviewGridCell` now — the grid card shell stopped painting a plane
-    // of its own — so assert the pairing rather than a fixed file: any
-    // element with the ambient hover shadow also carries the drag guard.
+  it("pairs any ambient hover lift with the drag guard", () => {
+    // Whatever element paints the ambient hover lift must also carry the drag
+    // guard, or a sort drag sweeping across it lights each one in turn. The
+    // overview's rows are flat list rows now and paint no lift at all, so the
+    // rule holds there with a count of zero; it still binds the card.
     for (const source of [cardSource, overviewSource]) {
       const liftCount = (source.match(/hover:shadow-\[var\(--theme-shadow-ambient\)\]/g) ?? [])
         .length;
@@ -73,11 +73,6 @@ describe("WorktreeCard interaction-state axes (issue #6963)", () => {
       ).length;
       expect(guardCount).toBe(liftCount);
     }
-    // …and the pairing exists somewhere, so a variant that simply deleted the
-    // hover lift cannot satisfy the rule vacuously.
-    expect(cardSource + overviewSource).toContain(
-      "[html[data-dragging='true']_&]:hover:shadow-none"
-    );
   });
 
   it("suppresses sidebar hover background while a drag is active, except on the drop target", () => {
@@ -154,20 +149,45 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
     expect(toolbarSource).toContain("group-has-[[data-state=open]]/card:delay-0");
   });
 
-  it("terminal sub-row drag handle stays visible-but-dimmed (no opacity-0 at rest)", () => {
-    // Dimmed by stepping DOWN the text hierarchy, not by fading a brighter
-    // token: Tailwind v4 bakes slash-alpha into `color-mix()` on the `color`
-    // property itself, so the contrast it loses cannot be recovered anywhere
-    // downstream. The rule is "solid token at rest, solid token on hover, and
-    // the hover one is the brighter of the two".
+  it("session-row grip reveals the way the card's own grip does", () => {
+    // #8099 kept this grip visible-but-dimmed because the card's grip was;
+    // the card's grip has since moved to absent-at-rest with a hover and
+    // keyboard-focus reveal, and the session grip follows it rather than
+    // being the one permanent handle column in the card.
+    const rules = [...sidebarCss.matchAll(/([^{}]*)\{([^{}]*)\}/g)]
+      .map(([, selector, body]) => ({
+        selectors: selector!
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .split(",")
+          .map((part) => part.trim().replace(/\s+/g, " ")),
+        body: body!,
+      }))
+      .filter((rule) => rule.selectors.some((sel) => sel.includes("[data-session-grip]")));
+
+    const rest = rules.filter((rule) => rule.selectors.includes("[data-session-grip]"));
+    expect(rest.map((rule) => rule.body).join(";")).toMatch(/opacity:\s*0\s*;/);
+    expect(rest.map((rule) => rule.body).join(";")).toMatch(/pointer-events:\s*none/);
+
+    const reveals = rules.filter((rule) => /opacity:\s*1\s*;/.test(rule.body));
+    const revealSelectors = reveals.flatMap((rule) => rule.selectors);
+    // Hover alone and keyboard focus alone each reveal it, as separate
+    // alternatives rather than one selector that needs both.
+    expect(revealSelectors).toContain("[data-session-row]:hover [data-session-grip]");
+    expect(revealSelectors).toContain("[data-session-row]:has(:focus-visible) [data-session-grip]");
+    for (const rule of reveals) expect(rule.body).toMatch(/pointer-events:\s*auto/);
+    // Mouse focus from clicking a row must not strand a visible grip on it.
+    for (const rule of rules) {
+      expect(rule.selectors.join(",")).not.toContain(":focus-within");
+    }
+
+    // Solid tokens at rest and on hover, the hover one the brighter.
     const handle = terminalSectionSource.slice(
-      terminalSectionSource.indexOf("cursor-grab"),
-      terminalSectionSource.indexOf("cursor-grab") + 400
+      terminalSectionSource.indexOf("data-session-grip"),
+      terminalSectionSource.indexOf("data-session-grip") + 400
     );
-    expect(handle).toMatch(/(^|\s)text-text-(muted|secondary)\b/);
-    expect(handle).toMatch(/group-hover\/termrow:text-text-(secondary|primary)\b/);
+    expect(handle).toMatch(/(^|\s)text-text-secondary\b/);
+    expect(handle).toMatch(/(^|\s)hover:text-text-primary\b/);
     expect(handle).not.toMatch(/text-text-\w+\/\d/);
-    expect(terminalSectionSource).not.toMatch(/data-drag-handle[\s\S]{0,400}opacity-0/);
   });
 
   it("resource action buttons use outline (not ring-2) for forced-colors survival", () => {
@@ -356,4 +376,46 @@ describe("worktree error banner stacking (issue #12087)", () => {
       expect(requireZ(testId, banner)).toBeGreaterThan(overlayZ);
     }
   );
+});
+
+// The collapsed alarm mark is a non-focusable span, so the select overlay is
+// where a keyboard user meets it. WorktreeHeader.test proves the header puts
+// the alarm's words at `collapsedAlarmDescriptionId(worktree.id)` and opens the
+// tooltip from `isKeyboardFocused`; this is the card's half of each contract.
+describe("collapsed alarm reaches the select overlay", () => {
+  it("describes the overlay by every mounted row mark", () => {
+    // Each part is gated on the same condition that mounts its node:
+    // `selectButtonDescribedBy` drops the unmounted ones, so a wrong gate here
+    // is a dangling IDREF or a silent mark.
+    const tag = openingTagWith(cardSource, "button", 'data-card-select-overlay=""');
+    const call = tag.match(
+      /aria-describedby=\{selectButtonDescribedBy\(worktree\.id, \{([^}]*)\}\)\}/
+    );
+    expect(
+      call,
+      "the overlay's aria-describedby is not built by selectButtonDescribedBy"
+    ).not.toBeNull();
+    const gates = call![1]!;
+    expect(gates).toMatch(/lifecycle:\s*chipState !== null/);
+    expect(gates).toMatch(/alarm:\s*!!effectiveIsCollapsed/);
+    expect(gates).toMatch(/external:\s*isExternal/);
+  });
+
+  it("mounts the lifecycle description beside the tick, sidebar only", () => {
+    expect(cardSource).toMatch(
+      /\{chipState !== null && variant === "sidebar" && \([\s\S]{0,400}<span id=\{worktreeRowDescriptionId\(worktree\.id, "lifecycle"\)\} hidden>\s*\{CHIP_LABELS\[chipState\]\}/
+    );
+  });
+
+  it("tracks the overlay's keyboard focus and hands it to the header", () => {
+    const tag = openingTagWith(cardSource, "button", 'data-card-select-overlay=""');
+    expect(tag).toMatch(/onFocus=\{handleSelectFocus\}/);
+    expect(tag).toMatch(/onBlur=\{handleSelectBlur\}/);
+    // Focus-visible only: a pointer click focuses the overlay too, and a click
+    // that selected the row should not also pop the alarm open under it.
+    expect(cardSource).toMatch(/handleSelectFocus[\s\S]{0,200}matches\(":focus-visible"\)/);
+    expect(openingTagWith(cardSource, "WorktreeHeader", "isKeyboardFocused=")).toMatch(
+      /isKeyboardFocused=\{isSelectFocusVisible\}/
+    );
+  });
 });

@@ -2,7 +2,7 @@
 
 Vite externals preset for Daintree plugins.
 
-Daintree's renderer ships React 19 in a host `vendor-react` chunk and injects a `<script type="importmap">` mapping the bare `react`, `react-dom`, and documented subpaths to that chunk. Plugin bundles need to externalize the same specifiers so they resolve, at runtime, to the host's single React instance — bundling a second copy produces "Invalid hook call" the first time JSX renders.
+Daintree's renderer ships one React 19 instance in a shared `vendor-react` chunk and injects a `<script type="importmap">` that maps each served specifier — `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, `react-dom/client` — to its own small facade module re-exporting that specifier's public API from the shared chunk. The map deliberately does not point at the chunk itself: a code-split chunk only exports the private interface other chunks import from it, so a bare `import { useState } from "react"` would fail to load. Plugin bundles need to externalize those specifiers so they resolve, at runtime, to the host's single React instance — bundling a second copy produces "Invalid hook call" the first time JSX renders. The preset also fails the build on any React subpath the map does not serve (`react-dom/server`, say), so an externalized-but-unmapped import is caught at build time rather than as an unresolved specifier at load.
 
 ## Usage
 
@@ -19,7 +19,7 @@ export default defineConfig({
 });
 ```
 
-The plugin sets `build.rollupOptions.external` to:
+The plugin sets `build.rollupOptions.external` to a function that externalizes:
 
 ```ts
 [/^react($|\/)/, /^react-dom($|\/)/];

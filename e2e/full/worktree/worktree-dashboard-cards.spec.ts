@@ -40,7 +40,7 @@ test.describe.serial("Full: Worktree Dashboard Cards", () => {
   test("overview modal supports Ctrl-click and Shift-click range multi-select", async () => {
     const { window } = ctx;
 
-    await window.keyboard.press(`${mod}+Shift+O`);
+    await window.keyboard.press(`${mod}+Alt+R`);
     await expect(window.locator(SEL.worktree.overviewModal)).toBeVisible({ timeout: T_LONG });
 
     const cells = window.locator(SEL.worktree.overviewCell);
@@ -62,17 +62,18 @@ test.describe.serial("Full: Worktree Dashboard Cards", () => {
     await expect(window.locator(SEL.worktree.overviewModal)).toContainText("2 of 2 selected");
 
     // Clearing the selection dismisses the bulk-action bar and deselects both cells.
-    await window.locator(SEL.worktree.clearSelection).click();
+    await window.locator(SEL.worktree.overviewModal).getByRole("button", { name: "Clear" }).click();
     await expect(window.locator(SEL.worktree.bulkRemove)).toHaveCount(0, { timeout: T_MEDIUM });
     await expect(first).toHaveAttribute("aria-selected", "false", { timeout: T_MEDIUM });
     await expect(second).toHaveAttribute("aria-selected", "false", { timeout: T_MEDIUM });
 
-    // The close button dismisses in ONE click even with a selection active:
-    // only Escape carries the clear-then-close contract, and the bar above has
-    // its own Clear control.
+    // Escape first clears the selection, then closes the overview.
     await first.click({ modifiers: ["ControlOrMeta"], position: { x: 20, y: 20 } });
     await expect(window.locator(SEL.worktree.overviewModal)).toContainText("1 of 2 selected");
-    await window.locator(SEL.worktree.overviewClose).click();
+    await window.keyboard.press("Escape");
+    await expect(first).toHaveAttribute("aria-selected", "false", { timeout: T_MEDIUM });
+    await expect(window.locator(SEL.worktree.overviewModal)).toBeVisible();
+    await window.keyboard.press("Escape");
     await expect(window.locator(SEL.worktree.overviewModal)).toBeHidden({ timeout: T_MEDIUM });
   });
 

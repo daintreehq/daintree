@@ -1,9 +1,19 @@
 // @vitest-environment jsdom
-import { render, screen, act, fireEvent } from "@testing-library/react";
+import { render as rtlRender, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
-import { NotificationCenterEntry } from "../NotificationCenterEntry";
+import { NotificationCenterEntry, formatSnoozeWake } from "../NotificationCenterEntry";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { useUIStore } from "@/store/uiStore";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
+
+// An unavailable row action explains itself through a real tooltip, which the
+// app mounts under App.tsx's provider.
+function render(ui: React.ReactElement) {
+  return rtlRender(ui, { wrapper: TooltipProvider });
+}
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 const getMock = vi.hoisted(() => vi.fn());
@@ -55,18 +65,18 @@ beforeEach(() => {
 describe("NotificationCenterEntry overflow menu", () => {
   it("does not render overflow menu when context has no projectId", () => {
     render(<NotificationCenterEntry entry={makeEntry()} />);
-    expect(screen.queryByLabelText("Notification options")).toBeNull();
+    expect(screen.queryByLabelText(/^Options for /)).toBeNull();
   });
 
   it("renders overflow menu when context.projectId is present", () => {
     render(<NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1" } })} />);
-    expect(screen.getByLabelText("Notification options")).toBeTruthy();
+    expect(screen.getByLabelText(/^Options for /)).toBeTruthy();
   });
 
   it("dispatches project.muteNotifications when Mute is selected", async () => {
     render(<NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1" } })} />);
 
-    const trigger = screen.getByLabelText("Notification options");
+    const trigger = screen.getByLabelText(/^Options for /);
     await act(async () => {
       fireEvent.pointerDown(trigger, { button: 0 });
       fireEvent.pointerUp(trigger, { button: 0 });
@@ -92,8 +102,8 @@ describe("NotificationCenterEntry overflow menu", () => {
       />
     );
 
-    expect(screen.getByLabelText("Dismiss notification")).toBeTruthy();
-    expect(screen.getByLabelText("Notification options")).toBeTruthy();
+    expect(screen.getByLabelText(/^Dismiss /)).toBeTruthy();
+    expect(screen.getByLabelText(/^Options for /)).toBeTruthy();
   });
 });
 
@@ -575,7 +585,7 @@ describe("NotificationCenterEntry roving focus props", () => {
     }
   });
 
-  it("keeps the snooze indicator rendered alongside the timestamp, not behind it", () => {
+  it("shows the snooze wake time as visible text on the row, not behind a tooltip", () => {
     const { container } = render(
       <NotificationCenterEntry
         entry={makeEntry()}
@@ -588,10 +598,12 @@ describe("NotificationCenterEntry roving focus props", () => {
     const indicator = screen.getByTestId("notification-snoozed-indicator");
     const timestamp = screen.getByTestId("notification-timestamp");
     expect(row.contains(indicator)).toBe(true);
-    // Siblings in one rail — if either ends up in a separately-revealed layer
-    // they stop sharing a parent, which is how the snooze state used to vanish
-    // on the one tab that exists to show it.
-    expect(indicator.parentElement).toBe(timestamp.parentElement);
+    expect(row.contains(timestamp)).toBe(true);
+    // The wake time is visible text, not a tooltip on a bare clock — the
+    // Snoozed tab exists to answer "when does this come back", and a title
+    // attribute only answers it for a pointer resting on the glyph.
+    expect(indicator.textContent).toMatch(/^Snoozed until \S/);
+    expect(indicator.getAttribute("title")).toBeNull();
   });
 
   it("keeps the management controls operable without hover", () => {
@@ -606,7 +618,7 @@ describe("NotificationCenterEntry roving focus props", () => {
       />
     );
     const row = container.firstElementChild as HTMLElement;
-    for (const label of ["Dismiss notification", "Notification options"]) {
+    for (const label of [/^Dismiss /, /^Options for /]) {
       const control = screen.getByLabelText(label);
       for (let el: HTMLElement | null = control; el && el !== row; el = el.parentElement) {
         expect(el.className).not.toMatch(/pointer-events-none/);
@@ -626,14 +638,14 @@ describe("NotificationCenterEntry roving focus props", () => {
         onDismiss={vi.fn()}
       />
     );
-    const boxOf = (label: string) =>
+    const boxOf = (label: RegExp) =>
       screen
         .getByLabelText(label)
         .className.split(/\s+/)
         .filter((c) => /^h-\d|^w-\d/.test(c))
         .sort();
-    expect(boxOf("Dismiss notification")).toEqual(boxOf("Notification options"));
-    expect(boxOf("Dismiss notification")).toEqual(["h-6", "w-6"]);
+    expect(boxOf(/^Dismiss /)).toEqual(boxOf(/^Options for /));
+    expect(boxOf(/^Dismiss /)).toEqual(["h-6", "w-6"]);
   });
 
   it("carries the forced-colors repaint handle on the unread dot", () => {
@@ -691,7 +703,7 @@ describe("NotificationCenterEntry roving focus props", () => {
         onDropdownOpenChange={onDropdownOpenChange}
       />
     );
-    const trigger = screen.getByLabelText("Notification options");
+    const trigger = screen.getByLabelText(/^Options for /);
 
     await act(async () => {
       fireEvent.pointerDown(trigger, { button: 0 });
@@ -739,7 +751,7 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
   });
 
   async function openMenu() {
-    const trigger = screen.getByLabelText("Notification options");
+    const trigger = screen.getByLabelText(/^Options for /);
     await act(async () => {
       fireEvent.pointerDown(trigger, { button: 0 });
       fireEvent.pointerUp(trigger, { button: 0 });
@@ -806,6 +818,28 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
       fireEvent.click(item);
     });
     expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "pane-42" });
+  });
+
+  it("closes the inbox when Report on GitHub hands off to the browser", async () => {
+    useUIStore.setState({ notificationCenterOpen: true });
+    render(
+      <NotificationCenterEntry entry={makeEntry({ type: "error", correlationId: "corr-close" })} />
+    );
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Report on GitHub"));
+    });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+  });
+
+  it("closes the inbox when Go to source takes you to the panel", async () => {
+    useUIStore.setState({ notificationCenterOpen: true });
+    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />);
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Go to source"));
+    });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(false);
   });
 
   it("swallows the panel.focus rejection when the source panel is gone", async () => {
@@ -911,5 +945,149 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
       fireEvent.click(item);
     });
     expect(openExternal).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("formatSnoozeWake", () => {
+  it("names the day only when the wake time isn't today", () => {
+    const now = new Date(2026, 8, 23, 7, 0, 0);
+    const laterToday = new Date(2026, 8, 23, 8, 0, 0).getTime();
+    const tomorrow = new Date(2026, 8, 24, 8, 0, 0).getTime();
+    const today = formatSnoozeWake(laterToday, now);
+    const nextDay = formatSnoozeWake(tomorrow, now);
+    // Same clock time, so the next-day label is the same-day label plus a day:
+    // "8:00 AM" alone doesn't say which morning "Until tomorrow" means.
+    expect(nextDay).not.toBe(today);
+    expect(nextDay).toContain(today);
+  });
+});
+
+describe("NotificationCenterEntry snooze keybinding", () => {
+  it("opens straight onto the durations, with focus on the first one", async () => {
+    const onSnooze = vi.fn();
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({ correlationId: "thr-1", context: { projectId: "p1" } })}
+        isSnoozePending
+        onConsumeSnoozePending={vi.fn()}
+        onSnooze={onSnooze}
+      />
+    );
+    const items = await screen.findAllByRole("menuitem");
+    // Only the four durations — `h` asks when, not for the whole menu.
+    expect(items).toHaveLength(4);
+    expect(screen.queryByText("Copy correlation ID")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(items[0]));
+    fireEvent.click(items[1]!);
+    expect(onSnooze).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("NotificationCenterEntry silence refresh", () => {
+  it("re-reads the project's silences once a row-menu silence or mute lands", async () => {
+    const load = vi
+      .spyOn(useProjectSettingsStore.getState(), "loadNotificationOverridesForProjects")
+      .mockResolvedValue(undefined);
+    try {
+      for (const itemText of [/^Silence /, /^Mute project notifications$/]) {
+        load.mockClear();
+        const { unmount } = render(
+          <NotificationCenterEntry
+            entry={makeEntry({ context: { projectId: "p1", eventKind: "waiting" } })}
+          />
+        );
+        const trigger = screen.getByLabelText(/^Options for /);
+        await act(async () => {
+          fireEvent.pointerDown(trigger, { button: 0 });
+          fireEvent.pointerUp(trigger, { button: 0 });
+          fireEvent.click(trigger);
+        });
+        await act(async () => {
+          fireEvent.click(screen.getByText(itemText));
+        });
+        // The settings file changed under the inbox; its strip has to hear.
+        await waitFor(() => expect(load).toHaveBeenCalledWith(["p1"]));
+        unmount();
+      }
+    } finally {
+      load.mockRestore();
+    }
+  });
+});
+
+describe("NotificationCenterEntry — unavailable row action", () => {
+  it("says why it can't run when focused, without a native title", async () => {
+    getMock.mockReturnValue({ enabled: false, disabledReason: "No worktree selected" });
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({ actions: [{ label: "Close them", actionId: "terminal.kill" }] })}
+      />
+    );
+    const button = screen.getByRole("button", { name: "Close them" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.getAttribute("title")).toBeNull();
+
+    await act(async () => {
+      button.focus();
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("No worktree selected").length).toBeGreaterThan(0);
+    });
+  });
+});
+
+describe("NotificationCenterEntry — row menu names the full source", () => {
+  async function openMenu() {
+    const trigger = screen.getByLabelText(/^Options for /);
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+  }
+
+  it("heads the menu with the row's project and worktree, which the row itself truncates", async () => {
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          correlationId: "c-src",
+          context: { worktreeId: "/repo/worktrees/feature-a-very-long-branch-name-that-truncates" },
+        })}
+        showSource={false}
+      />
+    );
+    await openMenu();
+    const menu = screen.getByRole("menu");
+    expect(menu.textContent).toContain("feature-a-very-long-branch-name-that-truncates");
+  });
+
+  it("adds no heading for a row with no place of origin", async () => {
+    render(<NotificationCenterEntry entry={makeEntry({ correlationId: "c-none" })} />);
+    await openMenu();
+    // The app-level fallback name is not a place the row came from.
+    expect(screen.getByRole("menu").textContent).not.toContain(APP_SOURCE_LABEL);
+  });
+});
+
+describe("NotificationCenterEntry forced-colors action hook", () => {
+  it("marks exactly the recommended action for the forced-colors primary border", () => {
+    getMock.mockReturnValue({ enabled: true });
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          actions: [
+            { label: "Pull and rebase", actionId: "terminal.kill" },
+            { label: "Open review", actionId: "terminal.kill", variant: "secondary" },
+          ],
+        })}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Pull and rebase" }).dataset.notificationAction).toBe(
+      "primary"
+    );
+    expect(screen.getByRole("button", { name: "Open review" }).dataset.notificationAction).not.toBe(
+      "primary"
+    );
   });
 });

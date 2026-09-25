@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/utils", () => ({
@@ -24,11 +25,24 @@ describe("Skeleton", () => {
       expect(screen.getByRole("status")).toBeTruthy();
     });
 
-    it('sets aria-live="polite" and aria-busy="true"', () => {
+    it("is a polite live region that is never marked busy", () => {
+      // `aria-busy` on a live region tells AT to hold back its updates until
+      // the region clears — which, on this wrapper, is its own loading message.
       render(<Skeleton />);
       const status = screen.getByRole("status");
       expect(status.getAttribute("aria-live")).toBe("polite");
-      expect(status.getAttribute("aria-busy")).toBe("true");
+      expect(status.closest('[aria-busy="true"]')).toBeNull();
+    });
+
+    it("registers the live region empty and inserts its message a commit later", () => {
+      // A live region only announces changes made after assistive tech has
+      // registered it; one that mounts with its message inside is often silent.
+      // Static markup is the first commit, before any effect runs.
+      const first = document.createElement("div");
+      first.innerHTML = renderToStaticMarkup(<Skeleton label="Loading files" />);
+      expect(first.querySelector('[role="status"]')?.textContent).toBe("");
+      render(<Skeleton label="Loading files" />);
+      expect(screen.getByRole("status").textContent).toBe("Loading files");
     });
 
     it("uses default label when none provided", () => {
@@ -445,7 +459,7 @@ describe("SkeletonHint", () => {
   it("marks the visible copy span as aria-hidden so AT only hears the live region", () => {
     const { container } = render(<SkeletonHint />);
     advance(8_000);
-    const visible = container.querySelector(".animate-hint-fade-in > span[aria-hidden='true']");
+    const visible = container.querySelector("span.animate-hint-fade-in[aria-hidden='true']");
     expect(visible).toBeTruthy();
     expect(visible?.textContent).toBe("Still working…");
     // Live region is sr-only; the visible span must NOT carry aria-live.
@@ -467,41 +481,64 @@ describe("SkeletonHint", () => {
     expect(hint.closest('[role="status"]')).toBeNull();
   });
 
-  it("re-keys the visible row when copy escalates so the fade-in re-fires", () => {
+  function copyNode(container: HTMLElement) {
+    return container.querySelector("span.animate-hint-fade-in[aria-hidden='true']");
+  }
+
+  it("re-fires the copy's fade when the copy escalates", () => {
     const { container } = render(<SkeletonHint />);
     advance(8_000);
-    const first = container.querySelector(".animate-hint-fade-in");
-    expect(first).toBeTruthy();
+    const first = copyNode(container);
+    expect(first?.textContent).toBe("Still working…");
     advance(5_000);
-    const second = container.querySelector(".animate-hint-fade-in");
-    expect(second).toBeTruthy();
-    // Copy changed ("Still working…" → "Taking longer than usual…"), so the
-    // keyed node is replaced and the animation restarts.
+    const second = copyNode(container);
+    expect(second?.textContent).toBe("Taking longer than usual…");
     expect(second).not.toBe(first);
   });
 
-  it("preserves the visible node at action phase when no handlers are passed (no spurious re-fade)", () => {
+  it("keeps the copy node at the action phase when the words do not change", () => {
     const { container } = render(<SkeletonHint />);
     advance(13_000);
-    const before = container.querySelector(".animate-hint-fade-in");
+    const before = copyNode(container);
     expect(before).toBeTruthy();
-    // Crossing the action threshold with no handlers must NOT remount the node:
-    // visible content is identical, key is stable, fade-in does not re-fire.
     advance(7_000);
-    const after = container.querySelector(".animate-hint-fade-in");
-    expect(after).toBe(before);
+    expect(copyNode(container)).toBe(before);
   });
 
-  it("re-keys at the action phase when Retry surfaces so the fade-in re-fires", () => {
-    const { container } = render(<SkeletonHint onRetry={() => {}} />);
-    advance(13_000);
-    const before = container.querySelector(".animate-hint-fade-in");
-    expect(before).toBeTruthy();
+  it("fades Retry in when it surfaces at the action phase", () => {
+    render(<SkeletonHint onRetry={() => {}} />);
+    advance(20_000);
+    expect(screen.getByRole("button", { name: "Retry" }).className).toContain(
+      "animate-hint-fade-in"
+    );
+  });
+
+  it("never remounts Cancel as the copy escalates, so a focused Cancel keeps focus", () => {
+    render(<SkeletonHint onCancel={() => {}} onRetry={() => {}} />);
+    advance(8_000);
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    act(() => cancel.focus());
+    expect(document.activeElement).toBe(cancel);
+    // Both later rungs change what is on screen: the copy escalates, then Retry surfaces.
+    advance(5_000);
     advance(7_000);
-    const after = container.querySelector(".animate-hint-fade-in");
-    expect(after).toBeTruthy();
-    // Retry appearing is a meaningful visual change — re-fade is desired.
-    expect(after).not.toBe(before);
+    expect(screen.getByRole("button", { name: "Cancel" })).toBe(cancel);
+    expect(document.activeElement).toBe(cancel);
+  });
+
+  it("keeps a focused Cancel mounted and focused when Retry surfaces beside it", () => {
+    render(<SkeletonHint onCancel={() => {}} onRetry={() => {}} />);
+    advance(13_000);
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    act(() => cancel.focus());
+    advance(7_000);
+    // A keyboard user who tabbed to Cancel must not be dropped on <body> when
+    // the row gains a button: the same node survives and keeps focus.
+    expect(screen.getByRole("button", { name: "Cancel" })).toBe(cancel);
+    expect(document.activeElement).toBe(cancel);
+    const retry = screen.getByRole("button", { name: "Retry" });
+    // Retry is the new content, so it is the thing that fades in.
+    expect(retry.classList.contains("animate-hint-fade-in")).toBe(true);
   });
 
   it("does not use transition-all", () => {
@@ -579,7 +616,7 @@ describe("SkeletonHint", () => {
   it("renders the copy in the visible (aria-hidden) row, not only the live region", () => {
     const { container } = render(<SkeletonHint message="Fetching 3 of 12 files…" />);
     advance(8_000);
-    const visible = container.querySelector('.animate-hint-fade-in > span[aria-hidden="true"]');
+    const visible = container.querySelector('span.animate-hint-fade-in[aria-hidden="true"]');
     expect(visible?.textContent).toBe("Fetching 3 of 12 files…");
   });
 
@@ -674,5 +711,83 @@ describe("animate-skeleton-shimmer CSS contract", () => {
     expect(css).toMatch(
       /body\[data-performance-mode="true"\]\s+\.pulse-skeleton-shimmer::after[^{]*\{[^}]*display:\s*none/
     );
+  });
+});
+
+describe("skeleton bone motion CSS contract", () => {
+  const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+
+  /** The body of the first `@keyframes name { … }` block. */
+  function keyframes(name: string): string {
+    const start = css.search(new RegExp(`@keyframes\\s+${name}\\s*\\{`));
+    expect(start).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let i = css.indexOf("{", start); i < css.length; i++) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}" && --depth === 0) return css.slice(start, i + 1);
+    }
+    throw new Error(`unterminated @keyframes ${name}`);
+  }
+
+  /** The declarations of the first top-level `selector { … }` rule. */
+  function rule(selector: string, from = 0): string {
+    const at = css.indexOf(`${selector} {`, from);
+    expect(at).toBeGreaterThan(-1);
+    return css.slice(at, css.indexOf("}", at) + 1);
+  }
+
+  it("the looping pulse never takes a bone to zero opacity", () => {
+    // A looping animation restarts from its first keyframe every iteration. When
+    // the anti-flicker gate lived inside the loop (`0% { opacity: 0 }`), every
+    // bone blinked out once a cycle. Whatever the loop's shape, none of its
+    // stops may hide the bone.
+    for (const name of ["skeleton-pulse"]) {
+      const stops = [...keyframes(name).matchAll(/opacity:\s*([\d.]+)/g)].map((m) => Number(m[1]));
+      expect(stops.length).toBeGreaterThan(1);
+      expect(Math.min(...stops)).toBeGreaterThan(0);
+    }
+  });
+
+  it("every looping skeleton animation is one of the zero-free loops", () => {
+    for (const selector of [".animate-pulse-delayed", ".animate-pulse-immediate"]) {
+      const body = rule(selector);
+      const loops = body.includes("animation-name:")
+        ? (() => {
+            const names = body.match(/animation-name:\s*([^;]+);/)![1]!.split(",");
+            const counts = body.match(/animation-iteration-count:\s*([^;]+);/)![1]!.split(",");
+            return names.filter((_, i) => counts[i]?.trim() === "infinite").map((n) => n.trim());
+          })()
+        : [body.match(/animation:\s*([\w-]+)[^;]*infinite/)![1]!];
+      expect(loops, selector).toEqual(["skeleton-pulse"]);
+    }
+  });
+
+  it("reduced motion keeps the anti-flicker gate on delayed bones", () => {
+    // Reduced motion removes motion, not the gate: a static bone that appears
+    // for a 100ms load is the flash the gate exists to prevent.
+    const variant = css.indexOf("@variant reduce-motion");
+    expect(variant).toBeGreaterThan(-1);
+    const body = rule(".animate-pulse-delayed", variant);
+    expect(body).toMatch(/var\(--anti-flicker-delay\)/);
+    expect(body).toMatch(/backwards/);
+  });
+
+  it("forced colors gives every bone an outline, since the fill is stripped", () => {
+    const forced = css.indexOf("@media (forced-colors: active)");
+    expect(forced).toBeGreaterThan(-1);
+    const body = rule("[data-skeleton-bone]", forced);
+    expect(body).toMatch(/outline:\s*1px solid \w+/);
+  });
+
+  it("every rendered bone carries the attribute those modes key off", () => {
+    const { container } = render(
+      <Skeleton>
+        <SkeletonBone />
+        <SkeletonText lines={2} />
+      </Skeleton>
+    );
+    const painted = [...container.querySelectorAll("[class*='bg-tint']")];
+    expect(painted.length).toBe(3);
+    for (const el of painted) expect(el.hasAttribute("data-skeleton-bone")).toBe(true);
   });
 });

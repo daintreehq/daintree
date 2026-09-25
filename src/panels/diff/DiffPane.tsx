@@ -25,10 +25,18 @@ import type { DiffPanelData } from "@shared/types/panel";
 import { isAbsolute, join, resolveWorktreePathScope } from "@shared/utils/path";
 import { useShallow } from "zustand/react/shallow";
 import { FolderOpen } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
+import {
+  DropdownMenuCheckboxItem,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import { FileUnavailableState } from "@/components/FileViewer/FileUnavailableState";
+import { getFileTypeIcon } from "@/panels/file-browser/fileTypeIcons";
 import { DiffChangeStepper } from "@/components/FileViewer/DiffChangeStepper";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
@@ -92,12 +100,15 @@ type DiffPaneLayout = DiffViewType | "rendered";
 type DiffContentScope = "changes" | "full-file";
 
 /** Which external surface a toolbar action aims the current file at. */
-type ExternalTarget = "reveal" | "editor" | "file-browser";
+// `default-app` is the PDF error state's way out (#12598): the OS default
+// handler for the file's type, which is what `file.openInBrowser` opens.
+type ExternalTarget = "reveal" | "editor" | "file-browser" | "default-app";
 
 const EXTERNAL_ACTIONS = {
   reveal: "file.showItemInFolder",
   editor: "file.openInEditor",
   "file-browser": "worktree.openFileBrowser",
+  "default-app": "file.openInBrowser",
 } as const;
 
 const FULL_FILE_FALLBACK_MESSAGES: Record<FullFileUnavailableReason, string> = {
@@ -110,12 +121,14 @@ const FULL_FILE_FALLBACK_MESSAGES: Record<FullFileUnavailableReason, string> = {
 // the media element no detail beyond "this didn't play".
 const GENERIC_VIDEO_ERROR: MediaPreviewError = {
   title: "This video couldn't be played",
-  description: "The container is supported but the codec may not be — Refresh to try again.",
+  description:
+    "The container is supported but the codec may not be. Open it in your default app to play it.",
 };
 
 const GENERIC_AUDIO_ERROR: MediaPreviewError = {
   title: "This audio file couldn't be played",
-  description: "The format is supported but the codec may not be — Refresh to try again.",
+  description:
+    "The format is supported but the codec may not be. Open it in your default app to play it.",
 };
 
 // The S/M/L rungs are the shared type steps, so the preference keeps meaning the
@@ -357,14 +370,15 @@ export function DiffPane({
   // don't carry those bytes, so Refresh has to re-request the protocol URL itself.
   const [previewReloadNonce, setPreviewReloadNonce] = useState(0);
   // An allowlisted container can still hold a codec Chromium lacks, or the
-  // file may be unreadable — surface that instead of a dead native control.
-  // Holds the preview's specific reason (e.g. too large) when it gives one.
-  const [mediaPlaybackError, setMediaPlaybackError] = useState<MediaPreviewError | null>(null);
+  // file may be unreadable or too large — surface that instead of a dead native
+  // control or a blank PDF frame. Holds the preview's specific reason when it
+  // gives one.
+  const [previewError, setPreviewError] = useState<MediaPreviewError | null>(null);
   useEffect(() => {
-    // Any change to the playback attempt's identity — file, resolved root, or
+    // Any change to the preview attempt's identity — file, resolved root, or
     // an explicit refresh — gets a fresh attempt. absolutePath covers a
     // worktree move that filePath (relative) alone would miss.
-    setMediaPlaybackError(null);
+    setPreviewError(null);
   }, [filePath, absolutePath, worktreePath, previewReloadNonce]);
 
   const [pathCopied, setPathCopied] = useState(false);
@@ -717,6 +731,7 @@ export function DiffPane({
         ]}
         value={wantsFullFile && !fullFileNotice ? "full-file" : "changes"}
         onChange={(next) => setDiffFullFile(next === "full-file")}
+        density="compact"
       />
       {!fullFileAvailability.available && (
         <span id={scopeReasonId} className="sr-only">
@@ -842,6 +857,7 @@ export function DiffPane({
         ]}
         value={layout}
         onChange={handleLayoutChange}
+        density="compact"
       />
       {renderedDisabledReason && (
         <span id={layoutReasonId} className="sr-only">
@@ -868,14 +884,26 @@ export function DiffPane({
             retry: "Retry opening file browser",
             dismiss: "Dismiss file browser error",
           }
-        : {
-            title: "Couldn't open in editor",
-            retry: "Retry opening in editor",
-            dismiss: "Dismiss editor error",
-          };
+        : externalError?.target === "default-app"
+          ? {
+              title: "Couldn't open in default app",
+              retry: "Retry opening in default app",
+              dismiss: "Dismiss default app error",
+            }
+          : {
+              title: "Couldn't open in editor",
+              retry: "Retry opening in editor",
+              dismiss: "Dismiss editor error",
+            };
   const toolbar = filePath ? (
     <>
-      <FileViewerToolbar.Root label="Diff viewer controls">
+      <FileViewerToolbar.Root
+        label="Diff viewer controls"
+        // The diff row carries two mode toggles and a stepper, so its icon
+        // actions fold into "More actions" early — the file name is what the
+        // row must not lose, and the file browser's viewer folds by the same rule.
+        compactBelow={720}
+      >
         {!isImageMode &&
           !isMediaMode &&
           !isPdfMode &&
@@ -912,45 +940,97 @@ export function DiffPane({
               <TooltipContent side="bottom">{fullFileAvailability.reason}</TooltipContent>
             </Tooltip>
           ))}
-        <FileViewerToolbar.Path path={filePath} copied={pathCopied} onCopy={handleCopyPath} />
+        <FileViewerToolbar.Path
+          path={filePath}
+          icon={getFileTypeIcon(filePath).Icon}
+          copied={pathCopied}
+          onCopy={handleCopyPath}
+        />
         <FileViewerToolbar.Actions>
-          {/* Rendered prose already wraps; the control would toggle nothing. */}
-          {!isImageMode && !isMediaMode && !isPdfMode && !showRendered && (
-            <FileViewerToolbar.IconButton
-              label="Wrap long lines"
-              pressed={effectiveWrapLines}
-              onClick={() => setDiffWrapLines(!effectiveWrapLines)}
-            >
-              <WrapText className={TOOLBAR_ICON_CLASS} />
-            </FileViewerToolbar.IconButton>
-          )}
-          <FileViewerToolbar.IconButton label="Refresh" onClick={refreshAll}>
-            <RefreshCw className={TOOLBAR_ICON_CLASS} />
-          </FileViewerToolbar.IconButton>
-          {absolutePath && (
-            <>
-              {browserScope && fileStatus !== "deleted" && !isGitlink && (
-                <FileViewerToolbar.IconButton
-                  label="Open in file browser"
-                  onClick={() => void handleExternalAction("file-browser")}
-                >
-                  <FolderTree className={TOOLBAR_ICON_CLASS} />
+          <FileViewerToolbar.Responsive
+            narrow={
+              <FileViewerToolbar.MoreActions data-testid="diff-pane-more-actions">
+                {!isImageMode && !isMediaMode && !isPdfMode && !showRendered && (
+                  <>
+                    <DropdownMenuCheckboxItem
+                      checked={effectiveWrapLines}
+                      onCheckedChange={(checked) => setDiffWrapLines(checked)}
+                    >
+                      Wrap long lines
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                <DropdownMenuItem onSelect={refreshAll}>
+                  <RefreshCw className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                  Refresh
+                </DropdownMenuItem>
+                {absolutePath && browserScope && fileStatus !== "deleted" && !isGitlink && (
+                  <DropdownMenuItem onSelect={() => void handleExternalAction("file-browser")}>
+                    <FolderTree className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                    Open in file browser
+                  </DropdownMenuItem>
+                )}
+                {absolutePath && (
+                  <>
+                    <DropdownMenuItem onSelect={() => void handleExternalAction("reveal")}>
+                      <FolderOpen className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                      {reveal.label}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => void handleExternalAction("editor")}>
+                      <ExternalLink
+                        className="mr-2 h-3.5 w-3.5"
+                        aria-hidden="true"
+                        data-menu-icon
+                      />
+                      Open in editor
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </FileViewerToolbar.MoreActions>
+            }
+            wide={
+              <>
+                {/* Rendered prose already wraps; the control would toggle nothing. */}
+                {!isImageMode && !isMediaMode && !isPdfMode && !showRendered && (
+                  <FileViewerToolbar.IconButton
+                    label="Wrap long lines"
+                    pressed={effectiveWrapLines}
+                    onClick={() => setDiffWrapLines(!effectiveWrapLines)}
+                  >
+                    <WrapText className={TOOLBAR_ICON_CLASS} />
+                  </FileViewerToolbar.IconButton>
+                )}
+                <FileViewerToolbar.IconButton label="Refresh" onClick={refreshAll}>
+                  <RefreshCw className={TOOLBAR_ICON_CLASS} />
                 </FileViewerToolbar.IconButton>
-              )}
-              <FileViewerToolbar.IconButton
-                label={reveal.label}
-                onClick={() => void handleExternalAction("reveal")}
-              >
-                <FolderOpen className={TOOLBAR_ICON_CLASS} />
-              </FileViewerToolbar.IconButton>
-              <FileViewerToolbar.IconButton
-                label="Open in editor"
-                onClick={() => void handleExternalAction("editor")}
-              >
-                <ExternalLink className={TOOLBAR_ICON_CLASS} />
-              </FileViewerToolbar.IconButton>
-            </>
-          )}
+                {absolutePath && (
+                  <>
+                    {browserScope && fileStatus !== "deleted" && !isGitlink && (
+                      <FileViewerToolbar.IconButton
+                        label="Open in file browser"
+                        onClick={() => void handleExternalAction("file-browser")}
+                      >
+                        <FolderTree className={TOOLBAR_ICON_CLASS} />
+                      </FileViewerToolbar.IconButton>
+                    )}
+                    <FileViewerToolbar.IconButton
+                      label={reveal.label}
+                      onClick={() => void handleExternalAction("reveal")}
+                    >
+                      <FolderOpen className={TOOLBAR_ICON_CLASS} />
+                    </FileViewerToolbar.IconButton>
+                    <FileViewerToolbar.IconButton
+                      label="Open in editor"
+                      onClick={() => void handleExternalAction("editor")}
+                    >
+                      <ExternalLink className={TOOLBAR_ICON_CLASS} />
+                    </FileViewerToolbar.IconButton>
+                  </>
+                )}
+              </>
+            }
+          />
         </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
       {/* A failed action carries a recovery the user just asked for, so it
@@ -1124,22 +1204,33 @@ export function DiffPane({
                     }
                   />
                 </div>
-              ) : mediaPlaybackError !== null ? (
-                <div className="flex h-full w-full items-center justify-center p-6">
-                  <EmptyState
-                    variant="zero-data"
-                    scale="canvas"
-                    title={mediaPlaybackError.title}
-                    description={mediaPlaybackError.description}
-                  />
-                </div>
+              ) : previewError !== null ? (
+                // Same body as the file browser and file panel: the cause, the
+                // next step, and the one way out that fits — here the OS app,
+                // which plays codecs Chromium can't.
+                <FileUnavailableState
+                  icon={getFileTypeIcon(filePath).Icon}
+                  title={previewError.title}
+                  description={previewError.description}
+                  data-testid="diff-pane-unavailable"
+                  action={
+                    <Button
+                      variant="subtle"
+                      size="sm"
+                      onClick={() => void handleExternalAction("default-app")}
+                    >
+                      <ExternalLink />
+                      Open in default app
+                    </Button>
+                  }
+                />
               ) : isAudioMode ? (
                 <FileAudioPreview
                   filePath={absolutePath}
                   rootPath={worktreePath}
                   label={fileName ?? filePath}
                   reloadKey={previewReloadNonce}
-                  onError={(error) => setMediaPlaybackError(error ?? GENERIC_AUDIO_ERROR)}
+                  onError={(error) => setPreviewError(error ?? GENERIC_AUDIO_ERROR)}
                 />
               ) : (
                 <FileVideoPreview
@@ -1147,7 +1238,7 @@ export function DiffPane({
                   rootPath={worktreePath}
                   label={fileName ?? filePath}
                   reloadKey={previewReloadNonce}
-                  onError={(error) => setMediaPlaybackError(error ?? GENERIC_VIDEO_ERROR)}
+                  onError={(error) => setPreviewError(error ?? GENERIC_VIDEO_ERROR)}
                   maxHeightClassName="max-h-full"
                 />
               ))}
@@ -1164,12 +1255,30 @@ export function DiffPane({
                     description="This PDF was deleted, and the diff view can only show the current file."
                   />
                 </div>
+              ) : previewError !== null ? (
+                <FileUnavailableState
+                  icon={getFileTypeIcon(filePath).Icon}
+                  title={previewError.title}
+                  description={previewError.description}
+                  data-testid="diff-pane-unavailable"
+                  action={
+                    <Button
+                      variant="subtle"
+                      size="sm"
+                      onClick={() => void handleExternalAction("default-app")}
+                    >
+                      <ExternalLink />
+                      Open in default app
+                    </Button>
+                  }
+                />
               ) : (
                 <FilePdfPreview
                   filePath={absolutePath}
                   rootPath={worktreePath}
                   label={fileName ?? filePath}
                   reloadKey={previewReloadNonce}
+                  onError={setPreviewError}
                 />
               ))}
 
@@ -1244,10 +1353,12 @@ export function DiffPane({
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => navigateFile(-1)}
-                      disabled={!hasPrevFile}
+                      onClick={() => {
+                        if (hasPrevFile) navigateFile(-1);
+                      }}
+                      aria-disabled={!hasPrevFile || undefined}
                       aria-label="Previous file"
-                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default aria-disabled:opacity-40 aria-disabled:pointer-events-none"
                     >
                       <ChevronLeft className={TOOLBAR_ICON_CLASS} />
                     </button>
@@ -1264,10 +1375,12 @@ export function DiffPane({
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => navigateFile(1)}
-                      disabled={!hasNextFile}
+                      onClick={() => {
+                        if (hasNextFile) navigateFile(1);
+                      }}
+                      aria-disabled={!hasNextFile || undefined}
                       aria-label="Next file"
-                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default aria-disabled:opacity-40 aria-disabled:pointer-events-none"
                     >
                       <ChevronRight className={TOOLBAR_ICON_CLASS} />
                     </button>

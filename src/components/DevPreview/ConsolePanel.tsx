@@ -10,11 +10,14 @@ import {
   ZERO_COUNTS,
 } from "@/store/consoleCaptureStore";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { SearchField } from "@/components/ui/SearchField";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { sanitizeForClipboard } from "@/lib/clipboardSanitize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { ObjectInspector } from "./ObjectInspector";
-import { StackTrace } from "./StackTrace";
+import { DisclosureChevron } from "./DisclosureChevron";
+import { StackLocation, StackTrace } from "./StackTrace";
+import { stripV8StackTail } from "./stackFrames";
 
 interface ConsolePanelProps {
   paneId: string;
@@ -59,7 +62,7 @@ const FILTER_BUTTONS: { filter: LevelFilter; label: string }[] = [
 // (e.g. exception text with embedded frames) are split first so their line
 // structure survives sanitization, matching the whitespace-pre-wrap display.
 export function serializeConsoleMessage(msg: ConsoleMessage): string {
-  const [firstLine = "", ...restLines] = msg.summaryText.split("\n");
+  const [firstLine = "", ...restLines] = displaySummary(msg).split("\n");
   const lines = [
     sanitizeForClipboard(`[${msg.timeLabel}] [${LEVEL_STYLES[msg.level].label}] ${firstLine}`),
     ...restLines.map((line) => sanitizeForClipboard(line)),
@@ -78,6 +81,32 @@ export function serializeConsoleMessages(messages: ConsoleMessage[]): string {
   return messages.map(serializeConsoleMessage).join("\n");
 }
 
+function hasFrames(msg: ConsoleMessage): boolean {
+  return (msg.stackTrace?.callFrames.length ?? 0) > 0;
+}
+
+// An exception's text already ends in V8's rendering of the stack; when the
+// structured frames came with it, they are the one copy that gets shown.
+function displaySummary(msg: ConsoleMessage): string {
+  return hasFrames(msg) ? stripV8StackTail(msg.summaryText) : msg.summaryText;
+}
+
+// DevTools' convention: every message names its source, but only the ones
+// someone is likely to trace back offer the full stack. V8 attaches a stack
+// to every console.log too, and a disclosure on each would double the list.
+function offersStackTrace(msg: ConsoleMessage): boolean {
+  return (
+    hasFrames(msg) && (msg.level === "error" || msg.level === "warning" || msg.cdpType === "trace")
+  );
+}
+
+interface StackView {
+  expanded: boolean;
+  openRuns: readonly number[];
+}
+
+const NO_OPEN_RUNS: readonly number[] = [];
+
 const COPY_REVEAL_CLASS =
   "shrink-0 invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/row:visible group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:visible group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto motion-reduce:transition-none";
 
@@ -86,15 +115,38 @@ const ConsoleRow = memo(function ConsoleRow({
   webContentsId,
   isGroupCollapsed,
   onToggleGroup,
+  stackView,
+  onStackViewChange,
 }: {
   msg: ConsoleMessage;
   webContentsId?: number;
   isGroupCollapsed?: boolean;
   onToggleGroup?: (msgId: number) => void;
+  stackView?: StackView;
+  onStackViewChange?: (msgId: number, view: StackView) => void;
 }) {
   const style = LEVEL_STYLES[msg.level];
   const indentPx = msg.groupDepth * 12;
   const handleToggle = useCallback(() => onToggleGroup?.(msg.id), [onToggleGroup, msg.id]);
+  const summary = displaySummary(msg);
+  // An uncaught exception used to print its stack in the message text; it
+  // opens with the frames showing so stripping that text hides nothing.
+  const stackExpanded = stackView?.expanded ?? summary !== msg.summaryText;
+  const openRuns = stackView?.openRuns ?? NO_OPEN_RUNS;
+  const handleStackToggle = useCallback(
+    () => onStackViewChange?.(msg.id, { expanded: !stackExpanded, openRuns }),
+    [onStackViewChange, msg.id, stackExpanded, openRuns]
+  );
+  const handleRunToggle = useCallback(
+    (start: number) =>
+      onStackViewChange?.(msg.id, {
+        expanded: stackExpanded,
+        openRuns: openRuns.includes(start)
+          ? openRuns.filter((s) => s !== start)
+          : [...openRuns, start],
+      }),
+    [onStackViewChange, msg.id, stackExpanded, openRuns]
+  );
   const { copied, copy } = useCopyWithFeedback();
   const handleCopy = useCallback(() => {
     void copy(serializeConsoleMessage(msg));
@@ -111,9 +163,7 @@ const ConsoleRow = memo(function ConsoleRow({
       )}
       style={indentPx > 0 ? { paddingLeft: `${8 + indentPx}px` } : undefined}
     >
-      <span className="shrink-0 text-text-placeholder select-none tabular-nums">
-        {msg.timeLabel}
-      </span>
+      <span className="shrink-0 text-text-secondary select-none tabular-nums">{msg.timeLabel}</span>
       <span
         className={cn(
           "shrink-0 text-4xs font-bold tracking-wide px-1 py-0.5 rounded select-none",
@@ -123,36 +173,49 @@ const ConsoleRow = memo(function ConsoleRow({
         {style.label}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="break-all whitespace-pre-wrap select-text">
-          {msg.isGroupHeader && onToggleGroup && (
-            <button
-              type="button"
-              onClick={handleToggle}
-              aria-expanded={!isGroupCollapsed}
-              aria-label="Toggle console group"
-              className="text-text-secondary mr-1 select-none hover:text-text-primary"
-            >
-              <span aria-hidden="true">{isGroupCollapsed ? "▶" : "▼"}</span>
-            </button>
-          )}
-          {msg.args.length > 0 ? (
-            msg.args.map((arg, i) => (
-              <span key={i}>
-                {i > 0 && <span className="mx-1" />}
-                <ObjectInspector
-                  arg={arg}
-                  webContentsId={webContentsId}
-                  paneId={msg.paneId}
-                  rowId={msg.id}
-                  isStale={msg.isStale}
-                />
-              </span>
-            ))
-          ) : (
-            <span className="text-text-secondary">{msg.summaryText}</span>
-          )}
+        {/* The source sits at the line's end when there is room and drops
+            beneath the message in a narrow pane rather than squeezing it. */}
+        <div className="flex flex-wrap items-baseline gap-x-3">
+          <div className="min-w-0 flex-auto wrap-break-word whitespace-pre-wrap select-text">
+            {msg.isGroupHeader && onToggleGroup && (
+              <button
+                type="button"
+                onClick={handleToggle}
+                aria-expanded={!isGroupCollapsed}
+                aria-label="Toggle console group"
+                className="inline-flex align-middle rounded-[var(--radius-sm)] mr-1 text-text-secondary select-none hover:text-text-primary transition-colors duration-150 ease-out"
+              >
+                <DisclosureChevron expanded={!isGroupCollapsed} />
+              </button>
+            )}
+            {msg.args.length > 0 ? (
+              msg.args.map((arg, i) => (
+                <span key={i}>
+                  {i > 0 && <span className="mx-1" />}
+                  <ObjectInspector
+                    arg={arg}
+                    webContentsId={webContentsId}
+                    paneId={msg.paneId}
+                    rowId={msg.id}
+                    isStale={msg.isStale}
+                  />
+                </span>
+              ))
+            ) : (
+              <span className="text-text-secondary">{summary}</span>
+            )}
+          </div>
+          {msg.stackTrace && <StackLocation stackTrace={msg.stackTrace} />}
         </div>
-        {msg.stackTrace && <StackTrace stackTrace={msg.stackTrace} />}
+        {offersStackTrace(msg) && (
+          <StackTrace
+            stackTrace={msg.stackTrace!}
+            expanded={stackExpanded}
+            openRuns={openRuns}
+            onToggle={handleStackToggle}
+            onToggleRun={handleRunToggle}
+          />
+        )}
       </div>
       <div className={COPY_REVEAL_CLASS}>
         <Tooltip>
@@ -160,7 +223,7 @@ const ConsoleRow = memo(function ConsoleRow({
             <button
               type="button"
               onClick={handleCopy}
-              className="p-0.5 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-text-primary transition-colors"
+              className="p-0.5 rounded hover:bg-overlay-medium text-text-secondary hover:text-text-primary transition-colors"
               aria-label="Copy console message"
             >
               {copied ? (
@@ -182,6 +245,9 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
   const [search, setSearch] = useState("");
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<number>>(new Set());
+  // Held here rather than in each row: the list is virtualized, so a row
+  // scrolled out of view unmounts and would forget what was opened.
+  const [stackViews, setStackViews] = useState<Map<number, StackView>>(() => new Map());
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const lastSeenTailIdRef = useRef<number | null>(null);
 
@@ -249,6 +315,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
   useEffect(() => {
     lastSeenTailIdRef.current = null;
     setCollapsedGroups(new Set());
+    setStackViews(new Map());
   }, [paneId]);
 
   // Auto-collapse startGroupCollapsed entries — scan only newly-arrived messages.
@@ -259,6 +326,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
       lastSeenTailIdRef.current = null;
       // Drop any stale collapsed-group ids from the prior session
       setCollapsedGroups((prev) => (prev.size === 0 ? prev : new Set()));
+      setStackViews((prev) => (prev.size === 0 ? prev : new Map()));
       return;
     }
 
@@ -315,6 +383,10 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
     void copyAll(serializeConsoleMessages(filtered));
   }, [copyAll, filtered]);
 
+  const changeStackView = useCallback((msgId: number, view: StackView) => {
+    setStackViews((prev) => new Map(prev).set(msgId, view));
+  }, []);
+
   const toggleGroup = useCallback((msgId: number) => {
     setCollapsedGroups((prev) => {
       const next = new Set(prev);
@@ -365,13 +437,17 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
         </div>
 
         {/* Search */}
-        <input
-          type="text"
+        <SearchField
+          size="compact"
+          // 22px matches the toolbar's icon buttons; the compact 28px would
+          // make the filter the tallest thing in this strip.
+          fieldClassName="h-5.5 flex-1 max-w-[160px] gap-1 px-1.5 text-2xs [&_.search-field-icon]:size-3"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          onClear={() => setSearch("")}
+          clearLabel="Clear filter"
           placeholder="Filter…"
           aria-label="Filter console messages"
-          className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-2xs rounded bg-surface-canvas border border-overlay focus:outline-hidden focus:border-border-strong text-text-primary placeholder:text-text-placeholder"
         />
 
         <div className="flex-1" />
@@ -383,7 +459,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
               <button
                 type="button"
                 onClick={handleScrollToBottom}
-                className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-text-primary transition-colors"
+                className="p-1 rounded hover:bg-overlay-medium text-text-secondary hover:text-text-primary transition-colors"
                 aria-label="Scroll to bottom"
               >
                 <ChevronDown className="w-3.5 h-3.5" />
@@ -400,7 +476,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
               type="button"
               onClick={handleCopyVisible}
               disabled={filtered.length === 0}
-              className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-text-primary transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-daintree-text/50"
+              className="p-1 rounded hover:bg-overlay-medium text-text-secondary hover:text-text-primary transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-text-secondary"
               aria-label="Copy visible console messages"
             >
               {allCopied ? (
@@ -419,7 +495,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
             <button
               type="button"
               onClick={handleClear}
-              className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-text-primary transition-colors"
+              className="p-1 rounded hover:bg-overlay-medium text-text-secondary hover:text-text-primary transition-colors"
               aria-label="Clear console"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -449,6 +525,8 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
               webContentsId={webContentsId}
               isGroupCollapsed={collapsedGroups.has(msg.id)}
               onToggleGroup={msg.isGroupHeader ? toggleGroup : undefined}
+              stackView={stackViews.get(msg.id)}
+              onStackViewChange={changeStackView}
             />
           )}
           className="flex-1 font-mono text-2xs leading-relaxed"

@@ -137,6 +137,15 @@ const {
   mockNotifyUserInput: vi.fn(),
 }));
 
+// Passthrough tooltips: the footer's Radix provider is incidental to these
+// suites, and its unmount timers collide with their stubbed globals.
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: unknown }) => children,
+  Tooltip: ({ children }: { children: unknown }) => children,
+  TooltipTrigger: ({ children }: { children: unknown }) => children,
+  TooltipContent: () => null,
+}));
+
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
 
 vi.mock("@/components/ui/button", () => ({
@@ -684,12 +693,12 @@ describe("HelpPanel — assistantMinVersion gate (issue #7539)", () => {
     const { findByTestId } = render(<HelpPanel width={380} />);
 
     const block = await findByTestId("help-version-too-old");
-    expect(block.textContent).toContain("Update Claude to use Daintree Assistant");
+    expect(block.textContent).toContain("Update Claude");
     expect(block.textContent).toContain("1.0.0");
     expect(block.textContent).toContain("0.2.74");
   });
 
-  it("update CTA dispatches app.settings.openTab to the assistant tab", async () => {
+  it("the settings action dispatches app.settings.openTab to the assistant tab", async () => {
     helpPanelState.preferredAgentId = "claude";
     mockGetFolderPath.mockResolvedValue("/help");
     mockGetAgentVersion.mockResolvedValue({
@@ -702,7 +711,7 @@ describe("HelpPanel — assistantMinVersion gate (issue #7539)", () => {
 
     const { findByRole } = render(<HelpPanel width={380} />);
 
-    const cta = await findByRole("button", { name: /update claude/i });
+    const cta = await findByRole("button", { name: /assistant settings/i });
     fireEvent.click(cta);
 
     expect(mockDispatch).toHaveBeenCalledWith(
@@ -1120,7 +1129,9 @@ describe("HelpPanel — HybridInputBar wiring (issue #8185)", () => {
     expect(document.activeElement).toBe(textarea);
 
     const escapeMock = vi.mocked(useEscapeStack);
-    const callback = escapeMock.mock.calls.at(-1)?.[1];
+    // The panel's own close is the enabled registration; the header's overflow
+    // menu registers too, disabled until it opens.
+    const callback = escapeMock.mock.calls.filter(([enabled]) => enabled).at(-1)?.[1];
     expect(callback).toBeTypeOf("function");
 
     act(() => {
@@ -1146,7 +1157,9 @@ describe("HelpPanel — HybridInputBar wiring (issue #8185)", () => {
     expect(document.activeElement).toBe(textarea);
 
     const escapeMock = vi.mocked(useEscapeStack);
-    const callback = escapeMock.mock.calls.at(-1)?.[1];
+    // The panel's own close is the enabled registration; the header's overflow
+    // menu registers too, disabled until it opens.
+    const callback = escapeMock.mock.calls.filter(([enabled]) => enabled).at(-1)?.[1];
     expect(callback).toBeTypeOf("function");
 
     act(() => {
@@ -1183,7 +1196,7 @@ describe("HelpPanel — launch loading state (issue #8771)", () => {
         await vi.advanceTimersByTimeAsync(450);
       });
 
-      // The label renders twice — once sr-only (Skeleton aria) and once visible.
+      // The label renders twice — once in the sr-only status node and once visible.
       expect(screen.getAllByText("Starting assistant…").length).toBeGreaterThan(0);
       // The static empty-state value prop must not show while launching.
       expect(screen.queryByText(/Use Daintree Assistant to configure/i)).toBeNull();
@@ -1204,7 +1217,7 @@ describe("HelpPanel — launch loading state (issue #8771)", () => {
     render(<HelpPanel width={380} />);
 
     expect(screen.queryByText("Starting assistant…")).toBeNull();
-    expect(screen.queryByText("Provisioning session…")).toBeNull();
+    expect(screen.queryByText("Preparing session…")).toBeNull();
     expect(screen.getByText(/Use Daintree Assistant to configure/i)).toBeTruthy();
   });
 });

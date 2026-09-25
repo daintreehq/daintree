@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useId, useMemo, useState, useRef } from "react";
-import { Filter, X, ChevronDown } from "lucide-react";
+import { Filter, ChevronDown } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { SearchField } from "@/components/ui/SearchField";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import type { ChipCounts } from "@/lib/worktreeFilters";
 import {
@@ -51,6 +54,7 @@ function FilterSection({
   const headerId = `filter-section-header-${reactId}`;
   const hasActive = activeCount > 0;
   const expandButtonRef = useRef<HTMLButtonElement>(null);
+  const { ref: summaryRef, isTruncated: isSummaryTruncated } = useTruncationDetection();
 
   // `defaultOpen` is only an initial value, so a section that gains its first
   // filter from outside the popover (the quick-state bar, a restored session)
@@ -62,71 +66,85 @@ function FilterSection({
     hadActive.current = hasActive;
   }, [hasActive]);
 
+  const showClear = onClear !== undefined && hasActive;
+
   return (
     <div className="flex flex-col border-b border-border-default last:border-b-0">
-      <div className="flex items-center">
-        <button
-          ref={expandButtonRef}
-          id={headerId}
-          type="button"
-          onClick={() => setIsOpen(!isOpen)}
-          aria-expanded={isOpen}
-          aria-controls={contentId}
-          className="flex min-w-0 flex-1 items-center justify-between gap-2 px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary"
+      {/* The toggle spans the whole row, edge to edge, so its hover fill and
+          focus ring match the dividers and there is no dead strip to miss.
+          Clear can't nest inside it, so it floats over the toggle in a slot
+          the toggle reserves just left of the chevron — the chevron column
+          stays put whether or not a section has anything to clear. The row
+          owns the hover so pointing at Clear doesn't drop the fill. */}
+      <div className="group/filter-header relative">
+        {/* A collapsed facet's summary is the answer to "what is filtering my
+            list", so when several values clip it, the toggle carries the full
+            list on hover and focus rather than making the user reopen it. */}
+        <TruncatedTooltip
+          content={summary}
+          side="right"
+          isTruncated={!isOpen && isSummaryTruncated}
         >
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span className="shrink-0">{title}</span>
-            {hasActive && (
-              <span className="rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none tabular-nums text-text-secondary">
-                {activeCount}
+          <button
+            ref={expandButtonRef}
+            id={headerId}
+            type="button"
+            onClick={() => setIsOpen(!isOpen)}
+            aria-expanded={isOpen}
+            aria-controls={contentId}
+            className="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left text-xs font-medium text-text-secondary transition-colors group-hover/filter-header:bg-overlay-soft group-hover/filter-header:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+          >
+            <span className="flex min-w-0 flex-1 items-center gap-1.5">
+              <span className="shrink-0">{title}</span>
+              {hasActive && (
+                <span className="rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none tabular-nums text-text-secondary">
+                  {activeCount}
+                </span>
+              )}
+              {!isOpen && summary && (
+                <span
+                  ref={summaryRef}
+                  className="min-w-0 truncate text-2xs font-normal text-text-secondary"
+                >
+                  {summary}
+                </span>
+              )}
+            </span>
+            {showClear && (
+              <span aria-hidden="true" className="invisible shrink-0 px-1 text-2xs">
+                Clear
               </span>
             )}
-            {!isOpen && summary && (
-              <span className="min-w-0 truncate text-2xs font-normal text-text-secondary">
-                {summary}
-              </span>
-            )}
-          </span>
-          <ChevronDown
-            data-animated-chevron
-            className={cn(
-              "w-3.5 h-3.5 shrink-0 transition-transform",
-              isOpen ? "transform rotate-180" : ""
-            )}
-          />
-        </button>
-        {/* The slot is always the same width, whether or not there is anything
-            in it: Clear is a sibling of the flex-1 header button, so rendering
-            it only on active sections pushed their chevrons out of line with
-            every other section's. `inert` keeps the placeholder — and a hidden
-            Clear — out of the tab order. */}
-        <span
-          className={cn("shrink-0 px-2 py-1.5 text-2xs", !(onClear && hasActive) && "invisible")}
-          inert={!(onClear && hasActive)}
-          aria-hidden={!(onClear && hasActive)}
-        >
-          {onClear && hasActive ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                // The Clear button hides itself once activeCount hits 0, so move
-                // focus to the adjacent expand toggle first to keep it off body.
-                expandButtonRef.current?.focus();
-                onClear();
-              }}
-              aria-label={`Clear ${title} filters`}
-              // Underlined rather than a bare colour step: at rest this sat at
-              // the same tone as the heading beside it, so nothing marked it as
-              // a control rather than a second label.
-              className="text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current"
-            >
-              Clear
-            </button>
-          ) : (
-            "Clear"
-          )}
-        </span>
+            <ChevronDown
+              data-animated-chevron
+              className={cn(
+                "w-3.5 h-3.5 shrink-0 transition-transform",
+                isOpen ? "transform rotate-180" : ""
+              )}
+            />
+          </button>
+        </TruncatedTooltip>
+        {showClear && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              // The Clear button hides itself once activeCount hits 0, so move
+              // focus to the adjacent expand toggle first to keep it off body.
+              expandButtonRef.current?.focus();
+              onClear();
+            }}
+            aria-label={`Clear ${title} filters`}
+            // Offset = the toggle's px-3 + the chevron's 3.5 + its gap-2, so
+            // this lands exactly on the slot the toggle reserved for it.
+            // Underlined rather than a bare colour step: at rest this sat at
+            // the same tone as the heading beside it, so nothing marked it as
+            // a control rather than a second label.
+            className="absolute inset-y-0 right-8.5 my-auto flex h-6 items-center rounded-[var(--radius-sm)] px-1 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+          >
+            Clear
+          </button>
+        )}
       </div>
       {/* Animated reveal so the body honors what the rotating chevron
        * promises — same grid-rows idiom as LocalCommitsDropdown. Content
@@ -141,7 +159,10 @@ function FilterSection({
         )}
       >
         <div className="overflow-hidden">
-          <div id={contentId} className="px-3 pb-2.5 pt-0.5">
+          {/* pt-2 keeps the first row clear of the header's hover fill; it
+              sits inside the clipped reveal, so a closed section gains
+              nothing. */}
+          <div id={contentId} className="px-3 pb-2.5 pt-2">
             {plainBody ? (
               children
             ) : (
@@ -184,7 +205,7 @@ interface FilterChipProps {
  * Zero-count chips stay clickable rather than `disabled`. Their `(0)` is what
  * answers "will this do anything", and disabling would take them out of the tab
  * order — so a keyboard user would silently skip values that reappear the moment
- * another facet changes. Matches `LogFilters`, which fades rather than disables.
+ * another facet changes. Matches `LogFilters`, which keeps zero-count rows enabled.
  */
 function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
   const isUnavailable = count === 0 && !isActive;
@@ -196,10 +217,11 @@ function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
       data-filter-chip="true"
       className={cn(
         "inline-flex items-center rounded-full border px-2 py-0.5 text-2xs transition-colors",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary",
         isActive
           ? "border-text-secondary bg-filter-selected-bg-strong font-medium text-text-primary"
           : isUnavailable
-            ? "border-border-default bg-transparent text-text-secondary opacity-60 hover:opacity-100"
+            ? "border-border-default bg-transparent text-text-secondary hover:text-text-primary"
             : "border-text-secondary bg-overlay-soft text-text-secondary hover:bg-overlay-medium hover:text-text-primary"
       )}
     >
@@ -302,7 +324,7 @@ function ChipGrid<T extends string>({
           type="button"
           onClick={() => setShowAll((v) => !v)}
           aria-expanded={showAll}
-          className="inline-flex items-center self-center py-0.5 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current"
+          className="inline-flex items-center self-center rounded-[var(--radius-sm)] py-0.5 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
         >
           {showAll
             ? "Show fewer"
@@ -313,6 +335,22 @@ function ChipGrid<T extends string>({
       )}
     </>
   );
+}
+
+/**
+ * What a collapsed facet is filtering by. The count badge alone said "one
+ * filter here" without saying which, so answering it meant reopening the
+ * section. Option order, not selection order, so it reads like the chips.
+ */
+function selectedSummary<T extends string>(
+  options: readonly ChipOption<T>[],
+  selected: ReadonlySet<T>
+): string | undefined {
+  if (selected.size === 0) return undefined;
+  return options
+    .filter((option) => selected.has(option.value))
+    .map((option) => option.label)
+    .join(", ");
 }
 
 /** Both orientations, because the group reads as a vertical list of choices. */
@@ -571,37 +609,20 @@ export function WorktreeFilterPopover({
         {/* Search */}
         {!hideSearchInput && (
           <div className="shrink-0 border-b border-border-default p-3">
-            <div className="relative">
-              <input
-                type="text"
-                value={localQuery}
-                onChange={(e) => handleQueryChange(e.target.value)}
-                placeholder="Search worktrees..."
-                aria-label="Search worktrees"
-                className={cn(
-                  "w-full rounded-[var(--radius-md)] px-2.5 py-1.5 text-xs",
-                  "border border-border-default bg-surface-canvas",
-                  "text-text-primary placeholder:text-text-secondary",
-                  "focus:outline-hidden focus:border-border-strong"
-                )}
-              />
-              {localQuery && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (debounceRef.current) {
-                      clearTimeout(debounceRef.current);
-                    }
-                    setLocalQuery("");
-                    setQuery("");
-                  }}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text-primary"
-                  aria-label="Clear search"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
-            </div>
+            <SearchField
+              size="compact"
+              value={localQuery}
+              onChange={(e) => handleQueryChange(e.target.value)}
+              onClear={() => {
+                if (debounceRef.current) {
+                  clearTimeout(debounceRef.current);
+                }
+                setLocalQuery("");
+                setQuery("");
+              }}
+              placeholder="Search worktrees..."
+              aria-label="Search worktrees"
+            />
           </div>
         )}
 
@@ -613,7 +634,10 @@ export function WorktreeFilterPopover({
               own question without spending a quarter of the panel on four
               radios the user set once. */}
           <FilterSection title="Sort by" summary={sortSummary} plainBody>
-            <div role="radiogroup" aria-label="Sort worktrees by" className="flex flex-col">
+            {/* -mx-2 cancels the rows' own px-2, so the radio circles share a
+                column with the checkbox and chips while the hover fill keeps
+                its breathing room. */}
+            <div role="radiogroup" aria-label="Sort worktrees by" className="-mx-2 flex flex-col">
               {sortOptions.map((option, index) => (
                 <button
                   key={option.value}
@@ -630,9 +654,11 @@ export function WorktreeFilterPopover({
                   className={cn(
                     "flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1 text-xs",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-                    orderBy === option.value
-                      ? "bg-overlay-raised text-text-primary"
-                      : "text-text-secondary hover:bg-overlay-medium"
+                    // The dot carries selection. A selected-row fill on top of
+                    // it read the same as the hover fill, so a pointer resting
+                    // on another option showed two identical rows.
+                    "hover:bg-overlay-soft",
+                    orderBy === option.value ? "text-text-primary" : "text-text-secondary"
                   )}
                 >
                   <span
@@ -640,7 +666,7 @@ export function WorktreeFilterPopover({
                       "flex h-3 w-3 shrink-0 items-center justify-center rounded-full border",
                       orderBy === option.value
                         ? "border-text-primary bg-text-primary"
-                        : "border-border-strong"
+                        : "border-text-secondary"
                     )}
                   >
                     {orderBy === option.value && (
@@ -669,6 +695,7 @@ export function WorktreeFilterPopover({
             defaultOpen
             activeCount={statusFilters.size}
             onClear={clearStatusFilters}
+            summary={selectedSummary(STATUS_OPTIONS, statusFilters)}
           >
             <ChipGrid
               options={STATUS_OPTIONS}
@@ -683,6 +710,7 @@ export function WorktreeFilterPopover({
             defaultOpen
             activeCount={typeFilters.size}
             onClear={clearTypeFilters}
+            summary={selectedSummary(TYPE_OPTIONS, typeFilters)}
           >
             <ChipGrid
               options={TYPE_OPTIONS}
@@ -698,6 +726,7 @@ export function WorktreeFilterPopover({
             defaultOpen={prIssueFilters.size > 0}
             activeCount={prIssueFilters.size}
             onClear={clearPrIssueFilters}
+            summary={selectedSummary(PR_ISSUE_OPTIONS, prIssueFilters)}
           >
             <ChipGrid
               options={PR_ISSUE_OPTIONS}
@@ -712,6 +741,7 @@ export function WorktreeFilterPopover({
             defaultOpen={sessionFilters.size > 0}
             activeCount={sessionFilters.size}
             onClear={clearSessionFilters}
+            summary={selectedSummary(SESSION_OPTIONS, sessionFilters)}
           >
             <ChipGrid
               options={SESSION_OPTIONS}
@@ -726,6 +756,7 @@ export function WorktreeFilterPopover({
             defaultOpen={activityFilters.size > 0}
             activeCount={activityFilters.size}
             onClear={clearActivityFilters}
+            summary={selectedSummary(ACTIVITY_OPTIONS, activityFilters)}
           >
             <ChipGrid
               options={ACTIVITY_OPTIONS}
@@ -740,6 +771,7 @@ export function WorktreeFilterPopover({
             defaultOpen={devServerFilters.size > 0}
             activeCount={devServerFilters.size}
             onClear={clearDevServerFilters}
+            summary={selectedSummary(DEV_SERVER_OPTIONS, devServerFilters)}
           >
             <ChipGrid
               options={DEV_SERVER_OPTIONS}

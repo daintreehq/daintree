@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { ProjectResourceBadge } from "@/components/Project";
 import { useKeepAwakeStore } from "@/store/keepAwakeStore";
 
@@ -19,8 +20,8 @@ import { useKeepAwakeStore } from "@/store/keepAwakeStore";
  * reads agent activity directly instead; the hold is passed only so the popover
  * can explain itself.
  */
-export function SidebarStatusBar() {
+export function SidebarStatusBar({ trailing }: { trailing?: ReactNode } = {}) {
   const holdingWakeLock = useKeepAwakeStore((state) => state.visible);
 
-  return <ProjectResourceBadge holdingWakeLock={holdingWakeLock} />;
+  return <ProjectResourceBadge holdingWakeLock={holdingWakeLock} trailing={trailing} />;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { FolderOpen, FolderX, GitBranch, Settings } from "lucide-react";
+import { FolderOpen, FolderX, GitBranch, GitCommitHorizontal, Settings } from "lucide-react";
 import { DaintreeIcon } from "@/components/icons";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
@@ -13,11 +13,12 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { useRecipeStore } from "@/store/recipeStore";
-import { formatPath, middleTruncate } from "@/utils/textParsing";
+import { formatPath, middleTruncate, shortSha } from "@/utils/textParsing";
 import { RotatingTip } from "./contentGridTips";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
 import { ResumeSessionLine } from "./ResumeSessionLine";
 import { LauncherQuickActions } from "./LauncherQuickActions";
+import { TourInviteCard } from "@/components/Tour/TourInviteCard";
 
 const PATH_TRUNCATE_LENGTH = 52;
 
@@ -78,6 +79,8 @@ const SECTION_ENTRY_DELAY_4 =
   "motion-safe:[--tw-animation-delay:120ms] motion-safe:fill-mode-backwards";
 const SECTION_ENTRY_DELAY_5 =
   "motion-safe:[--tw-animation-delay:150ms] motion-safe:fill-mode-backwards";
+const SECTION_ENTRY_DELAY_6 =
+  "motion-safe:[--tw-animation-delay:180ms] motion-safe:fill-mode-backwards";
 
 // Both of the entry's suppressors are CSS-only — `motion-safe:` reads the OS
 // preference and the `launcher-section-enter` rule reads the in-app toggle — so
@@ -227,10 +230,11 @@ export function ContentGridEmptyState({
     });
   }, []);
 
-  const branchLabel =
-    activeWorktreeIsDetached && activeWorktreeHead
-      ? `detached at ${activeWorktreeHead.slice(0, 7)}`
-      : activeWorktreeBranch || null;
+  const isDetachedLabel = Boolean(activeWorktreeIsDetached && activeWorktreeHead);
+  const branchLabel = isDetachedLabel
+    ? `detached at ${shortSha(activeWorktreeHead)}`
+    : activeWorktreeBranch || null;
+  const BranchGlyph = isDetachedLabel ? GitCommitHorizontal : GitBranch;
   const pathLabel = activeWorktreePath
     ? middleTruncate(formatPath(activeWorktreePath, homeDir), PATH_TRUNCATE_LENGTH)
     : null;
@@ -263,7 +267,7 @@ export function ContentGridEmptyState({
   const identityMark = sanitizedIcon?.ok ? (
     <img src={svgToDataUrl(sanitizedIcon.svg)} alt="" className="h-14 w-14 object-contain" />
   ) : (
-    <DaintreeIcon className="h-14 w-14 text-daintree-text/65" aria-hidden="true" />
+    <DaintreeIcon className="h-14 w-14 text-text-secondary" aria-hidden="true" />
   );
 
   // The container no longer fades as one block — each launcher section below
@@ -316,9 +320,19 @@ export function ContentGridEmptyState({
               // launch entry up. Reserving the footprint costs a scratch some
               // empty air and buys the same launch position in every kind of
               // workspace, which is the whole point of anchoring it.
+              //
+              // 9.25rem, not the 8.5rem this first shipped with: the tallest
+              // form actually measures ~145px (mark 56 + mb-3 12 + name line 32
+              // + gap 6 + branch line 20 + gap 2 + path line 16), so 136px was
+              // eight short. A project OVERFLOWED the reserve while a scratch
+              // sat inside it, and the palette rendered 9px lower in a project
+              // than in a scratch — the exact drift the reserve exists to
+              // prevent, just moved from "which bands resolved" to "which kind
+              // of workspace". Every line here is `truncate`, so the tallest
+              // form is a fixed height and this can be an exact number.
               <div
                 className={cn(
-                  "mb-6 flex min-h-[8.5rem] flex-col items-center justify-end text-center",
+                  "mb-6 flex min-h-[9.25rem] flex-col items-center justify-end text-center",
                   SECTION_ENTRY
                 )}
               >
@@ -343,7 +357,7 @@ export function ContentGridEmptyState({
                         <button
                           type="button"
                           onClick={handleOpenProjectSettings}
-                          className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+                          className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-text-secondary opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
                           aria-label="Project settings"
                         >
                           <Settings className="h-3.5 w-3.5" />
@@ -354,7 +368,7 @@ export function ContentGridEmptyState({
                       <div className="flex flex-col items-center gap-0.5 text-text-secondary max-w-full min-w-0 font-mono">
                         {branchLabel && (
                           <div className="flex items-center gap-1.5 text-sm max-w-full min-w-0">
-                            <GitBranch className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                            <BranchGlyph className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                             <span className="truncate min-w-0">{branchLabel}</span>
                           </div>
                         )}
@@ -495,6 +509,20 @@ export function ContentGridEmptyState({
               >
                 <RotatingTip />
               </div>
+            )}
+
+            {/* Last in the column: the tour's invitation is teaching content, and
+                nothing below the launch anchor may move it. It renders its own
+                section only while the tour is on offer, so there's no gap. */}
+            {hasLaunchTarget && (
+              <TourInviteCard
+                className={cn(
+                  "mt-6 flex w-full justify-center",
+                  LAUNCHER_MEASURE,
+                  SECTION_ENTRY,
+                  SECTION_ENTRY_DELAY_6
+                )}
+              />
             )}
           </section>
           {/* All remaining slack goes below the column, so the anchor keeps its

@@ -51,6 +51,30 @@ describe("AuditService.appendRecord", () => {
     expect(record!.argsSummary).toBe('{"q":"<redacted>"}');
   });
 
+  // #12692: a dispatch the tier ran without asking must be distinguishable
+  // from one a person approved, and from one nothing pre-authorized.
+  it("records what pre-authorized a dispatch, and nothing when nothing did", () => {
+    const { service } = makeFixture();
+    const base = {
+      toolId: "worktree.delete",
+      sessionId: "sess-1",
+      tier: "system" as const,
+      args: {},
+      durationMs: 1,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    };
+    service.appendRecord({ ...base, authorization: "tier" });
+    service.appendRecord({ ...base, authorization: "user", confirmationDecision: "approved" });
+    service.appendRecord(base);
+
+    // Newest first.
+    const [plain, approved, auto] = service.getRecords();
+    expect(auto!.authorization).toBe("tier");
+    expect(approved).toMatchObject({ authorization: "user", confirmationDecision: "approved" });
+    expect(plain).not.toHaveProperty("authorization");
+  });
+
   it("populates tierHint on unauthorized records using the static allowlist", () => {
     const { service } = makeFixture();
     // `agent.terminal` is in the action tier; from a workbench session

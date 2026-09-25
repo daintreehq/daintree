@@ -96,7 +96,7 @@ describe("CrossWorktreeDiff dialog accessibility", () => {
     expect(dialog.getAttribute("aria-modal")).toBe("true");
   });
 
-  it("has aria-labelledby linking to the Compare Worktrees heading", async () => {
+  it("has aria-labelledby linking to the Compare worktrees heading", async () => {
     renderModal();
     await act(() => vi.runAllTimersAsync());
 
@@ -104,7 +104,7 @@ describe("CrossWorktreeDiff dialog accessibility", () => {
     const labelledById = dialog.getAttribute("aria-labelledby");
     expect(labelledById).toBeTruthy();
 
-    const heading = screen.getByText("Compare Worktrees");
+    const heading = screen.getByText("Compare worktrees");
     expect(heading.id).toBe(labelledById);
   });
 

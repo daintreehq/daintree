@@ -1,8 +1,13 @@
 import { useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { MetricTile, type MetricTone } from "./MetricTile";
+import { DiagnosticsNotice } from "./DiagnosticsNotice";
 import { useProjectStore } from "@/store/projectStore";
 import {
   startLivePerfCapture,
@@ -27,42 +32,8 @@ function formatRelative(timestamp: number | null): string {
   if (diff < 5_000) return "just now";
   if (diff < 60_000) return `${Math.round(diff / 1000)}s ago`;
   if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
-  return new Date(timestamp).toLocaleTimeString();
-}
-
-interface MetricTileProps {
-  label: string;
-  value: string;
-  unit?: string;
-  tone?: "default" | "warn" | "alert";
-}
-
-function MetricTile({ label, value, unit, tone = "default" }: MetricTileProps) {
-  return (
-    <div
-      className={cn(
-        "flex flex-col gap-1 px-3 py-2 rounded border border-daintree-border/40 bg-daintree-sidebar/30",
-        tone === "warn" && "border-status-warning/40 bg-status-warning/5",
-        tone === "alert" && "border-status-error/40 bg-status-error/5"
-      )}
-    >
-      <span className="text-3xs uppercase tracking-wide text-text-secondary font-medium">
-        {label}
-      </span>
-      <div className="flex items-baseline gap-1">
-        <span
-          className={cn(
-            "text-lg font-mono tabular-nums text-text-primary",
-            tone === "warn" && "text-status-warning",
-            tone === "alert" && "text-status-error"
-          )}
-        >
-          {value}
-        </span>
-        {unit ? <span className="text-xs text-text-secondary font-mono">{unit}</span> : null}
-      </div>
-    </div>
-  );
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
+  return `on ${new Date(timestamp).toLocaleDateString()}`;
 }
 
 function LiveMetricsBar() {
@@ -75,27 +46,43 @@ function LiveMetricsBar() {
     }))
   );
 
-  const fpsTone: MetricTileProps["tone"] =
+  const fpsTone: MetricTone =
     fps === null ? "default" : fps < 30 ? "alert" : fps < 50 ? "warn" : "default";
-  const lafTone: MetricTileProps["tone"] =
-    lafCount30s === 0 ? "default" : lafCount30s < 5 ? "warn" : "alert";
-  const clsTone: MetricTileProps["tone"] =
-    cls30s < 0.1 ? "default" : cls30s < 0.25 ? "warn" : "alert";
+  const lafTone: MetricTone = lafCount30s === 0 ? "default" : lafCount30s < 5 ? "warn" : "alert";
+  const clsTone: MetricTone = cls30s < 0.1 ? "default" : cls30s < 0.25 ? "warn" : "alert";
 
   return (
-    <div className="px-3 py-2 border-b border-daintree-border/40 bg-daintree-sidebar/20">
-      <div className="flex items-center justify-between mb-1.5">
-        <span className="text-3xs uppercase tracking-wide text-text-secondary font-medium">
-          Live renderer
-        </span>
-        {isBackgrounded ? <span className="text-3xs text-text-secondary">Backgrounded</span> : null}
+    <section aria-labelledby="perf-live" className="shrink-0 px-3 pb-2 pt-2.5">
+      <div className="mb-1.5 flex items-center justify-between">
+        <h3 id="perf-live" className="text-2xs font-medium text-text-secondary">
+          This window, last 30 seconds
+        </h3>
+        {isBackgrounded ? (
+          <span className="text-2xs text-text-secondary">Paused while the window is hidden</span>
+        ) : null}
       </div>
       <div className="grid grid-cols-3 gap-2">
-        <MetricTile label="FPS" value={formatNumber(fps)} unit="hz" tone={fpsTone} />
-        <MetricTile label="Long frames (30s)" value={String(lafCount30s)} tone={lafTone} />
-        <MetricTile label="Layout shift (30s)" value={cls30s.toFixed(3)} tone={clsTone} />
+        <MetricTile
+          label="Frame rate"
+          value={formatNumber(fps)}
+          unit="fps"
+          hint="50+ is smooth"
+          tone={fpsTone}
+        />
+        <MetricTile
+          label="Long frames"
+          value={String(lafCount30s)}
+          hint="over 50ms each"
+          tone={lafTone}
+        />
+        <MetricTile
+          label="Layout shift"
+          value={cls30s.toFixed(3)}
+          hint="under 0.1 is stable"
+          tone={clsTone}
+        />
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -109,60 +96,44 @@ const MODE_LABEL: Record<PerfMode, string> = {
 // No error tint on an outside-reference row. The perf suite reports numbers and
 // gates nothing, so a measurement past a reference value is information, not a
 // fault — styling it as an error is a claim the harness no longer makes.
-function BudgetRow({ row }: { row: PerfSummaryRow }) {
+function ResultRow({ row }: { row: PerfSummaryRow }) {
   return (
-    <tr className="border-b border-daintree-border/30">
-      <td className="px-3 py-1.5 text-xs font-mono text-text-primary truncate">{row.name}</td>
-      <td className="px-3 py-1.5 text-3xs text-text-secondary font-mono uppercase tracking-wide">
-        {MODE_LABEL[row.mode] ?? row.mode}
-      </td>
-      <td className="px-3 py-1.5 text-xs font-mono tabular-nums text-text-primary text-right">
+    <tr className="border-b border-divider">
+      <td className="max-w-0 truncate px-3 py-1 text-xs text-text-primary">{row.name}</td>
+      <td className="px-3 py-1 text-2xs text-text-secondary">{MODE_LABEL[row.mode] ?? row.mode}</td>
+      <td className="px-3 py-1 text-right text-xs tabular-nums text-text-primary">
         {row.p95Ms.toFixed(1)}
       </td>
-      <td className="px-3 py-1.5 text-xs">
+      <td className="px-3 py-1">
         {row.outsideReference ? (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-medium uppercase tracking-wide border border-border-strong bg-overlay-subtle text-text-primary">
-            Outside reference
-          </span>
+          <span className="text-2xs font-medium text-text-primary">Outside reference</span>
         ) : (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-medium uppercase tracking-wide border border-border-default bg-overlay-subtle text-text-secondary">
-            Within reference
-          </span>
+          <span className="text-2xs text-text-secondary">Within reference</span>
         )}
       </td>
-      <td className="px-3 py-1.5 text-2xs text-text-secondary truncate">
+      <td className="max-w-0 truncate px-3 py-1 text-2xs text-text-secondary">
         {row.referenceNotes ?? ""}
       </td>
     </tr>
   );
 }
 
-function BudgetTable({ rows }: { rows: PerfSummaryRow[] }) {
+function ResultsTable({ rows }: { rows: PerfSummaryRow[] }) {
   return (
-    <div className="overflow-auto h-full">
-      <table className="w-full border-collapse">
-        <thead className="sticky top-0 bg-daintree-sidebar/80 backdrop-blur-sm">
-          <tr className="border-b border-daintree-border/60">
-            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-text-secondary font-medium text-left">
-              Scenario
-            </th>
-            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-text-secondary font-medium text-left">
-              Mode
-            </th>
-            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-text-secondary font-medium text-right">
-              p95 (ms)
-            </th>
-            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-text-secondary font-medium text-left">
-              Budget
-            </th>
-            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-text-secondary font-medium text-left">
-              Reason
-            </th>
+    <div className="h-full overflow-auto">
+      <table className="w-full table-fixed border-collapse">
+        <thead className="sticky top-0 bg-surface-sidebar">
+          <tr className="border-b border-divider text-left text-2xs font-medium text-text-secondary">
+            <th className="w-[36%] px-3 py-1 font-medium">Scenario</th>
+            <th className="w-[10%] px-3 py-1 font-medium">Mode</th>
+            <th className="w-[12%] px-3 py-1 text-right font-medium">p95 (ms)</th>
+            <th className="w-[16%] px-3 py-1 font-medium">Reference</th>
+            <th className="px-3 py-1 font-medium">Notes</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row) => (
-            <BudgetRow key={`${row.mode}:${row.scenarioId}`} row={row} />
+            <ResultRow key={`${row.mode}:${row.scenarioId}`} row={row} />
           ))}
         </tbody>
       </table>
@@ -170,38 +141,54 @@ function BudgetTable({ rows }: { rows: PerfSummaryRow[] }) {
   );
 }
 
-function PerfEmptyState({ hasProject }: { hasProject: boolean }) {
+function ResultsEmptyState({ hasProject }: { hasProject: boolean }) {
   if (!hasProject) {
     return (
       <EmptyState
         variant="zero-data"
-        scale="canvas"
-        title="Open a project to view perf results"
-        icon={<Activity />}
+        scale="sidebar"
+        className="py-4"
+        title="Open a project to see its benchmark results"
       />
     );
   }
   return (
     <EmptyState
       variant="zero-data"
-      scale="canvas"
-      title="No perf results found"
-      icon={<Activity />}
-      description="Run npm run perf to generate a budget report. Results are read from .tmp/perf-results."
+      scale="sidebar"
+      className="py-4"
+      title="Run a benchmark to see results here"
+      action={
+        <p className="text-xs text-text-secondary">
+          <code className="font-mono text-text-primary">
+            npm run perf smoke -- --scenario &lt;id&gt;
+          </code>{" "}
+          writes to .tmp/perf-results
+        </p>
+      }
     />
+  );
+}
+
+function ResultsSkeleton() {
+  return (
+    <Skeleton label="Loading benchmark results" className="flex flex-col gap-2 p-3">
+      <SkeletonBone className="h-3 w-1/2 rounded-[var(--radius-sm)]" />
+      <SkeletonBone className="h-3 w-2/3 rounded-[var(--radius-sm)]" />
+      <SkeletonBone className="h-3 w-1/3 rounded-[var(--radius-sm)]" />
+    </Skeleton>
   );
 }
 
 export function PerfContent({ className }: PerfContentProps) {
   const projectPath = useProjectStore((s) => s.currentProject?.path ?? null);
 
-  const { summaryRows, summaryLoadError, isLoadingSummaries, lastLoadedAt, refreshSummaries } =
+  const { summaryRows, summaryLoadError, isLoadingSummaries, refreshSummaries } =
     usePerfMetricsStore(
       useShallow((s) => ({
         summaryRows: s.summaryRows,
         summaryLoadError: s.summaryLoadError,
         isLoadingSummaries: s.isLoadingSummaries,
-        lastLoadedAt: s.lastLoadedAt,
         refreshSummaries: s.refreshSummaries,
       }))
     );
@@ -229,40 +216,79 @@ export function PerfContent({ className }: PerfContentProps) {
     return copy;
   }, [summaryRows]);
 
+  // When the results were produced, not when the files were last read — an
+  // hour-old benchmark read a second ago is still an hour old.
+  const generatedAt = useMemo(() => {
+    let newest: number | null = null;
+    for (const row of summaryRows) {
+      const t = Date.parse(row.generatedAt);
+      if (Number.isFinite(t) && (newest === null || t > newest)) newest = t;
+    }
+    return newest;
+  }, [summaryRows]);
+
+  const outsideCount = sortedRows.filter((r) => r.outsideReference).length;
   const showEmpty = !isLoadingSummaries && sortedRows.length === 0 && !summaryLoadError;
+  const showRows = !summaryLoadError && sortedRows.length > 0;
 
   return (
-    <div className={cn("flex flex-col h-full min-h-0", className)}>
+    <div className={cn("flex h-full min-h-0 flex-col", className)}>
       <LiveMetricsBar />
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-daintree-border/30 bg-daintree-sidebar/10">
-        <span className="text-3xs uppercase tracking-wide text-text-secondary font-medium">
-          CI budgets
-        </span>
-        {lastLoadedAt !== null && !isLoadingSummaries ? (
-          <span className="text-3xs text-text-secondary font-mono">
-            Updated {formatRelative(lastLoadedAt)}
-          </span>
-        ) : null}
-      </div>
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {summaryLoadError ? (
-          <div className="p-3 text-xs text-status-error font-mono">
-            Couldn't read perf results: {summaryLoadError}
+      <section
+        aria-labelledby="perf-results"
+        className="flex min-h-0 flex-1 flex-col border-t border-divider"
+      >
+        <div className="flex items-center justify-between px-3 py-1.5">
+          <h3 id="perf-results" className="text-2xs font-medium text-text-secondary">
+            Benchmark results
+            {showRows ? (
+              <span className="font-normal">
+                {" "}
+                · {sortedRows.length} scenarios
+                {outsideCount > 0 ? `, ${outsideCount} outside reference` : ""}
+              </span>
+            ) : null}
+          </h3>
+          <div className="flex items-center gap-2">
+            {showRows && generatedAt !== null ? (
+              <span className="text-2xs tabular-nums text-text-secondary">
+                Generated {formatRelative(generatedAt)}
+              </span>
+            ) : null}
+            {projectPath && !summaryLoadError ? (
+              <Button
+                variant="subtle"
+                size="xs"
+                onClick={() => void refreshSummaries(projectPath)}
+                disabled={isLoadingSummaries}
+                aria-label="Re-read benchmark results"
+              >
+                <SpinningIcon icon={RefreshCw} active={isLoadingSummaries} />
+                Refresh
+              </Button>
+            ) : null}
           </div>
-        ) : showEmpty ? (
-          <div className="flex items-center justify-center h-full">
-            <PerfEmptyState hasProject={projectPath !== null} />
-          </div>
-        ) : isLoadingSummaries && sortedRows.length === 0 ? (
-          <div className="animate-pulse-delayed p-3 space-y-2">
-            <div className="h-4 bg-overlay-soft rounded w-1/2" />
-            <div className="h-4 bg-overlay-soft rounded w-2/3" />
-            <div className="h-4 bg-overlay-soft rounded w-1/3" />
-          </div>
-        ) : (
-          <BudgetTable rows={sortedRows} />
-        )}
-      </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {summaryLoadError ? (
+            <div className="px-3">
+              <DiagnosticsNotice
+                kind="failed"
+                title="Couldn't read benchmark results"
+                description={<span className="break-all font-mono">{summaryLoadError}</span>}
+                onRetry={projectPath ? () => void refreshSummaries(projectPath) : undefined}
+                retrying={isLoadingSummaries}
+              />
+            </div>
+          ) : showEmpty ? (
+            <ResultsEmptyState hasProject={projectPath !== null} />
+          ) : isLoadingSummaries && sortedRows.length === 0 ? (
+            <ResultsSkeleton />
+          ) : (
+            <ResultsTable rows={sortedRows} />
+          )}
+        </div>
+      </section>
     </div>
   );
 }

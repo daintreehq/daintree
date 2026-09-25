@@ -5,6 +5,8 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vite
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { WorktreeHeader, type WorktreeHeaderProps } from "../WorktreeHeader";
+import { collapsedAlarmDescriptionId } from "../CollapsedAlarmPill";
+import { worktreeRowDescriptionId } from "../rowDescriptions";
 import type { WorktreeState } from "@shared/types";
 import type { NormalizedPRState } from "@shared/types/forge";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -182,7 +184,7 @@ describe("WorktreeHeader PR-originated headline (#8888)", () => {
     });
 
     const prButton = screen.getByRole("button", {
-      name: /Open pull request #314: Fix flaky terminal search/,
+      name: /pull request #314: Fix flaky terminal search/,
     });
     expect(prButton).toBeDefined();
     expect(screen.getByText("Fix flaky terminal search")).toBeDefined();
@@ -872,9 +874,7 @@ describe("WorktreeHeader collapsed session indicators", () => {
     const indicators = screen.getByTestId("collapsed-session-indicators");
     const badges = indicators.querySelectorAll(":scope > span[aria-hidden='true']");
     expect(badges.length).toBe(2);
-    // First badge should be working (text-state-working), second waiting (text-state-waiting)
-    expect(badges[0]!.className).toContain("text-state-working");
-    expect(badges[1]!.className).toContain("text-state-waiting");
+    expect(Array.from(badges, (b) => b.getAttribute("data-state"))).toEqual(["working", "waiting"]);
   });
 
   it("applies animate-spin-slow only to working icon", () => {
@@ -1203,11 +1203,12 @@ describe("WorktreeHeader token-missing badge behavior", () => {
       name: /Add a forge access token to see issue details/,
     });
     expect(issueButton).toBeDefined();
-    // Button stays full-opacity for focus-ring contrast; the icon is muted with a
+    // Button stays full-opacity for focus-ring contrast; the icon steps down to a
     // solid token (not its active state color, and not opacity/grayscale dimming).
+    // Not `text-muted`: the badge still acts, and muted has no dark contrast floor.
     expect(issueButton.className).not.toContain("opacity-60");
     const issueIcon = issueButton.querySelector("svg");
-    expect(issueIcon?.className.baseVal).toContain("text-text-muted");
+    expect(issueIcon?.className.baseVal).not.toContain("text-text-muted");
     expect(issueIcon?.className.baseVal).not.toContain("text-pr-open");
     expect(issueIcon?.className.baseVal).not.toContain("grayscale");
     expect(issueIcon?.className.baseVal).not.toContain("opacity-50");
@@ -1404,7 +1405,9 @@ describe("WorktreeHeader upstream sync indicator", () => {
     const indicator = screen.getByTestId("upstream-sync-indicator");
     expect(indicator).toBeDefined();
     expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
-    expect(indicator.textContent).toContain("—");
+    // With no counts to carry, the line is the action alone — never an empty
+    // control.
+    expect(indicator.textContent).toContain("Reconnect");
   });
 
   it("renders the sign-in affordance when matchedForgeProviderId is set and no linked data (#9982)", () => {
@@ -1424,7 +1427,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
     });
     const indicator = screen.getByRole("button", { name: /Forge authentication failed/ });
     expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
-    expect(indicator.textContent).toContain("—");
+    expect(indicator.textContent).toContain("Reconnect");
     // Recovery path must be reachable on the no-linked-data path too — the
     // badge owns the only per-worktree way out of the auth-suspended fetch.
     fireEvent.click(indicator);
@@ -1560,31 +1563,27 @@ describe("WorktreeHeader upstream sync indicator", () => {
         fetchNetworkFailed: true,
       },
     });
-    // The badge still renders the count display (transient failure doesn't
-    // replace the indicator like the auth+github path does), but it carries a
-    // partial dim so the failed row is distinguishable from a healthy one at
-    // the row level — without grayscale, which is reserved for the persistent
-    // auth-failure treatment.
+    // The counts stay at full strength — a failed fetch does not make them
+    // unreadable, only unconfirmed — and the line carries a mark saying so,
+    // distinct from the auth-failure treatment.
     const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator).toBeDefined();
     expect(indicator.textContent).toContain("↑1");
-    expect(indicator.className).toContain("opacity-75");
-    expect(indicator.className).not.toContain("grayscale");
-    expect(indicator.className).not.toContain("opacity-50");
+    expect(indicator.className).not.toMatch(/\bopacity-/);
     expect(indicator.getAttribute("data-fetch-network-failed")).toBe("true");
+    const mark = indicator.querySelector('[data-testid="upstream-sync-status"]');
+    expect(mark?.getAttribute("data-status")).toBe("unreachable");
   });
 
-  it("does not dim the count display on a healthy worktree", () => {
+  it("carries no failure mark on a healthy worktree", () => {
     renderHeader({
-      worktree: { ...baseWorktree, aheadCount: 1 },
+      worktree: { ...baseWorktree, aheadCount: 1, lastFetchedAt: Date.now() },
     });
     const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator).toBeDefined();
-    expect(indicator.className).not.toContain("opacity-75");
+    expect(indicator.querySelector('[data-testid="upstream-sync-status"]')).toBeNull();
     expect(indicator.getAttribute("data-fetch-network-failed")).toBeNull();
   });
 
-  it("prefers the auth-failed treatment over the network-failed dim", () => {
+  it("prefers the auth-failed treatment over the network-failed mark", () => {
     // Mutually exclusive at source (RepoFetchCoordinator), but pin the
     // precedence so a regression can't surface both treatments at once.
     renderHeader({
@@ -1600,7 +1599,8 @@ describe("WorktreeHeader upstream sync indicator", () => {
     const indicator = screen.getByTestId("upstream-sync-indicator");
     expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
     expect(indicator.getAttribute("data-fetch-network-failed")).toBeNull();
-    expect(indicator.className).not.toContain("opacity-75");
+    const marks = indicator.querySelectorAll('[data-testid="upstream-sync-status"]');
+    expect(Array.from(marks, (m) => m.getAttribute("data-status"))).toEqual(["auth"]);
   });
 });
 
@@ -1713,6 +1713,88 @@ describe("WorktreeHeader base relationship row", () => {
 
   it("keeps the row unmounted once the branch name it described is gone", () => {
     renderHeader({ worktree: { ...onBase, isDetached: true } });
+    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
+  });
+});
+
+describe("WorktreeHeader collapsed alarm keyboard reach", () => {
+  // The card's select button points aria-describedby at
+  // `collapsedAlarmDescriptionId(worktree.id)` whenever the row is collapsed;
+  // this is the half that proves the header puts something at that id.
+
+  it("describes a collapsed row's alarm under the id the card points at", () => {
+    renderHeader({ isCollapsed: true, worktree: { ...baseWorktree, behindCount: 3 } });
+    const description = document.getElementById(collapsedAlarmDescriptionId(baseWorktree.id));
+    expect(description, "no node at the card's aria-describedby target").not.toBeNull();
+    expect(description!.textContent).toBe(
+      screen.getByTestId("collapsed-alarm-pill").getAttribute("aria-label")
+    );
+  });
+
+  it("keeps the id resolvable on a collapsed row with nothing to report", () => {
+    renderHeader({ isCollapsed: true });
+    const description = document.getElementById(collapsedAlarmDescriptionId(baseWorktree.id));
+    expect(description).not.toBeNull();
+    expect(description!.textContent).toBe("");
+  });
+
+  it("opens the alarm tooltip while the card's select button is keyboard-focused", async () => {
+    renderHeader({
+      isCollapsed: true,
+      isKeyboardFocused: true,
+      worktree: { ...baseWorktree, behindCount: 3 },
+    });
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toContain("Behind");
+    expect(tip.textContent).toContain("Upstream: 3 commits behind");
+  });
+});
+
+describe("WorktreeHeader external worktree description", () => {
+  // The card's select button points aria-describedby at this node whenever the
+  // worktree is external; the icon itself is not focusable.
+  const external = {
+    ...baseWorktree,
+    isExternal: true,
+    path: "/Volumes/scratch/My Worktrees/helios",
+  };
+
+  it("describes an external sidebar row by the icon's own words", () => {
+    renderHeader({ worktree: external });
+    const node = document.getElementById(worktreeRowDescriptionId(external.id, "external"));
+    expect(node, "no node at the select button's external reference").not.toBeNull();
+    expect(node!.hidden).toBe(true);
+    expect(node!.textContent).toBe(
+      screen.getByRole("img", { name: /^External worktree at / }).getAttribute("aria-label")
+    );
+  });
+
+  it("renders no node in the grid, which has no select button and may share the document", () => {
+    renderHeader({ worktree: external, variant: "grid" });
+    expect(document.getElementById(worktreeRowDescriptionId(external.id, "external"))).toBeNull();
+  });
+});
+
+describe("WorktreeHeader — the sync line with no counts and no base", () => {
+  // The secondary row used to mount only for a title, a PR, drift or a base,
+  // so every mark the sync line carries on its own — a failed fetch, a
+  // missing upstream — was cut off above it on a card that had none of those.
+  it("shows a failed fetch", () => {
+    renderHeader({ worktree: { ...baseWorktree, aheadCount: 0, fetchNetworkFailed: true } });
+    expect(screen.getByTestId("upstream-sync-status").getAttribute("data-status")).toBe(
+      "unreachable"
+    );
+  });
+
+  it("does not treat an old fetch as a failure", () => {
+    renderHeader({
+      worktree: { ...baseWorktree, aheadCount: 0, lastFetchedAt: Date.now() - 24 * 60 * 60_000 },
+    });
+    expect(screen.queryByTestId("upstream-sync-status")).toBeNull();
+  });
+
+  it("stays out of the way with nothing to say", () => {
+    renderHeader({ worktree: { ...baseWorktree, aheadCount: 0 } });
     expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
   });
 });

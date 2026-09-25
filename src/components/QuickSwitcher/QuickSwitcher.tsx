@@ -1,8 +1,9 @@
 import { useCallback, useId } from "react";
+import { KbdChord } from "@/components/ui/Kbd";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { KBD_CLASS, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
+import { PaletteFooterHints, PaletteNoMatchHint } from "@/components/ui/AppPaletteDialog";
 import { QuickSwitcherItem } from "./QuickSwitcherItem";
-import { useKeybindingDisplay, useEffectiveCombo } from "@/hooks/useKeybinding";
+import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import type {
   QuickSwitcherItem as QuickSwitcherItemData,
   UseQuickSwitcherReturn,
@@ -26,6 +27,7 @@ type QuickSwitcherProps = Pick<
   | "results"
   | "totalResults"
   | "selectedIndex"
+  | "matchesById"
   | "isLoading"
   | "close"
   | "setQuery"
@@ -42,6 +44,7 @@ export function QuickSwitcher({
   results,
   totalResults,
   selectedIndex,
+  matchesById,
   isLoading,
   close,
   setQuery,
@@ -73,7 +76,7 @@ export function QuickSwitcher({
     [footerHintId]
   );
 
-  const newTerminalShortcut = useKeybindingDisplay("terminal.new");
+  const newTerminalShortcut = useEffectiveCombo("terminal.new");
   const quickSwitcherShortcut = useEffectiveCombo("nav.quickSwitcher");
 
   return (
@@ -90,7 +93,8 @@ export function QuickSwitcher({
       onClose={close}
       onHoverIndex={setSelectedIndex}
       getItemId={(item) => item.id}
-      renderItem={(item, index, isSelected, onHoverIndex) => (
+      matchesById={matchesById}
+      renderItem={(item, index, isSelected, onHoverIndex, matches) => (
         <QuickSwitcherItem
           key={item.id}
           item={item}
@@ -98,6 +102,7 @@ export function QuickSwitcher({
           onSelect={handleSelect}
           onHover={() => onHoverIndex(index)}
           ariaDescribedBy={footerHintId}
+          matches={matches}
         />
       )}
       getFooter={getFooter}
@@ -110,12 +115,13 @@ export function QuickSwitcher({
       listId="quick-switcher-list"
       itemIdPrefix="qs-option"
       emptyMessage="No panels open"
+      noMatchContent={<PaletteNoMatchHint what="everything open" />}
       totalResults={totalResults}
       emptyContent={
         <p className="mt-2 text-xs text-text-secondary">
           {newTerminalShortcut ? (
             <>
-              Press <kbd className={KBD_CLASS}>{newTerminalShortcut}</kbd> to create a terminal.
+              Press <KbdChord shortcut={newTerminalShortcut} /> to create a terminal.
             </>
           ) : (
             "Create a terminal to get started."

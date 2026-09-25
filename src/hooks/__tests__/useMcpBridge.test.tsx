@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
   getContext: vi.fn((): Record<string, unknown> => ({})),
   buildPreview: vi.fn(),
+  // Default for every suite: the delete runs no teardown. `mockClear` keeps
+  // the implementation, so this survives `vi.clearAllMocks()`.
+  teardownPreview: vi.fn(async () => ({ phases: [] }) as unknown),
   buildGitPreview: vi.fn(),
   // The renderer's own worktree records — the ONLY source of the typed-name
   // gate's identity half (#12115). Empty by default so `resolveMcpConfirmSubject`
@@ -42,7 +45,11 @@ vi.mock("@/services/ActionService", () => ({
 vi.mock("@/components/Worktree/worktreeDeletePreview", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/components/Worktree/worktreeDeletePreview")>();
-  return { ...actual, buildWorktreeDeletePreview: mocks.buildPreview };
+  return {
+    ...actual,
+    buildWorktreeDeletePreview: mocks.buildPreview,
+    fetchWorktreeTeardownPreview: mocks.teardownPreview,
+  };
 });
 
 vi.mock("@/store/panelStore", () => ({
@@ -137,6 +144,8 @@ describe("useMcpBridge", () => {
         context?: Record<string, unknown>;
         callerInfo?: { token4LastChars: string; userAgent: string };
         sessionOrigin?: "help" | "assistant-pane" | "external";
+        offerSessionApproval?: boolean;
+        approvalOnly?: boolean;
       }) => void | Promise<void>)
     | undefined;
   let cleanupManifest: ReturnType<typeof vi.fn>;
@@ -588,6 +597,125 @@ describe("useMcpBridge", () => {
         },
       },
       confirmationDecision: "rejected",
+    });
+  });
+
+  // #12692: an agent pane above its tier is asked about, not refused. Main
+  // runs the call itself once approved, so the bridge only reports back.
+  it("asks about an approval-only request whatever its danger, and never dispatches", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "git.push", title: "Push" }));
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-ask",
+      actionId: "git.push",
+      args: {},
+      sessionOrigin: "external",
+      offerSessionApproval: true,
+      approvalOnly: true,
+    });
+
+    await Promise.resolve();
+    const pending = useMcpConfirmStore.getState().current;
+    expect(pending?.approvalReason).toBe("above-tier");
+    expect(pending?.offerSessionApproval).toBe(true);
+
+    useMcpConfirmStore.getState().resolveCurrent("approved", undefined, "session");
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-ask",
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+      approvalScope: "session",
+    });
+  });
+
+  it("reports a declined approval-only request as USER_REJECTED", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "git.push", title: "Push" }));
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-ask-no",
+      actionId: "git.push",
+      args: {},
+      approvalOnly: true,
+    });
+
+    await Promise.resolve();
+    useMcpConfirmStore.getState().resolveCurrent("rejected");
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "req-ask-no",
+        result: expect.objectContaining({ ok: false }),
+        confirmationDecision: "rejected",
+      })
+    );
+  });
+
+  it("refuses an approval-only request for an action this view does not know", async () => {
+    mocks.get.mockReturnValue(null);
+
+    renderHook(() => useMcpBridge());
+
+    await dispatchHandler?.({
+      requestId: "req-ask-unknown",
+      actionId: "no.such.action",
+      args: {},
+      approvalOnly: true,
+    });
+
+    expect(useMcpConfirmStore.getState().current).toBeNull();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-ask-unknown",
+      result: { ok: false, error: expect.objectContaining({ code: "NOT_FOUND" }) },
+    });
+  });
+
+  it("does not offer the session scope for a tool whose dialog picks its targets", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry({ id: "terminal.killBatch" }));
+
+    renderHook(() => useMcpBridge());
+
+    void dispatchHandler?.({
+      requestId: "req-no-offer",
+      actionId: "terminal.killBatch",
+      args: { terminalIds: ["t1"] },
+      offerSessionApproval: true,
+    });
+
+    await Promise.resolve();
+    expect(useMcpConfirmStore.getState().current?.offerSessionApproval).toBeUndefined();
+  });
+
+  it("reports a session-scoped approval of an ordinary confirm dialog back to main", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-confirm-session",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1" },
+      offerSessionApproval: true,
+    });
+
+    await Promise.resolve();
+    useMcpConfirmStore.getState().resolveCurrent("approved", undefined, "session");
+    await dispatched;
+
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-confirm-session",
+      result: { ok: true, result: { ok: true } },
+      confirmationDecision: "approved",
+      approvalScope: "session",
     });
   });
 
@@ -2682,6 +2810,26 @@ describe("resolveWorktreeDeleteGate (#12115)", () => {
     expect(resolveWorktreeDeleteGate(target, verified())).toEqual({ state: "none" });
   });
 
+  it("keeps the typed-name gate when the parent read failed and a partial walk saw commits", () => {
+    // Tracked changes are unknown here, so the gate has to hold. A refusal
+    // would read as "no gate" on this surface, and if the commits were pushed
+    // before the host's own check the force delete would run unattested.
+    seedWorktree();
+    expect(
+      resolveWorktreeDeleteGate(target, {
+        state: "failed",
+        submodules: {
+          status: "unverified",
+          risk: {
+            ...emptySubmoduleRisk(),
+            incomplete: true,
+            atRiskCommits: [{ oid: "abc", subject: "s" }],
+          },
+        },
+      })
+    ).toEqual({ state: "required", typedNameTarget: "feature/x" });
+  });
+
   it("does not escalate on untracked files alone (#4927)", () => {
     seedWorktree();
     expect(
@@ -2859,6 +3007,48 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
     });
     expect(lines[0]).toContain("1 uncommitted tracked file");
     expect(lines).toContain("  M src/app.ts");
+  });
+
+  it("discloses the teardown an agent-requested delete runs, as the local dialog does", async () => {
+    // The delete runs the project's teardown before removing the tree; an
+    // approver shown only the file list consented to less than will happen.
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
+    });
+    mocks.teardownPreview.mockResolvedValueOnce({
+      phases: [{ phase: "teardown", commands: ["docker compose down"], approved: true }],
+    });
+    const { lines } = await buildMcpConfirmPreview({
+      kind: "worktreeDelete",
+      worktreeId: "wt-1",
+      force: false,
+    });
+    expect(mocks.teardownPreview).toHaveBeenCalledWith("wt-1");
+    expect(lines).toContain("Project teardown will run first (the delete continues if it fails):");
+    expect(lines).toContain("  docker compose down");
+  });
+
+  it("says an unreadable teardown may still run", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
+    });
+    mocks.teardownPreview.mockResolvedValueOnce("unreadable");
+    const { lines } = await buildMcpConfirmPreview({
+      kind: "worktreeDelete",
+      worktreeId: "wt-1",
+      force: false,
+    });
+    expect(lines.some((line) => line.includes("Project teardown may also run"))).toBe(true);
   });
 
   it("shows the nested submodule paths and at-risk commits an agent would destroy", async () => {

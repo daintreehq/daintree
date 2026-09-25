@@ -459,6 +459,16 @@
   background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
 }
 
+/* Grabbed: one step further along the hover ramp, as the grid scrollbar and
+ * xterm's slider do, so a pressed thumb does not read as merely hovered. */
+.diff-scroll-root::-webkit-scrollbar-thumb:active {
+  background: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary)) 70%,
+    var(--color-text-primary)
+  );
+}
+
 /* D1a (light) — diff scrollbars consume the shared --scrollbar-* tokens so
  * per-theme scrollbar tuning applies. Dark keeps the original hardcoded values
  * above (byte-for-byte unchanged). */
@@ -472,6 +482,10 @@
 
 .light .diff-scroll-root::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
+}
+
+.light .diff-scroll-root::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
 }
 
 /* refractor's grammars tag syntax tokens with bare class names that collide
@@ -687,6 +701,14 @@
   background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
 }
 
+.diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb:active {
+  background: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary)) 70%,
+    var(--color-text-primary)
+  );
+}
+
 /* D1a (light) — see the .diff-viewer scrollbar note above. */
 .light .diff-viewer .diff-hscrollbar::-webkit-scrollbar-track {
   background: var(--scrollbar-track);
@@ -698,6 +720,10 @@
 
 .light .diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
+}
+
+.light .diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
 }
 
 .diff-viewer .diff-file-scroll::-webkit-scrollbar {
@@ -731,6 +757,14 @@
   background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
 }
 
+.diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb:active {
+  background: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary)) 70%,
+    var(--color-text-primary)
+  );
+}
+
 /* D1a (light) — see the .diff-viewer scrollbar note above. */
 .light .diff-viewer .diff-file-scroll::-webkit-scrollbar-track {
   background: var(--scrollbar-track);
@@ -742,6 +776,10 @@
 
 .light .diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
+}
+
+.light .diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
 }
 
 .diff-viewer table.diff td {

@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import type React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { useEffect, useLayoutEffect } from "react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { ErrorBoundary, withErrorBoundary } from "../ErrorBoundary";
+import { ErrorBoundary, RETRY_RECOVERY_CONFIRM_MS, withErrorBoundary } from "../ErrorBoundary";
 import { useErrorStore } from "@/store/errorStore";
 import { captureRendererException, getRendererSentryConsent } from "@/utils/rendererSentry";
 import { notify } from "@/lib/notify";
@@ -98,7 +99,7 @@ describe("ErrorBoundary", () => {
         <ThrowingChild shouldThrow={true} />
       </ErrorBoundary>
     );
-    expect(screen.getByText("Section stopped working")).toBeTruthy();
+    expect(screen.getByText("This area stopped working")).toBeTruthy();
   });
 
   it("still adds the error to the store for cross-referencing", () => {
@@ -149,13 +150,13 @@ describe("ErrorBoundary", () => {
       </ErrorBoundary>
     );
 
-    expect(screen.getByText("Section stopped working")).toBeTruthy();
+    expect(screen.getByText("This area stopped working")).toBeTruthy();
 
     shouldThrow = false;
-    fireEvent.click(screen.getByText("Reload pane"));
+    fireEvent.click(screen.getByText("Try again"));
 
     expect(screen.getByText("Recovered")).toBeTruthy();
-    expect(screen.queryByText("Section stopped working")).toBeNull();
+    expect(screen.queryByText("This area stopped working")).toBeNull();
   });
 
   it("provides onReport to section variant", () => {
@@ -212,7 +213,9 @@ describe("ErrorBoundary", () => {
     expect(copyButton.textContent).toBe("sentry-event-deadbeef");
     expect(screen.queryByText("Test render error")).toBeNull();
     expect(
-      screen.getByText("This pane crashed but the rest of Daintree is still running.")
+      screen.getByText(
+        "Your terminals and agents are still running. Try again to reload this area."
+      )
     ).toBeTruthy();
   });
 
@@ -565,13 +568,13 @@ describe("ErrorBoundary", () => {
     );
 
     const button = screen.getByTestId("error-fallback-report") as HTMLButtonElement;
-    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-busy")).toBeNull();
 
     fireEvent.click(button);
-    await waitFor(() => expect(button.disabled).toBe(true));
+    await waitFor(() => expect(button.getAttribute("aria-busy")).toBe("true"));
 
     resolveDispatch?.({ ok: true, result: undefined });
-    await waitFor(() => expect(button.disabled).toBe(false));
+    await waitFor(() => expect(button.getAttribute("aria-busy")).toBeNull());
   });
 
   it("clears the in-flight guard on reset so a new report can fire after recovery", async () => {
@@ -611,7 +614,7 @@ describe("ErrorBoundary", () => {
 
     // User gives up and recovers the pane while the first report is still in flight.
     shouldThrow = false;
-    fireEvent.click(screen.getByText("Reload pane"));
+    fireEvent.click(screen.getByText("Try again"));
     expect(screen.getByText("Recovered")).toBeTruthy();
 
     // Re-arm the throw and re-render to bring the fallback back.
@@ -621,7 +624,7 @@ describe("ErrorBoundary", () => {
         <ConditionalThrow />
       </ErrorBoundary>
     );
-    expect(screen.getByText("Section stopped working")).toBeTruthy();
+    expect(screen.getByText("This area stopped working")).toBeTruthy();
 
     // Second click should now fire — the class-field guard was cleared on reset.
     fireEvent.click(screen.getByText("Report issue"));
@@ -741,11 +744,11 @@ describe("ErrorBoundary", () => {
       </ErrorBoundary>
     );
 
-    expect(screen.getByText("Section stopped working")).toBeTruthy();
+    expect(screen.getByText("This area stopped working")).toBeTruthy();
     expect(onReset).not.toHaveBeenCalled();
 
     shouldThrow = false;
-    fireEvent.click(screen.getByText("Reload pane"));
+    fireEvent.click(screen.getByText("Try again"));
 
     expect(onReset).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Recovered")).toBeTruthy();
@@ -772,10 +775,10 @@ describe("ErrorBoundary", () => {
       </ErrorBoundary>
     );
 
-    expect(screen.getByText("Section stopped working")).toBeTruthy();
+    expect(screen.getByText("This area stopped working")).toBeTruthy();
 
     events.length = 0;
-    fireEvent.click(screen.getByText("Reload pane"));
+    fireEvent.click(screen.getByText("Try again"));
 
     expect(events).toEqual(["onReset", "child-render"]);
     expect(screen.getByText("Recovered")).toBeTruthy();
@@ -798,10 +801,10 @@ describe("ErrorBoundary", () => {
       </ErrorBoundary>
     );
 
-    expect(screen.getByText("Section stopped working")).toBeTruthy();
+    expect(screen.getByText("This area stopped working")).toBeTruthy();
 
     shouldThrow = false;
-    fireEvent.click(screen.getByText("Reload pane"));
+    fireEvent.click(screen.getByText("Try again"));
 
     expect(onReset).toHaveBeenCalled();
     expect(logError).toHaveBeenCalledWith("Error in onReset handler", expect.any(Error));
@@ -866,5 +869,177 @@ describe("ErrorBoundary", () => {
 
     expect(onReset).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Recovered at key 1")).toBeTruthy();
+  });
+});
+
+describe("ErrorBoundary retry escalation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function AlwaysThrows(): React.ReactNode {
+    throw new Error("still broken");
+  }
+
+  it("offers a window reload only once Try again has failed", () => {
+    render(
+      <ErrorBoundary variant="section" componentName="ContentGrid">
+        <AlwaysThrows />
+      </ErrorBoundary>
+    );
+    expect(screen.queryByTestId("error-fallback-reload-window")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("error-fallback-restart"));
+
+    // The same fault came straight back; offering the same button again is a loop.
+    expect(screen.getByTestId("error-fallback-restart")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("error-fallback-reload-window"));
+    expect(actionService.dispatch).toHaveBeenCalledWith("window.reload", undefined, {
+      source: "user",
+    });
+  });
+
+  function ThrowsInEffect(): React.ReactNode {
+    useEffect(() => {
+      throw new Error("effect broken");
+    }, []);
+    return <div>mounted</div>;
+  }
+
+  function ThrowsInLayoutEffect(): React.ReactNode {
+    useLayoutEffect(() => {
+      throw new Error("layout effect broken");
+    }, []);
+    return <div>mounted</div>;
+  }
+
+  it.each([
+    ["useEffect", ThrowsInEffect],
+    ["useLayoutEffect", ThrowsInLayoutEffect],
+  ])("escalates to a window reload when the child throws from %s", async (_name, Child) => {
+    render(
+      <ErrorBoundary variant="section" componentName="ContentGrid">
+        <Child />
+      </ErrorBoundary>
+    );
+    expect(screen.queryByTestId("error-fallback-reload-window")).toBeNull();
+
+    // The child commits once, error-free, before its effect throws again —
+    // that commit is not a recovery.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("error-fallback-restart"));
+    });
+    expect(screen.getByTestId("error-fallback-reload-window")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("error-fallback-restart"));
+    });
+    expect(screen.getByTestId("error-fallback-reload-window")).toBeTruthy();
+    expect(screen.getByTestId("error-fallback-title").textContent).toContain("stopped working");
+  });
+
+  it("offers a window reload from the first render of the fullscreen fallback", () => {
+    render(
+      <ErrorBoundary variant="fullscreen" componentName="App">
+        <AlwaysThrows />
+      </ErrorBoundary>
+    );
+    expect(screen.getByTestId("error-fallback-reload-window")).toBeTruthy();
+  });
+
+  it("passes a display name through to the fallback in place of the code name", () => {
+    render(
+      <ErrorBoundary variant="section" componentName="ContentGrid" displayName="Workspace">
+        <AlwaysThrows />
+      </ErrorBoundary>
+    );
+    expect(screen.getByTestId("error-fallback-title").textContent).toBe(
+      "Workspace stopped working"
+    );
+  });
+});
+
+describe("ErrorBoundary retry episodes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  const fault = { on: true };
+  function Flaky(): React.ReactNode {
+    if (fault.on) throw new Error("flaky");
+    return <div>recovered</div>;
+  }
+
+  it("forgets failed attempts once the child has stayed up", () => {
+    vi.useFakeTimers();
+    fault.on = true;
+    const { rerender } = render(
+      <ErrorBoundary variant="section" componentName="Sidebar">
+        <Flaky />
+      </ErrorBoundary>
+    );
+    fireEvent.click(screen.getByTestId("error-fallback-restart"));
+    expect(screen.getByTestId("error-fallback-reload-window")).toBeTruthy();
+
+    fault.on = false;
+    fireEvent.click(screen.getByTestId("error-fallback-restart"));
+    expect(screen.getByText("recovered")).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(RETRY_RECOVERY_CONFIRM_MS);
+    });
+
+    // A later, unrelated crash is a new episode: nobody has tried again yet.
+    fault.on = true;
+    rerender(
+      <ErrorBoundary variant="section" componentName="Sidebar">
+        <Flaky key="again" />
+      </ErrorBoundary>
+    );
+    expect(screen.getByTestId("error-fallback-restart")).toBeTruthy();
+    expect(screen.queryByTestId("error-fallback-reload-window")).toBeNull();
+  });
+
+  it("does not count a resetKeys change as a failed attempt", () => {
+    fault.on = true;
+    const { rerender } = render(
+      <ErrorBoundary variant="section" componentName="Sidebar" resetKeys={["a"]}>
+        <Flaky />
+      </ErrorBoundary>
+    );
+    rerender(
+      <ErrorBoundary variant="section" componentName="Sidebar" resetKeys={["b"]}>
+        <Flaky />
+      </ErrorBoundary>
+    );
+    expect(screen.getByTestId("error-fallback-restart")).toBeTruthy();
+    expect(screen.queryByTestId("error-fallback-reload-window")).toBeNull();
+  });
+
+  it("leads with the window reload, focused, once Try again has failed full-screen", () => {
+    fault.on = true;
+    render(
+      <ErrorBoundary variant="fullscreen" componentName="App">
+        <Flaky />
+      </ErrorBoundary>
+    );
+    // First failure: Try again leads and holds focus.
+    expect(document.activeElement).toBe(screen.getByTestId("error-fallback-restart"));
+
+    fireEvent.click(screen.getByTestId("error-fallback-restart"));
+    const reload = screen.getByTestId("error-fallback-reload-window");
+    const retry = screen.getByTestId("error-fallback-restart");
+    expect(document.activeElement).toBe(reload);
+    expect(reload.compareDocumentPosition(retry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

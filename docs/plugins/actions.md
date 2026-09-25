@@ -210,6 +210,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `help.displayImage` | Display documentation image | safe | `url`, `altText?`, `caption?` |
 | `help.gettingStarted.show` | Getting started | safe | — |
 | `help.openCommandsFolder` | Open assistant commands folder | safe | — |
+| `help.tour.show` | Daintree Tour | safe | — |
 
 ## introspection
 
@@ -319,7 +320,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `pilot.openProject` | View this project's agents | safe | — |
 | `pilot.openRun` | Open run | safe | `runId`, `workspaceId?` |
 | `pilot.toggle` | View all agents | safe | — |
-| `project.add` | Open project | safe | `path?` |
+| `project.add` | Open project | safe | `destination?`, `path?` |
 | `project.cloneRepo` | Clone repository | safe | — |
 | `project.close` | Close project | safe | `projectId` |
 | `project.closeActive` | Close project | safe | — |
@@ -330,6 +331,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `project.getStats` | Get project stats | safe | `projectId?` |
 | `project.muteNotifications` | Mute project notifications | safe | `projectId` |
 | `project.openDialog` | Pick directory | safe | — |
+| `project.openInNewWindow` | Open project in new window | safe | — |
 | `project.remove` | Remove project | confirm | `projectId` |
 | `project.saveSettings` | Save project settings | safe | `projectId`, `settings` |
 | `project.settings.open` | Open project settings | safe | — |
@@ -381,6 +383,8 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminalConfig.setPerformanceMode` | Set performance mode | safe | `performanceMode` |
 | `terminalConfig.setScreenReaderMode` | Set screen reader mode | safe | `mode` |
 | `terminalConfig.setScrollback` | Set scrollback | safe | `scrollbackLines` |
+| `windowOpening.getConfig` | Get window opening config | safe | — |
+| `windowOpening.updateConfig` | Update window opening config | safe | `openFoldersInNewWindow?` |
 | `worktreeConfig.get` | Get worktree config | safe | — |
 | `worktreeConfig.setPattern` | Set worktree path pattern | safe | `pattern` |
 
@@ -551,6 +555,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.sessions.trashAll` | Trash all sessions | confirm | `confirmed?`, `worktreeId?` |
 | `worktree.setActive` | Set active worktree | safe | `worktreeId` |
 | `worktree.switchIndex` | Switch to worktree by index | safe | `index` |
+| `worktree.waitForPullRequest` | Wait for worktree pull request | safe | `worktreeIds`, `timeoutMs?` |
 | `worktree.waitUntilReady` | Wait until worktree ready | safe | `timeoutMs?`, `worktreeId?`, `worktreePath?` |
 
 ## See also

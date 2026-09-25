@@ -88,8 +88,10 @@ test.describe.serial("Core: Plugin permissions tab", () => {
       .first()
       .click();
 
-    // Overview must be present so the pane isn't just failing to render.
-    await expect(window.locator(SEL.plugin.tabOverview)).toBeVisible({ timeout: T_SHORT });
+    // Overview content must be present so the pane isn't just failing to render.
+    await expect(window.getByRole("tabpanel", { name: "Overview" })).toBeVisible({
+      timeout: T_SHORT,
+    });
     // A tab whose whole content was "No special permissions" is now absent.
     await expect(window.locator(SEL.plugin.tabPermissions)).toHaveCount(0);
     await expect(window.getByText("No special permissions")).toHaveCount(0);

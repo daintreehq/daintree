@@ -14,6 +14,8 @@ const STEP_ORDER: OnboardingStep[] = ["agentSetup"];
 
 interface OnboardingFlowProps {
   availability: CliAvailability;
+  /** Forwarded to the wizard so its completion leads somewhere useful. */
+  hasWorkspace?: boolean;
   onRefreshSettings: () => Promise<void>;
   onComplete?: () => void;
 }
@@ -29,6 +31,7 @@ function trackOnboarding(event: string, properties: Record<string, unknown> = {}
 
 export function OnboardingFlow({
   availability,
+  hasWorkspace = true,
   onRefreshSettings,
   onComplete,
 }: OnboardingFlowProps) {
@@ -130,7 +133,6 @@ export function OnboardingFlow({
   const handleManualWizardClose = useCallback(async () => {
     void onRefreshSettings();
     const shouldReturn = returnToPaletteRef.current;
-    const wasFirstRun = manualWizardIsFirstRun;
     returnToPaletteRef.current = false;
     // Reset the wizard sub-step ref so the next open doesn't carry a stale
     // value into an abandonment payload before the new wizard reports its
@@ -138,12 +140,13 @@ export function OnboardingFlow({
     lastWizardStepRef.current = null;
     setManualWizardOpen(false);
     setManualWizardIsFirstRun(false);
-    // If this open originated from the first-run welcome banner, mark the
-    // onboarding flow complete so the first-run prompts (theme / telemetry)
-    // are not shown again, and dismiss the banner via the shared hook so
-    // WelcomeScreen's AgentSetupBannerCard hides immediately (raw IPC would
-    // update electron-store but not the Zustand store the banner reads).
-    if (wasFirstRun && state && !state.completed) {
+    // Any finished setup completes onboarding if it was still open — whether
+    // the wizard came from the first-run banner or, after "Not now", from the
+    // welcome footer. Otherwise a user who declined the banner and set up
+    // later would stay "not onboarded" for good. Dismiss the banner via the
+    // shared hook so WelcomeScreen's AgentSetupBannerCard hides immediately
+    // (raw IPC would update electron-store but not the store it reads).
+    if (state && !state.completed) {
       try {
         await advanceStep("agentSetup");
       } catch {
@@ -157,7 +160,7 @@ export function OnboardingFlow({
     if (shouldReturn) {
       void actionService.dispatch("panel.palette", undefined, { source: "user" });
     }
-  }, [advanceStep, manualWizardIsFirstRun, onRefreshSettings, state]);
+  }, [advanceStep, onRefreshSettings, state]);
 
   // Render nothing until hydration completes or if E2E skip is enabled
   if (SKIP_FIRST_RUN_DIALOGS) {
@@ -167,6 +170,7 @@ export function OnboardingFlow({
         onClose={handleManualWizardClose}
         initialAvailability={availability}
         isFirstRun={manualWizardIsFirstRun}
+        hasWorkspace={hasWorkspace}
         onStepChange={handleWizardStepChange}
       />
     ) : null;
@@ -183,6 +187,7 @@ export function OnboardingFlow({
         onClose={handleManualWizardClose}
         initialAvailability={availability}
         isFirstRun={manualWizardIsFirstRun}
+        hasWorkspace={hasWorkspace}
         onStepChange={handleWizardStepChange}
       />
     );

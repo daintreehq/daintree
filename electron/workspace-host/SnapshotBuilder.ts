@@ -71,6 +71,7 @@ export interface SnapshotBuilderHost {
   readonly workingTreeChangedDirs: readonly string[] | null | undefined;
   readonly fetchAuthFailed: boolean;
   readonly fetchNetworkFailed: boolean;
+  readonly hasRemote: boolean | undefined;
   readonly isFetchInFlight: boolean;
   readonly matchedForgeProviderId: string | null;
   readonly isExternal: boolean | undefined;
@@ -202,6 +203,8 @@ export class SnapshotBuilder {
         : undefined,
       fetchAuthFailed: this.host.fetchAuthFailed || undefined,
       fetchNetworkFailed: this.host.fetchNetworkFailed || undefined,
+      // Verbatim: `false` is the answer that matters, so it must survive.
+      hasRemote: this.host.hasRemote,
       // Read in-flight state authoritatively at snapshot time (lesson #1700)
       // so a snapshot emitted between fetch-start and fetch-end always
       // serializes the correct value, never a stale cached copy.

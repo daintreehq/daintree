@@ -13,6 +13,8 @@ import {
 import { settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
 import { createHardenedGit, createAuthenticatedGit } from "../utils/hardenedGit.js";
+import { readRemotesWithStatus } from "../utils/baseCompareRef.js";
+import { createRemoteInventoryReader } from "./remoteInventory.js";
 import {
   classifyGitError,
   extractGitErrorMessage,
@@ -26,6 +28,7 @@ import type {
   Worktree,
   WorktreeSetupStatus,
   WorktreeSetupState,
+  WorktreeTeardownPreview,
   WslGitEligibility,
 } from "../../shared/types/worktree.js";
 
@@ -722,6 +725,16 @@ export class WorkspaceService {
       },
       onAuthFailureConfirmed: (commonDir, _remote, reason) =>
         this.handleAuthFailureConfirmed(commonDir, reason),
+      readRemotes: createRemoteInventoryReader(async (worktreePath) => {
+        try {
+          const { availableRemotes, succeeded } = await readRemotesWithStatus(
+            await createHardenedGit(worktreePath, this._shutdownController.signal)
+          );
+          return succeeded ? availableRemotes : null;
+        } catch {
+          return null;
+        }
+      }),
     });
     const prCallbacks: PRIntegrationCallbacks = {
       onPRDetected: (worktreeId, data) => {
@@ -2118,11 +2131,19 @@ export class WorkspaceService {
     ) {
       return result;
     }
+    // Remote presence is read from this worktree's effective config, which a
+    // sibling need not share, so "no remote" stops here instead of fanning out
+    // and wiping siblings' fetch history on one worktree's say-so.
+    if (result.skipReason === "no-remotes") {
+      live.setFetchState(null, false, false, false);
+      return result;
+    }
     await this.applyFetchResultToSiblings(live, {
       lastFetchedAt: result.lastFetchedAt ?? null,
       authFailed: result.authFailed ?? false,
       networkFailed: result.networkFailed ?? false,
       remote: result.remote,
+      hasRemote: result.hasRemote,
     });
     return result;
   }
@@ -2190,13 +2211,19 @@ export class WorkspaceService {
        * remote the sibling's own counts depend on — see the fan-out note below.
        */
       remote: string | undefined;
+      hasRemote: boolean | undefined;
     }
   ): Promise<void> {
     const triggeringCommonDir = await getGitCommonDir(triggering.path, { logErrors: false });
     if (!triggeringCommonDir) {
       // Without a commondir we can't identify siblings. Apply to the
       // triggering monitor only — its own card still benefits.
-      triggering.setFetchState(result.lastFetchedAt, result.authFailed, result.networkFailed);
+      triggering.setFetchState(
+        result.lastFetchedAt,
+        result.authFailed,
+        result.networkFailed,
+        result.hasRemote
+      );
       return;
     }
     for (const monitor of this.monitors.values()) {
@@ -2219,7 +2246,14 @@ export class WorkspaceService {
         dependsOnRemote(monitor) !== result.remote
       )
         continue;
-      monitor.setFetchState(result.lastFetchedAt, result.authFailed, result.networkFailed);
+      monitor.setFetchState(
+        result.lastFetchedAt,
+        result.authFailed,
+        result.networkFailed,
+        // Same scoping as the no-remote early return: only the worktree whose
+        // config was read learns what it said.
+        isTriggering ? result.hasRemote : undefined
+      );
     }
   }
 
@@ -2982,6 +3016,14 @@ export class WorkspaceService {
    *
    * `null` when no monitor exists for the id (already removed).
    */
+  async getDeleteTeardownPreview(worktreeId: string): Promise<WorktreeTeardownPreview | null> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor) return null;
+    const ctx = this.getLifecycleContext();
+    if (!ctx) return { phases: [] };
+    return this.lifecycleService.previewLifecycleTeardown(monitor, ctx);
+  }
+
   async getSubmoduleDeleteRisk(worktreeId: string): Promise<SubmoduleDeleteRisk | null> {
     const monitor = this.monitors.get(worktreeId);
     if (!monitor) return null;

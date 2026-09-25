@@ -7,6 +7,7 @@ import { requestPluginConfirmation, usePluginConfirmStore } from "@/store/plugin
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { logWarn } from "@/utils/logger";
 import { notify } from "@/lib/notify";
+import { resolvePluginAttribution } from "@/hooks/usePluginAttribution";
 
 /**
  * Pull plugin-registered actions on mount and keep the renderer registry in
@@ -202,7 +203,7 @@ function toSyntheticDefinition(
           notify({
             type: "error",
             title: "Plugin action failed",
-            message: `"${title ?? id}" from plugin ${pluginId} threw an error.`,
+            message: `"${title ?? id}" from the ${resolvePluginAttribution(pluginId).label} threw an error.`,
           });
         }
         logWarn(`[PluginActions] Plugin action "${id}" threw`, { error: err });

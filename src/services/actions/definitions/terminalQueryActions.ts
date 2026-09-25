@@ -355,7 +355,7 @@ export function registerTerminalQueryActions(
           })
           .optional()
           .describe(
-            "Opt-in. Adds `recentOutput` (last N scrollback lines) and `lastOutputChangeAt` when observed. Off by default to keep responses small."
+            "Opt-in. Adds `recentOutput` (last N scrollback lines), plus `lastOutputChangeAt` and `lastTypedInputAt` when observed. Off by default to keep responses small."
           ),
       })
       .optional(),
@@ -589,8 +589,13 @@ export function registerTerminalQueryActions(
                 // Nothing was read. Left silent, the missing timestamp would
                 // pass for a terminal whose screen has not changed yet.
                 appendError("Output activity unavailable for this terminal");
-              } else if (lookup.lastOutputChangeAt !== undefined) {
-                entry.lastOutputChangeAt = lookup.lastOutputChangeAt;
+              } else {
+                if (lookup.lastOutputChangeAt !== undefined) {
+                  entry.lastOutputChangeAt = lookup.lastOutputChangeAt;
+                }
+                if (lookup.lastTypedInputAt !== undefined) {
+                  entry.lastTypedInputAt = lookup.lastTypedInputAt;
+                }
               }
             }
           }
@@ -615,14 +620,14 @@ export function registerTerminalQueryActions(
       // says it could not look. `lastOutputChangeAt` is also read off the
       // pty-host (#12428), but only on calls that asked for output (#12495), so
       // it is unobservable on the default poll and on a call whose activity
-      // read failed outright.
+      // read failed outright. `lastTypedInputAt` rides the same read (#12718).
       //
       // Tails are fitted last, once every other field is in place, so the
       // budget they split is what the rest of the snapshot leaves (#12450).
       const unavailableFields: TerminalStatusUnavailableField[] =
         includeOutput && activityError === undefined
           ? ["hasPty"]
-          : ["hasPty", "lastOutputChangeAt"];
+          : ["hasPty", "lastOutputChangeAt", "lastTypedInputAt"];
       return boundTerminalStatusOutput(
         {
           terminals: entries,

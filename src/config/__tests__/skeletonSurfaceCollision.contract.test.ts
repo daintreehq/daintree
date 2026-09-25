@@ -17,8 +17,9 @@ import { fileURLToPath } from "node:url";
 // if someone re-introduces any surface-aliased fill, it fails.
 //
 // KNOWN LIMITS (deliberate — a regression guard, not a sound checker):
-//   - Only the shared `Skeleton.tsx` primitives are in scope. Hand-rolled bones
-//     elsewhere (there are two) are not reached by a static read of this file.
+//   - Alias resolution covers the shared `Skeleton.tsx` primitives. Hand-rolled bones
+//     elsewhere are held to the narrower rule below: an element marked
+//     `data-skeleton-bone` must not paint with `bg-muted`.
 //   - Alias resolution is one level deep against `src/index.css`, which is how these
 //     tokens are actually declared. A multi-hop alias through a new indirection would
 //     not be followed.
@@ -86,13 +87,86 @@ describe("skeleton surface-collision contract", () => {
   });
 
   it("the skeleton pulse cannot be the thing that makes a bone visible", () => {
-    // `pulse-delayed` animates opacity between 0 and 1. Opacity on a fill that matches
-    // its background composites to the background at every frame, so the animation is
+    // `skeleton-pulse` animates opacity only. Opacity on a fill that matches its
+    // background composites to the background at every frame, so the animation is
     // never a substitute for a fill that contrasts. Pinned so a future "the pulse makes
     // it visible enough" argument has to contend with the keyframes.
-    const block = css.slice(css.indexOf("@keyframes pulse-delayed"));
+    const start = css.indexOf("@keyframes skeleton-pulse");
+    expect(start).toBeGreaterThan(-1);
+    const block = css.slice(start);
     const body = block.slice(0, block.indexOf("}\n}") + 3);
     expect(body).toMatch(/opacity/);
     expect(body).not.toMatch(/background|background-color/);
+  });
+
+  describe("hand-rolled skeletons", () => {
+    /** Every .ts/.tsx under a root, minus tests and preview harnesses. */
+    function sources(root: string): string[] {
+      if (!fs.existsSync(root)) return [];
+      return fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+        const full = path.join(root, entry.name);
+        if (entry.isDirectory()) {
+          if (["node_modules", "__tests__", "__preview__", "dist"].includes(entry.name)) return [];
+          return sources(full);
+        }
+        return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [full] : [];
+      });
+    }
+
+    const files = [
+      ...sources(path.join(REPO_ROOT, "src")),
+      ...sources(path.join(REPO_ROOT, "plugins")),
+    ].map((file) => ({
+      rel: path.relative(REPO_ROOT, file),
+      // Comments explain why a class is avoided; only code can paint with it.
+      text: fs
+        .readFileSync(file, "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "")
+        .replace(/\{\/\*[\s\S]*?\*\/\}/g, ""),
+    }));
+
+    /**
+     * The opening JSX tag around each `data-skeleton-bone` attribute: back to its `<`,
+     * forward to the `>` that closes it at brace depth zero, so a `cn(…)` or an arrow
+     * inside an attribute cannot end the tag early.
+     */
+    function boneTags(text: string): string[] {
+      const tags: string[] = [];
+      for (const match of text.matchAll(/data-skeleton-bone/g)) {
+        const start = text.lastIndexOf("<", match.index);
+        let depth = 0;
+        let end = match.index;
+        for (; end < text.length; end++) {
+          const ch = text[end];
+          if (ch === "{") depth++;
+          else if (ch === "}") depth--;
+          else if (ch === ">" && depth === 0) break;
+        }
+        tags.push(text.slice(start, end + 1));
+      }
+      return tags;
+    }
+
+    it("no hand-rolled bone paints with the surface-aliased `bg-muted`", () => {
+      const tags = files.flatMap((f) => boneTags(f.text).map((tag) => ({ rel: f.rel, tag })));
+      expect(tags.length).toBeGreaterThan(10);
+      const offenders = tags
+        .filter(({ tag }) => /\bbg-muted\b(?!-)/.test(tag))
+        .map(({ rel, tag }) => `${rel}: ${tag.replace(/\s+/g, " ")}`);
+      expect(offenders).toEqual([]);
+    });
+
+    it("no status region is marked busy", () => {
+      // `aria-busy` on a live region holds back the region's own message until it
+      // clears — the loading announcement it exists to make.
+      const offenders: string[] = [];
+      for (const { rel, text } of files) {
+        for (const match of text.matchAll(/<\w+\b[^<>]*?role="status"[^<>]*?>/g)) {
+          if (/aria-busy="true"/.test(match[0])) offenders.push(rel);
+        }
+      }
+      expect(offenders).toEqual([]);
+    });
   });
 });

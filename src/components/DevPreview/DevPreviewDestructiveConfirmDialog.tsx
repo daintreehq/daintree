@@ -1,15 +1,25 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { PathSegments } from "@/components/ui/PathSegments";
+import {
+  Bone,
+  MissingValue,
+  PreviewFrame,
+  PreviewNote,
+  PreviewNotice,
+  PreviewSectionHeading,
+  PreviewSkeleton,
+  PreviewSummary,
+  SummaryRow,
+} from "@/components/Git/GitOperationPreview";
 import { formatBytes } from "@/lib/formatBytes";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { cn } from "@/lib/utils";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type {
   DevPreviewDestructivePreviewMeta,
   DevPreviewDestructivePreviewSizes,
-  DevPreviewPackageManager,
+  DevPreviewDirMeta,
 } from "@shared/types/ipc/devPreview";
 
 export type DevPreviewDestructiveTier = "restartAndClearCache" | "reinstallAndRestart";
@@ -19,50 +29,49 @@ interface DevPreviewDestructiveConfirmDialogProps {
   projectId: string | undefined;
   tier: DevPreviewDestructiveTier | null;
   isOpen: boolean;
+  /** The confirmed operation is running: the primary shows progress and Cancel locks. */
+  isConfirming?: boolean;
   onClose: () => void;
   onConfirm: () => void;
 }
 
-function joinNodeModulesPath(cwd: string): string {
-  const sep = cwd.includes("\\") && !cwd.includes("/") ? "\\" : "/";
-  return cwd.endsWith(sep) ? `${cwd}node_modules` : `${cwd}${sep}node_modules`;
+type SizesState = "pending" | "failed" | DevPreviewDestructivePreviewSizes;
+
+function pathSeparator(cwd: string): string {
+  return cwd.includes("\\") && !cwd.includes("/") ? "\\" : "/";
 }
 
-const PACKAGE_MANAGER_LABELS: Record<DevPreviewPackageManager, string> = {
-  npm: "npm",
-  pnpm: "pnpm",
-  yarn: "Yarn",
-  bun: "Bun",
-};
+function joinNodeModulesPath(cwd: string): string {
+  const sep = pathSeparator(cwd);
+  return cwd.endsWith(sep) ? `${cwd}node_modules` : `${cwd}${sep}node_modules`;
+}
 
 export function DevPreviewDestructiveConfirmDialog({
   panelId,
   projectId,
   tier,
   isOpen,
+  isConfirming = false,
   onClose,
   onConfirm,
 }: DevPreviewDestructiveConfirmDialogProps) {
   const [meta, setMeta] = useState<DevPreviewDestructivePreviewMeta | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
-  const [sizes, setSizes] = useState<DevPreviewDestructivePreviewSizes | null>(null);
-  const [sizesPending, setSizesPending] = useState(false);
+  const [sizes, setSizes] = useState<SizesState>("pending");
   const requestIdRef = useRef(0);
 
   useEffect(() => {
     if (!isOpen || !projectId || !tier) {
       setMeta(null);
       setMetaError(null);
-      setSizes(null);
-      setSizesPending(false);
+      setSizes("pending");
       return;
     }
 
     const requestId = ++requestIdRef.current;
     setMeta(null);
     setMetaError(null);
-    setSizes(null);
-    setSizesPending(true);
+    setSizes("pending");
 
     safeFireAndForget(
       window.electron.devPreview
@@ -73,7 +82,7 @@ export function DevPreviewDestructiveConfirmDialog({
         })
         .catch((err: unknown) => {
           if (requestIdRef.current !== requestId) return;
-          setMetaError(formatErrorMessage(err, "Couldn't load directory preview"));
+          setMetaError(formatErrorMessage(err, "The dev server's folder couldn't be read."));
         }),
       { context: "DevPreviewDestructiveConfirmDialog: load meta" }
     );
@@ -87,11 +96,9 @@ export function DevPreviewDestructiveConfirmDialog({
           setSizes(result);
         })
         .catch(() => {
-          // Size errors are non-blocking — cells render as "—" / "Unknown".
-        })
-        .finally(() => {
+          // Non-blocking: sizes inform the decision, the directory list gates it.
           if (requestIdRef.current !== requestId) return;
-          setSizesPending(false);
+          setSizes("failed");
         }),
       { context: "DevPreviewDestructiveConfirmDialog: load sizes" }
     );
@@ -99,16 +106,7 @@ export function DevPreviewDestructiveConfirmDialog({
 
   if (!tier) return null;
 
-  const isCacheTier = tier === "restartAndClearCache";
-  const isPnpm = meta?.packageManager === "pnpm";
-
-  const title = isCacheTier ? "Clear cache and restart?" : "Reinstall dependencies?";
-  const description = isCacheTier
-    ? "Framework build caches will be deleted, then the dev server respawns. Source files and installed dependencies are not affected."
-    : isPnpm
-      ? "node_modules will be deleted, then dependencies re-link from the pnpm store. Source files and git state are not affected."
-      : "node_modules will be deleted and all dependencies will be reinstalled, then the dev server respawns. This can take several minutes. Source files and git state are not affected.";
-  const confirmLabel = isCacheTier ? "Clear cache" : "Reinstall dependencies";
+  const copy = describe(tier, meta);
 
   return (
     <ConfirmDialog
@@ -116,243 +114,331 @@ export function DevPreviewDestructiveConfirmDialog({
       onClose={onClose}
       variant="destructive"
       hasPreview={true}
-      title={title}
-      description={description}
-      confirmLabel={confirmLabel}
+      title={copy.title}
+      description={copy.description}
+      confirmLabel={copy.confirmLabel}
       confirmDisabled={!meta}
+      isConfirmLoading={isConfirming}
+      hint={
+        metaError
+          ? "Needs a readable project folder"
+          : !meta
+            ? "Checking what this deletes…"
+            : undefined
+      }
       onConfirm={onConfirm}
     >
-      <PreviewBlock
-        tier={tier}
-        meta={meta}
-        metaError={metaError}
-        sizes={sizes}
-        sizesPending={sizesPending}
-      />
+      {/* Ahead of the frame, not after it: as the body's last child it took
+          the frame's place in `space-y` and pushed a gap under it. */}
+      <p className="sr-only" role="status" data-testid="dev-preview-destructive-status">
+        {settledAnnouncement(tier, meta, sizes)}
+      </p>
+      <PreviewFrame>
+        {metaError && (
+          <PreviewNotice
+            tone="error"
+            title="Couldn't read the dev server's folder"
+            testId="dev-preview-destructive-meta-error"
+          >
+            {metaError}
+          </PreviewNotice>
+        )}
+        {!metaError &&
+          (tier === "restartAndClearCache" ? (
+            <CacheDirsPreview meta={meta} sizes={sizes} />
+          ) : (
+            <NodeModulesPreview meta={meta} sizes={sizes} />
+          ))}
+      </PreviewFrame>
     </ConfirmDialog>
   );
 }
 
-interface PreviewBlockProps {
-  tier: DevPreviewDestructiveTier;
-  meta: DevPreviewDestructivePreviewMeta | null;
-  metaError: string | null;
-  sizes: DevPreviewDestructivePreviewSizes | null;
-  sizesPending: boolean;
+interface TierCopy {
+  title: string;
+  description: string;
+  confirmLabel: string;
 }
 
-function PreviewBlock({ tier, meta, metaError, sizes, sizesPending }: PreviewBlockProps) {
-  if (metaError) {
+/**
+ * The paragraph and the button follow what the preview found. A cache clear
+ * that finds nothing only restarts, and a reinstall with no node_modules only
+ * installs — saying "will be deleted" there made the user reconcile the copy
+ * against a list that contradicted it.
+ */
+function describe(tier: DevPreviewDestructiveTier, meta: DevPreviewDestructivePreviewMeta | null) {
+  if (tier === "restartAndClearCache") {
+    const nothingToClear = meta !== null && !meta.cacheDirs.some((d) => d.exists);
+    return nothingToClear
+      ? {
+          title: "Restart dev server?",
+          description:
+            "There are no build caches to delete, so this only restarts the dev server. Source files and installed dependencies aren't touched.",
+          confirmLabel: "Restart dev server",
+        }
+      : {
+          title: "Clear cache and restart?",
+          description:
+            "The build caches below are deleted and the dev server restarts; the framework rebuilds them on the next start. Source files and installed dependencies aren't touched.",
+          confirmLabel: "Clear cache",
+        };
+  }
+
+  const pm = meta?.packageManager ?? "npm";
+  // Only node_modules is deleted, but the install itself writes to the working
+  // tree: it can rewrite the lockfile, or create one where there was none.
+  const untouched = !meta
+    ? "Source files aren't touched, though the install can update the lockfile."
+    : meta.lockfileName
+      ? `Source files aren't touched, though the install can update ${meta.lockfileName}.`
+      : "Source files aren't touched, though the install writes a new lockfile.";
+  if (meta && !meta.nodeModules.exists) {
+    return {
+      title: "Install dependencies?",
+      description: `There's no node_modules to delete, so ${pm} installs every dependency, then the dev server restarts. This can take several minutes. ${untouched}`,
+      confirmLabel: "Install dependencies",
+    } satisfies TierCopy;
+  }
+  return {
+    title: "Reinstall dependencies?",
+    description:
+      pm === "pnpm"
+        ? `node_modules is deleted and re-linked from the pnpm store, then the dev server restarts. ${untouched}`
+        : `node_modules is deleted and every dependency reinstalled, then the dev server restarts. This can take several minutes. ${untouched}`,
+    confirmLabel: "Reinstall dependencies",
+  } satisfies TierCopy;
+}
+
+/**
+ * What a screen reader hears once the preview settles. The loading skeleton is
+ * its own status region, but it unmounts when the metadata lands, so without a
+ * region that outlives it the preview arrives — and the primary unlocks — in
+ * silence. Metadata errors announce through the notice's own alert.
+ */
+function settledAnnouncement(
+  tier: DevPreviewDestructiveTier,
+  meta: DevPreviewDestructivePreviewMeta | null,
+  sizes: SizesState
+): string {
+  if (!meta) return "";
+  // An empty outcome is known the moment the metadata lands; there is no size
+  // to wait for, so it never waits behind one.
+  const present = meta.cacheDirs.filter((d) => d.exists);
+  if (tier === "restartAndClearCache" && present.length === 0) {
+    return "Preview ready. No build caches found.";
+  }
+  if (tier === "reinstallAndRestart" && !meta.nodeModules.exists) {
+    return "Preview ready. node_modules isn't there.";
+  }
+  if (sizes === "pending") return "Preview ready. Measuring sizes.";
+  if (sizes === "failed") return "Preview ready. Sizes couldn't be measured.";
+  if (tier === "restartAndClearCache") {
+    const total = cacheTotal(present, sizes);
+    return typeof total === "number"
+      ? `Preview ready. ${present.length} ${present.length === 1 ? "cache" : "caches"}, ${formatBytes(total)} in all.`
+      : "Preview ready. Some sizes couldn't be measured.";
+  }
+  return typeof sizes.nodeModulesSizeBytes === "number"
+    ? `Preview ready. node_modules is ${formatBytes(sizes.nodeModulesSizeBytes)}.`
+    : "Preview ready. The size couldn't be measured.";
+}
+
+/** A full path, wrapping only between folders (see `PathSegments`). */
+function PathValue({ path, testId }: { path: string; testId?: string }) {
+  return (
+    <span className="font-mono text-text-primary" data-testid={testId} title={path}>
+      <PathSegments path={path} />
+    </span>
+  );
+}
+
+function SizeValue({ bytes, sizes }: { bytes: number | null | undefined; sizes: SizesState }) {
+  if (typeof bytes === "number") {
+    return <span className="tabular-nums text-text-primary">{formatBytes(bytes)}</span>;
+  }
+  if (sizes === "pending") return <Bone className="w-14" />;
+  return <MissingValue label="Unknown" />;
+}
+
+function cacheTotal(present: DevPreviewDirMeta[], sizes: SizesState): number | null | undefined {
+  if (sizes === "pending") return undefined;
+  if (sizes === "failed") return null;
+  let total = 0;
+  for (const dir of present) {
+    const size = sizes.cacheDirSizes[dir.relPath];
+    if (typeof size !== "number") return null;
+    total += size;
+  }
+  return total;
+}
+
+function CacheDirsPreview({
+  meta,
+  sizes,
+}: {
+  meta: DevPreviewDestructivePreviewMeta | null;
+  sizes: SizesState;
+}) {
+  if (!meta) {
     return (
-      <div
-        className="rounded border border-status-error/30 bg-status-error/[0.06] px-3 py-2 text-xs text-status-error flex items-start gap-2"
-        data-testid="dev-preview-destructive-meta-error"
-      >
-        <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-        <span>{metaError}</span>
-      </div>
+      <PreviewSkeleton
+        label="Checking for build caches"
+        testId="dev-preview-destructive-cache-skeleton"
+      />
     );
   }
 
-  if (tier === "restartAndClearCache") {
-    return <CacheDirsPreview meta={meta} sizes={sizes} sizesPending={sizesPending} />;
-  }
-  return <NodeModulesPreview meta={meta} sizes={sizes} sizesPending={sizesPending} />;
-}
-
-interface CacheDirsPreviewProps {
-  meta: DevPreviewDestructivePreviewMeta | null;
-  sizes: DevPreviewDestructivePreviewSizes | null;
-  sizesPending: boolean;
-}
-
-function CacheDirsPreview({ meta, sizes, sizesPending }: CacheDirsPreviewProps) {
-  const cacheDirs = meta?.cacheDirs ?? null;
-  const presentCount = cacheDirs?.filter((d) => d.exists).length ?? 0;
+  const present = meta.cacheDirs.filter((d) => d.exists);
+  const absent = meta.cacheDirs.filter((d) => !d.exists);
+  const total = cacheTotal(present, sizes);
 
   return (
-    <div
-      className="rounded border border-tint/[0.08] bg-tint/[0.04]"
-      data-testid="dev-preview-destructive-cache-preview"
-    >
-      <div className="px-3 py-2 border-b border-tint/[0.08] flex items-center justify-between">
-        <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
-          Directories to delete
-          {cacheDirs && (
-            <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
-              {presentCount} of {cacheDirs.length}
-            </span>
-          )}
-        </span>
-      </div>
-      <ul className="divide-y divide-tint/[0.06]">
-        {cacheDirs === null
-          ? Array.from({ length: 4 }).map((_, i) => (
-              <li key={i} className="px-3 py-1.5">
-                <div
-                  className="h-3.5 w-32 rounded bg-tint/[0.08] animate-pulse-delayed"
-                  data-testid="dev-preview-destructive-cache-skeleton"
-                />
-              </li>
-            ))
-          : cacheDirs.map((dir) => {
-              const size = sizes?.cacheDirSizes[dir.relPath];
-              return (
-                <li
+    <div data-testid="dev-preview-destructive-cache-preview">
+      <PreviewSummary>
+        <SummaryRow label="Folder">
+          <PathValue path={meta.cwd} testId="dev-preview-destructive-cwd" />
+        </SummaryRow>
+        {present.length > 0 && (
+          <SummaryRow label="Frees">
+            <SizeValue bytes={total} sizes={sizes} />
+          </SummaryRow>
+        )}
+      </PreviewSummary>
+
+      {present.length === 0 ? (
+        <PreviewNote testId="dev-preview-destructive-cache-none">
+          No build caches found. Checked {absent.map((d) => d.relPath).join(", ")}.
+        </PreviewNote>
+      ) : (
+        <>
+          <PreviewSectionHeading label="Caches to delete" count={present.length} />
+          <table
+            className="w-full border-t border-tint/[0.08] text-left"
+            aria-busy={sizes === "pending" || undefined}
+          >
+            <thead className="sr-only">
+              <tr>
+                <th scope="col">Directory</th>
+                <th scope="col">Modified</th>
+                <th scope="col">Size</th>
+              </tr>
+            </thead>
+            <tbody>
+              {present.map((dir) => (
+                <tr
                   key={dir.relPath}
-                  className="px-3 py-1.5 flex items-baseline gap-2 text-xs"
+                  className="align-baseline"
                   data-testid="dev-preview-destructive-cache-row"
                   data-rel-path={dir.relPath}
-                  data-exists={dir.exists ? "true" : "false"}
                 >
-                  <span
-                    className={cn(
-                      "font-mono shrink-0",
-                      dir.exists ? "text-text-primary" : "text-text-placeholder line-through"
-                    )}
-                  >
-                    {dir.relPath}
-                  </span>
-                  {dir.exists ? (
-                    <>
-                      <span className="text-3xs text-text-secondary shrink-0">
-                        {dir.mtimeMs ? formatRelativeTime(dir.mtimeMs) : null}
-                      </span>
-                      <span className="ml-auto tabular-nums text-text-secondary shrink-0">
-                        {size !== undefined && size !== null ? (
-                          formatBytes(size)
-                        ) : sizesPending ? (
-                          <span
-                            className="inline-block h-3 w-12 rounded bg-tint/[0.1] animate-pulse-delayed align-middle"
-                            data-testid="dev-preview-destructive-size-skeleton"
-                          />
-                        ) : (
-                          <span className="text-daintree-text/35">—</span>
-                        )}
-                      </span>
-                    </>
-                  ) : (
-                    <span className="ml-auto text-3xs text-text-placeholder italic shrink-0">
-                      not present
-                    </span>
-                  )}
-                </li>
-              );
-            })}
-      </ul>
+                  <td className="pl-3 pr-2 py-1 font-mono text-text-primary">{dir.relPath}</td>
+                  <td className="w-full px-2 py-1 text-2xs text-text-secondary whitespace-nowrap">
+                    {dir.mtimeMs ? formatRelativeTime(dir.mtimeMs) : <MissingValue />}
+                  </td>
+                  <td className="pl-2 pr-3 py-1 text-right whitespace-nowrap">
+                    <SizeValue
+                      bytes={
+                        sizes === "pending" || sizes === "failed"
+                          ? null
+                          : sizes.cacheDirSizes[dir.relPath]
+                      }
+                      sizes={sizes}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {absent.length > 0 && (
+            <p
+              className="px-3 pt-1 pb-2 text-2xs text-text-secondary"
+              data-testid="dev-preview-destructive-cache-absent"
+            >
+              Not found, skipped: {absent.map((d) => d.relPath).join(", ")}
+            </p>
+          )}
+        </>
+      )}
     </div>
   );
 }
 
-interface NodeModulesPreviewProps {
+function NodeModulesPreview({
+  meta,
+  sizes,
+}: {
   meta: DevPreviewDestructivePreviewMeta | null;
-  sizes: DevPreviewDestructivePreviewSizes | null;
-  sizesPending: boolean;
-}
+  sizes: SizesState;
+}) {
+  if (!meta) {
+    return (
+      <PreviewSkeleton
+        label="Checking node_modules"
+        testId="dev-preview-destructive-reinstall-skeleton"
+      />
+    );
+  }
 
-function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewProps) {
-  const nodeModules = meta?.nodeModules ?? null;
-  const sizeBytes = sizes?.nodeModulesSizeBytes ?? null;
-  const isPnpm = meta?.packageManager === "pnpm";
-  const pmLabel = meta ? PACKAGE_MANAGER_LABELS[meta.packageManager] : null;
+  const exists = meta.nodeModules.exists;
+  const isPnpm = meta.packageManager === "pnpm";
+  const bytes = sizes === "pending" || sizes === "failed" ? null : sizes.nodeModulesSizeBytes;
 
   return (
-    <div
-      className="rounded border border-tint/[0.08] bg-tint/[0.04] text-xs"
-      data-testid="dev-preview-destructive-reinstall-preview"
+    <PreviewSummary
+      testId="dev-preview-destructive-reinstall-preview"
+      busy={exists && sizes === "pending"}
     >
-      <div className="px-3 py-2 border-b border-tint/[0.08]">
-        <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
-          What will happen
-        </span>
-      </div>
-      <dl className="px-3 py-2 space-y-1.5">
-        <Row label="Directory">
-          {meta ? (
-            <span
-              className={cn(
-                "font-mono break-all",
-                nodeModules?.exists ? "text-text-primary" : "text-text-placeholder line-through"
-              )}
-              data-testid="dev-preview-destructive-node-modules-path"
-            >
-              {joinNodeModulesPath(meta.cwd)}
-            </span>
-          ) : (
-            <RowSkeleton width="w-48" />
-          )}
-        </Row>
-        <Row label="Size">
-          {nodeModules?.exists === false ? (
-            <span className="text-3xs text-text-placeholder italic">not present</span>
-          ) : sizeBytes !== null ? (
-            <span className="tabular-nums text-text-primary">
-              {formatBytes(sizeBytes)}
-              {isPnpm && (
-                <span className="ml-1.5 text-3xs text-text-secondary italic">
-                  apparent — pnpm store files remain
-                </span>
-              )}
-            </span>
-          ) : sizesPending ? (
-            <RowSkeleton width="w-20" />
-          ) : (
-            <span className="text-daintree-text/35">—</span>
-          )}
-        </Row>
-        <Row label="Last modified">
-          {nodeModules?.mtimeMs ? (
-            <span className="text-text-secondary">{formatRelativeTime(nodeModules.mtimeMs)}</span>
-          ) : meta ? (
-            <span className="text-daintree-text/35">—</span>
-          ) : (
-            <RowSkeleton width="w-24" />
-          )}
-        </Row>
-        <Row label="Install command">
-          {pmLabel ? (
-            <span
-              className="font-mono text-text-primary"
-              data-testid="dev-preview-destructive-install-cmd"
-            >
-              {meta?.packageManager} install
-            </span>
-          ) : (
-            <RowSkeleton width="w-20" />
-          )}
-        </Row>
-        <Row label="Lockfile">
-          {meta ? (
-            meta.lockfileName ? (
-              <span className="font-mono text-text-primary">{meta.lockfileName}</span>
+      {exists ? (
+        <SummaryRow label="Deletes">
+          <PathValue
+            path={joinNodeModulesPath(meta.cwd)}
+            testId="dev-preview-destructive-node-modules-path"
+          />
+        </SummaryRow>
+      ) : (
+        <>
+          <SummaryRow label="Folder">
+            <PathValue path={meta.cwd} testId="dev-preview-destructive-cwd" />
+          </SummaryRow>
+          <SummaryRow label="Deletes">
+            <MissingValue label="Nothing, node_modules isn't there" />
+          </SummaryRow>
+        </>
+      )}
+      {exists && (
+        <>
+          <SummaryRow
+            label="Size"
+            aside={isPnpm && bytes !== null ? "the pnpm store keeps the files" : undefined}
+          >
+            <SizeValue bytes={bytes} sizes={sizes} />
+          </SummaryRow>
+          <SummaryRow label="Modified">
+            {meta.nodeModules.mtimeMs ? (
+              <span className="text-text-primary">
+                {formatRelativeTime(meta.nodeModules.mtimeMs)}
+              </span>
             ) : (
-              <span className="text-3xs text-text-secondary italic">none — npm fallback</span>
-            )
-          ) : (
-            <RowSkeleton width="w-32" />
-          )}
-        </Row>
-      </dl>
-    </div>
-  );
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline gap-2">
-      <dt className="text-3xs uppercase tracking-wider text-text-secondary shrink-0 w-28">
-        {label}
-      </dt>
-      <dd className="flex-1 min-w-0">{children}</dd>
-    </div>
-  );
-}
-
-function RowSkeleton({ width }: { width: string }) {
-  return (
-    <span
-      className={cn("inline-block h-3.5 rounded bg-tint/[0.08] animate-pulse-delayed", width)}
-      data-testid="dev-preview-destructive-row-skeleton"
-    />
+              <MissingValue />
+            )}
+          </SummaryRow>
+        </>
+      )}
+      <SummaryRow label="Runs">
+        <span
+          className="font-mono text-text-primary"
+          data-testid="dev-preview-destructive-install-cmd"
+        >
+          {meta.packageManager} install
+        </span>
+      </SummaryRow>
+      <SummaryRow label="Lockfile">
+        {meta.lockfileName ? (
+          <span className="font-mono text-text-primary">{meta.lockfileName}</span>
+        ) : (
+          <MissingValue label="None, so versions resolve fresh from package.json" />
+        )}
+      </SummaryRow>
+    </PreviewSummary>
   );
 }

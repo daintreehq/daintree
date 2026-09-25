@@ -1,5 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
+import { ALL_CLEAR_FLASH_DURATION, DURATION_100 } from "@/lib/animationUtils";
+
+// animationend is the normal exit; this only covers a view whose animations
+// never tick (backgrounded) or were killed after mount.
+const SAFETY_TIMEOUT_MS = ALL_CLEAR_FLASH_DURATION + DURATION_100;
+
+const FLASH_STYLE: CSSProperties & Record<"--all-clear-flash-duration", string> = {
+  "--all-clear-flash-duration": `${ALL_CLEAR_FLASH_DURATION}ms`,
+};
 
 export function AllClearOverlay() {
   const [visible, setVisible] = useState(false);
@@ -14,6 +23,10 @@ export function AllClearOverlay() {
       // Recomputing this from a per-project-view renderer store would go
       // stale the moment a second open view's settings changed elsewhere.
       if (!data.shouldFlash) return;
+
+      // Every project view receives the event; only the one on screen should
+      // flash, or a background view replays a stale bell when it's revealed.
+      if (document.visibilityState === "hidden") return;
 
       // These three remain renderer-only concerns — CSS media queries and
       // DOM attributes the main process has no way to observe.
@@ -34,7 +47,7 @@ export function AllClearOverlay() {
 
   useEffect(() => {
     if (!visible) return;
-    safetyTimerRef.current = setTimeout(() => setVisible(false), 500);
+    safetyTimerRef.current = setTimeout(() => setVisible(false), SAFETY_TIMEOUT_MS);
     return () => {
       if (safetyTimerRef.current !== null) clearTimeout(safetyTimerRef.current);
     };
@@ -44,7 +57,9 @@ export function AllClearOverlay() {
 
   return createPortal(
     <div
-      className="fixed inset-0 pointer-events-none z-[200] animate-all-clear-flash bg-status-success"
+      data-all-clear-flash=""
+      className="fixed inset-0 pointer-events-none z-[var(--z-visual-bell)] animate-all-clear-flash"
+      style={FLASH_STYLE}
       aria-hidden="true"
       onAnimationEnd={handleAnimationEnd}
     />,

@@ -1,8 +1,23 @@
 {
   "name": "@daintreehq/plugin-sdk",
   "version": "0.1.0",
-  "description": "Public type surface for Daintree plugins — manifest, host API, activation contract, and forge/file-decoration provider types.",
+  "description": "Public surface for Daintree plugins \u2014 manifest, host API, activation contract, React hooks, file helpers, and the in-memory mock host for tests.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/daintreehq/daintree.git",
+    "directory": "packages/plugin-sdk"
+  },
+  "homepage": "https://github.com/daintreehq/daintree/tree/develop/docs/plugins",
+  "bugs": {
+    "url": "https://github.com/daintreehq/daintree/issues"
+  },
+  "keywords": [
+    "daintree",
+    "daintree-plugin",
+    "sdk",
+    "types"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -21,6 +36,11 @@
       "types": "./dist/files.d.ts",
       "import": "./dist/files.js",
       "default": "./dist/files.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js",
+      "default": "./dist/testing.js"
     }
   },
   "files": [
@@ -34,9 +54,9 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsup",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "prepare": "tsup"
+    "prepare": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsup"
   },
   "peerDependencies": {
     "react": "^19.0.0",
@@ -48,9 +68,9 @@
     }
   },
   "devDependencies": {
-    "@types/react": "^19.0.0",
-    "react": "^19.2.1",
-    "tsup": "^8.5.0",
-    "zod": "^4.3.6"
+    "@types/react": "^19.3.0",
+    "react": "^19.3.0",
+    "tsup": "^8.5.1",
+    "zod": "^4.6.5"
   }
 }

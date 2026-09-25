@@ -23,26 +23,60 @@ describe("HelpLaunchingState", () => {
     });
   }
 
-  it("stays hidden until the Doherty gate elapses", () => {
+  function statusNode(container: HTMLElement) {
+    return container.querySelector('[role="status"]')!;
+  }
+
+  it("shows and announces nothing until the Doherty gate elapses", () => {
     const { container } = render(
       <HelpLaunchingState phase="provisioning" isLoading onCancel={() => {}} />
     );
-    expect(container.firstChild).toBeNull();
+    // The announcer is mounted up front, empty, so its first text is a change AT hears.
+    expect(statusNode(container).textContent).toBe("");
+    expect(container.textContent).toBe("");
     advance(400);
-    expect(container.firstChild).not.toBeNull();
+    expect(statusNode(container).textContent).toBe("Preparing session…");
   });
 
-  it("threads the phase label through the hint so AT hears it (not the generic copy)", () => {
-    const { container } = render(
-      <HelpLaunchingState phase="provisioning" isLoading onCancel={() => {}} />
+  it("announces each phase from exactly one node, outside any busy subtree", () => {
+    const { container, rerender } = render(
+      <HelpLaunchingState phase="version-checking" isLoading onCancel={() => {}} />
     );
-    advance(400); // clear Doherty gate; hint mounts and starts its timers
-    advance(8_000); // reach the first hint threshold
-    // The Skeleton wrapper is itself a role=status / aria-live region; the hint's
-    // live region is the sibling one, outside any role=status subtree.
-    const live = Array.from(container.querySelectorAll('[aria-live="polite"]')).find(
-      (el) => el.closest('[role="status"]') === null
+    advance(400);
+    rerender(<HelpLaunchingState phase="launching" isLoading onCancel={() => {}} />);
+    const spoken = Array.from(container.querySelectorAll('[role="status"], [aria-live]')).filter(
+      (el) => el.textContent?.includes("Starting assistant…")
+    );
+    expect(spoken).toHaveLength(1);
+    expect(spoken[0]!.closest('[aria-busy="true"]')).toBeNull();
+    // The visible copy of the label is hidden from AT rather than read twice.
+    const visible = Array.from(container.querySelectorAll("p")).find(
+      (el) => el.textContent === "Starting assistant…"
     )!;
-    expect(live.textContent).toBe("Provisioning session… Cancel option available.");
+    expect(visible.closest('[aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it("never repeats the phase in the long-wait hint", () => {
+    const { container } = render(
+      <HelpLaunchingState phase="launching" isLoading onCancel={() => {}} />
+    );
+    // Every rung of the ladder: reassurance, escalation, action.
+    for (const ms of [5_000, 8_000, 7_000]) {
+      advance(ms);
+      const hint = container.querySelector("span.animate-hint-fade-in")!;
+      expect(hint.textContent).not.toBe("Starting assistant…");
+    }
+  });
+
+  it("offers Cancel with the first hint, five seconds into the launch", () => {
+    const onCancel = vi.fn();
+    const { getByRole, queryByRole } = render(
+      <HelpLaunchingState phase="launching" isLoading onCancel={onCancel} />
+    );
+    advance(4_999);
+    expect(queryByRole("button", { name: "Cancel" })).toBeNull();
+    advance(1);
+    getByRole("button", { name: "Cancel" }).click();
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });

@@ -2704,7 +2704,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
       render(<DevPreviewPane {...baseProps} />);
       headerContentPointerDownSpy.mockClear();
-      const trigger = screen.getByLabelText("Switch dev script");
+      const trigger = screen.getByLabelText(/^Dev script:/);
       fireEvent.pointerDown(trigger);
       expect(headerContentPointerDownSpy).not.toHaveBeenCalled();
     });

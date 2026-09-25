@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import { QuickRun } from "@/components/Project";
-import { SidebarStatusBar } from "./SidebarStatusBar";
-import { ProjectPluginIndicator } from "@/components/Plugin/ProjectPluginIndicator";
+import { SidebarFooter } from "./SidebarFooter";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
-import { DEFAULT_SIDEBAR_WIDTH } from "./AppLayout";
+import { DEFAULT_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from "./AppLayout";
 import {
   ContextMenu,
   ContextMenuActionItem,
@@ -129,7 +127,13 @@ export function Sidebar({
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         onResize(width + RESIZE_STEP);
-      } else if (e.key === "Enter" || e.key === " " || e.key === "Home") {
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        onResize(MIN_SIDEBAR_WIDTH);
+      } else if (e.key === "End") {
+        e.preventDefault();
+        onResize(MAX_SIDEBAR_WIDTH);
+      } else if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         handleResetWidth();
       }
@@ -188,25 +192,22 @@ export function Sidebar({
         >
           <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
 
-          {projectId != null && <QuickRun projectId={projectId} />}
-
-          <ProjectPluginIndicator />
-
-          <SidebarStatusBar />
+          <SidebarFooter projectId={projectId} />
 
           <div
             role="separator"
             aria-label="Resize sidebar (double-click to reset)"
             aria-orientation="vertical"
             aria-valuenow={width}
-            aria-valuemin={200}
-            aria-valuemax={600}
+            aria-valuemin={MIN_SIDEBAR_WIDTH}
+            aria-valuemax={MAX_SIDEBAR_WIDTH}
             tabIndex={isVisible ? 0 : -1}
             aria-hidden={!isVisible ? "true" : undefined}
             className={cn(
               "group absolute top-0 -right-1.5 w-3 h-full cursor-col-resize flex items-center justify-center z-50",
-              "hover:bg-overlay-soft transition-colors focus-visible:outline-hidden focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-daintree-accent/50",
-              isResizing && "bg-overlay-medium"
+              "transition-colors outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+              // Hover styling is off while resizing, or it outranks the drag state.
+              isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft"
             )}
             onMouseDown={startResizing}
             onKeyDown={handleKeyDown}
@@ -215,10 +216,11 @@ export function Sidebar({
           >
             <div
               className={cn(
-                "w-px h-8 rounded-full transition-[width] duration-150 delay-100 group-hover:w-0.5",
-                "bg-daintree-text/20",
-                "group-hover:bg-daintree-text/35 group-focus-visible:bg-accent-primary",
-                isResizing && "bg-daintree-text/50"
+                "h-8 rounded-full transition-[width] duration-150 delay-100",
+                // The focus outline is the accent; the grip stays neutral.
+                isResizing
+                  ? "w-0.5 bg-text-primary/50"
+                  : "w-px bg-text-primary/20 group-hover:w-0.5 group-hover:bg-text-primary/35 group-focus-visible:w-0.5 group-focus-visible:bg-text-primary/50"
               )}
             />
           </div>

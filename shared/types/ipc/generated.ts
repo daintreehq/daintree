@@ -1101,6 +1101,18 @@ export interface GeneratedIpcInvokeMap {
     args: [arg: string | { step: string | null; agentSetupIds?: string[] | undefined } | null];
     result: void;
   };
+  "onboarding:tour-dismiss-invite": {
+    args: [];
+    result: import("./maps.js").TourOnboardingState;
+  };
+  "onboarding:tour-set-muted": {
+    args: [muted: boolean];
+    result: import("./maps.js").TourOnboardingState;
+  };
+  "onboarding:tour-set-progress": {
+    args: [update: import("./maps.js").TourProgressUpdate];
+    result: import("./maps.js").TourOnboardingState;
+  };
   "os-dnd:get-state": {
     args: [];
     result: boolean | undefined;
@@ -1267,7 +1279,11 @@ export interface GeneratedIpcInvokeMap {
     result: import("../plugin.js").PluginInstallResult;
   };
   "plugin:install-from-url": {
-    args: [url: string, jobId?: string | undefined];
+    args: [
+      url: string,
+      jobId?: string | undefined,
+      expected?: import("../plugin.js").PluginInstallExpectation | undefined,
+    ];
     result: import("../plugin.js").PluginInstallResult;
   };
   "plugin:keybindings": {
@@ -1341,6 +1357,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin:recipes-get": {
     args: [];
     result: import("../project.js").TerminalRecipe[];
+  };
+  "plugin:report-panel-inventory": {
+    args: [nonPluginPanelIds: string[]];
+    result: void;
   };
   "plugin:report-panel-lifecycle": {
     args: [events: import("../plugin.js").PluginPanelLifecycleEvent[]];
@@ -1501,6 +1521,10 @@ export interface GeneratedIpcInvokeMap {
   "project-history:peek": {
     args: [];
     result: import("./project.js").ProjectHistoryTarget | null;
+  };
+  "project-presence:get-snapshot": {
+    args: [];
+    result: import("./projectPresence.js").ProjectPresenceSnapshot;
   };
   "project-relocation:apply": {
     args: [request: import("../projectRelocation.js").RelocationRequest];
@@ -2037,6 +2061,14 @@ export interface GeneratedIpcInvokeMap {
   "window-chrome:set-banner-severity": {
     args: [payload: { severity: "success" | "error" | "info" | "warning" | "neutral" | null }];
     result: void;
+  };
+  "window-opening:get-config": {
+    args: [];
+    result: import("./windowOpening.js").WindowOpeningConfig;
+  };
+  "window-opening:update-config": {
+    args: [config: Partial<import("./windowOpening.js").WindowOpeningConfig>];
+    result: import("./windowOpening.js").WindowOpeningConfig;
   };
   "workspace-residency:get": {
     args: [payload: { workspaceId: string }];

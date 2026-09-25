@@ -1259,17 +1259,78 @@ describe("a built-in's workspace-scoped host.fs (fsForWorkspace)", () => {
   });
 });
 
-// #12323: the checked write. Any options object selects it; without options
-// the call is the plain write it has always been (plus a revision result).
+// #12323: the checked write. #12618: it is the only write — omitting options
+// is the same call as passing `{}`.
 describe("host.fs.writeFile checked path (#12323)", () => {
   const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 
-  it("plain writes keep their behaviour and now report the written revision", async () => {
+  it("creates a new file without options and reports the written revision", async () => {
     const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
     const target = join(allowed, "plain.txt");
     const result = await host.fs.writeFile(target, "hello");
     expect(result).toEqual({ revision: sha("hello") });
     expect(await fs.readFile(target, "utf-8")).toBe("hello");
+  });
+
+  it("replaces an existing file atomically without options (#12618)", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "plain.txt");
+    await fs.writeFile(target, "before");
+    // Windows refuses to rename over a file held open, so the descriptor half
+    // of the proof is POSIX-only; the replace itself is checked everywhere.
+    const held = process.platform === "win32" ? null : await fs.open(target, "r");
+    try {
+      const result = await host.fs.writeFile(target, "after");
+      expect(result).toEqual({ revision: sha("after") });
+      expect(await fs.readFile(target, "utf-8")).toBe("after");
+      // A rename, not a truncate-and-write: a descriptor opened before the
+      // write still reads the file it opened.
+      if (held) expect(await held.readFile("utf-8")).toBe("before");
+    } finally {
+      await held?.close();
+    }
+    const siblings = await fs.readdir(allowed);
+    expect(siblings.filter((name) => name.includes(".tmp"))).toEqual([]);
+  });
+
+  it("refuses a leaf swapped for an outside symlink during consent, without options (#12618)", async () => {
+    if (process.platform === "win32") return;
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "doc.md");
+    await fs.writeFile(target, "mine");
+    const outside = join(baseDir, "outside.txt");
+    await fs.writeFile(outside, "not yours");
+    getPluginCapabilityConsentService().setConsentBridge(async () => {
+      await fs.rm(target);
+      await fs.symlink(outside, target);
+      return "approved-once";
+    });
+    await expect(host.fs.writeFile(target, "redirected")).rejects.toMatchObject({
+      code: "TARGET_UNAVAILABLE",
+    });
+    expect(await fs.readFile(outside, "utf-8")).toBe("not yours");
+    const writeAudits = appendSpy.mock.calls.filter(
+      (c) => (c[0] as { channel: string }).channel === "plugin:fs-write"
+    );
+    expect(writeAudits).toEqual([]);
+  });
+
+  it("refuses a leaf swapped for an in-scope symlink during consent, without options (#12618)", async () => {
+    if (process.platform === "win32") return;
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "doc.md");
+    await fs.writeFile(target, "mine");
+    const other = join(allowed, "other.md");
+    await fs.writeFile(other, "other");
+    getPluginCapabilityConsentService().setConsentBridge(async () => {
+      await fs.rm(target);
+      await fs.symlink(other, target);
+      return "approved-once";
+    });
+    await expect(host.fs.writeFile(target, "redirected")).rejects.toMatchObject({
+      code: "TARGET_UNAVAILABLE",
+    });
+    expect(await fs.readFile(other, "utf-8")).toBe("other");
   });
 
   it("writes atomically when the expected revision matches and returns the new one", async () => {
@@ -1352,40 +1413,63 @@ describe("host.fs.writeFile checked path (#12323)", () => {
     expect((await fs.stat(target)).isDirectory()).toBe(true);
   });
 
-  it("an options-only write replaces atomically without reading the target", async () => {
-    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
-    const target = join(allowed, "opaque.md");
-    await fs.writeFile(target, "v1");
-    const readSpy = vi.spyOn(fs, "readFile");
-    try {
-      const result = await host.fs.writeFile(target, "v2", {});
-      expect(result.revision).toBe(sha("v2"));
-      expect(readSpy.mock.calls.some((call) => call[0] === target)).toBe(false);
-    } finally {
-      readSpy.mockRestore();
+  it.each([
+    ["with empty options", {}],
+    ["without options", undefined],
+  ] as const)(
+    "a write %s replaces atomically without reading the target",
+    async (_label, options) => {
+      const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+      const target = join(allowed, "opaque.md");
+      await fs.writeFile(target, "v1");
+      const canonical = await fs.realpath(target);
+      // Reads open a descriptor, so a read of the target shows up as an open.
+      const openSpy = vi.spyOn(fs, "open");
+      const readSpy = vi.spyOn(fs, "readFile");
+      try {
+        const result = await host.fs.writeFile(target, "v2", options);
+        expect(result.revision).toBe(sha("v2"));
+        const touched = [...openSpy.mock.calls, ...readSpy.mock.calls].map((call) => call[0]);
+        expect(touched).not.toContain(target);
+        expect(touched).not.toContain(canonical);
+      } finally {
+        openSpy.mockRestore();
+        readSpy.mockRestore();
+      }
+      expect(await fs.readFile(target, "utf-8")).toBe("v2");
     }
-    expect(await fs.readFile(target, "utf-8")).toBe("v2");
-  });
+  );
 
-  it("refuses to write through a symlink on the checked path", async () => {
+  it.each([
+    ["with options", {}],
+    ["without options", undefined],
+  ] as const)("refuses to write through a symlink %s", async (_label, options) => {
+    if (process.platform === "win32") return;
     const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
     const real = join(allowed, "real.md");
     await fs.writeFile(real, "real");
     const link = join(allowed, "link.md");
     await fs.symlink(real, link);
-    await expect(host.fs.writeFile(link, "x", {})).rejects.toMatchObject({
+    await expect(host.fs.writeFile(link, "x", options)).rejects.toMatchObject({
       code: "TARGET_IS_SYMLINK",
     });
     expect(await fs.readFile(real, "utf-8")).toBe("real");
+    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
   });
 
-  it("preserves the file mode across an atomic replace", async () => {
+  it.each([
+    [
+      "with an expected revision",
+      { expectedRevision: createHash("sha256").update("v1").digest("hex") },
+    ],
+    ["without options", undefined],
+  ] as const)("preserves the file mode across an atomic replace %s", async (_label, options) => {
     if (process.platform === "win32") return;
     const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
     const target = join(allowed, "script.md");
     await fs.writeFile(target, "v1");
     await fs.chmod(target, 0o640);
-    await host.fs.writeFile(target, "v2", { expectedRevision: sha("v1") });
+    await host.fs.writeFile(target, "v2", options);
     const stat = await fs.stat(target);
     expect(stat.mode & 0o777).toBe(0o640);
   });

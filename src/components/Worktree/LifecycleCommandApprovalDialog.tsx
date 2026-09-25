@@ -6,6 +6,7 @@ import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { worktreeClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { PathSegments } from "@/components/ui/PathSegments";
 
 /**
  * Click-carry-over guard, as on `McpConfirmDialog`: the review can land under a
@@ -121,7 +122,9 @@ export function LifecycleCommandApprovalDialog({
         ) : (
           review.sources.map((source) => (
             <section key={source.path} className="space-y-2">
-              <p className="break-all font-mono text-2xs text-text-secondary">{source.path}</p>
+              <p className="font-mono text-2xs text-text-secondary">
+                <PathSegments path={source.path} />
+              </p>
               {source.groups.map((group) => (
                 <div key={group.label} className="space-y-1">
                   <p className="text-xs font-medium text-text-primary">{group.label}</p>

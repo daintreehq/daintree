@@ -7,6 +7,7 @@ import type {
   ProjectSleepResult,
   ProjectCreationIdentity,
 } from "@shared/types";
+import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
 import { projectClient, worktreeClient } from "@/clients";
 import type { NonGitFolderStep } from "@/components/Project/NonGitFolderDialog";
 import { notify } from "@/lib/notify";
@@ -41,6 +42,7 @@ import {
 import type {
   ProjectSwitchEntryPoint,
   ProjectSwitchOutgoingState,
+  ProjectSwitchResult,
 } from "@shared/types/ipc/project";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { flushPendingPerfMarks } from "@/utils/performance";
@@ -113,6 +115,40 @@ function collectTerminalSizes(
     }
   }
   return sizes;
+}
+
+/**
+ * What a switch clears up front on the assumption that this view is leaving,
+ * and that a redirect puts back. Fleet arming is cleared too but deliberately
+ * not restored: its orchestrator subscriptions drop per-target overrides, skips
+ * and failures along with the membership, and a fleet restored without them
+ * could broadcast to a terminal the user had excluded.
+ */
+interface PreSwitchState {
+  error: string | null;
+  worktreeLoadError: string | null;
+}
+
+/**
+ * Settle a switch or reopen that main sent to the window already owning the
+ * project (#12596). This renderer stays on screen and nothing will detach it, so
+ * unlike a real switch — whose busy flags are left for the reveal to clear — it
+ * has to come back to exactly where it was: busy flags down, and what the start
+ * of the switch cleared put back. Only into state still empty, since anything set
+ * after the switch began is newer than what it would restore.
+ */
+function settleRedirectedTransition(
+  result: ProjectSwitchResult | undefined,
+  set: (updater: (state: ProjectState) => Partial<ProjectState>) => void,
+  get: () => ProjectState,
+  before: PreSwitchState
+): void {
+  if (result?.outcome !== "focused-elsewhere" && result?.outcome !== "activated-elsewhere") return;
+  get().clearSwitching();
+  set((state) => ({
+    error: state.error ?? before.error,
+    worktreeLoadError: state.worktreeLoadError ?? before.worktreeLoadError,
+  }));
 }
 
 function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
@@ -239,6 +275,13 @@ interface ProjectState {
    * derives its own suggestion. Cleared with the path, in the same set().
    */
   gitInitIdentity: ProjectCreationIdentity | null;
+  /**
+   * Where the folder opens once git-init or "open without git" settles. The
+   * create and clone dialogs ask before their work starts (#12594), and the
+   * answer has to outlive the prompt they chain into. Cleared with the path, in
+   * the same set().
+   */
+  gitInitDisposition: ProjectOpenDisposition;
   /** Which screen the non-git folder dialog opens on. */
   gitInitDialogStep: NonGitFolderStep;
   createFolderDialogOpen: boolean;
@@ -253,9 +296,19 @@ interface ProjectState {
       skipDubiousOwnershipRetry?: boolean;
       gitBacked?: boolean;
       identity?: ProjectCreationIdentity;
+      /**
+       * `new` opens the project in an empty or new window and leaves this one
+       * exactly as it was (#12594). Anything else opens it here.
+       */
+      disposition?: ProjectOpenDisposition;
     }
   ) => Promise<void>;
-  createProjectFolder: (parentPath: string, folderName: string, emoji?: string) => Promise<void>;
+  createProjectFolder: (
+    parentPath: string,
+    folderName: string,
+    emoji?: string,
+    options?: { disposition?: ProjectOpenDisposition }
+  ) => Promise<void>;
   switchProject: (
     projectId: string,
     options?: {
@@ -296,7 +349,11 @@ interface ProjectState {
   locateProject: (projectId: string) => Promise<void>;
   openGitInitDialog: (
     directoryPath: string,
-    options?: { step?: NonGitFolderStep; identity?: ProjectCreationIdentity }
+    options?: {
+      step?: NonGitFolderStep;
+      identity?: ProjectCreationIdentity;
+      disposition?: ProjectOpenDisposition;
+    }
   ) => void;
   closeGitInitDialog: () => void;
   handleGitInitSuccess: (identity?: ProjectCreationIdentity) => Promise<void>;
@@ -305,7 +362,11 @@ interface ProjectState {
   closeCreateFolderDialog: () => void;
   openCloneRepoDialog: () => void;
   closeCloneRepoDialog: () => void;
-  handleCloneSuccess: (clonedPath: string, identity?: ProjectCreationIdentity) => Promise<void>;
+  handleCloneSuccess: (
+    clonedPath: string,
+    identity?: ProjectCreationIdentity,
+    options?: { disposition?: ProjectOpenDisposition }
+  ) => Promise<void>;
 }
 
 /**
@@ -592,6 +653,39 @@ function openNonGitFolderDialogForTransition(
   return true;
 }
 
+/**
+ * Hand a registered project to main to open in a new window (#12594). Main
+ * picks the window: an empty one other than this is reused before another is
+ * made, and a window already showing the project is brought forward instead.
+ */
+async function openInNewWindow(projectPath: string): Promise<void> {
+  const result = await actionService.dispatch("app.newWindow", { projectPath }, { source: "user" });
+  if (result.ok) return;
+  logErrorWithContext(result.error, {
+    operation: "open_project_in_new_window",
+    component: "projectStore",
+    details: { path: projectPath },
+  });
+  notify({
+    type: "error",
+    title: "Couldn't open a new window",
+    message: "The project was added, but no window opened for it. Try again in a moment.",
+    // A passive kind resolves to inbox-only; the retry has to be on screen.
+    priority: "high",
+    context: { eventKind: "uiFeedback" },
+    actions: [
+      {
+        label: "Try again",
+        variant: "primary",
+        // Serializable too, so the retry survives into the inbox entry.
+        actionId: "app.newWindow",
+        actionArgs: { projectPath },
+        onClick: () => void openInNewWindow(projectPath),
+      },
+    ],
+  });
+}
+
 function isPersistedProject(value: unknown): value is Project {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<Project>;
@@ -614,6 +708,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   gitInitDialogOpen: false,
   gitInitDirectoryPath: null,
   gitInitIdentity: null,
+  gitInitDisposition: "default",
   gitInitDialogStep: "choice",
   createFolderDialogOpen: false,
   cloneRepoDialogOpen: false,
@@ -644,6 +739,12 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       );
 
       await get().loadProjects();
+      if (options?.disposition === "new") {
+        // Registered here so identity and the git prompts stay with the dialog
+        // that asked, then handed to main to route: this window never switches.
+        await openInNewWindow(newProject.path);
+        return;
+      }
       await get().switchProject(newProject.id);
     } catch (error) {
       logErrorWithContext(error, {
@@ -666,7 +767,10 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           resolvedPath || path.trim() || errorMessage.match(/Not a git repository: (.+)/)?.[1];
         if (gitInitPath && isAbsolutePath(gitInitPath)) {
           set({ isLoading: false });
-          get().openGitInitDialog(gitInitPath, { identity: options?.identity });
+          get().openGitInitDialog(gitInitPath, {
+            identity: options?.identity,
+            disposition: options?.disposition,
+          });
           return;
         }
       }
@@ -709,6 +813,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
                   await get().addProjectByPath(targetPath, {
                     skipDubiousOwnershipRetry: true,
                     identity: options?.identity,
+                    disposition: options?.disposition,
                   });
                 },
               },
@@ -754,8 +859,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
             variant: "primary",
             onClick: () => {
               void (pickAnother
-                ? get().addProject()
-                : get().addProjectByPath(retryPath, { identity: options?.identity }));
+                ? get().addProjectByPath("", { disposition: options?.disposition })
+                : get().addProjectByPath(retryPath, {
+                    identity: options?.identity,
+                    disposition: options?.disposition,
+                  }));
             },
           },
         ],
@@ -834,6 +942,10 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     const traceMeta: Record<string, unknown> = { ...trace };
     markSwitch(PERF_MARKS.PROJECT_SWITCH_INTENT, { ...traceMeta, targetProjectId: projectId });
 
+    const before: PreSwitchState = {
+      error: get().error,
+      worktreeLoadError: get().worktreeLoadError,
+    };
     // Drop fleet arming selections synchronously — the outgoing view's armed
     // set is project-scoped and must not leak if the view is later restored
     // from the LRU cache.
@@ -887,50 +999,57 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
     // Fire-and-forget: the main process swaps WebContentsViews, so this
     // renderer gets detached. Don't write the response into stores — the
-    // new view handles its own state independently.
+    // new view handles its own state independently. The one outcome read here
+    // is a redirect to another window, which leaves this renderer on screen.
     markSwitch(PERF_MARKS.PROJECT_SWITCH_IPC_SENT, traceMeta);
     // Drain now: this view is about to be detached and its steady-state flush
     // may never tick again before it is cached or evicted.
     flushPendingPerfMarks();
     const { entryPoint: _entryPoint, ...switchOptions } = options ?? {};
-    projectClient.switch(projectId, outgoingState, { ...switchOptions, trace }).catch((error) => {
-      if (requestId !== projectTransitionRequestId) {
-        return;
-      }
-      if (openNonGitFolderDialogForTransition(set, get, projectId, error)) {
-        return;
-      }
-      logErrorWithContext(error, {
-        operation: "switch_project",
-        component: "projectStore",
-        details: { projectId },
-      });
-      const message = getProjectOpenErrorMessage(error);
-      notify({
-        type: "error",
-        title: "Couldn't switch project",
-        message,
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => {
-              // `options` rides the retry. Without it the retry is a different
-              // request from the one that failed: a switch launched to open a
-              // specific agent (`pilot.openRun` sends the run as a
-              // `focusIntent`) succeeded on the second press and landed in the
-              // project with nothing opened, which reads as the retry half
-              // working.
-              void get().switchProject(projectId, options);
+    projectClient.switch(projectId, outgoingState, { ...switchOptions, trace }).then(
+      (result) => {
+        if (requestId !== projectTransitionRequestId) return;
+        settleRedirectedTransition(result, set, get, before);
+      },
+      (error) => {
+        if (requestId !== projectTransitionRequestId) {
+          return;
+        }
+        if (openNonGitFolderDialogForTransition(set, get, projectId, error)) {
+          return;
+        }
+        logErrorWithContext(error, {
+          operation: "switch_project",
+          component: "projectStore",
+          details: { projectId },
+        });
+        const message = getProjectOpenErrorMessage(error);
+        notify({
+          type: "error",
+          title: "Couldn't switch project",
+          message,
+          actions: [
+            {
+              label: "Try again",
+              variant: "primary",
+              onClick: () => {
+                // `options` rides the retry. Without it the retry is a different
+                // request from the one that failed: a switch launched to open a
+                // specific agent (`pilot.openRun` sends the run as a
+                // `focusIntent`) succeeded on the second press and landed in the
+                // project with nothing opened, which reads as the retry half
+                // working.
+                void get().switchProject(projectId, options);
+              },
             },
-          },
-        ],
-      });
-      // The switch failed before the view swap, so this outgoing renderer stays
-      // visible — clear the busy flag here (the happy path never reaches this
-      // renderer again, so it needs no clear).
-      set({ error: message, isLoading: false, isSwitching: false, switchingToProjectId: null });
-    });
+          ],
+        });
+        // The switch failed before the view swap, so this outgoing renderer stays
+        // visible — clear the busy flag here (a real switch never reaches this
+        // renderer again, so only a redirect clears on success).
+        set({ error: message, isLoading: false, isSwitching: false, switchingToProjectId: null });
+      }
+    );
   },
 
   setWorktreeLoadError: (worktreeLoadError) => {
@@ -1172,6 +1291,10 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   reopenProject: async (projectId, options) => {
     const requestId = ++projectTransitionRequestId;
     const currentProjectId = get().currentProject?.id;
+    const before: PreSwitchState = {
+      error: get().error,
+      worktreeLoadError: get().worktreeLoadError,
+    };
     const trace = consumeSwitchTrace() ?? beginSwitchTrace(options?.entryPoint ?? "api");
     const traceMeta: Record<string, unknown> = { ...trace };
     markSwitch(PERF_MARKS.PROJECT_SWITCH_INTENT, { ...traceMeta, targetProjectId: projectId });
@@ -1207,39 +1330,45 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     });
     markSwitch(PERF_MARKS.PROJECT_SWITCH_IPC_SENT, traceMeta);
     flushPendingPerfMarks();
-    projectClient.reopen(projectId, outgoingState, { trace }).catch((error) => {
-      if (requestId !== projectTransitionRequestId) {
-        return;
-      }
-      if (openNonGitFolderDialogForTransition(set, get, projectId, error)) {
-        return;
-      }
-      logErrorWithContext(error, {
-        operation: "reopen_project",
-        component: "projectStore",
-        details: { projectId },
-      });
-      const message = getProjectOpenErrorMessage(error);
-      notify({
-        type: "error",
-        title: "Couldn't reopen project",
-        message,
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => {
-              void get().reopenProject(projectId);
+    projectClient.reopen(projectId, outgoingState, { trace }).then(
+      (result) => {
+        if (requestId !== projectTransitionRequestId) return;
+        settleRedirectedTransition(result, set, get, before);
+      },
+      (error) => {
+        if (requestId !== projectTransitionRequestId) {
+          return;
+        }
+        if (openNonGitFolderDialogForTransition(set, get, projectId, error)) {
+          return;
+        }
+        logErrorWithContext(error, {
+          operation: "reopen_project",
+          component: "projectStore",
+          details: { projectId },
+        });
+        const message = getProjectOpenErrorMessage(error);
+        notify({
+          type: "error",
+          title: "Couldn't reopen project",
+          message,
+          actions: [
+            {
+              label: "Try again",
+              variant: "primary",
+              onClick: () => {
+                void get().reopenProject(projectId);
+              },
             },
-          },
-        ],
-      });
-      // The reopen failed before the view swap, so this outgoing renderer stays
-      // visible — clear the busy flag (mirrors switchProject). Guarded by the
-      // requestId check above so a superseded reopen never clobbers a newer
-      // transition's state.
-      set({ error: message, isLoading: false, isSwitching: false, switchingToProjectId: null });
-    });
+          ],
+        });
+        // The reopen failed before the view swap, so this outgoing renderer stays
+        // visible — clear the busy flag (mirrors switchProject). Guarded by the
+        // requestId check above so a superseded reopen never clobbers a newer
+        // transition's state.
+        set({ error: message, isLoading: false, isSwitching: false, switchingToProjectId: null });
+      }
+    );
   },
 
   checkMissingProjects: async () => {
@@ -1285,25 +1414,36 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
   openGitInitDialog: (
     directoryPath: string,
-    options?: { step?: NonGitFolderStep; identity?: ProjectCreationIdentity }
+    options?: {
+      step?: NonGitFolderStep;
+      identity?: ProjectCreationIdentity;
+      disposition?: ProjectOpenDisposition;
+    }
   ) => {
     set({
       gitInitDialogOpen: true,
       gitInitDirectoryPath: directoryPath,
       gitInitDialogStep: options?.step ?? "choice",
       gitInitIdentity: options?.identity ?? null,
+      gitInitDisposition: options?.disposition ?? "default",
     });
   },
 
   closeGitInitDialog: () => {
-    set({ gitInitDialogOpen: false, gitInitDirectoryPath: null, gitInitIdentity: null });
+    set({
+      gitInitDialogOpen: false,
+      gitInitDirectoryPath: null,
+      gitInitIdentity: null,
+      gitInitDisposition: "default",
+    });
   },
 
   handleGitInitSuccess: async (identity) => {
-    // Snapshot before closing — closeGitInitDialog() clears path and identity
-    // together, so anything read afterwards is already null.
+    // Snapshot before closing — closeGitInitDialog() clears path, identity and
+    // disposition together, so anything read afterwards is already reset.
     const directoryPath = get().gitInitDirectoryPath;
     const carried = identity ?? get().gitInitIdentity ?? undefined;
+    const disposition = get().gitInitDisposition;
     get().closeGitInitDialog();
     if (!directoryPath) return;
     // The folder is a repository now, so this add resolves a git root and clears
@@ -1311,7 +1451,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // for it enumerated no worktrees, so it needs a reload to pick the new
     // repository up (#11405).
     const wasCurrent = get().currentProject?.path === directoryPath;
-    await get().addProjectByPath(directoryPath, { identity: carried });
+    await get().addProjectByPath(directoryPath, { identity: carried, disposition });
     if (wasCurrent) {
       try {
         await worktreeClient.retryProjectLoad();
@@ -1327,9 +1467,10 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
   openWithoutGit: async () => {
     const directoryPath = get().gitInitDirectoryPath;
+    const disposition = get().gitInitDisposition;
     get().closeGitInitDialog();
     if (directoryPath) {
-      await get().addProjectByPath(directoryPath, { gitBacked: false });
+      await get().addProjectByPath(directoryPath, { gitBacked: false, disposition });
     }
   },
 
@@ -1341,13 +1482,15 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     set({ createFolderDialogOpen: false });
   },
 
-  createProjectFolder: async (parentPath, folderName, emoji) => {
+  createProjectFolder: async (parentPath, folderName, emoji, options) => {
     const newFolderPath = await projectClient.createFolder(parentPath, folderName);
     // A brand-new folder is never a repo, so this always lands in the
     // NOT_A_GIT_REPO branch below and re-emerges in the git-init dialog — the
-    // identity rides along so that dialog prefills instead of re-asking.
+    // identity and the chosen window ride along so that dialog neither re-asks
+    // nor forgets where the project was meant to open.
     await get().addProjectByPath(newFolderPath, {
       identity: emoji ? { name: folderName, emoji } : undefined,
+      disposition: options?.disposition,
     });
   },
 
@@ -1359,9 +1502,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     set({ cloneRepoDialogOpen: false });
   },
 
-  handleCloneSuccess: async (clonedPath: string, identity?: ProjectCreationIdentity) => {
+  handleCloneSuccess: async (clonedPath, identity, options) => {
     get().closeCloneRepoDialog();
-    await get().addProjectByPath(clonedPath, { identity });
+    await get().addProjectByPath(clonedPath, { identity, disposition: options?.disposition });
   },
 });
 

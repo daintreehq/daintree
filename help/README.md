@@ -59,10 +59,12 @@ Adding a new agent requires three things:
 
 Both prompt files share the same answer workflow, tone, and topic coverage. They diverge on what the assistant is allowed to do beyond docs search:
 
-- **`CLAUDE.md`** — Tier-aware. Describes the `workbench` / `action` / `system` model exposed by the local `daintree` MCP server (see Tier Model below) and tells Claude to prefer the least-privileged path. Also carries the fuller Claude task recipes and the `ScheduleWakeup`-paced fleet-polling recipe.
-- **`AGENTS.md`** (Codex, and the experimental Copilot integration) — Connects to the local `daintree` MCP when local MCP is enabled; capabilities follow the selected tier, so the default `action` tier gives full in-app orchestration. Unlike Claude, Codex has no bundled tool-layer deny list and its session directory is writable, so "don't mutate anything locally, don't route around the tier with the shell" is carried by the prompt rather than enforced by a sandbox — the server-side tier gate remains the real boundary.
+Both open with the same orientation, ahead of any task recipe: the two MCP servers and what to do when either is off, finding tools at runtime (a tool name is its action ID), the tier model with `TIER_NOT_PERMITTED` and confirm-gated actions, and the rule that local tools never stand in for the tier. They also share the task recipes. They differ in:
 
-Both share:
+- **`CLAUDE.md`** — Claude's local tools and its tool-layer deny list, the broadcast and fleet-run recipes, and the `ScheduleWakeup`-paced fleet-polling recipe.
+- **`AGENTS.md`** (Codex, and the experimental Copilot integration) — the role-override header and a local-tools restriction that says plainly it is instruction, not enforcement: Codex has no bundled deny list and its session directory is writable, so the server-side tier gate is the real boundary.
+
+Both also share:
 
 - **Answer workflow:** Search the `daintree-docs` MCP first, never fabricate
 - **Tone:** Concise, actionable, grounded in documentation
@@ -76,19 +78,19 @@ Both share:
 
 ```
 scripts/help-src/
-├── SHARED.md              # canonical body (How to Answer, tool discovery, launched-agent dialogs, readiness checks)
-├── SHARED.tail.md         # shared closing sections (Topics, ideas, forge, IDK pattern, MCP docs)
-├── CLAUDE.head.md         # Claude title + What You Can Do
-├── CLAUDE.tasks.md        # Claude-only worked-example task recipes (read/spawn/send/close)
-├── CLAUDE.tier.md         # Claude-only tier model (workbench / action / system)
+├── SHARED.head.md         # orientation: MCP servers, local MCP off, tool discovery, tier model, permissions outside MCP
+├── SHARED.tasks.md        # Common Tasks recipes (launch/check/send/wait/close)
+├── SHARED.md              # How to Answer, launched-agent dialogs, confirmations, readiness checks
+├── SHARED.tail.md         # Topics, GitHub issues, IDK pattern
+├── CLAUDE.head.md         # Claude title + local tools and deny list
+├── CLAUDE.tasks.md        # Claude-only recipes (broadcast, fleet run status)
 ├── CLAUDE.transcript.md   # Claude session-transcript lookup
 ├── CLAUDE.tail.md         # Claude-only terminal-watching recipe (ScheduleWakeup pacing)
-├── AGENTS.head.md         # Codex Role Override + What You Can Do
-├── AGENTS.tasks.md        # Codex operations recipes (launch/status/send/wait/close), no Claude harness pacing
+├── AGENTS.head.md         # Codex Role Override + local-tools restriction
 └── AGENTS.transcript.md   # Codex session-transcript lookup
 ```
 
-`CLAUDE.md` is `CLAUDE.head` + `CLAUDE.tasks` + `CLAUDE.tier` + `SHARED` + `CLAUDE.transcript` + `SHARED.tail` + `CLAUDE.tail`; `AGENTS.md` is `AGENTS.head` + `AGENTS.tasks` + `SHARED` + `AGENTS.transcript` + `SHARED.tail`. Anything both assistants need therefore belongs in `SHARED.md` or `SHARED.tail.md` — the Claude-only partials never reach Codex. Keep `AGENTS.md` well under Codex's 32 KiB `project_doc_max_bytes` ceiling (the build test caps it at 24 KiB); Codex truncates past it without telling the model.
+`CLAUDE.md` is `CLAUDE.head` + `SHARED.head` + `SHARED.tasks` + `CLAUDE.tasks` + `SHARED` + `CLAUDE.transcript` + `SHARED.tail` + `CLAUDE.tail`; `AGENTS.md` is `AGENTS.head` + `SHARED.head` + `SHARED.tasks` + `SHARED` + `AGENTS.transcript` + `SHARED.tail`. Anything both assistants need therefore belongs in a `SHARED*` partial — the Claude-only partials never reach Codex. Keep `AGENTS.md` well under Codex's 32 KiB `project_doc_max_bytes` ceiling; Codex truncates past it without telling the model. The build test caps the file at 24 KiB and the template at 21,500 bytes, so the runtime notes provisioning appends still fit.
 
 After editing any partial, run:
 
@@ -100,13 +102,13 @@ CI runs `npm run check:help` (folded into `npm run check`) to catch drift betwee
 
 ## Tier Model
 
-Help sessions run at one of three authorization tiers, selected by user settings. The local `daintree` MCP server filters its `ListTools` response and rejects out-of-tier `CallTool` requests with `TIER_NOT_PERMITTED`. Tiers are additive: `action` is `workbench` plus addons, `system` is `action` plus addons. Both assistants honor the selected tier directly.
+Help sessions run at one of three authorization tiers, selected by user settings. The local `daintree` MCP server filters its `ListTools` response and rejects out-of-tier `CallTool` requests with `TIER_NOT_PERMITTED`. Tiers are additive: `action` is `workbench` plus addons, `system` is `action` plus addons. Both assistants run at the selected tier, and both prompts explain it. Tier decides what is reachable; an action's own `danger: "confirm"` still pauses it for the user.
 
 | Tier | Trigger | Capabilities (categories) |
 | --- | --- | --- |
 | `workbench` | User selects "Workbench — read-only" in Settings → Assistant | Read-only introspection: list projects, worktrees, terminals; read git status, diffs, commits, agent state, terminal output; view forge issues/PRs including CI status and issue comments; check review readiness and detect a project's runnable commands; search actions and skills. |
-| `action` | Default for help sessions | Adds in-app orchestration: spawn agents (`agent.launch`), send prompts to running agents (`terminal.sendCommand`), close terminals (`terminal.close`/`terminal.kill`), create worktrees, delete them (`worktree.delete`, or the session-scoped `worktree.deleteOwned`) and tear down their provisioned resources — all confirm-gated — inject context, run recipes, open files, run a detected project check (`project.runCheck`). |
-| `system` | User selects "System — destructive and external writes" in Settings → Assistant | Adds worktree creation at an explicit root outside the project, terminal arm/disarm for automation, git stage/unstage/fetch/commit/push, OS clipboard and CopyTree-to-disk writes, and forge issue/PR/review reads and writes from the local app. |
+| `action` | Default for help sessions | Adds in-app orchestration: spawn agents (`agent.launch`), send prompts to running agents (`terminal.sendCommand`), close terminals (`terminal.close`/`terminal.kill`), create worktrees from recipes, delete them (`worktree.delete`, or the session-scoped `worktree.deleteOwned`) and tear down their provisioned resources — the kills, deletes and teardowns confirm-gated — inject context, run recipes, open files, run a detected project check (`project.runCheck`). |
+| `system` | User selects "System — destructive and external writes" in Settings → Assistant | Adds worktree creation at an explicit root outside the project, terminal arm/disarm for automation, git stage/unstage/fetch/commit/push, clipboard export, and forge issue/PR/review writes from the local app. |
 
 These are the **help-assistant** tiers. They are distinct from the `external` tier that API-key clients connect at, which is a much smaller, separately budgeted allowlist — see [`docs/architecture/mcp-server.md`](../docs/architecture/mcp-server.md). Nothing that shrank the external surface applies to the tiers above.
 

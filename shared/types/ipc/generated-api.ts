@@ -467,6 +467,9 @@ export interface GeneratedElectronAPI {
     dismissSetupBanner(
       ...args: IpcInvokeMap["onboarding:dismiss-setup-banner"]["args"]
     ): Promise<IpcInvokeMap["onboarding:dismiss-setup-banner"]["result"]>;
+    dismissTourInvite(
+      ...args: IpcInvokeMap["onboarding:tour-dismiss-invite"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:tour-dismiss-invite"]["result"]>;
     dismissWelcomeCard(
       ...args: IpcInvokeMap["onboarding:dismiss-welcome-card"]["args"]
     ): Promise<IpcInvokeMap["onboarding:dismiss-welcome-card"]["result"]>;
@@ -500,6 +503,12 @@ export interface GeneratedElectronAPI {
     setStep(
       ...args: IpcInvokeMap["onboarding:set-step"]["args"]
     ): Promise<IpcInvokeMap["onboarding:set-step"]["result"]>;
+    setTourMuted(
+      ...args: IpcInvokeMap["onboarding:tour-set-muted"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:tour-set-muted"]["result"]>;
+    setTourProgress(
+      ...args: IpcInvokeMap["onboarding:tour-set-progress"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:tour-set-progress"]["result"]>;
   };
   osDnd: {
     getState(
@@ -632,6 +641,9 @@ export interface GeneratedElectronAPI {
     reloadProjectPlugins(
       ...args: IpcInvokeMap["plugin:project-reload"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-reload"]["result"]>;
+    reportPanelInventory(
+      ...args: IpcInvokeMap["plugin:report-panel-inventory"]["args"]
+    ): Promise<IpcInvokeMap["plugin:report-panel-inventory"]["result"]>;
     reportPanelLifecycle(
       ...args: IpcInvokeMap["plugin:report-panel-lifecycle"]["args"]
     ): Promise<IpcInvokeMap["plugin:report-panel-lifecycle"]["result"]>;
@@ -800,6 +812,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["project-history:peek"]["args"]
     ): Promise<IpcInvokeMap["project-history:peek"]["result"]>;
   };
+  projectPresence: {
+    getSnapshot(
+      ...args: IpcInvokeMap["project-presence:get-snapshot"]["args"]
+    ): Promise<IpcInvokeMap["project-presence:get-snapshot"]["result"]>;
+  };
   projectRelocation: {
     apply(
       ...args: IpcInvokeMap["project-relocation:apply"]["args"]
@@ -926,6 +943,14 @@ export interface GeneratedElectronAPI {
     setBannerSeverity(
       ...args: IpcInvokeMap["window-chrome:set-banner-severity"]["args"]
     ): Promise<IpcInvokeMap["window-chrome:set-banner-severity"]["result"]>;
+  };
+  windowOpening: {
+    getConfig(
+      ...args: IpcInvokeMap["window-opening:get-config"]["args"]
+    ): Promise<IpcInvokeMap["window-opening:get-config"]["result"]>;
+    updateConfig(
+      ...args: IpcInvokeMap["window-opening:update-config"]["args"]
+    ): Promise<IpcInvokeMap["window-opening:update-config"]["result"]>;
   };
   workspace: {
     list(

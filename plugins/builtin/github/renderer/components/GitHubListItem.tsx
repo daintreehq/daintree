@@ -13,7 +13,7 @@ import {
   ListChecks,
 } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
-import { Avatar } from "@/components/ui/Avatar";
+import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
 import { cn } from "@/lib/utils";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -472,7 +472,11 @@ export function GitHubListItem({
                       role="img"
                       aria-label={assigneeLabel}
                     >
-                      <Avatar src={firstAssignee.avatarUrl ?? ""} alt="" className="w-4 h-4" />
+                      <Avatar
+                        src={avatarUrlAtSize(firstAssignee.avatarUrl, 32)}
+                        alt=""
+                        className="w-4 h-4"
+                      />
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">{assigneeLabel}</TooltipContent>

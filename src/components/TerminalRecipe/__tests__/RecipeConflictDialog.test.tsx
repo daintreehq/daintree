@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, cleanup, act } from "@testing-library/react";
+import { render, screen, cleanup, act, waitFor } from "@testing-library/react";
 import { RecipeConflictDialog } from "../RecipeConflictDialog";
 import { useRecipeConflictStore, type RecipeConflictRequest } from "@/store/recipeConflictStore";
 
@@ -41,6 +41,18 @@ describe("RecipeConflictDialog", () => {
     const { container } = render(<RecipeConflictDialog />);
     expect(container.textContent).toBe("");
   });
+
+  it.each(["stale", "forward-compat"] as const)(
+    "never arrives on the overwrite (%s)",
+    async (reason) => {
+      park({ reason, detail: "build.json — terminal #2" });
+      render(<RecipeConflictDialog />);
+
+      const dialog = screen.getByRole("dialog");
+      await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+      expect(document.activeElement).not.toBe(screen.getByTestId("recipe-conflict-overwrite"));
+    }
+  );
 
   it("explains an external change for the stale reason", () => {
     park({ reason: "stale" });

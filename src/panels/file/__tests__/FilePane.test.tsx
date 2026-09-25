@@ -219,6 +219,7 @@ vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
       onClick={() => props.onValueChange("2xl")}
     />
   ),
+  MarkdownTextSizeMenuItems: () => null,
 }));
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
   // Surfaces `content` so a re-read's result is observable — the only way to
@@ -743,7 +744,9 @@ describe("FilePane reveal in file manager (#11386)", () => {
       findButton(container, revealLabel).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
-    expect(findButton(container, "Retry opening in editor").hasAttribute("disabled")).toBe(false);
+    expect(
+      findButton(container, "Retry opening in editor").getAttribute("aria-disabled")
+    ).toBeNull();
 
     await act(async () => {
       revealGate.resolve({ ok: true, result: undefined });
@@ -1590,6 +1593,32 @@ describe("FilePane diff mode (#11274)", () => {
   });
 
   describe("PDF preview (#11427)", () => {
+    // The frame mounts only once a HEAD on its URL answers 200 (#12598). Only
+    // `fetch` is restored: `vi.unstubAllGlobals()` would also strip what
+    // vitest.setup.ts installs for every later test.
+    const pdfProbeMock = vi.fn();
+    const realFetch = globalThis.fetch;
+    beforeEach(() => {
+      pdfProbeMock.mockResolvedValue({ ok: true, status: 200 });
+      vi.stubGlobal("fetch", pdfProbeMock);
+    });
+    afterEach(() => {
+      pdfProbeMock.mockReset();
+      vi.stubGlobal("fetch", realFetch);
+    });
+
+    function buttonByText(container: HTMLElement, text: string): HTMLButtonElement | undefined {
+      return Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === text
+      );
+    }
+
+    async function clickButton(el: HTMLElement) {
+      await act(async () => {
+        el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+    }
+
     it("frames the PDF scheme instead of reading the file as text", async () => {
       const { container } = await renderPane({ filePath: "/repo/docs/spec.pdf" });
 
@@ -1629,6 +1658,133 @@ describe("FilePane diff mode (#11274)", () => {
       await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
       expect(screen.queryByText(/Binary file/)).toBeNull();
       expect(readMock).not.toHaveBeenCalled();
+    });
+
+    describe("when the document can't be framed (#12598)", () => {
+      it("lands in the error state with the preview's reason instead of a blank frame", async () => {
+        seedWorktree([]);
+        pdfProbeMock.mockResolvedValue({ ok: false, status: 413 });
+        const { container } = await renderPane({ filePath: "/repo/docs/huge.pdf" });
+
+        await waitFor(() => expect(buttonByText(container, "Retry")).toBeDefined());
+        expect(container.querySelector("iframe")).toBeNull();
+        const message = container.querySelector(
+          '[data-testid="file-pane-unavailable"]'
+        )?.textContent;
+        expect(message).toBeTruthy();
+        // The code is shared with the text path, whose message names its own
+        // 500 KB ceiling — a PDF refused under a different cap must not borrow it.
+        expect(message).not.toContain(FILE_READ_ERROR_MESSAGES.FILE_TOO_LARGE);
+      });
+
+      it("always offers the guarded reveal beside the open, which a link out of the root defeats", async () => {
+        // Containment here is lexical; the OS open checks the canonical path,
+        // so `/repo/report.pdf` linking outside every root passes one and fails
+        // the other. Reveal is the route that still reaches such a file.
+        seedWorktree([]);
+        pdfProbeMock.mockResolvedValue({ ok: false, status: 404 });
+        const { container } = await renderPane({ filePath: "/repo/docs/report.pdf" });
+
+        await waitFor(() => expect(buttonByText(container, "Retry")).toBeDefined());
+        expect(buttonByText(container, "Open in default app")).toBeDefined();
+        const reveal = buttonByText(container, revealCopy().label);
+        if (!reveal) throw new Error("no reveal action in the error state");
+        await clickButton(reveal);
+
+        expect(dispatchMock).toHaveBeenCalledWith(
+          "file.showItemInFolder",
+          { path: "/repo/docs/report.pdf", allowOutsideRoots: true },
+          { source: "user" }
+        );
+      });
+
+      it("offers to open a PDF inside a governed root in the default app", async () => {
+        seedWorktree([]);
+        pdfProbeMock.mockResolvedValue({ ok: false, status: 413 });
+        const { container } = await renderPane({ filePath: "/repo/docs/huge.pdf" });
+
+        const open = await waitFor(() => {
+          const found = buttonByText(container, "Open in default app");
+          if (!found) throw new Error("no default-app action yet");
+          return found;
+        });
+        await clickButton(open);
+
+        expect(dispatchMock).toHaveBeenCalledWith(
+          "file.openInBrowser",
+          { path: "/repo/docs/huge.pdf" },
+          { source: "user" }
+        );
+      });
+
+      it("offers the guarded reveal instead for a PDF no project owns", async () => {
+        // The OS open is root-contained and would refuse this file outright;
+        // reveal carries the out-of-root fallback, so it is the way out here.
+        pdfProbeMock.mockResolvedValue({ ok: false, status: 413 });
+        const { container } = await renderPane({
+          filePath: "/elsewhere/huge.pdf",
+          worktreeId: undefined,
+        });
+
+        await waitFor(() => expect(buttonByText(container, "Retry")).toBeDefined());
+        expect(buttonByText(container, "Open in default app")).toBeUndefined();
+        const reveal = buttonByText(container, revealCopy().label);
+        if (!reveal) throw new Error("no reveal action in the error state");
+        await clickButton(reveal);
+
+        expect(dispatchMock).toHaveBeenCalledWith(
+          "file.showItemInFolder",
+          { path: "/elsewhere/huge.pdf", allowOutsideRoots: true },
+          { source: "user" }
+        );
+      });
+
+      it("names a failed default-app open for what it tried, not for a browser", async () => {
+        seedWorktree([]);
+        pdfProbeMock.mockResolvedValue({ ok: false, status: 404 });
+        dispatchMock.mockResolvedValue({
+          ok: false,
+          error: { code: "EXECUTION_ERROR", message: "No application" },
+        });
+        const { container } = await renderPane({ filePath: "/repo/docs/gone.pdf" });
+
+        const open = await waitFor(() => {
+          const found = buttonByText(container, "Open in default app");
+          if (!found) throw new Error("no default-app action yet");
+          return found;
+        });
+        await clickButton(open);
+
+        await waitFor(() => expect(screen.queryByText("No application")).not.toBeNull());
+        expect(screen.queryByText(/open in browser/i)).toBeNull();
+      });
+
+      it("retries by probing the document again, and frames it once it is admitted", async () => {
+        seedWorktree([]);
+        pdfProbeMock.mockResolvedValueOnce({ ok: false, status: 404 });
+        const { container } = await renderPane({ filePath: "/repo/docs/spec.pdf" });
+
+        const retry = await waitFor(() => {
+          const found = buttonByText(container, "Retry");
+          if (!found) throw new Error("no retry yet");
+          return found;
+        });
+        await clickButton(retry);
+
+        await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+        expect(pdfProbeMock).toHaveBeenCalledTimes(2);
+      });
+
+      it("never hands a binary to the OS default app, which may execute it", async () => {
+        seedWorktree([]);
+        readMock.mockRejectedValueOnce(new ClientAppError("BINARY_FILE", "binary"));
+        const { container } = await renderPane({ filePath: "/repo/bin/blob.bin" });
+
+        // Reveal is its way out; a Retry could never turn a binary into text.
+        await waitFor(() => expect(buttonByText(container, revealCopy().label)).toBeDefined());
+        expect(buttonByText(container, "Open in default app")).toBeUndefined();
+        expect(buttonByText(container, "Retry")).toBeUndefined();
+      });
     });
   });
 
@@ -2506,11 +2662,13 @@ describe("FilePane live disk refresh (#11451)", () => {
     const img = container.querySelector("img");
     if (!img) throw new Error("image preview not rendered");
     fireEvent.error(img);
-    expect(screen.getByText(FILE_READ_ERROR_MESSAGES.NOT_FOUND)).toBeTruthy();
+    // Named as a decode failure, not "File no longer exists" — the file is
+    // right there; it just didn't decode on that pass.
+    expect(screen.getByText("Couldn't load this image")).toBeTruthy();
 
     await commitTick(rerender, true);
 
-    expect(screen.queryByText(FILE_READ_ERROR_MESSAGES.NOT_FOUND)).toBeNull();
+    expect(screen.queryByText("Couldn't load this image")).toBeNull();
     expect(container.querySelector("img")).not.toBeNull();
   });
 
@@ -3307,6 +3465,31 @@ describe("FilePane copy file contents (#12136)", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("the whole file\n"));
   });
 
+  it("keeps an SVG's own read-error cause rather than calling it an image decode", async () => {
+    readMock.mockRejectedValue(new ClientAppError("PERMISSION", "PERMISSION"));
+    await renderPane("/repo/assets/icon.svg");
+
+    const body = await screen.findByTestId("file-pane-unavailable");
+    expect(body.textContent).toContain("No permission to read this file");
+    expect(body.textContent).not.toContain("Couldn't load this image");
+  });
+
+  it("folds its actions into one menu when the toolbar is narrow, keeping the path", async () => {
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue(new DOMRect(0, 0, 320, 30));
+    try {
+      readMock.mockResolvedValue({ content: "x" });
+      await renderPane("/repo/src/index.ts");
+
+      expect(await screen.findByRole("button", { name: "More actions" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Open in editor" })).toBeNull();
+      expect(screen.getByRole("button", { name: /^Copy file path/ })).toBeTruthy();
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
   it("withholds the control until the read settles", async () => {
     readMock.mockReturnValue(new Promise(() => {}));
     await renderPane("/repo/src/index.ts");
@@ -3325,7 +3508,7 @@ describe("FilePane copy file contents (#12136)", () => {
 
       // Prove the pane actually settled into the matching error, or the absence
       // below could just be a frame that never rendered.
-      expect(await screen.findByText(FILE_READ_ERROR_MESSAGES[code])).toBeTruthy();
+      expect(await screen.findByTestId("file-pane-unavailable")).toBeTruthy();
       // The extension says nothing here; the read is what knows, and its failure
       // is what has to keep the button away.
       expect(copyButton()).toBeNull();
@@ -3341,7 +3524,7 @@ describe("FilePane copy file contents (#12136)", () => {
     readMock.mockRejectedValue(new ClientAppError(code, code));
     await renderPane("/repo/vendor/sub");
 
-    expect(await screen.findByText(FILE_READ_ERROR_MESSAGES[code])).toBeTruthy();
+    expect(await screen.findByTestId("file-pane-unavailable")).toBeTruthy();
     const hasRetry = [...document.querySelectorAll("button")].some(
       (button) => button.textContent === "Retry"
     );
@@ -3600,6 +3783,25 @@ describe("FilePane edit mode (#12323)", () => {
     // Source and Rendered stay out of the tree while Edit owns the body.
     expect(screen.queryByTestId("code-viewer-mock")).toBeNull();
     expect(screen.queryByTestId("markdown-viewer-mock")).toBeNull();
+  });
+
+  it("hands focus to the Rendered segment, not the first one, when leaving Edit for Rendered", async () => {
+    seedWorktree();
+    const view = await renderPane({ fileViewMode: "edit" });
+    expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
+    expect(document.activeElement).toBe(document.body);
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/docs/spec.md",
+      worktreeId: WORKTREE_ID,
+      fileViewMode: "rendered",
+    };
+    view.rerender(paneElement());
+    await act(async () => {});
+    const rendered = screen.getByRole("button", { name: "Rendered" });
+    expect(rendered.getAttribute("aria-pressed")).toBe("true");
+    expect(document.activeElement).toBe(rendered);
   });
 
   it("offers the wrap toggle in edit mode, shared with Source", async () => {

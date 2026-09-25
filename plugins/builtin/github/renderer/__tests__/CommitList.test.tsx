@@ -5,9 +5,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { CommitList } from "../components/CommitList";
-import type { GitCommit } from "@shared/types/git";
+import type { GitCommit, GitCommitListResponse } from "@shared/types/git";
 
 const dispatchMock = vi.fn();
+const listCommitsMock = vi.fn();
+const listPushCommitsMock = vi.fn();
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => dispatchMock(...args) },
@@ -28,26 +30,6 @@ vi.mock("@/hooks/useDebounce", () => ({
   useDebounce: <T,>(value: T) => value,
 }));
 
-vi.mock("framer-motion", () => ({
-  AnimatePresence: ({ children }: { children: ReactNode }) => <>{children}</>,
-  m: new Proxy(
-    {},
-    {
-      get:
-        () =>
-        ({ children, ...rest }: { children: ReactNode } & Record<string, unknown>) => {
-          const safeProps = Object.fromEntries(
-            Object.entries(rest).filter(
-              ([k]) =>
-                !["initial", "animate", "exit", "transition", "variants", "layout"].includes(k)
-            )
-          );
-          return <div {...safeProps}>{children}</div>;
-        },
-    }
-  ),
-}));
-
 const commitWithBody: GitCommit = {
   hash: "aaaaaaa1bbbbbbb2",
   shortHash: "aaaaaaa",
@@ -65,15 +47,22 @@ const commitNoBody: GitCommit = {
   date: "2026-01-02T00:00:00Z",
 };
 
-function arrangeDispatchSuccess(items: GitCommit[]) {
-  dispatchMock.mockResolvedValue({
-    ok: true,
-    result: { items, hasMore: false },
-  });
-}
+const page = (items: GitCommit[], hasMore = false): GitCommitListResponse => ({
+  items,
+  hasMore,
+  total: items.length,
+});
+
+const rowOf = (commit: GitCommit) => document.getElementById(`local-commit-row-${commit.hash}`);
 
 beforeEach(() => {
   dispatchMock.mockReset();
+  listCommitsMock.mockReset();
+  listPushCommitsMock.mockReset();
+  listPushCommitsMock.mockRejectedValue(new Error("no remote"));
+  (window as unknown as { electron: unknown }).electron = {
+    git: { listCommits: listCommitsMock, listPushCommits: listPushCommitsMock },
+  };
   Element.prototype.scrollIntoView = vi.fn();
   Object.defineProperty(navigator, "clipboard", {
     value: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -85,171 +74,98 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  delete (window as unknown as { electron?: unknown }).electron;
 });
 
-async function moveToCommit(container: HTMLElement, input: HTMLInputElement, commit: GitCommit) {
-  await act(async () => {
-    fireEvent.keyDown(input, { key: "ArrowDown" });
-  });
-
-  await waitFor(() => {
-    expect(input.getAttribute("aria-activedescendant")).toBe(`commit-option-${commit.hash}`);
-    expect(
-      document.getElementById(`commit-option-${commit.hash}`)?.getAttribute("aria-selected")
-    ).toBe("true");
-    expect(container.querySelectorAll("[role='option']").length).toBeGreaterThan(0);
-  });
+async function renderList(items: GitCommit[], hasMore = false) {
+  listCommitsMock.mockResolvedValueOnce(page(items, hasMore));
+  const onClose = vi.fn();
+  const utils = render(
+    <CommitList projectPath="/tmp/repo" branch="main" onClose={onClose} initialCount={2} />
+  );
+  await waitFor(() => expect(rowOf(items[0]!)).not.toBeNull());
+  const input = utils.getByRole("combobox");
+  return { ...utils, input, onClose };
 }
 
-describe("CommitList Enter key handling", () => {
-  it("Enter on a commit with body toggles its expansion (renders body pre)", async () => {
-    arrangeDispatchSuccess([commitWithBody, commitNoBody]);
-    const { container } = render(<CommitList projectPath="/tmp/repo" />);
+describe("CommitList", () => {
+  it("lists the worktree's history through the host's commits list", async () => {
+    await renderList([commitWithBody, commitNoBody]);
 
-    await waitFor(() => {
-      expect(container.querySelectorAll("[role='option']").length).toBeGreaterThan(0);
+    expect(listCommitsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/tmp/repo", branch: "main", skip: 0 })
+    );
+    expect(listPushCommitsMock).toHaveBeenCalledWith("/tmp/repo", "main", 100);
+  });
+
+  it("opens the branch's commits on GitHub and closes", async () => {
+    const { getByRole, onClose } = await renderList([commitNoBody]);
+
+    fireEvent.click(getByRole("button", { name: /view on github/i }));
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "forge.openCommits",
+      { projectPath: "/tmp/repo", branch: "main" },
+      { source: "user" }
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("Enter on a commit with a body toggles it, and a second Enter collapses it", async () => {
+    const { input } = await renderList([commitWithBody, commitNoBody]);
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
     });
-
-    const input = container.querySelector<HTMLInputElement>("input[role='combobox']");
-    expect(input).not.toBeNull();
-    if (!input) return;
-
-    await moveToCommit(container, input, commitWithBody);
-
-    const optionsBefore = container.querySelectorAll("[role='option']");
-    expect(optionsBefore[0]?.getAttribute("aria-expanded")).toBe("false");
+    expect(rowOf(commitWithBody)?.getAttribute("aria-expanded")).toBe("true");
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
 
     await act(async () => {
       fireEvent.keyDown(input, { key: "Enter" });
     });
-
-    await waitFor(() => {
-      const optionsAfter = container.querySelectorAll("[role='option']");
-      expect(optionsAfter[0]?.getAttribute("aria-expanded")).toBe("true");
-    });
-    const pre = container.querySelector("pre");
-    expect(pre?.textContent).toContain("Detailed body line 1.");
-    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(rowOf(commitWithBody)?.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("Enter on a commit without body copies its hash", async () => {
-    arrangeDispatchSuccess([commitNoBody]);
-    const { container } = render(<CommitList projectPath="/tmp/repo" />);
+  it("Enter on a commit without a body copies its hash", async () => {
+    const { input } = await renderList([commitNoBody]);
 
-    await waitFor(() => {
-      expect(container.querySelectorAll("[role='option']").length).toBeGreaterThan(0);
-    });
-
-    const input = container.querySelector<HTMLInputElement>("input[role='combobox']");
-    expect(input).not.toBeNull();
-    if (!input) return;
-
-    await moveToCommit(container, input, commitNoBody);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
     await act(async () => {
       fireEvent.keyDown(input, { key: "Enter" });
     });
 
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(commitNoBody.hash);
-    const option = container.querySelector("[role='option']");
-    expect(option?.hasAttribute("aria-expanded")).toBe(false);
+    expect(rowOf(commitNoBody)?.hasAttribute("aria-expanded")).toBe(false);
   });
 
-  it("Load More append preserves existing expansions", async () => {
-    dispatchMock
-      .mockResolvedValueOnce({
-        ok: true,
-        result: { items: [commitWithBody], hasMore: true },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        result: { items: [commitNoBody], hasMore: false },
-      });
+  it("keeps an expansion when Load more appends a page", async () => {
+    const { input, getByRole } = await renderList([commitWithBody], true);
+    listCommitsMock.mockResolvedValueOnce(page([commitNoBody]));
 
-    const { container } = render(<CommitList projectPath="/tmp/repo" />);
-
-    await waitFor(() => {
-      expect(container.querySelectorAll("[role='option']").length).toBe(1);
-    });
-
-    const input = container.querySelector<HTMLInputElement>("input[role='combobox']");
-    expect(input).not.toBeNull();
-    if (!input) return;
-
-    await moveToCommit(container, input, commitWithBody);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
     await act(async () => {
       fireEvent.keyDown(input, { key: "Enter" });
     });
+    fireEvent.click(getByRole("button", { name: /load more/i }));
 
-    await waitFor(() => {
-      const firstOption = container.querySelector("[role='option']");
-      expect(firstOption?.getAttribute("aria-expanded")).toBe("true");
-    });
-
-    const loadMore = container.querySelector("#commit-load-more");
-    expect(loadMore).not.toBeNull();
-
-    await act(async () => {
-      fireEvent.click(loadMore!);
-    });
-
-    await waitFor(() => {
-      expect(container.querySelectorAll("[role='option']").length).toBe(2);
-    });
-
-    const firstOptionAfter = container.querySelectorAll("[role='option']")[0];
-    expect(firstOptionAfter?.getAttribute("aria-expanded")).toBe("true");
+    await waitFor(() => expect(rowOf(commitNoBody)).not.toBeNull());
+    expect(rowOf(commitWithBody)?.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("Enter on no-body commit with missing clipboard does not crash", async () => {
-    arrangeDispatchSuccess([commitNoBody]);
+  it("survives Enter with no clipboard available", async () => {
     Object.defineProperty(navigator, "clipboard", {
       value: undefined,
       writable: true,
       configurable: true,
     });
+    const { input, findAllByText } = await renderList([commitNoBody]);
 
-    const { container } = render(<CommitList projectPath="/tmp/repo" />);
-    await waitFor(() => {
-      expect(container.querySelectorAll("[role='option']").length).toBe(1);
-    });
-
-    const input = container.querySelector<HTMLInputElement>("input[role='combobox']");
-    expect(input).not.toBeNull();
-    if (!input) return;
-
-    await moveToCommit(container, input, commitNoBody);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
     await act(async () => {
       fireEvent.keyDown(input, { key: "Enter" });
     });
 
-    // No crash, no unhandled rejection — passes if we reach here.
-  });
-
-  it("Enter toggles expansion off when pressed twice on the same commit", async () => {
-    arrangeDispatchSuccess([commitWithBody]);
-    const { container } = render(<CommitList projectPath="/tmp/repo" />);
-
-    await waitFor(() => {
-      expect(container.querySelectorAll("[role='option']").length).toBeGreaterThan(0);
-    });
-
-    const input = container.querySelector<HTMLInputElement>("input[role='combobox']");
-    expect(input).not.toBeNull();
-    if (!input) return;
-
-    await moveToCommit(container, input, commitWithBody);
-    await act(async () => {
-      fireEvent.keyDown(input, { key: "Enter" });
-    });
-
-    const expandedRegion = container.querySelector(".grid.transition-\\[grid-template-rows\\]");
-    expect(expandedRegion?.className).toContain("grid-rows-[1fr]");
-
-    await act(async () => {
-      fireEvent.keyDown(input, { key: "Enter" });
-    });
-
-    const collapsedRegion = container.querySelector(".grid.transition-\\[grid-template-rows\\]");
-    expect(collapsedRegion?.className).toContain("grid-rows-[0fr]");
+    expect((await findAllByText("Couldn't copy hash")).length).toBeGreaterThan(0);
   });
 });

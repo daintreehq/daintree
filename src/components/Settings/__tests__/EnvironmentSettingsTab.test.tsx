@@ -42,7 +42,7 @@ describe("EnvironmentSettingsTab", () => {
     renderTab();
 
     await waitFor(() => {
-      expect(screen.getByText("Environment variables")).toBeTruthy();
+      expect(screen.getByText("Global variables")).toBeTruthy();
     });
     expect(screen.queryByText("No project open")).toBeNull();
   });
@@ -96,7 +96,7 @@ describe("EnvironmentSettingsTab", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          "Global environment variables injected into all new terminals. Project-level variables override globals with the same name."
+          "Injected into every new terminal in every project. A project variable with the same name overrides one of these."
         )
       ).toBeTruthy();
     });
@@ -132,6 +132,27 @@ describe("EnvironmentSettingsTab", () => {
     );
   });
 
+  it("retries a failed load in place and unlocks editing once it succeeds", async () => {
+    const get = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("IPC channel not found"))
+      .mockResolvedValueOnce({ EXISTING: "value" });
+    Reflect.set(window, "electron", {
+      globalEnv: { get, set: vi.fn().mockResolvedValue(undefined) },
+    });
+
+    renderTab();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+    });
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.getByRole("button", { name: /add variable/i })).toBeTruthy();
+  });
+
   it("wires aria-invalid and aria-describedby on row inputs when validation fails", async () => {
     window.electron = {
       globalEnv: {
@@ -143,7 +164,7 @@ describe("EnvironmentSettingsTab", () => {
     renderTab();
 
     await waitFor(() => {
-      expect(screen.getByText("No environment variables configured yet")).toBeTruthy();
+      expect(screen.getByText("Add a variable to set it in every new terminal")).toBeTruthy();
     });
 
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
@@ -161,7 +182,9 @@ describe("EnvironmentSettingsTab", () => {
 
     const errorId = nameInput.getAttribute("aria-describedby");
     expect(errorId).toBeTruthy();
-    expect(document.getElementById(errorId!)?.textContent).toContain("Invalid name");
+    expect(document.getElementById(errorId!)?.textContent).toContain(
+      "Start with a letter or underscore"
+    );
 
     expect(valueInput.getAttribute("aria-invalid")).toBeNull();
     expect(valueInput.getAttribute("aria-describedby")).toBe(errorId);
@@ -181,7 +204,7 @@ describe("EnvironmentSettingsTab", () => {
     renderTab();
 
     await waitFor(() => {
-      expect(screen.getByText("No environment variables configured yet")).toBeTruthy();
+      expect(screen.getByText("Add a variable to set it in every new terminal")).toBeTruthy();
     });
 
     const addButton = screen.getByRole("button", { name: /add variable/i });

@@ -312,9 +312,9 @@ function FileStageRowComponent({
             aria-label={isStaged ? `Unstage ${file.path}` : `Stage ${file.path}`}
           >
             {isStaged ? (
-              <Minus className="w-3 h-3 text-status-error" />
+              <Minus className="w-3 h-3 text-text-secondary" />
             ) : (
-              <Plus className="w-3 h-3 text-status-success" />
+              <Plus className="w-3 h-3 text-text-secondary" />
             )}
           </button>
         </TooltipTrigger>

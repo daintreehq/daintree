@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 
@@ -71,6 +72,32 @@ vi.mock("@/config/appColorSchemes", () => ({
     { id: "dark-b", name: "Dark B", type: "dark", tokens: { "accent-primary": "#222222" } },
     { id: "light-a", name: "Light A", type: "light", tokens: { "accent-primary": "#eeeeee" } },
   ],
+}));
+
+// The real Radix Select needs pointer-event plumbing jsdom doesn't provide. This
+// stand-in keeps the same contract — a controlled `value` plus an `onValueChange`
+// per item — so choosing an option by its visible name drives the real handler.
+const SelectCtx = React.createContext<((value: string) => void) | null>(null);
+
+vi.mock("@/components/ui/select", () => ({
+  Select: ({
+    onValueChange,
+    children,
+  }: {
+    onValueChange: (value: string) => void;
+    children: React.ReactNode;
+  }) => <SelectCtx.Provider value={onValueChange}>{children}</SelectCtx.Provider>,
+  SelectTrigger: () => null,
+  SelectValue: () => null,
+  SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => {
+    const onValueChange = React.useContext(SelectCtx);
+    return (
+      <button type="button" onClick={() => onValueChange?.(value)}>
+        {children}
+      </button>
+    );
+  },
 }));
 
 import { appThemeClient } from "@/clients/appThemeClient";
@@ -195,7 +222,7 @@ describe("AppThemePicker — follow-system and preferred schemes", () => {
     client.setFollowSystem.mockReturnValue(write.promise);
 
     render(<AppThemePicker />);
-    await act(async () => screen.getByLabelText("Toggle automatic theme switching").click());
+    await act(async () => screen.getByRole("switch", { name: "Match system appearance" }).click());
     expect(state().followSystem).toBe(true);
 
     await act(async () => {
@@ -226,7 +253,7 @@ describe("AppThemePicker — follow-system and preferred schemes", () => {
 
     // A successful write to a DIFFERENT field must not dismiss a failure the
     // user has not dealt with.
-    await act(async () => screen.getByLabelText("Toggle automatic theme switching").click());
+    await act(async () => screen.getByRole("switch", { name: "Match system appearance" }).click());
 
     expect(screen.getByRole("alert")).toBeTruthy();
   });
@@ -370,7 +397,7 @@ describe("AppThemePicker — theme selection is three separate durable writes", 
     client.setFollowSystem.mockReturnValueOnce(toggleWrite.promise);
 
     render(<AppThemePicker />);
-    await act(async () => screen.getByLabelText("Toggle automatic theme switching").click());
+    await act(async () => screen.getByRole("switch", { name: "Match system appearance" }).click());
     expect(state().followSystem).toBe(true);
 
     client.setFollowSystem.mockResolvedValue(undefined);
@@ -394,7 +421,7 @@ describe("AppThemePicker — theme selection is three separate durable writes", 
     await selectDarkB(); // in flight, will fail
 
     // User turns system matching ON while that write is pending; it saves.
-    await act(async () => screen.getByLabelText("Toggle automatic theme switching").click());
+    await act(async () => screen.getByRole("switch", { name: "Match system appearance" }).click());
     expect(state().followSystem).toBe(true);
 
     await act(async () => {

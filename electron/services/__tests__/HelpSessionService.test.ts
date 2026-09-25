@@ -19,6 +19,7 @@ const {
   mockProbeMcpServer,
   mockProbeMcpSseServer,
   mockSyncAssistantContent,
+  mockLoadAssistantUserConfig,
 } = vi.hoisted(() => ({
   mockUserDataDir: vi.fn<() => string>(),
   mockHelpFolderPath: vi.fn<() => string | null>(),
@@ -65,7 +66,21 @@ const {
         input: unknown
       ) => Promise<import("../AssistantContentMirror.js").AssistantContentSyncResult | null>
     >(),
+  // Same reason: provision tests must never read the developer's real
+  // instructions.md, mcp.json or hooks.json.
+  mockLoadAssistantUserConfig:
+    vi.fn<
+      (
+        input: import("../AssistantUserConfig.js").LoadAssistantUserConfigInput
+      ) => Promise<import("../AssistantUserConfig.js").AssistantUserConfig>
+    >(),
 }));
+
+function emptyUserConfig(
+  overrides: Partial<import("../AssistantUserConfig.js").AssistantUserConfig> = {}
+): import("../AssistantUserConfig.js").AssistantUserConfig {
+  return { instructions: [], mcpServers: {}, claudeHooks: null, warnings: [], ...overrides };
+}
 
 function cleanSyncResult(
   overrides: Partial<import("../AssistantContentMirror.js").AssistantContentSyncResult> = {}
@@ -77,6 +92,7 @@ function cleanSyncResult(
     omittedSkills: [],
     failedCopies: [],
     staleFailures: [],
+    referenceFiles: 0,
     ...overrides,
   };
 }
@@ -111,7 +127,21 @@ vi.mock("../../store.js", () => ({
 
 vi.mock("../AssistantContentMirror.js", () => ({
   syncAssistantContent: (input: unknown) => mockSyncAssistantContent(input),
+  agentSupportsAssistantContent: (agentId: string) =>
+    agentId === "claude" || agentId === "codex" || agentId === "copilot",
 }));
+
+vi.mock("../AssistantUserConfig.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../AssistantUserConfig.js")>();
+  return {
+    ...actual,
+    loadAssistantUserConfig: (
+      input: import("../AssistantUserConfig.js").LoadAssistantUserConfigInput
+    ) => mockLoadAssistantUserConfig(input),
+    // Never the developer's real ~/.codex/config.toml.
+    readCodexNativeServerNames: async () => new Set<string>(),
+  };
+});
 
 import { HelpSessionService } from "../HelpSessionService.js";
 
@@ -161,14 +191,19 @@ async function makeBundledHelpFolder(root: string): Promise<string> {
 }
 
 /**
- * Removes the scratch-folder addendum block (#7947) plus its trailing
- * whitespace from a markdown file body so a template-body equality assertion
- * can ignore the addendum that `doProvision` appends unconditionally.
+ * Removes the scratch-folder (#7947) and project-metadata (#12702) addendum
+ * blocks plus their trailing whitespace from a markdown file body so a
+ * template-body equality assertion can ignore the addenda that `doProvision`
+ * appends unconditionally.
  */
-function stripScratchAddendum(content: string): string {
+function stripManagedAddenda(content: string): string {
   return content
     .replace(
       /\n*<!-- DAINTREE_ASSISTANT_SCRATCH_START -->[\s\S]*?<!-- DAINTREE_ASSISTANT_SCRATCH_END -->\n*/,
+      ""
+    )
+    .replace(
+      /\n*<!-- DAINTREE_PROJECT_METADATA_START -->[\s\S]*?<!-- DAINTREE_PROJECT_METADATA_END -->\n*/,
       ""
     )
     .replace(/\n+$/, "");
@@ -209,6 +244,8 @@ describe("HelpSessionService", () => {
     mockProbeMcpSseServer.mockResolvedValue(undefined);
     mockSyncAssistantContent.mockReset();
     mockSyncAssistantContent.mockResolvedValue(cleanSyncResult());
+    mockLoadAssistantUserConfig.mockReset();
+    mockLoadAssistantUserConfig.mockResolvedValue(emptyUserConfig());
 
     service = new HelpSessionService();
     // The new `ensureMcpServerReady` path throws if no registry is wired —
@@ -334,6 +371,320 @@ describe("HelpSessionService", () => {
     const result = await service.provisionSession(provisionInput());
 
     expect(result).not.toBeNull();
+  });
+
+  describe("assistant folder instructions, MCP servers and hooks", () => {
+    const stdioServer = {
+      type: "stdio" as const,
+      command: "npx",
+      args: ["-y", "linear-mcp"],
+      env: { LINEAR_TOKEN: "t" },
+    };
+
+    it("passes the opt-in setting through and defaults it off", async () => {
+      await service.provisionSession(provisionInput());
+      expect(mockLoadAssistantUserConfig).toHaveBeenLastCalledWith({
+        projectPath: "/tmp/project",
+        agentId: "claude",
+        loadGlobalHooksAndServers: false,
+      });
+
+      mockStoreGet.mockReturnValue({ loadGlobalHooksAndServers: true });
+      await service.provisionSession(provisionInput());
+      expect(mockLoadAssistantUserConfig).toHaveBeenLastCalledWith({
+        projectPath: "/tmp/project",
+        agentId: "claude",
+        loadGlobalHooksAndServers: true,
+      });
+    });
+
+    it("never reads the folder for an agent that reads nothing from its cwd", async () => {
+      await service.provisionSession({ ...provisionInput(), agentId: "daintree-assistant" });
+      expect(mockLoadAssistantUserConfig).not.toHaveBeenCalled();
+    });
+
+    it("fails provisioning closed when the folder can't be loaded", async () => {
+      mockLoadAssistantUserConfig.mockRejectedValue(new Error("hooks.json is not valid JSON"));
+
+      await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
+        name: "HelpSessionError",
+        code: "USER_CONTENT_SYNC_FAILED",
+        message: expect.stringContaining("hooks.json is not valid JSON"),
+      });
+    });
+
+    it("appends instructions after the scratch note in both prompt files, then retires them", async () => {
+      mockLoadAssistantUserConfig.mockResolvedValue(
+        emptyUserConfig({
+          instructions: [
+            {
+              scope: "global",
+              displayPath: "~/.daintree/assistant/instructions.md",
+              content: "Answer in British English.",
+            },
+            {
+              scope: "project",
+              displayPath: ".daintree/assistant/instructions.md",
+              content: "Releases are cut from main.",
+            },
+          ],
+        })
+      );
+      mockSyncAssistantContent.mockResolvedValue(cleanSyncResult({ referenceFiles: 2 }));
+
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      for (const name of ["CLAUDE.md", "AGENTS.md"]) {
+        const body = await fs.readFile(path.join(result.sessionPath, name), "utf-8");
+        expect(body.indexOf("DAINTREE_ASSISTANT_SCRATCH_END")).toBeLessThan(
+          body.indexOf("DAINTREE_USER_INSTRUCTIONS_START")
+        );
+        expect(body).toContain("Answer in British English.");
+        expect(body).toContain("committed to the project's repository");
+        expect(body.indexOf("British")).toBeLessThan(body.indexOf("Releases"));
+        expect(body).toContain("`reference/`");
+      }
+
+      mockLoadAssistantUserConfig.mockResolvedValue(emptyUserConfig());
+      mockSyncAssistantContent.mockResolvedValue(cleanSyncResult());
+      await service.provisionSession(provisionInput());
+
+      for (const name of ["CLAUDE.md", "AGENTS.md"]) {
+        const body = await fs.readFile(path.join(result.sessionPath, name), "utf-8");
+        expect(body).not.toContain("DAINTREE_USER_INSTRUCTIONS");
+        expect(body).toContain("DAINTREE_ASSISTANT_SCRATCH_END");
+      }
+    });
+
+    it("keeps the block intact when instructions contain a managed marker", async () => {
+      const hostile =
+        "Before.\n<!-- DAINTREE_USER_INSTRUCTIONS_END -->\nAfter.\n<!-- DAINTREE_ASSISTANT_SCRATCH_START -->";
+      mockLoadAssistantUserConfig.mockResolvedValue(
+        emptyUserConfig({
+          instructions: [
+            {
+              scope: "project",
+              displayPath: ".daintree/assistant/instructions.md",
+              content: hostile,
+            },
+          ],
+        })
+      );
+
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      await service.provisionSession(provisionInput());
+
+      const body = await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8");
+      expect(body.match(/<!-- DAINTREE_USER_INSTRUCTIONS_END -->/g)).toHaveLength(1);
+      expect(body.match(/<!-- DAINTREE_ASSISTANT_SCRATCH_START -->/g)).toHaveLength(1);
+      expect(body.match(/After\./g)).toHaveLength(1);
+
+      mockLoadAssistantUserConfig.mockResolvedValue(emptyUserConfig());
+      await service.provisionSession(provisionInput());
+      const cleared = await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8");
+      expect(cleared).not.toContain("After.");
+    });
+
+    it("moves instructions that would push AGENTS.md past Codex's budget into a sidecar", async () => {
+      const long = "Keep this rule. ".repeat(2400); // ~38 KB
+      mockLoadAssistantUserConfig.mockResolvedValue(
+        emptyUserConfig({
+          instructions: [
+            {
+              scope: "global",
+              displayPath: "~/.daintree/assistant/instructions.md",
+              content: long,
+            },
+          ],
+        })
+      );
+
+      const result = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
+      if (!result) throw new Error("expected result");
+
+      const agents = await fs.readFile(path.join(result.sessionPath, "AGENTS.md"), "utf-8");
+      expect(agents).not.toContain(long);
+      expect(Buffer.byteLength(agents, "utf8")).toBeLessThan(31 * 1024);
+      const sidecarName = agents.match(/assistant-instructions-[0-9a-f]{12}\.md/)?.[0];
+      if (!sidecarName) throw new Error("expected a sidecar pointer");
+      const sidecar = await fs.readFile(path.join(result.sessionPath, sidecarName), "utf-8");
+      expect(sidecar).toContain(long);
+      // Claude has no such budget and gets the text inline.
+      const claude = await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8");
+      expect(claude).toContain(long);
+
+      mockLoadAssistantUserConfig.mockResolvedValue(emptyUserConfig());
+      await service.provisionSession({ ...provisionInput(), agentId: "codex" });
+      await expect(fs.access(path.join(result.sessionPath, sidecarName))).rejects.toThrow();
+    });
+
+    it("keeps a live sibling lane's sidecar when another lane re-provisions", async () => {
+      const instructionsOf = (content: string) =>
+        emptyUserConfig({
+          instructions: [
+            { scope: "global", displayPath: "~/.daintree/assistant/instructions.md", content },
+          ],
+        });
+      mockLoadAssistantUserConfig.mockResolvedValue(instructionsOf("First. ".repeat(6000)));
+      const laneA = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
+      if (!laneA) throw new Error("expected result");
+      const agentsA = await fs.readFile(path.join(laneA.sessionPath, "AGENTS.md"), "utf-8");
+      const sidecarA = agentsA.match(/assistant-instructions-[0-9a-f]{12}\.md/)?.[0];
+      if (!sidecarA) throw new Error("expected a sidecar pointer");
+
+      mockLoadAssistantUserConfig.mockResolvedValue(instructionsOf("Second. ".repeat(6000)));
+      await service.provisionSession({ ...provisionInput(), agentId: "codex", slot: 1 });
+
+      // Lane A's agent was launched pointing at its own sidecar; it must survive.
+      await expect(fs.readFile(path.join(laneA.sessionPath, sidecarA), "utf-8")).resolves.toContain(
+        "First."
+      );
+    });
+
+    it("keeps both sidecars when two lanes provision at once with different instructions", async () => {
+      // The second lane to reach the directory lock must count the first as
+      // live even though it hasn't registered its session record yet.
+      const instructionsOf = (content: string) =>
+        emptyUserConfig({
+          instructions: [
+            { scope: "global", displayPath: "~/.daintree/assistant/instructions.md", content },
+          ],
+        });
+      mockLoadAssistantUserConfig
+        .mockResolvedValueOnce(instructionsOf("First. ".repeat(6000)))
+        .mockResolvedValueOnce(instructionsOf("Second. ".repeat(6000)));
+
+      const [laneA] = await Promise.all([
+        service.provisionSession({ ...provisionInput(), agentId: "codex" }),
+        service.provisionSession({ ...provisionInput(), agentId: "codex", slot: 1 }),
+      ]);
+      if (!laneA) throw new Error("expected result");
+
+      const sidecars = (await fs.readdir(laneA.sessionPath)).filter((entry) =>
+        /^assistant-instructions-[0-9a-f]{12}\.md$/.test(entry)
+      );
+      expect(sidecars).toHaveLength(2);
+    });
+
+    it("refuses to launch without instructions when a prompt file is missing", async () => {
+      mockLoadAssistantUserConfig.mockResolvedValue(
+        emptyUserConfig({
+          instructions: [
+            {
+              scope: "global",
+              displayPath: "~/.daintree/assistant/instructions.md",
+              content: "Rule.",
+            },
+          ],
+        })
+      );
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected result");
+      await service.revokeSession(first.sessionId);
+      // The template hash stamp still matches, so fs.cp won't restore it.
+      await fs.rm(path.join(first.sessionPath, "AGENTS.md"));
+
+      await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
+        name: "HelpSessionError",
+        code: "USER_CONTENT_SYNC_FAILED",
+        message: expect.stringContaining(first.sessionPath),
+      });
+    });
+
+    it("adds user MCP servers beside Daintree's in the Claude lane config", async () => {
+      mockLoadAssistantUserConfig.mockResolvedValue(
+        emptyUserConfig({ mcpServers: { linear: stdioServer } })
+      );
+
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const lane = await readLaneConfig(result);
+      expect(lane.mcpServers.linear).toEqual({
+        type: "stdio",
+        command: "npx",
+        args: ["-y", "linear-mcp"],
+        env: { LINEAR_TOKEN: "t" },
+      });
+      expect(lane.mcpServers.daintree?.headers?.Authorization).toMatch(/^Bearer /);
+      expect(lane.mcpServers["daintree-docs"]).toBeDefined();
+      // The shared cwd file stays empty so nothing raises an approval prompt.
+      expect((await readSharedMcp(result.sessionPath)).mcpServers).toEqual({});
+    });
+
+    it("adds user MCP servers to Copilot's .mcp.json", async () => {
+      mockLoadAssistantUserConfig.mockResolvedValue(
+        emptyUserConfig({ mcpServers: { linear: stdioServer } })
+      );
+
+      const result = await service.provisionSession({ ...provisionInput(), agentId: "copilot" });
+      if (!result) throw new Error("expected result");
+
+      const shared = await readSharedMcp(result.sessionPath);
+      expect(shared.mcpServers.linear).toBeDefined();
+      expect(shared.mcpServers.daintree).toBeDefined();
+    });
+
+    it("appends user MCP servers to Codex's -c overrides", async () => {
+      mockLoadAssistantUserConfig.mockResolvedValue(
+        emptyUserConfig({ mcpServers: { linear: stdioServer } })
+      );
+
+      const result = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
+      if (!result) throw new Error("expected result");
+
+      const args = service.getCodexLaunchArgs(result.token) ?? [];
+      expect(args).toContain('mcp_servers.assistant-linear.command="npx"');
+      expect(args).toContain('mcp_servers.assistant-linear.args=["-y","linear-mcp"]');
+      expect(args).toContain('mcp_servers.assistant-linear.env={"LINEAR_TOKEN"="t"}');
+      expect(args).toContain('mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"');
+    });
+
+    it.each(["copilot", "codex"])(
+      "retires Claude hooks when the project's session switches to %s",
+      async (agentId) => {
+        const hooks = {
+          PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "guard.sh" }] }],
+        };
+        mockLoadAssistantUserConfig.mockResolvedValue(emptyUserConfig({ claudeHooks: hooks }));
+        const first = await service.provisionSession(provisionInput());
+        if (!first) throw new Error("expected result");
+        await service.revokeSession(first.sessionId);
+
+        // Opt-out: the loader now returns no hooks.
+        mockLoadAssistantUserConfig.mockResolvedValue(emptyUserConfig());
+        await service.provisionSession({ ...provisionInput(), agentId });
+
+        const settings = JSON.parse(
+          await fs.readFile(path.join(first.sessionPath, ".claude", "settings.json"), "utf-8")
+        );
+        expect(settings.hooks).toBeUndefined();
+        expect(settings.permissions.deny).toContain("Edit(**)");
+      }
+    );
+
+    it("writes user hooks into Claude settings without touching permissions, then retires them", async () => {
+      const hooks = {
+        PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "guard.sh" }] }],
+      };
+      mockLoadAssistantUserConfig.mockResolvedValue(emptyUserConfig({ claudeHooks: hooks }));
+
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const settingsPath = path.join(result.sessionPath, ".claude", "settings.json");
+      const withHooks = JSON.parse(await fs.readFile(settingsPath, "utf-8"));
+      expect(withHooks.hooks).toEqual(hooks);
+      expect(withHooks.permissions.deny).toContain("Edit(**)");
+      expect(withHooks.defaultMode).toBeUndefined();
+
+      mockLoadAssistantUserConfig.mockResolvedValue(emptyUserConfig());
+      await service.provisionSession(provisionInput());
+      const without = JSON.parse(await fs.readFile(settingsPath, "utf-8"));
+      expect(without.hooks).toBeUndefined();
+    });
   });
 
   it("serializes concurrent provisions for the same project", async () => {
@@ -3047,7 +3398,7 @@ describe("HelpSessionService", () => {
       // The user's session-dir mutation must be preserved across the
       // hash-gate short-circuit. The scratch-folder addendum is appended
       // unconditionally outside the gate (#7947) — strip it before checking.
-      expect(stripScratchAddendum(claude)).toBe("# mutated");
+      expect(stripManagedAddenda(claude)).toBe("# mutated");
       cpSpy.mockRestore();
     });
 
@@ -3067,7 +3418,7 @@ describe("HelpSessionService", () => {
       const claude = await fs.readFile(path.join(second.sessionPath, "CLAUDE.md"), "utf-8");
       // Strip the unconditional scratch-folder addendum (#7947) before
       // comparing against the bundled template body.
-      expect(stripScratchAddendum(claude)).toBe("# Help v2");
+      expect(stripManagedAddenda(claude)).toBe("# Help v2");
 
       const secondStamp = (
         await fs.readFile(path.join(second.sessionPath, ".template-hash"), "utf-8")
@@ -3133,7 +3484,7 @@ describe("HelpSessionService", () => {
       const claude = await fs.readFile(path.join(first.sessionPath, "CLAUDE.md"), "utf-8");
       // Scratch-folder addendum (#7947) is appended unconditionally outside
       // the hash gate. Strip it to compare against the bundled template body.
-      expect(stripScratchAddendum(claude)).toBe("# Help");
+      expect(stripManagedAddenda(claude)).toBe("# Help");
     });
 
     it("rewrites the lane file with a fresh bearer on every provision, even when the template copy is skipped", async () => {
@@ -3408,6 +3759,136 @@ describe("HelpSessionService", () => {
       expect(secondEnv).not.toBeNull();
       expect(claudeMd).not.toContain(secondEnv!.DAINTREE_ASSISTANT_SCRATCH_DIR);
       expect(claudeMd).toContain("DAINTREE_ASSISTANT_SCRATCH_DIR");
+    });
+  });
+
+  describe("project metadata addendum", () => {
+    const START = "<!-- DAINTREE_PROJECT_METADATA_START -->";
+    const END = "<!-- DAINTREE_PROJECT_METADATA_END -->";
+
+    function metadataBlock(content: string): string {
+      const start = content.indexOf(START);
+      const end = content.indexOf(END);
+      if (start === -1 || end === -1) throw new Error("expected metadata block");
+      return content.slice(start, end + END.length);
+    }
+
+    it("writes the project facts into CLAUDE.md and AGENTS.md", async () => {
+      const reader = vi.fn(async () => ({
+        name: "Example",
+        worktrees: [
+          { path: "/tmp/project", branch: "main", isMainWorktree: true },
+          { path: "/tmp/project-fix", branch: "fix/help", isMainWorktree: false },
+        ],
+        forgeRemote: { name: "origin", url: "https://github.com/acme/example.git" },
+      }));
+      service.setProjectMetadataReader(reader);
+
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(reader).toHaveBeenCalledWith("proj-1", "/tmp/project");
+
+      for (const name of ["CLAUDE.md", "AGENTS.md"]) {
+        const block = metadataBlock(
+          await fs.readFile(path.join(result.sessionPath, name), "utf-8")
+        );
+        expect(block).toContain("- Name: `Example`");
+        expect(block).toContain("- Path: `/tmp/project`");
+        expect(block).toContain("- Project ID: `proj-1`");
+        expect(block).toContain("`/tmp/project` — branch `main` (main worktree)");
+        expect(block).toContain("`/tmp/project-fix` — branch `fix/help`");
+        expect(block).toContain("- Forge remote: `origin` `https://github.com/acme/example.git`");
+        expect(block).toContain("- Assistant tier setting: `action`");
+        expect(block).toContain("- Daintree MCP tools setting: `enabled`");
+        // Shared by every lane: nothing lane- or session-scoped belongs here.
+        expect(block).not.toContain(result.token);
+        expect(block).not.toContain(result.sessionId);
+      }
+    });
+
+    it("still writes path, tier and MCP state when no reader is wired", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const block = metadataBlock(
+        await fs.readFile(path.join(result.sessionPath, "AGENTS.md"), "utf-8")
+      );
+      expect(block).toContain("- Path: `/tmp/project`");
+      expect(block).toContain("- Assistant tier setting: `action`");
+      expect(block).not.toContain("- Name:");
+      expect(block).not.toContain("worktrees");
+    });
+
+    it("launches without the facts when the reader throws", async () => {
+      service.setProjectMetadataReader(async () => {
+        throw new Error("sqlite is gone");
+      });
+
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const block = metadataBlock(
+        await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8")
+      );
+      expect(block).toContain("- Path: `/tmp/project`");
+      expect(block).not.toContain("- Name:");
+    });
+
+    it("launches without the facts when the reader never settles", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        service.setProjectMetadataReader(() => new Promise(() => {}));
+        const pending = service.provisionSession(provisionInput());
+        await vi.advanceTimersByTimeAsync(5000);
+        const result = await pending;
+        if (!result) throw new Error("expected result");
+
+        const block = metadataBlock(
+          await fs.readFile(path.join(result.sessionPath, "AGENTS.md"), "utf-8")
+        );
+        expect(block).toContain("- Path: `/tmp/project`");
+        expect(block).not.toContain("- Name:");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("refreshes the block in place on re-provision even when the template copy is skipped", async () => {
+      let name = "Before";
+      service.setProjectMetadataReader(async () => ({ name }));
+
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected result");
+      name = "After";
+      const cpSpy = vi.spyOn(fs, "cp");
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected result");
+      expect(cpSpy).not.toHaveBeenCalled();
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(second.sessionPath, file), "utf-8");
+        expect(content.match(/<!-- DAINTREE_PROJECT_METADATA_START -->/g) ?? []).toHaveLength(1);
+        expect(content.match(/<!-- DAINTREE_ASSISTANT_SCRATCH_START -->/g) ?? []).toHaveLength(1);
+        expect(content).toContain("- Name: `After`");
+        expect(content).not.toContain("Before");
+        expect(content.startsWith(file === "CLAUDE.md" ? "# Help" : "# Agents Help")).toBe(true);
+      }
+      cpSpy.mockRestore();
+    });
+
+    it("drops facts a later provision could not read instead of keeping stale ones", async () => {
+      service.setProjectMetadataReader(async () => ({
+        name: "Example",
+        forgeRemote: { name: "origin", url: "https://github.com/acme/example.git" },
+      }));
+      await service.provisionSession(provisionInput());
+
+      service.setProjectMetadataReader(async () => ({ name: "Example" }));
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected result");
+
+      const content = await fs.readFile(path.join(second.sessionPath, "AGENTS.md"), "utf-8");
+      expect(content).not.toContain("Forge remote");
     });
   });
 });

@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { BrandMark } from "@/components/icons";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { actionService } from "@/services/ActionService";
@@ -58,10 +58,10 @@ import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
 
 import { resolveEffectivePresetId } from "@shared/types";
 import {
-  getDominantAgentState,
   agentStateDotColor,
-} from "@/components/Worktree/AgentStatusIndicator";
-import { STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
+  getAttentionAgentState,
+  STATE_LABELS,
+} from "@/components/Worktree/terminalStateConfig";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 import { isPtyPanel } from "@shared/types/panel";
 
@@ -182,7 +182,7 @@ export function AgentButton({
   "data-toolbar-item": dataToolbarItem,
 }: AgentButtonProps) {
   const hasWorktrees = useWorktreeStore((s) => s.worktrees.size > 0);
-  const displayCombo = useKeybindingDisplay(`agent.${type}`);
+  const effectiveCombo = useEffectiveCombo(`agent.${type}`);
   const ariaShortcut = useAriaKeyshortcuts(`agent.${type}`);
   const hover = useShortcutHintHover(`agent.${type}`);
   const agentSettings = useAgentSettingsStore((s) => s.settings);
@@ -254,7 +254,7 @@ export function AgentButton({
         states.push(p.agentState);
       }
       if (!firstId) return null;
-      return { id: firstId, dominantState: getDominantAgentState(states) };
+      return { id: firstId, attentionState: getAttentionAgentState(states) };
     })
   );
 
@@ -262,7 +262,7 @@ export function AgentButton({
   if (!config) return null;
 
   const isSessionActive = activeSession !== null;
-  const dominantState = activeSession?.dominantState ?? null;
+  const attentionState = activeSession?.attentionState ?? null;
 
   const entry = agentSettings?.agents?.[type] ?? {};
   const presets = getMergedPresets(type, entry.customPresets, ccrPresets, projectPresets);
@@ -311,30 +311,31 @@ export function AgentButton({
   // because the CLI itself will prompt for sign-in on first run.
   const signInUnconfirmed = isAgentUnauthenticated(availability);
 
-  // Same gate the corner dot uses (issue #9823, #5900). When a dot renders,
-  // dominantState is one of {waiting, directing} — STATE_LABELS has a human
-  // word for every dot-bearing state, so the suffix is always meaningful.
-  // Moved above the tooltip/aria ternaries so they can consume it.
-  const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
-  const visibleStateSuffix = dotColor ? ` — ${STATE_LABELS[dominantState!]}` : "";
-  // Suppress the at-rest split-button seam when the chevron is gated — the
-  // chevron blocks clicks in these states anyway (issue #8131), so a seam
-  // would advertise a control that isn't usable.
-  const showSeam = !isLoading && isLaunchable;
+  // Same gate the corner dot uses (issue #9823, #5900), so the tooltip and
+  // accessible name never say less than the dot. Moved above the tooltip/aria
+  // ternaries so they can consume it.
+  const dotColor = attentionState ? agentStateDotColor(attentionState) : null;
+  const visibleStateSuffix = attentionState && dotColor ? ` — ${STATE_LABELS[attentionState]}` : "";
+  // The split's hover wash and inner partition only draw while the chevron is
+  // usable — it blocks clicks when gated (issue #8131), so drawing it as a
+  // second half would advertise a control that isn't there.
+  const isSplitLive = !isLoading && isLaunchable;
 
   const presetSegment = activePresetName ? ` · ${activePresetName}` : "";
   // The click still launches when the CLI is unavailable — it lands on the
   // recovery panel, not Settings — so both surfaces borrow the dock's hint
   // rather than naming an action this button no longer performs (#11760).
   const unavailableLabel = unavailableAgentHint(config.name, availability);
+  // The pip draws whether or not the CLI is launchable, so every branch
+  // carries its state — a waiting session outlives an availability re-probe.
   const tooltipLabel = isLoading
-    ? `Checking ${config.name} CLI…`
+    ? `Checking ${config.name} CLI…${visibleStateSuffix}`
     : isLaunchable
       ? signInUnconfirmed
         ? `Start ${config.name}${presetSegment}${visibleStateSuffix} — sign-in not detected`
         : `Start ${config.name}${presetSegment}${visibleStateSuffix}`
-      : unavailableLabel;
-  const tooltipShortcut = isLaunchable ? displayCombo : undefined;
+      : `${unavailableLabel}${visibleStateSuffix}`;
+  const tooltipShortcut = isLaunchable ? effectiveCombo : undefined;
   const chevronTooltip = isLoading
     ? `Checking ${config.name} CLI availability...`
     : isLaunchable
@@ -348,10 +349,10 @@ export function AgentButton({
   const isChevronDisabled = isLoading || !isLaunchable;
 
   const ariaLabel = isLoading
-    ? `Checking ${config.name} CLI`
+    ? `Checking ${config.name} CLI${visibleStateSuffix}`
     : isLaunchable
       ? `Start ${config.name}${visibleStateSuffix}`
-      : unavailableLabel;
+      : `${unavailableLabel}${visibleStateSuffix}`;
 
   const handleClick = (e?: ReactMouseEvent<HTMLElement>) => {
     if (isLoading) return;
@@ -584,7 +585,11 @@ export function AgentButton({
       }}
     >
       <ContextMenuTrigger asChild>
-        <span className="inline-flex group/agent-split">
+        {/* One control at rest: no seam, the chevron tucked against its own
+            brand mark and a little extra room after it, so it can only be read
+            as this agent's. The partition and the shared wash appear on hover
+            or focus, when which half does what actually matters. */}
+        <span className="toolbar-agent-split mr-1 inline-flex" data-split-live={isSplitLive}>
           <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
             <TooltipTrigger asChild>
               <Button
@@ -602,12 +607,17 @@ export function AgentButton({
                 onFocus={hover.onFocus}
                 onBlur={hover.onBlur}
                 className={cn(
-                  "toolbar-agent-button text-text-primary rounded-r-none border-r border-transparent relative",
-                  showSeam && "toolbar-agent-split-seam",
+                  "toolbar-agent-button text-text-primary rounded-r-none relative",
                   needsSetup && "opacity-70",
                   "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                 )}
                 aria-label={ariaLabel}
+                // The tooltip names the preset a click will use; the name stays
+                // stable for selectors and voice control, so the preset rides in
+                // the description instead.
+                aria-description={
+                  isLaunchable && activePresetName ? `Preset: ${activePresetName}` : undefined
+                }
                 aria-keyshortcuts={ariaShortcut}
               >
                 {iconElement}
@@ -650,8 +660,11 @@ export function AgentButton({
                     data-toolbar-item={dataToolbarItem}
                     onPointerEnter={clearFocusRestoreSuppression}
                     className={cn(
-                      "toolbar-agent-button text-text-primary rounded-l-none",
-                      "h-8 w-6 p-0 flex items-center justify-center",
+                      "toolbar-agent-button toolbar-agent-split-toggle text-text-secondary aria-expanded:text-text-primary rounded-l-none",
+                      // 24px keeps the target at the WCAG 2.5.8 minimum; the
+                      // glyph sits at its leading edge so it reads as part of
+                      // the mark beside it rather than centred between agents.
+                      "h-8 w-6 p-0 pl-0.5 flex items-center justify-start",
                       "aria-disabled:opacity-60 aria-disabled:cursor-not-allowed"
                     )}
                     aria-label={chevronTooltip}

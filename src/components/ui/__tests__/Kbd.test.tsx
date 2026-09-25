@@ -2,6 +2,7 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { Kbd, KbdChord } from "../Kbd";
+import { describeChord } from "@/lib/kbdShortcut";
 
 vi.mock("@/lib/platform", () => ({
   isMac: vi.fn(() => false),
@@ -42,10 +43,16 @@ describe("KbdChord", () => {
     expect(label?.textContent).toBe("Save file");
   });
 
-  it("falls back to shortcut string for accessible text when aria-label is not provided", () => {
-    const { container } = render(<KbdChord shortcut="Cmd+S" />);
-    const label = container.querySelector(".sr-only");
-    expect(label?.textContent).toBe("Cmd+S");
+  it("falls back to the spoken form, not glyphs or the raw string, without an aria-label", () => {
+    for (const isMac of [true, false]) {
+      const { container, unmount } = render(
+        <KbdChord shortcut="Cmd+Shift+K Cmd+S" isMac={isMac} />
+      );
+      const spoken = container.querySelector(".sr-only")?.textContent ?? "";
+      expect(spoken).toBe(describeChord("Cmd+Shift+K Cmd+S", isMac));
+      expect(spoken).not.toMatch(/[⌘⌥⇧⌃+]/);
+      unmount();
+    }
   });
 
   it("renders chord with multiple steps", () => {
@@ -71,4 +78,27 @@ describe("KbdChord", () => {
       expect(kbd.className).toContain("tabular-nums");
     });
   });
+});
+
+describe("KbdChord modifier glyph face", () => {
+  it.each(["default", "compact", "bare"] as const)(
+    "sets every macOS modifier glyph in one face and every other key in mono (%s)",
+    (density) => {
+      const { container } = render(
+        <KbdChord shortcut="Ctrl+Alt+Shift+Cmd+K Cmd+Enter" isMac density={density} />
+      );
+      const chips = Array.from(container.querySelectorAll("kbd"));
+      const glyphs = chips.filter((k) => /^[⌘⇧⌥⌃]$/.test(k.textContent ?? ""));
+      const others = chips.filter((k) => !glyphs.includes(k));
+      expect(glyphs.length).toBe(5);
+      expect(others.length).toBeGreaterThan(0);
+
+      const face = (k: Element) =>
+        k.className.split(/\s+/).filter((c) => /^font-(mono|sans)$/.test(c));
+      for (const k of glyphs) expect(face(k)).toEqual([face(glyphs[0]!)[0]]);
+      expect(face(glyphs[0]!)).not.toEqual(["font-mono"]);
+      for (const k of others) expect(face(k)).toEqual(["font-mono"]);
+      for (const k of chips) expect(k.className).toContain("leading-none");
+    }
+  );
 });

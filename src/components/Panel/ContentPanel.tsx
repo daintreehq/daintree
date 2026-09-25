@@ -161,8 +161,6 @@ export interface ContentPanelProps extends BasePanelProps {
 interface GridChromeInputs {
   /** Multi-pane grid gate — every ambient state below needs a sibling to contrast against. */
   showGridAttention: boolean;
-  /** Lone-pane focus cue (#11837): single pane, Assistant open, pane focused or armed. */
-  showLonePaneFocusCue: boolean;
   showSelectedChrome: boolean;
   showGridAgentHighlights: boolean;
   isVoiceArming: boolean;
@@ -172,17 +170,13 @@ interface GridChromeInputs {
 }
 
 /**
- * Resolves the grid pane's container chrome to exactly one class.
- *
- * Ordered highest-priority first; the multi-pane branches are the historical
- * ternary chain unchanged. `showLonePaneFocusCue` sits last because every
- * branch above it is gated on `showGridAttention`, which a single-pane grid
- * never satisfies — so the two groups are mutually exclusive in practice and
- * a lone pane only ever picks between the quiet cue and the bare fallback.
+ * Resolves the grid pane's container chrome to exactly one class, ordered
+ * highest-priority first. Selection is not gated on `showGridAttention`: a
+ * lone pane still has to show that it, and not the dock or the Assistant,
+ * holds the keystrokes after the user clicks back into it.
  */
 function resolveGridPanelChromeClass({
   showGridAttention,
-  showLonePaneFocusCue,
   showSelectedChrome,
   showGridAgentHighlights,
   isVoiceArming,
@@ -191,11 +185,10 @@ function resolveGridPanelChromeClass({
   isHibernated,
 }: GridChromeInputs): string {
   if (showGridAttention && isVoiceArming) return "panel-state-arming";
-  if (showGridAttention && showSelectedChrome) return "terminal-selected";
+  if (showSelectedChrome) return "terminal-selected";
   if (showGridAttention && showGridAgentHighlights && isWaiting) return "panel-state-waiting";
   if (showGridAttention && showGridAgentHighlights && isWorkingState) return "panel-state-working";
   if (showGridAttention && isHibernated) return "panel-state-hibernated";
-  if (showLonePaneFocusCue) return "terminal-selected-quiet";
   return "border-overlay hover:border-tint/[0.08]";
 }
 
@@ -372,22 +365,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // and its stripe (PanelHeader), but not the focus frame — otherwise every
   // receiver in a fleet looks like the pane the keystrokes go to.
   const showSelectedChrome = isFocused && !isAssistantActive;
-  // #11837: a lone grid pane has no sibling to contrast against, so it skips
-  // `showGridAttention` entirely and renders bare in every state — including
-  // while the Assistant holds the keystrokes. That leaves the two states
-  // indistinguishable exactly when telling them apart matters. Light the pane
-  // with the fill-free `terminal-selected-quiet` perimeter when it owns focus
-  // AND the Assistant is on screen to compete for it. Gating on visibility (a
-  // separate selector so the boolean stays primitive) keeps the bare lone pane
-  // the default whenever the Assistant is closed, which is the outcome #7544's
-  // fix lost by dropping the guard outright.
-  const isAssistantVisible = useMacroFocusStore((s) => s.visibility.assistant);
-  const showLonePaneFocusCue =
-    location === "grid" &&
-    !isMaximized &&
-    !isMultiPanelGrid &&
-    isAssistantVisible &&
-    showSelectedChrome;
   // Voice-dictation lock indicator: persistent amber border on the pinned
   // target. Selector returns a boolean for stable equality across unrelated
   // store updates (transcript deltas, audio levels). Renders independently of
@@ -660,7 +637,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           !isMaximized &&
           resolveGridPanelChromeClass({
             showGridAttention,
-            showLonePaneFocusCue,
             showSelectedChrome,
             showGridAgentHighlights,
             isVoiceArming,
@@ -794,8 +770,9 @@ export const ContentPanel = forwardRef<HTMLDivElement, ContentPanelProps>(
         showTask: showAgentTaskTitles,
       });
     });
-    // The task alone, for a header with no room for the identity prefix. Only
-    // the grid composes tasks, and only when the compact form actually differs.
+    // The task alone, which is what the header paints: the brand mark beside it
+    // already names the agent. Only the grid composes tasks, and only when the
+    // compact form actually differs.
     const compactTitle = usePanelStore((s) => {
       const panel = s.panelsById[props.id];
       if (!panel || !isPtyPanel(panel) || panel.title !== propsTitle) return undefined;

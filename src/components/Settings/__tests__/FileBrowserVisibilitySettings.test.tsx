@@ -72,7 +72,7 @@ describe("FileBrowserVisibilitySettings", () => {
     usePreferencesStore.getState().setFileBrowserAlwaysHiddenPatterns([]);
     render(<FileBrowserVisibilitySettings />);
 
-    expect(screen.getByText("Nothing is hidden")).toBeTruthy();
+    expect(screen.getByText("Add a name or pattern to always hide it")).toBeTruthy();
   });
 
   it("refuses to add past the cap and keeps the draft instead of silently dropping it", () => {
@@ -93,8 +93,20 @@ describe("FileBrowserVisibilitySettings", () => {
     // beforeEach left a custom list, which differs from defaults.
     render(<FileBrowserVisibilitySettings />);
 
-    fireEvent.click(screen.getByText("Reset to defaults"));
+    fireEvent.click(screen.getByLabelText("Reset always-hidden patterns to defaults"));
 
     expect(patterns()).toEqual(defaults);
+    expect(screen.queryByLabelText("Reset always-hidden patterns to defaults")).toBeNull();
+  });
+
+  it("keeps focus in the list when a chip is removed, and falls back to the add field", () => {
+    render(<FileBrowserVisibilitySettings />);
+    const [first, second] = patterns();
+
+    fireEvent.click(screen.getByLabelText(`Remove ${first}`));
+    expect(document.activeElement).toBe(screen.getByLabelText(`Remove ${second}`));
+
+    fireEvent.click(screen.getByLabelText(`Remove ${second}`));
+    expect(document.activeElement).toBe(screen.getByLabelText("Add an always-hidden pattern"));
   });
 });

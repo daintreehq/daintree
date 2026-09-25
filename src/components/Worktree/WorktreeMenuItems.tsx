@@ -484,6 +484,9 @@ export function WorktreeMenuItems({
   // destination, so the worst case is a disabled row on a config where
   // ReviewHub and the palette still push.
   const nothingToPush = worktree.aheadCount === 0;
+  // Only a measured "none": an unknown answer keeps Fetch live, since the
+  // click itself is how an unread repo finds out.
+  const noRemote = worktree.hasRemote === false;
   const showForcePush = gitBranch !== null && Boolean(onGitForcePush) && Boolean(canForcePush);
 
   // Acting on the base branch the card already measures itself against
@@ -560,9 +563,12 @@ export function WorktreeMenuItems({
       onSelect={() =>
         void actionService.dispatch("git.fetch", { worktreeId: worktree.id }, { source })
       }
+      disabled={noRemote}
+      aria-label={noRemote ? "Fetch, no remote configured" : "Fetch"}
     >
       <RefreshCw className={ICON} />
       Fetch
+      {noRemote && <C.Meta>No remote</C.Meta>}
     </C.Item>,
     <C.Item
       key="fetch-prune"
@@ -573,9 +579,12 @@ export function WorktreeMenuItems({
           { source }
         )
       }
+      disabled={noRemote}
+      aria-label={noRemote ? "Fetch and prune, no remote configured" : "Fetch and prune"}
     >
       <Scissors className={ICON} />
       Fetch and prune
+      {noRemote && <C.Meta>No remote</C.Meta>}
     </C.Item>,
     ...(baseOperation
       ? [
@@ -741,10 +750,10 @@ export function WorktreeMenuItems({
         <C.Item
           onSelect={onTerminateAll}
           disabled={counts.active === 0}
-          {...counted("Terminate all sessions", counts.active)}
+          {...counted("End all sessions", counts.active)}
         >
           <OctagonX className={ICON} />
-          Terminate all sessions…
+          End all sessions…
           <C.Meta>{counts.active}</C.Meta>
         </C.Item>
       </C.SubContent>
@@ -875,7 +884,7 @@ export function WorktreeMenuItems({
         ),
         !isLocalEnvironment && onResourceResume && showResume && (
           <C.Item key="resume" onSelect={onResourceResume}>
-            <Play className={`${ICON} text-status-success`} />
+            <Play className={ICON} />
             Resume
           </C.Item>
         ),

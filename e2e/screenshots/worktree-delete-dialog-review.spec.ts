@@ -385,32 +385,31 @@ test("worktree-delete dialog review — every consequence tier", async () => {
       await closeDialog(page);
     });
 
-    // 9. Fail-closed verification. The fresh status ride is a MessagePort
-    //    request, not an IPC invoke, so the fault goes in at that seam — the
-    //    same one `worktreeClient.getFreshChanges` calls — rather than at the
-    //    UI. This is the only way to see the `verifyFailed` banner, and it is
-    //    the banner that guards the worst case.
-    // 9. Fail-closed verification. No mocking: the worktree directory is
-    //    removed from disk behind the app's back — a real scenario (someone
-    //    rm -rf'd it, or a volume unmounted) — so the fresh `git status` the
-    //    dialog runs on open genuinely fails and the dialog falls back to its
-    //    D3 fail-closed path. Patching the IPC bridge is not an option here:
-    //    `worktreePort` is a non-configurable contextBridge property, so both
-    //    assignment and defineProperty are rejected in the isolated world.
-    //    This runs LAST among the dirty-state steps because it destroys its
-    //    own fixture.
+    // 9. Fail-closed verification. No mocking: the worktree's git link is
+    //    broken behind the app's back — a real scenario (a moved gitdir, an
+    //    unmounted volume) — so the fresh `git status` the dialog runs on open
+    //    genuinely fails and the dialog falls back to its fail-closed path.
+    //    Patching the IPC bridge is not an option here: `worktreePort` is a
+    //    non-configurable contextBridge property. This runs LAST among the
+    //    dirty-state steps because it breaks its own fixture.
     await step("verify-failed", async () => {
-      rmSync(path.join(repo.wtRoot, WT_UNTRACKED.replace(/\//g, "-")), {
-        recursive: true,
-        force: true,
-      });
+      // The worktree's `.git` pointer file is overwritten rather than the
+      // directory removed: a removed directory races the topology watcher,
+      // which can drop the monitor first and turn "couldn't check" into
+      // "already gone" — a different state with no banner.
+      writeFileSync(
+        path.join(repo.wtRoot, WT_UNTRACKED.replace(/\//g, "-"), ".git"),
+        "gitdir: /nonexistent/daintree-delete-shots\n"
+      );
       await settle(page, 1500);
       await openDialog(page, WT_UNTRACKED);
       // The fail-closed banner is the whole point of this shot — refuse to
       // write a PNG that does not contain it rather than ship a lookalike.
       await page
         .locator(SEL.worktree.deleteDialog)
-        .getByText(/Couldn't (verify|check)/i)
+        .getByRole("alert")
+        .filter({ hasText: /Couldn't (verify|check)/i })
+        .first()
         .waitFor({ state: "visible", timeout: 8000 });
       await snap(page, "70-verify-failed", PANEL);
       await closeDialog(page);
@@ -480,18 +479,14 @@ test("worktree-delete dialog review — every consequence tier", async () => {
       await settle(page, 5000);
       await dismissBlockingPalette(page);
       await openDialog(page, WT_CLEAN);
-      // The row only un-strikes when a session exists and is not "stopped".
-      // Assert it rather than writing a PNG identical to the previous state —
-      // a lookalike shot is worse than a missing one, because it reads as
-      // evidence for a state nobody actually reached.
-      const devRow = page
+      // The row exists only while a session is running. Wait for it rather
+      // than writing a PNG identical to the previous state — a lookalike shot
+      // is worse than a missing one, because it reads as evidence for a state
+      // nobody actually reached.
+      await page
         .locator(`${SEL.worktree.deleteDialog} li`, { hasText: "Dev server will be stopped" })
-        .first();
-      const struck = await devRow.evaluate(
-        (el) => getComputedStyle(el).textDecorationLine.includes("line-through"),
-        undefined
-      );
-      if (struck) throw new Error("dev preview never reported running — row still struck through");
+        .first()
+        .waitFor({ state: "visible", timeout: 15000 });
       await snap(page, "65-with-dev-preview", PANEL);
       await closeDialog(page);
     });

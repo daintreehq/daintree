@@ -11,6 +11,7 @@ import { ContentPanel, PluginMissingPanel } from "@/components/Panel";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
 import { buildPanelProps } from "@/utils/panelProps";
 import { withViewTransition } from "@/lib/viewTransition";
+import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 
 export interface DockedPanelProps {
   terminal: PanelInstance;
@@ -40,9 +41,11 @@ export function DockedPanel({
     // Move and close inside the transition callback so both land in the
     // after-snapshot, and only close when the move actually succeeded (it can
     // no-op for an already-gridded/missing panel) — matching the prior guard.
-    withViewTransition(() => {
-      if (moveTerminalToGrid(terminal.id)) onPopoverClose?.();
-    }, gridElement);
+    animatePanelMove(terminal.id, "restore", () =>
+      withViewTransition(() => {
+        if (moveTerminalToGrid(terminal.id)) onPopoverClose?.();
+      }, gridElement)
+    );
   }, [moveTerminalToGrid, terminal.id, onPopoverClose]);
 
   const handleMinimize = useCallback(() => {

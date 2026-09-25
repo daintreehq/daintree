@@ -106,6 +106,26 @@ export interface ProjectSwitchTrace {
   entryPoint: ProjectSwitchEntryPoint;
 }
 
+/**
+ * What `project:switch` / `project:reopen` did with the request (#12596).
+ *
+ * A project has one live view across the whole app. When another window
+ * already owns the target, the request is redirected there and the requesting
+ * window is left exactly as it was — so the caller has to be told, because a
+ * plain success means "you are being detached" and leaves its busy state set.
+ *
+ * - `switched`: the requesting window now shows the project.
+ * - `focused-elsewhere`: `targetWindowId` was already showing it and was brought forward.
+ * - `activated-elsewhere`: `targetWindowId` had it cached and was asked to show it.
+ */
+export type ProjectSwitchResult =
+  | { outcome: "switched"; project: Project }
+  | {
+      outcome: "focused-elsewhere" | "activated-elsewhere";
+      project: Project;
+      targetWindowId: number;
+    };
+
 /** Payload for project:on-switch event with cancellation token */
 export interface ProjectSwitchPayload {
   /** The project being switched to */

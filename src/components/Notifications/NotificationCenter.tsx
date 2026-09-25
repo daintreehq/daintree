@@ -1,15 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Archive,
-  ArrowDown,
-  Bell,
-  CheckCheck,
-  Clock,
-  Ellipsis,
-  Layers,
-  Moon,
-  Trash2,
-} from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Archive, ArrowDown, Bell, CheckCheck, Clock, Ellipsis, Moon, Trash2 } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import {
   useNotificationHistoryStore,
@@ -24,14 +14,24 @@ import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { actionService } from "@/services/ActionService";
 import type { ActionId } from "@shared/types/actions";
-import { muteForDuration, muteUntilNextMorning, notify, setSessionQuietUntil } from "@/lib/notify";
+import {
+  EVENT_KIND_TO_SETTING_KEY,
+  muteForDuration,
+  muteUntilNextMorning,
+  notify,
+  setSessionQuietUntil,
+  type NotificationEventKind,
+} from "@/lib/notify";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useUIStore } from "@/store/uiStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -52,8 +52,18 @@ import {
   KIND_SHORT_LABEL,
 } from "@/lib/notificationEffectiveState";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
+import { useProjectStore } from "@/store/projectStore";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import {
+  APP_SOURCE_LABEL,
+  UNKNOWN_PROJECT_LABEL,
+  worktreeNameFromId,
+} from "@/lib/notificationSourceLabel";
 
-const NEEDS_ATTENTION_CAP = 5;
+// Three, not five. Even as compact previews, five pinned rows took three
+// quarters of a laptop-height list, so the first screen held one row of what
+// had actually arrived. Overflow is still counted and still in the list below.
+const NEEDS_ATTENTION_CAP = 3;
 const CONTEXT_NONE_KEY = "__none__";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -61,8 +71,42 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
+/**
+ * The panel's one small-button shape: Resume, Manage, and the divider's mark
+ * read. Bordered because bare text at the end of a line of text didn't read
+ * as a control, and ringed because nothing in the app supplies a focus ring
+ * for an element that doesn't declare one.
+ */
+const SMALL_BUTTON_CLASS = cn(
+  "inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-border-strong px-1.5 py-0.5",
+  "text-2xs font-medium text-text-secondary transition-colors hover:bg-overlay-medium hover:text-text-primary",
+  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+);
+
+/**
+ * Whether a kind ships switched on, so that it being off is the user's doing.
+ * Outside the component: the compiler bails on a hook referenced as a value.
+ */
+function shipsOn(kind: NotificationEventKind): boolean {
+  const key = EVENT_KIND_TO_SETTING_KEY[kind];
+  return (
+    key !== undefined && Reflect.get(useNotificationSettingsStore.getInitialState(), key) === true
+  );
+}
+
+/** The per-project silences the row menu writes, with the words the strip uses. */
+const PROJECT_SILENCEABLE = [
+  ["completedEnabled", "Completed"],
+  ["waitingEnabled", "Waiting"],
+] as const;
+
 function isUnreadGroup(group: ThreadGroup): boolean {
   return group.entries.some((e) => !e.seenAsToast);
+}
+
+/** An agent asking for input outranks anything that has merely gone wrong. */
+function isAskingGroup(group: ThreadGroup): boolean {
+  return group.entries.some((e) => !e.seenAsToast && e.context?.eventKind === "waiting");
 }
 
 function getGroupContextKey(group: ThreadGroup): string {
@@ -214,6 +258,30 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   );
 
   const lastClosedAt = useUIStore((s) => s.lastNotificationCenterClosedAt);
+  const currentProjectId = useProjectStore((s) => s.currentProject?.id);
+  const overridesByProjectId = useProjectSettingsStore((s) => s.notificationOverridesByProjectId);
+  const projects = useProjectStore((s) => s.projects);
+  const currentProjectOverrides = currentProjectId
+    ? overridesByProjectId[currentProjectId]
+    : undefined;
+  // Every project the inbox has heard from, since a silence set from one of
+  // their rows is as invisible as the current project's.
+  const inboxProjectIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of entries) if (e.context?.projectId) ids.add(e.context.projectId);
+    if (currentProjectId) ids.add(currentProjectId);
+    return [...ids].sort();
+  }, [entries, currentProjectId]);
+  const inboxProjectKey = inboxProjectIds.join(",");
+  // Re-read on every open. "Silence … from this project" writes straight to
+  // the project's settings file and tells no renderer store, so this is the
+  // point where the inbox can find out (and find out about an Undo).
+  useEffect(() => {
+    if (!open || inboxProjectKey === "") return;
+    void useProjectSettingsStore
+      .getState()
+      .loadNotificationOverridesForProjects(inboxProjectKey.split(","));
+  }, [open, inboxProjectKey]);
   const resetLastClosedAt = useUIStore((s) => s.resetNotificationCenterLastClosedAt);
 
   const [filter, setFilter] = useState<"all" | "unread" | "archived" | "snoozed">("all");
@@ -334,13 +402,28 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           setShowJumpPill(entry.boundingClientRect.top > rootBounds.bottom);
         }
       },
-      // Pull the bottom edge in by the height of the scroll fade (h-8 in
-      // ScrollShadow): a divider still under the gradient is washed out, so it
-      // doesn't count as reached and the pill stays up.
-      { root: scrollContainer, rootMargin: "0px 0px -32px 0px", threshold: 0 }
+      // No inset. It used to pull the bottom edge in by the fade's 32px, so a
+      // divider sitting in that band counted as unreached — and the pill,
+      // anchored to the same band, was drawn straight over the divider it
+      // pointed at. A divider showing at all under the fade is found.
+      { root: scrollContainer, threshold: 0 }
     );
     observer.observe(dividerEl);
-    return () => observer.disconnect();
+    // An observer only reports crossings, and a jump from below the viewport
+    // to above it (End, the scrollbar, a fast wheel) never crosses — it goes
+    // from not-intersecting to not-intersecting, so the pill stayed up at the
+    // bottom of the list pointing at something already passed. A scroll can
+    // only ever retire it here; showing it stays the observer's job.
+    const handleScroll = () => {
+      const divider = dividerEl.getBoundingClientRect();
+      const port = scrollContainer.getBoundingClientRect();
+      if (divider.top <= port.bottom) setShowJumpPill(false);
+    };
+    scrollContainer.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      observer.disconnect();
+      scrollContainer.removeEventListener("scroll", handleScroll);
+    };
   }, [dividerEl]);
 
   useEffect(() => {
@@ -408,6 +491,13 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 return sev === "error" || sev === "warning";
               })
               .sort((a, b) => {
+                // Asking first. The brief's first question is "is anything
+                // asking me for something", and a waiting agent is stalled
+                // until answered, where a failure has already happened. Sorting
+                // on severity alone put a 44-minute-old migration failure
+                // ahead of an agent that had been waiting six.
+                const askDiff = Number(isAskingGroup(b)) - Number(isAskingGroup(a));
+                if (askDiff !== 0) return askDiff;
                 const sevDiff =
                   SEVERITY_WEIGHTS[getWorstSeverity(b.entries)] -
                   SEVERITY_WEIGHTS[getWorstSeverity(a.entries)];
@@ -422,7 +512,11 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         : [{ key: "all", groups: chronoGroups }];
 
       let divider: string | null = null;
-      if (lastClosedAt > 0 && filter !== "archived" && filter !== "snoozed") {
+      // Ungrouped only. Grouped, the new rows are spread across sections, and
+      // one divider in whichever section held the newest row labelled that
+      // section alone while its action reset the watermark for all of them.
+      // Each section marks its own boundary instead (see ChronoSection).
+      if (!groupByContext && lastClosedAt > 0 && filter !== "archived" && filter !== "snoozed") {
         for (const g of chronoGroups) {
           if (g.latestTimestamp > lastClosedAt) {
             divider = g.correlationId ?? g.entries[0]?.id ?? null;
@@ -515,9 +609,12 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
 
   const rowCount = flatRows.length;
   const [focusedIndex, setFocusedIndex] = useState(0);
+  // Whether a row has held focus during this opening. Recovery below only runs
+  // for a user who was already in the list; it must never pull focus off the
+  // bell (or anywhere else) when the panel opens or when rows arrive.
+  const rowHadFocusRef = useRef(false);
   const rowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const dropdownOpenCountRef = useRef(0);
-  const prevRowCountRef = useRef(rowCount);
 
   const setRowRef = useCallback((index: number, el: HTMLDivElement | null) => {
     if (el) {
@@ -531,34 +628,39 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     dropdownOpenCountRef.current = Math.max(0, dropdownOpenCountRef.current + (open ? 1 : -1));
   }, []);
 
-  // After any row count change, clamp focusedIndex; reset the dropdown
-  // counter (a row removed mid-menu may never fire onOpenChange(false)); and
-  // when row count *decreases* with focus dropped to <body> (the focused row
-  // just unmounted), snap focus back to the surviving slot at the prior
-  // index. Only on decrease — never on mount or addition — to avoid
-  // hijacking focus from the toolbar bell button when the panel opens.
+  const handleRowFocus = useCallback((index: number) => {
+    rowHadFocusRef.current = true;
+    setFocusedIndex(index);
+  }, []);
+
   useEffect(() => {
-    const prevRowCount = prevRowCountRef.current;
-    prevRowCountRef.current = rowCount;
+    if (!open) rowHadFocusRef.current = false;
+  }, [open]);
 
+  // After the rows change, clamp focusedIndex; reset the dropdown counter (a
+  // row removed mid-menu may never fire onOpenChange(false)); and if focus has
+  // dropped to <body> because the focused row just unmounted, put it on the
+  // row now in that slot — or on the panel when nothing is left.
+  //
+  // Keyed on the rows, not their count. Marking a pinned row read with `u`
+  // takes it out of the rail and promotes the next severe thread into the
+  // same slot, so the count never moves while the focused element is replaced
+  // — and the old count gate left focus on <body>, where j/k do nothing.
+  useEffect(() => {
     dropdownOpenCountRef.current = 0;
+    const clamped = rowCount === 0 ? 0 : Math.min(focusedIndex, rowCount - 1);
+    if (clamped !== focusedIndex) setFocusedIndex(clamped);
 
-    if (rowCount === 0) {
-      if (focusedIndex !== 0) setFocusedIndex(0);
-      return;
-    }
-
-    const clamped = Math.min(focusedIndex, rowCount - 1);
-    if (clamped !== focusedIndex) {
-      setFocusedIndex(clamped);
-    }
-
-    if (rowCount >= prevRowCount) return;
+    if (!rowHadFocusRef.current) return;
     if (typeof document === "undefined") return;
     const active = document.activeElement;
     if (active && active !== document.body) return;
+    if (rowCount === 0) {
+      dialogRef.current?.focus({ preventScroll: true });
+      return;
+    }
     rowRefs.current.get(clamped)?.focus();
-  }, [rowCount, focusedIndex]);
+  }, [flatRows, rowCount, focusedIndex]);
 
   const dispatchPrimaryAction = useCallback((row: FlatRow) => {
     const action = row.primaryAction;
@@ -665,17 +767,16 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           return;
         }
         case "e": {
-          e.preventDefault();
+          if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+          // Nothing in the Archived tab. `e` is learned as archive, and it used
+          // to turn into a permanent delete here, so the same key that filed
+          // something away destroyed it one tab over. The row's × is the
+          // deliberate delete.
+          if (filter === "archived") return;
           const row = flatRows[activeIndex];
           if (!row) return;
-          // In the Archived tab, 'e' permanently deletes the visible (head)
-          // entry. Do NOT route threads through dismissByCorrelationId — a
-          // live entry sharing the same correlationId would also be destroyed.
-          if (filter === "archived") {
-            dismissEntry(row.entryId);
-          } else {
-            archiveRow(row);
-          }
+          e.preventDefault();
+          archiveRow(row);
           return;
         }
         case "u": {
@@ -683,6 +784,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           // unread. Lowercase only — uppercase `U` is reserved for a future
           // bulk action and would conflict with Shift-modified navigation.
           if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+          // Archived rows are filed; the store won't unread them, so the key
+          // would do nothing while looking like it should.
+          if (filter === "archived") return;
           e.preventDefault();
           const row = flatRows[activeIndex];
           if (!row) return;
@@ -712,16 +816,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           return;
       }
     },
-    [
-      rowCount,
-      flatRows,
-      moveFocusTo,
-      dismissEntry,
-      archiveRow,
-      dispatchPrimaryAction,
-      filter,
-      toggleReadForRow,
-    ]
+    [rowCount, flatRows, moveFocusTo, archiveRow, dispatchPrimaryAction, filter, toggleReadForRow]
   );
 
   // Take focus into the panel when it opens. The bell keeps `aria-haspopup` and
@@ -837,7 +932,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   // line that answers "what will fire right now" plus which kinds are switched
   // off. Memoized over the gate inputs so it's a stable value the rest of the
   // render (and the compiler) can lean on.
-  const { summaryHeroLine, offLabel } = useMemo(() => {
+  const { summaryHeroLine, offLabel, silencedLabel } = useMemo(() => {
     // `isQuiet` only encodes in-app suppression (session mute + scheduled
     // quiet) — OS DND must never be folded into `isQuiet` because it would
     // flip kinds to `quiet-gated`, which the hard constraint forbids.
@@ -852,10 +947,16 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       osDndActive,
     });
     const offKinds = selectKindOffKinds(states);
+    // A silence is a kind switched off that ships on. "Completed" ships off,
+    // so counting every off kind would have put the strip on screen for
+    // everyone who never touched a setting.
+    const silenced = offKinds.filter(shipsOn);
+    const label = (kinds: typeof offKinds) =>
+      kinds.length > 0 ? `Off: ${kinds.map((k) => KIND_SHORT_LABEL[k]).join(", ")}` : "";
     return {
       summaryHeroLine: heroLine(states),
-      offLabel:
-        offKinds.length > 0 ? `Off: ${offKinds.map((k) => KIND_SHORT_LABEL[k]).join(", ")}` : "",
+      offLabel: label(offKinds),
+      silencedLabel: label(silenced),
     };
   }, [
     notificationsEnabled,
@@ -871,8 +972,58 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   // through. `pillLabel` is empty only when nothing in-app is muted and the OS
   // signal is unknown — in that case the breakthrough line is the only thing
   // there is to say, so it becomes the lead rather than leaving a blank one.
-  const quietCause = pillLabel || summaryHeroLine;
-  const quietDetail = [pillLabel ? summaryHeroLine : "", offLabel].filter(Boolean).join(" · ");
+  // Silences the user set that aren't a mute: kinds switched off app-wide, and
+  // the ones this project has silenced (the row menu's "Silence…" and "Mute
+  // project" write these). They used to surface only if a mute happened to
+  // be on too, so a silenced inbox looked like a quiet one.
+  const projectOffLabel = (() => {
+    if (!currentProjectOverrides) return "";
+    const off = PROJECT_SILENCEABLE.filter(([key]) => currentProjectOverrides[key] === false);
+    if (off.length === 0) return "";
+    if (off.length === PROJECT_SILENCEABLE.length) return "This project is muted";
+    return `This project: ${off.map(([, label]) => label).join(", ")} off`;
+  })();
+  const otherProjectsOffLabel = (() => {
+    const silenced = inboxProjectIds.filter(
+      (id) =>
+        id !== currentProjectId &&
+        PROJECT_SILENCEABLE.some(([key]) => overridesByProjectId[id]?.[key] === false)
+    );
+    if (silenced.length === 0) return "";
+    const names = silenced.map((id) => projects.find((p) => p.id === id)?.name);
+    // Names while they fit; a count once they don't, or when one can't be named.
+    if (silenced.length <= 2 && names.every(Boolean)) {
+      return `Silenced in ${names.join(" and ")}`;
+    }
+    return `Silenced in ${silenced.length} other ${silenced.length === 1 ? "project" : "projects"}`;
+  })();
+  const hasSilences =
+    silencedLabel !== "" || projectOffLabel !== "" || otherProjectsOffLabel !== "";
+  const showQuietStrip = showMutedPill || hasSilences;
+  const quietCause = pillLabel || (hasSilences ? "Some notifications are off" : summaryHeroLine);
+  // OS Do Not Disturb silences the OS's banners, not Daintree's, so under it
+  // alone the breakthrough list named every kind the app has — six or seven
+  // names that all said "nothing changed in here". One clause says that.
+  const osDndOnly = isOsDndActive && notificationsEnabled && !isSessionMuted && !isScheduledMuted;
+  // A line per clause. Run together with " · " they broke wherever the width
+  // fell, so "Off:" and the kind it named landed on different lines.
+  // The lead names one cause; the others that are on at the same time get a
+  // clause of their own, or Resume reads as the end of a quiet it doesn't end.
+  const concurrentCauses = [
+    isSessionMuted && isScheduledMuted
+      ? `Quiet hours continue until ${timeFormatter.format(new Date(nextOccurrenceTimestamp(quietHoursEndMin)))}`
+      : "",
+    (isSessionMuted || isScheduledMuted) && isOsDndActive
+      ? (osDndDisplayNote(osDndActive) ?? "")
+      : "",
+  ];
+  const quietDetail = [
+    ...concurrentCauses,
+    pillLabel ? (osDndOnly ? "Daintree's own alerts still show" : summaryHeroLine) : "",
+    pillLabel ? offLabel : silencedLabel,
+    projectOffLabel,
+    otherProjectsOffLabel,
+  ].filter(Boolean);
   // What "Clear all" actually costs, named in the confirm. The count is the
   // preview; the archived and snoozed breakdown is the part a user standing on
   // the Archived tab would not otherwise expect, since the store call ignores
@@ -992,18 +1143,6 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           {/* gap-1.5, not gap-1: four controls at 4px apart, one of them a text
               button, read as a single crowded clump jammed into the corner. */}
           <div className="flex items-center gap-1.5 shrink-0">
-            {showGroupToggle && (
-              <button
-                type="button"
-                aria-label="Group by project or worktree"
-                aria-pressed={groupByContext}
-                title="Group by project or worktree"
-                onClick={() => setGroupByContext(!groupByContext)}
-                className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/70"
-              >
-                <Layers className="w-3 h-3" aria-hidden="true" />
-              </button>
-            )}
             {unreadCount > 0 && (
               <button
                 type="button"
@@ -1014,66 +1153,96 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 Mark all read
               </button>
             )}
+            {/* Two icon controls, each named by a real tooltip. The native
+                `title` they carried arrived late or not at all, so the moon read
+                as a theme switch and nothing said otherwise. Group-by and
+                settings live in the overflow menu with Clear all, which used to
+                open onto that one item alone. */}
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  aria-label="Pause notifications"
-                  title="Pause notifications"
-                  className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/70"
-                >
-                  <Moon className="w-3 h-3" aria-hidden="true" />
-                </button>
-              </DropdownMenuTrigger>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="Pause notifications"
+                      className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-text-secondary"
+                    >
+                      <Moon className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Pause notifications</TooltipContent>
+              </Tooltip>
               <DropdownMenuContent align="end" className="min-w-[180px]">
+                <DropdownMenuLabel>Pause notifications</DropdownMenuLabel>
                 <DropdownMenuItem onSelect={() => handleMuteFor(60 * 60 * 1000)}>
                   For 1 hour
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={handleMuteUntilMorning}>
                   {morningLabel}
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={openNotificationSettings}>Custom…</DropdownMenuItem>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={openNotificationSettings}>
+                  Schedule quiet hours…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-text-secondary"
+                      aria-label="More notification actions"
+                    >
+                      <Ellipsis className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">More actions</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" className="min-w-[200px]">
+                {showGroupToggle && (
+                  <>
+                    <DropdownMenuCheckboxItem
+                      checked={groupByContext}
+                      onCheckedChange={(checked) => setGroupByContext(checked === true)}
+                    >
+                      Group by project or worktree
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 <DropdownMenuItem
                   aria-label="Notification settings"
                   onSelect={openNotificationSettings}
                 >
                   Notification settings…
                 </DropdownMenuItem>
+                {entries.length > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      destructive
+                      // Confirm first. `clearAll` empties the whole store —
+                      // active, archived AND snoozed — regardless of which tab
+                      // you are looking at, and the emptied state is persisted,
+                      // so a mis-click on the Archived tab silently destroys the
+                      // record of a whole fleet run with no undo. That is a D1
+                      // local-irreversible action under
+                      // docs/architecture/destructive-action-safeguards.md, which
+                      // requires a ConfirmDialog and a verb-noun button; the
+                      // in-repo precedent is `logs.clear`.
+                      onSelect={() => setClearAllConfirmOpen(true)}
+                    >
+                      <Trash2 data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Clear all…
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
-            {entries.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/70"
-                    aria-label="More notification actions"
-                    title="More notification actions"
-                  >
-                    <Ellipsis className="w-3 h-3" aria-hidden="true" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="min-w-[160px]">
-                  <DropdownMenuItem
-                    destructive
-                    // Confirm first. `clearAll` empties the whole store —
-                    // active, archived AND snoozed — regardless of which tab
-                    // you are looking at, and the emptied state is persisted,
-                    // so a mis-click on the Archived tab silently destroys the
-                    // record of a whole fleet run with no undo. That is a D1
-                    // local-irreversible action under
-                    // docs/architecture/destructive-action-safeguards.md, which
-                    // requires a ConfirmDialog and a verb-noun button; the
-                    // in-repo precedent is `logs.clear`.
-                    onSelect={() => setClearAllConfirmOpen(true)}
-                  >
-                    <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                    Clear all
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
           </div>
         </div>
         {entries.length > 0 && (
@@ -1133,29 +1302,39 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           Height: one flex row instead of a column with a nested row, and the
           detail line only renders when there is a detail. On the common
           "muted until X, nothing else unusual" case that is a single line. */}
-      {showMutedPill && (
+      {showQuietStrip && (
         <div
           data-testid="notification-muted-pill"
           className="flex shrink-0 items-start gap-2 pl-4 pr-3 py-1.5 bg-overlay-raised text-2xs text-text-secondary"
         >
           <div className="min-w-0 flex-1 flex flex-col gap-0.5">
             <span className="font-medium text-text-primary">{quietCause}</span>
-            {quietDetail && <span className="text-text-secondary">{quietDetail}</span>}
+            {quietDetail.map((clause) => (
+              <span key={clause} className="text-text-secondary">
+                {clause}
+              </span>
+            ))}
           </div>
           {isSessionMuted && (
             <button
               type="button"
               onClick={handleResumeNotifications}
               aria-label="Resume notifications"
-              title="Resume notifications"
               // A border, because without one this was bare text sitting at the
               // end of a line of bare text. It only read as a control under
               // `forced-colors: active`, where the UA supplies the border this
               // was missing — which is the tell that it was missing. Matches the
               // secondary row action, so the panel has one button shape.
-              className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-daintree-text/20 px-1.5 py-0.5 text-2xs font-medium text-text-secondary hover:bg-overlay-medium hover:text-text-primary transition-colors"
+              className={SMALL_BUTTON_CLASS}
             >
               Resume
+            </button>
+          )}
+          {/* Quiet hours too: they explained the silence and then left the way
+              to change them two menus away. */}
+          {!isSessionMuted && (hasSilences || isScheduledMuted) && (
+            <button type="button" onClick={openNotificationSettings} className={SMALL_BUTTON_CLASS}>
+              Manage
             </button>
           )}
         </div>
@@ -1246,7 +1425,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     indexOffset={0}
                     focusedIndex={focusedIndex}
                     setRowRef={setRowRef}
-                    onRowFocus={setFocusedIndex}
+                    onRowFocus={handleRowFocus}
                     onDropdownOpenChange={handleDropdownOpenChange}
                     onDismiss={dismissEntry}
                     onDismissThread={dismissByCorrelationId}
@@ -1256,6 +1435,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     onConsumeSnoozePending={consumeSnoozePending}
                     onSnoozeRow={handleSnoozeForRow}
                     onUnsnoozeRow={handleUnsnoozeForRow}
+                    onArchiveRow={filter === "archived" ? undefined : archiveRow}
+                    onToggleReadRow={filter === "archived" ? undefined : toggleReadForRow}
                   />
                 )}
                 {chronoSections.map((section, sectionIdx) => (
@@ -1267,13 +1448,14 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     }
                     focusedIndex={focusedIndex}
                     setRowRef={setRowRef}
-                    onRowFocus={setFocusedIndex}
+                    onRowFocus={handleRowFocus}
                     onDropdownOpenChange={handleDropdownOpenChange}
                     groupByContext={groupByContext}
                     hasPinnedAbove={needsAttentionGroups.length > 0}
                     dividerGroupId={dividerGroupId}
                     dividerRef={setDividerEl}
-                    lastClosedAt={lastClosedAt}
+                    // No boundary in the tabs that aren't about arrival order.
+                    lastClosedAt={filter === "archived" || filter === "snoozed" ? 0 : lastClosedAt}
                     onDismiss={dismissEntry}
                     onDismissThread={dismissByCorrelationId}
                     onMarkIdsRead={markIdsReadWithUndo}
@@ -1283,6 +1465,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     onConsumeSnoozePending={consumeSnoozePending}
                     onSnoozeRow={handleSnoozeForRow}
                     onUnsnoozeRow={handleUnsnoozeForRow}
+                    onArchiveRow={filter === "archived" ? undefined : archiveRow}
+                    onToggleReadRow={filter === "archived" ? undefined : toggleReadForRow}
                   />
                 ))}
               </>
@@ -1298,15 +1482,28 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
             tabIndex={showJumpPill ? 0 : -1}
             onClick={() => {
               dividerEl?.scrollIntoView({ block: "start", behavior: "instant" });
-              dividerEl?.focus();
+              // Land on the first new ROW, not the divider: the list's keys
+              // only move between rows, so focus parked on the label left
+              // j/k/arrows doing nothing. The rail's copies come first in
+              // flat order, so search past them.
+              const pinned = needsAttentionGroups.length;
+              const index = flatRows.findIndex(
+                (row, i) => i >= pinned && row.key === dividerGroupId
+              );
+              if (index >= 0) moveFocusTo(index);
+              else dividerEl?.focus();
             }}
             className={cn(
               "absolute bottom-2 left-1/2 -translate-x-1/2 z-10",
               "inline-flex items-center gap-1.5 px-3 py-1 rounded-full",
-              "bg-overlay-raised border border-border-strong",
+              // Opaque, like ScrollPill: it floats over notification rows, and
+              // `overlay-raised` is ~4% alpha on dark themes, so the rows read
+              // through it. The hover tint layers as an image over the fill.
+              "bg-surface-panel-elevated border border-border-default",
               "shadow-[var(--theme-shadow-floating)]",
-              "text-2xs font-medium text-daintree-text/80",
-              "hover:text-text-primary hover:bg-overlay-raised",
+              "text-2xs font-medium text-text-secondary",
+              "hover:text-text-primary hover:border-border-strong",
+              "hover:bg-[linear-gradient(var(--color-overlay-hover),var(--color-overlay-hover))]",
               "transition-[translate,opacity] motion-reduce:transition-none",
               showJumpPill
                 ? "opacity-100 translate-y-0 pointer-events-auto"
@@ -1408,6 +1605,8 @@ function NeedsAttentionSection({
   onConsumeSnoozePending,
   onSnoozeRow,
   onUnsnoozeRow,
+  onArchiveRow,
+  onToggleReadRow,
 }: {
   groups: ThreadGroup[];
   /** Severe unread threads beyond the pinned cap — they remain in the chronological list below. */
@@ -1420,6 +1619,8 @@ function NeedsAttentionSection({
   onConsumeSnoozePending: () => void;
   onSnoozeRow: (row: FlatRow, option: SnoozeDurationOption) => void;
   onUnsnoozeRow: (row: FlatRow) => void;
+  onArchiveRow: ((row: FlatRow) => void) | undefined;
+  onToggleReadRow: ((row: FlatRow) => void) | undefined;
 } & RovingSectionProps) {
   return (
     <div data-testid="needs-attention-section" className="border-b border-divider">
@@ -1439,6 +1640,8 @@ function NeedsAttentionSection({
               setRowRef,
               onRowFocus,
               onDropdownOpenChange,
+              compact: true,
+              showSource: true,
             },
             buildSnoozeProps(
               group,
@@ -1450,6 +1653,8 @@ function NeedsAttentionSection({
                 onConsumeSnoozePending,
                 onSnooze: onSnoozeRow,
                 onUnsnooze: onUnsnoozeRow,
+                onArchive: onArchiveRow,
+                onToggleRead: onToggleReadRow,
               }
             )
           );
@@ -1487,6 +1692,8 @@ function ChronoSection({
   onConsumeSnoozePending,
   onSnoozeRow,
   onUnsnoozeRow,
+  onArchiveRow,
+  onToggleReadRow,
   hasPinnedAbove,
 }: {
   section: ContextSection;
@@ -1503,6 +1710,8 @@ function ChronoSection({
   onConsumeSnoozePending: () => void;
   onSnoozeRow: (row: FlatRow, option: SnoozeDurationOption) => void;
   onUnsnoozeRow: (row: FlatRow) => void;
+  onArchiveRow: ((row: FlatRow) => void) | undefined;
+  onToggleReadRow: ((row: FlatRow) => void) | undefined;
   /**
    * Whether the "Needs attention" rail is rendering above this list. That rail
    * is a preview, not a filter — a pinned entry still appears here — so with
@@ -1518,24 +1727,55 @@ function ChronoSection({
   const newSinceUnreadIds = section.groups
     .filter((g) => g.latestTimestamp > lastClosedAt)
     .flatMap((g) => g.entries.filter((e) => !e.seenAsToast).map((e) => e.id));
-  const sectionLabel = groupByContext ? "Notifications for this context" : "All notifications";
+  const sectionLabel = "All notifications";
+  // Grouped, the section's name is its header's — "Notifications for this
+  // context" named nothing a screen reader user could tell apart.
+  const headerLabelId = useId();
+  // Where "new" ends: the first group at or before the watermark, marked only
+  // when something newer sits above it in this same section — a section that
+  // is all new or all old has no boundary to draw. The divider at the top
+  // says where new begins; without this nothing said where it stopped.
+  const firstKey = section.groups[0]
+    ? (section.groups[0].correlationId ?? section.groups[0].entries[0]!.id)
+    : null;
+  const opensWithNew =
+    lastClosedAt > 0 && !!section.groups[0] && section.groups[0].latestTimestamp > lastClosedAt;
+  const earlierGroup = opensWithNew
+    ? section.groups.find((g) => g.latestTimestamp <= lastClosedAt)
+    : undefined;
+  const earlierKey = earlierGroup
+    ? (earlierGroup.correlationId ?? earlierGroup.entries[0]!.id)
+    : null;
+  // The divider already says what this list is, so it stands in for the
+  // "All notifications" label rather than stacking a second one on it.
+  const dividerLeads = dividerGroupId !== null && dividerGroupId === firstKey;
   return (
     <div data-testid="chrono-section">
-      {!groupByContext && hasPinnedAbove && (
+      {!groupByContext && hasPinnedAbove && !dividerLeads && (
         <div className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-text-secondary">
           {sectionLabel}
         </div>
       )}
       {groupByContext && (
         <ContextSectionHeader
+          labelId={headerLabelId}
           worktreeId={section.worktreeId}
           projectId={section.projectId}
           count={section.groups.length}
+          newCount={
+            lastClosedAt > 0
+              ? section.groups.filter((g) => g.latestTimestamp > lastClosedAt).length
+              : 0
+          }
           unreadIds={sectionUnreadIds}
           onMarkRead={() => onMarkIdsRead(sectionUnreadIds, { resetLastClosed: false })}
         />
       )}
-      <div role="group" aria-label={sectionLabel}>
+      <div
+        role="group"
+        aria-label={groupByContext ? undefined : sectionLabel}
+        aria-labelledby={groupByContext ? headerLabelId : undefined}
+      >
         {section.groups.map((group, idx) => {
           const groupKey = group.correlationId ?? group.entries[0]!.id;
           const isDivider = dividerGroupId !== null && groupKey === dividerGroupId;
@@ -1564,6 +1804,14 @@ function ChronoSection({
                   onMarkRead={() => onMarkIdsRead(newSinceUnreadIds, { resetLastClosed: true })}
                 />
               )}
+              {groupKey === earlierKey && (
+                <div
+                  data-testid="notification-earlier-boundary"
+                  className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-text-secondary"
+                >
+                  Earlier
+                </div>
+              )}
               {renderGroup(
                 group,
                 onDismiss,
@@ -1574,6 +1822,9 @@ function ChronoSection({
                   setRowRef,
                   onRowFocus,
                   onDropdownOpenChange,
+                  compact: false,
+                  // The section header names the place; the row needn't.
+                  showSource: !groupByContext,
                 },
                 buildSnoozeProps(
                   group,
@@ -1585,6 +1836,8 @@ function ChronoSection({
                     onConsumeSnoozePending,
                     onSnooze: onSnoozeRow,
                     onUnsnooze: onUnsnoozeRow,
+                    onArchive: onArchiveRow,
+                    onToggleRead: onToggleReadRow,
                   }
                 )
               )}
@@ -1602,6 +1855,8 @@ interface RowRovingProps {
   setRowRef: (index: number, el: HTMLDivElement | null) => void;
   onRowFocus: (index: number) => void;
   onDropdownOpenChange: (open: boolean) => void;
+  compact: boolean;
+  showSource: boolean;
 }
 
 interface SnoozeRowProps {
@@ -1611,6 +1866,9 @@ interface SnoozeRowProps {
   onConsumeSnoozePending: () => void;
   onSnooze: (option: SnoozeDurationOption) => void;
   onUnsnooze: () => void;
+  /** The pointer's route to what `e` and `u` do from the keyboard. */
+  onArchive: (() => void) | undefined;
+  onToggleRead: (() => void) | undefined;
 }
 
 function renderGroup(
@@ -1641,6 +1899,10 @@ function renderGroup(
         onConsumeSnoozePending={snooze.onConsumeSnoozePending}
         onSnooze={snooze.onSnooze}
         onUnsnooze={snooze.onUnsnooze}
+        onArchive={snooze.onArchive}
+        onToggleRead={snooze.onToggleRead}
+        compact={roving.compact}
+        showSource={roving.showSource}
       />
     );
   }
@@ -1662,6 +1924,10 @@ function renderGroup(
       onConsumeSnoozePending={snooze.onConsumeSnoozePending}
       onSnooze={snooze.onSnooze}
       onUnsnooze={snooze.onUnsnooze}
+      onArchive={snooze.onArchive}
+      onToggleRead={snooze.onToggleRead}
+      compact={roving.compact}
+      showSource={roving.showSource}
     />
   );
 }
@@ -1672,11 +1938,7 @@ function buildSnoozeProps(
   snoozePendingIndex: number | null,
   snoozedThreads: Record<string, number>,
   now: number,
-  handlers: {
-    onConsumeSnoozePending: () => void;
-    onSnooze: (row: FlatRow, option: SnoozeDurationOption) => void;
-    onUnsnooze: (row: FlatRow) => void;
-  }
+  handlers: RowMenuHandlers
 ): SnoozeRowProps {
   const row = buildFlatRow(group);
   const snoozedUntil = group.correlationId ? snoozedThreads[group.correlationId] : undefined;
@@ -1689,49 +1951,122 @@ function buildSnoozeProps(
     onConsumeSnoozePending: handlers.onConsumeSnoozePending,
     onSnooze: (option) => handlers.onSnooze(row, option),
     onUnsnooze: () => handlers.onUnsnooze(row),
+    onArchive: handlers.onArchive ? () => handlers.onArchive?.(row) : undefined,
+    onToggleRead: handlers.onToggleRead ? () => handlers.onToggleRead?.(row) : undefined,
   };
+}
+
+interface RowMenuHandlers {
+  onConsumeSnoozePending: () => void;
+  onSnooze: (row: FlatRow, option: SnoozeDurationOption) => void;
+  onUnsnooze: (row: FlatRow) => void;
+  /** Absent in the Archived tab, where there is nothing further to archive to. */
+  onArchive: ((row: FlatRow) => void) | undefined;
+  /** Absent in the Archived tab too: read state doesn't apply to filed rows. */
+  onToggleRead: ((row: FlatRow) => void) | undefined;
 }
 
 function ContextSectionHeader({
   worktreeId,
   projectId,
   count,
+  newCount,
   unreadIds,
   onMarkRead,
+  labelId,
 }: {
+  /** The name's element id, which the section's group takes as its label. */
+  labelId: string;
   worktreeId?: string;
   projectId?: string;
   count: number;
+  /**
+   * Rows here newer than the last look. Grouped, there's no single divider to
+   * say where new starts, so each place says how much of it is new, and its
+   * "Earlier" boundary says where that stops.
+   */
+  newCount: number;
   unreadIds: string[];
   onMarkRead: () => void;
 }) {
   const worktreeName = useWorktreeStore((s) =>
     worktreeId ? s.worktrees.get(worktreeId)?.name : undefined
   );
-  const label = worktreeName ?? worktreeId ?? projectId ?? "Other";
+  const projectName = useProjectStore((s) =>
+    projectId ? s.projects.find((p) => p.id === projectId)?.name : undefined
+  );
+  // Names, never ids. A project id is a sha256 and a worktree id is a path, so
+  // the old `worktreeName ?? worktreeId ?? projectId` fallback printed a
+  // 64-character hash as the heading of any section from a project this view
+  // hasn't loaded.
+  const project = projectName ?? (projectId ? UNKNOWN_PROJECT_LABEL : undefined);
+  const resolvedWorktree = worktreeId
+    ? worktreeName?.trim() || worktreeNameFromId(worktreeId)
+    : undefined;
+  // A main worktree is named after its folder, usually the project's own name.
+  const worktree = resolvedWorktree && resolvedWorktree !== project ? resolvedWorktree : undefined;
+  const label = [project, worktree].filter(Boolean).join(" · ") || APP_SOURCE_LABEL;
   const hasUnread = unreadIds.length > 0;
   return (
+    // Sticky, so the place a row belongs to stays on screen while you read
+    // it: mid-section, the rows carry no source of their own. The solid layer
+    // underneath is what makes that work — `overlay-raised` is a tint, and
+    // alone it let the rows scroll visibly through the header. `z-20` puts it
+    // above ScrollShadow's `z-10` top fade, whose lower edge then falls just
+    // under the header as its shadow. The list's `scroll-py-8` already keeps
+    // keyboard-focused rows clear of it.
     <div
-      data-testid="context-section-header"
-      className="group/section flex items-center justify-between pl-4 pr-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-text-secondary"
+      data-testid="context-section-sticky"
+      className="sticky top-0 z-20 bg-[var(--overlay-surface-solid)]"
     >
-      <span className="truncate">{label}</span>
-      <div className="ml-2 shrink-0 flex items-center gap-2">
+      <div
+        data-testid="context-section-header"
+        // Sentence case, not the uppercase eyebrow the other labels use: this
+        // one is a name. Branch names are case-sensitive and uppercasing
+        // "feature/refine-inbox" misstates the thing it identifies.
+        className="flex items-center justify-between gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-2xs font-medium text-text-secondary"
+      >
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          {/* Two spans so the worktree survives a long project name. As one
+            string it truncated from the right, and the worktree — the part
+            that tells two sections of one project apart — went first. */}
+          <span
+            id={labelId}
+            className="flex min-w-0 items-baseline text-text-primary"
+            title={label}
+          >
+            {project ? <span className="min-w-0 truncate">{project}</span> : null}
+            {project && worktree ? (
+              <span aria-hidden="true" className="shrink-0 px-1 text-text-secondary">
+                ·
+              </span>
+            ) : null}
+            {worktree ? <span className="max-w-[65%] shrink-0 truncate">{worktree}</span> : null}
+            {!project && !worktree ? <span className="truncate">{APP_SOURCE_LABEL}</span> : null}
+          </span>
+          {/* Beside the name it counts, not beside the button — at the far end
+            it read as part of "Mark read". */}
+          <span className="shrink-0 tabular-nums" aria-label={`${count} notifications`}>
+            {count}
+          </span>
+          {newCount > 0 && (
+            <span data-testid="context-section-new" className="shrink-0 tabular-nums">
+              · {newCount} new
+            </span>
+          )}
+        </span>
         {hasUnread && (
           <button
             type="button"
             onClick={onMarkRead}
             className={cn(
-              "inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-text-secondary hover:text-text-primary hover:bg-overlay-raised transition-colors",
+              "shrink-0 inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-text-secondary hover:text-text-primary hover:bg-overlay-medium transition-colors",
               PALETTE_ROW_FOCUS_CLASS
             )}
           >
             Mark read
           </button>
         )}
-        <span aria-hidden="true" className="text-daintree-text/40 tabular-nums">
-          {count}
-        </span>
       </div>
     </div>
   );
@@ -1758,7 +2093,10 @@ function NewSinceLastLookedDivider({
         <button
           type="button"
           onClick={onMarkRead}
-          className="inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-text-secondary hover:bg-overlay-raised hover:text-text-primary transition-colors"
+          // Bordered like Resume and the secondary row action — the panel's one
+          // small-button shape. Bare, it was the same grey and size as the
+          // label beside it and read as more of the label.
+          className={cn(SMALL_BUTTON_CLASS, "ml-auto normal-case tracking-normal")}
         >
           {unreadCount === 1 ? "Mark this read" : `Mark these ${unreadCount} read`}
         </button>
@@ -1780,8 +2118,14 @@ function NotificationThread({
   onConsumeSnoozePending,
   onSnooze,
   onUnsnooze,
+  onArchive,
+  onToggleRead,
+  compact = false,
+  showSource = true,
 }: {
   group: ThreadGroup;
+  compact?: boolean;
+  showSource?: boolean;
   onDismiss: () => void;
   rowRef?: (el: HTMLDivElement | null) => void;
   tabIndex?: number;
@@ -1793,6 +2137,8 @@ function NotificationThread({
   onConsumeSnoozePending?: () => void;
   onSnooze?: (option: SnoozeDurationOption) => void;
   onUnsnooze?: () => void;
+  onArchive?: () => void;
+  onToggleRead?: () => void;
 }) {
   const latest = group.entries[0];
   const isNew = group.entries.some((e) => !e.seenAsToast);
@@ -1853,6 +2199,10 @@ function NotificationThread({
         onConsumeSnoozePending={onConsumeSnoozePending}
         onSnooze={onSnooze}
         onUnsnooze={onUnsnooze}
+        onArchive={onArchive}
+        onToggleRead={onToggleRead}
+        compact={compact}
+        showSource={showSource}
       />
     </div>
   );

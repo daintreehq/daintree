@@ -3,6 +3,8 @@ import {
   AppPaletteDialog,
   KBD_CLASS,
   PaletteFooterHints,
+  PaletteNoMatchHint,
+  toHintPhrase,
   type PaletteSurfaceTier,
 } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
@@ -68,10 +70,23 @@ export interface SearchablePaletteProps<T> {
   searchPlaceholder?: string;
   /** ARIA label for the search input */
   searchAriaLabel?: string;
+  /**
+   * Id of an element that describes the search input — for a palette control
+   * the user reaches by a chord from the field rather than by Tab, which moves
+   * the list selection here.
+   */
+  searchAriaDescribedBy?: string;
   /** ID for the listbox container */
   listId?: string;
   /** Prefix for item IDs used in aria-activedescendant */
   itemIdPrefix?: string;
+
+  /**
+   * The list allows more than one option to be chosen. Semantic only: sets
+   * `aria-multiselectable` on the listbox, which the options' own checked state
+   * does not replace. The row treatment stays the caller's.
+   */
+  multiselectable?: boolean;
 
   /** Message when no items exist */
   emptyMessage?: string;
@@ -126,12 +141,15 @@ export interface SearchablePaletteProps<T> {
    * Sugar for the common case of "the footer says one thing: what Enter does."
    * Returns the verb-noun action label for the current selection (e.g.
    * `"Switch terminal"`, `"Apply theme"`); the shell wraps it in a single `↵`
-   * chip and lowercases the label for mid-sentence rendering. Ignored when
+   * chip and drops the leading capital for mid-sentence rendering. Ignored when
    * `footer` or `getFooter` is also set — those win, in that order. Use a
    * stable reference (module-level fn or `useCallback`) to avoid recomputing
-   * the footer node every render.
+   * the footer node every render. Called only while a row is selected; with
+   * nothing selected the footer carries no hint. Return `null` for a selection
+   * Enter will not act on (an unavailable row) and the footer carries no hint
+   * for it either.
    */
-  getActionLabel?: (selectedItem: T | null) => string;
+  getActionLabel?: (selectedItem: T) => string | null;
   /** Additional className for AppPaletteDialog.Body */
   bodyClassName?: string;
   /** Custom content before the list */
@@ -182,8 +200,10 @@ export function SearchablePalette<T>({
   tier,
   searchPlaceholder = "Search",
   searchAriaLabel,
+  searchAriaDescribedBy,
   listId = "searchable-palette-list",
   itemIdPrefix = "palette-option",
+  multiselectable = false,
   emptyMessage = "No items available",
   noMatchMessage,
   emptyContent,
@@ -216,28 +236,90 @@ export function SearchablePalette<T>({
     }
   }, [selectedIndex, results]);
 
-  // Announce the result count to screen readers on the trailing edge of a
-  // filter pass. Gated on the `isFiltering` true→false transition (mirrors the
-  // visual stale-dim signal) and debounced 400ms so fast typists don't chatter
-  // the live region. Empty-query passes are skipped — the listbox already
-  // reflects the no-input state and an "N results" announcement there is noise.
+  // One owner for "N results". Two things can end with a count worth saying —
+  // a filter pass settling and an announced load landing — and they often end
+  // in the same commit. Each schedules through here, so the later one replaces
+  // the earlier and a single count is spoken. The count is read when the timer
+  // fires, not when it is set, so a list that is still filling says what it
+  // settled on.
+  //
+  // Zero results render `AppPaletteDialog.Empty`, which announces its own
+  // "No matches for …". Saying "0 results" as well gives the same news two
+  // owners, so zero is skipped — except for a `renderBody` consumer, which
+  // draws no Empty and has only the count.
+  const resultCountRef = useRef(results.length);
+  const hasCustomBodyRef = useRef(renderBody !== undefined);
+  useEffect(() => {
+    resultCountRef.current = results.length;
+    hasCustomBodyRef.current = renderBody !== undefined;
+  });
+  const countTimerRef = useRef<number | null>(null);
+  const cancelCount = useCallback(() => {
+    if (countTimerRef.current !== null) {
+      window.clearTimeout(countTimerRef.current);
+      countTimerRef.current = null;
+    }
+  }, []);
+  const scheduleCount = useCallback(() => {
+    cancelCount();
+    countTimerRef.current = window.setTimeout(() => {
+      countTimerRef.current = null;
+      const count = resultCountRef.current;
+      if (count === 0 && !hasCustomBodyRef.current) return;
+      useAnnouncerStore
+        .getState()
+        .announce(count === 1 ? "1 result" : `${count} results`, "polite");
+    }, UI_DOHERTY_THRESHOLD);
+  }, [cancelCount]);
+  useEffect(() => cancelCount, [cancelCount]);
+
+  // A filter pass is announced on its trailing edge — the `isFiltering`
+  // true→false transition that also clears the visual stale-dim — and debounced
+  // so fast typists don't chatter the live region: a new pass cancels the last
+  // one's pending count. Empty-query passes are skipped; the listbox already
+  // shows the no-input state and a count there is noise.
   const prevIsFilteringRef = useRef(isFiltering);
   useEffect(() => {
     const wasFiltering = prevIsFilteringRef.current;
     prevIsFilteringRef.current = isFiltering;
-    if (!wasFiltering || isFiltering) return;
+    if (isFiltering) {
+      cancelCount();
+      return;
+    }
+    if (!wasFiltering) return;
     // Hosts now keep palettes mounted through their exit animation (#9917), so a
     // late filter pass can resolve after close — don't announce to a closed,
     // invisible palette.
     if (!isOpen) return;
     if (!query.trim()) return;
-    const count = results.length;
-    const timer = window.setTimeout(() => {
-      const message = count === 1 ? "1 result" : `${count} results`;
-      useAnnouncerStore.getState().announce(message, "polite");
-    }, UI_DOHERTY_THRESHOLD);
-    return () => window.clearTimeout(timer);
-  }, [isFiltering, query, results.length, isOpen]);
+    scheduleCount();
+  }, [isFiltering, query, isOpen, cancelCount, scheduleCount]);
+
+  // The header's loading sweep is aria-hidden, so a slow load needs words too
+  // (WCAG 4.1.3 counts busy indicators as status). Same Doherty gate as the
+  // sweep's own onset: a fast load says nothing. Keyed to the load alone, so
+  // rows arriving or a query changing mid-load never restart it. Once an
+  // announced load lands, the count owner above says what it brought.
+  const loadAnnouncedRef = useRef(false);
+  useEffect(() => {
+    if (!isOpen) {
+      loadAnnouncedRef.current = false;
+      cancelCount();
+      return undefined;
+    }
+    if (isLoading) {
+      const timer = window.setTimeout(() => {
+        loadAnnouncedRef.current = true;
+        useAnnouncerStore.getState().announce("Loading results", "polite");
+      }, UI_DOHERTY_THRESHOLD);
+      return () => window.clearTimeout(timer);
+    }
+    if (loadAnnouncedRef.current) {
+      loadAnnouncedRef.current = false;
+      scheduleCount();
+    }
+    return undefined;
+  }, [isOpen, isLoading, cancelCount, scheduleCount]);
 
   useEscapeStack(isOpen, () => {
     if (query !== "") {
@@ -304,6 +386,18 @@ export function SearchablePalette<T>({
         if (e.defaultPrevented) return;
       }
 
+      // A query clears before the palette closes. The escape-stack entry below
+      // says the same thing, but it never gets the chance: the dialog's
+      // document-level Escape backstop runs first, closes the palette and marks
+      // the key consumed. Stopping the event here keeps it from reaching that
+      // backstop; an empty field lets Escape through to close as before.
+      if (e.key === "Escape" && query !== "") {
+        e.preventDefault();
+        e.stopPropagation();
+        onQueryChange("");
+        return;
+      }
+
       // Tab stays input-only: on the results region it must keep its native
       // traversal so controls rendered after the list stay reachable.
       if (e.key === "Tab") {
@@ -319,7 +413,7 @@ export function SearchablePalette<T>({
 
       handleNavigationKeyDown(e);
     },
-    [onKeyDown, onSelectPrevious, onSelectNext, handleNavigationKeyDown]
+    [onKeyDown, onSelectPrevious, onSelectNext, handleNavigationKeyDown, query, onQueryChange]
   );
 
   const activeDescendant =
@@ -328,6 +422,11 @@ export function SearchablePalette<T>({
       : undefined;
 
   const selectedItem = results[selectedIndex] ?? null;
+
+  // The listbox is only in the tree while there are rows; an expanded combobox
+  // controlling an id that is not rendered points assistive technology at
+  // nothing. A `renderBody` consumer draws its own body, so it keeps the claim.
+  const listRendered = renderBody ? isOpen : isOpen && results.length > 0;
 
   // Derive the action label as a primitive so the footer JSX can be memoized
   // by its string content rather than the (changing) selectedItem reference.
@@ -339,11 +438,14 @@ export function SearchablePalette<T>({
   // supplied, so consumers aren't surprised by getActionLabel side-effects
   // when its output would be discarded anyway.
   const actionLabelActive = !getFooter && footer === undefined && getActionLabel != null;
-  const rawActionLabel = actionLabelActive ? getActionLabel!(selectedItem) : null;
+  // No selection, no hint: with nothing on screen for Enter to act on, a verb
+  // in the footer promises an action the key will not take.
+  const rawActionLabel =
+    actionLabelActive && selectedItem != null ? getActionLabel!(selectedItem) : null;
   const actionLabelFooter = useMemo(() => {
     if (rawActionLabel == null) return null;
     const actionLabel = rawActionLabel.trim() || "Select";
-    const phrase = `to ${actionLabel.toLowerCase()}`;
+    const phrase = `to ${toHintPhrase(actionLabel)}`;
     // One chip, not three. `getActionLabel` names what Enter does for the
     // current selection, which is the only thing a footer is for now — the
     // `↑↓` and `Esc` chips this used to compose were restating conventions.
@@ -385,11 +487,12 @@ export function SearchablePalette<T>({
           onKeyDown={handleKeyDown}
           placeholder={searchPlaceholder}
           role="combobox"
-          aria-expanded={isOpen}
+          aria-expanded={listRendered}
           aria-haspopup="listbox"
           aria-autocomplete="list"
           aria-label={searchAriaLabel ?? searchPlaceholder.replace("...", "")}
-          aria-controls={listId}
+          aria-describedby={searchAriaDescribedBy}
+          aria-controls={listRendered ? listId : undefined}
           aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>
@@ -399,6 +502,7 @@ export function SearchablePalette<T>({
         ariaLabel={label}
         activeDescendant={activeDescendant}
         onNavigationKeyDown={handleNavigationKeyDown}
+        keepPointerFocusOnInput
       >
         {renderBody ? (
           renderBody()
@@ -415,7 +519,10 @@ export function SearchablePalette<T>({
                   query={query}
                   emptyMessage={emptyMessage}
                   noMatchMessage={noMatchMessage}
-                  noMatchContent={noMatchContent}
+                  // Escape clears the query before it closes (see handleKeyDown),
+                  // so every no-match state has the same way back; a consumer
+                  // with a better next step passes its own.
+                  noMatchContent={noMatchContent ?? <PaletteNoMatchHint />}
                 >
                   {resolvedEmptyContent}
                 </AppPaletteDialog.Empty>
@@ -426,6 +533,7 @@ export function SearchablePalette<T>({
                 id={listId}
                 role="listbox"
                 aria-label={label}
+                aria-multiselectable={multiselectable || undefined}
                 className={isFiltering ? "palette-results-stale" : undefined}
                 data-stale={isFiltering ? "true" : undefined}
                 aria-busy={isFiltering || undefined}

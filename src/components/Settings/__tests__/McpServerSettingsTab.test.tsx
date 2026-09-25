@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { parse as parseToml } from "smol-toml";
 import { McpServerSettingsTab } from "../McpServerSettingsTab";
@@ -208,7 +208,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    const displayArea = container.querySelector(".bg-surface-disabled");
+    const displayArea = container.querySelector("[data-api-key-display]");
     expect(displayArea).toBeTruthy();
     expect(displayArea?.tagName).toBe("DIV");
 
@@ -224,7 +224,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     expect(displayArea.textContent).not.toContain("dnt-key-abc123");
     expect(displayArea.textContent).toContain("•");
 
@@ -277,7 +277,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
@@ -297,7 +297,7 @@ describe("McpServerSettingsTab", () => {
       expect(window.electron.mcpServer.rotateApiKey).toHaveBeenCalledTimes(1);
     });
 
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     await waitFor(() => {
       expect(displayArea.textContent).not.toContain("dnt-key-rotated789");
     });
@@ -312,7 +312,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     });
@@ -334,12 +334,12 @@ describe("McpServerSettingsTab", () => {
     await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByLabelText("Show API key"));
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     await waitFor(() => {
       expect(displayArea.textContent).toContain("dnt-key-abc123");
     });
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     });
@@ -368,14 +368,15 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     });
 
     fireEvent.click(screen.getByRole("button", { name: /^rotate key$/i }));
 
-    await waitForContent(container, "rotate failed");
+    // The error sits inside the still-open confirm, which portals out of the tab.
+    await screen.findByText(new RegExp("rotate failed"));
     expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     expect(window.electron.mcpServer.rotateApiKey).toHaveBeenCalledTimes(1);
     expect(mockedLogError).toHaveBeenCalledWith("Failed to rotate MCP API key", expect.any(Error));
@@ -390,12 +391,12 @@ describe("McpServerSettingsTab", () => {
     await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByLabelText("Show API key"));
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     await waitFor(() => {
       expect(displayArea.textContent).toContain("dnt-key-abc123");
     });
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     });
@@ -425,7 +426,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     const maskSpan = displayArea.querySelector("span")!;
     const bulletCount = (maskSpan.textContent ?? "").length;
     expect(bulletCount).toBe(24);
@@ -482,7 +483,7 @@ describe("McpServerSettingsTab", () => {
     expect(mockedLogError).toHaveBeenCalledWith("Failed to load MCP status", expect.any(Error));
   });
 
-  it("renders empty state with 'Turn on MCP server' CTA when MCP is disabled", async () => {
+  it("offers the enable switch as the only way to turn MCP on — no duplicate empty-state CTA", async () => {
     installMcpApi({
       getStatus: vi.fn().mockResolvedValue({
         enabled: false,
@@ -490,53 +491,6 @@ describe("McpServerSettingsTab", () => {
         configuredPort: null,
         apiKey: "",
       }),
-    });
-
-    const { container } = render(
-      <SettingsValidationProvider>
-        <McpServerSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "MCP server is off");
-
-    expect(screen.getByRole("button", { name: /turn on mcp server/i })).toBeTruthy();
-  });
-
-  it("clicking 'Turn on MCP server' from the empty state calls setEnabled(true)", async () => {
-    const setEnabledMock = vi.fn().mockResolvedValue({
-      enabled: true,
-      port: 9020,
-      configuredPort: 9020,
-      apiKey: "",
-    });
-    installMcpApi({
-      getStatus: vi.fn().mockResolvedValue({
-        enabled: false,
-        port: null,
-        configuredPort: null,
-        apiKey: "",
-      }),
-      setEnabled: setEnabledMock,
-    });
-
-    const { container } = render(
-      <SettingsValidationProvider>
-        <McpServerSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "MCP server is off");
-
-    fireEvent.click(screen.getByRole("button", { name: /turn on mcp server/i }));
-
-    await waitFor(() => {
-      expect(setEnabledMock).toHaveBeenCalledWith(true);
-    });
-  });
-
-  it("does not render the empty state while MCP status is still loading", () => {
-    installMcpApi({
-      // Pending forever so the loading state is the rendered state.
-      getStatus: vi.fn().mockReturnValue(new Promise(() => {})),
     });
 
     render(
@@ -544,23 +498,34 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
+
+    const toggle = screen.getByLabelText("Enable MCP server");
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByRole("button", { name: /turn on mcp server/i })).toBeNull();
     expect(screen.queryByText("MCP server is off")).toBeNull();
   });
 
-  it("hides the empty state once MCP is enabled", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <McpServerSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForApiKeyControls(container);
-
-    expect(screen.queryByText("MCP server is off")).toBeNull();
-  });
-
-  it("does not show the empty state when MCP status load fails", async () => {
+  it("keeps the audit history reachable while the server is off", async () => {
     installMcpApi({
-      getStatus: vi.fn().mockRejectedValue(new Error("IPC down")),
+      getStatus: vi.fn().mockResolvedValue({
+        enabled: false,
+        port: null,
+        configuredPort: null,
+        apiKey: "",
+      }),
+      getLogRecords: vi.fn().mockResolvedValue([
+        {
+          id: "1",
+          timestamp: Date.now(),
+          toolId: "files.read",
+          sessionId: "s",
+          tier: "external",
+          argsSummary: "{}",
+          result: "success",
+          durationMs: 3,
+        },
+      ]),
     });
 
     const { container } = render(
@@ -569,12 +534,14 @@ describe("McpServerSettingsTab", () => {
       </SettingsValidationProvider>
     );
 
-    await waitForContent(container, "IPC down");
-
-    expect(screen.queryByText("MCP server is off")).toBeNull();
+    // Stopping the server after something suspicious must not hide what it did.
+    await waitForContent(container, "files.read");
+    expect(screen.getByRole("button", { name: "Clear audit log…" })).toBeTruthy();
+    // Connection setup is still collapsed behind the switch.
+    expect(screen.queryByLabelText("MCP server port")).toBeNull();
   });
 
-  it("hides the empty state once MCP is enabled via the CTA", async () => {
+  it("turning the switch on calls setEnabled(true) and reveals the connection section", async () => {
     const setEnabledMock = vi.fn().mockResolvedValue({
       enabled: true,
       port: 9020,
@@ -596,13 +563,17 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "MCP server is off");
 
-    fireEvent.click(screen.getByRole("button", { name: /turn on mcp server/i }));
+    const toggle = screen.getByLabelText("Enable MCP server");
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    expect(container.textContent).not.toContain("The server binds to 127.0.0.1");
+
+    fireEvent.click(toggle);
 
     await waitFor(() => {
-      expect(screen.queryByText("MCP server is off")).toBeNull();
+      expect(setEnabledMock).toHaveBeenCalledWith(true);
     });
+    await waitForContent(container, "The server binds to 127.0.0.1");
   });
 
   it("shows inline error and logs toggle failure without notifying", async () => {
@@ -810,18 +781,16 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log…" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
     });
     expect(window.electron.mcpServer.clearAuditLog).not.toHaveBeenCalled();
 
-    const buttons = screen.getAllByRole("button", { name: /^clear log$/i });
-    const dialogConfirm = buttons[buttons.length - 1]!;
-    fireEvent.click(dialogConfirm);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log" }));
 
-    await waitForContent(container, "No tool dispatches recorded yet");
+    await waitForContent(container, "Audit log cleared");
     expect(mockedNotify).not.toHaveBeenCalled();
   });
 
@@ -846,7 +815,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
     });
@@ -882,16 +851,15 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
     });
 
-    const buttons = screen.getAllByRole("button", { name: /^clear log$/i });
-    const dialogConfirm = buttons[buttons.length - 1]!;
-    fireEvent.click(dialogConfirm);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log" }));
 
-    await waitForContent(container, "clear failed");
+    // The error sits inside the still-open confirm, which portals out of the tab.
+    await screen.findByText(new RegExp("clear failed"));
     expect(mockedNotify).not.toHaveBeenCalled();
     expect(mockedLogError).toHaveBeenCalledWith("Failed to clear MCP audit log", expect.any(Error));
   });
@@ -1690,17 +1658,22 @@ describe("McpServerSettingsTab", () => {
       );
       await waitForApiKeyControls(container);
 
-      const group = screen.getByRole("radiogroup", { name: /client/i });
-      const choices = Array.from(group.querySelectorAll('[role="radio"]'));
-      expect(choices.map((c) => c.textContent)).toEqual([
-        expect.stringContaining("Claude Code"),
-        expect.stringContaining("Codex"),
-        expect.stringContaining("Other client"),
-      ]);
+      // Native radios in a fieldset: the group is named by its legend, and each
+      // option is named by its label alone, with the destination as its description.
+      const group = screen.getByRole("group", { name: /client/i });
+      const choices = within(group).getAllByRole("radio") as HTMLInputElement[];
+      expect(choices).toHaveLength(3);
+      expect(within(group).getByRole("radio", { name: "Claude Code" })).toBeTruthy();
+      expect(within(group).getByRole("radio", { name: "Codex" })).toBeTruthy();
+      expect(within(group).getByRole("radio", { name: "Other client" })).toBeTruthy();
 
-      const checked = choices.filter((c) => c.getAttribute("aria-checked") === "true");
+      const checked = choices.filter((c) => c.checked);
       expect(checked).toHaveLength(1);
-      expect(checked[0]?.textContent).toContain("Claude Code");
+      expect(checked[0]).toBe(within(group).getByRole("radio", { name: "Claude Code" }));
+
+      const describedBy = checked[0]!.getAttribute("aria-describedby");
+      const claude = MCP_CLIENT_CONFIGS.find((entry) => entry.label === "Claude Code")!;
+      expect(document.getElementById(describedBy ?? "")?.textContent).toBe(claude.destination);
     });
 
     it("shows each client's destination only on its own card", async () => {

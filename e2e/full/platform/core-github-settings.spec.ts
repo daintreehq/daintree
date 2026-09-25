@@ -14,6 +14,19 @@ import { T_SHORT, T_MEDIUM } from "../../helpers/timeouts";
 import { openSettings } from "../../helpers/panels";
 
 let ctx: AppContext;
+
+// The error renders on the field and again as a visually hidden live-region
+// copy, so resolve the field's own error through its aria-describedby.
+async function expectTokenFieldError(window: Page, message: string): Promise<void> {
+  const input = window.locator(SEL.github.tokenInput);
+  await expect(input).toHaveAttribute("aria-invalid", "true", { timeout: T_MEDIUM });
+  await expect(input).toHaveAccessibleDescription(new RegExp(`^${message}`));
+  const errorId = (await input.getAttribute("aria-describedby"))?.split(/\s+/)[0];
+  expect(errorId).toBeTruthy();
+  const fieldError = window.locator(`[id="${errorId}"]`);
+  await expect(fieldError).toHaveText(message);
+  await expect(fieldError).toBeVisible();
+}
 let fixtureCleanup: (() => void) | undefined;
 
 async function openGitHubSettings(window: Page): Promise<void> {
@@ -25,7 +38,7 @@ async function openGitHubSettings(window: Page): Promise<void> {
 
   await window
     .locator(SEL.settings.navSidebar)
-    .getByRole("tab", { name: "Code Forge", exact: true })
+    .getByRole("tab", { name: "Code forge", exact: true })
     .click();
   await expect(window.locator("h3", { hasText: "Code Forge" })).toBeVisible({ timeout: T_SHORT });
   await selectGitHubSettingsProvider(window);
@@ -84,9 +97,7 @@ test.describe.serial("Core: GitHub settings token flow", () => {
     await window.locator(SEL.github.tokenInput).fill("ghp_invalid_token");
     await window.locator(SEL.github.testButton).click();
 
-    await expect(window.locator("text=Couldn't validate token")).toBeVisible({
-      timeout: T_MEDIUM,
-    });
+    await expectTokenFieldError(window, "Couldn't validate token");
     // The settings surface stays intact (no error-boundary fallback).
     await expect(window.locator(SEL.errorBoundary.fallback)).not.toBeVisible();
   });
@@ -101,28 +112,36 @@ test.describe.serial("Core: GitHub settings token flow", () => {
     await window.locator(SEL.github.tokenInput).fill("ghp_unsavable_token");
     await window.locator(SEL.github.saveButton).click();
 
-    await expect(window.locator("text=Couldn't save token")).toBeVisible({ timeout: T_MEDIUM });
+    await expectTokenFieldError(window, "Couldn't save token");
     await expect(window.locator(SEL.errorBoundary.fallback)).not.toBeVisible();
   });
 
-  test("connected state shows the badge and a Clear control", async () => {
+  test("saved state shows the token status and a Clear control", async () => {
     const { window } = ctx;
     await openGitHubSettings(window);
 
     // Seed an in-memory token and hydrate the renderer config store. The
-    // settings tab reads the same store, so the connected badge + Clear button
+    // settings tab reads the same store, so the saved status + Clear button
     // appear without any real token validation.
     await connectGitHub(ctx.app, window);
 
-    await expect(window.locator(SEL.github.connectedBadge)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.locator(SEL.github.tokenSavedStatus)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.locator(SEL.github.noTokenStatus)).toHaveCount(0);
     const clearButton = window
       .locator(SEL.github.tokenBlock)
       .getByRole("button", { name: "Clear token" });
     await expect(clearButton).toBeVisible();
 
-    // Clearing removes the token and the connected affordances disappear.
+    // Clearing asks first; confirming removes the token and the status flips.
     await clearButton.click();
-    await expect(window.locator(SEL.github.connectedBadge)).not.toBeVisible({ timeout: T_MEDIUM });
+    const confirmClear = window
+      .locator(SEL.confirmDialog.confirm)
+      .filter({ hasText: "Clear token" });
+    await expect(confirmClear).toBeVisible({ timeout: T_SHORT });
+    await confirmClear.click();
+    await expect(window.locator(SEL.github.noTokenStatus)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.locator(SEL.github.tokenSavedStatus)).toHaveCount(0);
+    await expect(clearButton).toHaveCount(0);
 
     // Belt-and-braces: ensure no seeded token leaks into later specs.
     await clearGitHubToken(ctx.app);

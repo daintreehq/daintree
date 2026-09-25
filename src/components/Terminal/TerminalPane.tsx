@@ -27,6 +27,7 @@ import { ArtifactOverlay } from "./ArtifactOverlay";
 
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
+import { TerminalChipRow } from "./TerminalChipRow";
 import { useGridScrollRoot } from "./GridScrollRootContext";
 import { useUnmountVisibilityCleanup } from "./useUnmountVisibilityCleanup";
 import { useTerminalVisibilityObserver } from "./useTerminalVisibilityObserver";
@@ -244,18 +245,15 @@ export function TerminalStartupPlaceholder({
 
   return (
     <div className="relative flex flex-1 min-h-0 w-full flex-col items-center justify-center bg-surface-canvas px-4">
-      <div
-        className="flex max-w-[28ch] flex-col items-center gap-3 text-center"
-        role="status"
-        aria-busy="true"
-        aria-label={label}
-      >
-        <span className="sr-only">{label}</span>
-
+      {/* The phase's one announcer, outside any aria-busy subtree so it is heard,
+          and the only place the phase reaches AT: the hint below keeps its own
+          generic copy instead of repeating the caption. */}
+      <span className="sr-only" role="status" aria-atomic="true">
+        {showSpinner ? label : ""}
+      </span>
+      <div className="flex max-w-[28ch] flex-col items-center gap-3 text-center">
         {/* Spinner + visible caption gated by the Doherty threshold. The
-            caption is aria-hidden — the role=status wrapper above owns the AT
-            announcement, and an aria-live here would be silenced by its
-            aria-busy="true" anyway. The label also flows through the hint. */}
+            caption is aria-hidden — the status node above announces it. */}
         {showSpinner && (
           <>
             <Spinner size="xl" className="text-daintree-text/45" />
@@ -267,8 +265,7 @@ export function TerminalStartupPlaceholder({
       </div>
 
       <SkeletonHint
-        className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto"
-        message={label}
+        className="absolute bottom-8 inset-x-4 flex justify-center pointer-events-auto"
         onCancel={onCancel}
       />
     </div>
@@ -1222,7 +1219,7 @@ function TerminalPaneComponent({
   }, [id]);
 
   const isWorking = agentState === "working";
-  const allowPing = !isMaximized && (location !== "grid" || isMultiPanelGrid);
+  const allowPing = !isMaximized;
 
   const agentHeaderActions = (() => {
     if (!effectiveAgentId) return undefined;
@@ -1358,15 +1355,17 @@ function TerminalPaneComponent({
       })()}
     >
       {terminalErrors.length > 0 && (
-        <div className="px-2 py-1 border-b border-border-default bg-[color-mix(in_oklab,var(--color-status-error)_5%,transparent)] shrink-0">
-          <CompactErrorList
-            errors={terminalErrors}
-            maxInline={2}
-            onDismiss={dismissError}
-            onRetry={handleErrorRetry}
-            onCancelRetry={handleCancelRetry}
-          />
-        </div>
+        // Flush to the pane's edges like every other banner in this slot; each
+        // row draws its own band and divider.
+        <CompactErrorList
+          variant="flush"
+          className="shrink-0"
+          errors={terminalErrors}
+          maxInline={2}
+          onDismiss={dismissError}
+          onRetry={handleErrorRetry}
+          onCancelRetry={handleCancelRetry}
+        />
       )}
 
       <BannerSlot visible={showRestartError}>
@@ -1605,15 +1604,10 @@ function TerminalPaneComponent({
                 )}
               </div>
 
-              <TerminalScrollIndicator terminalId={id} />
-
-              {isFleetPrimary && (
-                <div className="absolute inset-0 z-30 pointer-events-none flex items-end justify-start pb-1.5 pl-[14px]">
-                  <div className="pointer-events-auto">
-                    <FleetDraftingPill />
-                  </div>
-                </div>
-              )}
+              <TerminalChipRow
+                leading={isFleetPrimary ? <FleetDraftingPill /> : null}
+                trailing={<TerminalScrollIndicator terminalId={id} />}
+              />
 
               {(isBackendDisconnected || isBackendRecovering) && (
                 <div

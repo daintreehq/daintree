@@ -21,10 +21,11 @@ import { systemClient } from "@/clients";
 import { useAgentSettingsStore } from "@/store";
 import { DEFAULT_DANGEROUS_ARGS, resolveDangerousMode } from "@shared/types/agentSettings";
 import { CopyableCommand } from "./CopyableCommand";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { AGENT_DESCRIPTIONS } from "@/config/agents";
 import type { CliAvailability } from "@shared/types";
-import { isAgentInstalled } from "@shared/utils/agentAvailability";
+import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 const AGENT_ORDER = LAUNCHABLE_AGENT_IDS;
@@ -182,18 +183,24 @@ export function AgentCliStep({
     [selectedMethodIndex, onInstallComplete]
   );
 
-  const handleInstallAll = useCallback(async () => {
-    setIsBatchRunning(true);
-    for (const agentId of selectedAgentIds) {
-      if (!mountedRef.current) break;
-      const status = cardStatusesRef.current[agentId];
-      if (status === "installed" || status === "manual") continue;
-      await handleInstall(agentId);
-    }
-    if (mountedRef.current) {
-      setIsBatchRunning(false);
-    }
-  }, [selectedAgentIds, handleInstall]);
+  // Takes the ids the button advertised when it was pressed, not the live
+  // selection: "Install Claude" must not go on to retry another agent whose
+  // own install failed while this one ran.
+  const handleInstallAll = useCallback(
+    async (agentIds: readonly string[]) => {
+      setIsBatchRunning(true);
+      for (const agentId of agentIds) {
+        if (!mountedRef.current) break;
+        const status = cardStatusesRef.current[agentId];
+        if (status === "installed" || status === "manual") continue;
+        await handleInstall(agentId);
+      }
+      if (mountedRef.current) {
+        setIsBatchRunning(false);
+      }
+    },
+    [handleInstall]
+  );
 
   const handleMethodChange = useCallback((agentId: string, index: number) => {
     setSelectedMethodIndex((prev) => ({ ...prev, [agentId]: index }));
@@ -209,10 +216,21 @@ export function AgentCliStep({
     setExpandedErrors((prev) => ({ ...prev, [agentId]: !prev[agentId] }));
   }, []);
 
-  const hasInstallableAgents = selectedAgentIds.some((id) => {
+  const installableIds = selectedAgentIds.filter((id) => {
     const status = cardStatuses[id];
     return status === "idle" || status === "error";
   });
+  const hasInstallableAgents = installableIds.length > 0;
+  // With one agent to install, the step's primary IS that agent's install — a
+  // row button beside an "Install {agent}" would be two names for one act.
+  const singleAgent = installableIds.length === 1;
+  // Once a picked agent already works, the footer's Continue leads and more
+  // installs are optional — two contrast buttons would be two primaries.
+  const hasUsableSelection = selectedAgentIds.some((id) => isAgentLaunchable(availability[id]));
+  const installAllLabel =
+    installableIds.length === 1
+      ? `Install ${AGENT_REGISTRY[installableIds[0]!]?.name ?? "agent"}`
+      : "Install selected agents";
 
   const updateAgent = useAgentSettingsStore((s) => s.updateAgent);
   const agentSettings = useAgentSettingsStore((s) => s.settings?.agents);
@@ -251,7 +269,7 @@ export function AgentCliStep({
                     ? "bg-overlay-soft border-border-strong"
                     : isError
                       ? "bg-status-error/5 border-status-error/20"
-                      : "bg-daintree-bg/30 border-border-default"
+                      : "bg-surface-canvas/30 border-border-default"
                 }`}
               >
                 {/* The box only aligns the row; the mark carries its own colour and
@@ -273,7 +291,7 @@ export function AgentCliStep({
                       <TooltipTrigger asChild>
                         <button
                           type="button"
-                          className="text-daintree-text/30 hover:text-text-primary transition-colors p-0.5 cursor-pointer"
+                          className="text-text-secondary hover:text-text-primary transition-colors p-0.5 cursor-pointer"
                           onClick={() => systemClient.openExternal(config.install!.docsUrl!)}
                           aria-label="Open documentation"
                         >
@@ -303,12 +321,12 @@ export function AgentCliStep({
                       Manual
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 text-2xs text-text-muted">
-                      <CircleDashed className="w-3 h-3" />
+                    <span className="inline-flex items-center gap-1 text-2xs text-text-secondary">
+                      <CircleDashed className="w-3 h-3" aria-hidden="true" />
                       Not installed
                     </span>
                   )}
-                  {canInstall && !isBatchRunning && (
+                  {canInstall && !isBatchRunning && !singleAgent && (
                     <button
                       type="button"
                       onClick={() => handleInstall(agentId)}
@@ -331,7 +349,7 @@ export function AgentCliStep({
                       disabled={isInstalling || isBatchRunning}
                       onClick={() => handleMethodChange(agentId, idx)}
                       data-selected={idx === currentMethodIdx || undefined}
-                      className="px-1.5 py-0.5 rounded text-3xs text-daintree-text/50 transition-colors hover:text-daintree-text/80 data-[selected]:bg-tint/[0.12] data-[selected]:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
+                      className="px-1.5 py-0.5 rounded-[var(--radius-xs)] text-3xs text-text-secondary transition-colors hover:text-text-primary data-[selected]:bg-overlay-medium data-[selected]:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
                     >
                       {block.label ?? `Method ${idx + 1}`}
                     </button>
@@ -371,7 +389,7 @@ export function AgentCliStep({
                       <pre
                         id={`error-log-${agentId}`}
                         hidden={!isErrorExpanded}
-                        className="text-3xs text-status-error/80 bg-surface-canvas border border-border-default rounded-[var(--radius-sm)] p-2 max-h-[120px] overflow-y-auto whitespace-pre-wrap font-mono"
+                        className="text-3xs text-text-secondary bg-surface-canvas border border-border-default rounded-[var(--radius-sm)] p-2 max-h-[120px] overflow-y-auto whitespace-pre-wrap font-mono"
                       >
                         {errorLog}
                       </pre>
@@ -396,25 +414,28 @@ export function AgentCliStep({
         })}
       </div>
 
-      {hasInstallableAgents && (
-        <button
-          type="button"
+      {/* The step's primary: nothing here is usable until something installs,
+          so the footer demotes its forward action to "Set up later" meanwhile. */}
+      {(hasInstallableAgents || isBatchRunning) && (
+        <Button
+          variant={hasUsableSelection ? "outline" : "contrast"}
           disabled={isBatchRunning}
-          onClick={handleInstallAll}
-          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] border border-border-strong bg-overlay-subtle text-text-primary text-sm font-medium hover:bg-overlay-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary disabled:opacity-50 disabled:pointer-events-none"
+          onClick={() => void handleInstallAll(installableIds)}
+          className="w-full"
+          data-testid="agent-cli-install-primary"
         >
           {isBatchRunning ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin" />
-              Installing...
+              Installing…
             </>
           ) : (
             <>
               <Download className="w-4 h-4" />
-              Install all
+              {installAllLabel}
             </>
           )}
-        </button>
+        </Button>
       )}
 
       {!isFirstRun && agentsWithDangerousToggle.length > 0 && (
@@ -431,7 +452,7 @@ export function AgentCliStep({
               return (
                 <label
                   key={agentId}
-                  className="flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30 cursor-pointer hover:bg-daintree-bg/60 transition-colors"
+                  className="flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30 cursor-pointer hover:bg-surface-canvas/60 transition-colors"
                 >
                   <input
                     type="checkbox"

@@ -1,11 +1,10 @@
 import { useMemo } from "react";
 import { FlaskConical, FolderOpen, FolderTree } from "lucide-react";
-import type { AgentState } from "@/types";
 import type { WorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { NO_WORKTREE } from "@/store/slices/panelRegistry/worktreeIndex";
 import { CollapsedSessionIndicators } from "@/components/Worktree/WorktreeCard/CollapsedSessionIndicators";
-import { STATE_LABELS, STATE_PRIORITY } from "@/components/Worktree/terminalStateConfig";
+import { summarizeSessionStates } from "@/components/Worktree/terminalStateConfig";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -57,24 +56,10 @@ export function WorkspaceRootRow({
 }) {
   const { counts } = useWorktreeTerminals(NO_WORKTREE);
 
-  const { visibleStates, sessionAriaLabel } = useMemo(() => {
-    const total = counts.total;
-    if (total === 0) {
-      return { visibleStates: [] as { state: AgentState; count: number }[], sessionAriaLabel: "" };
-    }
-    const visible = STATE_PRIORITY.filter((s) => s !== "idle" && counts.byState[s] > 0).map(
-      (s) => ({
-        state: s,
-        count: counts.byState[s],
-      })
-    );
-    const parts = visible.map((v) => `${v.count} ${STATE_LABELS[v.state]}`);
-    const label =
-      parts.length > 0
-        ? `${total} session${total !== 1 ? "s" : ""}: ${parts.join(", ")}`
-        : `${total} session${total !== 1 ? "s" : ""}`;
-    return { visibleStates: visible, sessionAriaLabel: label };
-  }, [counts]);
+  const { visibleStates, label: sessionAriaLabel } = useMemo(
+    () => summarizeSessionStates(counts.byState, counts.total),
+    [counts]
+  );
 
   const KindIcon = workspace.kind === "scratch" ? FlaskConical : FolderOpen;
   const displayPath = formatPath(workspace.path, homeDir);

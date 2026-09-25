@@ -9,8 +9,10 @@ function getCSSColor(property: string, fallback: string): string {
   return value || fallback;
 }
 
-export function getActivityColor(lastActivityTimestamp: number | null | undefined): string {
-  const now = Date.now();
+export function getActivityColor(
+  lastActivityTimestamp: number | null | undefined,
+  now: number = Date.now()
+): string {
   if (!isValidPastTimestamp(lastActivityTimestamp, now)) {
     return getCSSColor("--theme-activity-idle", "#52525b");
   }

@@ -140,6 +140,12 @@ export const UI_STILL_WORKING_MS = 5000;
  *  mechanism constant coupled to a third-party default. */
 export const UI_SPIN_CYCLE_MS = 1_000;
 
+/** The all-clear flash, the window's visual bell. Platform visual bells run
+ *  100–300ms; this sits at the top of that range so a glance from another pane
+ *  still catches it. The CSS reads it through `--all-clear-flash-duration`, so
+ *  the keyframe and the component's unmount fallback share one number. */
+export const ALL_CLEAR_FLASH_DURATION = DURATION_300;
+
 /** One full visible/hidden cycle of the composer's cursor blink. CodeMirror's
  *  own `cursorBlinkRate` default, kept so the timer-driven blink (#12584) reads
  *  exactly like the CSS animation it replaced. A mechanism constant, not a
@@ -166,6 +172,15 @@ export const UI_ACTION_SUCCESS_DWELL_MS = 2000;
  *  a panel is closed). One second is enough to draw the eye without dwelling
  *  — discovery cue, not an undo affordance. */
 export const UI_TRANSIENT_HINT_DWELL_MS = 1_000;
+
+/** How long the typing locator names the pane a keystroke landed in. Longer
+ *  than a discovery hint: the user has to look up from the keyboard, find the
+ *  pill, and read a pane title they may not have seen before. */
+export const UI_TYPING_LOCATOR_DWELL_MS = 2_000;
+
+/** How long the locator holds a file-reference receipt. A full sentence, and
+ *  on refusal the only sign that the click did nothing. */
+export const UI_TYPING_LOCATOR_REPORT_DWELL_MS = 3_000;
 
 export const UI_TOOLTIP_DELAY_DURATION = 500;
 export const UI_TOOLTIP_SKIP_DELAY_DURATION = DURATION_300;

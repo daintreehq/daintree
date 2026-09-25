@@ -388,6 +388,13 @@ export interface Worktree {
    */
   fetchNetworkFailed?: boolean;
 
+  /**
+   * `false` when `git remote` lists nothing: a local-only repo, which has
+   * nothing to fetch and nothing wrong with it. `true` when it lists any;
+   * absent until a fetch attempt has read the list.
+   */
+  hasRemote?: boolean;
+
   /** True while a background `git fetch` is in-flight for this worktree's repo. */
   isFetchInFlight?: boolean;
 
@@ -547,4 +554,24 @@ export interface WorktreeCreateResult {
 export interface WorktreeListResult {
   worktrees: WorktreeState[];
   gitBacked: boolean | null;
+}
+
+/**
+ * One phase of the teardown a worktree delete runs before `git worktree
+ * remove`, as the delete-confirm surfaces preview it. Commands are already
+ * variable-substituted, so they read exactly as they will run.
+ */
+export interface WorktreeTeardownPhasePreview {
+  phase: "resource-teardown" | "teardown";
+  commands: string[];
+  /**
+   * `false` when the commands come from a repository config the user has not
+   * approved. The delete skips that phase rather than waiting for an answer.
+   */
+  approved: boolean;
+}
+
+/** Every teardown phase a delete would attempt, in execution order. */
+export interface WorktreeTeardownPreview {
+  phases: WorktreeTeardownPhasePreview[];
 }

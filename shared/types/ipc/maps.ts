@@ -81,6 +81,7 @@ import type {
   ProjectWorktreeLoadStatusPayload,
   ProjectFocusOnActivateIntent,
   ProjectSwitchTrace,
+  ProjectSwitchResult,
 } from "./project.js";
 import type { FleetSnapshot } from "./fleet.js";
 import type {
@@ -172,6 +173,20 @@ export interface ChecklistState {
   items: ChecklistItems;
 }
 
+export interface TourOnboardingState {
+  completed: boolean;
+  /** The user turned down the tour's invitation; it is never offered again unasked. */
+  dismissed: boolean;
+  muted: boolean;
+  /** Chapter the user last reached, so a reopened tour resumes there. */
+  lastChapter: number;
+}
+
+export interface TourProgressUpdate {
+  completed?: boolean;
+  lastChapter?: number;
+}
+
 export interface OnboardingState {
   schemaVersion: number;
   completed: boolean;
@@ -185,6 +200,7 @@ export interface OnboardingState {
   welcomeCardDismissed: boolean;
   setupBannerDismissed: boolean;
   checklist: ChecklistState;
+  tour: TourOnboardingState;
 }
 
 /**
@@ -616,7 +632,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
       outgoingState?: ProjectSwitchOutgoingState,
       options?: { focusIntent?: ProjectFocusOnActivateIntent; trace?: ProjectSwitchTrace },
     ];
-    result: Project;
+    result: ProjectSwitchResult;
   };
   "project:prefetch-hydrate": {
     args: [projectId: string];
@@ -648,7 +664,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
       outgoingState?: ProjectSwitchOutgoingState,
       options?: { trace?: ProjectSwitchTrace },
     ];
-    result: Project;
+    result: ProjectSwitchResult;
   };
   "project:get-stats": {
     args: [projectId: string];
@@ -1505,6 +1521,10 @@ export interface IpcEventMap {
   // Per-service connectivity state push
   "connectivity:service-changed": ServiceConnectivityPayload;
 
+  // Where projects are open may have changed — re-read with
+  // `project-presence:get-snapshot`, which answers per window (#12597).
+  "project-presence:changed": void;
+
   /**
    * MCP server runtime-state transition. Distinct from
    * `connectivity:service-changed` because the renderer needs the derived
@@ -1535,6 +1555,9 @@ export interface IpcEventMap {
     confirmed: boolean;
     context?: import("../actions.js").ActionContext;
     callerInfo?: import("./mcpServer.js").McpBearerIdentity;
+    /** Agent-pane approval controls (#12692); both set only by main. */
+    offerSessionApproval?: boolean;
+    approvalOnly?: boolean;
   };
 
   /**
@@ -1587,6 +1610,16 @@ export interface IpcEventMap {
    * `DEAD_CHANNEL_ALLOWLIST` in channelDrift.test.ts.
    */
   "plugin:ui-prompt-request": import("../pluginUiPrompt.js").PluginUiPromptRequest;
+
+  /**
+   * Plugin backend panel reload (#12610). Main emits this on the one
+   * WebContents that reported the panel's view when a plugin calls
+   * `host.reloadPanel(panelId)`, and awaits a renderer `ipcRenderer.send` reply
+   * on `CHANNELS.PLUGIN_PANEL_RELOAD_RESPONSE`, correlated by `requestId`. The
+   * response channel is a renderer→main fire-and-forget send tracked in
+   * `DEAD_CHANNEL_ALLOWLIST` in channelDrift.test.ts.
+   */
+  "plugin:panel-reload-request": import("../pluginPanelReload.js").PluginPanelReloadRequest;
 
   /**
    * Cancel pending plugin UI prompts (#10522). Main broadcasts this to the

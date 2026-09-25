@@ -29,6 +29,8 @@ import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "./HelpSessionTabs";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
+import { trimSessionTabTitle } from "./sessionTabTitle";
+import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 import {
   acquireHelpSessionController,
   releaseHelpSessionController,
@@ -36,10 +38,7 @@ import {
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpLaunchingState } from "./HelpLaunchingState";
-import { McpActivityStrip } from "./McpActivityStrip";
-import { TerminalWatchChip } from "@/components/Terminal/TerminalWatchChip";
-import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
-import { TurnOutcomePip } from "./TurnOutcomePip";
+import { HelpPanelFooter } from "./HelpPanelFooter";
 import { FigureRail } from "./FigureRail";
 import {
   useHelpPanelStore,
@@ -62,6 +61,7 @@ import { isAssistantFocused, useMacroFocusStore } from "@/store/macroFocusStore"
 // hand-listed hook set) across the HelpPanel/controller suites, so pulling a new
 // hook through it would crash every one of them on an undefined destructure.
 import { useScratchStore } from "@/store/scratchStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import { useFocusStore } from "@/store/focusStore";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { buildResumeLatestCommand } from "@shared/types/agentSettings";
@@ -84,7 +84,7 @@ const LazyHybridInputBar = lazy(() =>
 const RESIZE_STEP = 10;
 const RESIZE_PAGE_STEP = 50;
 
-const ASSISTANT_DOCS_URL = "https://daintree.org/assistant";
+const ASSISTANT_DOCS_URL = "https://daintree.org/docs/daintree-assistant";
 const ASSISTANT_INSTALLER_URL = "https://daintree.org/download";
 
 // How long `agentState` must stay "exited" before the assistant self-stops and
@@ -222,6 +222,8 @@ export function HelpPanel({
     conversationTouched,
     focusRequest,
     figures,
+    activeFigureNumber,
+    figureRequest,
     markConversationStarted,
     setWidth,
     setOpen,
@@ -242,6 +244,8 @@ export function HelpPanel({
       conversationTouched: selectSlot(s, s.activeSlot).conversationTouched,
       focusRequest: s.focusRequest,
       figures: selectSlot(s, s.activeSlot).figures,
+      activeFigureNumber: selectSlot(s, s.activeSlot).activeFigureNumber,
+      figureRequest: selectSlot(s, s.activeSlot).figureRequest,
       markConversationStarted: s.markConversationStarted,
       setWidth: s.setWidth,
       setOpen: s.setOpen,
@@ -339,6 +343,11 @@ export function HelpPanel({
     pinnedContext?.worktreeId != null &&
     focusedWorktreeId !== null &&
     pinnedContext.worktreeId !== focusedWorktreeId;
+  const returnToPinnedWorktree = useCallback(() => {
+    if (pinnedContext?.worktreeId) {
+      selectWorktree(pinnedContext.worktreeId, { source: "user" });
+    }
+  }, [pinnedContext?.worktreeId, selectWorktree]);
 
   const agentConfig = agentId ? getAgentConfig(agentId) : undefined;
   // The model the live session actually launched with, read from its persisted
@@ -1033,10 +1042,17 @@ export function HelpPanel({
   const openSlots = useHelpPanelStore(useShallow(selectOpenSlots));
   const canOpenParallelSession = openSlots.length < MAX_ASSISTANT_SLOTS;
 
+  // Subscribed rather than read through `getState()` inside the panel-store selectors
+  // below: a background lane that binds a terminal changes only this, and without the
+  // subscription its tab kept the old terminal's state and name until something else
+  // happened to re-render the panel.
+  const laneTerminalIds = useHelpPanelStore(
+    useShallow((s) => openSlots.map((slot) => s.sessions[slot]?.terminalId ?? null))
+  );
+
   const laneAgentStates = usePanelStore(
     useShallow((s: ReturnType<typeof usePanelStore.getState>) =>
-      openSlots.map((slot) => {
-        const laneTerminalId = useHelpPanelStore.getState().sessions[slot]?.terminalId;
+      laneTerminalIds.map((laneTerminalId) => {
         if (!laneTerminalId) return undefined;
         const panel = s.panelsById[laneTerminalId];
         return panel && isPtyPanel(panel) ? panel.agentState : undefined;
@@ -1044,21 +1060,44 @@ export function HelpPanel({
     )
   );
 
+  // The agent's own name for each lane, through the same composition every other
+  // title surface uses — identity echoes ("Claude Code"), user-locked titles and exited
+  // agents all come back null and fall through to `Session N`. Selected as strings so
+  // `useShallow` skips the render when an OSC update left every lane's task unchanged,
+  // which is most of them: the spinner glyphs that churn the raw title are already gone.
+  const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
+  const laneTaskTitles = usePanelStore(
+    useShallow((s: ReturnType<typeof usePanelStore.getState>) =>
+      laneTerminalIds.map((laneTerminalId) => {
+        if (showAgentTaskTitles === false || !laneTerminalId) return null;
+        const panel = s.panelsById[laneTerminalId];
+        return panel && isPtyPanel(panel) ? getTerminalTaskTitle(panel) : null;
+      })
+    )
+  );
+
   const sessionTabs = useMemo<HelpSessionTab[]>(
     () =>
-      openSlots.map((slot, index) => ({
-        slot,
-        // Numbered by SLOT, which is the lane's durable identity, rather than by
-        // position in the strip. Position renumbers: closing the first of three
-        // lanes used to rename the two behind it, so a conversation the user had
-        // been calling "Session 3" silently became "Session 2" and the name they
-        // navigated back to belonged to a different session. A gap at 2 is a much
-        // smaller cost than a label that lies, and the gap closes on its own —
-        // `openSlot` always takes the lowest free slot.
-        label: `Session ${slot + 1}`,
-        agentState: laneAgentStates[index],
-      })),
-    [openSlots, laneAgentStates]
+      openSlots.map((slot, index) => {
+        const task = trimSessionTabTitle(laneTaskTitles[index]);
+        return {
+          slot,
+          // Numbered by SLOT, which is the lane's durable identity, rather than by
+          // position in the strip. Position renumbers: closing the first of three
+          // lanes used to rename the two behind it, so a conversation the user had
+          // been calling "Session 3" silently became "Session 2" and the name they
+          // navigated back to belonged to a different session. A gap at 2 is a much
+          // smaller cost than a label that lies, and the gap closes on its own —
+          // `openSlot` always takes the lowest free slot.
+          //
+          // A task title replaces the number rather than joining it: the strip is
+          // narrow, and the number was only ever standing in for a name.
+          label: task?.label ?? `Session ${slot + 1}`,
+          fullTitle: task?.fullTitle,
+          agentState: laneAgentStates[index],
+        };
+      }),
+    [openSlots, laneAgentStates, laneTaskTitles]
   );
 
   // Bring back the tabs for lanes whose conversations an eviction or crash
@@ -1165,10 +1204,18 @@ export function HelpPanel({
     setPendingCloseSlot(null);
   }, []);
 
-  const pendingCloseLabel =
+  // A task title is free text, so it is quoted the way every confirm quotes the entity
+  // it names, and given whole: two tasks that share an opening would otherwise ask
+  // the same question. `Session N` is already a name and reads wrong in quotes.
+  const pendingCloseTab =
     pendingCloseSlot === null
-      ? null
-      : (sessionTabs.find((tab) => tab.slot === pendingCloseSlot)?.label ?? "this session");
+      ? undefined
+      : sessionTabs.find((tab) => tab.slot === pendingCloseSlot);
+  const pendingCloseLabel = !pendingCloseTab
+    ? "this session"
+    : pendingCloseTab.fullTitle !== undefined
+      ? `'${pendingCloseTab.fullTitle}'`
+      : pendingCloseTab.label;
 
   const handleNewSession = useCallback(() => {
     if (!terminalId || !agentId) return;
@@ -1575,7 +1622,19 @@ export function HelpPanel({
                   />
                 </Suspense>
               )}
-              {figures.length > 0 && <FigureRail figures={figures} />}
+              {figures.length > 0 && (
+                <FigureRail
+                  figures={figures}
+                  activeFigureNumber={activeFigureNumber}
+                  figureRequest={figureRequest}
+                  onActivateFigure={(figureNumber) =>
+                    useHelpPanelStore.getState().setActiveFigureNumber(activeSlot, figureNumber)
+                  }
+                  onFigureRequestHandled={() =>
+                    useHelpPanelStore.getState().clearFigureRequest(activeSlot)
+                  }
+                />
+              )}
             </>
           )
         ) : session.assistantVersionTooOld ? (
@@ -1710,108 +1769,20 @@ export function HelpPanel({
         )}
       </div>
 
-      {/* Bottom info bar — a single status row (#9763). Left: the live/recent
-          tool-call activity element (popover trigger). Right: the pinned
-          worktree·branch binding, then the agent identity anchored at the
-          edge. Raw args, the elapsed ticker, and the marketing link live in
-          the popover / hover titles / header docs button now. */}
-      {showTerminal && agentConfig && !isMissingCli && (
-        <div className="flex items-center justify-between gap-3 border-t border-border-default shrink-0 px-3 py-1.5 text-2xs text-text-secondary">
-          <span className="flex items-center gap-2 min-w-0">
-            <McpActivityStrip sessionId={sessionId} activity={session.mcpActivity} />
-            <TurnOutcomePip outcome={session.outcomeAlert} onDismiss={dismissOutcomeAlert} />
-            {/* This lane's terminal watches (#12491): self-gating, and where the
-                user stops Daintree from waking the assistant. */}
-            {terminalId && <TerminalWatchChip terminalId={terminalId} />}
-          </span>
-          <span className="flex items-center gap-2 min-w-0 shrink-0 max-w-[70%]">
-            {pinnedContext &&
-              // A diverged worktree is recoverable in one click — switch focus
-              // back to the worktree the session is pinned to. A pinned terminal
-              // with no live grid target is no longer a failure to shout about:
-              // tool calls re-resolve at dispatch time and the dock-hosted chat
-              // keeps working, so it stays a quiet neutral indicator. The
-              // recovery path is the overflow menu's "Restart conversation"
-              // (#10792).
-              (isPinnedWorktreeDiverged ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (pinnedContext.worktreeId) {
-                      selectWorktree(pinnedContext.worktreeId, { source: "user" });
-                    }
-                  }}
-                  className={cn(
-                    "flex items-center gap-1.5 min-w-0 p-0 bg-transparent border-none text-2xs",
-                    "text-status-warning hover:text-status-warning/80 transition-colors duration-150",
-                    "rounded-[var(--radius-sm)]",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                  )}
-                  title="Switch to the worktree this assistant is pinned to"
-                >
-                  <span
-                    aria-hidden
-                    className="status-mark w-1.5 h-1.5 rounded-full shrink-0 bg-status-warning"
-                  />
-                  <span className="truncate">
-                    {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
-                      .filter(Boolean)
-                      .join(" · ") || "Pinned session"}
-                  </span>
-                </button>
-              ) : (
-                <span
-                  className="flex items-center gap-1.5 min-w-0"
-                  title="Assistant tool calls are pinned to this worktree and terminal."
-                >
-                  <span
-                    aria-hidden
-                    className="status-mark w-1.5 h-1.5 rounded-full shrink-0 bg-daintree-text/30"
-                  />
-                  <span className="truncate">
-                    {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
-                      .filter(Boolean)
-                      .join(" · ") || "Pinned session"}
-                  </span>
-                </span>
-              ))}
-            {agentId === "daintree-assistant" ? (
-              // The Daintree Assistant is the workspace's own conductor, so the
-              // brand mark already says "Daintree" — pairing it with just
-              // "assistant" keeps this status row from repeating the word twice
-              // and frees up the tight footer width.
-              <span
-                className="flex items-center gap-1 shrink-0"
-                title={
-                  launchedModelLabel
-                    ? `Assistant agent: ${agentConfig.name} · ${launchedModelLabel}`
-                    : `Assistant agent: ${agentConfig.name}`
-                }
-              >
-                <DaintreeIcon className="w-3.5 h-3.5" />
-                Assistant
-                {launchedModelLabel && (
-                  <span className="text-text-secondary">· {launchedModelLabel}</span>
-                )}
-              </span>
-            ) : (
-              <span
-                className="flex items-center gap-1 shrink-0"
-                title={
-                  launchedModelLabel
-                    ? `Assistant agent: ${agentConfig.name} · ${launchedModelLabel}`
-                    : `Assistant agent: ${agentConfig.name}`
-                }
-              >
-                <agentConfig.icon className="w-3.5 h-3.5" />
-                {agentConfig.name}
-                {launchedModelLabel && (
-                  <span className="text-text-secondary">· {launchedModelLabel}</span>
-                )}
-              </span>
-            )}
-          </span>
-        </div>
+      {showTerminal && agentConfig && agentId && !isMissingCli && (
+        <HelpPanelFooter
+          sessionId={sessionId}
+          activity={session.mcpActivity}
+          outcomeAlert={session.outcomeAlert}
+          onDismissOutcome={dismissOutcomeAlert}
+          terminalId={terminalId ?? null}
+          pinnedContext={pinnedContext}
+          isPinnedWorktreeDiverged={isPinnedWorktreeDiverged}
+          onReturnToPinnedWorktree={returnToPinnedWorktree}
+          agentId={agentId}
+          agentConfig={agentConfig}
+          launchedModelLabel={launchedModelLabel}
+        />
       )}
       <ConfirmDialog
         isOpen={showNewSessionConfirm}
@@ -1836,7 +1807,7 @@ export function HelpPanel({
       />
       <ConfirmDialog
         isOpen={pendingCloseSlot !== null}
-        title={`Close ${pendingCloseLabel ?? "this session"}?`}
+        title={`Close ${pendingCloseLabel}?`}
         description="The assistant will stop and the conversation will be discarded"
         confirmLabel="Close session"
         onConfirm={handleConfirmCloseSlot}

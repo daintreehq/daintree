@@ -1,23 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertCircle,
-  AlertTriangle,
-  BookOpen,
-  Check,
-  ChevronRight,
-  Copy,
-  FolderOpen,
-  KeyRound,
-  Moon,
-  RefreshCw,
-  ScrollText,
-  ShieldAlert,
-  Sliders,
-  Wrench,
-  X,
-} from "lucide-react";
+import type { ReactNode } from "react";
+import { AlertCircle, AlertTriangle, Check, ChevronRight, Copy, FolderOpen } from "lucide-react";
 import * as semver from "semver";
-import { DaintreeIcon, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
@@ -27,9 +11,13 @@ import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
+import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { SettingsChoicebox } from "./SettingsChoicebox";
+import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import { SettingsInput } from "./SettingsInput";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { McpAuditLogViewer } from "./McpAuditLogViewer";
 import { McpAuditLatencyTable } from "./McpAuditLatencyTable";
 import { TurnOutcomeDiagnostics } from "./TurnOutcomeDiagnostics";
@@ -64,6 +52,69 @@ import {
 const COPY_RESET_DELAY_MS = 2000;
 const CUSTOM_ARGS_DEBOUNCE_MS = 500;
 
+type SaveGroup = "agent" | "launch" | "behavior" | "security" | "privacy" | "content";
+
+const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
+  modelId: "agent",
+  customArgs: "launch",
+  debugLogging: "launch",
+  docSearch: "behavior",
+  daintreeControl: "behavior",
+  idleHibernateMinutes: "launch",
+  tier: "security",
+  bypassPermissions: "security",
+  auditRetention: "privacy",
+  loadGlobalHooksAndServers: "content",
+};
+
+const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
+  "modelId",
+  "customArgs",
+  "debugLogging",
+  "docSearch",
+  "daintreeControl",
+  "idleHibernateMinutes",
+  "tier",
+  "bypassPermissions",
+  "auditRetention",
+  "loadGlobalHooksAndServers",
+];
+
+function patchedKeys(patch: Partial<HelpAssistantSettings>): (keyof HelpAssistantSettings)[] {
+  return SETTING_KEYS.filter((key) => key in patch);
+}
+
+function saveGroupOf(patch: Partial<HelpAssistantSettings>): SaveGroup {
+  const [first] = patchedKeys(patch);
+  return first ? SAVE_GROUP_BY_KEY[first] : "agent";
+}
+
+function copySetting<K extends keyof HelpAssistantSettings>(
+  target: HelpAssistantSettings,
+  source: HelpAssistantSettings,
+  key: K
+): void {
+  target[key] = source[key];
+}
+
+const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
+  modelId: "Model",
+  customArgs: "Custom CLI args",
+  debugLogging: "Debug logging",
+  docSearch: "Search documentation",
+  daintreeControl: "Daintree control",
+  idleHibernateMinutes: "Hibernate after",
+  tier: "Capability tier",
+  bypassPermissions: "Bypass",
+  auditRetention: "Audit log retention",
+  loadGlobalHooksAndServers: "Load my MCP servers and hooks",
+};
+
+interface SaveFailure {
+  group: SaveGroup;
+  patch: Partial<HelpAssistantSettings>;
+}
+
 const DEFAULT_SETTINGS: HelpAssistantSettings = {
   docSearch: true,
   daintreeControl: true,
@@ -74,25 +125,36 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   customArgs: "",
   idleHibernateMinutes: 5,
   debugLogging: false,
+  loadGlobalHooksAndServers: false,
 };
 
 // Radix Select rejects an empty-string item value, so the "use the CLI default"
 // choice carries a sentinel in the dropdown and maps back to "" on persist.
 const MODEL_DEFAULT_SENTINEL = "__default__";
 
-const TIER_OPTIONS = [
-  { value: "workbench", label: "Workbench — read-only" },
-  { value: "action", label: "Action — read + write (default)" },
-  { value: "system", label: "System — destructive and external writes" },
+// One sentence of consequence beside the select; the rest lives in the tier's
+// disclosure with the action inventory, where it can be read in full.
+const TIER_SUMMARIES: Record<HelpAssistantTier, string> = {
+  workbench: "Reads project state but can't change it",
+  action: "Full in-app orchestration, including closing terminals and deleting worktrees",
+  system: "Adds git, forge and on-disk writes outside the app. Reserve for trusted automation.",
+};
+
+// Descriptive exclusive choice: each tier's consequence stays readable in full, so the
+// one that grants destructive and external writes can't hide behind a truncated label.
+const TIER_CHOICES: { value: HelpAssistantTier; label: string; description: string }[] = [
+  { value: "workbench", label: "Workbench", description: TIER_SUMMARIES.workbench },
+  { value: "action", label: "Action (default)", description: TIER_SUMMARIES.action },
+  { value: "system", label: "System", description: TIER_SUMMARIES.system },
 ];
 
-const TIER_DESCRIPTIONS: Record<HelpAssistantTier, string> = {
+const TIER_DETAILS: Record<HelpAssistantTier, string> = {
   workbench:
     "The assistant can read project state but can't change it. Best when you're handing off observation tasks.",
   action:
-    "The assistant can spawn agents, send prompts, read terminal state, close terminals, and delete worktrees in this project or tear down their resources — full in-app orchestration. Deletions normally ask you to confirm each time, unless you have granted the assistant automation for them, and they run whatever teardown commands the project configures. Most assistance tasks need this.",
+    "The assistant can spawn agents, send prompts, read terminal state, close terminals, and delete worktrees in this project or tear down their resources. Deletions normally ask you to confirm each time, unless you have granted the assistant automation for them, and they run whatever teardown commands the project configures. Most assistance tasks need this.",
   system:
-    "Adds git staging, commits, fetches and pushes; forge issue/PR reads and writes; worktree creation at any path on disk; clipboard and CopyTree-to-disk writes; and arming terminals for automation. Reserve for trusted automation.",
+    "Adds git staging, commits, fetches and pushes; forge issue/PR reads and writes; worktree creation at any path on disk; clipboard and CopyTree-to-disk writes; and arming terminals for automation.",
 };
 
 const TIER_SHORT_LABEL: Record<HelpAssistantTier, string> = {
@@ -141,7 +203,7 @@ interface McpStatusSnapshot {
 }
 
 const RETENTION_OPTIONS = [
-  { value: "7", label: "7 days (default)" },
+  { value: "7", label: "7 days" },
   { value: "30", label: "30 days" },
   { value: "0", label: "Off" },
 ];
@@ -158,7 +220,8 @@ const HIBERNATE_OPTIONS = [
 interface BypassCopy {
   title: string;
   subtitle: string;
-  ariaLabel: string;
+  /** Only when the spoken name must add to the visible title; it has to contain it. */
+  ariaLabel?: string;
   warning: string;
 }
 
@@ -222,7 +285,6 @@ function getBypassCopy(agentId: string | null, tier: HelpAssistantTier): BypassC
     return {
       title: "Auto-approve assistant actions",
       subtitle: "Skip the assistant's own per-action confirmation sheet",
-      ariaLabel: "Auto-approve Daintree Assistant actions during help sessions",
       warning: `With this on, the assistant acts without asking — it skips its own confirmation sheet for everything it does. ${safeguard}`,
     };
   }
@@ -255,7 +317,19 @@ export function DaintreeAssistantSettingsTab() {
   // the runtime snapshot). Keep both — they update independently (lesson #4958).
   const runtimeSnapshot = useMcpReadiness();
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Failures of one-off actions stay on the section they belong to, not at the page foot.
+  const [privacyError, setPrivacyError] = useState<{ message: string; retry?: () => void } | null>(
+    null
+  );
+  const [clearAuditError, setClearAuditError] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [rotateError, setRotateError] = useState<string | null>(null);
+  // A failed read must not pass for an empty history.
+  const [auditReadFailed, setAuditReadFailed] = useState(false);
+  // Unread, the recording switch would show its optimistic default as if it were fact.
+  const [auditConfigFailed, setAuditConfigFailed] = useState(false);
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const [copied, setCopied] = useState(false);
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
@@ -296,7 +370,7 @@ export function DaintreeAssistantSettingsTab() {
     pendingCustomArgsRef.current = pendingCustomArgs;
   }, [pendingCustomArgs]);
 
-  useSettingsTabValidation("assistant", Boolean(error));
+  useSettingsTabValidation("assistant", Boolean(loadError || saveFailure));
 
   const preferredAgentId = useHelpPanelStore((s) => s.preferredAgentId);
   const setPreferredAgent = useHelpPanelStore((s) => s.setPreferredAgent);
@@ -334,6 +408,9 @@ export function DaintreeAssistantSettingsTab() {
   // no models" (also nothing). The model picker only appears once a non-empty
   // catalog resolves for the selected agent.
   const [resolvedModels, setResolvedModels] = useState<AgentModelConfig[] | null>(null);
+  // A failed catalog read is not "this agent has no models": the row stays, with Retry.
+  const [modelCatalogFailed, setModelCatalogFailed] = useState(false);
+  const [modelCatalogAttempt, setModelCatalogAttempt] = useState(0);
 
   useEffect(() => {
     if (!preferredAgentId) {
@@ -342,6 +419,7 @@ export function DaintreeAssistantSettingsTab() {
     }
     let cancelled = false;
     setResolvedModels(null);
+    setModelCatalogFailed(false);
     agentCapabilitiesClient
       .getResolvedModelList(preferredAgentId)
       .then((catalog) => {
@@ -351,12 +429,13 @@ export function DaintreeAssistantSettingsTab() {
       .catch((err) => {
         if (cancelled) return;
         setResolvedModels([]);
+        setModelCatalogFailed(true);
         logError("Failed to load model catalog for assistant tab", err);
       });
     return () => {
       cancelled = true;
     };
-  }, [preferredAgentId]);
+  }, [preferredAgentId, modelCatalogAttempt]);
 
   const modelOptions = useMemo(() => {
     const models = resolvedModels ?? [];
@@ -373,7 +452,9 @@ export function DaintreeAssistantSettingsTab() {
   }, [resolvedModels, settings.modelId]);
 
   const modelSelectValue = settings.modelId || MODEL_DEFAULT_SENTINEL;
-  const showModelPicker = Boolean(resolvedModels && resolvedModels.length > 0);
+  const showModelPicker =
+    Boolean(resolvedModels && resolvedModels.length > 0) ||
+    (modelCatalogFailed && Boolean(preferredAgentId));
 
   useEffect(() => {
     let cancelled = false;
@@ -404,7 +485,7 @@ export function DaintreeAssistantSettingsTab() {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(formatErrorMessage(err, "Couldn't load assistant settings"));
+        setLoadError(formatErrorMessage(err, "Couldn't load assistant settings"));
         logError("Failed to load Daintree Assistant settings", err);
       });
 
@@ -438,11 +519,20 @@ export function DaintreeAssistantSettingsTab() {
   // viewer hydrate independently of the settings + MCP status round-trips.
   // `allSettled` so a stats failure doesn't silently blank the record list.
   const refreshAuditRecords = async (): Promise<void> => {
-    const [recordsResult, statsResult, turnsResult] = await Promise.allSettled([
+    const [recordsResult, statsResult, turnsResult, configResult] = await Promise.allSettled([
       window.electron.mcpServer.getLogRecords(),
       window.electron.mcpServer.getAuditStats(),
       window.electron.mcpServer.getTurnOutcomeRecords(),
+      window.electron.mcpServer.getAuditConfig(),
     ]);
+    setAuditReadFailed(recordsResult.status === "rejected" || turnsResult.status === "rejected");
+    if (configResult.status === "fulfilled") {
+      setAuditEnabled(configResult.value.enabled);
+      setAuditConfigFailed(false);
+    } else {
+      setAuditConfigFailed(true);
+      logError("Failed to load MCP audit config for assistant tab", configResult.reason);
+    }
     if (recordsResult.status === "fulfilled") {
       setAuditRecords(recordsResult.value);
     } else {
@@ -475,6 +565,7 @@ export function DaintreeAssistantSettingsTab() {
           if (recordsResult.status === "fulfilled") {
             setAuditRecords(recordsResult.value);
           } else {
+            setAuditReadFailed(true);
             logError("Failed initial audit load for assistant tab", recordsResult.reason);
           }
           if (statsResult.status === "fulfilled") {
@@ -485,11 +576,13 @@ export function DaintreeAssistantSettingsTab() {
           if (turnsResult.status === "fulfilled") {
             setTurnRecords(turnsResult.value);
           } else {
+            setAuditReadFailed(true);
             logError("Failed initial turn outcomes load for assistant tab", turnsResult.reason);
           }
           if (configResult.status === "fulfilled") {
             setAuditEnabled(configResult.value.enabled);
           } else {
+            setAuditConfigFailed(true);
             logError("Failed initial audit config load for assistant tab", configResult.reason);
           }
         })
@@ -562,12 +655,15 @@ export function DaintreeAssistantSettingsTab() {
     if (isTogglingAudit) return;
     setIsTogglingAudit(true);
     try {
-      setError(null);
+      setPrivacyError(null);
       const next = !auditEnabled;
       const cfg = await window.electron.mcpServer.setAuditEnabled(next);
       setAuditEnabled(cfg.enabled);
     } catch (err) {
-      setError(formatErrorMessage(err, "Couldn't update audit recording"));
+      setPrivacyError({
+        message: formatErrorMessage(err, "Couldn't update audit recording"),
+        retry: () => void handleAuditEnabledToggle(),
+      });
       logError("Failed to toggle MCP audit log from assistant tab", err);
     } finally {
       setIsTogglingAudit(false);
@@ -577,6 +673,7 @@ export function DaintreeAssistantSettingsTab() {
   const handleCopyAuditAsJson = async (records: McpLogRecord[]) => {
     try {
       await navigator.clipboard.writeText(JSON.stringify(records, null, 2));
+      setPrivacyError(null);
       setAuditCopied(true);
       if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
       auditCopyTimeoutRef.current = setTimeout(() => setAuditCopied(false), COPY_RESET_DELAY_MS);
@@ -586,7 +683,10 @@ export function DaintreeAssistantSettingsTab() {
         clearTimeout(auditCopyTimeoutRef.current);
         auditCopyTimeoutRef.current = null;
       }
-      setError(formatErrorMessage(err, "Couldn't copy audit log"));
+      setPrivacyError({
+        message: formatErrorMessage(err, "Couldn't copy audit log"),
+        retry: () => void handleCopyAuditAsJson(records),
+      });
       logError("Failed to copy MCP audit log from assistant tab", err);
     }
   };
@@ -595,7 +695,7 @@ export function DaintreeAssistantSettingsTab() {
     if (isExportingAudit) return;
     setIsExportingAudit(true);
     try {
-      setError(null);
+      setPrivacyError(null);
       const written = await window.electron.mcpServer.exportAuditLog(records);
       if (written) {
         setAuditExported(true);
@@ -611,7 +711,10 @@ export function DaintreeAssistantSettingsTab() {
         clearTimeout(auditExportTimeoutRef.current);
         auditExportTimeoutRef.current = null;
       }
-      setError(formatErrorMessage(err, "Couldn't export audit log"));
+      setPrivacyError({
+        message: formatErrorMessage(err, "Couldn't export audit log"),
+        retry: () => void handleExportAuditAsNdjson(records),
+      });
       logError("Failed to export MCP audit log from assistant tab", err);
     } finally {
       setIsExportingAudit(false);
@@ -622,12 +725,12 @@ export function DaintreeAssistantSettingsTab() {
     if (isClearingAudit) return;
     setIsClearingAudit(true);
     try {
-      setError(null);
+      setClearAuditError(null);
       await window.electron.mcpServer.clearAuditLog();
       setAuditRecords([]);
       setShowClearAuditConfirm(false);
     } catch (err) {
-      setError(formatErrorMessage(err, "Couldn't clear audit log"));
+      setClearAuditError(formatErrorMessage(err, "Couldn't clear audit log"));
       logError("Failed to clear MCP audit log from assistant tab", err);
     } finally {
       setIsClearingAudit(false);
@@ -636,24 +739,43 @@ export function DaintreeAssistantSettingsTab() {
 
   const handleCancelClearAudit = () => {
     if (isClearingAudit) return;
+    setClearAuditError(null);
     setShowClearAuditConfirm(false);
   };
 
+  // Optimistic apply; a rejected save puts the attempted keys back (unless a later
+  // change has already moved them) and parks the failure on the group it belongs to.
   const persist = useCallback(
     async (patch: Partial<HelpAssistantSettings>) => {
-      const next = { ...settings, ...patch } as HelpAssistantSettings;
-      setSettings(next);
+      const previous = settings;
+      const group = saveGroupOf(patch);
+      setSettings((current) => ({ ...current, ...patch }));
       try {
         await window.electron.helpAssistant.setSettings(patch);
+        setSaveFailure((current) => (current?.group === group ? null : current));
       } catch (err) {
-        setError(formatErrorMessage(err, "Couldn't save assistant settings"));
+        setSettings((current) => {
+          const reverted: HelpAssistantSettings = { ...current };
+          for (const key of patchedKeys(patch)) {
+            if (current[key] === patch[key]) copySetting(reverted, previous, key);
+          }
+          return reverted;
+        });
+        setSaveFailure({ group, patch });
         logError("Failed to save Daintree Assistant settings", err);
       }
-      // settings is intentionally read at call time via the closure; no stale risk
-      // because we set it synchronously above.
     },
     [settings]
   );
+
+  const saveError = (group: SaveGroup) =>
+    saveFailure?.group === group ? (
+      <SettingsLoadErrorBanner
+        title="Couldn't save that change"
+        message={`${SETTING_LABEL[patchedKeys(saveFailure.patch)[0] ?? "modelId"]} is back to its previous value.`}
+        onRetry={() => void persist(saveFailure.patch)}
+      />
+    ) : null;
 
   const toggleDocSearch = () => {
     void persist({ docSearch: !settings.docSearch });
@@ -674,6 +796,10 @@ export function DaintreeAssistantSettingsTab() {
 
   const toggleDebugLogging = () => {
     void persist({ debugLogging: !settings.debugLogging });
+  };
+
+  const toggleLoadGlobalHooksAndServers = () => {
+    void persist({ loadGlobalHooksAndServers: !settings.loadGlobalHooksAndServers });
   };
 
   const setRetention = (value: string) => {
@@ -715,9 +841,18 @@ export function DaintreeAssistantSettingsTab() {
   // Persist the pending value once the debounce settles. Skipped when pending
   // matches what's already persisted (e.g., user typed and undid, or the
   // value just landed via the optimistic update inside `persist`).
+  // Each settled value is attempted once: a rejected save rolls settings.customArgs
+  // back, which would otherwise re-fire this effect and retry in a loop. Retry
+  // lives on the group's error banner instead.
+  const lastAttemptedCustomArgsRef = useRef<string | null>(null);
   useEffect(() => {
-    if (debouncedPendingCustomArgs === null) return;
+    if (debouncedPendingCustomArgs === null) {
+      lastAttemptedCustomArgsRef.current = null;
+      return;
+    }
+    if (debouncedPendingCustomArgs === lastAttemptedCustomArgsRef.current) return;
     if (debouncedPendingCustomArgs !== settings.customArgs) {
+      lastAttemptedCustomArgsRef.current = debouncedPendingCustomArgs;
       void persist({ customArgs: debouncedPendingCustomArgs });
     }
   }, [debouncedPendingCustomArgs, settings.customArgs, persist]);
@@ -746,12 +881,12 @@ export function DaintreeAssistantSettingsTab() {
     if (isRotating) return;
     setIsRotating(true);
     try {
-      setError(null);
+      setRotateError(null);
       const key = await window.electron.mcpServer.rotateApiKey();
       setMcpStatus((prev) => (prev ? { ...prev, apiKey: key } : prev));
       setShowRotateConfirm(false);
     } catch (err) {
-      setError(formatErrorMessage(err, "Couldn't rotate key"));
+      setRotateError(formatErrorMessage(err, "Couldn't rotate key"));
       logError("Failed to rotate MCP API key", err);
     } finally {
       setIsRotating(false);
@@ -760,6 +895,7 @@ export function DaintreeAssistantSettingsTab() {
 
   const handleCancelRotate = () => {
     if (isRotating) return;
+    setRotateError(null);
     setShowRotateConfirm(false);
   };
 
@@ -787,504 +923,630 @@ export function DaintreeAssistantSettingsTab() {
     try {
       const snippet = await window.electron.mcpServer.getConfigSnippet();
       await navigator.clipboard.writeText(snippet);
+      setConnectionError(null);
       setCopied(true);
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
       copyTimeoutRef.current = setTimeout(() => setCopied(false), COPY_RESET_DELAY_MS);
     } catch (err) {
-      setError(formatErrorMessage(err, "Couldn't copy config"));
+      setConnectionError(formatErrorMessage(err, "Couldn't copy config"));
       logError("Failed to copy MCP config", err);
     }
   };
 
-  return (
-    <div className="space-y-6" id="settings-panel-assistant-content">
-      <header className="flex items-start gap-3 pb-4 border-b border-border-default">
-        <DaintreeIcon className="w-6 h-6 text-text-primary shrink-0 mt-0.5" size={24} />
-        <div>
-          <h3 className="text-sm font-medium text-text-primary">Daintree Assistant</h3>
-          <p className="text-xs text-text-secondary mt-1 select-text">
-            Controls the help assistant launched from the dock — the tools it can call and how its
-            activity is recorded. Changes apply to new help sessions.
-          </p>
-        </div>
-      </header>
+  const retryMcpStatus = () => {
+    window.electron.mcpServer
+      .getStatus()
+      .then((status) =>
+        setMcpStatus({ enabled: status.enabled, port: status.port, apiKey: status.apiKey })
+      )
+      .catch((err) => logError("Failed to reload MCP status for assistant tab", err));
+  };
 
-      {/* Agent */}
-      <SettingsSection
-        icon={Sliders}
-        title="Agent"
-        description="Pick which CLI runs the assistant and pass extra flags at launch."
-      >
-        <SettingsSelect
-          label="Agent"
-          description="The CLI launched when you open the Daintree Assistant."
-          value={agentSelectValue}
-          onValueChange={handleAgentChange}
-          options={agentOptions}
-          placeholder="Choose an agent"
-          disabled={loading || agentOptions.length === 0}
+  // Controls stay inert for the whole retry and only unlock once real values land.
+  const retryLoadSettings = () => {
+    setLoading(true);
+    window.electron.helpAssistant
+      .getSettings()
+      .then((s) => {
+        setSettings(s);
+        setLoadError(null);
+      })
+      .catch((err) => {
+        setLoadError(formatErrorMessage(err, "Couldn't load assistant settings"));
+        logError("Failed to reload Daintree Assistant settings", err);
+      })
+      .finally(() => setLoading(false));
+  };
+
+  // Until the saved values arrive, the controls show defaults. They stay inert so a
+  // click can't overwrite a real setting with a value the user never saw.
+  const settingsUnavailable = loading || Boolean(loadError);
+  const unavailableReason = loadError
+    ? "Your saved settings couldn't be read. Retry above."
+    : undefined;
+
+  const mcpState = runtimeSnapshot.state;
+  const mcpStatusRow = (
+    <SettingsRow
+      label="MCP server"
+      description={
+        mcpState === "ready" ? (
+          <StatusLine live tone="ok">
+            {runtimeSnapshot.port ? `Running on port ${runtimeSnapshot.port}` : "Running"}
+          </StatusLine>
+        ) : mcpState === "starting" ? (
+          <StatusLine live tone="idle">
+            Server is starting…
+          </StatusLine>
+        ) : mcpState === "failed" ? (
+          <StatusLine live tone="error">
+            MCP server failed to start.{" "}
+            {runtimeSnapshot.lastError ?? "Check the MCP server tab for details."}
+          </StatusLine>
+        ) : (
+          <StatusLine live tone="idle">
+            {settings.daintreeControl
+              ? "MCP server is off, so the assistant can't reach Daintree actions"
+              : "MCP server is off. Turning on Daintree control starts it."}
+          </StatusLine>
+        )
+      }
+      control={
+        mcpState === "failed" || mcpState === "disabled" ? (
+          <Button variant="outline" size="sm" onClick={handleGoToMcpSettings}>
+            Open MCP server settings
+          </Button>
+        ) : undefined
+      }
+    />
+  );
+
+  return (
+    <div className="space-y-8" id="settings-panel-assistant-content">
+      {loadError && (
+        <SettingsLoadErrorBanner
+          title="Couldn't load assistant settings"
+          message={loadError}
+          onRetry={retryLoadSettings}
         />
-        {showModelPicker && (
+      )}
+
+      <SettingsSection title="Agent" description="Changes apply to new assistant sessions.">
+        {saveError("agent")}
+        <SettingsGroup>
           <SettingsSelect
-            label="Model"
-            description="The model the assistant launches with. Custom CLI args override this."
-            value={modelSelectValue}
-            onValueChange={handleModelChange}
-            options={modelOptions}
-            disabled={loading}
+            label="Agent"
+            description={
+              preferredAgentId
+                ? "The CLI that runs the help assistant in the dock"
+                : "The help assistant can't start until you choose one"
+            }
+            value={agentSelectValue}
+            onValueChange={handleAgentChange}
+            options={agentOptions}
+            placeholder="Choose an agent"
+            disabled={settingsUnavailable || agentOptions.length === 0}
+            disabledReason={unavailableReason}
           />
-        )}
-        {droppedPreferredAgentId && (
-          <div
-            role="alert"
-            data-testid="assistant-dropped-agent-banner"
-            className={cn(
-              "flex items-start gap-2 p-3 rounded-[var(--radius-md)]",
-              "bg-status-warning/10 border border-status-warning/20"
-            )}
-          >
-            <ShieldAlert
-              className="w-4 h-4 text-status-warning shrink-0 mt-0.5"
-              aria-hidden="true"
+          {showModelPicker && (
+            <SettingsSelect
+              label="Model"
+              description={
+                modelCatalogFailed ? (
+                  <>
+                    Couldn&apos;t load this agent&apos;s models, so only the saved choice is listed
+                    ·{" "}
+                    <button
+                      type="button"
+                      onClick={() => setModelCatalogAttempt((n) => n + 1)}
+                      className="text-text-secondary underline underline-offset-2 hover:text-text-primary transition-colors"
+                    >
+                      Retry
+                    </button>
+                  </>
+                ) : (
+                  "A --model flag in Custom CLI args overrides this"
+                )
+              }
+              value={modelSelectValue}
+              onValueChange={handleModelChange}
+              options={modelOptions}
+              controlWidth="wide"
+              disabled={settingsUnavailable}
+              isModified={settings.modelId !== DEFAULT_SETTINGS.modelId}
+              onReset={() => handleModelChange(MODEL_DEFAULT_SENTINEL)}
             />
-            <div className="flex-1 text-xs leading-relaxed select-text">
-              <p className="font-medium text-text-primary">
-                {getAgentConfig(droppedPreferredAgentId)?.name ?? droppedPreferredAgentId} is no
-                longer available
-              </p>
-              <p className="mt-0.5 text-text-secondary">
-                The agent was removed or is no longer supported as an assistant backend. Choose
-                another agent above.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={clearDroppedPreferredAgent}
-              aria-label="Dismiss"
-              className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
+          )}
+        </SettingsGroup>
+        {droppedPreferredAgentId && (
+          <AgentNotice
+            testId="assistant-dropped-agent-banner"
+            title={`${getAgentConfig(droppedPreferredAgentId)?.name ?? droppedPreferredAgentId} is no longer available`}
+            body="The agent was removed or is no longer supported as an assistant backend. Choose another agent above."
+            action={
+              <Button variant="ghost" size="sm" onClick={clearDroppedPreferredAgent}>
+                Dismiss
+              </Button>
+            }
+          />
         )}
         {versionWarning && (
-          <div
-            role="alert"
-            data-testid="assistant-version-warning-banner"
-            className={cn(
-              "flex items-start gap-2 p-3 rounded-[var(--radius-md)]",
-              "bg-status-warning/10 border border-status-warning/20"
-            )}
-          >
-            <AlertTriangle
-              className="w-4 h-4 text-status-warning shrink-0 mt-0.5"
-              aria-hidden="true"
-            />
-            <div className="flex-1 text-xs leading-relaxed select-text">
-              <p className="font-medium text-text-primary">
-                {versionWarning.agentName} needs an update
-              </p>
-              <p className="mt-0.5 text-text-secondary">
-                Version {versionWarning.required} or later is required, but{" "}
-                {versionWarning.installed} is installed. Update the CLI to avoid a blocked or
-                degraded session.
-              </p>
-              <button
-                type="button"
-                onClick={handleGoToAgentSettings}
-                className="mt-1 text-text-secondary hover:text-text-primary underline underline-offset-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-              >
+          <AgentNotice
+            testId="assistant-version-warning-banner"
+            title={`${versionWarning.agentName} needs an update`}
+            body={`Version ${versionWarning.required} or later is required, but ${versionWarning.installed} is installed. Update the CLI to avoid a blocked or degraded session.`}
+            action={
+              <Button variant="outline" size="sm" onClick={handleGoToAgentSettings}>
                 Open agent settings
-              </button>
-            </div>
-          </div>
-        )}
-        <SettingsInput
-          label="Custom CLI args"
-          description={
-            <>
-              Advanced — whitespace-separated flags appended to the launch command. Use the Model
-              picker above for the model; a <code className="font-mono text-2xs">--model</code> flag
-              here overrides it. Applies to new assistant sessions.
-            </>
-          }
-          type="text"
-          spellCheck={false}
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="off"
-          placeholder="--verbose"
-          value={displayedCustomArgs}
-          onChange={handleCustomArgsChange}
-          disabled={loading}
-        />
-        {preferredAgentId === "daintree-assistant" && (
-          <SettingsSwitchCard
-            variant="compact"
-            icon={ScrollText}
-            title="Debug logging"
-            subtitle="Write a full-fidelity per-session trace to ~/.daintree/logs. Applies to new assistant sessions."
-            isEnabled={settings.debugLogging}
-            onChange={toggleDebugLogging}
-            ariaLabel="Enable Daintree Assistant debug logging"
-            disabled={loading}
+              </Button>
+            }
           />
         )}
       </SettingsSection>
 
-      {/* Behavior */}
       <SettingsSection
-        icon={Wrench}
         title="Behavior"
-        description="Choose which tools the assistant can use during help sessions."
+        description="Which tools the assistant can use during help sessions"
       >
-        <SettingsSwitchCard
-          variant="compact"
-          icon={BookOpen}
-          title="Search documentation"
-          subtitle="Let the assistant search Daintree docs and changelog while answering"
-          isEnabled={settings.docSearch}
-          onChange={toggleDocSearch}
-          ariaLabel="Allow the assistant to search Daintree documentation"
-          disabled={loading}
-        />
-        <SettingsSwitchCard
-          variant="compact"
-          icon={DaintreeIcon}
-          title="Daintree control"
-          subtitle="Let the assistant call Daintree actions through the local MCP server"
-          isEnabled={settings.daintreeControl}
-          onChange={toggleDaintreeControl}
-          ariaLabel="Allow the assistant to call Daintree control tools"
-          disabled={loading}
-        />
-        {!loading && settings.daintreeControl && (
-          <div
-            className={cn(
-              "flex items-start gap-2 p-3 rounded-[var(--radius-md)]",
-              "bg-overlay-subtle border border-border-default"
-            )}
-          >
-            <div className="text-xs text-text-secondary leading-relaxed select-text">
-              Enabling this starts a local HTTP server on 127.0.0.1 so the assistant can call
-              Daintree actions. The MCP server tab has the connection details and API key.
-            </div>
-          </div>
-        )}
-      </SettingsSection>
-
-      {/* Custom commands and skills */}
-      <SettingsSection
-        icon={FolderOpen}
-        title="Custom commands and skills"
-        description="Add your own commands and skills to every assistant session."
-      >
-        <div className="flex items-start gap-3">
-          <div className="flex-1 text-xs text-text-secondary leading-relaxed select-text">
-            Files in <code className="font-mono text-2xs">~/.daintree/assistant</code> are copied
-            into each new assistant session. Claude Code picks up{" "}
-            <code className="font-mono text-2xs">.claude/commands</code> and{" "}
-            <code className="font-mono text-2xs">.claude/skills</code>; Codex picks up{" "}
-            <code className="font-mono text-2xs">.agents/skills</code> and{" "}
-            <code className="font-mono text-2xs">.codex/skills</code>; Copilot reads both skill
-            trees. A per-project variant in{" "}
-            <code className="font-mono text-2xs">&lt;project&gt;/.daintree/assistant</code> takes
-            precedence and can be committed to git.
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleOpenCommandsFolder}
-            className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary shrink-0"
-          >
-            <FolderOpen className="w-4 h-4" />
-            Open folder
-          </Button>
-        </div>
-      </SettingsSection>
-
-      {/* Hibernation */}
-      <SettingsSection
-        icon={Moon}
-        title="Hibernation"
-        description="Idle assistants release memory and capture a resume token, so reopening reconnects to the same conversation."
-      >
-        <SettingsSelect
-          label="Hibernate after"
-          description="How long the panel stays hidden before the assistant gracefully shuts down. Off keeps it resident until you close it."
-          value={String(settings.idleHibernateMinutes)}
-          onValueChange={setHibernateMinutes}
-          options={HIBERNATE_OPTIONS}
-          disabled={loading}
-        />
-      </SettingsSection>
-
-      {/* Security */}
-      <SettingsSection
-        icon={ShieldAlert}
-        title="Security"
-        description="Pick how much of Daintree the assistant can reach, and whether to bypass the agent's own confirmation gate."
-      >
-        <SettingsSelect
-          label="Capability tier"
-          description={TIER_DESCRIPTIONS[settings.tier]}
-          value={settings.tier}
-          onValueChange={setTier}
-          options={TIER_OPTIONS}
-          disabled={loading}
-        />
-
-        <BlastRadiusPreview
-          tier={settings.tier}
-          isOpen={showBlastRadius}
-          onToggle={() => setShowBlastRadius((v) => !v)}
-        />
-
-        <SessionLiveStatusCard configuredTier={settings.tier} />
-
-        {/* The stored preference is agent-agnostic but its effect is not, so the
-            card only renders once an agent with a real bypass mechanism is
-            selected — mirroring the agent-gated Debug logging switch above. */}
-        {bypassCopy && (
+        {saveError("behavior")}
+        <SettingsGroup>
           <SettingsSwitchCard
-            variant="compact"
-            icon={ShieldAlert}
-            title={bypassCopy.title}
-            subtitle={bypassCopy.subtitle}
-            isEnabled={settings.bypassPermissions}
-            onChange={toggleBypassPermissions}
-            ariaLabel={bypassCopy.ariaLabel}
-            colorScheme="amber"
-            disabled={loading}
+            id="assistant-doc-search"
+            title="Search documentation"
+            subtitle="Let the assistant search Daintree docs and changelog while answering"
+            isEnabled={settings.docSearch}
+            onChange={toggleDocSearch}
+            disabled={settingsUnavailable}
+            isModified={settings.docSearch !== DEFAULT_SETTINGS.docSearch}
+            onReset={() => void persist({ docSearch: DEFAULT_SETTINGS.docSearch })}
           />
-        )}
-        {bypassCopy && settings.bypassPermissions && (
-          <div
-            className={cn(
-              "flex items-start gap-2 p-3 rounded-[var(--radius-md)]",
-              "bg-overlay-subtle border border-border-default"
-            )}
-          >
-            <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-0.5" />
-            <div className="text-xs text-text-secondary leading-relaxed select-text">
-              {bypassCopy.warning}
-            </div>
-          </div>
-        )}
+          <SettingsSwitchCard
+            id="assistant-daintree-control"
+            title="Daintree control"
+            subtitle={
+              !loading && settings.daintreeControl
+                ? "Let the assistant call Daintree actions. This starts a local HTTP server on 127.0.0.1."
+                : "Let the assistant call Daintree actions through the local MCP server"
+            }
+            isEnabled={settings.daintreeControl}
+            onChange={toggleDaintreeControl}
+            ariaLabel="Allow the assistant to call Daintree control tools"
+            disabled={settingsUnavailable}
+            isModified={settings.daintreeControl !== DEFAULT_SETTINGS.daintreeControl}
+            onReset={() => void persist({ daintreeControl: DEFAULT_SETTINGS.daintreeControl })}
+          />
+          {!loading && <SettingsDependents>{mcpStatusRow}</SettingsDependents>}
+        </SettingsGroup>
       </SettingsSection>
 
-      {/* Privacy */}
       <SettingsSection
-        icon={KeyRound}
-        title="Privacy"
-        description="Help-session activity is logged locally so you can review what the assistant did."
+        title="Security"
+        description="How much of Daintree the assistant can reach, and whether to bypass the agent's own confirmation gate"
       >
-        <SettingsSwitchCard
-          variant="compact"
-          title="Capture audit log"
-          subtitle={
-            auditEnabled ? "Recording every dispatch" : "New dispatches will not be recorded"
-          }
-          isEnabled={auditEnabled}
-          onChange={handleAuditEnabledToggle}
-          ariaLabel="Capture audit log"
-          // Gate on auditLoading too: until getAuditConfig resolves, auditEnabled
-          // is still the optimistic default and a late fulfillment would clobber
-          // a user toggle made in that window.
-          disabled={loading || auditLoading || isTogglingAudit}
-        />
-        <SettingsSelect
-          label="Audit log retention"
-          description="How long MCP audit records are kept on this machine. Turn-outcome diagnostics are recorded separately and aren't affected by this setting."
-          value={String(settings.auditRetention)}
-          onValueChange={setRetention}
-          options={RETENTION_OPTIONS}
-          disabled={loading}
-        />
-        <div className="rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle/40">
-          <button
-            type="button"
-            onClick={() => setAdvancedDiagnosticsOpen((v) => !v)}
-            aria-expanded={advancedDiagnosticsOpen}
-            className={cn(
-              "w-full flex items-center gap-2 px-3 py-2 text-xs",
-              "text-daintree-text/80 hover:text-text-primary transition-colors"
-            )}
-          >
-            <ChevronRight
-              data-animated-chevron
-              className={cn(
-                "w-3.5 h-3.5 transition-transform duration-150",
-                advancedDiagnosticsOpen ? "rotate-90" : "rotate-0"
-              )}
+        {saveError("security")}
+        <SettingsGroup>
+          <SettingsChoicebox
+            label="Capability tier"
+            description="The default for new sessions"
+            value={settings.tier}
+            onChange={setTier}
+            options={TIER_CHOICES}
+            disabled={settingsUnavailable}
+            isModified={settings.tier !== DEFAULT_SETTINGS.tier}
+            onReset={() => setTier(DEFAULT_SETTINGS.tier)}
+          />
+
+          {/* The stored preference is agent-agnostic but its effect is not, so the
+              row only renders once an agent with a real bypass mechanism is
+              selected — mirroring the agent-gated Debug logging switch above. */}
+          {bypassCopy && (
+            <SettingsSwitchCard
+              id="assistant-skip-permissions"
+              title={bypassCopy.title}
+              subtitle={bypassCopy.subtitle}
+              isEnabled={settings.bypassPermissions}
+              onChange={toggleBypassPermissions}
+              ariaLabel={bypassCopy.ariaLabel}
+              colorScheme="amber"
+              disabled={settingsUnavailable}
+              isModified={settings.bypassPermissions !== DEFAULT_SETTINGS.bypassPermissions}
+              onReset={() =>
+                void persist({ bypassPermissions: DEFAULT_SETTINGS.bypassPermissions })
+              }
             />
-            Advanced diagnostics
-          </button>
-          {advancedDiagnosticsOpen && (
-            <div className="flex flex-col gap-4 px-3 pb-3 pt-1">
-              <McpAuditLogViewer
-                records={auditRecords}
-                turnRecords={turnRecords}
-                loading={auditLoading}
-                onRefresh={refreshAuditRecords}
-                onCopy={handleCopyAuditAsJson}
-                onClear={() => setShowClearAuditConfirm(true)}
-                copyFlashActive={auditCopied}
-                // Privacy section hides external MCP traffic. Grant-lifecycle
-                // events stay visible — they're tied to this Daintree's own
-                // help-session bearers, not external API-key clients.
-                includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
-                onExport={handleExportAuditAsNdjson}
-                exportFlashActive={auditExported}
+          )}
+          {bypassCopy && settings.bypassPermissions && (
+            <div className="flex items-start gap-2 py-2.5 pl-4 pr-4">
+              <AlertTriangle
+                className="w-4 h-4 text-status-warning shrink-0 mt-px"
+                aria-hidden="true"
               />
-              <McpAuditLatencyTable
-                records={auditRecords}
-                includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
-              />
-              <TurnOutcomeDiagnostics
-                auditRecords={auditRecords}
-                records={turnRecords}
-                onRefresh={refreshAuditRecords}
-              />
-              {auditStats && auditStats.auth401Count > 0 && (
-                <p className="text-xs text-text-secondary select-text">
-                  <span className="font-mono text-text-primary">{auditStats.auth401Count}</span>{" "}
-                  bearer rejection{auditStats.auth401Count === 1 ? "" : "s"} since last launch — an
-                  external client is connecting with a stale or missing API key.
-                </p>
-              )}
+              <div className="text-xs text-text-secondary select-text">{bypassCopy.warning}</div>
             </div>
           )}
-        </div>
+
+          {/* The inventory comes last so opening it never pushes the bypass switch away
+              from the tier it works with. */}
+          <BlastRadiusPreview
+            tier={settings.tier}
+            isOpen={showBlastRadius}
+            onToggle={() => setShowBlastRadius((v) => !v)}
+          />
+        </SettingsGroup>
+
+        <SessionLiveStatusCard configuredTier={settings.tier} />
       </SettingsSection>
 
-      {/* Connection */}
       <SettingsSection
-        icon={McpServerIcon}
-        title="Connection"
-        description="The assistant talks to Daintree through the local MCP server. Use these controls to share access with external clients."
+        title="Privacy"
+        description="Help-session activity is logged locally so you can review what the assistant did"
       >
+        {saveError("privacy")}
+        {privacyError && (
+          <InlineError onRetry={privacyError.retry}>{privacyError.message}</InlineError>
+        )}
+        {(auditReadFailed || auditConfigFailed) && (
+          <InlineError onRetry={() => void refreshAuditRecords()}>
+            {auditConfigFailed
+              ? "Couldn't read the audit settings, so recording is shown as unknown."
+              : "Couldn't read the audit log, so the diagnostics below may be incomplete."}
+          </InlineError>
+        )}
+        <SettingsGroup>
+          <SettingsSwitchCard
+            title="Capture audit log"
+            subtitle={
+              auditConfigFailed
+                ? "Recording status unavailable"
+                : auditLoading
+                  ? "Checking…"
+                  : auditEnabled
+                    ? "Recording every dispatch"
+                    : "New dispatches will not be recorded"
+            }
+            isEnabled={auditEnabled}
+            onChange={handleAuditEnabledToggle}
+            ariaLabel="Capture audit log"
+            // Gate on auditLoading too: until getAuditConfig resolves, auditEnabled
+            // is still the optimistic default and a late fulfillment would clobber
+            // a user toggle made in that window.
+            disabled={loading || auditLoading || isTogglingAudit || auditConfigFailed}
+            disabledReason={
+              auditConfigFailed ? "Couldn't read whether recording is on. Retry above." : undefined
+            }
+          />
+          <SettingsPresetGroup
+            id="assistant-audit-retention"
+            label="Audit log retention"
+            description="How long audit records stay on this machine. Turn-outcome diagnostics are kept separately."
+            options={RETENTION_OPTIONS}
+            value={String(settings.auditRetention)}
+            onChange={setRetention}
+            disabled={settingsUnavailable}
+            isModified={settings.auditRetention !== DEFAULT_SETTINGS.auditRetention}
+            onReset={() => setRetention(String(DEFAULT_SETTINGS.auditRetention))}
+          />
+          <div>
+            <button
+              type="button"
+              onClick={() => setAdvancedDiagnosticsOpen((v) => !v)}
+              aria-expanded={advancedDiagnosticsOpen}
+              className={cn(
+                "w-full flex items-center gap-2 px-4 py-3 text-sm font-medium",
+                "text-text-primary transition-colors"
+              )}
+            >
+              <ChevronRight
+                data-animated-chevron
+                className={cn(
+                  "w-3.5 h-3.5 text-text-secondary transition-transform duration-150",
+                  advancedDiagnosticsOpen ? "rotate-90" : "rotate-0"
+                )}
+                aria-hidden="true"
+              />
+              Advanced diagnostics
+            </button>
+          </div>
+        </SettingsGroup>
+        {/* Each diagnostics view is its own settings group, so they follow the
+            disclosure as siblings rather than nesting cards inside its card. */}
+        {advancedDiagnosticsOpen && (
+          <>
+            <McpAuditLogViewer
+              records={auditRecords}
+              turnRecords={turnRecords}
+              loading={auditLoading}
+              onRefresh={refreshAuditRecords}
+              onCopy={handleCopyAuditAsJson}
+              onClear={() => setShowClearAuditConfirm(true)}
+              copyFlashActive={auditCopied}
+              // Privacy section hides external MCP traffic. Grant-lifecycle
+              // events stay visible — they're tied to this Daintree's own
+              // help-session bearers, not external API-key clients.
+              includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
+              onExport={handleExportAuditAsNdjson}
+              exportFlashActive={auditExported}
+            />
+            <McpAuditLatencyTable
+              records={auditRecords}
+              includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
+            />
+            <TurnOutcomeDiagnostics
+              auditRecords={auditRecords}
+              records={turnRecords}
+              onRefresh={refreshAuditRecords}
+            />
+            {auditStats && auditStats.auth401Count > 0 && (
+              <p className="text-xs text-text-secondary select-text">
+                <span className="font-mono text-text-primary">{auditStats.auth401Count}</span>{" "}
+                bearer rejection{auditStats.auth401Count === 1 ? "" : "s"} since last launch — an
+                external client is connecting with a stale or missing API key.
+              </p>
+            )}
+          </>
+        )}
+      </SettingsSection>
+
+      <SettingsSection
+        title="Launch options"
+        description="Changes apply to new assistant sessions."
+      >
+        {saveError("launch")}
+        <SettingsGroup>
+          <SettingsInput
+            label="Custom CLI args"
+            description="Whitespace-separated flags appended to the launch command"
+            type="text"
+            spellCheck={false}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            placeholder="e.g. --verbose"
+            className="font-mono"
+            value={displayedCustomArgs}
+            onChange={handleCustomArgsChange}
+            disabled={settingsUnavailable}
+            isModified={displayedCustomArgs !== DEFAULT_SETTINGS.customArgs}
+            onReset={() => {
+              setPendingCustomArgs(null);
+              void persist({ customArgs: DEFAULT_SETTINGS.customArgs });
+            }}
+          />
+          <SettingsSelect
+            label="Hibernate after"
+            description="How long the panel stays hidden before the assistant shuts down. Reopening resumes the same conversation."
+            value={String(settings.idleHibernateMinutes)}
+            onValueChange={setHibernateMinutes}
+            options={HIBERNATE_OPTIONS}
+            disabled={settingsUnavailable}
+            isModified={settings.idleHibernateMinutes !== DEFAULT_SETTINGS.idleHibernateMinutes}
+            onReset={() => setHibernateMinutes(String(DEFAULT_SETTINGS.idleHibernateMinutes))}
+          />
+          {preferredAgentId === "daintree-assistant" && (
+            <SettingsSwitchCard
+              title="Debug logging"
+              subtitle="Write a full-fidelity per-session trace to ~/.daintree/logs"
+              isEnabled={settings.debugLogging}
+              onChange={toggleDebugLogging}
+              ariaLabel="Enable Daintree Assistant debug logging"
+              disabled={settingsUnavailable}
+              isModified={settings.debugLogging !== DEFAULT_SETTINGS.debugLogging}
+              onReset={() => void persist({ debugLogging: DEFAULT_SETTINGS.debugLogging })}
+            />
+          )}
+        </SettingsGroup>
+      </SettingsSection>
+
+      <SettingsSection title="Custom commands and skills">
+        {saveError("content")}
+        <SettingsGroup>
+          <SettingsRow
+            label="Assistant folder"
+            description={
+              <>
+                Commands, skills, instructions and reference files in{" "}
+                <code className="font-mono">~/.daintree/assistant</code> join every new session. A
+                project&apos;s own <code className="font-mono">.daintree/assistant</code> takes
+                precedence.
+              </>
+            }
+            control={
+              <Button variant="outline" size="sm" onClick={handleOpenCommandsFolder}>
+                <FolderOpen />
+                Open folder
+              </Button>
+            }
+          />
+          <SettingsSwitchCard
+            title="Load my MCP servers and hooks"
+            subtitle="Starts the servers in mcp.json and runs the Claude hooks in hooks.json from ~/.daintree/assistant. A project's folder can never add these."
+            isEnabled={settings.loadGlobalHooksAndServers}
+            onChange={toggleLoadGlobalHooksAndServers}
+            ariaLabel="Load my MCP servers and hooks"
+            disabled={settingsUnavailable}
+            isModified={
+              settings.loadGlobalHooksAndServers !== DEFAULT_SETTINGS.loadGlobalHooksAndServers
+            }
+            onReset={() =>
+              void persist({
+                loadGlobalHooksAndServers: DEFAULT_SETTINGS.loadGlobalHooksAndServers,
+              })
+            }
+          />
+        </SettingsGroup>
+      </SettingsSection>
+
+      <SettingsSection
+        id="assistant-mcp-status"
+        title="External clients"
+        description="Share the assistant's local MCP server with other clients, such as Claude Code or Cursor"
+      >
+        {connectionError && (
+          <InlineError onRetry={() => void handleCopyConfig()}>{connectionError}</InlineError>
+        )}
         {loading ? (
           showInlineLoading ? (
             <p className="text-xs text-text-secondary">Loading…</p>
           ) : null
-        ) : runtimeSnapshot.state === "disabled" ? (
-          <div className="space-y-2">
-            <p className="text-xs text-text-secondary select-text">
-              MCP server is off. Turn it on to share the connection with external clients.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={handleGoToMcpSettings}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
-              >
-                Open MCP server settings
-              </button>
-            </div>
-          </div>
-        ) : runtimeSnapshot.state === "starting" ? (
-          <div className="flex items-center gap-2">
-            <div className="status-mark w-2 h-2 rounded-full bg-daintree-text/30 shrink-0" />
-            <span className="text-xs text-text-secondary">Server is starting…</span>
-          </div>
-        ) : runtimeSnapshot.state === "failed" ? (
-          <div className="space-y-2">
-            <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-              <AlertCircle className="w-4 h-4 text-status-danger shrink-0 mt-0.5" />
-              <p className="text-xs text-status-danger leading-relaxed select-text">
-                MCP server failed to start.{" "}
-                {runtimeSnapshot.lastError ?? "Check the MCP server tab for details."}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={handleGoToMcpSettings}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
-              >
-                Open MCP server settings
-              </button>
-            </div>
-          </div>
+        ) : mcpState !== "ready" ? (
+          <SettingsGroup>
+            <SettingsRow
+              label="Client config"
+              description="Available while the MCP server is running. Its status is under Behavior."
+            />
+          </SettingsGroup>
         ) : !mcpStatus ? (
-          <p className="text-xs text-text-secondary">Couldn't load MCP status.</p>
+          <SettingsGroup>
+            <SettingsRow
+              label="MCP server"
+              description="Couldn't load MCP status."
+              control={
+                <Button variant="outline" size="sm" onClick={retryMcpStatus}>
+                  Retry
+                </Button>
+              }
+            />
+          </SettingsGroup>
         ) : (
-          <div className="contents">
-            <div className="flex items-center gap-2">
-              <div className="status-mark w-2 h-2 rounded-full bg-activity-working shrink-0" />
-              <span className="text-xs text-text-secondary">
-                {runtimeSnapshot.port ? `Running on port ${runtimeSnapshot.port}` : "Running"}
-              </span>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={handleCopyConfig}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
-                  "border border-border-default hover:bg-overlay-soft",
-                  copied
-                    ? "text-status-success border-status-success/30"
-                    : "text-text-secondary hover:text-text-primary"
-                )}
-              >
-                {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                {copied ? "Copied" : "Copy MCP config"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowRotateConfirm(true)}
-                disabled={!apiKeySuffix}
-                title={apiKeySuffix ? undefined : "Waiting for the MCP key to load…"}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-text-secondary"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                Rotate MCP key
-              </button>
-            </div>
-
-            <p className="text-xs text-text-secondary leading-relaxed select-text">
-              Paste the copied config into an external MCP client (e.g. Claude Code, Cursor).
-              Regenerating the key invalidates existing client connections.
-            </p>
-          </div>
+          <>
+            <SettingsGroup>
+              <SettingsRow
+                label="Client config"
+                description={`Paste into an external MCP client to connect it to port ${runtimeSnapshot.port ?? mcpStatus.port ?? "—"}`}
+                control={
+                  <Button variant="outline" size="sm" onClick={handleCopyConfig}>
+                    {copied ? <Check /> : <Copy />}
+                    {copied ? "Copied" : "Copy MCP config"}
+                  </Button>
+                }
+              />
+            </SettingsGroup>
+            {/* Rotating cuts off every client holding the key, so it sits in its own
+            group rather than beside the everyday copy action. */}
+            <SettingsGroup>
+              <SettingsRow
+                label="API key"
+                description={
+                  apiKeySuffix
+                    ? `Ends in ${apiKeySuffix}. Rotating it disconnects every client using the old key.`
+                    : "Rotating the key disconnects every client using the old one."
+                }
+                control={
+                  <Button
+                    variant="ghost-danger"
+                    size="sm"
+                    onClick={() => setShowRotateConfirm(true)}
+                    disabled={!apiKeySuffix}
+                    title={apiKeySuffix ? undefined : "Waiting for the MCP key to load…"}
+                  >
+                    Rotate MCP key…
+                  </Button>
+                }
+              />
+            </SettingsGroup>
+          </>
         )}
       </SettingsSection>
-
-      {error && (
-        <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-          <AlertCircle className="w-4 h-4 text-status-danger shrink-0 mt-0.5" />
-          <p className="text-xs text-status-danger">{error}</p>
-        </div>
-      )}
 
       <ConfirmDialog
         isOpen={showClearAuditConfirm}
         onClose={isClearingAudit ? undefined : handleCancelClearAudit}
         title="Clear audit log?"
         description="All recorded tool dispatches will be permanently deleted — including those from external MCP clients."
-        confirmLabel="Clear log"
+        confirmLabel={clearAuditError ? "Try again" : "Clear audit log"}
         cancelLabel="Cancel"
         onConfirm={confirmClearAuditLog}
         isConfirmLoading={isClearingAudit}
         variant="destructive"
         zIndex="nested"
-      />
+      >
+        {clearAuditError && <InlineError>{clearAuditError}</InlineError>}
+      </ConfirmDialog>
 
       <ConfirmDialog
         isOpen={showRotateConfirm}
         onClose={isRotating ? undefined : handleCancelRotate}
         title="Rotate API key?"
         description="The current key will be invalidated immediately. External clients using this key will need to update their configuration."
-        confirmLabel="Rotate key"
+        confirmLabel={rotateError ? "Try again" : "Rotate key"}
         cancelLabel="Cancel"
         onConfirm={confirmRotateKey}
         isConfirmLoading={isRotating}
         variant="destructive"
         zIndex="nested"
-      />
+      >
+        {rotateError && <InlineError>{rotateError}</InlineError>}
+      </ConfirmDialog>
+    </div>
+  );
+}
+
+/** A status sentence with its mark: the colour sits on the dot, never on the words. */
+function StatusLine({
+  tone,
+  children,
+  live = false,
+}: {
+  tone: "ok" | "idle" | "error";
+  children: ReactNode;
+  live?: boolean;
+}) {
+  return (
+    <span role={live ? "status" : undefined} className="flex items-start gap-2">
+      {tone === "error" ? (
+        <AlertCircle className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
+      ) : (
+        <span
+          className={cn(
+            "status-mark mt-1 w-2 h-2 rounded-full shrink-0",
+            tone === "ok" ? "bg-activity-working" : "bg-text-secondary"
+          )}
+          aria-hidden="true"
+        />
+      )}
+      <span>{children}</span>
+    </span>
+  );
+}
+
+function InlineError({ children, onRetry }: { children: ReactNode; onRetry?: () => void }) {
+  return (
+    <div role="alert" className="flex items-start gap-1.5 text-xs text-text-primary select-text">
+      <AlertCircle className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
+      <span className="min-w-0 flex-1">{children}</span>
+      {onRetry && (
+        <Button variant="ghost" size="xs" onClick={onRetry} className="-my-1 shrink-0">
+          Retry
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** A notice about the chosen agent, directly under the group that chooses it. */
+function AgentNotice({
+  testId,
+  title,
+  body,
+  action,
+}: {
+  testId: string;
+  title: string;
+  body: string;
+  action: ReactNode;
+}) {
+  return (
+    <div
+      role="alert"
+      data-testid={testId}
+      className="flex items-start gap-3 rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-3 py-2.5"
+    >
+      <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-0.5" aria-hidden="true" />
+      <div className="min-w-0 flex-1 text-xs select-text">
+        <p className="font-medium text-text-primary">{title}</p>
+        <p className="mt-0.5 text-text-secondary">{body}</p>
+      </div>
+      <div className="shrink-0">{action}</div>
     </div>
   );
 }
@@ -1294,6 +1556,8 @@ interface BlastRadiusPreviewProps {
   isOpen: boolean;
   onToggle: () => void;
 }
+
+const HIGH_BLAST_RADIUS_GROUP = "high blast radius";
 
 function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps) {
   const totalCount = HELP_TIER_CUMULATIVE[tier].length;
@@ -1310,20 +1574,20 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
     const pinned = new Set(pinnedList);
     const rest = cumulative.filter((tool) => !pinned.has(tool));
     return [
-      ["⚠ high blast radius", pinnedList] as [string, string[]],
+      [HIGH_BLAST_RADIUS_GROUP, pinnedList] as [string, string[]],
       ...groupToolsByNamespace(rest),
     ];
   }, [tier]);
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle/40">
+    <div>
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={isOpen}
         className={cn(
-          "w-full flex items-center justify-between gap-3 px-3 py-2 text-xs",
-          "text-daintree-text/80 hover:text-text-primary transition-colors"
+          "w-full flex items-center justify-between gap-3 px-4 py-2.5 text-xs",
+          "text-text-secondary hover:text-text-primary transition-colors"
         )}
       >
         <span className="flex items-center gap-2">
@@ -1333,20 +1597,23 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
               "w-3.5 h-3.5 transition-transform duration-150",
               isOpen ? "rotate-90" : "rotate-0"
             )}
+            aria-hidden="true"
           />
           <span>
-            {totalCount} actions available at this tier
-            {tier !== "workbench" && (
-              <span className="text-text-secondary"> ({newAtTier} new at this tier)</span>
-            )}
+            What this tier allows · {totalCount} actions
+            {tier !== "workbench" && <span> ({newAtTier} new at this tier)</span>}
           </span>
         </span>
       </button>
       {isOpen && (
-        <div className="px-3 pb-3 pt-1 space-y-2">
+        <div className="px-4 pb-3 pt-1 space-y-2">
+          <p className="text-xs text-text-secondary select-text">{TIER_DETAILS[tier]}</p>
           {groups.map(([ns, tools]) => (
             <div key={ns} className="space-y-1">
-              <div className="text-3xs uppercase tracking-wide text-text-secondary font-mono">
+              <div className="flex items-center gap-1 text-xs text-text-secondary font-mono">
+                {ns === HIGH_BLAST_RADIUS_GROUP && (
+                  <AlertTriangle className="w-3 h-3 text-status-warning" aria-hidden="true" />
+                )}
                 {ns}
                 <span className="ml-1 text-text-placeholder">({tools.length})</span>
               </div>
@@ -1355,7 +1622,7 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
                   <span
                     key={tool}
                     className={cn(
-                      "px-1.5 py-0.5 rounded text-3xs font-mono",
+                      "px-1.5 py-0.5 rounded-[var(--radius-sm)] text-3xs font-mono",
                       "bg-surface-canvas border border-border-default text-text-secondary"
                     )}
                   >
@@ -1438,11 +1705,13 @@ function NativeGrantsSection({
   }, [helpSessionId, toolsInput, usesInput]);
 
   const revoke = useCallback((grantId: string) => {
+    setIssueError(null);
     safeFireAndForget(
       window.electron.mcpServer
         .revokeNativeGrant({ grantId })
         .then(() => undefined)
         .catch((err: unknown) => {
+          setIssueError(formatErrorMessage(err, "Couldn't revoke grant"));
           logError("DaintreeAssistant: revokeNativeGrant failed", err);
         }),
       { context: "DaintreeAssistant:revokeNativeGrant" }
@@ -1451,7 +1720,7 @@ function NativeGrantsSection({
 
   return (
     <div className="space-y-2 pt-1">
-      <div className="text-3xs uppercase tracking-wide text-text-secondary font-mono">
+      <div className="text-xs text-text-secondary font-mono">
         Automation grants{grants.length > 0 ? ` (${grants.length})` : ""}
       </div>
       {grants.length > 0 ? (
@@ -1459,19 +1728,20 @@ function NativeGrantsSection({
           {grants.map((grant) => (
             <div
               key={grant.grantId}
-              className="rounded-[var(--radius-sm)] border border-border-default bg-daintree-bg/40 px-2 py-1.5 space-y-1"
+              className="rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-2 py-1.5 space-y-1"
             >
               <div className="flex items-center justify-between gap-2 text-2xs">
-                <span className="font-mono text-text-secondary truncate">
+                <span className="font-mono text-text-secondary break-all">
                   {(grant.allowedTools ?? []).join(", ") || "no tools"}
                 </span>
-                <button
-                  type="button"
+                <Button
+                  variant="ghost-danger"
+                  size="xs"
+                  className="shrink-0"
                   onClick={() => grant.grantId && revoke(grant.grantId)}
-                  className="shrink-0 text-3xs text-text-secondary hover:text-status-danger transition-colors"
                 >
                   Revoke
-                </button>
+                </Button>
               </div>
               <div className="flex items-center justify-between gap-2 text-3xs text-text-secondary">
                 <span className="tabular-nums">
@@ -1486,33 +1756,33 @@ function NativeGrantsSection({
         <div className="text-2xs text-text-secondary">No automation grants active</div>
       )}
 
-      <div className="flex items-end gap-1.5 pt-0.5">
-        <input
-          type="text"
-          value={toolsInput}
-          onChange={(e) => setToolsInput(e.target.value)}
-          placeholder="git.commit terminal.new"
-          className="flex-1 min-w-0 rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-2 py-1 text-2xs font-mono text-text-primary placeholder:text-daintree-text/30 focus-visible:outline-2 focus-visible:outline-accent-primary"
-        />
-        <input
-          type="number"
-          min={1}
-          max={100}
-          value={usesInput}
-          onChange={(e) => setUsesInput(e.target.value)}
-          aria-label="Maximum uses"
-          className="w-12 rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-1.5 py-1 text-2xs tabular-nums text-text-primary focus-visible:outline-2 focus-visible:outline-accent-primary"
-        />
-        <button
-          type="button"
-          onClick={approve}
-          disabled={issuing}
-          className="shrink-0 rounded-[var(--radius-sm)] border border-border-default bg-overlay-subtle px-2 py-1 text-2xs text-daintree-text/80 hover:text-text-primary disabled:opacity-50 transition-colors"
-        >
+      <div className="flex flex-wrap items-end gap-2 pt-0.5">
+        <label className="grid min-w-0 flex-1 basis-56 gap-1 text-xs text-text-secondary">
+          Tools to approve
+          <input
+            type="text"
+            value={toolsInput}
+            onChange={(e) => setToolsInput(e.target.value)}
+            placeholder="git.commit terminal.new"
+            className="min-w-0 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-2 py-1 text-xs font-mono text-text-primary placeholder:text-text-placeholder focus-visible:outline-2 focus-visible:outline-accent-primary"
+          />
+        </label>
+        <label className="grid gap-1 text-xs text-text-secondary">
+          Maximum uses
+          <input
+            type="number"
+            min={1}
+            max={100}
+            value={usesInput}
+            onChange={(e) => setUsesInput(e.target.value)}
+            className="w-20 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-2 py-1 text-xs tabular-nums text-text-primary focus-visible:outline-2 focus-visible:outline-accent-primary"
+          />
+        </label>
+        <Button variant="outline" size="sm" onClick={approve} disabled={issuing}>
           Approve grant
-        </button>
+        </Button>
       </div>
-      {issueError && <div className="text-3xs text-status-danger">{issueError}</div>}
+      {issueError && <InlineError>{issueError}</InlineError>}
     </div>
   );
 }
@@ -1546,62 +1816,60 @@ function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
         : " — matches the configured default";
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle/40 px-3 py-2.5 space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-2">
-          <span
-            className={cn(
-              "status-mark w-1.5 h-1.5 rounded-full shrink-0",
-              connected ? "bg-activity-working" : "bg-daintree-text/30"
-            )}
-            aria-hidden="true"
-          />
-          <span className="text-xs text-text-primary">
-            {connected ? "Live session" : "No live session"}
-          </span>
-        </span>
-        {connected && (
-          <span className="px-1.5 py-0.5 rounded text-3xs font-mono bg-surface-canvas border border-border-default text-text-secondary">
-            {TIER_SHORT_LABEL[tier]}
-          </span>
-        )}
-      </div>
-
-      {connected ? (
-        <>
-          <div className="text-xs text-text-secondary leading-relaxed">
-            Running at{" "}
-            <span className="text-text-primary">{TIER_SHORT_LABEL[tier].toLowerCase()}</span>
-            {tierComparisonCopy}
-          </div>
-          {perToolGrants.length > 0 ? (
-            <div className="space-y-1">
-              <div className="text-3xs uppercase tracking-wide text-text-secondary font-mono">
-                Active grants ({perToolGrants.length})
-              </div>
-              <div className="space-y-1">
-                {perToolGrants.map((grant) => (
-                  <div
-                    key={grant.toolId}
-                    className="flex items-center justify-between gap-2 text-2xs"
-                  >
-                    <span className="font-mono text-text-secondary truncate">{grant.toolId}</span>
-                    <GrantCountdown expiresAt={grant.expiresAt} />
-                  </div>
-                ))}
-              </div>
-            </div>
+    <SettingsGroup>
+      <SettingsRow
+        label="Live session"
+        accessory={
+          connected ? (
+            <span className="px-1.5 py-0.5 rounded-[var(--radius-sm)] text-3xs font-mono bg-surface-canvas border border-border-default text-text-secondary">
+              {TIER_SHORT_LABEL[tier]}
+            </span>
+          ) : undefined
+        }
+        description={
+          connected ? (
+            <StatusLine tone="ok">
+              Running at{" "}
+              <span className="text-text-primary">{TIER_SHORT_LABEL[tier].toLowerCase()}</span>
+              {tierComparisonCopy}
+            </StatusLine>
           ) : (
-            <div className="text-2xs text-text-secondary">No per-tool grants active</div>
-          )}
-          {sessionId && <NativeGrantsSection helpSessionId={sessionId} grants={nativeGrants} />}
-        </>
-      ) : (
-        <div className="text-xs text-text-secondary leading-relaxed">
-          Open the assistant to start a session — its live tier and any active per-tool grants show
-          here
-        </div>
-      )}
-    </div>
+            <StatusLine tone="idle">
+              None. Open the assistant to start one; its live tier and grants show here.
+            </StatusLine>
+          )
+        }
+        layout={connected ? "stacked" : "inline"}
+        control={
+          connected ? (
+            <div className="space-y-2">
+              {perToolGrants.length > 0 ? (
+                <div className="space-y-1">
+                  <div className="text-xs text-text-secondary font-mono">
+                    Active grants ({perToolGrants.length})
+                  </div>
+                  <div className="space-y-1">
+                    {perToolGrants.map((grant) => (
+                      <div
+                        key={grant.toolId}
+                        className="flex items-center justify-between gap-2 text-2xs"
+                      >
+                        <span className="font-mono text-text-secondary break-all">
+                          {grant.toolId}
+                        </span>
+                        <GrantCountdown expiresAt={grant.expiresAt} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-2xs text-text-secondary">No per-tool grants active</div>
+              )}
+              {sessionId && <NativeGrantsSection helpSessionId={sessionId} grants={nativeGrants} />}
+            </div>
+          ) : undefined
+        }
+      />
+    </SettingsGroup>
   );
 }

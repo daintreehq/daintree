@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { createContext, use } from "react";
+import type { ReactNode } from "react";
 import { ProjectPluginsTab } from "../ProjectPluginsTab";
 import {
   __resetProjectPluginStoreForTesting,
@@ -25,7 +27,50 @@ vi.mock("@/store/projectStore", () => ({
     selector({ currentProject: { id: PROJECT_ID, path: "/tmp/proj" } }),
 }));
 
+// The real Select lazy-loads Radix. This stand-in keeps the trigger's own props (its
+// test id and label) and lets a test pick an option with a click.
+vi.mock("@/components/ui/select", () => {
+  interface Ctx {
+    value: string;
+    onValueChange: (v: string) => void;
+    disabled?: boolean;
+  }
+  const SelectCtx = createContext<Ctx | null>(null);
+  return {
+    Select: ({ children, ...ctx }: Ctx & { children: ReactNode }) => (
+      <SelectCtx value={ctx}>{children}</SelectCtx>
+    ),
+    SelectTrigger: ({ children, ...props }: { children: ReactNode }) => {
+      const ctx = use(SelectCtx)!;
+      return (
+        <button type="button" role="combobox" disabled={ctx.disabled} {...props}>
+          {children}
+        </button>
+      );
+    },
+    SelectValue: () => <span>{use(SelectCtx)!.value}</span>,
+    SelectContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+    SelectItem: ({ value, children }: { value: string; children: ReactNode }) => {
+      const ctx = use(SelectCtx)!;
+      return (
+        <button type="button" data-select-item={value} onClick={() => ctx.onValueChange(value)}>
+          {children}
+        </button>
+      );
+    },
+  };
+});
+
 const showItemInFolder = vi.fn().mockResolvedValue(undefined);
+const dispatch = vi.fn();
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: (...args: unknown[]) => dispatch(...args) },
+}));
+
+// The generated form's secret-clear confirm pulls the app dialog stack (and the panel
+// store behind it) into this suite; nothing here opens it.
+vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
+
 vi.mock("@/clients", () => ({
   systemClient: { showItemInFolder: (p: string) => showItemInFolder(p) },
 }));
@@ -346,6 +391,17 @@ describe("ProjectPluginsTab", () => {
     expect(pane.textContent).not.toContain("turned off as a folder");
   });
 
+  it("offers a staged plugin's activation in place of a switch that would read as on", async () => {
+    seed([projectPlugin({ state: "staged", muted: false })]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    await select("Acme Dashboard");
+    await screen.findByTestId("project-plugin-detail");
+    expect(screen.queryByTestId("project-plugin-mute-switch")).toBeNull();
+    expect(screen.getByRole("button", { name: "Activate plugin" })).toBeTruthy();
+  });
+
   it("hides Activate for a muted staged plugin, so the switch is the only way back", async () => {
     seed([projectPlugin({ state: "staged", muted: true })]);
     render(<ProjectPluginsTab />);
@@ -384,6 +440,48 @@ describe("ProjectPluginsTab", () => {
     await waitFor(() =>
       expect(pluginApi.setProjectPluginVisibility).toHaveBeenCalledWith("acme.tools", false)
     );
+  });
+
+  it("sends a forge plugin's settings to its own Code forge page instead of editing them here", async () => {
+    const settings = [{ id: "instanceUrl", type: "string" as const, label: "Instance URL" }];
+    pluginApi.list.mockResolvedValue([
+      installed({
+        manifest: {
+          name: "acme.forge",
+          version: "1.0.0",
+          displayName: "Acme Forge",
+          contributes: {
+            ...EMPTY_CONTRIBUTES,
+            settings,
+            forgeProviders: [
+              {
+                id: "acme",
+                name: "Acme",
+                matches: ["acme.test"],
+                slots: { settingsTab: "acme.settingsTab" },
+              },
+            ],
+          },
+        } as LoadedPluginInfo["manifest"],
+        instanceId: "acme.forge",
+      }),
+    ]);
+    seed([]);
+    const opened = vi.fn();
+    window.addEventListener("daintree:open-settings-tab", opened);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    await select("Acme Forge");
+    // Its own page guards changes this generic form can't (a token tied to the value).
+    expect(screen.queryByRole("textbox", { name: "Instance URL" })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Open Code forge" }));
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect((opened.mock.calls[0]![0] as CustomEvent).detail).toEqual({
+      tab: "code-forge",
+      subtab: "acme.forge.acme",
+    });
+    window.removeEventListener("daintree:open-settings-tab", opened);
   });
 
   it("clears the override rather than storing an explicit allow when re-enabling", async () => {
@@ -434,9 +532,9 @@ describe("ProjectPluginsTab", () => {
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
     await select("Acme Tools");
-    fireEvent.change(await screen.findByTestId("installed-plugin-visibility-default"), {
-      target: { value: "selected" },
-    });
+    const trigger = await screen.findByTestId("installed-plugin-visibility-default");
+    expect(trigger.getAttribute("aria-label")).toBe("Which projects show this plugin by default");
+    fireEvent.click(screen.getByRole("button", { name: "Only projects I turn it on in" }));
 
     await waitFor(() =>
       expect(pluginApi.setPluginVisibilityDefault).toHaveBeenCalledWith("acme.tools", true)

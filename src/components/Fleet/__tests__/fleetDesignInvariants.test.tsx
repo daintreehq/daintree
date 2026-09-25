@@ -388,8 +388,23 @@ describe("Fleet drafting preview invariants", () => {
     usePanelStore.setState({ focusedId: "p" });
     useFleetArmingStore.getState().armIds(["p", "live", "dead"]);
     render(<FleetDraftingPill />);
-    expect(screen.getByText(/Mirroring to 1 peer\b/)).toBeTruthy();
-    expect(screen.queryByText(/Mirroring to 2 peers/)).toBeNull();
+    expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).toMatch(
+      /Mirroring to 1 peer\b/
+    );
+    expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).not.toMatch(
+      /Mirroring to 2 peers/
+    );
+  });
+
+  it("never truncates the peer count when the chip runs out of width", () => {
+    seed([makeAgent("p"), makeAgent("q"), makeAgent("r")]);
+    usePanelStore.setState({ focusedId: "p" });
+    useFleetArmingStore.getState().armIds(["p", "q", "r"]);
+    render(<FleetDraftingPill />);
+    const trigger = screen.getByTestId("fleet-drafting-pill-trigger");
+    const truncating = Array.from(trigger.querySelectorAll(".truncate"));
+    expect(truncating.length).toBeGreaterThan(0);
+    for (const el of truncating) expect(el.textContent).not.toMatch(/\d+ peers?/);
   });
 
   it("with focus outside the fleet every armed peer still counts", () => {
@@ -400,7 +415,9 @@ describe("Fleet drafting preview invariants", () => {
     usePanelStore.setState({ focusedId: "outsider" });
     useFleetArmingStore.getState().armIds(["q", "r"]);
     render(<FleetDraftingPill />);
-    expect(screen.getByText(/Mirroring to 2 peers/)).toBeTruthy();
+    expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).toMatch(
+      /Mirroring to 2 peers/
+    );
   });
 
   it("the pill's reach excludes a peer the user has skipped, and stays mounted while the preview is open", () => {
@@ -471,35 +488,56 @@ describe("Fleet drafting preview invariants", () => {
 });
 
 describe("Saved fleet row invariants", () => {
-  it("a stale snapshot fades its recall content but never its delete control", () => {
-    const scope = {
-      kind: "snapshot" as const,
-      id: "s",
-      name: "old",
-      terminalIds: ["gone"],
-      createdAt: 0,
-    };
+  const scope = {
+    kind: "snapshot" as const,
+    id: "s",
+    name: "old",
+    terminalIds: ["gone"],
+    createdAt: 0,
+  };
+
+  it("a stale snapshot steps its name down through the text hierarchy, never opacity", () => {
     const { unmount } = render(
       <SavedFleetRow scope={scope} onRequestDelete={() => {}} count={0} isStale />
     );
     const staleRow = screen.getByTestId("fleet-saved-row");
-    const staleDelete = screen.getByTestId("fleet-saved-row-delete");
     // Stale means "cannot recall", never "menu item disabled" — Radix would dim
-    // and block every descendant, Delete included.
+    // and block the row, and with it the one action a dead snapshot still has.
     expect(staleRow.getAttribute("data-disabled")).toBeNull();
     expect(staleRow.className).not.toMatch(/opacity-/);
-    expect(staleDelete.className).not.toMatch(/opacity-/);
-    const fadedText = Array.from(staleRow.querySelectorAll("span")).filter((s) =>
-      /opacity-/.test(s.className)
-    );
-    expect(fadedText.length).toBeGreaterThan(0);
+    const staleName = screen.getByText("old").className;
+    expect(staleName).not.toMatch(/opacity-/);
     unmount();
 
     render(<SavedFleetRow scope={scope} onRequestDelete={() => {}} count={2} isStale={false} />);
-    expect(screen.getByTestId("fleet-saved-row-delete").className).toBe(staleDelete.className);
-    const delegate = vi.fn();
-    render(<SavedFleetRow scope={scope} onRequestDelete={delegate} count={0} isStale />);
-    fireEvent.click(screen.getAllByTestId("fleet-saved-row-delete")[1]!);
-    expect(delegate).toHaveBeenCalledWith("s");
+    expect(screen.getByText("old").className).not.toBe(staleName);
+  });
+
+  it("a saved fleet row holds one action and no nested controls, like every other menu row", () => {
+    for (const isStale of [true, false]) {
+      const { unmount } = render(
+        <SavedFleetRow
+          scope={scope}
+          onRequestDelete={() => {}}
+          count={isStale ? 0 : 1}
+          isStale={isStale}
+        />
+      );
+      const row = screen.getByTestId("fleet-saved-row");
+      expect(row.querySelectorAll("button, input, select, textarea, a[href]")).toHaveLength(0);
+      unmount();
+    }
+  });
+
+  it("Delete on any row reaches the delete request", () => {
+    for (const isStale of [true, false]) {
+      const delegate = vi.fn();
+      const { unmount } = render(
+        <SavedFleetRow scope={scope} onRequestDelete={delegate} count={1} isStale={isStale} />
+      );
+      fireEvent.keyDown(screen.getByTestId("fleet-saved-row"), { key: "Delete" });
+      expect(delegate).toHaveBeenCalledWith("s");
+      unmount();
+    }
   });
 });

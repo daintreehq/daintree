@@ -396,7 +396,6 @@ export function CrashRecoveryDialog({
             <div className="rounded-lg overflow-hidden" data-testid="recovery-error">
               <InlineStatusBanner
                 severity="error"
-                icon={AlertTriangle}
                 title="Recovery failed"
                 description={recoveryError}
                 animated={false}
@@ -676,7 +675,7 @@ function PanelRow({
         type="checkbox"
         checked={selected}
         onChange={() => onToggle(panel.id)}
-        className="accent-accent-primary h-3.5 w-3.5 shrink-0"
+        className="h-3.5 w-3.5 shrink-0"
         data-testid={`panel-checkbox-${panel.id}`}
       />
       <span className="text-text-secondary shrink-0">{getPanelIcon(panel.kind)}</span>

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GroupedVirtuoso, type GroupedVirtuosoHandle } from "react-virtuoso";
-import { Check, Folder, Search } from "lucide-react";
+import { Check, Folder } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { shouldVirtualizeFileList } from "@/lib/fileListWindowing";
 import { basename, dirname, join } from "@shared/utils/path";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SearchField } from "@/components/ui/SearchField";
 import {
   isFileRowMenuKey,
   openFileRowMenuFromKeyboard,
@@ -383,26 +384,25 @@ export function DiffFileSidebar({
       </div>
 
       <div className="shrink-0 px-2 py-1.5">
-        <div className="flex items-center gap-1.5 rounded border border-border-default bg-surface-canvas px-2 py-1 focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20">
-          <Search className="h-3 w-3 shrink-0 text-text-muted" />
-          <input
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-            onKeyDown={(event) => {
-              // Escape clears an active filter instead of bubbling to the
-              // dialog's escape stack and closing the whole workspace.
-              if (event.key === "Escape" && filter) {
-                event.preventDefault();
-                event.stopPropagation();
-                setFilter("");
-              }
-            }}
-            placeholder="Filter files"
-            aria-label="Filter files"
-            className="w-full bg-transparent text-xs text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
-            data-testid="diff-sidebar-filter"
-          />
-        </div>
+        <SearchField
+          size="compact"
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+          onClear={() => setFilter("")}
+          clearLabel="Clear file filter"
+          onKeyDown={(event) => {
+            // Escape clears an active filter instead of bubbling to the
+            // dialog's escape stack and closing the whole workspace.
+            if (event.key === "Escape" && filter) {
+              event.preventDefault();
+              event.stopPropagation();
+              setFilter("");
+            }
+          }}
+          placeholder="Filter files"
+          aria-label="Filter files"
+          data-testid="diff-sidebar-filter"
+        />
       </div>
 
       <div

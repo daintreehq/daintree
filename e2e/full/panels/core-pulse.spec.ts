@@ -8,7 +8,7 @@ import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import { openSettings } from "../../helpers/panels";
 
 async function expandProjectPulse(window: AppContext["window"]) {
-  const trigger = window.getByRole("button", { name: /show project activity/i });
+  const trigger = window.getByRole("button", { name: /^project pulse/i });
   await expect(trigger).toBeVisible({ timeout: T_LONG });
   await trigger.click();
   await expect(window.locator(SEL.pulse.heatmap)).toBeVisible({ timeout: T_LONG });
@@ -75,7 +75,7 @@ test.describe.serial("Core: Project Pulse", () => {
 
     await expect(window.locator(SEL.pulse.heatmap)).toHaveAttribute(
       "aria-label",
-      "Activity over the last 120 days",
+      "Activity over the last 120 days, one column per week",
       { timeout: T_MEDIUM }
     );
   });

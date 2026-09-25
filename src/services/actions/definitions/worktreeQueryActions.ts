@@ -63,6 +63,21 @@ const WAIT_UNTIL_READY_POLL_INTERVAL_MS = 500;
 /** States a wait stops on — every state that is not still in progress. */
 const SETTLED_SETUP_STATES = new Set(["ready", "failed", "timed-out", "needs-approval", "unknown"]);
 
+/**
+ * Same ceiling and for the same reason as the readiness wait: the renderer
+ * dispatch path times out at 30s. PR detection polls every 30s focused and
+ * every 2 minutes blurred, so several expired calls in a row are normal.
+ */
+const MAX_WAIT_FOR_PR_TIMEOUT_MS = 25_000;
+
+/**
+ * A local store read rather than a host round trip, so this can be tighter
+ * than the readiness poll at no cost.
+ */
+const WAIT_FOR_PR_POLL_INTERVAL_MS = 250;
+
+const MAX_WAIT_FOR_PR_TARGETS = 32;
+
 export function registerWorktreeQueryActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -384,4 +399,128 @@ export function registerWorktreeQueryActions(
       },
     })
   );
+
+  actions.set("worktree.waitForPullRequest", () =>
+    defineAction({
+      id: "worktree.waitForPullRequest",
+      title: "Wait for worktree pull request",
+      description:
+        "Wait until any given worktree has a detected pull request. Detection is a cached background poll: a PR seen, not a PR opened, and not proof its agent finished. Returns at once if one is already detected. A timeout is not a failure: call again without the worktrees that matched.",
+      category: "worktree",
+      kind: "query",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        worktreeIds: z
+          .array(z.string().min(1))
+          .min(1)
+          .max(MAX_WAIT_FOR_PR_TARGETS)
+          .describe(`Worktrees to wait on, 1 to ${MAX_WAIT_FOR_PR_TARGETS}.`),
+        timeoutMs: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_WAIT_FOR_PR_TIMEOUT_MS)
+          .optional()
+          .describe(
+            `Milliseconds to wait; 0 reads now. Default and max ${MAX_WAIT_FOR_PR_TIMEOUT_MS}.`
+          ),
+      }),
+      resultSchema: z.object({
+        worktrees: z
+          .array(
+            z.object({
+              worktreeId: z.string(),
+              prNumber: z.number().nullable(),
+              prUrl: z.string().nullable(),
+              prState: z.enum(["open", "merged", "closed", "declined"]).nullable(),
+            })
+          )
+          .describe("One per requested worktree, in order; PR fields null until detected."),
+        timedOut: z
+          .boolean()
+          .describe(
+            "True if no PR was detected in time. Detection pauses while the project is backgrounded."
+          ),
+      }),
+      mcpOutputSchema: true,
+      mcpAnnotations: {
+        readOnlyHint: true,
+        // A wait's answer depends on when it is asked.
+        idempotentHint: false,
+        destructiveHint: false,
+      },
+      run: async ({ worktreeIds, timeoutMs }) => {
+        // Captured once so a project switch mid-wait cannot redirect the read.
+        const store = getCurrentViewStore();
+        const budgetMs = Math.min(
+          timeoutMs ?? MAX_WAIT_FOR_PR_TIMEOUT_MS,
+          MAX_WAIT_FOR_PR_TIMEOUT_MS
+        );
+        const deadline = Date.now() + budgetMs;
+
+        // Ids seen in the store at any point in the wait. A row missing from
+        // the store is not proof the worktree is unknown — a create result and
+        // the store's update travel on unordered transports (see
+        // `fetchSetupStatus`) — so only the host may refuse an id, and only
+        // once the wait has nothing else to report.
+        const seen = new Set<string>();
+
+        for (;;) {
+          const { worktrees } = store.getState();
+          const rows = worktreeIds.map((worktreeId) => {
+            const worktree = worktrees.get(worktreeId);
+            if (worktree) seen.add(worktreeId);
+            // Absent here means not yet arrived, or deleted mid-wait. Neither
+            // has a PR to report, and neither should cost the sibling rows
+            // their answer.
+            //
+            // `linked` is the source of truth (#8452); the flat pr* fields can
+            // outlive a branch switch that cleared it. `linked: null` is that
+            // explicit clear, and it reads as "not detected" like absence does.
+            const pr = worktree?.linked?.pr;
+            return {
+              worktreeId,
+              prNumber: pr?.ref.number ?? null,
+              prUrl: pr?.url ?? null,
+              prState: pr?.state ?? null,
+            };
+          });
+          const detected = rows.some((row) => row.prNumber !== null);
+          const remaining = deadline - Date.now();
+          if (detected || remaining <= 0) {
+            if (!detected) await refuseIdsTheHostLacks(worktreeIds, seen, store);
+            return { worktrees: rows, timedOut: !detected };
+          }
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.min(WAIT_FOR_PR_POLL_INTERVAL_MS, remaining))
+          );
+        }
+      },
+    })
+  );
+}
+
+/**
+ * Refuse an id the store never showed during the wait, but only on the host's
+ * authoritative word. `gitBacked: null` is the host being unavailable or not
+ * yet classified, which says nothing about whether the worktree exists, so
+ * that answer lets the wait report normally and the caller call again.
+ */
+async function refuseIdsTheHostLacks(
+  worktreeIds: readonly string[],
+  seen: ReadonlySet<string>,
+  store: ReturnType<typeof getCurrentViewStore>
+): Promise<void> {
+  if (worktreeIds.every((id) => seen.has(id))) return;
+  const { worktrees: hostRows, gitBacked } = await worktreeClient.getAllWithStatus();
+  if (gitBacked === null) return;
+  const hostIds = new Set(hostRows.map((w) => w.id));
+  // Re-read the store: a row can arrive while the host read is in flight.
+  const current = store.getState().worktrees;
+  if (worktreeIds.some((id) => !seen.has(id) && !current.has(id) && !hostIds.has(id))) {
+    // Static, per the repo-wide rule: an error message never carries the
+    // rejected input back out.
+    throw new Error("Unknown worktree — the workspace host has no worktree with that id.");
+  }
 }

@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SearchField } from "@/components/ui/SearchField";
 import { KBD_CLASS, KbdChord } from "@/components/ui/Kbd";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { PALETTE_HEADER_ATTR } from "./paletteHeaderAttr";
@@ -62,11 +63,18 @@ export { KBD_CLASS };
  * one-off measurement, so a second surface that grows the same shape takes
  * this rather than inventing its own number.
  *
- * Three tiers, not a free width per palette — palettes open from the same
+ * `workspace` is the fourth, for a palette whose rows carry several named
+ * sections of their own — the worktree overview's identity, agents, changes
+ * and age — where each section needs room for a line of prose (an agent's
+ * task) rather than a glyph. At the overview tier those sections squeezed to
+ * glyph clusters and ellipses. Still a capped box, inside the 880-980px band
+ * data-heavy dialogs settle on, never a window-sized canvas.
+ *
+ * Four tiers, not a free width per palette — palettes open from the same
  * keyboard reflex and often in sequence, so unconstrained per-surface sizing
  * reads as the box jumping around rather than as a deliberate size.
  */
-export type PaletteSurfaceTier = "anchored" | "command" | "overview";
+export type PaletteSurfaceTier = "anchored" | "command" | "overview" | "workspace";
 
 /**
  * Tailwind needs each class present in source for the JIT compiler, so these
@@ -77,11 +85,20 @@ export const PALETTE_SURFACE_WIDTHS: Record<PaletteSurfaceTier, string> = {
   anchored: "w-[484px] max-w-[calc(100vw-2rem)]",
   command: "w-[608px] max-w-[calc(100vw-2rem)]",
   overview: "w-[672px] max-w-[calc(100vw-2rem)]",
+  workspace: "w-[880px] max-w-[calc(100vw-2rem)]",
 };
+
+/** Why the palette asked to close — for a consumer whose Escape is two-stage. */
+export type PaletteCloseReason = "escape" | "backdrop";
 
 export interface AppPaletteDialogProps {
   isOpen: boolean;
-  onClose: () => void;
+  /**
+   * Called for Escape and for a scrim click, with the reason. A consumer that
+   * treats the two differently reads it rather than inferring the source from
+   * a key flag, which cannot be ordered reliably against a later pointer task.
+   */
+  onClose: (reason?: PaletteCloseReason) => void;
   children: React.ReactNode;
   ariaLabel: string;
   /**
@@ -125,7 +142,8 @@ export function AppPaletteDialog({
   initialFocusRef,
   className,
 }: AppPaletteDialogProps) {
-  useEscapeStack(isOpen, onClose);
+  const closeOnEscape = useCallback(() => onClose("escape"), [onClose]);
+  useEscapeStack(isOpen, closeOnEscape);
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const autofocusRafRef = useRef<number | null>(null);
@@ -250,7 +268,7 @@ export function AppPaletteDialog({
 
   useLayoutEffect(() => {
     if (!isOpen) return;
-    const closeThis = () => onCloseRef.current();
+    const closeThis = () => onCloseRef.current("escape");
     const unregister = registerDialogEscapeBackstop(closeThis);
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.isComposing || e.repeat) return;
@@ -309,7 +327,7 @@ export function AppPaletteDialog({
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
       if (e.target === e.currentTarget) {
-        onClose();
+        onClose("backdrop");
       }
     },
     [onClose]
@@ -556,6 +574,17 @@ interface AppPaletteBodyProps {
    * arrow and Enter navigation stop working after Tab (#11431).
    */
   onNavigationKeyDown: React.KeyboardEventHandler<HTMLDivElement>;
+  /**
+   * Keep a pointer press on the list's non-interactive space from moving focus
+   * off the search field. For palettes whose rows are driven entirely from the
+   * input (aria-activedescendant): a click in the gap under a short result
+   * list otherwise parked focus on this region, where typing went nowhere and
+   * the input's own chords (the action palette's Alt+P / Alt+H) stopped
+   * working, while the footer went on advertising them. Presses on anything
+   * tabbable inside the body, and on the scrollbar, are left alone; keyboard
+   * Tab still reaches the region (see `tabIndex` below).
+   */
+  keepPointerFocusOnInput?: boolean;
 }
 
 AppPaletteDialog.Body = function AppPaletteBody({
@@ -571,7 +600,22 @@ AppPaletteDialog.Body = function AppPaletteBody({
   focusIndicator = "region",
   onNavigationKeyDown,
   scrollClassName = "p-2 space-y-1",
+  keepPointerFocusOnInput = false,
 }: AppPaletteBodyProps) {
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!keepPointerFocusOnInput) return;
+      const scroller = e.currentTarget;
+      // A press in the scrollbar gutter lands on the scroller itself, past its
+      // client width; leave native scrollbar dragging alone.
+      if (e.target === scroller && e.nativeEvent.offsetX > scroller.clientWidth) return;
+      const tabbable = e.target instanceof Element ? e.target.closest(TABBABLE_SELECTOR) : null;
+      if (tabbable && tabbable !== scroller) return;
+      e.preventDefault();
+    },
+    [keepPointerFocusOnInput]
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       // Only when the scroller itself owns focus. Palette bodies also host
@@ -594,6 +638,7 @@ AppPaletteDialog.Body = function AppPaletteBody({
       aria-label={ariaLabel}
       aria-activedescendant={activeDescendant}
       onKeyDown={handleKeyDown}
+      onPointerDown={handlePointerDown}
       className={cn(
         maxHeight,
         // Floor sized off the row rhythm, not a round number: `p-2` (16) + a
@@ -616,6 +661,11 @@ AppPaletteDialog.Body = function AppPaletteBody({
         focusIndicator === "region" || activeDescendant === undefined
           ? "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           : "focus:outline-hidden",
+        // Matches the ScrollShadow fade (`h-8`). Every palette scrolls its
+        // active row into view with `block: "nearest"`, which honours scroll
+        // padding — without it the row Enter will act on parks under the fade
+        // and reads as disabled.
+        "scroll-py-8",
         scrollClassName
       )}
     >
@@ -720,6 +770,20 @@ const SECONDARY_DROP_CLASSES = [
   "@max-[200px]/palette-footer:hidden",
 ];
 
+/**
+ * A row's title or label as it reads after "to" in a footer hint. Sentence
+ * case only drops the leading capital; a leading word that carries its own
+ * internal capitals or is an initialism ("GitHub", "CLI") is a name and keeps
+ * them. Lowercasing the whole string turned "Launch GitHub Copilot" into
+ * "launch github copilot".
+ */
+export function toHintPhrase(label: string): string {
+  const trimmed = label.trim();
+  const firstWord = trimmed.split(/\s/, 1)[0] ?? "";
+  if (/[A-Z]/.test(firstWord.slice(1))) return trimmed;
+  return trimmed.charAt(0).toLowerCase() + trimmed.slice(1);
+}
+
 export function PaletteFooterHints({ primaryHint, hints = [] }: PaletteFooterHintsProps) {
   return (
     <div className="@container/palette-footer w-full flex items-center justify-between gap-3">
@@ -741,79 +805,34 @@ export function PaletteFooterHints({ primaryHint, hints = [] }: PaletteFooterHin
   );
 }
 
-// The search box IS the palette, not a form field sitting inside one, so it
-// takes a recessed wash over the dialog surface rather than the standalone
-// `surface-input` fill. Alpha-based, so it reads the same over a dialog and
-// over the dock launcher's popover.
-//
-// The focus lift that pairs with it draws `selection-outline`, the same token
-// and the same strength `PALETTE_ROW_CLASS` uses for the selected row, so the
-// focused field and the selected row read as one treatment; the ring is that
-// colour again at half alpha, a halo around the border rather than a second
-// signal. Change them together. Neutral rather than accent (#11686): the row,
-// its old rail and this field were three accent signals in one focus region.
-// Tailwind needs the variants written out at each use site, so they live inline
-// below.
-const PALETTE_INPUT_SURFACE =
-  "bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)]";
-
-interface AppPaletteInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+interface AppPaletteInputProps extends Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "size" | "prefix"
+> {
   inputRef?: React.Ref<HTMLInputElement>;
   /**
-   * Optional leading adornment rendered inside the input's border, left of the
-   * editable text. Used by `ActionPalette` to surface a mode-prefix chip
-   * (e.g. `> Commands`). When present, the input loses its hardcoded left
-   * padding so the adornment sits flush with the inner edge.
+   * Optional leading adornment rendered inside the field, between the
+   * magnifier and the editable text. Used by `ActionPalette` to surface a
+   * mode-prefix chip (e.g. `> Commands`).
    */
   inputPrefix?: React.ReactNode;
 }
 
+/**
+ * The palette's search box: the shared search field at its palette size, so it
+ * is the same control as the Worktrees rail and the settings search, one tier
+ * larger. Its neutral focus edge is `selection-outline`, the token
+ * `PALETTE_ROW_CLASS` uses for the selected row's rail — the focused field and
+ * the selected row read as one treatment, so change them together. Neutral
+ * rather than accent (#11686): the field is focused whenever the palette is
+ * open, so accent here would be lit on every opening.
+ */
 AppPaletteDialog.Input = function AppPaletteInput({
-  className,
   inputRef,
   inputPrefix,
   ...props
 }: AppPaletteInputProps) {
-  if (inputPrefix) {
-    return (
-      <div
-        className={cn(
-          "flex w-full items-center gap-1.5 pl-2 pr-3 py-1.5",
-          PALETTE_INPUT_SURFACE,
-          // Neutral focus — see `PALETTE_INPUT_SURFACE`.
-          "focus-within:border-selection-outline focus-within:ring-1 focus-within:ring-selection-outline/50"
-        )}
-      >
-        {inputPrefix}
-        <input
-          ref={inputRef}
-          type="text"
-          className={cn(
-            "flex-1 min-w-0 bg-transparent px-0 py-0 text-sm",
-            "text-text-primary placeholder:text-text-placeholder",
-            "focus:outline-hidden focus:border-transparent focus:ring-0",
-            className
-          )}
-          {...props}
-        />
-      </div>
-    );
-  }
-  return (
-    <input
-      ref={inputRef}
-      type="text"
-      className={cn(
-        "w-full px-3 py-2 text-sm",
-        PALETTE_INPUT_SURFACE,
-        "text-text-primary placeholder:text-text-placeholder",
-        // Neutral focus — see `PALETTE_INPUT_SURFACE`.
-        "focus:outline-hidden focus:border-selection-outline focus:ring-1 focus:ring-selection-outline/50",
-        className
-      )}
-      {...props}
-    />
-  );
+  return <SearchField size="palette" inputRef={inputRef} prefix={inputPrefix} {...props} />;
 };
 
 interface AppPaletteEmptyProps {
@@ -948,3 +967,18 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
     </>
   );
 };
+
+/**
+ * The next step a no-match state names. Escape clears the query before it
+ * closes the palette, so the way back from "nothing matched" is one key, and
+ * saying so turns a dead end into an instruction. `what` is the population the
+ * cleared list will show ("all actions"); without it the hint says what the key
+ * does. `SearchablePalette` renders the generic form by default.
+ */
+export function PaletteNoMatchHint({ what }: { what?: string }) {
+  return (
+    <p className="mt-2 text-xs text-text-secondary">
+      Press <kbd className={KBD_CLASS}>Esc</kbd> {what ? `to see ${what}` : "to clear the search"}
+    </p>
+  );
+}

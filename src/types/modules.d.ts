@@ -153,6 +153,15 @@ declare module "react-diff-view" {
   export const Decoration: ComponentType<DecorationProps>;
 }
 
+// Untyped (no @types/babel__core installed). Only the call the React Compiler
+// test harness makes — src/components/Worktree/__tests__/compileWithReactCompiler.ts.
+declare module "@babel/core" {
+  export function transformSync(
+    code: string,
+    options: Record<string, unknown>
+  ): { code?: string | null } | null;
+}
+
 declare module "refractor" {
   export const refractor: any;
 }

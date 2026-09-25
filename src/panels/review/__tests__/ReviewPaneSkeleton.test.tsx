@@ -4,11 +4,11 @@ import { describe, expect, it } from "vitest";
 import { ReviewPaneSkeleton } from "../ReviewPaneSkeleton";
 
 describe("ReviewPaneSkeleton", () => {
-  it("renders with role=status and aria-busy", () => {
+  it("renders a polite status region named for the panel", () => {
     render(<ReviewPaneSkeleton />);
     const el = screen.getByRole("status");
     expect(el).toBeTruthy();
-    expect(el.getAttribute("aria-busy")).toBe("true");
+    expect(el.getAttribute("aria-live")).toBe("polite");
     expect(el.getAttribute("aria-label")).toBe("Loading review panel");
   });
 

@@ -428,22 +428,28 @@ type FocusRingAllowlistEntry = {
 
 const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
+    file: "src/components/Settings/PresetSelector.tsx",
+    fragment: "overflow-y-auto max-h-80 focus:outline-hidden",
+    reason:
+      "The preset listbox keeps DOM focus while aria-activedescendant names the active option, which PALETTE_ROW_CLASS draws as a fill plus a leading selection-outline rail — the same one-focus-owner model as the palettes; a ring on the listbox itself would be a second indicator around the whole list",
+  },
+  {
     file: "src/components/Worktree/views/WorktreePathPicker.tsx",
     fragment: "focus:outline-hidden disabled:opacity-50",
     reason:
       "Path input and its browse button are one compound control — the ring is painted once on the wrapper via has-[input:focus-visible], so an element-owned ring here would draw a second ring around the pair",
   },
   {
+    file: "src/components/Project/projectDialogFields.tsx",
+    fragment: "focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-50",
+    reason:
+      "The project dialogs' compound fields (location + browse, emoji + name) follow WorktreePathPicker: the ring is painted once on COMPOUND_FIELD via has-[input:focus-visible], switching to the error colour when invalid, so an element-owned ring would draw a second one inside it",
+  },
+  {
     file: "src/components/ui/PopoverSearchField.tsx",
     fragment: "h-10 min-w-0 flex-1 bg-transparent text-sm text-text-primary",
     reason:
       "The field is the popover's whole top strip, so its indicator is painted once on the wrapping label via focus-within — it has to span the panel's full width and take its rounded top corners, which a ring on the bare input cannot do (that ring is precisely what this component replaced)",
-  },
-  {
-    file: "src/components/Worktree/ReviewHub/FileSection.tsx",
-    fragment: "w-[104px] min-w-0 bg-transparent text-2xs",
-    reason:
-      "Section filter is a strip: the wrapper carries the border, focus-within and the forced-colors outline, so the bare input must not paint a second box inside it (that nested rectangle is exactly what #11984 removed)",
   },
   {
     file: "src/components/HelpPanel/HelpPanel.tsx",
@@ -459,7 +465,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   },
   {
     file: "src/components/ui/emoji-picker.tsx",
-    fragment: "relative flex-1 outline-hidden",
+    fragment: "min-h-0 flex-1 outline-hidden",
     reason:
       "Radix emoji-picker Viewport is a presentational container — focus lives on the inner search input",
   },
@@ -546,39 +552,11 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   // wrapper's ring is the only focus indication. The scanner can't see the
   // sibling JSX parent, so these get per-occurrence allowlists.
   {
-    file: "src/components/Settings/KeyboardShortcutsTab.tsx",
-    fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
-    reason:
-      "Parent shows focus: wrapper at line 230 has `focus-within:border-accent-primary focus-within:ring-1`",
-  },
-  {
-    file: "src/components/Settings/SettingsDialog.tsx",
-    fragment:
-      "settings-search-input flex-1 min-w-0 text-xs bg-transparent text-text-primary focus:outline-hidden",
-    reason:
-      "Parent shows focus: wrapper at line 578 has `focus-within:border-accent-primary focus-within:ring-1`",
-  },
-  {
     file: "src/components/FileViewer/FileViewerModal.tsx",
     fragment:
       "w-44 bg-transparent text-xs text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
     reason:
       "Parent shows focus: the diff search bar wrapper has `focus-within:border-accent-primary focus-within:ring-1`",
-  },
-  {
-    file: "src/components/FileViewer/DiffFileSidebar.tsx",
-    fragment:
-      "w-full bg-transparent text-xs text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
-    reason:
-      "Parent shows focus: the sidebar filter wrapper has `focus-within:border-accent-primary focus-within:ring-1`",
-  },
-  {
-    file: "src/panels/file/FilePane.tsx",
-    fragment:
-      "w-full bg-transparent text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
-    reason:
-      "Parent shows focus: the markdown file-picker wrapper has `focus-within:border-accent-primary focus-within:ring-1`",
   },
   {
     file: "src/components/Project/QuickRun.tsx",
@@ -587,36 +565,10 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Parent shows focus: wrapper at line 397 has `focus-within:border-daintree-accent/35 focus-within:ring-1`",
   },
   {
-    file: "src/components/ui/AppPaletteDialog.tsx",
-    fragment: "focus:outline-hidden focus:border-transparent focus:ring-0",
+    file: "src/components/Worktree/WorktreeCard/EnvironmentPopover.tsx",
+    fragment: "leading-relaxed text-text-primary outline-hidden",
     reason:
-      "Parent shows focus: the prefixed-input wrapper carries `focus-within:border-selection-outline focus-within:ring-1`.",
-  },
-  {
-    file: "src/components/Settings/ColorSchemePicker.tsx",
-    fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
-    reason: "Parent shows focus: wrapper at line 172 has `focus-within:border-accent-primary`",
-  },
-  {
-    file: "src/components/ThemeBrowser/ThemeBrowser.tsx",
-    fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
-    reason: "Parent shows focus: wrapper at line 477 has `focus-within:border-accent-primary`",
-  },
-  {
-    file: "src/components/Worktree/WorktreeSidebarSearchBar.tsx",
-    fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden",
-    reason:
-      "Parent shows focus: the field wrapper carries `has-[input:focus-visible]:outline outline-2 outline-accent-primary`. Moved off the alpha-accent border + 1px alpha ring, which measured 2.61:1 and 1.47:1 against their grounds.",
-  },
-  {
-    file: "src/components/Layout/LocalCommitsDropdown.tsx",
-    fragment:
-      "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-muted-foreground focus:outline-hidden",
-    reason:
-      "Parent shows focus: wrapper at line 437 has `focus-within:border-accent-primary focus-within:ring-1`",
+      "Parent shows focus: the output well wrapper carries `has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent-primary`; the scroller has no vertical padding of its own, so a ring on it would sit inside the wrapper's border.",
   },
 
   // ── Pre-existing focus-ring gaps surfaced by #8940 ───────────────────
@@ -624,20 +576,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   // suppress the default focus outline with no replacement. Documented
   // here for follow-up; each is a real keyboard-accessibility gap that
   // should be addressed in a separate cleanup PR.
-  {
-    file: "src/components/Settings/AgentSelectorDropdown.tsx",
-    fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
-    reason:
-      "PRE-EXISTING #8940: autoFocus filter input inside popover lacks a focus indicator — follow-up",
-  },
-  {
-    file: "src/components/Settings/ForgeProviderSelectorDropdown.tsx",
-    fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
-    reason:
-      "PRE-EXISTING #8940: autoFocus filter input inside popover lacks a focus indicator — follow-up",
-  },
   {
     file: "src/components/Settings/AgentScopeEditor/CustomPresetChrome.tsx",
     fragment:
@@ -677,12 +615,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     reason: "PRE-EXISTING #8940: command picker trigger button has no focus indicator — follow-up",
   },
   {
-    file: "plugins/builtin/github/renderer/components/CommitList.tsx",
-    fragment:
-      "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-muted-foreground focus:outline-hidden",
-    reason: "PRE-EXISTING #8940: autoFocus commit search input lacks a focus indicator — follow-up",
-  },
-  {
     file: "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
     fragment:
       "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden",
@@ -696,7 +628,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     file: "src/components/Layout/ChordIndicator.tsx",
     fragment: "focus:outline-hidden",
     reason:
-      "Command HUD search input is auto-focused for the HUD's entire lifetime (a modal, single-input command surface) — there is no ambiguous focus state to indicate, and the dark-glass panel is the focus surface.",
+      "Command HUD search input holds focus for the whole pending chord: it is focused once the panel mounts, and focus leaving it ends the chord — so there is never a focused-but-unmarked state to indicate, and the glass panel itself is the focus surface.",
   },
 ];
 

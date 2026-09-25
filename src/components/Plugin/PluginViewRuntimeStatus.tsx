@@ -19,7 +19,8 @@ const PluginViewRuntimeBanner = lazy(() =>
 
 /**
  * The host-owned half of a plugin panel: what the shell draws when the plugin's
- * backend, rather than its view, is the thing that went wrong (#12278).
+ * backend, rather than its view, is the thing that went wrong (#12278), or when
+ * the host stopped a view that kept asking to reload (#12609).
  *
  * Rendered OUTSIDE the plugin's ErrorBoundary and Suspense, and outside its
  * style root, so a crashed backend can't take its own error report down with it
@@ -28,7 +29,7 @@ const PluginViewRuntimeBanner = lazy(() =>
 export function PluginViewRuntimeStatus(props: PluginViewRuntimeStatusProps) {
   // The overwhelmingly common case, and the one that has to cost nothing: no
   // chunk is requested until a panel genuinely has something to say.
-  if (props.presentation.kind === "content") return null;
+  if (props.presentation.kind === "content" && !props.reloadBlocked) return null;
   return (
     // `null` while the chunk loads. This reports a state whose consequences the
     // user is already looking at, so a skeleton for the report itself would be

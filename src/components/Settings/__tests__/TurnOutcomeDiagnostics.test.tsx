@@ -49,14 +49,14 @@ describe("TurnOutcomeDiagnostics", () => {
     await waitFor(() => {
       expect(getTurnOutcomeRecords).toHaveBeenCalledTimes(1);
     });
-    await screen.findByText("Turn outcomes by class");
+    await screen.findByText(/Outcomes show up here/);
   });
 
   it("does not self-fetch when records are supplied (controlled)", async () => {
     render(<TurnOutcomeDiagnostics records={[]} />);
 
     // Controlled mode renders immediately without a loading round-trip.
-    await screen.findByText("Turn outcomes by class");
+    await screen.findByText(/Outcomes show up here/);
     expect(getTurnOutcomeRecords).not.toHaveBeenCalled();
   });
 
@@ -64,7 +64,7 @@ describe("TurnOutcomeDiagnostics", () => {
     render(<TurnOutcomeDiagnostics records={[sampleRecord]} />);
 
     // The turn count reflects the controlled prop, not an internal fetch.
-    await screen.findByText("(1 turns)");
+    await screen.findByRole("button", { name: /Outcomes by class\s*1 turn/ });
     expect(getTurnOutcomeRecords).not.toHaveBeenCalled();
   });
 
@@ -72,7 +72,7 @@ describe("TurnOutcomeDiagnostics", () => {
     const onRefresh = vi.fn().mockResolvedValue(undefined);
     render(<TurnOutcomeDiagnostics records={[]} onRefresh={onRefresh} />);
 
-    await screen.findByText("Turn outcomes by class");
+    await screen.findByText(/Outcomes show up here/);
     fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
 
     expect(onRefresh).toHaveBeenCalledTimes(1);
@@ -83,11 +83,11 @@ describe("TurnOutcomeDiagnostics", () => {
     const onRefresh = vi.fn().mockResolvedValue(undefined);
     render(<TurnOutcomeDiagnostics records={[sampleRecord]} onRefresh={onRefresh} />);
 
-    await screen.findByText("(1 turns)");
-    fireEvent.click(screen.getByRole("button", { name: "Clear log" }));
+    await screen.findByRole("button", { name: /Outcomes by class\s*1 turn/ });
+    fireEvent.click(screen.getByRole("button", { name: "Clear turn outcomes…" }));
 
     const dialog = await screen.findByRole("alertdialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Clear log" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clear turn outcomes" }));
 
     await waitFor(() => {
       expect(clearTurnOutcomeLog).toHaveBeenCalledTimes(1);
@@ -103,11 +103,11 @@ describe("TurnOutcomeDiagnostics", () => {
     const onRefresh = vi.fn().mockRejectedValue(new Error("refresh boom"));
     render(<TurnOutcomeDiagnostics records={[sampleRecord]} onRefresh={onRefresh} />);
 
-    await screen.findByText("(1 turns)");
-    fireEvent.click(screen.getByRole("button", { name: "Clear log" }));
+    await screen.findByRole("button", { name: /Outcomes by class\s*1 turn/ });
+    fireEvent.click(screen.getByRole("button", { name: "Clear turn outcomes…" }));
 
     const dialog = await screen.findByRole("alertdialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Clear log" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clear turn outcomes" }));
 
     await waitFor(() => {
       expect(clearTurnOutcomeLog).toHaveBeenCalledTimes(1);
@@ -125,12 +125,40 @@ describe("TurnOutcomeDiagnostics", () => {
     await waitFor(() => {
       expect(getTurnOutcomeRecords).toHaveBeenCalledTimes(1);
     });
-    await screen.findByText("Turn outcomes by class");
+    await screen.findByText(/Outcomes show up here/);
 
     fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
 
     await waitFor(() => {
       expect(getTurnOutcomeRecords).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("tones every outcome's share the same way, good or bad", async () => {
+    const make = (id: string, outcome: AssistantTurnRecord["outcome"]) => ({
+      ...sampleRecord,
+      id,
+      outcome,
+    });
+    render(
+      <TurnOutcomeDiagnostics
+        records={[
+          make("a", "answered"),
+          make("b", "answered"),
+          make("c", "tool-error"),
+          make("d", "agent-stuck"),
+        ]}
+      />
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /Outcomes by class/ }));
+
+    const shareCell = (label: string) => {
+      const row = screen.getByRole("rowheader", { name: label }).closest("tr")!;
+      return row.querySelectorAll("td")[1]!;
+    };
+    // A rate colour reads as a verdict; the share of answered turns is not a problem.
+    // Shares of 50%, 25% and 0% all read the same way.
+    expect(shareCell("Answered").className).toBe(shareCell("Tool error").className);
+    expect(shareCell("Answered").className).toBe(shareCell("Docs empty").className);
   });
 });

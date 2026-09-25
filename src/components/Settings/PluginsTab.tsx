@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Package, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -17,12 +18,16 @@ import { logError } from "@/utils/logger";
  */
 export function PluginsTab() {
   const [count, setCount] = useState<number | null>(null);
+  const [countFailed, setCountFailed] = useState(false);
   const showInlineLoading = useDeferredLoading(count === null, UI_DOHERTY_THRESHOLD);
   // Opt-in background update check (#10893). `null` until the main-process
   // electron-store value loads; renders OFF while loading so it never implies
   // the feature is on before we know.
   const [backgroundChecksEnabled, setBackgroundChecksEnabled] = useState<boolean | null>(null);
   const [backgroundChecksSaving, setBackgroundChecksSaving] = useState(false);
+  // A failed read is unknown, not Off: the switch would otherwise claim a state nobody read.
+  const [backgroundChecksFailed, setBackgroundChecksFailed] = useState(false);
+  const [backgroundChecksAttempt, setBackgroundChecksAttempt] = useState(0);
   const isMountedRef = useRef(true);
 
   // Re-pull the count when a plugin is installed or uninstalled anywhere so the
@@ -33,13 +38,15 @@ export function PluginsTab() {
       window.electron.plugin
         .list()
         .then((list) => {
-          if (!cancelled) setCount(list.length);
+          if (cancelled) return;
+          setCount(list.length);
+          setCountFailed(false);
         })
         .catch((err) => {
           if (cancelled) return;
-          // The manager surfaces load failures itself; the summary just stays
-          // quiet rather than showing a count it can't trust.
-          setCount(0);
+          // A count of zero would read as "nothing installed"; say it couldn't be read
+          // and let the manager, which surfaces the failure itself, take it from there.
+          setCountFailed(true);
           logError("Failed to load plugin count", err);
         });
     };
@@ -68,17 +75,19 @@ export function PluginsTab() {
     window.electron.plugin
       .getBackgroundUpdateCheckSettings()
       .then((result) => {
-        if (!cancelled) setBackgroundChecksEnabled(result.enabled);
+        if (cancelled) return;
+        setBackgroundChecksEnabled(result.enabled);
+        setBackgroundChecksFailed(false);
       })
       .catch((err) => {
         if (cancelled) return;
         logError("Failed to load plugin background update check setting", err);
-        setBackgroundChecksEnabled(false);
+        setBackgroundChecksFailed(true);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [backgroundChecksAttempt]);
 
   const handleBackgroundChecksToggle = async () => {
     if (backgroundChecksSaving || backgroundChecksEnabled === null) return;
@@ -115,47 +124,60 @@ export function PluginsTab() {
     void actionService.dispatch("app.pluginManager", undefined, { source: "user" });
   };
 
-  const summary =
-    count === null
+  const summary = countFailed
+    ? "Couldn't read the installed plugins — the plugin manager shows why"
+    : count === null
       ? null
       : count === 0
-        ? "No plugins installed yet."
-        : `${count} plugin${count === 1 ? "" : "s"} installed.`;
+        ? "No plugins installed yet"
+        : `${count} plugin${count === 1 ? "" : "s"} installed`;
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h3 className="text-sm font-medium text-text-primary">Plugins</h3>
-        <p className="text-xs text-text-secondary mt-1 select-text">
-          Extend Daintree with panels, commands, and integrations. Install, enable, and update
-          plugins from the plugin manager.
-        </p>
-      </div>
-
-      <div className="flex items-center justify-between gap-4 p-4 rounded-[var(--radius-lg)] border border-border-default">
-        <div className="flex items-center gap-3 min-w-0">
-          <Package className="w-5 h-5 text-daintree-text/70 shrink-0" aria-hidden="true" />
-          <div className="min-w-0 text-left">
-            <div className="text-sm font-medium text-text-primary">Plugin manager</div>
-            <div className="text-xs text-text-secondary mt-0.5 min-h-[1rem]">
-              {summary ?? (showInlineLoading ? "Loading…" : "")}
-            </div>
-          </div>
-        </div>
-        <Button variant="outline" size="sm" onClick={openManager} className="shrink-0">
-          Open plugin manager
-        </Button>
-      </div>
-
-      <SettingsSwitchCard
-        icon={RefreshCw}
-        title="Check for plugin updates in the background"
-        subtitle="Checks URL-installed plugins about once a day and adds an inbox notification when updates are available"
-        isEnabled={backgroundChecksEnabled ?? false}
-        onChange={() => void handleBackgroundChecksToggle()}
-        ariaLabel="Background plugin update checks"
-        disabled={backgroundChecksEnabled === null || backgroundChecksSaving}
-      />
+    <div className="space-y-8">
+      <SettingsSection
+        id="plugins-manage"
+        title="Installed plugins"
+        description="Extend Daintree with panels, commands, and integrations. Install, enable, and update plugins from the plugin manager."
+      >
+        <SettingsGroup>
+          <SettingsRow
+            label="Plugin manager"
+            description={
+              <span className="block min-h-[1rem]">
+                {summary ?? (showInlineLoading ? "Loading…" : "")}
+              </span>
+            }
+            control={
+              <Button variant="outline" size="sm" onClick={openManager}>
+                Open plugin manager
+              </Button>
+            }
+          />
+          {backgroundChecksFailed ? (
+            <SettingsRow
+              label="Check for plugin updates in the background"
+              description="Couldn't read whether this is on"
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setBackgroundChecksAttempt((n) => n + 1)}
+                >
+                  Retry
+                </Button>
+              }
+            />
+          ) : (
+            <SettingsSwitchCard
+              title="Check for plugin updates in the background"
+              subtitle="Checks URL-installed plugins about once a day and adds an inbox notification when updates are available"
+              isEnabled={backgroundChecksEnabled ?? false}
+              onChange={() => void handleBackgroundChecksToggle()}
+              disabled={backgroundChecksEnabled === null || backgroundChecksSaving}
+            />
+          )}
+        </SettingsGroup>
+      </SettingsSection>
     </div>
   );
 }

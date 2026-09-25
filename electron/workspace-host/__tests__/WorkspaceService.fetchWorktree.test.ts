@@ -347,6 +347,64 @@ describe("WorkspaceService.executeFetchForWorktree", () => {
     expect(setFetchState).not.toHaveBeenCalled();
   });
 
+  describe("remote presence stays with the worktree that read it", () => {
+    beforeEach(async () => {
+      const gitUtils = await import("../../utils/gitUtils.js");
+      vi.mocked(gitUtils.getGitCommonDir).mockResolvedValue("/repo/.git");
+    });
+
+    afterEach(async () => {
+      const gitUtils = await import("../../utils/gitUtils.js");
+      vi.mocked(gitUtils.getGitCommonDir).mockReturnValue(null as never);
+    });
+
+    // Siblings share `config` but not necessarily their effective config, so
+    // one worktree's "no remote" must not wipe a sibling's fetch history.
+    it("applies a no-remote answer to the triggering worktree only", async () => {
+      const triggering = createMonitor("/test/wt-local");
+      const sibling = createMonitor("/test/wt-sibling");
+      triggering.start();
+      sibling.start();
+      const siblingState = vi.spyOn(sibling, "setFetchState");
+      const triggeringState = vi.spyOn(triggering, "setFetchState");
+      vi.spyOn(service["fetchCoordinator"], "fetchForWorktree").mockResolvedValue({
+        status: "skipped",
+        skipReason: "no-remotes",
+        lastFetchedAt: null,
+        authFailed: false,
+        networkFailed: false,
+        hasRemote: false,
+      });
+
+      await service["executeFetchForWorktree"]("/test/wt-local", false);
+
+      expect(triggeringState).toHaveBeenCalledWith(null, false, false, false);
+      expect(siblingState).not.toHaveBeenCalled();
+    });
+
+    it("fans freshness out to siblings without telling them about remotes", async () => {
+      const triggering = createMonitor("/test/wt-a");
+      const sibling = createMonitor("/test/wt-b");
+      triggering.start();
+      sibling.start();
+      const siblingState = vi.spyOn(sibling, "setFetchState");
+      const triggeringState = vi.spyOn(triggering, "setFetchState");
+      vi.spyOn(service["fetchCoordinator"], "fetchForWorktree").mockResolvedValue({
+        status: "success",
+        remote: "origin",
+        lastFetchedAt: 5,
+        authFailed: false,
+        networkFailed: false,
+        hasRemote: true,
+      });
+
+      await service["executeFetchForWorktree"]("/test/wt-a", false);
+
+      expect(triggeringState).toHaveBeenCalledWith(5, false, false, true);
+      expect(siblingState).toHaveBeenCalledWith(5, false, false, undefined);
+    });
+  });
+
   it("returns undefined without spawning a fetch for an unknown worktree", async () => {
     const spy = vi.spyOn(service["fetchCoordinator"], "fetchForWorktree");
 

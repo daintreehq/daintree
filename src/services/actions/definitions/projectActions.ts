@@ -460,16 +460,45 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     argsSchema: z
       .object({
         path: z.string().optional(),
+        destination: z
+          .enum(["current", "new"])
+          .optional()
+          .describe(
+            "Where the project opens. `new` uses an empty or new window and leaves this one as it is; defaults to `current`. A window already showing the project is brought forward instead."
+          ),
       })
       .optional(),
     run: async (args: unknown) => {
-      const { path } = (args as { path?: string } | undefined) ?? {};
+      const { path, destination } =
+        (args as { path?: string; destination?: "current" | "new" } | undefined) ?? {};
       const trimmedPath = path?.trim();
+      if (destination === "new") {
+        await useProjectStore
+          .getState()
+          .addProjectByPath(trimmedPath ?? "", { disposition: "new" });
+        return;
+      }
       if (!trimmedPath) {
         await useProjectStore.getState().addProject();
         return;
       }
       await useProjectStore.getState().addProjectByPath(trimmedPath);
+    },
+  }));
+
+  // `project.add` with a new-window destination, as its own action: keybindings
+  // dispatch without arguments, so this is what one can be bound to (#12594).
+  actions.set("project.openInNewWindow", () => ({
+    id: "project.openInNewWindow",
+    title: "Open project in new window",
+    description:
+      "Pick a folder and open it in an empty or new window, leaving this window as it is",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      await useProjectStore.getState().addProjectByPath("", { disposition: "new" });
     },
   }));
 

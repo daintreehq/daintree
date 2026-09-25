@@ -229,13 +229,16 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
 
     await pushRateLimitBlocked(ctx.app);
 
-    await expect(window.getByRole("status", { name: /GitHub rate limit/ })).toBeVisible({
+    const pausedStatus = window
+      .getByRole("status")
+      .filter({ hasText: "GitHub requests are paused" });
+    await expect(pausedStatus).toBeVisible({
       timeout: T_MEDIUM,
     });
 
     // Clearing the block lifts the paused surface — the toolbar resumes.
     await pushRateLimitClear(ctx.app);
-    await expect(window.getByRole("status", { name: /GitHub rate limit/ })).not.toBeVisible({
+    await expect(pausedStatus).not.toBeVisible({
       timeout: T_MEDIUM,
     });
   });

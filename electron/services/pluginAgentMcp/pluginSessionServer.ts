@@ -24,7 +24,7 @@ export const PLUGIN_MCP_SESSION_SERVER_VERSION = "1.0.0";
  */
 export const MAX_CONCURRENT_PLUGIN_TOOL_CALLS = 16;
 
-/** Longest plugin-thrown error message relayed to the agent, in characters. */
+/** Longest tool-error message relayed to the agent, in characters. */
 const MAX_ERROR_MESSAGE_CHARS = 2_000;
 
 export interface PluginSessionServerOptions {
@@ -63,7 +63,11 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function toolError(message: string): CallToolResult {
-  return { content: [{ type: "text", text: message }], isError: true };
+  const text =
+    message.length > MAX_ERROR_MESSAGE_CHARS
+      ? `${message.slice(0, MAX_ERROR_MESSAGE_CHARS)}…`
+      : message;
+  return { content: [{ type: "text", text }], isError: true };
 }
 
 function sanitizeServerNamePart(value: string): string {
@@ -226,6 +230,20 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
         throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${toolName}`);
       }
 
+      // Checked before any plugin code runs, against the schema the agent was
+      // shown. Answered the way McpServer answers it — an InvalidParams error
+      // carried in a tool result rather than a protocol error, so the agent
+      // reads what was wrong and can correct the call.
+      const argsProblem = descriptor.checkInput(rawArgs);
+      if (argsProblem !== null) {
+        return toolError(
+          new McpError(
+            ErrorCode.InvalidParams,
+            `Input validation error: Invalid arguments for tool ${toolName}: ${argsProblem}`
+          ).message
+        );
+      }
+
       // Subscribed only after the roster was read, so the registration that
       // activation itself produced does not count as a change. A replaced or
       // dropped roster means the worker that owned this call has reloaded or
@@ -258,12 +276,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
         value = await Promise.race([invocation, aborted]);
       } catch (err) {
         if (controller.signal.aborted) return abortedResult();
-        const message = formatErrorMessage(err, "Tool call failed.");
-        return toolError(
-          message.length > MAX_ERROR_MESSAGE_CHARS
-            ? `${message.slice(0, MAX_ERROR_MESSAGE_CHARS)}…`
-            : message
-        );
+        return toolError(formatErrorMessage(err, "Tool call failed."));
       }
       // Settled, but after an abort: the late result answers a call that no
       // longer exists and is discarded.
@@ -297,6 +310,12 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       if (!isPlainObject(structured)) {
         return toolError(
           "The tool declares an output schema but returned a value that is not a JSON object."
+        );
+      }
+      const outputProblem = descriptor.checkOutput(structured);
+      if (outputProblem !== null) {
+        return toolError(
+          `The tool returned a result that does not match its output schema: ${outputProblem}`
         );
       }
       return { content: [{ type: "text", text }], structuredContent: structured };

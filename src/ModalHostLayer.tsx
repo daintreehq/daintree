@@ -1,5 +1,7 @@
 import { Suspense } from "react";
+import { DaintreeTourHost } from "@/components/Tour/DaintreeTourHost";
 import type { WorktreeState, Project, ProjectCreationIdentity } from "@shared/types";
+import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import type { UseQuickSwitcherReturn } from "./hooks/useQuickSwitcher";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
@@ -9,7 +11,6 @@ import type { UseProjectSwitcherPaletteReturn } from "./hooks/useProjectSwitcher
 import type { UseActionPaletteReturn } from "./hooks/useActionPalette";
 import type { UseWorktreePaletteReturn } from "./hooks/useWorktreePalette";
 import type { UseQuickCreatePaletteReturn } from "./hooks/useQuickCreatePalette";
-import type { WorktreeActions } from "./hooks/useWorktreeActions";
 import type { GettingStartedChecklistState } from "./hooks/app/useGettingStartedChecklist";
 import type { ReEntrySummaryState } from "./hooks/useReEntrySummary";
 import type { UseAgentLauncherReturn } from "./hooks/useAgentLauncher";
@@ -23,6 +24,7 @@ import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { usePilotStore } from "@/store/pilotStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
@@ -106,12 +108,8 @@ interface ModalHostLayerProps {
   closeWorktreeOverview: () => void;
   worktrees: WorktreeState[];
   isLoading: boolean;
-  focusedWorktreeId: string | null;
   selectWorktree: (id: string, options?: { source?: "user" | "focus" }) => void;
-  overviewWorktreeActions: WorktreeActions;
   availability: UseAgentLauncherReturn["availability"];
-  agentSettings: UseAgentLauncherReturn["agentSettings"];
-  homeDir: string | undefined;
   crossDiffDialog: { isOpen: boolean; initialWorktreeId: string | null };
   shouldMountCrossDiffDialog: boolean;
   closeCrossWorktreeDiff: () => void;
@@ -156,7 +154,11 @@ interface ModalHostLayerProps {
   closeCreateFolderDialog: () => void;
   cloneRepoDialogOpen: boolean;
   shouldMountCloneRepoDialog: boolean;
-  handleCloneSuccess: (clonedPath: string, identity?: ProjectCreationIdentity) => Promise<void>;
+  handleCloneSuccess: (
+    clonedPath: string,
+    identity?: ProjectCreationIdentity,
+    options?: { disposition?: ProjectOpenDisposition }
+  ) => Promise<void>;
   closeCloneRepoDialog: () => void;
   reEntrySummary: ReEntrySummaryState;
   gettingStarted: GettingStartedChecklistState;
@@ -201,12 +203,8 @@ export function ModalHostLayer({
   closeWorktreeOverview,
   worktrees,
   isLoading,
-  focusedWorktreeId,
   selectWorktree,
-  overviewWorktreeActions,
   availability,
-  agentSettings,
-  homeDir,
   crossDiffDialog,
   shouldMountCrossDiffDialog,
   closeCrossWorktreeDiff,
@@ -260,6 +258,7 @@ export function ModalHostLayer({
   // registry, a keybinding and the project switcher, none of which has a prop
   // path into this layer.
   const isPilotOpen = usePilotStore((s) => s.isOpen);
+  const hasScratch = useScratchStore((s) => s.currentScratch !== null);
 
   // Both palette activation paths (click and Enter) launch the same way, and
   // through the same seam the dock uses, so a kind can't behave differently
@@ -311,6 +310,7 @@ export function ModalHostLayer({
               results={quickSwitcher.results}
               totalResults={quickSwitcher.totalResults}
               selectedIndex={quickSwitcher.selectedIndex}
+              matchesById={quickSwitcher.matchesById}
               isLoading={quickSwitcher.isLoading}
               close={quickSwitcher.close}
               setQuery={quickSwitcher.setQuery}
@@ -632,14 +632,7 @@ export function ModalHostLayer({
               worktrees={worktrees}
               isLoading={isLoading}
               activeWorktreeId={activeWorktreeId}
-              focusedWorktreeId={focusedWorktreeId}
               onSelectWorktree={selectWorktree}
-              onOpenEditor={overviewWorktreeActions.handleOpenEditor}
-              onSaveLayout={undefined}
-              onLaunchAgent={overviewWorktreeActions.handleLaunchAgent}
-              agentAvailability={availability}
-              agentSettings={agentSettings}
-              homeDir={homeDir}
             />
           </Suspense>
         )}
@@ -954,12 +947,14 @@ export function ModalHostLayer({
           <Suspense fallback={null}>
             <LazyOnboardingFlow
               availability={availability}
+              hasWorkspace={currentProject !== null || hasScratch}
               onRefreshSettings={refreshSettings}
               onComplete={gettingStarted.notifyOnboardingComplete}
             />
           </Suspense>
         </ErrorBoundary>
       )}
+      {isStateLoaded && <DaintreeTourHost />}
       {currentProject !== null && gettingStarted.visible && gettingStarted.checklist && (
         <ErrorBoundary
           variant="component"

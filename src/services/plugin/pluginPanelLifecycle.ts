@@ -37,9 +37,50 @@ interface TrackedPanel {
   lastPhase: PluginPanelLifecyclePhase | null;
   /** Panel is gone; the entry lingers only until the pending flush drains. */
   removed: boolean;
+  /**
+   * When each plugin-initiated reload inside the current window was accepted,
+   * on the monotonic clock (#12609). Kept here rather than in the view host
+   * because the host is torn down by every temporary unmount, and a guard that
+   * forgot its history on a sibling maximize would not be a guard.
+   */
+  reloadTimes: number[];
+  /**
+   * The view asked to reload once too often and the host stopped it. One-way:
+   * the window expiring must not re-arm reloads, so only the user reloading
+   * the panel clears this. Separate from `renderFailed` because a commit
+   * clears that one automatically.
+   */
+  reloadBlocked: boolean;
 }
 
+/** Plugin-initiated reloads one panel may make in any rolling window (#12609). */
+export const VIEW_RELOAD_LIMIT = 3;
+export const VIEW_RELOAD_WINDOW_MS = 30_000;
+
+/** What the host decided about one plugin-initiated reload request. */
+export type ViewReloadAdmission =
+  /** Within budget; replace the attempt. */
+  | "accepted"
+  /** Over budget; the view is stopped until the user reloads the panel. */
+  | "blocked"
+  /** No live panel record to charge, so nothing to reload. */
+  | "refused";
+
 const tracked = new Map<string, TrackedPanel>();
+/**
+ * The mounted view hosts that can carry out the user's reload, per panel
+ * (#12611). A list rather than one slot because a StrictMode replay or an
+ * overlapping remount registers the new host before the old one's cleanup
+ * runs; the newest registration is the live one.
+ */
+const userReloadHandlers = new Map<string, Array<() => void>>();
+/**
+ * The view attempts that say they hold unsaved work, per panel (#12611). Owner
+ * tokens rather than a boolean so a setter held past its attempt can never
+ * clear the flag its replacement raised, and a set because two hosts of one
+ * panel can overlap: one leaving must not clear what the other still holds.
+ */
+const unsavedOwners = new Map<string, Set<object>>();
 let pending: PluginPanelLifecycleEvent[] = [];
 let flushScheduled = false;
 let nextMountToken = 1;
@@ -67,6 +108,8 @@ function ensureEntry(
       removal: new AbortController(),
       lastPhase: null,
       removed: false,
+      reloadTimes: [],
+      reloadBlocked: false,
     };
     tracked.set(panelId, entry);
   } else if (seed) {
@@ -91,12 +134,15 @@ function ensureEntry(
  * one rule covers every temporary-teardown case — sibling maximize, an inactive
  * dock tab, a cached project view — because all of them unmount the subtree,
  * which is precisely why they all aborted `disposeSignal` before.
+ *
+ * A view stopped for reloading too often reads as `render-failed` too: either
+ * way the panel has no working view until the user acts.
  */
 function effectivePhase(entry: TrackedPanel): PluginPanelLifecyclePhase {
   if (entry.removed) return "removed";
   if (entry.location === "trash") return "trashed";
   if (entry.location === "background") return "backgrounded";
-  if (entry.renderFailed) return "render-failed";
+  if (entry.renderFailed || entry.reloadBlocked) return "render-failed";
   return entry.mountTokens.size > 0 ? "mounted" : "hidden";
 }
 
@@ -201,6 +247,109 @@ export function clearViewRenderFailure(panelId: string): void {
 }
 
 /**
+ * Charge one plugin-initiated reload against the panel's budget (#12609).
+ *
+ * The first {@link VIEW_RELOAD_LIMIT} inside any rolling
+ * {@link VIEW_RELOAD_WINDOW_MS} are accepted; the next one blocks the panel,
+ * and a blocked panel refuses every request until
+ * {@link resetViewReloadBudget}. Never creates an entry: a panel the lifecycle
+ * service does not know, or one already removed, has nothing to reload.
+ */
+export function admitViewReload(
+  panelId: string,
+  now: number = performance.now()
+): ViewReloadAdmission {
+  const entry = tracked.get(panelId);
+  if (!entry || entry.removed) return "refused";
+  if (entry.reloadBlocked) return "blocked";
+  const recent = entry.reloadTimes.filter((at) => now - at < VIEW_RELOAD_WINDOW_MS);
+  if (recent.length >= VIEW_RELOAD_LIMIT) {
+    entry.reloadTimes = [];
+    entry.reloadBlocked = true;
+    settle(panelId, entry);
+    return "blocked";
+  }
+  recent.push(now);
+  entry.reloadTimes = recent;
+  return "accepted";
+}
+
+/** Whether the panel was stopped for reloading too often and still is. */
+export function isViewReloadBlocked(panelId: string): boolean {
+  return tracked.get(panelId)?.reloadBlocked === true;
+}
+
+/**
+ * The user reloaded the panel: forget its reload history and lift a block.
+ * The only way a block ends — neither time nor a backend restart clears it.
+ */
+export function resetViewReloadBudget(panelId: string): void {
+  const entry = tracked.get(panelId);
+  if (!entry) return;
+  entry.reloadTimes = [];
+  if (!entry.reloadBlocked) return;
+  entry.reloadBlocked = false;
+  settle(panelId, entry);
+}
+
+/**
+ * Register the mounted view host that performs the user's reload for
+ * `panelId`. Returns the matching unregister, which removes only this
+ * registration.
+ */
+export function registerUserViewReload(panelId: string, handler: () => void): () => void {
+  const handlers = userReloadHandlers.get(panelId) ?? [];
+  handlers.push(handler);
+  userReloadHandlers.set(panelId, handlers);
+  return () => {
+    const current = userReloadHandlers.get(panelId);
+    if (!current) return;
+    const index = current.lastIndexOf(handler);
+    if (index === -1) return;
+    current.splice(index, 1);
+    if (current.length === 0) userReloadHandlers.delete(panelId);
+  };
+}
+
+/**
+ * The user reloaded the panel (#12611). Hands the reload to the mounted view
+ * host when there is one and reports whether there was. Without one there is
+ * no view to discard, and lifting the budget is all a reload means: the next
+ * mount starts fresh, a stopped view included.
+ */
+export function requestUserViewReload(panelId: string): boolean {
+  const handlers = userReloadHandlers.get(panelId);
+  const handler = handlers?.[handlers.length - 1];
+  if (!handler) {
+    resetViewReloadBudget(panelId);
+    return false;
+  }
+  handler();
+  return true;
+}
+
+/**
+ * Record whether the view attempt identified by `owner` holds unsaved work.
+ * Clearing is owner-scoped: only the attempt that raised the flag can lower
+ * it, so a stale setter cannot clear its replacement's flag.
+ */
+export function setViewUnsavedChanges(panelId: string, owner: object, dirty: boolean): void {
+  const owners = unsavedOwners.get(panelId);
+  if (dirty) {
+    if (owners) owners.add(owner);
+    else unsavedOwners.set(panelId, new Set([owner]));
+    return;
+  }
+  if (!owners?.delete(owner)) return;
+  if (owners.size === 0) unsavedOwners.delete(panelId);
+}
+
+/** Whether the panel's live view attempt says it holds unsaved work. */
+export function hasViewUnsavedChanges(panelId: string): boolean {
+  return unsavedOwners.has(panelId);
+}
+
+/**
  * Reconcile the tracked set against the store.
  *
  * `entries` are the panels whose kind currently resolves to a plugin;
@@ -244,6 +393,7 @@ export function syncPluginPanels(
 
   for (const [panelId, entry] of tracked) {
     if (live.has(panelId) || entry.removed) continue;
+    unsavedOwners.delete(panelId);
     entry.removed = true;
     entry.lastPhase = "removed";
     enqueue(panelId, entry, "removed");
@@ -254,6 +404,8 @@ export function syncPluginPanels(
 /** Test seam — drops all tracked state without aborting or emitting. */
 export function resetPluginPanelLifecycleForTests(): void {
   tracked.clear();
+  userReloadHandlers.clear();
+  unsavedOwners.clear();
   pending = [];
   flushScheduled = false;
   nextMountToken = 1;

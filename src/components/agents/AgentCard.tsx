@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from "react";
+import type { ComponentType } from "react";
 import { cn } from "@/lib/utils";
 import { AGENT_DESCRIPTIONS, getAgentConfig, type AgentIconProps } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
@@ -9,10 +9,14 @@ import {
 } from "@shared/utils/agentAvailability";
 import type { AgentAvailabilityState, AgentCliDetail } from "@shared/types";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, ExternalLink } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RefreshCw, ExternalLink, TriangleAlert } from "lucide-react";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
-import { InstallBlock } from "@/components/Setup/InstallBlock";
+import { CopyableCommand } from "@/components/Setup/InstallBlock";
+import { extractInspectUrl } from "@/lib/agentInstall";
+import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 export interface AgentIdentity {
@@ -51,26 +55,13 @@ interface AgentCardOnboardingProps {
   compact?: boolean;
 }
 
-// --- Management mode ---
-
-interface AgentCardManagementProps {
-  mode: "management";
-  agentId: string;
-  actions?: ReactNode;
-  children: ReactNode;
-}
-
-export type AgentCardProps = AgentCardOnboardingProps | AgentCardManagementProps;
+export type AgentCardProps = AgentCardOnboardingProps;
 
 export function AgentCard(props: AgentCardProps) {
   const identity = resolveIdentity(props.agentId);
   if (!identity) return null;
 
-  if (props.mode === "onboarding") {
-    return <OnboardingCard identity={identity} {...props} />;
-  }
-
-  return <ManagementCard identity={identity} {...props} />;
+  return <OnboardingCard identity={identity} {...props} />;
 }
 
 function OnboardingCard({
@@ -94,11 +85,11 @@ function OnboardingCard({
         compact ? "py-2" : "py-2.5"
       )}
     >
-      <input
-        type="checkbox"
-        className="w-4 h-4 accent-accent-primary shrink-0"
+      {/* The house checkbox: checked paints in the text colour, because a
+          selection is membership and the accent is not spent on it. */}
+      <Checkbox
         checked={isChecked}
-        onChange={(e) => onToggle(agentId, e.target.checked)}
+        onCheckedChange={(checked) => onToggle(agentId, checked === true)}
         disabled={isSaving}
       />
       <AgentIdentityBlock
@@ -117,38 +108,10 @@ function OnboardingCard({
         {installed ? (
           <span className="text-2xs text-text-secondary font-medium">Installed</span>
         ) : (
-          <span className="text-2xs text-text-placeholder">Not installed</span>
+          <span className="text-2xs text-text-secondary">Not installed</span>
         )}
       </div>
     </label>
-  );
-}
-
-function ManagementCard({
-  identity,
-  actions,
-  children,
-}: AgentCardManagementProps & { identity: AgentIdentity }) {
-  const { name, color, Icon } = identity;
-
-  return (
-    <div className="rounded-[var(--radius-lg)] border border-border-default bg-surface p-4 space-y-4">
-      <div className="flex items-center justify-between pb-3 border-b border-border-default">
-        <div className="flex items-center gap-3">
-          <BrandMark brandColor={color}>
-            <Icon size={24} />
-          </BrandMark>
-          <div>
-            <h4 className="text-sm font-medium text-text-primary">{name} settings</h4>
-            <p className="text-xs text-text-secondary select-text">
-              Configure how {name.toLowerCase()} runs in terminals
-            </p>
-          </div>
-        </div>
-        {actions && <div className="flex items-center gap-2">{actions}</div>}
-      </div>
-      {children}
-    </div>
   );
 }
 
@@ -231,12 +194,19 @@ export function AgentInstallSection({
   // would be misleading, but we do want to show why it isn't runnable and
   // where it was found. "installed" covers the WSL cap.
   if (availability === "ready" && !authMissing) return null;
+  // Not part of CLI detection (the built-in assistant, say): there is nothing to
+  // install and no probe result to report, so a "Not installed" heading would be a guess.
+  if (availability === undefined && !isCliLoading) return null;
 
   if (isCliLoading) {
     return (
-      <div className="pt-4 border-t border-border-default">
-        <div className="text-xs text-text-secondary">Checking CLI availability...</div>
-      </div>
+      <SettingsSection
+        id="agents-installation"
+        title="Installation"
+        description="Checking CLI availability..."
+      >
+        {null}
+      </SettingsSection>
     );
   }
 
@@ -247,13 +217,18 @@ export function AgentInstallSection({
   const showWslNotice = availability === "installed";
   const showAuthNudge = authMissing;
 
+  // The title states what the probe found, so the section reads as a status line
+  // from its heading down — the same words the agent picker and inventory use.
   const headerLabel = blocked
     ? "Blocked"
     : showWslNotice
-      ? "Not launchable"
+      ? "Needs setup"
       : showAuthNudge
-        ? "Authentication"
-        : "Installation";
+        ? "No credentials detected"
+        : "Not installed";
+
+  const installCommandCount =
+    installBlocks?.reduce((n, block) => n + (block.commands?.length ?? 0), 0) ?? 0;
 
   const headerDescription = blocked
     ? `${agentName} CLI was found but couldn't run — check your security software or file permissions`
@@ -265,143 +240,170 @@ export function AgentInstallSection({
           // where we looked, and the state is launchable — the CLI resolves auth at run
           // time and may well just work.
           `${agentName} CLI found, but no credentials were detected — it may still launch, or ask you to sign in`
-        : `${agentName} CLI not found`;
+        : installCommandCount > 0
+          ? `Install the ${agentName} CLI with ${installCommandCount === 1 ? "the command" : "one of the commands"} below, then re-check`
+          : `The ${agentName} CLI isn't on your PATH. Install it, then re-check.`;
+
+  const openDocs = () => {
+    const url = agentConfig?.install?.docsUrl;
+    if (url) {
+      safeFireAndForget(window.electron.system.openExternal(url), {
+        context: "Opening agent install docs",
+      });
+    }
+  };
+
+  const openDocsButton = (
+    <Button size="sm" variant="outline" onClick={openDocs}>
+      <ExternalLink aria-hidden="true" />
+      Open install docs
+    </Button>
+  );
+
+  // A binary that was found needs a different fix than one that wasn't: offering to
+  // install it again would send the user to reinstall something already on disk. The
+  // commands stay for a missing CLI only; everything else keeps the diagnosis, the
+  // troubleshooting and the docs.
+  const binaryFound = isAgentInstalled(availability);
+  const hasBlocks = !binaryFound && !!installBlocks && installBlocks.length > 0;
+  const troubleshooting = agentConfig?.install?.troubleshooting ?? [];
+  const location = detail?.resolvedPath
+    ? detail.via === "wsl"
+      ? `Available via WSL (${detail.wslDistro ?? "distro"})`
+      : detail.via === "npm-global"
+        ? `npm global: ${detail.resolvedPath}`
+        : `Resolved path: ${detail.resolvedPath}`
+    : null;
 
   return (
-    <div
+    <SettingsSection
       id="agents-installation"
-      className="rounded-[var(--radius-lg)] border border-border-default bg-surface p-4 space-y-4"
-    >
-      <div className="pb-3 border-b border-border-default">
-        <div className="flex items-center justify-between">
-          <div>
-            <h5 className="text-sm font-medium text-text-primary">{headerLabel}</h5>
-            <p className="text-xs text-text-secondary select-text">{headerDescription}</p>
-          </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={onRefresh}
-            disabled={isRefreshingCli}
-            className="text-text-secondary hover:text-text-primary"
-          >
-            <SpinningIcon
-              icon={RefreshCw}
-              active={isRefreshingCli}
-              size={14}
-              wrapperClassName="mr-1.5"
-            />
-            Re-check
-          </Button>
-        </div>
-      </div>
-
-      {cliError && (
-        <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
-          <p className="text-xs text-status-error">
-            Re-check failed. Try again or restart the app.
-          </p>
-        </div>
-      )}
-
-      {detail && (detail.resolvedPath || detail.message) && (
-        <div
-          className={cn(
-            "px-3 py-2 rounded-[var(--radius-md)] border",
-            blocked
-              ? "bg-status-warning/10 border-status-warning/20"
-              : "bg-daintree-bg/50 border-daintree-border/50"
-          )}
-        >
-          {detail.resolvedPath && (
-            <div className="text-xs font-mono break-all text-text-secondary select-text">
-              {detail.via === "wsl"
-                ? `Available via WSL (${detail.wslDistro ?? "distro"})`
-                : detail.via === "npm-global"
-                  ? `npm global: ${detail.resolvedPath}`
-                  : `Resolved path: ${detail.resolvedPath}`}
-            </div>
-          )}
-          {detail.message && (
-            <div className="text-xs text-status-warning mt-1 select-text">{detail.message}</div>
-          )}
-        </div>
-      )}
-
-      {installBlocks && installBlocks.length > 0 ? (
-        <div className="space-y-3">
-          {installBlocks.map((block, blockIndex) => (
-            <InstallBlock key={blockIndex} block={block} />
-          ))}
-
-          {agentConfig?.install?.troubleshooting &&
-            agentConfig.install.troubleshooting.length > 0 && (
-              <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-                <div className="text-xs font-medium text-status-warning mb-1">Troubleshooting</div>
-                <ul className="space-y-0.5 text-xs text-text-secondary">
-                  {agentConfig.install.troubleshooting.map((tip, tipIndex) => (
-                    <li key={tipIndex}>
-                      {"• "}
-                      {tip}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-          <div className="px-3 py-2 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-daintree-border/50">
-            <p className="text-xs text-text-secondary select-text">
-              Warning: Review commands before running them in your terminal
-            </p>
-          </div>
-        </div>
-      ) : hasInstallConfig?.docsUrl ? (
-        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-border-default bg-surface text-center">
-          <p className="text-xs text-text-secondary mb-3">
-            No OS-specific install instructions available
-          </p>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              const url = agentConfig?.install?.docsUrl;
-              if (url) {
-                safeFireAndForget(window.electron.system.openExternal(url), {
-                  context: "Opening agent install docs",
-                });
-              }
-            }}
-          >
-            <ExternalLink size={14} />
-            Open install docs
-          </Button>
-        </div>
-      ) : (
-        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-border-default bg-surface text-center">
-          <p className="text-xs text-text-secondary">
-            No installation instructions configured for this agent
-          </p>
-        </div>
-      )}
-
-      {hasInstallConfig?.docsUrl && installBlocks && installBlocks.length > 0 && (
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => {
-            const url = agentConfig?.install?.docsUrl;
-            if (url) {
-              safeFireAndForget(window.electron.system.openExternal(url), {
-                context: "Opening agent install docs",
-              });
-            }
-          }}
-          className="w-full text-text-secondary hover:text-text-primary"
-        >
-          <ExternalLink size={14} />
-          View official documentation
+      title={headerLabel}
+      description={headerDescription}
+      action={
+        <Button size="sm" variant="outline" onClick={onRefresh} disabled={isRefreshingCli}>
+          <SpinningIcon icon={RefreshCw} active={isRefreshingCli} size={14} />
+          Re-check
         </Button>
-      )}
-    </div>
+      }
+    >
+      <SettingsGroup>
+        {cliError && (
+          <p
+            className="flex items-start gap-1.5 px-4 py-3 text-xs text-text-secondary"
+            role="alert"
+          >
+            <TriangleAlert
+              className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
+              aria-hidden="true"
+            />
+            <span>Re-check failed. Try again, or restart Daintree if it keeps failing.</span>
+          </p>
+        )}
+
+        {detail && (location || detail.message) && (
+          <SettingsRow
+            label="Detected CLI"
+            layout="stacked"
+            control={
+              <div className="grid gap-1">
+                {location && (
+                  <div className="text-xs font-mono break-all text-text-secondary select-text">
+                    {location}
+                  </div>
+                )}
+                {detail.message && (
+                  // Severity rides the glyph; the sentence stays body text so it holds
+                  // contrast on every theme.
+                  <div className="flex items-start gap-1.5 text-xs text-text-secondary select-text">
+                    <TriangleAlert
+                      className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
+                      aria-hidden="true"
+                    />
+                    <span>{detail.message}</span>
+                  </div>
+                )}
+              </div>
+            }
+          />
+        )}
+
+        {hasBlocks && (
+          <>
+            {installBlocks.map((block, blockIndex) => (
+              <SettingsRow
+                key={blockIndex}
+                label={block.label ?? `Install ${agentName}`}
+                layout="stacked"
+                description={
+                  block.steps && block.steps.length > 0 ? (
+                    <ol className="list-decimal list-inside space-y-1">
+                      {block.steps.map((step, i) => (
+                        <li key={i}>{step}</li>
+                      ))}
+                    </ol>
+                  ) : undefined
+                }
+                control={
+                  (block.commands && block.commands.length > 0) ||
+                  (block.notes && block.notes.length > 0) ? (
+                    <div className="grid gap-1.5">
+                      {block.commands?.map((cmd) => (
+                        <CopyableCommand
+                          key={cmd}
+                          command={cmd}
+                          inspectUrl={extractInspectUrl(cmd)}
+                        />
+                      ))}
+                      {block.notes && block.notes.length > 0 && (
+                        <div className="text-xs text-text-secondary space-y-0.5 select-text">
+                          {block.notes.map((note, i) => (
+                            <p key={i}>{note}</p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : undefined
+                }
+              />
+            ))}
+          </>
+        )}
+
+        {!binaryFound && !hasBlocks && (
+          <SettingsEmptyRow action={hasInstallConfig?.docsUrl ? openDocsButton : undefined}>
+            {hasInstallConfig?.docsUrl
+              ? "No install commands for this operating system — the docs have the steps"
+              : "No install instructions for this agent yet"}
+          </SettingsEmptyRow>
+        )}
+
+        {troubleshooting.length > 0 && (
+          <SettingsRow
+            label="Troubleshooting"
+            layout="stacked"
+            control={
+              <ul className="list-disc list-inside space-y-0.5 text-xs text-text-secondary select-text">
+                {troubleshooting.map((tip, tipIndex) => (
+                  <li key={tipIndex}>{tip}</li>
+                ))}
+              </ul>
+            }
+          />
+        )}
+
+        {hasInstallConfig?.docsUrl && (hasBlocks || binaryFound) && (
+          <SettingsRow
+            label="Official documentation"
+            description={
+              hasBlocks
+                ? "Review commands before running them in your terminal"
+                : `Setup, sign-in and permissions help for ${agentName}`
+            }
+            control={openDocsButton}
+          />
+        )}
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

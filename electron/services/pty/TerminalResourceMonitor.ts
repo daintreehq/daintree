@@ -37,6 +37,7 @@ export class TerminalResourceMonitor {
         cpuPercent: summary.cpuPercent,
         memoryKb: summary.memoryKb,
         breakdown: summary.breakdown,
+        processCount: summary.processCount,
       };
     }
 

@@ -88,6 +88,7 @@ export interface GitStatusPassHost {
   worktreeChanges: WorktreeChanges | null;
 
   clearPRInfo(): void;
+  clearLinked(): void;
   onBranchChanged(branch: string): void;
   onRemoved(): void;
   stop(): void;
@@ -338,8 +339,11 @@ export class GitStatusPass {
         // so the renderer never sees a frame with the new branch but the old
         // PR (#8079). PullRequestService still emits its own clear downstream;
         // by then this snapshot already has null PR fields, so that second
-        // emit collapses to a no-op via snapshotsEqual.
+        // emit collapses to a no-op via snapshotsEqual. `linked` goes too: it
+        // is the canonical PR, and that downstream clear names the old branch,
+        // so the branch guard drops it and the old PR would otherwise stick.
         this.host.clearPRInfo();
+        this.host.clearLinked();
         this.host.onBranchChanged(currentBranch);
       }
 

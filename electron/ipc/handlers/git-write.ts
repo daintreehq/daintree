@@ -278,8 +278,13 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
           // destination branch, which this push would add.
           let rangeBasis: GitPushCommitPreview["rangeBasis"];
           let revArgs: string[];
+          // The destination tip the range was measured from, when there is one.
+          // The same tip decides `behind`, so the two can never describe
+          // different states of the remote.
+          let destinationTip: string | null = null;
           if (hasRemoteRef) {
             rangeBasis = "tracked";
+            destinationTip = destination.remoteTrackingRef;
             revArgs = [`${destination.remoteTrackingRef}..${localRef}`];
           } else {
             const remoteTip = await readRemoteBranchTip(
@@ -296,6 +301,7 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
               // The remote named a tip this repository already holds, so the
               // delta is exact even without a tracking ref.
               rangeBasis = "tracked";
+              destinationTip = remoteTip;
               revArgs = [`${remoteTip}..${localRef}`];
             } else {
               // No answer, or a tip we cannot resolve. Fall back to the local
@@ -309,11 +315,19 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
           // rows and `total` describe the same set the push would write.
           const log = await git.log([`--max-count=${limit}`, ...revArgs]);
           const total = await countCommitsInRange(git, revArgs);
+          // Measured in the other direction: a destination holding commits the
+          // branch lacks refuses the push as non-fast-forward, and the approver
+          // should see that before approving rather than after.
+          const behind =
+            destinationTip === null
+              ? 0
+              : await countCommitsInRange(git, [`${localRef}..${destinationTip}`]);
 
           return {
             destination: { remote: destination.remote, branch: destination.branch },
             rangeBasis,
             total,
+            behind,
             commits: log.all.map((commit) => ({
               hash: commit.hash,
               date: commit.date,
@@ -388,6 +402,7 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
               commits: [],
               total: 0,
               behind: 0,
+              incoming: [],
             };
           }
 
@@ -415,9 +430,10 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
           // Measured separately and in the other direction: an empty replay set
           // is produced both by a branch level with its upstream and by one
           // purely behind it, and only the second is moved by the rebase.
-          const behind = await countCommitsInRange(git, [
-            `${localRef}..${upstream.remoteTrackingRef}`,
-          ]);
+          const incomingRange = `${localRef}..${upstream.remoteTrackingRef}`;
+          const behind = await countCommitsInRange(git, [incomingRange]);
+          const incomingLog =
+            behind > 0 ? await git.log([`--max-count=${limit}`, incomingRange]) : null;
 
           return {
             upstream: { remote: upstream.remote, branch: upstream.branch },
@@ -425,6 +441,12 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
             total,
             behind,
             commits: log.all.map((commit) => ({
+              hash: commit.hash,
+              date: commit.date,
+              message: commit.message,
+              author: commit.author_name,
+            })),
+            incoming: (incomingLog?.all ?? []).map((commit) => ({
               hash: commit.hash,
               date: commit.date,
               message: commit.message,
@@ -548,6 +570,28 @@ async function requireCleanTree(
   if (status.isClean() && status.conflicted.length === 0) return;
   const message =
     "This worktree has uncommitted changes. Commit or stash them before integrating the base branch.";
+  throw new GitOperationError(
+    "worktree-dirty",
+    encodeGitOperationErrorMessage("worktree-dirty", message),
+    { cwd, op, rawMessage: message }
+  );
+}
+
+/**
+ * Refuse a pull-rebase over uncommitted changes to tracked files — the ones git
+ * itself refuses to rebase over. Untracked files don't block a rebase, so unlike
+ * {@link requireCleanTree} they are not counted here.
+ */
+async function requireNoTrackedChanges(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "status">,
+  cwd: string,
+  op: string
+): Promise<void> {
+  const status = await git.status();
+  const tracked = status.files.filter((f) => !(f.index === "?" && f.working_dir === "?"));
+  if (tracked.length === 0) return;
+  const message =
+    "This worktree has uncommitted changes to tracked files. Commit or stash them before pulling.";
   throw new GitOperationError(
     "worktree-dirty",
     encodeGitOperationErrorMessage("worktree-dirty", message),
@@ -1236,7 +1280,27 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         "pull-rebase",
         "upstream"
       );
-      await git.pull(source.remote, source.branch, ["--rebase"]);
+      await requireNoOperationInProgress(git, payload.cwd, "pull-rebase");
+      await requireNoTrackedChanges(git, payload.cwd, "pull-rebase");
+      // The same pins the base rebase carries, for the same reason: each closes
+      // a gap between what the confirm previewed and what git would do under a
+      // user's config. `rebase.updateRefs` moves OTHER local branches pointing
+      // into the replayed range; `rebase.rebaseMerges` recreates the merges the
+      // preview's `--no-merges` replay set leaves out; `rebase.autoStash` would
+      // replay over the changes the check above just refused. `-c` rather than
+      // flags, because git ignores an unknown key where an unknown flag errors.
+      await git.raw([
+        "-c",
+        "rebase.updateRefs=false",
+        "-c",
+        "rebase.rebaseMerges=false",
+        "-c",
+        "rebase.autoStash=false",
+        "pull",
+        "--rebase=true",
+        source.remote,
+        source.branch,
+      ]);
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("git-push");
       }

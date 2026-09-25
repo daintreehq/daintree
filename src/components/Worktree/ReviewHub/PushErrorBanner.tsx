@@ -1,4 +1,7 @@
-import { AlertTriangle } from "lucide-react";
+import { useId } from "react";
+import { ChevronRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { cn } from "@/lib/utils";
 import { type PushBannerCta, type PushErrorState, getPushBannerConfig } from "./reviewHubUtils";
 
@@ -14,8 +17,19 @@ interface PushErrorBannerProps {
   onRetryPush: () => void;
   onPullRebase: () => void;
   onForcePush: () => void;
+  onDismiss: () => void;
 }
 
+/** A server-side rejection's output is the remote's own words; anything else is git's. */
+const SERVER_OUTPUT_REASONS = new Set(["hook-rejected", "push-rejected-policy"]);
+
+/**
+ * The push failure, in the same banner grammar as every other failure on this
+ * surface: an error glyph and wash, a neutral title and explanation, one
+ * recovery, and a dismiss. It used to be a bespoke amber strip whose explanation
+ * was set in the severity colour, which fell under 4.5:1 on the light themes and
+ * made the failure harder to read than the passive rail above it.
+ */
 export function PushErrorBanner({
   pushError,
   behindCount,
@@ -28,9 +42,17 @@ export function PushErrorBanner({
   onRetryPush,
   onPullRebase,
   onForcePush,
+  onDismiss,
 }: PushErrorBannerProps) {
+  const detailsId = useId();
   const config = getPushBannerConfig(pushError, behindCount, forgeProviderId);
   const canCollapse = config.detailPolicy === "collapse" && pushError.rawMessage.length > 0;
+  const outputLabel = SERVER_OUTPUT_REASONS.has(pushError.reason) ? "Server output" : "Git output";
+  // Announced once per failure. It reads only from the failure itself: a later
+  // `behindCount` or provider resolution restates the visible copy, and must not
+  // interrupt a second time as though the push had failed again.
+  const announcement = `Push failed. ${getPushBannerConfig(pushError).message}`;
+
   const dispatchCta = (cta: PushBannerCta) => {
     switch (cta.kind) {
       case "settings-forge":
@@ -47,80 +69,132 @@ export function PushErrorBanner({
         return;
     }
   };
-  const renderCta = (cta: PushBannerCta, isPrimary: boolean, key: string, isLoading: boolean) => (
-    <button
-      key={key}
-      type="button"
-      onClick={() => dispatchCta(cta)}
-      disabled={isLoading}
-      data-testid={isPrimary ? "review-hub-push-error-cta" : "review-hub-push-error-secondary-cta"}
-      data-cta-kind={cta.kind}
-      className={cn(
-        "inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs font-medium transition-colors",
-        "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-warning",
-        "disabled:opacity-50 disabled:cursor-not-allowed",
-        isPrimary
-          ? "bg-status-warning/20 hover:bg-status-warning/30 text-status-warning"
-          : "bg-filter-selected-bg-soft hover:bg-tint/[0.14] text-text-primary"
+
+  const primary = config.cta;
+  const secondary = config.secondaryCta;
+
+  // Rendered here rather than through the banner's `action` so each control keeps
+  // the test id and `data-cta-kind` the hub's callers key on. Same geometry as the
+  // banner's own action: `outline` at `sm`, leading the row.
+  //
+  // The destructive alternative is a ghost after the safe fix rather than a peer:
+  // the two used to render as matching pills, and the neutral one read as the
+  // louder of the pair. Its label's ellipsis says a confirm follows —
+  // `git.forcePushWithLease` owns that dialog.
+  const controls =
+    primary || secondary ? (
+      <>
+        {primary && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => dispatchCta(primary)}
+            loading={pullRebasing && primary.kind === "pull-rebase"}
+            disabled={pullRebasing && primary.kind !== "pull-rebase"}
+            // Forced colours strip the fill that sets the two apart and border
+            // every button alike; weight is left alone, so the safe fix keeps it.
+            className="forced-colors:font-semibold"
+            data-testid="review-hub-push-error-cta"
+            data-cta-kind={primary.kind}
+          >
+            {primary.label}
+          </Button>
+        )}
+        {secondary && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => dispatchCta(secondary)}
+            disabled={pullRebasing}
+            aria-haspopup={secondary.kind === "force-push" ? "dialog" : undefined}
+            data-testid="review-hub-push-error-secondary-cta"
+            data-cta-kind={secondary.kind}
+          >
+            {secondary.label}
+          </Button>
+        )}
+      </>
+    ) : undefined;
+
+  const code = forgeErrorCode ? (
+    <p
+      data-testid="review-hub-push-error-code"
+      className="mt-1 text-xs font-mono text-text-secondary"
+    >
+      {forgeErrorCode}
+    </p>
+  ) : null;
+
+  const details = canCollapse ? (
+    <div className="mt-1.5">
+      <button
+        type="button"
+        onClick={onToggleDetails}
+        data-testid="review-hub-push-error-toggle"
+        aria-expanded={showPushDetails}
+        aria-controls={detailsId}
+        className={cn(
+          "-ml-1 inline-flex items-center gap-1 h-6 px-1 rounded-[var(--radius-sm)]",
+          "text-xs font-medium text-text-secondary hover:text-text-primary",
+          "transition-colors duration-150 ease-out",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+        )}
+      >
+        <ChevronRight
+          className={cn(
+            "w-3.5 h-3.5 shrink-0 transition-transform duration-150 ease-out",
+            showPushDetails && "rotate-90"
+          )}
+          aria-hidden="true"
+        />
+        {outputLabel}
+      </button>
+      {showPushDetails && (
+        <pre
+          id={detailsId}
+          tabIndex={0}
+          aria-label={outputLabel}
+          data-testid="review-hub-push-error-details"
+          className={cn(
+            "mt-1 max-h-48 overflow-auto px-2.5 py-2 rounded-[var(--radius-sm)]",
+            "bg-overlay-subtle border border-divider",
+            "text-2xs leading-relaxed font-mono text-text-secondary whitespace-pre-wrap break-words",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+          )}
+        >
+          {pushError.rawMessage}
+        </pre>
       )}
-    >
-      {isLoading && cta.kind === "pull-rebase" ? "Pulling…" : cta.label}
-    </button>
-  );
+    </div>
+  ) : undefined;
+
   return (
-    <div
-      role="alert"
-      data-testid="review-hub-push-error"
-      data-reason={pushError.reason}
-      className="px-4 py-2 text-xs text-status-warning bg-status-warning/10 flex items-start gap-2 shrink-0"
-    >
-      <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-      <div className="flex-1 min-w-0">
-        <div>
-          <span className="font-medium">Push failed.</span> <span>{config.message}</span>
-        </div>
-        {forgeErrorCode && (
-          <div
-            data-testid="review-hub-push-error-code"
-            className="mt-1 text-3xs font-mono opacity-80"
-          >
-            {forgeErrorCode}
-          </div>
-        )}
-        {canCollapse && (
-          <div className="mt-1.5 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onToggleDetails}
-              data-testid="review-hub-push-error-toggle"
-              aria-expanded={showPushDetails}
-              className={cn(
-                "inline-flex items-center px-1.5 py-0.5 rounded",
-                "text-status-warning/80 hover:text-status-warning",
-                "text-3xs font-medium underline-offset-2 hover:underline transition-colors",
-                "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-warning"
-              )}
-            >
-              {showPushDetails ? "Hide details" : "Show details"}
-            </button>
-          </div>
-        )}
-        {canCollapse && showPushDetails && (
-          <pre
-            data-testid="review-hub-push-error-details"
-            className="mt-1 text-3xs font-mono whitespace-pre-wrap break-all opacity-70"
-          >
-            {pushError.rawMessage}
-          </pre>
-        )}
-        {(config.cta || config.secondaryCta) && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-2">
-            {config.cta && renderCta(config.cta, true, "primary", pullRebasing)}
-            {config.secondaryCta &&
-              renderCta(config.secondaryCta, false, "secondary", pullRebasing)}
-          </div>
-        )}
-      </div>
+    <div data-testid="review-hub-push-error" data-reason={pushError.reason}>
+      <span role="alert" className="sr-only" data-testid="review-hub-push-error-announcement">
+        {announcement}
+      </span>
+      {/* The visible banner is a plain region, not a live one: its controls, its
+          changing copy and the expanded output are read on arrival, never
+          pushed into the announcement. */}
+      <InlineStatusBanner
+        severity="error"
+        role="status"
+        ariaLive="off"
+        className="px-4"
+        title="Push failed"
+        description={config.message}
+        descriptionExtras={
+          code || details ? (
+            <>
+              {code}
+              {details}
+            </>
+          ) : undefined
+        }
+        onClose={onDismiss}
+        closeAriaLabel="Dismiss push failure"
+        trailingSlot={controls}
+      />
     </div>
   );
 }

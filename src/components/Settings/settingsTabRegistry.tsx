@@ -10,6 +10,7 @@ import {
   Mic,
   Package,
   PanelRight,
+  PanelTop,
   Keyboard,
   ScrollText,
   SquareTerminal,
@@ -19,6 +20,7 @@ import {
   Bell,
   KeyRound,
   Shield,
+  ArrowDownUp,
 } from "lucide-react";
 import { DaintreeIcon, FolderGit2, Plug, McpServerIcon, Workflow } from "@/components/icons";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
@@ -126,6 +128,7 @@ const importPluginsTab = () => import("./PluginsTab");
 const importDaintreeAssistantSettingsTab = () => import("./DaintreeAssistantSettingsTab");
 const importEnvironmentSettingsTab = () => import("./EnvironmentSettingsTab");
 const importPrivacyDataTab = () => import("./PrivacyDataTab");
+const importImportExportSettingsTab = () => import("./ImportExportSettingsTab");
 const importProjectGeneralTab = () => import("@/components/Project/GeneralTab");
 const importProjectContextTab = () => import("@/components/Project/ContextTab");
 const importProjectVariablesTab = () => import("@/components/Project/EnvironmentVariablesEditor");
@@ -192,6 +195,9 @@ const LazyEnvironmentSettingsTab = lazy(() =>
 );
 const LazyPrivacyDataTab = lazy(() =>
   importPrivacyDataTab().then((m) => ({ default: m.PrivacyDataTab }))
+);
+const LazyImportExportSettingsTab = lazy(() =>
+  importImportExportSettingsTab().then((m) => ({ default: m.ImportExportSettingsTab }))
 );
 const LazyProjectGeneralTab = lazy(() =>
   importProjectGeneralTab().then((m) => ({ default: m.GeneralTab }))
@@ -275,7 +281,7 @@ export const SETTINGS_REGISTRY = [
         id: "general-update-channel",
         subtab: "overview",
         subtabLabel: "Overview",
-        section: "Update channel",
+        section: "Updates",
         title: "Update channel",
         description: "Switch between stable and nightly update channels",
         keywords: ["update", "channel", "stable", "nightly", "releases"],
@@ -297,6 +303,30 @@ export const SETTINGS_REGISTRY = [
           "resume",
           "reopen",
           "projects",
+        ],
+      },
+      {
+        id: "general-window-opening",
+        subtab: "overview",
+        subtabLabel: "Overview",
+        section: "Opening folders",
+        title: "Open folders in a new window",
+        description:
+          "Choose whether a folder opened from your file manager or the command line, or picked in Daintree, gets a new window or replaces the current one.",
+        keywords: [
+          "folder",
+          "project",
+          "window",
+          "new window",
+          "current window",
+          "replace",
+          "dock",
+          "finder",
+          "explorer",
+          "file manager",
+          "cli",
+          "command line",
+          "open",
         ],
       },
       {
@@ -323,8 +353,8 @@ export const SETTINGS_REGISTRY = [
         id: "general-hibernation",
         subtab: "hibernation",
         subtabLabel: "Hibernation",
-        section: "Auto-hibernation",
-        title: "Auto-hibernation",
+        section: "Background projects",
+        title: "Hibernate inactive projects",
         description:
           "Automatically stop terminals and servers for inactive projects. Reduces system resource usage.",
         keywords: ["hibernate", "sleep", "inactive", "stop", "resources", "idle", "auto"],
@@ -333,8 +363,8 @@ export const SETTINGS_REGISTRY = [
         id: "general-hibernation-threshold",
         subtab: "hibernation",
         subtabLabel: "Hibernation",
-        section: "Auto-hibernation",
-        title: "Inactivity threshold",
+        section: "Background projects",
+        title: "Hibernate after",
         description: "How long before a project is hibernated: 12h, 24h, 48h, or 72h",
         keywords: ["hibernate", "threshold", "hours", "timeout", "inactivity"],
       },
@@ -342,8 +372,8 @@ export const SETTINGS_REGISTRY = [
         id: "general-idle-terminal-notify",
         subtab: "hibernation",
         subtabLabel: "Hibernation",
-        section: "Idle terminal notifications",
-        title: "Idle terminal notifications",
+        section: "Background projects",
+        title: "Notify me about idle terminals",
         description:
           "Notify when background project terminals have been idle past a threshold. Includes Close Them / Mute project actions.",
         keywords: ["idle", "notify", "terminal", "background", "reminder", "inactive", "close"],
@@ -352,8 +382,8 @@ export const SETTINGS_REGISTRY = [
         id: "general-idle-terminal-threshold",
         subtab: "hibernation",
         subtabLabel: "Hibernation",
-        section: "Idle terminal notifications",
-        title: "Idle threshold",
+        section: "Background projects",
+        title: "Remind after",
         description: "Minutes of inactivity before notifying: 30m, 1h, 2h, or 4h",
         keywords: ["idle", "threshold", "minutes", "notify", "inactivity", "background"],
       },
@@ -361,8 +391,8 @@ export const SETTINGS_REGISTRY = [
         id: "general-idle-background-auto-close",
         subtab: "hibernation",
         subtabLabel: "Hibernation",
-        section: "Auto-close idle projects",
-        title: "Auto-close idle projects",
+        section: "Background projects",
+        title: "Close idle projects automatically",
         description:
           "Reclaim memory from background projects that have no terminals and have been idle for a while",
         keywords: ["idle", "auto-close", "close", "memory", "background", "project", "reclaim"],
@@ -371,8 +401,8 @@ export const SETTINGS_REGISTRY = [
         id: "general-idle-background-threshold",
         subtab: "hibernation",
         subtabLabel: "Hibernation",
-        section: "Auto-close idle projects",
-        title: "Idle threshold",
+        section: "Background projects",
+        title: "Close after",
         description: "Minutes of inactivity before auto-closing: 15m, 30m, 1h, or 2h",
         keywords: ["idle", "threshold", "minutes", "auto-close", "memory", "background"],
       },
@@ -391,7 +421,7 @@ export const SETTINGS_REGISTRY = [
         subtabLabel: "Display",
         section: "Interface elements",
         title: "Developer tools",
-        description: "Show problems panel button in the toolbar",
+        description: "Show the Problems button in the toolbar",
         keywords: ["developer", "debug", "problems", "panel", "toolbar"],
       },
       {
@@ -489,7 +519,7 @@ export const SETTINGS_REGISTRY = [
         id: "appearance-color-scheme",
         subtab: "terminal",
         subtabLabel: "Terminal",
-        section: "Terminal color scheme",
+        section: "Color scheme",
         title: "Terminal color scheme",
         description: "Choose the terminal color scheme and palette",
         keywords: ["color", "scheme", "terminal", "colors", "palette", "theme"],
@@ -520,7 +550,7 @@ export const SETTINGS_REGISTRY = [
     scope: "global",
     group: "General",
     label: "Keyboard",
-    headerTitle: "Keyboard Shortcuts",
+    headerTitle: "Keyboard shortcuts",
     icon: <Keyboard className="w-4 h-4" />,
     importKind: "lazy",
     importer: importKeyboardShortcutsTab,
@@ -569,14 +599,14 @@ export const SETTINGS_REGISTRY = [
         id: "notifications-completed",
         section: "Agent notifications",
         title: "Agent completed notification",
-        description: "Show a notification when an agent finishes its task",
+        description: "Send an OS notification when an agent finishes its task",
         keywords: ["notification", "alert", "complete", "done", "agent", "finish"],
       },
       {
         id: "notifications-waiting",
         section: "Agent notifications",
         title: "Agent waiting for input",
-        description: "Show a notification when an agent needs input",
+        description: "Send an OS notification as soon as an agent needs input",
         keywords: ["notification", "waiting", "input", "agent", "prompt", "pause"],
       },
       {
@@ -584,7 +614,7 @@ export const SETTINGS_REGISTRY = [
         section: "Sound",
         title: "Notification sound",
         description:
-          "Play a sound when notifications fire. Choose from chime, ping, complete, waiting, or error sounds.",
+          "Play a sound when notifications fire. Choose from chime, ping, complete, waiting, error, or pulse sounds.",
         keywords: ["sound", "audio", "chime", "ping", "notification", "alert", "volume"],
       },
     ],
@@ -594,7 +624,7 @@ export const SETTINGS_REGISTRY = [
     id: "privacy",
     scope: "global",
     group: "General",
-    label: "Privacy & Data",
+    label: "Privacy & data",
     icon: <Shield className="w-4 h-4" />,
     importKind: "lazy",
     importer: importPrivacyDataTab,
@@ -623,7 +653,7 @@ export const SETTINGS_REGISTRY = [
       {
         id: "privacy-log-retention",
         subtab: "storage",
-        subtabLabel: "Data & Storage",
+        subtabLabel: "Data & storage",
         section: "Log retention",
         title: "Log retention",
         description: "Auto-prune log files older than 7, 30, or 90 days on startup",
@@ -632,7 +662,7 @@ export const SETTINGS_REGISTRY = [
       {
         id: "privacy-data-folder",
         subtab: "storage",
-        subtabLabel: "Data & Storage",
+        subtabLabel: "Data & storage",
         section: "Data folder",
         title: "Data folder",
         description: "View and open the app data folder in your file manager",
@@ -641,7 +671,7 @@ export const SETTINGS_REGISTRY = [
       {
         id: "privacy-clear-cache",
         subtab: "storage",
-        subtabLabel: "Data & Storage",
+        subtabLabel: "Data & storage",
         section: "Clear cache",
         title: "Clear cache",
         description: "Clear HTTP disk cache and code caches without affecting settings",
@@ -650,7 +680,7 @@ export const SETTINGS_REGISTRY = [
       {
         id: "privacy-reset-data",
         subtab: "storage",
-        subtabLabel: "Data & Storage",
+        subtabLabel: "Data & storage",
         section: "Reset all app data",
         title: "Reset all app data",
         description:
@@ -669,12 +699,41 @@ export const SETTINGS_REGISTRY = [
     ],
   } satisfies LazySettingsTabEntry,
 
+  {
+    id: "import-export",
+    scope: "global",
+    group: "General",
+    label: "Import & export",
+    icon: <ArrowDownUp className="w-4 h-4" />,
+    importKind: "lazy",
+    importer: importImportExportSettingsTab,
+    LazyComponent: LazyImportExportSettingsTab,
+    searchNavDescription: "Export your configuration to a file or import one from another machine",
+    searchNavKeywords: ["import", "export", "backup", "restore", "config", "configuration"],
+    sections: [
+      {
+        id: "import-export-config-export",
+        section: "Configuration file",
+        title: "Export configuration",
+        description: "Save your agents, shortcuts, theme, and other settings to a JSON file",
+        keywords: ["export", "backup", "config", "configuration", "save", "migrate", "transfer"],
+      },
+      {
+        id: "import-export-config-import",
+        section: "Configuration file",
+        title: "Import configuration",
+        description: "Replace matching settings with the values in an exported file",
+        keywords: ["import", "restore", "config", "configuration", "load", "migrate", "transfer"],
+      },
+    ],
+  } satisfies LazySettingsTabEntry,
+
   // ═══ Global — Terminal ═══
   {
     id: "terminal",
     scope: "global",
     group: "Terminal",
-    label: "Panel Grid",
+    label: "Panel grid",
     icon: <LayoutGrid className="w-4 h-4" />,
     importKind: "lazy",
     importer: importTerminalSettingsTab,
@@ -764,7 +823,7 @@ export const SETTINGS_REGISTRY = [
         id: "terminal-grid-layout",
         subtab: "layout",
         subtabLabel: "Layout",
-        section: "Grid layout strategy",
+        section: "Grid layout",
         title: "Grid layout strategy",
         description:
           "Control how panels arrange in the grid: automatic, fixed columns, or fixed rows",
@@ -825,7 +884,7 @@ export const SETTINGS_REGISTRY = [
     scope: "global",
     group: "Terminal",
     label: "Worktree",
-    headerTitle: "Worktree Paths",
+    headerTitle: "Worktree paths",
     icon: <FolderGit2 className="w-4 h-4" />,
     importKind: "lazy",
     importer: importWorktreeSettingsTab,
@@ -886,8 +945,10 @@ export const SETTINGS_REGISTRY = [
     scope: "global",
     group: "Terminal",
     label: "Toolbar",
-    headerTitle: "Toolbar Customization",
-    icon: <SettingsIcon className="w-4 h-4" />,
+    headerTitle: "Toolbar customization",
+    // Not the gear: that is project General's glyph, and global General's sliders
+    // already read as "settings". This is the strip along the top of the window.
+    icon: <PanelTop className="w-4 h-4" />,
     importKind: "lazy",
     importer: importToolbarSettingsTab,
     LazyComponent: LazyToolbarSettingsTab,
@@ -898,15 +959,22 @@ export const SETTINGS_REGISTRY = [
         id: "toolbar-left-buttons",
         section: "Left side buttons",
         title: "Left toolbar buttons",
-        description: "Drag to reorder, uncheck to hide left toolbar buttons",
+        description: "Reorder, move or hide left toolbar buttons",
         keywords: ["toolbar", "buttons", "left", "reorder", "customize", "hide"],
       },
       {
         id: "toolbar-right-buttons",
         section: "Right side buttons",
         title: "Right toolbar buttons",
-        description: "Drag to reorder, uncheck to hide right toolbar buttons",
+        description: "Reorder, move or hide right toolbar buttons",
         keywords: ["toolbar", "buttons", "right", "reorder", "customize", "hide"],
+      },
+      {
+        id: "toolbar-hidden-buttons",
+        section: "Not on the toolbar",
+        title: "Add buttons to the toolbar",
+        description: "Pin an agent or panel, promote a plugin button, or show a hidden button",
+        keywords: ["toolbar", "pin", "agent", "panel", "plugin", "show", "hidden", "add"],
       },
       {
         id: "toolbar-launcher",
@@ -931,7 +999,7 @@ export const SETTINGS_REGISTRY = [
     scope: "global",
     group: "Terminal",
     label: "Environment",
-    headerTitle: "Environment Variables",
+    headerTitle: "Environment variables",
     icon: <KeyRound className="w-4 h-4" />,
     importKind: "lazy",
     importer: importEnvironmentSettingsTab,
@@ -1083,10 +1151,19 @@ export const SETTINGS_REGISTRY = [
     ],
     sections: [
       {
+        id: "agents-inventory",
+        subtab: "general",
+        subtabLabel: "General",
+        section: "Agents",
+        title: "Installed agents",
+        description: "Which agents are installed, which need attention, and the setup wizard",
+        keywords: ["installed", "missing", "blocked", "credentials", "status", "setup", "wizard"],
+      },
+      {
         id: "agents-default-agent",
         subtab: "general",
         subtabLabel: "General",
-        section: "Global agent settings",
+        section: "All agents",
         title: "Default agent",
         description:
           'Agent used for the help dock button (⌘⇧H) and automated workflows ("What\'s Next?", onboarding, project explanations). Distinct from the Portal "Default new tab agent".',
@@ -1108,7 +1185,7 @@ export const SETTINGS_REGISTRY = [
         id: "agents-enable",
         subtab: "claude",
         subtabLabel: "Claude",
-        section: "Agent runtime settings",
+        section: "Launching",
         title: "Enable / disable agent",
         description: "Enable or disable individual CLI agents",
         keywords: ["agent", "enable", "disable", ...BUILT_IN_AGENT_IDS, "select"],
@@ -1117,7 +1194,7 @@ export const SETTINGS_REGISTRY = [
         id: "agents-skip-permissions",
         subtab: "claude",
         subtabLabel: "Claude",
-        section: "Agent runtime settings",
+        section: "Launch preset",
         title: "Skip permissions",
         description: "Auto-approve all agent actions without confirmation prompts",
         keywords: [
@@ -1135,7 +1212,7 @@ export const SETTINGS_REGISTRY = [
         id: "agents-inline-mode",
         subtab: "claude",
         subtabLabel: "Claude",
-        section: "Agent runtime settings",
+        section: "Launch preset",
         title: "Alt-screen mode",
         description: "Choose inline rendering or the CLI's full-screen TUI per agent",
         keywords: ["inline", "mode", "tui", "fullscreen", "alt screen", "resize", "tty"],
@@ -1144,7 +1221,7 @@ export const SETTINGS_REGISTRY = [
         id: "agents-clipboard",
         subtab: "gemini",
         subtabLabel: "Gemini",
-        section: "Agent runtime settings",
+        section: "Launching",
         title: "Share clipboard directory",
         description: "Allow Gemini to read pasted clipboard images",
         keywords: ["clipboard", "images", "share", "gemini", "paste", "screenshot"],
@@ -1153,7 +1230,7 @@ export const SETTINGS_REGISTRY = [
         id: "agents-custom-args",
         subtab: "claude",
         subtabLabel: "Claude",
-        section: "Agent runtime settings",
+        section: "Launch preset",
         title: "Custom arguments",
         description: "Extra CLI flags appended when launching agents",
         keywords: ["args", "arguments", "flags", "cli", "custom", "launch", "options"],
@@ -1162,9 +1239,10 @@ export const SETTINGS_REGISTRY = [
         id: "agents-installation",
         subtab: "claude",
         subtabLabel: "Claude",
-        section: "Installation",
+        section: "Not installed",
         title: "Agent installation",
-        description: "Install and set up CLI agents. Run setup wizard to install.",
+        description:
+          "Install commands, detected path and troubleshooting for an agent that isn't ready",
         keywords: ["install", "setup", "wizard", "cli", "download", "npm", "brew"],
       },
     ],
@@ -1174,8 +1252,8 @@ export const SETTINGS_REGISTRY = [
     id: "code-forge",
     scope: "global",
     group: "Integrations",
-    label: "Code Forge",
-    headerTitle: "Code Forge",
+    label: "Code forge",
+    headerTitle: "Code forge",
     icon: <GitBranch className="w-4 h-4" />,
     importKind: "lazy",
     importer: importCodeForgeSettingsTab,
@@ -1332,7 +1410,7 @@ export const SETTINGS_REGISTRY = [
     id: "voice",
     scope: "global",
     group: "Integrations",
-    label: "Voice Input",
+    label: "Voice input",
     icon: <Mic className="w-4 h-4" />,
     importKind: "lazy",
     importer: importVoiceInputSettingsTab,
@@ -1411,7 +1489,7 @@ export const SETTINGS_REGISTRY = [
     scope: "global",
     group: "Integrations",
     label: "Portal",
-    headerTitle: "Portal Links",
+    headerTitle: "Portal links",
     icon: <PanelRight className="w-4 h-4" />,
     importKind: "lazy",
     importer: importPortalSettingsTab,
@@ -1447,7 +1525,7 @@ export const SETTINGS_REGISTRY = [
     id: "mcp",
     scope: "global",
     group: "Integrations",
-    label: "MCP Server",
+    label: "MCP server",
     icon: <McpServerIcon className="w-4 h-4" />,
     importKind: "lazy",
     importer: importMcpServerSettingsTab,
@@ -1753,7 +1831,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:automation",
     scope: "project",
     group: "Project",
-    label: "Worktree Setup",
+    label: "Worktree setup",
     // Not GitBranch: project Code Forge already uses it, and two sections in the same
     // nav list sharing one glyph makes the icon useless for telling them apart.
     icon: <GitBranchPlus className="w-4 h-4" />,
@@ -1803,7 +1881,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:code-forge",
     scope: "project",
     group: "Project",
-    label: "Code Forge",
+    label: "Code forge",
     icon: <GitBranch className="w-4 h-4" />,
     importKind: "lazy",
     importer: importProjectCodeForgeTab,
@@ -1864,29 +1942,29 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
     sections: [
       {
         id: "project-name",
-        section: "Project Identity",
-        title: "Project Name",
+        section: "Project identity",
+        title: "Project name",
         description: "Display name for the project",
         keywords: ["name", "title", "label"],
       },
       {
         id: "project-dev-server",
-        section: "Dev Server",
-        title: "Dev Server Command",
+        section: "Dev server",
+        title: "Dev server command",
         description: "Command to start the development server for live preview",
         keywords: ["dev", "server", "preview", "start", "command"],
       },
       {
         id: "project-agent-integrations",
         section: "Agent integrations",
-        title: "Keep Workspace Resident",
+        title: "Keep workspace resident",
         description: "Hold this project's view in the cache so a bound MCP session stays reachable",
         keywords: ["resident", "mcp", "cache", "evict", "keep", "warm", "tier"],
       },
       {
         id: "project-in-repo-settings",
-        section: "In-Repo Settings",
-        title: "In-Repo Settings",
+        section: "In-repo settings",
+        title: "In-repo settings",
         description: "Store project settings in the repository for team sharing",
         keywords: ["repo", "repository", "shared", "team", "daintree.json"],
       },
@@ -1899,15 +1977,15 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
     sections: [
       {
         id: "project-excluded-paths",
-        section: "Excluded Paths",
-        title: "Excluded Paths",
+        section: "Excluded paths",
+        title: "Excluded paths",
         description: "Paths to exclude from context tree and file operations",
         keywords: ["exclude", "ignore", "paths", "gitignore", "filter"],
       },
       {
         id: "project-copy-tree",
-        section: "Copy Tree",
-        title: "Copy Tree Settings",
+        section: "Copy tree",
+        title: "Copy tree settings",
         description:
           "Configure context size limits, file size limits, and include/exclude patterns",
         keywords: ["copy", "tree", "context", "size", "limit", "include", "exclude"],
@@ -1921,15 +1999,15 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
     sections: [
       {
         id: "project-env-vars",
-        section: "Environment Variables",
-        title: "Environment Variables",
+        section: "Environment variables",
+        title: "Environment variables",
         description: "Project-specific environment variables injected into terminals",
         keywords: ["env", "environment", "variables", "secrets", "inject"],
       },
     ],
   },
   "project:automation": {
-    tabLabel: "Worktree Setup",
+    tabLabel: "Worktree setup",
     searchNavDescription:
       "Configure worktree paths, run commands, branch prefix, and terminal defaults",
     searchNavKeywords: [
@@ -1944,22 +2022,31 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
     sections: [
       {
         id: "project-run-commands",
-        section: "Run Commands",
-        title: "Run Commands",
+        section: "Run commands",
+        title: "Run commands",
         description: "Named commands to run in worktree terminals on creation",
         keywords: ["run", "commands", "startup", "init", "worktree"],
       },
       {
         id: "project-branch-prefix",
-        section: "Branch Prefix",
-        title: "Branch Prefix",
+        section: "Branch prefix",
+        title: "Branch prefix",
         description: "Automatic prefix for new branch names (none, username, or custom)",
         keywords: ["branch", "prefix", "username", "git", "naming"],
       },
       {
+        id: "project-worktree-path-pattern",
+        section: "Worktree path pattern",
+        title: "Path pattern",
+        description: "Where this project's new worktrees are created, built from path variables",
+        keywords: ["worktree", "path", "pattern", "location", "directory", "folder", "variables"],
+      },
+      {
+        // Id kept for deep links; the names follow the heading the page renders, which
+        // is what a result with no DOM section lands by.
         id: "project-terminal-settings",
-        section: "Terminal Settings",
-        title: "Terminal Settings",
+        section: "Terminal defaults",
+        title: "Terminal defaults",
         description: "Project-specific shell, shell args, working directory, and scrollback",
         keywords: ["terminal", "shell", "bash", "zsh", "scrollback", "cwd"],
       },
@@ -1968,7 +2055,7 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         // backward-compatible deep links); the entry is a regular section
         // surfaced inside the Worktree Setup tab, not a separate project tab.
         id: "tab-nav-project:environments",
-        section: "Resource Environments",
+        section: "Resource environments",
         title: "Resources",
         description: "Remote resource definitions and default worktree mode",
         keywords: ["project", "resources", "environments", "remote", "docker", "akash", "worktree"],
@@ -1982,7 +2069,7 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
     sections: [
       {
         id: "project-default-recipe",
-        section: "Terminal Recipes",
+        section: "Terminal recipes",
         title: "Default worktree recipe",
         description: "Pin a recipe to run automatically when creating new worktrees",
         keywords: ["default", "recipe", "worktree", "auto", "launch", "startup", "pin"],
@@ -2018,7 +2105,7 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
     ],
   },
   "project:code-forge": {
-    tabLabel: "Code Forge",
+    tabLabel: "Code forge",
     searchNavDescription: "Per-project forge remote configuration for issues, PRs, and pulse data",
     searchNavKeywords: [
       "project",
@@ -2034,8 +2121,8 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
     sections: [
       {
         id: "project-code-forge-remote",
-        section: "Forge Remote",
-        title: "Forge Remote",
+        section: "Forge remote",
+        title: "Forge remote",
         description: "Select which git remote to use for forge integration",
         keywords: [
           "forge",
@@ -2082,8 +2169,9 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   assistant: <DaintreeIcon className="w-5 h-5 text-text-secondary" size={20} />,
   "code-forge": <GitBranch className="w-5 h-5 text-text-secondary" />,
   portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
-  toolbar: <SettingsIcon className="w-5 h-5 text-text-secondary" />,
+  toolbar: <PanelTop className="w-5 h-5 text-text-secondary" />,
   notifications: <Bell className="w-5 h-5 text-text-secondary" />,
+  "import-export": <ArrowDownUp className="w-5 h-5 text-text-secondary" />,
   integrations: <Blocks className="w-5 h-5 text-text-secondary" />,
   voice: <Mic className="w-5 h-5 text-text-secondary" />,
   mcp: <McpServerIcon className="w-5 h-5 text-text-secondary" />,

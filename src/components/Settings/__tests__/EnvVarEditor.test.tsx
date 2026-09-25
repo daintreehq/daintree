@@ -18,6 +18,7 @@ import { EnvVarEditor } from "../EnvVarEditor";
 
 vi.mock("lucide-react", () => ({
   X: () => <span data-testid="x-icon" />,
+  Trash2: () => <span data-testid="trash-icon" />,
   Eye: () => <span data-testid="eye-icon" />,
   EyeOff: () => <span data-testid="eye-off-icon" />,
   Plus: () => <span data-testid="plus-icon" />,
@@ -153,6 +154,23 @@ describe("EnvVarEditor", () => {
     }
   });
 
+  it("holds the commit and explains the rule when a name can't be exported", () => {
+    const { getAllByTestId, getByTestId, getByRole } = renderEditor({ FOO: "a" });
+    const keyInput = getAllByTestId("env-editor-key")[0]!;
+    onChange.mockClear();
+
+    fireEvent.change(keyInput, { target: { value: "2FOO" } });
+    fireEvent.blur(keyInput);
+
+    const message = getByTestId("env-editor-error-invalid");
+    expect(message.textContent).toMatch(/start with a letter or underscore/i);
+    expect(keyInput.getAttribute("aria-describedby")).toBe(message.id);
+    expect(getByRole("status").textContent).toMatch(/aren't saved/i);
+    for (const [committed] of onChange.mock.calls) {
+      expect(Object.keys(committed)).not.toContain("2FOO");
+    }
+  });
+
   it("entering a duplicate key flags both rows and holds the commit", () => {
     const { getAllByTestId, getAllByText } = renderEditor({ FOO: "a", BAR: "b" });
     const keyInputs = getAllByTestId("env-editor-key") as HTMLInputElement[];
@@ -163,7 +181,7 @@ describe("EnvVarEditor", () => {
 
     // Duplicate key error surfaces (the first row also gets flagged because it
     // matches the duplicate set).
-    expect(getAllByText(/Duplicate key/).length).toBeGreaterThanOrEqual(1);
+    expect(getAllByText(/already uses this name/).length).toBeGreaterThanOrEqual(1);
 
     // Commit must not include the duplicate (the resolver drops the second
     // occurrence and keeps {FOO: "a"}).

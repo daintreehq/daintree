@@ -1,6 +1,7 @@
 import { useId } from "react";
 import { ChevronUp, ChevronDown, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { SearchField } from "@/components/ui/SearchField";
 import type { FindInPageState } from "@/hooks/useFindInPage";
 
 interface FindBarProps {
@@ -57,9 +58,10 @@ export function FindBar({ find }: FindBarProps) {
     // `z-40`: above a dev preview tool drawer floating over the page (`z-30`),
     // which otherwise covers this corner while Find has the focus.
     <div className="absolute top-2 right-2 z-40 flex items-center gap-1 rounded-md bg-surface-panel-elevated border border-border-default shadow-[var(--theme-shadow-floating)] px-2 py-1">
-      <input
-        ref={inputRef}
-        type="text"
+      <SearchField
+        size="compact"
+        fieldClassName="w-44"
+        inputRef={inputRef}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={handleKeyDown}
@@ -74,7 +76,6 @@ export function FindBar({ find }: FindBarProps) {
         aria-label="Find in page"
         aria-describedby={counterId}
         data-testid="find-bar-input"
-        className="w-44 bg-transparent text-xs text-text-primary placeholder:text-text-placeholder outline-hidden border border-transparent focus:border-border-strong transition-colors"
         spellCheck={false}
       />
       <span

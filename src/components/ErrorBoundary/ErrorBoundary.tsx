@@ -12,6 +12,12 @@ import type { PluginDiagnosticsSnapshot } from "../../../shared/types/ipc/plugin
 
 const ENRICHMENT_TIMEOUT_MS = 2000;
 
+// How long a retried child has to stay up before the retry counts as a
+// recovery. Must outlast the commit that follows Try again: layout effects,
+// componentDidMount and passive effects all throw after the boundary has
+// already committed with `hasError: false`.
+export const RETRY_RECOVERY_CONFIRM_MS = 1000;
+
 async function fetchReportEnrichment(): Promise<ReportIssueEnrichment | null> {
   const consent = getRendererSentryConsent();
   if (!consent.hasSeenPrompt || consent.level === "off") return null;
@@ -48,6 +54,8 @@ interface ErrorBoundaryProps {
   resetKeys?: Array<string | number>;
   variant?: "fullscreen" | "section" | "component";
   componentName?: string;
+  /** User-facing name for the fallback. `componentName` stays the diagnostic id. */
+  displayName?: string;
   context?: {
     worktreeId?: string;
     terminalId?: string;
@@ -70,6 +78,15 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   // state drives the visible `disabled` prop on the button.
   private reportInFlight = false;
 
+  // Consecutive "Try again" clicks in the current failure episode, so a
+  // fallback that is back straight after one can say so and lead with the
+  // bigger hammer — a window reload — instead of the button that just failed.
+  // Only the user's clicks count: a resetKeys change is a new context, not a
+  // failed attempt, and a child that stays up past the effect phase ends the
+  // episode.
+  private userRetries = 0;
+  private recoveryTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = {
@@ -89,6 +106,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
+    this.cancelRecoveryConfirmation();
     const { onError, context, componentName } = this.props;
     const componentStack = errorInfo.componentStack || "";
 
@@ -145,9 +163,20 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     });
   }
 
-  componentDidUpdate(prevProps: ErrorBoundaryProps): void {
+  componentDidUpdate(prevProps: ErrorBoundaryProps, prevState: ErrorBoundaryState): void {
     const { resetKeys } = this.props;
     const { hasError } = this.state;
+
+    // A commit without the error is not proof of recovery — the child's
+    // effects run after this and may throw straight back. Only forget the
+    // failed attempts once it has stayed up; componentDidCatch cancels this.
+    if (prevState.hasError && !hasError && this.userRetries > 0) {
+      this.cancelRecoveryConfirmation();
+      this.recoveryTimer = setTimeout(() => {
+        this.recoveryTimer = null;
+        this.userRetries = 0;
+      }, RETRY_RECOVERY_CONFIRM_MS);
+    }
 
     if (hasError && resetKeys) {
       const prevResetKeys = prevProps.resetKeys || [];
@@ -156,8 +185,20 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         resetKeys.some((key, index) => key !== prevResetKeys[index]);
 
       if (hasResetKeyChanged) {
+        this.userRetries = 0;
         this.resetError();
       }
+    }
+  }
+
+  componentWillUnmount(): void {
+    this.cancelRecoveryConfirmation();
+  }
+
+  private cancelRecoveryConfirmation(): void {
+    if (this.recoveryTimer !== null) {
+      clearTimeout(this.recoveryTimer);
+      this.recoveryTimer = null;
     }
   }
 
@@ -183,6 +224,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       incidentId: null,
       reportInFlight: false,
     });
+  };
+
+  handleTryAgain = (): void => {
+    this.userRetries += 1;
+    this.resetError();
   };
 
   handleReport = async (): Promise<void> => {
@@ -272,7 +318,13 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   render(): ReactNode {
     const { hasError, error, errorInfo, incidentId, reportInFlight } = this.state;
-    const { children, fallback: FallbackComponent, variant, componentName } = this.props;
+    const {
+      children,
+      fallback: FallbackComponent,
+      variant,
+      componentName,
+      displayName,
+    } = this.props;
 
     if (hasError && error) {
       const Fallback = FallbackComponent || ErrorFallback;
@@ -281,12 +333,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         <Fallback
           error={error}
           errorInfo={errorInfo || undefined}
-          resetError={this.resetError}
+          resetError={this.handleTryAgain}
           variant={variant}
           componentName={componentName}
+          displayName={displayName}
           incidentId={incidentId}
           onReport={variant !== "component" ? this.handleReport : undefined}
           reportInFlight={reportInFlight}
+          retryCount={this.userRetries}
         />
       );
     }
@@ -298,6 +352,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 export interface WithErrorBoundaryOptions {
   variant?: "fullscreen" | "section" | "component";
   componentName?: string;
+  displayName?: string;
   context?: {
     worktreeId?: string;
     terminalId?: string;
@@ -314,6 +369,7 @@ export function withErrorBoundary<P extends object>(
     <ErrorBoundary
       variant={options.variant || "component"}
       componentName={options.componentName || Component.displayName || Component.name}
+      displayName={options.displayName}
       context={options.context}
       onReset={options.onReset}
       resetKeys={options.resetKeys}

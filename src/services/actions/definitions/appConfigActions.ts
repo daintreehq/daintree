@@ -6,17 +6,30 @@ import {
   appClient,
   hibernationClient,
   sessionRestoreClient,
+  windowOpeningClient,
   idleTerminalClient,
   idleBackgroundAutoCloseClient,
   worktreeConfigClient,
 } from "@/clients";
 import { dispatchEscape } from "@/lib/escapeStack";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { OPEN_FOLDERS_IN_NEW_WINDOW_VALUES } from "@shared/types/windowOpen";
 
 const ProjectIdArgsSchema = z.object({ projectId: z.string().min(1) });
 
 /** Shared by `sessionRestore.updateConfig`'s declared schema and its body. */
 const SessionRestoreConfigPatchSchema = z.object({ enabled: z.boolean().optional() });
+
+const OpenFoldersInNewWindowSchema = z.enum(OPEN_FOLDERS_IN_NEW_WINDOW_VALUES);
+
+/** Shared by `windowOpening.updateConfig`'s declared schema and its body. */
+// Strict so a misspelt field fails validation instead of reaching main as an
+// empty patch and reporting success — the handler rejects unknown keys too.
+const WindowOpeningConfigPatchSchema = z
+  .object({
+    openFoldersInNewWindow: OpenFoldersInNewWindowSchema.optional(),
+  })
+  .strict();
 
 export function registerAppConfigActions(
   actions: ActionRegistry,
@@ -144,6 +157,41 @@ export function registerAppConfigActions(
       // a caller sending `{ enabled: "yes" }` is rejected here instead of
       // reaching the store.
       return await sessionRestoreClient.updateConfig(SessionRestoreConfigPatchSchema.parse(args));
+    },
+  }));
+
+  actions.set("windowOpening.getConfig", () => ({
+    id: "windowOpening.getConfig",
+    title: "Get window opening config",
+    description:
+      "Read the stored preference for whether opening a folder uses the current window or a new one. No arguments. Returns { openFoldersInNewWindow }: `default` asks for a new window only for folders opened from outside Daintree (Dock, Finder, command line); `on` asks for one every time; `off` never does. Switching between known projects isn't governed by it.",
+    category: "settings",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    resultSchema: z.object({
+      openFoldersInNewWindow: OpenFoldersInNewWindowSchema,
+    }),
+    run: async () => {
+      return await windowOpeningClient.getConfig();
+    },
+  }));
+
+  actions.set("windowOpening.updateConfig", () => ({
+    id: "windowOpening.updateConfig",
+    title: "Update window opening config",
+    description:
+      "Update the stored preference for whether opening a folder uses the current window or a new one",
+    category: "settings",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    // Config-patch tool: a palette pick dispatches `{}` (an empty patch that
+    // changes nothing). Belongs in Settings, not the palette. Stays an MCP tool.
+    palette: { mode: "hidden" },
+    argsSchema: WindowOpeningConfigPatchSchema,
+    run: async (args: unknown) => {
+      return await windowOpeningClient.updateConfig(WindowOpeningConfigPatchSchema.parse(args));
     },
   }));
 

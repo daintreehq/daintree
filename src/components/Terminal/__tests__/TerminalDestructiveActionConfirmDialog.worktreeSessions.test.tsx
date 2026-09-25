@@ -71,14 +71,14 @@ describe("TerminalDestructiveActionConfirmDialog — worktree end-all (#11345)",
     stageEndAll(2, 1);
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    expect(screen.getByText(/1 has a running agent/)).toBeTruthy();
+    expect(screen.getByText(/1 agent is working and will be stopped/)).toBeTruthy();
   });
 
   it("uses the plural agent warning when several are running", () => {
     stageEndAll(3, 2);
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    expect(screen.getByText(/2 have running agents/)).toBeTruthy();
+    expect(screen.getByText(/2 agents are working and will be stopped/)).toBeTruthy();
   });
 
   it("stays silent about agents when none are running", () => {
@@ -173,4 +173,27 @@ describe("TerminalDestructiveActionConfirmDialog — worktree clear-history (#11
 
     expect(dispatch).not.toHaveBeenCalled();
   });
+});
+
+describe("TerminalDestructiveActionConfirmDialog — confirmed re-dispatch source", () => {
+  const origins = ["keybinding", "user", "menu", "context-menu", "agent", undefined] as const;
+
+  it.each(origins)(
+    "answers a %s-raised confirm as a keybinding only when it came from one",
+    (origin) => {
+      useTerminalPendingDestructiveActionStore.getState().request({
+        kind: "worktreeEndAll",
+        targetCount: 2,
+        runningAgentCount: 0,
+        worktreeId: "wt-1",
+        dispatchSource: origin,
+      });
+      render(<TerminalDestructiveActionConfirmDialog />);
+      fireEvent.click(screen.getByRole("button", { name: "End 2 sessions" }));
+
+      const opts = dispatch.mock.calls.at(-1)![2];
+      // A human confirmed this, so it is never replayed as an agent dispatch.
+      expect(opts).toEqual({ source: origin === "keybinding" ? "keybinding" : "user" });
+    }
+  );
 });

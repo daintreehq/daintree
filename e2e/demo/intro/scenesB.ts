@@ -183,10 +183,10 @@ export async function sceneWorkflow(d: Director): Promise<void> {
   });
   await d.beat(125.8, "open new worktree", async () => {
     await d.pickWorktree(branch, 900);
-    // After a cross-worktree move Daintree offers "Tell it to continue in <worktree>"; use it.
+    // After a cross-worktree move Daintree offers "Tell it to continue here"; use it.
     const handoff = d.page
       .locator(`[data-panel-id="${main}"]`)
-      .getByText(/Tell it to continue in/i)
+      .getByRole("button", { name: /Tell it to continue here/i })
       .first();
     if (
       await handoff

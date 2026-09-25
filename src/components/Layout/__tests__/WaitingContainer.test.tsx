@@ -242,8 +242,56 @@ describe("WaitingContainer", () => {
         makeTerminal({ id: "t3" }),
       ];
       render(<WaitingContainer />);
-      const trigger = screen.getByRole("button", { name: "Waiting (3)" });
+      const trigger = screen.getByRole("button", {
+        name: "Waiting: 3 agents across all worktrees, all in this one",
+      });
       expect(trigger).toBeTruthy();
+    });
+
+    it("marks a project-wide count that includes this worktree, and names the share", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t1" }),
+        makeTerminal({ id: "t2", worktreeId: "wt-2" }),
+        makeTerminal({ id: "t3", worktreeId: "wt-2" }),
+      ];
+      render(<WaitingContainer />);
+      const trigger = screen.getByRole("button", {
+        name: "Waiting: 3 agents across all worktrees, 1 in this one",
+      });
+      expect(trigger.querySelector("[data-dock-pill-local]")).not.toBeNull();
+      expect(trigger.textContent).not.toContain("here");
+      // Scope rides on the count itself: the state glyph is the pill's only mark.
+      expect(trigger.querySelectorAll("svg")).toHaveLength(1);
+    });
+
+    it("drops the local marker when nothing is waiting here", () => {
+      mockTerminals = [makeTerminal({ id: "t1", worktreeId: "wt-2" })];
+      render(<WaitingContainer />);
+      const trigger = screen.getByRole("button", {
+        name: "Waiting: 1 agent across all worktrees, none in this one",
+      });
+      expect(trigger.querySelector("[data-dock-pill-local]")).toBeNull();
+      expect(trigger.textContent).not.toContain("here");
+    });
+  });
+
+  describe("scope sections", () => {
+    it("lists this worktree's agents first and names the worktree only for the others", () => {
+      mockTerminals = [
+        makeTerminal({ id: "far", title: "Far agent", worktreeId: "wt-2" }),
+        makeTerminal({ id: "near", title: "Near agent" }),
+      ];
+      render(<WaitingContainer />);
+      fireEvent.click(screen.getByRole("button", { name: /^Waiting:/ }));
+      const here = screen.getByRole("group", { name: "This worktree" });
+      const elsewhere = screen.getByRole("group", { name: "Other worktrees" });
+      expect(here.textContent).toContain("Near agent");
+      expect(here.textContent).not.toContain("feature-auth");
+      expect(elsewhere.textContent).toContain("Far agent");
+      expect(elsewhere.textContent).toContain("feature-ui");
+      expect(
+        here.compareDocumentPosition(elsewhere) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
     });
   });
 
@@ -252,6 +300,7 @@ describe("WaitingContainer", () => {
       mockTerminals = [
         makeTerminal({
           id: "t1",
+          worktreeId: "wt-2",
           title: "Fix auth bug",
           activityHeadline: "Awaiting permission",
           lastStateChange: 1700000000123,
@@ -261,9 +310,53 @@ describe("WaitingContainer", () => {
       const row = screen.getByTestId("waiting-single-item");
       const text = row.textContent ?? "";
       expect(text).toContain("Fix auth bug");
-      expect(text).toContain("feature-auth");
+      expect(text).toContain("feature-ui");
       expect(text).toContain("Awaiting permission");
       expect(within(row).getByTestId("live-time-ago")).toBeTruthy();
+    });
+
+    it("tells same-named agents apart by their observed task, through the shared title rules", () => {
+      mockTerminals = [
+        makeTerminal({
+          id: "t1",
+          title: "Claude",
+          detectedAgentId: "claude",
+          lastObservedTitle: "Tighten the popover rows",
+        }),
+        makeTerminal({
+          id: "t2",
+          title: "Claude",
+          detectedAgentId: "claude",
+          lastObservedTitle: "Claude Code",
+        }),
+      ];
+      render(<WaitingContainer />);
+      const [withTask, echo] = screen.getAllByTestId("waiting-single-item");
+      expect(withTask!.textContent).toContain("Tighten the popover rows");
+      expect(withTask!.getAttribute("aria-label")).toContain("Tighten the popover rows");
+      // An identity echo is not a task and must not render as one.
+      expect(echo!.textContent).not.toContain("Claude Code");
+    });
+
+    it("describes the row by its age without folding the ticking age into its name", () => {
+      mockTerminals = [makeTerminal({ id: "t1", lastStateChange: 1700000000123 })];
+      render(<WaitingContainer />);
+      const row = screen.getByTestId("waiting-single-item");
+      const describedBy = row.getAttribute("aria-describedby");
+      expect(describedBy).toBeTruthy();
+      const age = within(row).getByTestId("live-time-ago");
+      expect(document.getElementById(describedBy!)?.contains(age)).toBe(true);
+      expect(
+        screen.getByRole("button", { name: "Focus claude", description: "@1700000000123" })
+      ).toBe(row);
+    });
+
+    it("omits the age description when there is no timestamp", () => {
+      mockTerminals = [makeTerminal({ id: "t1", lastStateChange: undefined })];
+      render(<WaitingContainer />);
+      const row = screen.getByTestId("waiting-single-item");
+      expect(row.getAttribute("aria-describedby")).toBeNull();
+      expect(within(row).queryByTestId("live-time-ago")).toBeNull();
     });
 
     it("does not render the redundant per-row state chip (state is surfaced once in the header)", () => {
@@ -306,13 +399,14 @@ describe("WaitingContainer", () => {
       expect(nested.length).toBe(0);
     });
 
-    it("exposes the row as a button via role + tabIndex (not a native <button>)", () => {
+    it("makes the row a native button with the kill button as its sibling, not its child", () => {
       mockTerminals = [makeTerminal({ id: "t1" })];
       render(<WaitingContainer />);
       const row = screen.getByTestId("waiting-single-item");
-      expect(row.tagName).toBe("DIV");
-      expect(row.getAttribute("role")).toBe("button");
-      expect(row.getAttribute("tabindex")).toBe("0");
+      const kill = screen.getByTestId("waiting-kill-button");
+      expect(row.tagName).toBe("BUTTON");
+      expect(row.contains(kill)).toBe(false);
+      expect(row.parentElement?.contains(kill)).toBe(true);
     });
   });
 
@@ -484,7 +578,23 @@ describe("WaitingContainer", () => {
       render(<WaitingContainer />);
       const rows = screen.getAllByTestId("waiting-single-item");
       expect(rows.length).toBe(2);
-      expect(screen.getByRole("button", { name: "Collapse group" })).toBeTruthy();
+      const header = screen.getByRole("button", { name: /Tab group \(2 waiting\)/ });
+      expect(header.getAttribute("aria-expanded")).toBe("true");
+    });
+
+    it("names another worktree once in the group header but keeps it in each member's accessible name", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t1", title: "A", worktreeId: "wt-2" }),
+        makeTerminal({ id: "t2", title: "B", worktreeId: "wt-2" }),
+      ];
+      mockTabGroups = new Map([["g1", makeGroup({ worktreeId: "wt-2", panelIds: ["t1", "t2"] })]]);
+      render(<WaitingContainer />);
+      const header = screen.getByRole("button", { name: /Tab group/ });
+      expect(header.textContent).toContain("feature-ui");
+      for (const row of screen.getAllByTestId("waiting-single-item")) {
+        expect(row.textContent).not.toContain("feature-ui");
+        expect(row.getAttribute("aria-label")).toContain("in feature-ui");
+      }
     });
 
     it("falls through to a single row when the group has only one waiting member", () => {
@@ -495,7 +605,7 @@ describe("WaitingContainer", () => {
       expect(screen.getAllByTestId("waiting-single-item").length).toBe(1);
     });
 
-    it("collapses and expands a group row when the chevron is clicked", () => {
+    it("collapses and expands a group when its header is clicked", () => {
       mockTerminals = [
         makeTerminal({ id: "t1", title: "A" }),
         makeTerminal({ id: "t2", title: "B" }),
@@ -503,9 +613,14 @@ describe("WaitingContainer", () => {
       mockTabGroups = new Map([["g1", makeGroup({ panelIds: ["t1", "t2"] })]]);
       render(<WaitingContainer />);
       expect(screen.getAllByTestId("waiting-single-item").length).toBe(2);
-      fireEvent.click(screen.getByRole("button", { name: "Collapse group" }));
+      const header = screen.getByRole("button", { name: /Tab group/ });
+      fireEvent.click(header);
+      expect(header.getAttribute("aria-expanded")).toBe("false");
       expect(screen.queryAllByTestId("waiting-single-item").length).toBe(0);
-      fireEvent.click(screen.getByRole("button", { name: "Expand group" }));
+      fireEvent.click(header);
+      expect(header.getAttribute("aria-expanded")).toBe("true");
+      const region = document.getElementById(header.getAttribute("aria-controls")!);
+      expect(region?.getAttribute("aria-labelledby")).toBe(header.id);
       expect(screen.getAllByTestId("waiting-single-item").length).toBe(2);
     });
 
@@ -549,7 +664,7 @@ describe("WaitingContainer", () => {
       ]);
       render(<WaitingContainer />);
       expect(screen.getAllByTestId("waiting-single-item").length).toBe(4);
-      const collapseButtons = screen.getAllByRole("button", { name: "Collapse group" });
+      const collapseButtons = screen.getAllByRole("button", { name: /Tab group/ });
       expect(collapseButtons.length).toBe(2);
       fireEvent.click(collapseButtons[0]!);
       expect(screen.getAllByTestId("waiting-single-item").length).toBe(2);

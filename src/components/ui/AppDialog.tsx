@@ -46,6 +46,7 @@ import {
   SurfaceHeaderCloseButton,
 } from "@/components/ui/SurfaceHeader";
 import { Button } from "./button";
+import { ARIA_DISABLED_CLASSES } from "./ariaDisabled";
 
 type DialogSize = "sm" | "md" | "lg" | "4xl" | "5xl" | "6xl" | "7xl" | "workspace";
 type DialogVariant = "default" | "destructive" | "info";
@@ -79,6 +80,8 @@ interface AppDialogContextValue {
   titleId: string;
   descriptionId: string;
   variant: DialogVariant;
+  /** Mirrors the dialog's `dismissible`, so the close button can say it's unavailable. */
+  dismissible: boolean;
 }
 
 const AppDialogContext = createContext<AppDialogContextValue | null>(null);
@@ -103,6 +106,12 @@ export interface AppDialogProps {
   zIndex?: DialogZIndex;
   initialFocus?: DialogInitialFocus;
   restoreFocusTo?: RestoreFocusTarget;
+  /**
+   * Try `restoreFocusTo` before the trigger, not only once the trigger is gone —
+   * for a dialog whose content moves the user's place away from where they
+   * opened it (a viewer stepped to another item returns focus to that item).
+   */
+  preferRestoreFocusTo?: boolean;
   "data-testid"?: string;
 }
 
@@ -134,6 +143,7 @@ export function AppDialog({
   zIndex = "modal",
   initialFocus,
   restoreFocusTo,
+  preferRestoreFocusTo = false,
   "data-testid": dataTestId,
 }: AppDialogProps) {
   // A dock popover renders above the standard modal tier, so a dialog opened
@@ -166,9 +176,11 @@ export function AppDialog({
   // changed identity (e.g. a caller passing an inline function), the cleanup
   // would fire mid-open and restore focus prematurely.
   const restoreFocusToRef = useRef(restoreFocusTo);
+  const preferRestoreFocusToRef = useRef(preferRestoreFocusTo);
   useEffect(() => {
     restoreFocusToRef.current = restoreFocusTo;
-  }, [restoreFocusTo]);
+    preferRestoreFocusToRef.current = preferRestoreFocusTo;
+  }, [restoreFocusTo, preferRestoreFocusTo]);
 
   const restoreFocus = useCallback(() => {
     const el = previousActiveElement.current;
@@ -179,6 +191,13 @@ export function AppDialog({
     // through Radix's focus path, and this runs an exit animation after
     // the close-transition clear already fired (issue #11030).
     clearDialogOverlays();
+    if (preferRestoreFocusToRef.current) {
+      const preferred = resolveRestoreFocusTarget(restoreFocusToRef.current);
+      if (preferred?.isConnected) {
+        preferred.focus();
+        if (document.activeElement === preferred) return;
+      }
+    }
     if (document.contains(el)) {
       el.focus();
       return;
@@ -231,30 +250,57 @@ export function AppDialog({
     clearDialogOverlays();
   }, [isOpen]);
 
+  // Initial focus is owed once per opening, and is paid only once the surface
+  // exists. The surface mounts on the render *after* `isOpen` flips, because
+  // `shouldRender` is presence state set from an effect — so a frame queued at the
+  // flip can run before that render commits, find no dialog, and leave focus on
+  // the trigger behind the modal. A click- or keypress-driven open from a surface
+  // that mounts the dialog fresh reliably loses that race.
+  const initialFocusOwedRef = useRef(false);
+
   useEffect(() => {
     if (isOpen) {
       previousActiveElement.current = document.activeElement as HTMLElement;
-      if (effectiveInitialFocus === "none") return;
-      requestAnimationFrame(() => {
-        const root = dialogRef.current;
-        if (!root) return;
-        let target: HTMLElement | null = null;
-        if (effectiveInitialFocus === "cancel" || effectiveInitialFocus === "confirm") {
-          target = root.querySelector<HTMLElement>(
-            `[data-confirm-role="${effectiveInitialFocus}"]`
-          );
-        }
-        if (!target) {
-          target = getVisibleTabbableElements(root)[0] ?? null;
-        }
-        if (target) {
-          target.focus();
-        } else {
-          root.focus();
-        }
-      });
+      initialFocusOwedRef.current = effectiveInitialFocus !== "none";
+    } else {
+      initialFocusOwedRef.current = false;
     }
   }, [isOpen, effectiveInitialFocus, restoreFocus]);
+
+  useEffect(() => {
+    if (!isOpen || !shouldRender || !initialFocusOwedRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      const root = dialogRef.current;
+      if (!root || !initialFocusOwedRef.current) return;
+      initialFocusOwedRef.current = false;
+      // A consumer that focuses its own field on open (UpdateCwdDialog,
+      // CreateProjectFolderDialog) has already placed focus inside by the time
+      // this later frame runs; that choice wins. Focus that was already inside
+      // when this opening began is not a choice — a queue-driven dialog reopened
+      // mid-exit still holds the last request's button, and the new request's
+      // initial focus (Cancel, for a destructive one) has to replace it.
+      const active = document.activeElement;
+      if (root.contains(active) && active !== previousActiveElement.current) return;
+      let target: HTMLElement | null = null;
+      if (effectiveInitialFocus === "cancel" || effectiveInitialFocus === "confirm") {
+        target = root.querySelector<HTMLElement>(`[data-confirm-role="${effectiveInitialFocus}"]`);
+      }
+      if (!target) {
+        // The header's close button is first in DOM order, but it is the one
+        // control that answers nothing — arriving there makes a reflexive
+        // Enter throw the dialog away. Land on it only when nothing else is
+        // tabbable.
+        const tabbable = getVisibleTabbableElements(root);
+        target = tabbable.find((el) => !el.hasAttribute(DIALOG_CLOSE_ATTR)) ?? tabbable[0] ?? null;
+      }
+      if (target) {
+        target.focus();
+      } else {
+        root.focus();
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen, shouldRender, effectiveInitialFocus]);
 
   useEffect(() => {
     return () => {
@@ -300,14 +346,26 @@ export function AppDialog({
   // Backstop registration must NOT churn on every handleClose-identity change
   // (re-registering pushes the entry to the top of the stack and breaks LIFO
   // when this dialog is rendered underneath another). Hold the latest closer
-  // in a ref and only register once per `isOpen && dismissible` cycle.
+  // in a ref and only register once per `isOpen` cycle.
+  //
+  // Registered while open even when the dialog can't be dismissed: a locked
+  // dialog still has to be the topmost backstop, or Escape falls through to
+  // the dismissible dialog underneath it (a running confirm over Settings
+  // closed Settings and unmounted itself mid-run). While locked it swallows
+  // the keypress instead of closing.
   const handleCloseRef = useRef(handleClose);
+  const dismissibleRef = useRef(dismissible);
   useEffect(() => {
     handleCloseRef.current = handleClose;
-  }, [handleClose]);
+    dismissibleRef.current = dismissible;
+  }, [handleClose, dismissible]);
 
-  useEffect(() => {
-    if (!isOpen || !dismissible) return;
+  // Layout effect, matching AppPaletteDialog: backstops stack in commit order,
+  // so a dialog and a palette opened in the same commit layer in render order.
+  // A passive effect here registered after the palette's layout effect and put
+  // a locked dialog on top of the palette it sits beneath.
+  useLayoutEffect(() => {
+    if (!isOpen) return;
     const closeThis = () => {
       void handleCloseRef.current();
     };
@@ -326,6 +384,10 @@ export function AppDialog({
       // in a dialog above it — a dock popover deliberately stays open behind the
       // dialog it spawned, so it is always "the open layer" (#11505).
       if (radixLayerWasOpenWhenEscapePressed() && !escapeWasYieldedToDialog(e)) return;
+      if (!dismissibleRef.current) {
+        markBackstopConsumedEscape();
+        return;
+      }
       // We deliberately do NOT bail on `e.defaultPrevented`: Radix Select /
       // Combobox triggers call `preventDefault` on Escape even when their
       // popup is closed, which would leave the dialog stuck open if we
@@ -344,7 +406,7 @@ export function AppDialog({
       document.removeEventListener("keydown", handler);
       unregister();
     };
-  }, [isOpen, dismissible]);
+  }, [isOpen]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === "Tab" && dialogRef.current) {
@@ -407,7 +469,9 @@ export function AppDialog({
   if (!shouldRender) return null;
 
   return createPortal(
-    <AppDialogContext.Provider value={{ onClose: handleClose, titleId, descriptionId, variant }}>
+    <AppDialogContext.Provider
+      value={{ onClose: handleClose, titleId, descriptionId, variant, dismissible }}
+    >
       <div
         className={cn(
           "fixed inset-0 flex items-center justify-center bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur)] backdrop-saturate-[var(--theme-material-saturation)]",
@@ -432,9 +496,11 @@ export function AppDialog({
         aria-describedby={descriptionId}
         // Marks the surface as one a Radix layer underneath can hand Escape to
         // — see `ESCAPE_BACKSTOP_DIALOG_ATTR`. Tracks the backstop registration
-        // (`isOpen && dismissible`), not merely being mounted: a dialog mid-exit
-        // has already unregistered and could not take the keypress.
-        {...(isOpen && dismissible ? { [ESCAPE_BACKSTOP_DIALOG_ATTR]: "" } : {})}
+        // (`isOpen`), not merely being mounted: a dialog mid-exit has already
+        // unregistered and could not take the keypress. A locked dialog keeps
+        // it — its backstop swallows the keypress, and without the marker the
+        // dock popover underneath would take Escape and dismiss itself.
+        {...(isOpen ? { [ESCAPE_BACKSTOP_DIALOG_ATTR]: "" } : {})}
         // Unconditional, unlike the Escape backstop above: `handleDockInteractOutside`
         // needs to recognise this surface whether or not the dialog is dismissible.
         {...{ [APP_DIALOG_SURFACE_ATTR]: "" }}
@@ -506,17 +572,14 @@ interface AppDialogHeaderProps {
  */
 const DIALOG_INSET = "px-6";
 
+/** Marks the header close button, which initial focus passes over. */
+const DIALOG_CLOSE_ATTR = "data-dialog-close";
+
 // Footer actions announce unavailability with `aria-disabled`, never the native
 // attribute — a natively-disabled button leaves the tab order and refuses focus,
 // so the initial-focus pass above (which resolves Cancel/Confirm by
 // `data-confirm-role` and calls `.focus()` on the match) would silently strand
-// focus outside the dialog. The attribute is advisory, so each action vetoes its
-// own activation in JS; these classes stand in for the `disabled:` variants that
-// stop matching. Applied only when the action itself is disabled: `Button` also
-// synthesises `aria-disabled` while `loading`, and dimming there would fade the
-// spinner it overlays. No `aria-disabled:pointer-events-none` — that would
-// suppress hover and put the control back out of reach.
-const DISABLED_ACTION_CLASSES = "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed";
+// focus outside the dialog. Each action vetoes its own activation in JS.
 
 AppDialog.Header = function AppDialogHeader({ children, className }: AppDialogHeaderProps) {
   // `density` is deliberately not forwarded: every dialog header is comfortable,
@@ -552,7 +615,11 @@ AppDialog.CloseButton = function AppDialogCloseButton({
   const context = useContext(AppDialogContext);
   return (
     <SurfaceHeaderCloseButton
+      {...{ [DIALOG_CLOSE_ATTR]: "" }}
       onClick={context?.onClose}
+      // A locked dialog swallows the click anyway; say so instead of offering
+      // an X that looks live beside a disabled Cancel.
+      disabled={context ? !context.dismissible : false}
       className={className}
       aria-label={ariaLabel}
     />
@@ -665,6 +732,11 @@ AppDialog.Footer = function AppDialogFooter({
 }: AppDialogFooterProps) {
   const context = useContext(AppDialogContext);
   const dialogVariant = context?.variant ?? "default";
+  const hintId = useId();
+  // The hint is where a dialog says why its primary is unavailable, so an
+  // unavailable primary points at it — otherwise a screen reader lands on a
+  // dimmed button with no reason attached.
+  const primaryDescribedBy = hint && primaryAction?.disabled ? hintId : undefined;
 
   // The standard dialog primary action is the high-contrast neutral button, not the
   // accent fill: its fill is the theme's own body-text colour, so it resolves near-white
@@ -696,6 +768,7 @@ AppDialog.Footer = function AppDialogFooter({
           lets a hint measure its own box and crop to it. */}
       {hint && (
         <div
+          id={hintId}
           className="text-xs leading-[inherit] text-text-secondary flex min-w-0 flex-1 items-center gap-1"
           data-testid="app-dialog-hint"
         >
@@ -719,7 +792,7 @@ AppDialog.Footer = function AppDialogFooter({
               aria-disabled={secondaryAction.disabled || undefined}
               className={cn(
                 "text-text-secondary hover:text-text-primary",
-                secondaryAction.disabled && DISABLED_ACTION_CLASSES
+                secondaryAction.disabled && ARIA_DISABLED_CLASSES
               )}
               data-confirm-role="cancel"
             >
@@ -738,8 +811,9 @@ AppDialog.Footer = function AppDialogFooter({
                 primaryAction.onClick();
               }}
               aria-disabled={primaryAction.disabled || undefined}
+              aria-describedby={primaryDescribedBy}
               loading={primaryAction.loading}
-              className={primaryAction.disabled ? DISABLED_ACTION_CLASSES : undefined}
+              className={primaryAction.disabled ? ARIA_DISABLED_CLASSES : undefined}
               data-confirm-role="confirm"
             >
               {primaryAction.label}

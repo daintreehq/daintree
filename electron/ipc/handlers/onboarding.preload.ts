@@ -15,6 +15,9 @@ export const ONBOARDING_METHOD_CHANNELS = {
   dismissChecklist: "onboarding:checklist-dismiss",
   markChecklistItem: "onboarding:checklist-mark-item",
   markChecklistCelebrationShown: "onboarding:checklist-mark-celebration-shown",
+  dismissTourInvite: "onboarding:tour-dismiss-invite",
+  setTourProgress: "onboarding:tour-set-progress",
+  setTourMuted: "onboarding:tour-set-muted",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof ONBOARDING_METHOD_CHANNELS;

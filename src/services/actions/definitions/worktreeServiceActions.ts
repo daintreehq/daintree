@@ -17,15 +17,18 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
  */
 function hasRetryableWorktreeLoadFailure(): boolean {
   const { worktreeLoadError, currentProject } = useProjectStore.getState();
+  const viewState = getCurrentViewStoreOrNull()?.getState();
+  // Checked before a reported load failure, which a dead host usually causes
+  // too: Retry beside it would offer a fix that cannot work.
+  if (hasServiceError()) return false;
   if (worktreeLoadError !== null) return true;
   if (!currentProject) return false;
-  const viewState = getCurrentViewStoreOrNull()?.getState();
-  return (
-    viewState !== undefined &&
-    !viewState.isInitialized &&
-    !viewState.isLoading &&
-    viewState.error === null
-  );
+  return viewState !== undefined && !viewState.isInitialized && !viewState.isLoading;
+}
+
+function hasServiceError(): boolean {
+  const error = getCurrentViewStoreOrNull()?.getState().error;
+  return error !== undefined && error !== null;
 }
 
 export function registerWorktreeServiceActions(
@@ -143,7 +146,11 @@ export function registerWorktreeServiceActions(
     keywords: ["reload", "recover", "switch", "worktree"],
     isEnabled: () => hasRetryableWorktreeLoadFailure(),
     disabledReason: () =>
-      hasRetryableWorktreeLoadFailure() ? undefined : "No worktree load failure to retry",
+      hasRetryableWorktreeLoadFailure()
+        ? undefined
+        : hasServiceError()
+          ? "The workspace service is down; restart it first"
+          : "No worktree load failure to retry",
     run: async () => {
       const retriedError = useProjectStore.getState().worktreeLoadError;
       await worktreeClient.retryProjectLoad();

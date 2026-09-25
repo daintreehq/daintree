@@ -9,8 +9,8 @@ describe("HybridInputBar shortcut tooltips — issue #6434", () => {
   const source = readFileSync(HYBRID_INPUT_BAR_PATH, "utf-8");
 
   describe("stash button", () => {
-    it("uses useKeybindingDisplay for terminal.popStash", () => {
-      expect(source).toContain('useKeybindingDisplay("terminal.popStash")');
+    it("uses useEffectiveCombo for terminal.popStash", () => {
+      expect(source).toContain('useEffectiveCombo("terminal.popStash")');
     });
 
     it("uses createTooltipContent for restore stashed input", () => {

@@ -1,21 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  Activity,
-  FileText,
-  Trash2,
-  Bug,
-  AlertTriangle,
-  ShieldCheck,
-  CircleCheck,
-  CircleX,
-  RotateCw,
-  Download,
-  Monitor,
-  SlidersHorizontal,
-  Square,
-} from "lucide-react";
-import { cn } from "@/lib/utils";
+import { AlertTriangle } from "lucide-react";
+import { SeverityMark } from "@/lib/statusSeverity";
+import { ErrorRetryRow, InlineErrorRow } from "./auditLogParts";
 import { Spinner } from "@/components/ui/Spinner";
 import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
@@ -23,10 +10,12 @@ import { actionService } from "@/services/ActionService";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
 import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
 import { useSettingsStore } from "@/store/settingsStore";
+import { usePaletteStore } from "@/store/paletteStore";
 import { logError, logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { ClearLogsConfirmDialog } from "@/components/Diagnostics/ClearLogsConfirmDialog";
 
@@ -64,53 +53,64 @@ function SystemHealthSection() {
     }
   };
 
+  const labels: Record<string, string> = {
+    git: "Git",
+    node: "Node.js",
+    npm: "npm",
+    gh: "GitHub CLI",
+  };
+  const missing = result ? result.prerequisites.filter((check) => !check.available) : [];
+
   return (
-    <SettingsSection
-      icon={ShieldCheck}
-      title="System health check"
-      description="Verify that required tools (Git, Node.js, npm) are installed and available."
-    >
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => void runCheck()}
-        disabled={isChecking}
-        className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary mb-3"
-      >
-        <span className={cn("inline-flex shrink-0", isChecking && "animate-spin")}>
-          <RotateCw className="w-4 h-4" />
-        </span>
-        {isChecking ? "Checking…" : result ? "Re-run Check" : "Run Health Check"}
-      </Button>
-      {checkError && <p className="text-xs text-status-error mb-3">{checkError}</p>}
+    <>
+      <SettingsRow
+        id="troubleshooting-health"
+        label="System health check"
+        description="Checks that the command-line tools Daintree relies on are installed and on your PATH"
+        error={checkError}
+        control={
+          <Button variant="outline" size="sm" onClick={() => void runCheck()} disabled={isChecking}>
+            {isChecking ? "Checking…" : result ? "Run health check again" : "Run health check"}
+          </Button>
+        }
+      />
+      <p className="sr-only" role="status">
+        {checkError ?? ""}
+      </p>
       {result && (
-        <div className="space-y-1.5">
-          {result.prerequisites.map((check) => {
-            const labels: Record<string, string> = { git: "Git", node: "Node.js", npm: "npm" };
-            const label = labels[check.tool] ?? check.tool;
-            return (
-              <div
-                key={check.tool}
-                className="flex items-center gap-2.5 px-3 py-2 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
-              >
-                {check.available ? (
-                  <CircleCheck className="w-3.5 h-3.5 text-status-success shrink-0" />
-                ) : (
-                  <CircleX className="w-3.5 h-3.5 text-status-error shrink-0" />
-                )}
-                <span className="text-sm text-text-primary">{label}</span>
-                {check.version && (
-                  <span className="text-xs text-text-secondary">v{check.version}</span>
-                )}
-                {!check.available && (
-                  <span className="ml-auto text-xs text-status-error">Not found</span>
-                )}
-              </div>
-            );
-          })}
+        <div className="py-2 pl-4 pr-4">
+          <p className="sr-only" role="status">
+            {missing.length === 0
+              ? "Health check finished. Every tool was found."
+              : `Health check finished. Not found: ${missing.map((c) => labels[c.tool] ?? c.tool).join(", ")}.`}
+          </p>
+          <ul aria-label="Health check results">
+            {result.prerequisites.map((check) => {
+              const label = labels[check.tool] ?? check.tool;
+              return (
+                <li key={check.tool} className="flex items-center gap-2.5 py-1.5">
+                  <SeverityMark
+                    severity={check.available ? "success" : "error"}
+                    label={check.available ? "Found" : "Not found"}
+                    className="w-3.5 h-3.5"
+                  />
+                  <span className="text-sm text-text-primary">{label}</span>
+                  {check.available ? (
+                    check.version && (
+                      <span className="text-xs text-text-secondary tabular-nums">
+                        {check.version}
+                      </span>
+                    )
+                  ) : (
+                    <span className="text-xs text-text-primary">Not found</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
-    </SettingsSection>
+    </>
   );
 }
 
@@ -127,23 +127,17 @@ export function DownloadDiagnosticsSection() {
   };
 
   return (
-    <SettingsSection
-      icon={Download}
-      title="Download diagnostics"
-      description="Export a detailed snapshot of your system environment, app state, and recent logs for troubleshooting."
-    >
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={handleOpenReview}
-        disabled={isCollecting}
-        className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary mb-3"
-      >
-        {isCollecting ? <Spinner size="sm" /> : <Download className="w-4 h-4" />}
-        {isCollecting ? "Collecting…" : "Download diagnostics"}
-      </Button>
-      {downloadError && <p className="text-xs text-status-error mb-3">{downloadError}</p>}
-    </SettingsSection>
+    <SettingsRow
+      label="Diagnostics report"
+      description="A snapshot of your system environment, app state, and recent logs. You review it before anything is saved."
+      error={downloadError}
+      control={
+        <Button variant="outline" size="sm" onClick={handleOpenReview} disabled={isCollecting}>
+          {isCollecting && <Spinner size="sm" />}
+          {isCollecting ? "Collecting…" : "Download diagnostics"}
+        </Button>
+      }
+    />
   );
 }
 
@@ -212,55 +206,53 @@ function RendererCpuProfileSection() {
   };
 
   return (
-    <SettingsSection
-      icon={Activity}
-      title="Record CPU profile"
-      description="Capture a 15-second CPU profile of the app's interface to diagnose lag or slow interactions. The saved .cpuprofile file opens in Chrome DevTools."
-    >
-      <div className="flex items-center gap-3">
-        {phase === "recording" ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void handleStop()}
-            className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
-          >
-            <Square className="w-4 h-4" />
+    <SettingsRow
+      label="CPU profile"
+      description={
+        phase === "recording"
+          ? `Reproduce the slow interaction — auto-stops in ${secondsLeft}s`
+          : "Captures 15 seconds of the interface's CPU activity to diagnose lag. The saved .cpuprofile file opens in Chrome DevTools."
+      }
+      error={error && <span className="select-text">{error}</span>}
+      control={
+        phase === "recording" ? (
+          <Button variant="outline" size="sm" onClick={() => void handleStop()}>
             Stop recording
           </Button>
         ) : (
           <Button
-            variant="outline"
+            variant="subtle"
             size="sm"
             onClick={() => void handleRecord()}
             disabled={phase === "saving"}
-            className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
           >
-            <Activity className="w-4 h-4" />
             {phase === "saving" ? "Saving…" : "Record profile"}
           </Button>
-        )}
-        {phase === "recording" && (
-          <span className="text-xs text-text-secondary">
-            Reproduce the slow interaction — auto-stops in {secondsLeft}s
-          </span>
-        )}
-      </div>
-      {error && <p className="text-xs text-status-error mt-3 select-text">{error}</p>}
-    </SettingsSection>
+        )
+      }
+    />
   );
 }
 
 function HardwareAccelerationSection() {
   const [disabled, setDisabled] = useState<boolean | null>(null);
   const [angleFallback, setAngleFallback] = useState<boolean>(false);
+  const [readFailed, setReadFailed] = useState(false);
+  const [readNonce, setReadNonce] = useState(0);
 
   useEffect(() => {
-    window.electron.gpu.getStatus().then((status) => {
-      setDisabled(status.hardwareAccelerationDisabled);
-      setAngleFallback(status.angleFallbackActive);
-    });
-  }, []);
+    setReadFailed(false);
+    window.electron.gpu
+      .getStatus()
+      .then((status) => {
+        setDisabled(status.hardwareAccelerationDisabled);
+        setAngleFallback(status.angleFallbackActive);
+      })
+      .catch((err) => {
+        setReadFailed(true);
+        logError("Failed to read GPU status", err);
+      });
+  }, [readNonce]);
 
   const handleToggle = () => {
     if (disabled === null) return;
@@ -270,82 +262,113 @@ function HardwareAccelerationSection() {
     });
   };
 
-  if (disabled === null) return null;
+  if (disabled === null) {
+    // Rendered from the start so the group doesn't shift when the read lands, and
+    // so a failed read says so instead of the setting silently missing.
+    return (
+      <>
+        <SettingsSwitchCard
+          id="troubleshooting-gpu-acceleration"
+          title="Hardware acceleration"
+          subtitle="Uses the GPU to render the interface. Turn off if you see blank panels or repeated GPU crashes. The app restarts on change."
+          isEnabled={false}
+          onChange={() => {}}
+          disabled
+        />
+        {readFailed && (
+          <ErrorRetryRow
+            message="The GPU status couldn't be read"
+            onRetry={() => setReadNonce((n) => n + 1)}
+          />
+        )}
+      </>
+    );
+  }
+
+  const warning = disabled
+    ? "GPU acceleration was disabled due to repeated crashes. Turn it back on to restore full performance."
+    : angleFallback
+      ? "GPU is running in ANGLE/Vulkan fallback mode after a crash. Performance may be reduced — turn hardware acceleration off and back on to restore the default backend."
+      : null;
 
   return (
-    <SettingsSection
-      icon={Monitor}
-      title="Hardware acceleration"
-      description="GPU hardware acceleration improves rendering performance. Disable if you experience blank panels or repeated GPU crashes."
-    >
+    <>
       <SettingsSwitchCard
-        icon={Monitor}
+        id="troubleshooting-gpu-acceleration"
         title="Hardware acceleration"
-        subtitle="Uses GPU to improve rendering performance. Disable if you experience blank panels or rendering issues. App restarts on change."
+        subtitle="Uses the GPU to render the interface. Turn off if you see blank panels or repeated GPU crashes. The app restarts on change."
         isEnabled={!disabled}
         onChange={handleToggle}
-        ariaLabel="Hardware Acceleration Toggle"
       />
+      {warning && <RowNote>{warning}</RowNote>}
+    </>
+  );
+}
 
-      {disabled && (
-        <p className="text-xs text-status-warning/80 flex items-center gap-1.5 select-text">
-          <AlertTriangle className="w-3 h-3" />
-          GPU acceleration was disabled due to repeated crashes. Re-enable to restore full
-          performance.
-        </p>
-      )}
-
-      {!disabled && angleFallback && (
-        <p className="text-xs text-status-warning/80 flex items-start gap-1.5 select-text">
-          <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
-          <span>
-            GPU is running in ANGLE/Vulkan fallback mode after a crash. Performance may be reduced —
-            toggle hardware acceleration off and back on to restore the default backend.
-          </span>
-        </p>
-      )}
-    </SettingsSection>
+/** A warning attached to the row above it, inside the same group. */
+function RowNote({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="flex items-start gap-1.5 px-4 py-2 text-xs text-text-secondary select-text">
+      <AlertTriangle
+        className="w-3.5 h-3.5 mt-px shrink-0 text-status-warning"
+        aria-hidden="true"
+      />
+      <span>{children}</span>
+    </p>
   );
 }
 
 export function ApplicationLogsSection() {
-  const [showClearDialog, setShowClearDialog] = useState(false);
-
   return (
-    <SettingsSection
-      icon={FileText}
-      title="Application logs"
-      description="View internal application logs for debugging purposes."
-    >
-      <div className="flex gap-3">
+    <SettingsRow
+      id="troubleshooting-logs"
+      label="Application logs"
+      description="Internal logs for debugging"
+      control={
         <Button
           variant="outline"
           size="sm"
           onClick={() =>
             void actionService.dispatch("logs.openFile", undefined, { source: "user" })
           }
-          className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
         >
-          <FileText />
-          Open Log File
+          Open log file
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setShowClearDialog(true)}
-          className="text-status-error border-border-default hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
-        >
-          <Trash2 />
-          Clear Logs
-        </Button>
-      </div>
-      <ClearLogsConfirmDialog isOpen={showClearDialog} onOpenChange={setShowClearDialog} />
-    </SettingsSection>
+      }
+    />
+  );
+}
+
+/** Destructive, so it closes the logging group rather than sharing the logs row. */
+export function ClearLogsRow() {
+  const [showClearDialog, setShowClearDialog] = useState(false);
+
+  return (
+    <SettingsRow
+      label="Clear logs"
+      description="Deletes the application log files. Asks for confirmation first."
+      control={
+        <>
+          <Button variant="ghost-danger" size="sm" onClick={() => setShowClearDialog(true)}>
+            Clear logs
+          </Button>
+          <ClearLogsConfirmDialog isOpen={showClearDialog} onOpenChange={setShowClearDialog} />
+        </>
+      }
+    />
   );
 }
 
 export function TroubleshootingTab() {
   const [developerMode, setDeveloperMode] = useState(false);
+  // The switches show defaults until main answers; they stay disabled until then
+  // so a fallback never reads as the saved setting.
+  const [developerModeLoaded, setDeveloperModeLoaded] = useState(false);
+  const [verboseLoaded, setVerboseLoaded] = useState(false);
+  const [verboseError, setVerboseError] = useState<string | null>(null);
+  const [logOverridesFailed, setLogOverridesFailed] = useState(false);
+  const [clearOverridesError, setClearOverridesError] = useState<string | null>(null);
+  const [developerModeError, setDeveloperModeError] = useState<string | null>(null);
   const [autoOpenDiagnostics, setAutoOpenDiagnostics] = useState(false);
   const [focusEventsTab, setFocusEventsTab] = useState(false);
   const [verboseLogging, setVerboseLogging] = useState(false);
@@ -358,54 +381,87 @@ export function TroubleshootingTab() {
     void logsClient
       .getLevelOverrides()
       .then((overrides) => {
-        if (!cancelled) setLogOverrides(overrides);
+        if (cancelled) return;
+        setLogOverrides(overrides);
+        setLogOverridesFailed(false);
       })
       .catch(() => {
-        if (!cancelled) setLogOverrides({});
+        if (!cancelled) setLogOverridesFailed(true);
       });
     return () => {
       cancelled = true;
     };
   }, [logOverridesRefreshKey, verboseLogging]);
 
+  // The palette is where overrides change, so re-read them when it closes.
+  const logLevelPaletteOpen = usePaletteStore((s) => s.activePaletteId === "log-level");
+  const [wasLogLevelPaletteOpen, setWasLogLevelPaletteOpen] = useState(false);
+  if (logLevelPaletteOpen !== wasLogLevelPaletteOpen) {
+    setWasLogLevelPaletteOpen(logLevelPaletteOpen);
+    if (!logLevelPaletteOpen) setLogOverridesRefreshKey((k) => k + 1);
+  }
+
   const handleOpenLogLevelPalette = () => {
     window.dispatchEvent(new CustomEvent("daintree:open-log-level-palette"));
-    // Refresh on a short delay after the palette closes; simplest approach is
-    // to re-fetch whenever the user clicks the button again.
-    setLogOverridesRefreshKey((k) => k + 1);
   };
 
   const handleClearLogOverrides = async () => {
+    setClearOverridesError(null);
     try {
       await logsClient.clearLevelOverrides();
       setLogOverrides({});
     } catch (error) {
+      setClearOverridesError("Overrides couldn't be cleared. Try again.");
       logError("Failed to clear log level overrides", error);
     }
   };
 
-  useEffect(() => {
-    appClient.getState().then((appState) => {
-      if (appState?.developerMode) {
-        setDeveloperMode(appState.developerMode.enabled);
-        setAutoOpenDiagnostics(appState.developerMode.autoOpenDiagnostics);
-        setFocusEventsTab(appState.developerMode.focusEventsTab);
-      }
-    });
+  const [developerModeReadFailed, setDeveloperModeReadFailed] = useState(false);
+  const [developerModeNonce, setDeveloperModeNonce] = useState(0);
+  const [verboseReadFailed, setVerboseReadFailed] = useState(false);
+  const [verboseNonce, setVerboseNonce] = useState(0);
 
+  useEffect(() => {
+    setDeveloperModeReadFailed(false);
+    appClient
+      .getState()
+      .then((appState) => {
+        if (appState?.developerMode) {
+          setDeveloperMode(appState.developerMode.enabled);
+          setAutoOpenDiagnostics(appState.developerMode.autoOpenDiagnostics);
+          setFocusEventsTab(appState.developerMode.focusEventsTab);
+        }
+        setDeveloperModeLoaded(true);
+      })
+      .catch((error) => {
+        setDeveloperModeReadFailed(true);
+        logError("Failed to read developer mode settings", error);
+      });
+  }, [developerModeNonce]);
+
+  useEffect(() => {
+    setVerboseReadFailed(false);
     actionService
       .dispatch("logs.getVerbose", undefined, { source: "user" })
       .then((result) => {
         if (result.ok) {
           setVerboseLogging((result.result as { verbose: boolean }).verbose);
+          setVerboseLoaded(true);
+        } else {
+          setVerboseReadFailed(true);
         }
       })
       .catch((error) => {
+        setVerboseReadFailed(true);
         logError("Failed to get verbose logging state", error);
       });
-  }, []);
+  }, [verboseNonce]);
 
-  const saveDeveloperModeSettings = async (settings: NonNullable<AppState["developerMode"]>) => {
+  /** Resolves false when main refused the change, so the caller can put the switches back. */
+  const saveDeveloperModeSettings = async (
+    settings: NonNullable<AppState["developerMode"]>
+  ): Promise<boolean> => {
+    setDeveloperModeError(null);
     try {
       const result = await actionService.dispatch(
         "app.developerMode.set",
@@ -419,12 +475,26 @@ export function TroubleshootingTab() {
       if (!result.ok) {
         throw new Error(result.error.message);
       }
+      return true;
     } catch (error) {
       logError("Failed to save developer mode settings", error);
+      setDeveloperModeError("Developer settings couldn't be saved. Try again.");
+      return false;
     }
   };
 
-  const handleToggleDeveloperMode = () => {
+  const restoreDeveloperMode = (previous: {
+    enabled: boolean;
+    autoOpenDiagnostics: boolean;
+    focusEventsTab: boolean;
+  }) => {
+    setDeveloperMode(previous.enabled);
+    setAutoOpenDiagnostics(previous.autoOpenDiagnostics);
+    setFocusEventsTab(previous.focusEventsTab);
+  };
+
+  const handleToggleDeveloperMode = async () => {
+    const previous = { enabled: developerMode, autoOpenDiagnostics, focusEventsTab };
     const newEnabled = !developerMode;
     setDeveloperMode(newEnabled);
 
@@ -436,58 +506,56 @@ export function TroubleshootingTab() {
       }
       setAutoOpenDiagnostics(false);
       setFocusEventsTab(false);
-      saveDeveloperModeSettings({
+      const saved = await saveDeveloperModeSettings({
         enabled: false,
         showStateDebug: false,
         autoOpenDiagnostics: false,
         focusEventsTab: false,
       });
+      if (!saved) restoreDeveloperMode(previous);
     } else {
-      saveDeveloperModeSettings({
+      const saved = await saveDeveloperModeSettings({
         enabled: true,
         showStateDebug: false,
         autoOpenDiagnostics,
         focusEventsTab,
       });
+      if (!saved) restoreDeveloperMode(previous);
     }
   };
 
-  const handleToggleAutoOpenDiagnostics = () => {
+  const handleToggleAutoOpenDiagnostics = async () => {
+    const previous = { enabled: developerMode, autoOpenDiagnostics, focusEventsTab };
     const newValue = !autoOpenDiagnostics;
     setAutoOpenDiagnostics(newValue);
-    if (!newValue) {
-      setFocusEventsTab(false);
-      saveDeveloperModeSettings({
-        enabled: developerMode,
-        showStateDebug: false,
-        autoOpenDiagnostics: false,
-        focusEventsTab: false,
-      });
-    } else {
-      saveDeveloperModeSettings({
-        enabled: developerMode,
-        showStateDebug: false,
-        autoOpenDiagnostics: true,
-        focusEventsTab,
-      });
-    }
+    if (!newValue) setFocusEventsTab(false);
+    const saved = await saveDeveloperModeSettings({
+      enabled: developerMode,
+      showStateDebug: false,
+      autoOpenDiagnostics: newValue,
+      focusEventsTab: newValue ? focusEventsTab : false,
+    });
+    if (!saved) restoreDeveloperMode(previous);
   };
 
-  const handleToggleFocusEventsTab = () => {
+  const handleToggleFocusEventsTab = async () => {
+    const previous = { enabled: developerMode, autoOpenDiagnostics, focusEventsTab };
     const newValue = !focusEventsTab;
     setFocusEventsTab(newValue);
-    saveDeveloperModeSettings({
+    const saved = await saveDeveloperModeSettings({
       enabled: developerMode,
       showStateDebug: false,
       autoOpenDiagnostics,
       focusEventsTab: newValue,
     });
+    if (!saved) restoreDeveloperMode(previous);
   };
 
   const handleToggleVerboseLogging = async () => {
     if (verboseLoggingPending) return;
 
     const newState = !verboseLogging;
+    setVerboseError(null);
     setVerboseLoggingPending(true);
     setVerboseLogging(newState);
 
@@ -500,159 +568,171 @@ export function TroubleshootingTab() {
       if (!result.ok) {
         logWarn("Backend rejected verbose logging toggle");
         setVerboseLogging(!newState);
+        setVerboseError("Verbose logging couldn't be changed. Try again.");
       }
     } catch (error) {
       logError("Failed to set verbose logging", error);
       setVerboseLogging(!newState);
+      setVerboseError("Verbose logging couldn't be changed. Try again.");
     } finally {
       setVerboseLoggingPending(false);
     }
   };
 
+  const hasLogOverrides = Object.keys(logOverrides).length > 0;
+
   return (
-    <div className="space-y-6">
-      <HardwareAccelerationSection />
+    <div className="space-y-8">
+      <SettingsSection title="System">
+        <SettingsGroup>
+          <HardwareAccelerationSection />
+          <SystemHealthSection />
+        </SettingsGroup>
+      </SettingsSection>
 
-      <DownloadDiagnosticsSection />
+      <SettingsSection title="Diagnostics">
+        <SettingsGroup>
+          <DownloadDiagnosticsSection />
+          <RendererCpuProfileSection />
+        </SettingsGroup>
+      </SettingsSection>
 
-      <RendererCpuProfileSection />
-
-      <SystemHealthSection />
-
-      <ApplicationLogsSection />
-
-      <SettingsSection
-        icon={Bug}
-        title="Developer mode"
-        description="Enable enhanced debugging features for development and troubleshooting."
-      >
-        <SettingsSwitchCard
-          icon={Bug}
-          title="Developer mode"
-          subtitle="Activates all debugging features below"
-          isEnabled={developerMode}
-          onChange={handleToggleDeveloperMode}
-          ariaLabel="Developer Mode Toggle"
-        />
-
-        <div className="ml-4 space-y-3 border-l-2 border-border-default pl-4">
+      <SettingsSection title="Logging">
+        <SettingsGroup>
+          <ApplicationLogsSection />
           <SettingsSwitchCard
-            variant="compact"
-            title="Auto-open diagnostics dock"
-            subtitle="Automatically open diagnostics panel on app startup"
-            isEnabled={autoOpenDiagnostics}
-            onChange={handleToggleAutoOpenDiagnostics}
-            ariaLabel="Auto-open diagnostics dock"
-            disabled={!developerMode}
+            id="troubleshooting-verbose-logging"
+            title="Verbose logging"
+            subtitle="Captures detailed debug output for troubleshooting. Resets on app restart."
+            isEnabled={verboseLogging}
+            onChange={handleToggleVerboseLogging}
+            disabled={verboseLoggingPending || !verboseLoaded}
           />
-
-          <div className="ml-4">
-            <SettingsSwitchCard
-              variant="compact"
-              title="Focus events tab"
-              subtitle="Default to Events tab when diagnostics opens"
-              isEnabled={focusEventsTab}
-              onChange={handleToggleFocusEventsTab}
-              ariaLabel="Focus events tab"
-              disabled={!developerMode || !autoOpenDiagnostics}
+          {verboseError && <InlineErrorRow>{verboseError}</InlineErrorRow>}
+          {verboseReadFailed && (
+            <ErrorRetryRow
+              message="Whether verbose logging is on couldn't be read"
+              onRetry={() => setVerboseNonce((n) => n + 1)}
             />
-          </div>
-        </div>
-
-        <SettingsSwitchCard
-          icon={AlertTriangle}
-          title="Verbose logging"
-          subtitle="Captures detailed debug output for troubleshooting. Resets on app restart."
-          isEnabled={verboseLogging}
-          onChange={handleToggleVerboseLogging}
-          ariaLabel="Enable verbose logging"
-          disabled={verboseLoggingPending}
-          colorScheme="amber"
-        />
-
-        {verboseLogging && (
-          <div className="flex items-start gap-2 text-xs text-status-warning/90">
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-            <span>Verbose logging may impact performance and increase log file size.</span>
-          </div>
-        )}
-
-        <div className="p-3 bg-daintree-border/30 rounded-[var(--radius-md)]">
-          <h5 className="text-xs font-medium text-text-primary mb-2">
-            Advanced: Persistent Verbose Logging
-          </h5>
-          <p className="text-xs text-text-secondary mb-2 select-text">
-            Use the toggle above for quick debugging. For persistent verbose logs across restarts,
-            launch the app with environment variables:
-          </p>
-          <code className="block text-xs bg-surface-canvas p-2 rounded border border-border-default font-mono text-text-primary">
-            DAINTREE_DEBUG=1 npm run dev
-          </code>
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        icon={SlidersHorizontal}
-        title="Per-module log levels"
-        description="Override the log level for a specific module (or a process-wide wildcard). Overrides persist across restarts."
-      >
-        <div className="flex gap-3">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleOpenLogLevelPalette}
-            className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
-          >
-            <SlidersHorizontal />
-            Set Log Level…
-          </Button>
-          {Object.keys(logOverrides).length > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void handleClearLogOverrides()}
-              className="text-status-error border-border-default hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
-            >
-              <Trash2 />
-              Clear All Overrides
-            </Button>
           )}
-        </div>
-
-        {Object.keys(logOverrides).length > 0 && (
-          <div className="space-y-1 mt-3">
-            <h5 className="text-xs font-medium text-text-primary mb-1">Active overrides</h5>
-            {Object.entries(logOverrides)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([name, level]) => (
-                <div
-                  key={name}
-                  className="flex items-center justify-between px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
+          {verboseLogging && (
+            <RowNote>Verbose logging may impact performance and increase log file size.</RowNote>
+          )}
+          <SettingsRow
+            label="Verbose logging on every launch"
+            description={
+              <>
+                Set <code className="font-mono text-text-primary">DAINTREE_DEBUG=1</code> in the
+                environment Daintree starts from. In a development build that&apos;s{" "}
+                <code className="font-mono text-text-primary">DAINTREE_DEBUG=1 npm run dev</code>.
+              </>
+            }
+          />
+        </SettingsGroup>
+        <SettingsGroup>
+          <ClearLogsRow />
+        </SettingsGroup>
+        <SettingsGroup label="Log levels">
+          <SettingsRow
+            label="Per-module log levels"
+            description="Override the log level for one module, or a process-wide wildcard. Overrides persist across restarts."
+            control={
+              <Button variant="outline" size="sm" onClick={handleOpenLogLevelPalette}>
+                Set log level…
+              </Button>
+            }
+          />
+          {logOverridesFailed && (
+            <ErrorRetryRow
+              message="Active overrides couldn't be read"
+              onRetry={() => setLogOverridesRefreshKey((k) => k + 1)}
+            />
+          )}
+          {hasLogOverrides && (
+            <SettingsRow
+              label="Active overrides"
+              description={
+                <ul>
+                  {Object.entries(logOverrides)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([name, level]) => (
+                      <li key={name} className="flex items-center justify-between gap-3 py-0.5">
+                        <span className="font-mono text-text-primary truncate">{name}</span>
+                        <span className="font-mono">{level}</span>
+                      </li>
+                    ))}
+                </ul>
+              }
+              control={
+                <Button
+                  variant="ghost-danger"
+                  size="sm"
+                  onClick={() => void handleClearLogOverrides()}
                 >
-                  <span className="text-xs font-mono text-text-primary truncate">{name}</span>
-                  <span className="text-3xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-daintree-border/60 text-text-primary">
-                    {level}
-                  </span>
-                </div>
-              ))}
-          </div>
-        )}
+                  Clear all overrides
+                </Button>
+              }
+            />
+          )}
+          {clearOverridesError && <InlineErrorRow>{clearOverridesError}</InlineErrorRow>}
+        </SettingsGroup>
       </SettingsSection>
 
-      <div className="space-y-2">
-        <h4 className="text-sm font-medium text-text-primary">Keyboard Shortcuts</h4>
-        {/*
-          Named by route, not by chord. The dev-only Alt+Cmd+I accelerator this
-          used to advertise was removed when that chord became the fleet
-          overview's scoped shortcut (#11950), and a settings page promising a
-          key that now does something else entirely is worse than one that does
-          not mention a key at all.
-        */}
-        <p className="text-xs text-text-secondary select-text">
-          In development builds, open DevTools from View → Toggle Developer Tools, or run the Toggle
-          DevTools command from the command palette.
-        </p>
-      </div>
+      <SettingsSection title="Developer tools">
+        <SettingsGroup>
+          <SettingsSwitchCard
+            id="troubleshooting-devmode"
+            title="Developer mode"
+            subtitle="Turns on the debugging features below"
+            isEnabled={developerMode}
+            onChange={() => void handleToggleDeveloperMode()}
+            disabled={!developerModeLoaded}
+            // e2e selectors (SEL.settings.developerModeToggle) find the switch by this name.
+            ariaLabel="Developer Mode Toggle"
+          />
+          {developerModeError && <InlineErrorRow>{developerModeError}</InlineErrorRow>}
+          {developerModeReadFailed && (
+            <ErrorRetryRow
+              message="Developer settings couldn't be read"
+              onRetry={() => setDeveloperModeNonce((n) => n + 1)}
+            />
+          )}
+          <SettingsDependents
+            disabled={!developerMode}
+            reason="Turn on developer mode to use these"
+          >
+            <SettingsSwitchCard
+              id="troubleshooting-auto-diagnostics"
+              title="Auto-open diagnostics dock"
+              subtitle="Opens the diagnostics panel on app startup"
+              isEnabled={autoOpenDiagnostics}
+              onChange={() => void handleToggleAutoOpenDiagnostics()}
+            />
+            <SettingsSwitchCard
+              id="troubleshooting-focus-events"
+              title="Focus events tab"
+              subtitle="Opens diagnostics on the Events tab"
+              isEnabled={focusEventsTab}
+              onChange={() => void handleToggleFocusEventsTab()}
+              disabled={!autoOpenDiagnostics}
+              disabledReason={
+                developerMode ? "Turn on auto-open diagnostics dock to use this" : undefined
+              }
+            />
+          </SettingsDependents>
+          {/*
+            Named by route, not by chord. The dev-only Alt+Cmd+I accelerator this
+            used to advertise was removed when that chord became the fleet
+            overview's scoped shortcut (#11950), and a settings page promising a
+            key that now does something else entirely is worse than one that does
+            not mention a key at all.
+          */}
+          <SettingsRow
+            label="DevTools"
+            description="In development builds, open DevTools from View → Toggle Developer Tools, or run the Toggle DevTools command from the command palette."
+          />
+        </SettingsGroup>
+      </SettingsSection>
     </div>
   );
 }

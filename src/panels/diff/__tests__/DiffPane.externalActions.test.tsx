@@ -450,15 +450,21 @@ describe("DiffPane toolbar — failure and recovery", () => {
     });
 
     const retry = screen.getByRole("button", { name: "Retry opening in editor" });
-    expect(retry.hasAttribute("disabled")).toBe(true);
+    expect(retry.getAttribute("aria-disabled")).toBe("true");
+    // Unavailable but still focusable, so the veto has to be real.
+    const attempts = dispatchMock.mock.calls.length;
+    act(() => {
+      fireEvent.click(retry);
+    });
+    expect(dispatchMock.mock.calls.length).toBe(attempts);
 
     await act(async () => {
       gate.resolve(fail("boom"));
       await gate.promise;
     });
     expect(
-      screen.getByRole("button", { name: "Retry opening in editor" }).hasAttribute("disabled")
-    ).toBe(false);
+      screen.getByRole("button", { name: "Retry opening in editor" }).getAttribute("aria-disabled")
+    ).toBeNull();
   });
 });
 
@@ -663,8 +669,8 @@ describe("DiffPane toolbar — concurrency", () => {
     // Pending is per target: a slow reveal says nothing about the editor, so
     // the editor's own Retry must stay live.
     expect(
-      screen.getByRole("button", { name: "Retry opening in editor" }).hasAttribute("disabled")
-    ).toBe(false);
+      screen.getByRole("button", { name: "Retry opening in editor" }).getAttribute("aria-disabled")
+    ).toBeNull();
 
     await act(async () => {
       gate.resolve(ok());

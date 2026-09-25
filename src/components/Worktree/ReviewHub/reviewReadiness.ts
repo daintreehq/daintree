@@ -153,6 +153,10 @@ export function deriveReviewReadiness(input: ReviewReadinessInput): ReviewReadin
       severity: "blocker",
       label: operationLabel,
       detail: [stepDetail, conflictDetail].filter(Boolean).join(" · ") || undefined,
+      // A halted rebase or merge is resolved in the same conflict list the plain
+      // conflict state points at; naming the files without the way to them left
+      // the developer hunting for it.
+      ...(conflictCount > 0 ? { action: { kind: "focus-conflicts" as const } } : {}),
     });
   } else if (conflictCount > 0) {
     items.push({

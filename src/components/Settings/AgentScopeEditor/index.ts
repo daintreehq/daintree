@@ -5,5 +5,6 @@ export {
   isBoolModified,
   isStringModified,
   getEffectiveBool,
+  resolveSkipPermissions,
 } from "./scopeUtils";
 export type { ScopeKind } from "./scopeUtils";

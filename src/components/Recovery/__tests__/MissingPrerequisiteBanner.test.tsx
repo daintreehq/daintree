@@ -503,7 +503,7 @@ describe("MissingPrerequisiteBanner", () => {
       render(<MissingPrerequisiteBanner />);
 
       const button = screen.getByRole("button", { name: "Install Git" });
-      expect(button.hasAttribute("disabled")).toBe(true);
+      expect(button.getAttribute("aria-disabled")).toBe("true");
       expect(screen.queryByRole("button", { name: "Re-check" })).toBeNull();
     });
   });

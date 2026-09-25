@@ -70,16 +70,17 @@ test.describe.serial("Core: Shell & Settings", () => {
         const navButtons = [
           "Keyboard",
           "Notifications",
-          "Panel Grid",
+          "Panel grid",
           "Worktree",
           "Toolbar",
           "Appearance",
           "CLI agents",
-          "Code Forge",
+          "Code forge",
           "Integrations",
           "Portal",
-          "MCP Server",
-          "Privacy & Data",
+          "MCP server",
+          "Privacy & data",
+          "Import & export",
           "Environment",
           "Troubleshooting",
         ];
@@ -293,13 +294,13 @@ test.describe.serial("Core: Shell & Settings", () => {
       });
 
       await test.step("Change font family from JetBrains Mono to System monospace", async () => {
-        const fontSelect = window.locator(SEL.settings.fontFamilySelect);
-        await expect(fontSelect).toBeVisible({ timeout: T_MEDIUM });
-        await expect(fontSelect).toContainText("JetBrains Mono", { timeout: T_MEDIUM });
+        const fontGroup = window.locator(SEL.settings.fontFamilySelect);
+        const checked = fontGroup.locator('[role="radio"][aria-checked="true"]');
+        await expect(fontGroup).toBeVisible({ timeout: T_MEDIUM });
+        await expect(checked).toContainText("JetBrains Mono", { timeout: T_MEDIUM });
 
-        await fontSelect.click();
-        await window.locator('[role="option"]', { hasText: "System monospace" }).click();
-        await expect(fontSelect).toContainText("System monospace", { timeout: T_MEDIUM });
+        await fontGroup.locator('[role="radio"]', { hasText: "System monospace" }).click();
+        await expect(checked).toContainText("System monospace", { timeout: T_MEDIUM });
       });
     });
 
@@ -345,8 +346,10 @@ test.describe.serial("Core: Shell & Settings", () => {
           '#settings-panel-terminalAppearance button[role="tab"]:has-text("Terminal")'
         );
         await terminalSubtab.click();
-        const fontSelect = window.locator(SEL.settings.fontFamilySelect);
-        await expect(fontSelect).toContainText("System monospace", { timeout: T_MEDIUM });
+        const checked = window.locator(
+          `${SEL.settings.fontFamilySelect} [role="radio"][aria-checked="true"]`
+        );
+        await expect(checked).toContainText("System monospace", { timeout: T_MEDIUM });
       });
 
       await window.keyboard.press("Escape");
@@ -375,11 +378,8 @@ test.describe.serial("Core: Shell & Settings", () => {
         const heading = window.locator('h2:has-text("Settings")');
         await expect(heading).toBeVisible({ timeout: T_MEDIUM });
 
-        // Verify project scope is selected
-        // The radiogroup renders both labels, so containText would pass either way.
-        // Assert the Project segment is the checked one.
-        const projectSegment = window.locator(SEL.settings.scopeOption("Project"));
-        await expect(projectSegment).toHaveAttribute("aria-checked", "true", {
+        // The scope heading names the scope it is showing.
+        await expect(window.locator(SEL.settings.scopeControl)).toHaveText("Project settings", {
           timeout: T_SHORT,
         });
       });

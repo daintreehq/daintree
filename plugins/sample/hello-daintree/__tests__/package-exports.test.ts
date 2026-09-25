@@ -12,6 +12,10 @@ describe("@daintreehq package boundaries resolve by public name", () => {
     const sdk = await import("@daintreehq/plugin-sdk");
     expect(typeof sdk.PLUGIN_PROCESS_STREAM_CHANNEL).toBe("string");
     expect(sdk.PLUGIN_PROCESS_STREAM_CHANNEL.length).toBeGreaterThan(0);
+    // `export type *` in the SDK index erases value bindings; the api-report
+    // declares this as a runtime string, so it must survive the boundary.
+    expect(typeof sdk.PLUGIN_STYLE_ROOT_ATTRIBUTE).toBe("string");
+    expect(sdk.PLUGIN_STYLE_ROOT_ATTRIBUTE.length).toBeGreaterThan(0);
   });
 
   it("plugin-sdk/react subpath exports the React hooks", async () => {
@@ -35,8 +39,8 @@ describe("@daintreehq package boundaries resolve by public name", () => {
     expect(rows.map((row) => row.path)).toEqual(["src"]);
   });
 
-  it("plugin-testing exports createMockHost", async () => {
-    const testing = await import("@daintreehq/plugin-testing");
+  it("plugin-sdk/testing subpath exports createMockHost", async () => {
+    const testing = await import("@daintreehq/plugin-sdk/testing");
     expect(typeof testing.createMockHost).toBe("function");
     // The factory must actually produce a usable mock host, not just exist.
     const host = testing.createMockHost({ pluginId: "daintree.hello" });

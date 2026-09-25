@@ -30,18 +30,6 @@ export const STATUS_SUCCESS_CATEGORIES = [
   "outcome",
   /** Notation the app inherited rather than invented: git status letters, diff counts, ahead arrows. */
   "domain",
-  /**
-   * The affirmative half of a control pair — run, apply, stage, resume, save.
-   * Green here means "go", not "good": it is not reporting state at all.
-   *
-   * NOT one of the four categories the #12002 ruling named, and deliberately
-   * separate rather than folded into `domain`, which would have quietly
-   * restated what the ruling meant by it. These controls were never in the
-   * ruling's demote list, so this PR left them alone and named the gap instead
-   * of laundering it. If the maintainer wants them neutral, deleting this
-   * category is the change — and the guard will then list every site to fix.
-   */
-  "affordance",
 ] as const;
 
 export type StatusSuccessCategory = (typeof STATUS_SUCCESS_CATEGORIES)[number];
@@ -92,22 +80,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded per-item result of the bulk create the user just ran",
     },
   ],
-  "plugins/builtin/github/renderer/components/CommitListItem.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'copied && "text-status-success"',
-      expectedOccurrences: 1,
-      rationale: "Copy-hash confirmation on the row; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: "<span>#</span>",
-      expectedOccurrences: 1,
-      rationale: "Copy-hash confirmation glyph; resets when the copy flash times out",
-    },
-  ],
   "plugins/builtin/github/renderer/components/GitHubListItem.tsx": [
     {
       category: "outcome",
@@ -131,36 +103,12 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Copy confirmation glyph; resets when the copy flash times out",
     },
   ],
-  "plugins/builtin/github/renderer/components/GitHubSettingsTab.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'validationResult === "success"',
-      expectedOccurrences: 1,
-      rationale: "Token-saved confirmation; resets on the next edit of the token field",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'validationResult === "test-success"',
-      expectedOccurrences: 1,
-      rationale: "Token-valid confirmation; resets on the next edit of the token field",
-    },
-  ],
   "plugins/builtin/github/renderer/utils/prCIStatus.ts": [
     {
       category: "outcome",
       signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Recorded result of the last CI run on the pull request",
-    },
-  ],
-  "src/components/AllClearOverlay/AllClearOverlay.tsx": [
-    {
-      category: "transient",
-      signature: "bg-status-success",
-      expectedOccurrences: 1,
-      rationale: "Full-screen all-clear flash; the portal unmounts itself on animationend",
     },
   ],
   "src/components/Browser/BrowserToolbar.tsx": [
@@ -177,6 +125,14 @@ export const STATUS_SUCCESS_INVENTORY = {
       anchor: 'aria-label="Copy screenshot to clipboard"',
       expectedOccurrences: 1,
       rationale: "Copy-screenshot confirmation; resets when the copy flash times out",
+    },
+    {
+      category: "transient",
+      signature: "text-status-success",
+      anchor: 'aria-label="More page actions"',
+      expectedOccurrences: 1,
+      rationale:
+        "Copy-URL confirmation on the More trigger in a compact pane, where Copy URL lives in the menu; resets when the copy flash times out",
     },
   ],
   "src/components/Commands/CommandBuilder.tsx": [
@@ -203,37 +159,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Copy-all-messages confirmation; resets when the copy flash times out",
     },
   ],
-  "src/components/Diagnostics/ProblemsContent.tsx": [
-    {
-      category: "affordance",
-      signature:
-        "text-status-success hover:text-status-success/70 border-status-success/50 hover:bg-status-success/10",
-      expectedOccurrences: 4,
-      rationale: "Go-colour on the Retry control, not a claim that the problem is resolved",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Copy-details confirmation; resets when the copy flash times out",
-    },
-  ],
-  "src/components/Diagnostics/TelemetryContent.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Copy-payload confirmation; resets when the copy flash times out",
-    },
-  ],
-  "src/components/EventInspector/EventDetail.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Copy-payload confirmation; resets when the copy flash times out",
-    },
-  ],
   "src/components/FileViewer/DiffFileSidebar.tsx": [
     {
       category: "domain",
@@ -258,7 +183,7 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "transient",
       signature: "text-status-success",
-      anchor: 'aria-label="Copy file path"',
+      anchor: "copyLabel}: ${path}",
       expectedOccurrences: 1,
       rationale: "Copy-path confirmation; resets when the copy flash times out",
     },
@@ -268,6 +193,14 @@ export const STATUS_SUCCESS_INVENTORY = {
       anchor: 'label="Copy file contents"',
       expectedOccurrences: 1,
       rationale: "Copy-file-contents confirmation; resets when the copy flash times out",
+    },
+    {
+      category: "transient",
+      signature: "text-status-success",
+      anchor: "{confirmed ? (",
+      expectedOccurrences: 1,
+      rationale:
+        "Copy confirmation on the More actions trigger when Copy ran from the folded menu; resets when the copy flash times out",
     },
   ],
   "src/components/FileViewer/diffChangeSet.ts": [
@@ -306,14 +239,6 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "transient",
       signature: "text-status-success",
-      anchor: 'copied && "text-status-success"',
-      expectedOccurrences: 1,
-      rationale: "Copy-hash confirmation on the row; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: "<span>#</span>",
       expectedOccurrences: 1,
       rationale: "Copy-hash confirmation glyph; resets when the copy flash times out",
     },
@@ -354,14 +279,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Recorded result of the named context test the user ran",
-    },
-  ],
-  "src/components/Project/GeneralTab.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Copy-gitignore confirmation; resets when the copy flash times out",
     },
   ],
   "src/components/Project/GitInitDialog.tsx": [
@@ -428,141 +345,16 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "domain",
       signature: "text-status-success",
+      anchor: "deltaToMain!.ahead",
       expectedOccurrences: 1,
       rationale: "Ahead-arrow count against the base branch",
     },
     {
       category: "domain",
-      signature: "text-status-success/80",
+      signature: "text-status-success",
+      anchor: "deltaToMain!.insertions",
       expectedOccurrences: 1,
       rationale: "Diff insertion count against the base branch",
-    },
-  ],
-  "src/components/Settings/CodeForgeSettingsTab.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Credentials-saved confirmation; resets on the next input change",
-    },
-  ],
-  "src/components/Settings/DaintreeAssistantSettingsTab.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      expectedOccurrences: 2,
-      rationale: "Copy-config confirmation; resets when the copy flash times out",
-    },
-  ],
-  "src/components/Settings/EditorIntegrationTab.tsx": [
-    {
-      category: "outcome",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Recorded result of the editor test the user ran",
-    },
-  ],
-  "src/components/Settings/ForgeAuditLogViewer.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: "copyFlashActive",
-      expectedOccurrences: 2,
-      rationale: "Copy confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: "exportFlashActive",
-      expectedOccurrences: 2,
-      rationale: "Export confirmation; resets when the export flash times out",
-    },
-  ],
-  "src/components/Settings/ImageViewerTab.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Saved confirmation; resets on the next edit",
-    },
-  ],
-  "src/components/Settings/McpAuditLogViewer.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: "copyFlashActive",
-      expectedOccurrences: 2,
-      rationale: "Copy confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: "exportFlashActive",
-      expectedOccurrences: 2,
-      rationale: "Export confirmation; resets when the export flash times out",
-    },
-  ],
-  "src/components/Settings/McpServerSettingsTab.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: 'copiedTarget === "plain"',
-      expectedOccurrences: 2,
-      rationale: "Copy-config confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: 'copiedTarget === "scoped"',
-      expectedOccurrences: 2,
-      rationale: "Copy-scoped-config confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: "copiedKey",
-      expectedOccurrences: 2,
-      rationale: "Copy-API-key confirmation; resets when the copy flash times out",
-    },
-  ],
-  "src/components/Settings/PluginActionAuditLogViewer.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: "copyFlashActive",
-      expectedOccurrences: 2,
-      rationale: "Copy confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: "exportFlashActive",
-      expectedOccurrences: 2,
-      rationale: "Export confirmation; resets when the export flash times out",
-    },
-  ],
-  "src/components/Settings/PortalSettingsTab.tsx": [
-    {
-      category: "affordance",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the confirm half of a confirm/cancel edit pair",
-    },
-  ],
-  "src/components/Settings/RunHistorySettingsTab.tsx": [
-    {
-      category: "outcome",
-      signature: "bg-status-success/15 text-status-success",
-      expectedOccurrences: 2,
-      rationale: "Counted results of named runs, beside the matching failure count",
-    },
-  ],
-  "src/components/Settings/TroubleshootingTab.tsx": [
-    {
-      category: "verification",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "One mark per required tool in a finite prerequisite list",
     },
   ],
   "src/components/Settings/VoiceInputSettingsTab.tsx": [
@@ -629,45 +421,20 @@ export const STATUS_SUCCESS_INVENTORY = {
   ],
   "src/components/Terminal/ArtifactOverlay.tsx": [
     {
-      category: "domain",
-      signature: "text-status-success bg-status-success/10",
-      expectedOccurrences: 2,
-      rationale: "Added line in a unified patch",
-    },
-    {
-      category: "affordance",
-      signature: "bg-status-success",
-      anchor: "onClick={handleApplyPatch}",
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the apply-patch control",
-    },
-    {
-      category: "transient",
+      category: "outcome",
       signature: "text-status-success",
-      anchor: 'feedback.tone === "success"',
+      anchor: 'tone === "success" && "text-status-success"',
       expectedOccurrences: 1,
-      rationale: "Apply feedback; replaced on the next action",
+      rationale:
+        "A row's recorded `git apply` result, beside the files it touched; replaced by the next attempt",
     },
     {
-      category: "affordance",
-      signature: "bg-status-success",
-      anchor: "onClick={handleApplyAllPatches}",
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the apply-all-patches control",
-    },
-    {
-      category: "transient",
+      category: "outcome",
       signature: "text-status-success",
-      anchor: 'bulkResult.tone === "success"',
+      anchor: 'className="size-3.5 shrink-0 mt-px text-status-success"',
       expectedOccurrences: 1,
-      rationale: "Bulk apply feedback; replaced on the next action",
-    },
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: 'className="text-status-success"',
-      expectedOccurrences: 1,
-      rationale: "Per-patch insertion count",
+      rationale:
+        "The result of a named bulk copy, save or apply run; copy and save clear on a timer, apply until dismissed or rerun",
     },
   ],
   "src/components/Terminal/GridNotificationBar.tsx": [
@@ -685,13 +452,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       expectedOccurrences: 1,
       rationale: "Recorded result carried by a success notification on the grid bar",
     },
-    {
-      category: "outcome",
-      signature: "text-status-success",
-      anchor: 'titleClass: "text-status-success"',
-      expectedOccurrences: 1,
-      rationale: "Recorded result carried by a success notification on the grid bar",
-    },
   ],
   "src/components/Terminal/MissingCliGate.tsx": [
     {
@@ -705,48 +465,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "CLI-now-available banner; the gate stops rendering once it is seen",
-    },
-  ],
-  "src/components/Terminal/RecipeRunner/RecipeRunnerEmpty.tsx": [
-    {
-      category: "affordance",
-      signature: "text-status-success/50",
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the run-suggestion control",
-    },
-    {
-      category: "affordance",
-      signature: "group-hover:text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the run-suggestion control at hover",
-    },
-  ],
-  "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx": [
-    {
-      category: "affordance",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the run-recipe control",
-    },
-    {
-      category: "affordance",
-      signature: "group-hover:text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the run-recipe control at hover",
-    },
-    {
-      category: "affordance",
-      signature: "text-status-success/50 group-hover:text-status-success",
-      expectedOccurrences: 2,
-      rationale: "Go-colour on the run-recipe control in the collapsed row",
-    },
-  ],
-  "src/components/TerminalRecipe/RecipeManager.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Recipe-exported confirmation; resets when the export flash times out",
     },
   ],
   "src/components/Worktree/CrossWorktreeDiff.tsx": [
@@ -861,13 +579,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale:
         "One viewed mark per file in the review checklist; the row wash went neutral in #12002",
     },
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: 'className="w-3 h-3 text-status-success"',
-      expectedOccurrences: 1,
-      rationale: "Plus half of the stage/unstage pair, against the red Minus",
-    },
   ],
   "src/components/Worktree/ReviewHub/ReviewHubContent.tsx": [
     {
@@ -918,7 +629,7 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "domain",
       signature: "text-status-success",
-      anchor: "↑{baseAheadCount}",
+      anchor: "↑{displayedBaseAhead}",
       expectedOccurrences: 1,
       rationale: "Ahead-arrow count against the base branch",
     },
@@ -931,12 +642,21 @@ export const STATUS_SUCCESS_INVENTORY = {
       expectedOccurrences: 1,
       rationale: "Worktree diff insertion count",
     },
+  ],
+  "src/components/Worktree/WorktreeOverviewRow.tsx": [
     {
-      category: "affordance",
+      category: "domain",
       signature: "text-status-success",
-      anchor: 'aria-label="Resume resource"',
+      anchor: "+{insertions}",
       expectedOccurrences: 1,
-      rationale: "Go-colour on the resume-resource control",
+      rationale: "Worktree diff insertion count, as the sidebar card paints it",
+    },
+    {
+      category: "domain",
+      signature: "text-status-success",
+      anchor: "↑{ahead}",
+      expectedOccurrences: 1,
+      rationale: "Ahead-arrow count against the upstream, as the sidebar card paints it",
     },
   ],
   "src/components/Worktree/WorktreeDetails.tsx": [
@@ -945,15 +665,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Copy-path confirmation; resets when the copy flash times out",
-    },
-  ],
-  "src/components/Worktree/WorktreeMenuItems.tsx": [
-    {
-      category: "affordance",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale:
-        "Go-colour on the resume-resource command — the same control the worktree card paints green, reached from the context menu instead of the card's icon rail",
     },
   ],
   "src/components/ui/ReEntrySummary.tsx": [
@@ -970,14 +681,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       signature: "bg-status-success/10 text-status-success",
       expectedOccurrences: 2,
       rationale: "The success tone of the shared badge primitive, for reporting a result",
-    },
-  ],
-  "src/components/ui/button.tsx": [
-    {
-      category: "affordance",
-      signature: "text-status-success hover:bg-status-success/10",
-      expectedOccurrences: 2,
-      rationale: "Go-colour variant of the shared button primitive",
     },
   ],
   "src/components/ui/toaster.tsx": [
@@ -1029,7 +732,7 @@ export const STATUS_SUCCESS_INVENTORY = {
   "src/panels/file-browser/FileBrowserChangeSummary.tsx": [
     {
       category: "domain",
-      signature: "text-status-success/80",
+      signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Per-file diff insertion count",
     },
@@ -1057,5 +760,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 127;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 148;
+export const EXPECTED_STATUS_SUCCESS_SITES = 89;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 93;

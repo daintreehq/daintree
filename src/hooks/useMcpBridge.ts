@@ -14,6 +14,8 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { runWithMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import {
   buildWorktreeDeletePreview,
+  fetchWorktreeTeardownPreview,
+  formatTeardownPreviewLines,
   formatWorktreeDeletePreviewLines,
   settleWorktreeDeleteOutcome,
   worktreeDeleteBlockedBy,
@@ -56,11 +58,16 @@ import type {
   HostApprovedRecipeRun,
   HostApprovedTarget,
 } from "@shared/types/actions";
-import type { McpConfirmationDecision, McpSessionOrigin } from "@shared/types/ipc/mcpServer";
+import type {
+  McpApprovalScope,
+  McpConfirmationDecision,
+  McpSessionOrigin,
+} from "@shared/types/ipc/mcpServer";
 import type { TerminalSpawnSource } from "@shared/types/panel";
 import { TerminalKillBatchIdsSchema } from "@shared/types/terminalKillBatch";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
+import { isGenericNativeGrantEligible } from "@shared/config/nativeGrantUsePolicies";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { withReplayedWorktreeDetails } from "@/services/actions/replayedContextWorktree";
 
@@ -192,7 +199,7 @@ export type McpConfirmPreviewTarget =
 
 /** Section heading rendered above each kind's preview lines. */
 const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
-  worktreeDelete: "Working tree changes",
+  worktreeDelete: "What this delete affects",
   gitPush: "Branch and local commits",
   gitPullRebase: "Branch and local commits",
   recipe: "Recipe contents",
@@ -750,9 +757,13 @@ export async function buildMcpConfirmPreview(
     };
   }
   if (target.kind === "worktreeDelete") {
-    const outcome = await settleWorktreeDeleteOutcome(
-      buildWorktreeDeletePreview(target.worktreeId)
-    );
+    // The teardown read rides alongside: the delete runs the project's
+    // teardown before removing the tree, and an agent-initiated delete owes
+    // the approver the same disclosure the local dialog makes.
+    const [outcome, teardown] = await Promise.all([
+      settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(target.worktreeId)),
+      fetchWorktreeTeardownPreview(target.worktreeId),
+    ]);
     // Deliberately the SAME formatter the local dialog's data comes from,
     // submodule half included: this surface is the one an agent-driven force
     // delete gates on, and a preview that listed only what the parent's status
@@ -760,9 +771,12 @@ export async function buildMcpConfirmPreview(
     // unrecoverable submodule commits they were never shown.
     const lines =
       outcome.state === "verified"
-        ? formatWorktreeDeletePreviewLines(outcome.preview)
+        ? [
+            ...formatWorktreeDeletePreviewLines(outcome.preview),
+            ...formatTeardownPreviewLines(teardown),
+          ]
         : outcome.state === "failed"
-          ? formatWorktreeDeletePreviewLines(null)
+          ? [...formatWorktreeDeletePreviewLines(null), ...formatTeardownPreviewLines(teardown)]
           : // Monitor gone / already removed → nothing meaningful to preview.
             [];
     const gate = resolveWorktreeDeleteGate(target, outcome);
@@ -1055,6 +1069,8 @@ export function useMcpBridge(): void {
         context: replayedContext,
         callerInfo,
         sessionOrigin,
+        offerSessionApproval,
+        approvalOnly,
       }) => {
         // An agent pane's replayed snapshot names its worktree by id only, so
         // describe it from this view's store once, up front (#12486): the
@@ -1072,6 +1088,9 @@ export function useMcpBridge(): void {
         // — for the destructive re-check below we compare against it directly.
         const receivedAt = Date.now();
         let confirmationDecision: McpConfirmationDecision | undefined;
+        // Set only when the user ticked "Allow for this session" on a dialog
+        // main said may offer it (#12692); main mints the grant, never this.
+        let approvalScope: McpApprovalScope | undefined;
         // Declared outside the confirm block so the approved dispatch can pin
         // itself to the previewed cwd. Stays undefined for pre-granted
         // dispatches, which show no modal and so previewed nothing to pin to.
@@ -1147,7 +1166,25 @@ export function useMcpBridge(): void {
               source: "agent",
               args,
             });
-            if (definition?.danger === "confirm") {
+            // An approval-only request (#12692) asks about a call main will
+            // run itself once approved — an agent pane reaching above its
+            // tier — so it raises the dialog whatever the action's danger, and
+            // never dispatches. Unknown here means there is nothing honest to
+            // show the approver, so it is refused rather than asked about.
+            if (approvalOnly === true && !definition) {
+              window.electron.mcpBridge.sendDispatchActionResponse({
+                requestId,
+                result: {
+                  ok: false,
+                  error: {
+                    code: "NOT_FOUND",
+                    message: `Action '${actionId}' is not available in this view, so it was not put to the user.`,
+                  },
+                },
+              });
+              return;
+            }
+            if (definition && (definition.danger === "confirm" || approvalOnly === true)) {
               inFlightConfirms.add(requestId);
               // Fetch the fresh preview OFF the critical path so the modal
               // appears immediately (never blocked on a git read) and the
@@ -1222,6 +1259,13 @@ export function useMcpBridge(): void {
                   // requester positively instead of inferring one from an
                   // absence that has two very different causes.
                   sessionOrigin,
+                  // Only where "Allow for this session" can deliver what it says.
+                  // A target-picking tool's dialog is raised again on every
+                  // call, so offering to stop asking would be untrue (#12692).
+                  ...(offerSessionApproval === true && isGenericNativeGrantEligible(actionId)
+                    ? { offerSessionApproval: true }
+                    : {}),
+                  ...(approvalOnly === true ? { approvalReason: "above-tier" as const } : {}),
                   previewPending,
                   ...(hasAsyncPreview && previewTarget
                     ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) }
@@ -1260,6 +1304,19 @@ export function useMcpBridge(): void {
               }
               confirmationDecision = "approved";
               effectiveConfirmed = true;
+              if (resolution.scope === "session") approvalScope = "session";
+              if (approvalOnly === true) {
+                // Main runs the call itself, preconfirmed — which is also
+                // where a force delete's live D3 re-check happens, on the
+                // dispatch that actually deletes.
+                window.electron.mcpBridge.sendDispatchActionResponse({
+                  requestId,
+                  result: { ok: true, result: null },
+                  confirmationDecision,
+                  ...(approvalScope ? { approvalScope } : {}),
+                });
+                return;
+              }
               if (selectableTargets !== undefined) {
                 // Only the rows still checked, each carrying the agent state its
                 // row was SHOWING. `run()` re-reads that state live before it
@@ -1334,6 +1391,7 @@ export function useMcpBridge(): void {
             requestId,
             result,
             confirmationDecision,
+            ...(approvalScope ? { approvalScope } : {}),
           });
         } catch (err) {
           if (disposed) return;

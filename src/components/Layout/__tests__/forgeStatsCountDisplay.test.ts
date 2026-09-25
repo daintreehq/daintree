@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { resolveForgeDisplayCount } from "../forgeStatsCountDisplay";
+import {
+  formatExactCount,
+  formatForgeBadgeCount,
+  resolveForgeDisplayCount,
+} from "../forgeStatsCountDisplay";
 
 /**
  * Recency arbitration between the stats poll and the list-derived count
@@ -54,5 +58,23 @@ describe("resolveForgeDisplayCount", () => {
   it("preserves a genuine zero from whichever source wins", () => {
     expect(resolveForgeDisplayCount(3, 3000, 0, false, 4000)).toBe(0);
     expect(resolveForgeDisplayCount(0, 3000, 5, false, 2000)).toBe(0);
+  });
+});
+
+describe("formatForgeBadgeCount / formatExactCount", () => {
+  it("compacts the badge and keeps the exact figure for names and tooltips", () => {
+    expect(formatForgeBadgeCount(23_645)).not.toContain("23645");
+    expect(formatExactCount(23_645)).toBe("23,645");
+  });
+
+  it("keeps the approximate marker on the list's N+ form", () => {
+    expect(formatForgeBadgeCount("20+")).toBe("20+");
+    expect(formatForgeBadgeCount("1500+")).toMatch(/\+$/);
+    expect(formatExactCount("1500+")).toBe("1,500+");
+  });
+
+  it("passes null through for the em-dash placeholder", () => {
+    expect(formatForgeBadgeCount(null)).toBeNull();
+    expect(formatExactCount(null)).toBe("—");
   });
 });

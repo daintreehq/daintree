@@ -21,6 +21,16 @@ import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 import { TrashBinItem } from "./TrashBinItem";
 import { TrashGroupItem } from "./TrashGroupItem";
+import {
+  DOCK_STATUS_PILL_CLASS,
+  DOCK_STATUS_PILL_OPEN_CLASS,
+  DOCK_POPOVER_SECTIONS,
+  DockPopoverSection,
+  DockStatusPillLabel,
+  dockStatusScopeDescription,
+  useDockPopoverFocusHandoff,
+} from "./dockStatusPill";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 const MOVED_HINT_MAX_SHOWS = 3;
 
@@ -68,7 +78,10 @@ export function TrashContainer({
 }: TrashContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isTrashPulsing, setIsTrashPulsing] = useState(false);
+  const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const [showMovedHint, setShowMovedHint] = useState(false);
+  // Hover and focus open the scope tooltip; the moved hint borrows the same one.
+  const [scopeTooltipOpen, setScopeTooltipOpen] = useState(false);
   const [emptyTrashConfirmOpen, setEmptyTrashConfirmOpen] = useState(false);
   const [pendingRemoval, setPendingRemoval] = useState<TrashRemovalRequest | null>(null);
   const [isScrollable, setIsScrollable] = useState(false);
@@ -155,10 +168,15 @@ export function TrashContainer({
   // a confirm. The dialog is owned here rather than by the row because the
   // popover is anchored to the toolbar and paints over anything opened beneath
   // it; the popover steps aside, which it cannot do while hosting the dialog.
-  const requestRemoval = useCallback((request: TrashRemovalRequest) => {
-    setIsOpen(false);
-    setPendingRemoval(request);
-  }, []);
+  const focusHandoff = useDockPopoverFocusHandoff();
+  const requestRemoval = useCallback(
+    (request: TrashRemovalRequest) => {
+      focusHandoff.markHandoff();
+      setIsOpen(false);
+      setPendingRemoval(request);
+    },
+    [focusHandoff]
+  );
 
   // Reopen where they were: the popover only closed to get out of the dialog's
   // way, and a cancelled removal that also loses your place is two losses.
@@ -302,6 +320,18 @@ export function TrashContainer({
     return items.sort((a, b) => b.sortKey - a.sortKey);
   }, [trashedTerminals]);
 
+  // Same split as the Waiting popover; LIFO holds within each section.
+  const { hereItems, elsewhereItems } = useMemo(() => {
+    const here: TrashDisplayItem[] = [];
+    const elsewhere: TrashDisplayItem[] = [];
+    for (const item of displayItems) {
+      const worktreeId =
+        item.type === "group" ? item.groupMetadata.worktreeId : item.terminal.worktreeId;
+      ((worktreeId ?? null) === (activeWorktreeId ?? null) ? here : elsewhere).push(item);
+    }
+    return { hereItems: here, elsewhereItems: elsewhere };
+  }, [displayItems, activeWorktreeId]);
+
   // The footer only earns its space when rows are actually out of sight, so the
   // question is whether the list overflows, not how many items it holds — a
   // count threshold would guess wrong the moment a row grows a second line.
@@ -423,6 +453,9 @@ export function TrashContainer({
   if (trashedTerminals.length === 0 && !isPanelDragging) return null;
 
   const count = trashedTerminals.length;
+  const hereCount = trashedTerminals.filter(
+    ({ terminal }) => (terminal.worktreeId ?? null) === (activeWorktreeId ?? null)
+  ).length;
   const contentId = "trash-container-popover";
 
   // Ghost pill: visible during drags so users can see a drop target even when trash is empty.
@@ -444,7 +477,7 @@ export function TrashContainer({
               "cursor-copy opacity-100 bg-overlay-soft ring-2 ring-inset ring-border-default"
           )}
         >
-          <Trash2 className="w-3.5 h-3.5 text-daintree-text/60" aria-hidden="true" />
+          <Trash2 className="w-3.5 h-3.5 text-text-secondary" aria-hidden="true" />
           {!compact && <span className="font-medium">Trash (drop to delete)</span>}
         </Button>
       </div>
@@ -456,9 +489,14 @@ export function TrashContainer({
   const hintOpen = showMovedHint && !isOpen;
 
   return (
-    <div ref={setNodeRef} onFocusCapture={noteFocusEntered} className="shrink-0">
+    <div
+      ref={setNodeRef}
+      onFocusCapture={noteFocusEntered}
+      className="dock-status-pill shrink-0"
+      data-visible="true"
+    >
       <Popover open={isOpen} onOpenChange={setIsOpen}>
-        <Tooltip open={hintOpen}>
+        <Tooltip open={hintOpen || scopeTooltipOpen} onOpenChange={setScopeTooltipOpen}>
           <TooltipTrigger asChild>
             <PopoverTrigger asChild>
               <Button
@@ -466,8 +504,9 @@ export function TrashContainer({
                 size="sm"
                 data-testid="trash-container"
                 className={cn(
-                  compact ? "px-1.5 min-w-0" : "px-3",
-                  isOpen && "bg-overlay-emphasis border-border-default",
+                  DOCK_STATUS_PILL_CLASS,
+                  compact ? "px-2 min-w-0" : "px-3",
+                  isOpen && DOCK_STATUS_PILL_OPEN_CLASS,
                   isOver &&
                     isPanelDragging &&
                     "cursor-copy bg-overlay-soft ring-2 ring-inset ring-border-default"
@@ -475,25 +514,29 @@ export function TrashContainer({
                 aria-haspopup="dialog"
                 aria-expanded={isOpen}
                 aria-controls={contentId}
-                aria-label={`Trash: ${count} terminal${count === 1 ? "" : "s"}, removed for good ${TRASH_TTL_SECONDS} seconds after closing`}
+                aria-label={`Trash: ${count} terminal${count === 1 ? "" : "s"} ${dockStatusScopeDescription(count, hereCount)}, removed for good ${TRASH_TTL_SECONDS} seconds after closing`}
               >
-                <span
-                  className={cn("relative", isTrashPulsing && "animate-trash-pulse")}
-                  onAnimationEnd={handleTrashAnimationEnd}
-                >
-                  <Trash2 className="w-3.5 h-3.5 text-daintree-text/60" aria-hidden="true" />
-                  {compact && count > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-text-secondary text-3xs font-bold tabular-nums text-text-inverse">
-                      {count > 9 ? "9+" : count}
+                <DockStatusPillLabel
+                  icon={
+                    <span
+                      className={cn("flex", isTrashPulsing && "animate-trash-pulse")}
+                      onAnimationEnd={handleTrashAnimationEnd}
+                    >
+                      <Trash2 className="text-text-secondary" aria-hidden="true" />
                     </span>
-                  )}
-                </span>
-                {!compact && <span className="font-medium tabular-nums">Trash ({count})</span>}
+                  }
+                  label="Trash"
+                  count={count}
+                  hasLocal={hereCount > 0}
+                  compact={compact}
+                />
               </Button>
             </PopoverTrigger>
           </TooltipTrigger>
           <TooltipContent side="top" align="center" sideOffset={6}>
-            Moved to trash
+            {hintOpen
+              ? "Moved to trash"
+              : `Recently closed ${dockStatusScopeDescription(count, hereCount)}`}
           </TooltipContent>
         </Tooltip>
 
@@ -507,7 +550,7 @@ export function TrashContainer({
           sideOffset={8}
           onFocusCapture={noteFocusEntered}
           onOpenAutoFocus={(e) => e.preventDefault()}
-          onCloseAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
         >
           <div className="flex flex-col">
             <div className="px-3 py-2 border-b border-divider bg-surface-canvas/50 flex justify-between items-start gap-2">
@@ -530,6 +573,7 @@ export function TrashContainer({
                   // on top of it: this popover is anchored to the toolbar and
                   // paints above the dialog, where it was clipping the confirm
                   // button of the very action it launched.
+                  focusHandoff.markHandoff();
                   setIsOpen(false);
                   setEmptyTrashConfirmOpen(true);
                 }}
@@ -549,36 +593,46 @@ export function TrashContainer({
               // never knew there was anything out of sight.
               className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto"
             >
-              {displayItems.map((item) => {
-                if (item.type === "group") {
-                  const worktreeName = item.groupMetadata.worktreeId
-                    ? worktreeMap.get(item.groupMetadata.worktreeId)?.name
-                    : undefined;
-                  return (
-                    <TrashGroupItem
-                      key={item.groupRestoreId}
-                      groupRestoreId={item.groupRestoreId}
-                      groupMetadata={item.groupMetadata}
-                      terminals={item.terminals}
-                      worktreeName={worktreeName}
-                      earliestExpiry={item.earliestExpiry}
-                      onRequestRemove={requestRemoval}
-                    />
-                  );
-                } else {
-                  const worktreeName = item.terminal.worktreeId
-                    ? worktreeMap.get(item.terminal.worktreeId)?.name
-                    : undefined;
-                  return (
-                    <TrashBinItem
-                      key={item.terminal.id}
-                      terminal={item.terminal}
-                      trashedInfo={item.trashedInfo}
-                      worktreeName={worktreeName}
-                      onRequestRemove={requestRemoval}
-                    />
-                  );
-                }
+              {DOCK_POPOVER_SECTIONS.map((section) => {
+                const items = section.key === "here" ? hereItems : elsewhereItems;
+                if (items.length === 0) return null;
+                const showWorktree = section.key === "elsewhere";
+                return (
+                  <DockPopoverSection key={section.key} label={section.label}>
+                    {items.map((item) => {
+                      if (item.type === "group") {
+                        const worktreeName = item.groupMetadata.worktreeId
+                          ? worktreeMap.get(item.groupMetadata.worktreeId)?.name
+                          : undefined;
+                        return (
+                          <TrashGroupItem
+                            key={item.groupRestoreId}
+                            groupRestoreId={item.groupRestoreId}
+                            groupMetadata={item.groupMetadata}
+                            terminals={item.terminals}
+                            worktreeName={worktreeName}
+                            showWorktree={showWorktree}
+                            earliestExpiry={item.earliestExpiry}
+                            onRequestRemove={requestRemoval}
+                          />
+                        );
+                      }
+                      const worktreeName = item.terminal.worktreeId
+                        ? worktreeMap.get(item.terminal.worktreeId)?.name
+                        : undefined;
+                      return (
+                        <TrashBinItem
+                          key={item.terminal.id}
+                          terminal={item.terminal}
+                          trashedInfo={item.trashedInfo}
+                          worktreeName={worktreeName}
+                          showWorktree={showWorktree}
+                          onRequestRemove={requestRemoval}
+                        />
+                      );
+                    })}
+                  </DockPopoverSection>
+                );
               })}
             </div>
 

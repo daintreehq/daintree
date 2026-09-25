@@ -80,8 +80,17 @@ export function PanelPalette({
           onConfirm();
           break;
         case "Escape":
+          // An IME spends Escape cancelling its candidate; leave the query alone.
+          if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) break;
           e.preventDefault();
-          onClose();
+          // A query clears before the palette closes, as in every SearchablePalette.
+          // Stopped so the dialog's document-level Escape backstop cannot close it.
+          if (query !== "") {
+            e.stopPropagation();
+            onQueryChange("");
+          } else {
+            onClose();
+          }
           break;
         case "Tab":
           e.preventDefault();
@@ -93,7 +102,7 @@ export function PanelPalette({
           break;
       }
     },
-    [onSelectPrevious, onSelectNext, onConfirm, onClose]
+    [onSelectPrevious, onSelectNext, onConfirm, onClose, query, onQueryChange]
   );
 
   const panelCount = usePanelStore((state) =>
@@ -140,8 +149,7 @@ export function PanelPalette({
         className={cn(
           PALETTE_ROW_CLASS,
           "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
-          "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
-          isUnavailable && "opacity-50"
+          "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
         )}
         onClick={() => onSelect(kind)}
       >
@@ -149,7 +157,14 @@ export function PanelPalette({
           <PanelKindIcon iconId={kind.iconId} color={kind.color} size={16} />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-text-primary truncate">
+          {/* Unavailable steps the name down the ramp rather than fading the
+              row, which took the "Not installed" badge — the reason — with it. */}
+          <div
+            className={cn(
+              "text-sm font-medium truncate",
+              isUnavailable ? "text-text-secondary" : "text-text-primary"
+            )}
+          >
             <HighlightedText
               text={kind.name}
               indices={findMatchIndices(matchesById.get(kind.id), "name")}
@@ -214,10 +229,11 @@ export function PanelPalette({
           onKeyDown={handleKeyDown}
           placeholder="Select a panel type..."
           role="combobox"
-          aria-expanded={isOpen}
+          // The listbox only exists while there are rows to put in it.
+          aria-expanded={isOpen && results.length > 0}
           aria-haspopup="listbox"
           aria-label="Select panel type"
-          aria-controls="panel-list"
+          aria-controls={results.length > 0 ? "panel-list" : undefined}
           aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>

@@ -1,11 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { PluginPanelLifecycleEvent } from "@shared/types/plugin";
 import {
+  VIEW_RELOAD_LIMIT,
+  VIEW_RELOAD_WINDOW_MS,
+  admitViewReload,
   clearViewRenderFailure,
   getPanelRemovedSignal,
+  hasViewUnsavedChanges,
+  isViewReloadBlocked,
+  registerUserViewReload,
   reportViewMounted,
   reportViewRenderFailed,
   resetPluginPanelLifecycleForTests,
+  resetViewReloadBudget,
+  requestUserViewReload,
+  setViewUnsavedChanges,
   syncPluginPanels,
   type PluginPanelSnapshotEntry,
 } from "@/services/plugin/pluginPanelLifecycle";
@@ -229,5 +238,194 @@ describe("reporting", () => {
     vi.stubGlobal("window", {});
     expect(() => syncPluginPanels([panel()])).not.toThrow();
     await Promise.resolve();
+  });
+});
+
+describe("view reload budget (#12609)", () => {
+  const LIMIT = VIEW_RELOAD_LIMIT;
+  const WINDOW = VIEW_RELOAD_WINDOW_MS;
+  /** Spacing that fits the whole budget comfortably inside one window. */
+  const STEP = WINDOW / (LIMIT + 2);
+
+  /** Request `count` reloads for `panelId`, {@link STEP} apart from `start`. */
+  function admitMany(panelId: string, count: number, start = 0): string[] {
+    return Array.from({ length: count }, (_, i) => admitViewReload(panelId, start + i * STEP));
+  }
+
+  it("accepts the budget inside one window and blocks the request after it", () => {
+    syncPluginPanels([panel()]);
+    const outcomes = admitMany("p1", LIMIT + 1);
+    expect(outcomes.slice(0, LIMIT).every((outcome) => outcome === "accepted")).toBe(true);
+    expect(outcomes[LIMIT]).toBe("blocked");
+    expect(isViewReloadBlocked("p1")).toBe(true);
+  });
+
+  it("rolls the window rather than resetting it on a fixed schedule", () => {
+    syncPluginPanels([panel()]);
+    admitMany("p1", LIMIT);
+    // Exactly one reload — the first, at 0 — has aged out, so exactly one more
+    // fits; the rest of the budget is still inside the window.
+    expect(admitViewReload("p1", WINDOW)).toBe("accepted");
+    expect(admitViewReload("p1", WINDOW + 1)).toBe("blocked");
+  });
+
+  it("keeps a block after the window expires", () => {
+    syncPluginPanels([panel()]);
+    admitMany("p1", LIMIT + 1);
+    // Long after every recorded reload aged out: the block is one-way.
+    expect(admitViewReload("p1", 10 * WINDOW)).toBe("blocked");
+    expect(isViewReloadBlocked("p1")).toBe(true);
+  });
+
+  it("lifts the block and starts the budget over when the user reloads", () => {
+    syncPluginPanels([panel()]);
+    admitMany("p1", LIMIT + 1);
+    resetViewReloadBudget("p1");
+    expect(isViewReloadBlocked("p1")).toBe(false);
+    // A full budget, not whatever was left of the old window.
+    const outcomes = admitMany("p1", LIMIT + 1, LIMIT * STEP);
+    expect(outcomes.filter((outcome) => outcome === "accepted")).toHaveLength(LIMIT);
+    expect(outcomes[LIMIT]).toBe("blocked");
+  });
+
+  it("charges each panel separately", () => {
+    syncPluginPanels([panel({ panelId: "a" }), panel({ panelId: "b" })]);
+    admitMany("a", LIMIT + 1);
+    expect(isViewReloadBlocked("a")).toBe(true);
+    expect(admitViewReload("b", 0)).toBe("accepted");
+    expect(isViewReloadBlocked("b")).toBe(false);
+  });
+
+  it("reports a blocked panel as render-failed, even with a view mounted, until reset", async () => {
+    syncPluginPanels([panel()]);
+    const release = reportViewMounted("p1", IDENTITY);
+    admitMany("p1", LIMIT + 1);
+    // The view's unmount lands after the block; it must not surface as hidden.
+    release();
+    // A later commit clears `renderFailed`, but not the block.
+    reportViewMounted("p1", IDENTITY);
+    resetViewReloadBudget("p1");
+    expect(await drainPhases()).toEqual(["hidden", "mounted", "render-failed", "mounted"]);
+  });
+
+  it("keeps its history across a temporary unmount and a trash round trip", () => {
+    syncPluginPanels([panel()]);
+    const release = reportViewMounted("p1", IDENTITY);
+    admitMany("p1", LIMIT);
+    release();
+    syncPluginPanels([panel({ location: "trash" })]);
+    syncPluginPanels([panel()]);
+    expect(admitViewReload("p1", LIMIT * STEP)).toBe("blocked");
+  });
+
+  it("refuses a panel it does not track, without starting to track it", async () => {
+    expect(admitViewReload("ghost", 0)).toBe("refused");
+    expect(isViewReloadBlocked("ghost")).toBe(false);
+    resetViewReloadBudget("ghost");
+    // A tracked id missing from the store is swept as removed, so a reconcile
+    // is what would expose one of these calls having registered it.
+    syncPluginPanels([]);
+    expect(await drainPhases()).toEqual([]);
+  });
+
+  it("refuses a removed panel and gives a reused id a fresh budget", async () => {
+    syncPluginPanels([panel()]);
+    admitMany("p1", LIMIT + 1);
+    syncPluginPanels([]);
+    expect(admitViewReload("p1", WINDOW)).toBe("refused");
+    await Promise.resolve();
+
+    syncPluginPanels([panel()]);
+    expect(isViewReloadBlocked("p1")).toBe(false);
+    expect(admitViewReload("p1", WINDOW)).toBe("accepted");
+  });
+});
+
+describe("the user's reload (#12611)", () => {
+  it("hands it to the newest mounted host and reports that one took it", () => {
+    const older = vi.fn();
+    const newer = vi.fn();
+    registerUserViewReload("p1", older);
+    registerUserViewReload("p1", newer);
+
+    expect(requestUserViewReload("p1")).toBe(true);
+    expect(newer).toHaveBeenCalledTimes(1);
+    expect(older).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the remaining host when the newest unregisters", () => {
+    const older = vi.fn();
+    registerUserViewReload("p1", older);
+    const release = registerUserViewReload("p1", vi.fn());
+    release();
+
+    expect(requestUserViewReload("p1")).toBe(true);
+    expect(older).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases only its own registration, even when called twice", () => {
+    const kept = vi.fn();
+    const release = registerUserViewReload("p1", vi.fn());
+    registerUserViewReload("p1", kept);
+    release();
+    release();
+
+    requestUserViewReload("p1");
+    expect(kept).toHaveBeenCalledTimes(1);
+  });
+
+  it("lifts a block when no view is mounted, so the next mount starts fresh", () => {
+    syncPluginPanels([panel()]);
+    for (let i = 0; i <= VIEW_RELOAD_LIMIT; i += 1) admitViewReload("p1", i);
+    expect(isViewReloadBlocked("p1")).toBe(true);
+
+    expect(requestUserViewReload("p1")).toBe(false);
+    expect(isViewReloadBlocked("p1")).toBe(false);
+  });
+});
+
+describe("unsaved changes (#12611)", () => {
+  it("is raised and lowered by the attempt that owns it", () => {
+    const owner = {};
+    expect(hasViewUnsavedChanges("p1")).toBe(false);
+    setViewUnsavedChanges("p1", owner, true);
+    expect(hasViewUnsavedChanges("p1")).toBe(true);
+    setViewUnsavedChanges("p1", owner, false);
+    expect(hasViewUnsavedChanges("p1")).toBe(false);
+  });
+
+  it("cannot be lowered by a stale attempt's token", () => {
+    const stale = {};
+    const current = {};
+    setViewUnsavedChanges("p1", stale, true);
+    setViewUnsavedChanges("p1", current, true);
+    setViewUnsavedChanges("p1", stale, false);
+
+    expect(hasViewUnsavedChanges("p1")).toBe(true);
+  });
+
+  it("stays raised while an overlapping host still holds unsaved work", () => {
+    const leaving = {};
+    const staying = {};
+    setViewUnsavedChanges("p1", staying, true);
+    setViewUnsavedChanges("p1", leaving, true);
+    setViewUnsavedChanges("p1", leaving, false);
+
+    expect(hasViewUnsavedChanges("p1")).toBe(true);
+    setViewUnsavedChanges("p1", staying, false);
+    expect(hasViewUnsavedChanges("p1")).toBe(false);
+  });
+
+  it("is per panel", () => {
+    setViewUnsavedChanges("p1", {}, true);
+    expect(hasViewUnsavedChanges("p2")).toBe(false);
+  });
+
+  it("goes with the panel when it is removed", () => {
+    syncPluginPanels([panel()]);
+    setViewUnsavedChanges("p1", {}, true);
+    syncPluginPanels([], new Set());
+
+    expect(hasViewUnsavedChanges("p1")).toBe(false);
   });
 });

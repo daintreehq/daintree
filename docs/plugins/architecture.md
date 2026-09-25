@@ -52,11 +52,11 @@ The schema is built per origin — `getPluginManifestSchema(origin)` — so a ha
 
 Agent `command`/`args` are the one exception to the token check: the schema does **not** validate their `${settings:*}` tokens at parse time even though the runtime resolves them at spawn (see [Environment variable substitution](#environment-variable-substitution)).
 
-The `engines.daintree` semver range is validated and compared against the running Daintree version. A mismatch produces a user-visible toast and the plugin is skipped.
+The `engines.daintree` semver range is validated and compared against the running Daintree version. A mismatch still loads the plugin and shows a warning toast that it may not work on this version. A local dev build (`0.37.0-dev.<stamp>`) that misses the range is also checked against the release it precedes.
 
 ### Registration
 
-The manifest `contributes` object has 17 contribution points (`electron/schemas/plugin.ts`): sixteen arrays — `panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes` — each with a per-array cap in `MANIFEST_CONTRIBUTION_CAPS`, plus the non-array `surfaces` object. Most register eagerly at plugin-load time so the UI reflects them immediately — the command palette, toolbars, menus, keybindings, and context menus populate before any plugin code runs:
+The manifest `contributes` object has 20 contribution points (`electron/schemas/plugin.ts`): nineteen arrays — `panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`, plus the built-in-only `fileEditors`, `previewTools` and `guestAdapters` — each with a per-array cap in `MANIFEST_CONTRIBUTION_CAPS`, plus the non-array `surfaces` object. Most register eagerly at plugin-load time so the UI reflects them immediately — the command palette, toolbars, menus, keybindings, and context menus populate before any plugin code runs:
 
 - `panels` → `registerPanelKind()` in `shared/config/panelKindRegistry.ts`
 - `toolbarButtons` → `registerToolbarButton()` in `shared/config/toolbarButtonRegistry.ts`
@@ -182,7 +182,7 @@ Panels, commands/actions, toolbar buttons, keybindings, context menus and settin
 
 `createPluginHost` takes a `PluginHostBinding` (`{ projectId, projectRoot }`) and captures it **once, at construction**. Every closure reads the captured values; no bound host method resolves a project, worktree, or renderer from focus. That covers renderer dispatch and `host.actions.*`, the UI prompts, worktree getters and events, agent-state events, `sendToActiveAgent`, toasts and renderer pushes, and settings and storage `"project"` scope resolution. `host.storage` at `scope: "worktree"` is bound too: `storageTargetFor` passes an explicit `worktreePath` from `resolveBoundWorktreeTarget`, selected on each call from the bound project's own worktree snapshot, so it never reads the app-global focused worktree. If that project has no resolvable current worktree the call fails closed with no storage target rather than falling back; only a genuinely unbound host still resolves worktree scope ambiently.
 
-A bound round-trip with no live renderer for its own project throws `PROJECT_VIEW_UNAVAILABLE` (`shared/types/appError.ts`) rather than falling back — the fallback _is_ the confused-deputy bug. `resolveTargetWebContents` in `electron/services/plugin/rendererTargeting.ts` is the single decision point: nullish `projectId` means unbound and resolves ambiently, anything else resolves that project or throws. The throw reaches the plugin as a rejection from `host.dispatch` and the UI prompts; the read-only catalog surfaces (`host.actions.list` / `get` / `canDispatch`) are documented never to throw, so they catch exactly this code and answer empty. A cached (evicted-but-retained) view still counts as live; a visible view wins when the project is open in more than one window.
+A bound round-trip with no live renderer for its own project throws `PROJECT_VIEW_UNAVAILABLE` (`shared/types/appError.ts`) rather than falling back — the fallback _is_ the confused-deputy bug. `resolveTargetWebContents` in `electron/services/plugin/rendererTargeting.ts` is the single decision point: nullish `projectId` means unbound and resolves ambiently, anything else resolves that project or throws. The throw reaches the plugin as a rejection from `host.dispatch` and the UI prompts; the read-only catalog surfaces (`host.actions.list` / `get` / `canDispatch`) are documented never to throw, so they catch exactly this code and answer empty. A cached (backgrounded but retained) view still counts as live; a visible view wins when the project is open in more than one window.
 
 Installed and builtin plugins keep an unbound binding (`UNBOUND_PLUGIN_HOST_BINDING`) and the ambient behaviour they always had. Making them project-bound is a separate product decision; what this feature delivers is that the binding exists, project plugins always have one, and a bound plugin's resolution path never consults focus.
 
@@ -221,9 +221,9 @@ Plugin views render inside Daintree's existing panel system. They must share Dai
 
 **Import maps + Vite externals.**
 
-- Plugin bundles externalize React via the `@daintreehq/plugin-vite` preset, which sets `build.rollupOptions.external` to `[/^react($|\/)/, /^react-dom($|\/)/]`. The regex form covers every subpath; `external: ["react"]` matches only the literal string `"react"` and silently bundles `react/jsx-runtime` into plugin output.
-- Daintree's `index.html` injects a `<script type="importmap">` at build time, mapping `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, and `react-dom/client` to the host's `vendor-react` chunk.
-- When the plugin bundle executes in Daintree's renderer, those imports resolve to the host's single React instance.
+- Plugin bundles externalize React via the `@daintreehq/plugin-vite` preset, which sets `build.rollupOptions.external` to a function matching `/^react($|\/)/` and `/^react-dom($|\/)/` (and rejecting any React subpath the host import map does not serve). The pattern form covers every subpath; `external: ["react"]` matches only the literal string `"react"` and silently bundles `react/jsx-runtime` into plugin output.
+- Daintree's `index.html` injects a `<script type="importmap">` at build time, mapping each of `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, and `react-dom/client` to its own facade module — a small chunk that re-exports only that specifier's public surface. Every facade is backed by the host's single `vendor-react` chunk.
+- When the plugin bundle executes in Daintree's renderer, those imports resolve through the facades to the host's single React instance.
 
 Chromium (Electron 42) supports import maps natively — no polyfill required.
 

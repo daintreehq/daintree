@@ -280,18 +280,21 @@ test.describe.serial("E2E: Voice Input — Settings UI", () => {
       timeout: T_SHORT,
     });
 
-    const toggle = window.locator('[aria-label="Toggle voice input"]');
+    const toggle = window.getByRole("switch", { name: "Dictation", exact: true });
     await expect(toggle).toBeVisible({ timeout: T_SHORT });
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
 
     await expect(window.getByText("Speech-to-text", { exact: true })).toBeVisible();
     await expect(
-      window.getByText(
-        "Real-time transcription. Requires a provider API key and microphone access."
-      )
+      window.getByText("Real-time transcription with your own provider API key.", { exact: true })
     ).toBeVisible();
 
-    // While disabled, the API key field is not rendered.
-    await expect(window.locator('input[placeholder="sk-..."]')).toHaveCount(0);
+    // While disabled, the API key field is not rendered. Pin the placeholder's
+    // presence once enabled (next test) so this zero-count can't pass vacuously.
+    await expect(window.getByPlaceholder("Paste an OpenAI API key", { exact: true })).toHaveCount(
+      0
+    );
+    await expect(window.getByText("OpenAI API key", { exact: true })).toHaveCount(0);
   });
 
   test("enabling voice input reveals API key, language, paragraphing, and dictionary controls", async () => {
@@ -299,16 +302,19 @@ test.describe.serial("E2E: Voice Input — Settings UI", () => {
     await openSettings(window);
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
 
-    const toggle = window.locator('[aria-label="Toggle voice input"]');
+    const toggle = window.getByRole("switch", { name: "Dictation", exact: true });
     await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true", { timeout: T_SHORT });
 
-    await expect(window.locator('input[placeholder="sk-..."]')).toBeVisible({ timeout: T_SHORT });
+    await expect(window.getByPlaceholder("Paste an OpenAI API key", { exact: true })).toBeVisible({
+      timeout: T_SHORT,
+    });
     await expect(window.getByText("Language", { exact: true })).toBeVisible();
-    await expect(window.getByText("Paragraph Breaks")).toBeVisible();
-    await expect(window.getByText("Custom Dictionary")).toBeVisible();
+    await expect(window.getByText("Paragraph breaks", { exact: true }).first()).toBeVisible();
+    await expect(window.getByText("Custom dictionary", { exact: true })).toBeVisible();
   });
 
-  test("API key persists across settings dialog reopen and Clear reverts the indicator", async () => {
+  test("API key persists across settings dialog reopen and Remove key reverts the indicator", async () => {
     const { window } = ctx;
     // Pre-seed via IPC — avoids the validation/HTTP path the Save button triggers.
     await ipcSetSettings(window, { enabled: true, openaiApiKey: PRE_SEEDED_KEY });
@@ -321,12 +327,15 @@ test.describe.serial("E2E: Voice Input — Settings UI", () => {
     await openSettings(window);
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
 
-    // Configured-state indicators: "Enter new key to replace" placeholder + Clear
-    // button. The green "Configured" badge was ambient chrome and is gone (#12002).
-    const keyInput = window.locator('input[placeholder="Enter new key to replace"]');
+    // Configured-state indicators: the replace placeholder, the masked "Saved ·"
+    // accessory, and the Remove key button.
+    const keyInput = window.getByPlaceholder("Paste a new key to replace the saved one", {
+      exact: true,
+    });
     await expect(keyInput).toBeVisible({ timeout: T_SHORT });
-    const clearButton = window.getByRole("button", { name: "Clear", exact: true });
-    await expect(clearButton).toBeVisible();
+    await expect(window.getByText(/^Saved · /)).toBeVisible();
+    const removeButton = window.getByRole("button", { name: "Remove key", exact: true });
+    await expect(removeButton).toBeVisible();
 
     // Close + reopen — key must still be configured.
     await window.keyboard.press("Escape");
@@ -334,12 +343,17 @@ test.describe.serial("E2E: Voice Input — Settings UI", () => {
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
 
     await expect(keyInput).toBeVisible({ timeout: T_SHORT });
-    await expect(clearButton).toBeVisible();
+    await expect(removeButton).toBeVisible();
 
-    // Clear reverts to unconfigured (placeholder returns to "sk-...").
-    await clearButton.click();
-    await expect(window.locator('input[placeholder="sk-..."]')).toBeVisible({ timeout: T_SHORT });
-    await expect(clearButton).not.toBeVisible({ timeout: T_SHORT });
+    // Remove key reverts to unconfigured (placeholder returns to the empty-state copy).
+    await removeButton.click();
+    await expect(window.getByPlaceholder("Paste an OpenAI API key", { exact: true })).toBeVisible({
+      timeout: T_SHORT,
+    });
+    await expect(window.getByText("Key removed", { exact: true })).toBeVisible();
+    await expect(window.getByText("Not set", { exact: true })).toBeVisible();
+    await expect(removeButton).not.toBeVisible({ timeout: T_SHORT });
+    await expect(keyInput).toHaveCount(0);
 
     // And the underlying store now reflects the empty key.
     const settings = await ipcGetSettings(window);

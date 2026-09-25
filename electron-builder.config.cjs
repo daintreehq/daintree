@@ -6,8 +6,8 @@ const fs = require("fs");
 // 1. The esbuild `external` list in scripts/build-main.mjs (minus "electron").
 // 2. CJS-only packages loaded via createRequire interop — esbuild can't see
 //    through `req("...")` calls, so they are never bundled and must resolve
-//    from the ASAR's node_modules (PluginService: ajv, ajv-formats;
-//    PluginInstaller: proper-lockfile).
+//    from the ASAR's node_modules (PluginService and pluginAgentMcp's schema
+//    validation: ajv, ajv-formats; PluginInstaller: proper-lockfile).
 // Everything else under node_modules is already bundled into dist/
 // dist-electron by Vite/esbuild and is dead weight in the ASAR (~10k files,
 // issue #10395).

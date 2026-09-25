@@ -65,7 +65,7 @@ describe("ScrollbackRestoreErrorBanner", () => {
 
   it("renders the parse title for parse errors", () => {
     renderBanner("parse");
-    expect(screen.getByText(/scrollback contents couldn't be replayed/i)).toBeTruthy();
+    expect(screen.getByText(/scrollback couldn't be replayed/i)).toBeTruthy();
   });
 
   it("renders the generic title for error type", () => {
@@ -83,11 +83,25 @@ describe("ScrollbackRestoreErrorBanner", () => {
     expect(screen.queryByText(/should not appear/i)).toBeNull();
   });
 
-  it("omits a leading space when the error message is empty", () => {
+  it("leads every variant with the reassurance, never with the raw message", () => {
+    for (const type of ["timeout", "parse", "error"] as const) {
+      const { unmount } = renderBanner(type, { message: "boom from disk" });
+      const text = screen.getByText(/the terminal still works/i).textContent ?? "";
+      expect(text.startsWith("The terminal still works")).toBe(true);
+      expect(text).not.toContain("boom from disk");
+      unmount();
+    }
+  });
+
+  it("renders no detail line when the error message is empty", () => {
     renderBanner("error", { message: "" });
-    const text = screen.getByText(/the terminal still works/i).textContent ?? "";
-    expect(text.startsWith(" ")).toBe(false);
-    expect(text).toBe("The terminal still works — only its earlier output is missing.");
+    expect(document.querySelector("p.font-mono")).toBeNull();
+  });
+
+  it("announces politely, since the terminal still works", () => {
+    renderBanner("timeout");
+    expect(screen.getByRole("status")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("invokes onRestart with the terminal id when reset is clicked", () => {

@@ -118,6 +118,16 @@ export interface RepoFetchCoordinatorCallbacks {
    * `clearAuthFailures()` resets the state so a later re-confirmation re-fires.
    */
   onAuthFailureConfirmed?: (commonDir: string, remote: string, reason: GitOperationReason) => void;
+  /**
+   * The repo's configured remotes, or `null` when they could not be read.
+   * Without it every repo is assumed to have `origin`, which is what the
+   * planner fell back to before a local-only repo had a way to say otherwise.
+   */
+  readRemotes?: (
+    worktreePath: string,
+    commonDir: string,
+    fresh: boolean
+  ) => Promise<readonly string[] | null>;
 }
 
 export interface FetchOptions {
@@ -251,7 +261,32 @@ export type FetchResult = WorkspaceFetchResult;
       return { status: "skipped", skipReason: "stale-generation" };
     }
 
-    const remotes = this.planRemotes(opts);
+    // A worktree with no remote has nothing to fetch, and `git fetch origin`
+    // there fails in a way that reads as an unreachable remote. Answer without
+    // spawning. Per-remote state is left alone: it is shared by every sibling
+    // on the common dir, and one worktree's config (`config.worktree`,
+    // conditional includes) is not proof about the others'. A forced fetch
+    // re-reads, so a remote added moments ago is fetched on the click.
+    const inventory = this.callbacks.readRemotes
+      ? await this.callbacks
+          .readRemotes(opts.worktreePath, commonDir, opts.force === true)
+          .catch(() => null)
+      : null;
+    if (this.baseGeneration !== baseGenerationAtStart) {
+      return { status: "skipped", skipReason: "stale-generation" };
+    }
+    if (inventory !== null && inventory.length === 0) {
+      return {
+        status: "skipped",
+        skipReason: "no-remotes",
+        lastFetchedAt: null,
+        authFailed: false,
+        networkFailed: false,
+        hasRemote: false,
+      };
+    }
+
+    const remotes = this.planRemotes(opts, inventory);
     const primary = remotes[0]!;
 
     // Pre-chain triage: a remote inside its backoff window or covered by a
@@ -305,7 +340,9 @@ export type FetchResult = WorkspaceFetchResult;
     const auxiliaryFailed = remotes.some(
       (remote) => remote !== primary && settled.get(remote)?.status === "failed"
     );
-    return auxiliaryFailed ? { ...primaryResult, auxiliaryFailed } : primaryResult;
+    const withInventory =
+      inventory !== null ? { ...primaryResult, hasRemote: true } : primaryResult;
+    return auxiliaryFailed ? { ...withInventory, auxiliaryFailed } : withInventory;
   }
 
   /**
@@ -313,14 +350,21 @@ export type FetchResult = WorkspaceFetchResult;
    * the primary's result is what the card renders, so it should not sit behind
    * a slow auxiliary remote's 60s timeout.
    */
-  private planRemotes(opts: FetchOptions): string[] {
+  private planRemotes(opts: FetchOptions, inventory: readonly string[] | null): string[] {
+    // With the repo's real remotes in hand, a requested remote it doesn't have
+    // is a guaranteed failure — the caller's plan falls back to `origin` before
+    // it has resolved anything, which a repo whose only remote is named
+    // something else would otherwise fail on forever.
+    const exists = (remote: string) => inventory === null || inventory.includes(remote);
     const requested = (opts.remotes ?? []).filter(
-      (remote) => typeof remote === "string" && remote.length > 0
+      (remote) => typeof remote === "string" && remote.length > 0 && exists(remote)
     );
+    const fallback =
+      inventory === null || inventory.includes(DEFAULT_REMOTE) ? DEFAULT_REMOTE : inventory[0]!;
     const primary =
-      opts.primaryRemote && opts.primaryRemote.length > 0
+      opts.primaryRemote && opts.primaryRemote.length > 0 && exists(opts.primaryRemote)
         ? opts.primaryRemote
-        : (requested[0] ?? DEFAULT_REMOTE);
+        : (requested[0] ?? fallback);
     const ordered = [primary];
     for (const remote of requested) {
       if (!ordered.includes(remote)) ordered.push(remote);

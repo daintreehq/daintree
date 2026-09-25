@@ -26,6 +26,7 @@ import {
   _resetOverflowAnnouncements,
 } from "@/lib/notify";
 import { usePanelStore, type BackendStatus, type WatchdogStatus } from "@/store/panelStore";
+import { useUIStore } from "@/store/uiStore";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 
@@ -42,6 +43,8 @@ export interface E2EToastInput {
   historyEntryId?: string;
   /** When set, renders an action button with this label. */
   actionLabel?: string;
+  /** A full action manifest, for surfaces that render several (the grid bar). Wins over `actionLabel`. */
+  actions?: { label: string; variant?: "primary" | "secondary" }[];
   /** Past-tense confirmation label; enables the success-flash flow. */
   successLabel?: string;
   /** When true, the action's onClick resolves after `asyncDelayMs` (spinner path). */
@@ -82,6 +85,12 @@ export interface NotificationsE2EApi {
   seedHistory: (input: E2ESeedHistoryInput) => void;
   archiveHistoryEntry: (id: string) => void;
   snoozeThread: (correlationId: string, snoozedUntil: number) => void;
+  /**
+   * Pins the "last closed" watermark the "New since you last looked" divider
+   * is drawn from. Closing the panel writes `Date.now()`, so a fixture with
+   * real ages can't otherwise put the divider anywhere but the top.
+   */
+  setCenterLastClosedAt: (timestamp: number) => void;
   clearHistory: () => void;
   resetNotifyInternals: () => void;
   setBackendStatus: (status: BackendStatus) => void;
@@ -115,6 +124,11 @@ function buildApi(): NotificationsE2EApi {
         correlationId: input.correlationId,
         historyEntryId: input.historyEntryId,
         action,
+        actions: input.actions?.map((a) => ({
+          label: a.label,
+          variant: a.variant,
+          onClick: () => {},
+        })),
       });
     },
     backdateNotification: (id, firstShownAt) => {
@@ -144,6 +158,8 @@ function buildApi(): NotificationsE2EApi {
     archiveHistoryEntry: (id) => useNotificationHistoryStore.getState().archiveEntry(id),
     snoozeThread: (correlationId, snoozedUntil) =>
       useNotificationHistoryStore.getState().snoozeThread(correlationId, snoozedUntil),
+    setCenterLastClosedAt: (timestamp) =>
+      useUIStore.setState({ lastNotificationCenterClosedAt: timestamp }),
     clearHistory: () => useNotificationHistoryStore.getState().clearAll(),
     resetNotifyInternals: () => {
       _resetRateLimitBuckets();

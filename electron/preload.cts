@@ -67,11 +67,13 @@ import { buildSentryPreloadBindings } from "./ipc/handlers/sentry.preload.js";
 import { buildPrivacyPreloadBindings } from "./ipc/handlers/privacy.preload.js";
 import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
 import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
+import { buildProjectPresencePreloadBindings } from "./ipc/handlers/projectPresence.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
 import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.js";
 import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
 import { buildSessionRestorePreloadBindings } from "./ipc/handlers/sessionRestore.preload.js";
+import { buildWindowOpeningPreloadBindings } from "./ipc/handlers/windowOpening.preload.js";
 import { buildKeepAwakePreloadBindings } from "./ipc/handlers/keepAwake.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
@@ -2114,6 +2116,13 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.CONNECTIVITY_SERVICE_CHANGED, callback),
     },
 
+    // Which windows hold a live view of which projects (#12597)
+    projectPresence: {
+      ...buildProjectPresencePreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: () => void) => _typedOn(CHANNELS.PROJECT_PRESENCE_CHANGED, callback),
+    },
+
     // Dev Preview API
     devPreview: {
       ...buildDevPreviewPreloadBindings(_unwrappingInvoke),
@@ -2434,6 +2443,10 @@ function buildElectronApi(): ElectronAPI {
     // Hibernation API
     sessionRestore: {
       ...buildSessionRestorePreloadBindings(_unwrappingInvoke),
+    },
+
+    windowOpening: {
+      ...buildWindowOpeningPreloadBindings(_unwrappingInvoke),
     },
 
     // Keep-awake API
@@ -3178,6 +3191,8 @@ function buildElectronApi(): ElectronAPI {
           context?: ActionContext;
           callerInfo?: McpBearerIdentity;
           sessionOrigin?: McpSessionOrigin;
+          offerSessionApproval?: boolean;
+          approvalOnly?: boolean;
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
 
@@ -3185,6 +3200,7 @@ function buildElectronApi(): ElectronAPI {
         requestId: string;
         result: unknown;
         confirmationDecision?: "approved" | "rejected" | "timeout";
+        approvalScope?: "once" | "session";
       }) => {
         ipcRenderer.send(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, payload);
       },
@@ -3239,6 +3255,18 @@ function buildElectronApi(): ElectronAPI {
           payload: import("../shared/types/pluginUiPrompt.js").PluginUiPromptCancel
         ) => void
       ) => _typedOn(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, callback),
+
+      onPanelReloadRequest: (
+        callback: (
+          payload: import("../shared/types/pluginPanelReload.js").PluginPanelReloadRequest
+        ) => void
+      ) => _typedOn(CHANNELS.PLUGIN_PANEL_RELOAD_REQUEST, callback),
+
+      sendPanelReloadResponse: (
+        payload: import("../shared/types/pluginPanelReload.js").PluginPanelReloadResponse
+      ) => {
+        ipcRenderer.send(CHANNELS.PLUGIN_PANEL_RELOAD_RESPONSE, payload);
+      },
     },
 
     plugin: {

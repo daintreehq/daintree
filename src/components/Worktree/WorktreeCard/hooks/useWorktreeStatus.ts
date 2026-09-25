@@ -18,6 +18,38 @@ export type WorktreeReviewState = "conflicted" | "unpushed-clean" | "has-changes
 
 export type ResourceStatusColor = "green" | "yellow" | "red" | "neutral";
 
+const KNOWN_STATUS_COLORS: Record<string, ResourceStatusColor> = {
+  running: "green",
+  healthy: "green",
+  ready: "green",
+  up: "green",
+  starting: "yellow",
+  provisioning: "yellow",
+  unhealthy: "red",
+  down: "red",
+  error: "red",
+  failed: "red",
+  paused: "neutral",
+  stopped: "neutral", // graceful fallback — prefer "paused"
+  stopping: "neutral",
+  unknown: "neutral",
+};
+
+/** Colour class for a status string a resource's status command reported. */
+export function resourceStatusColorFor(status: string): ResourceStatusColor {
+  return KNOWN_STATUS_COLORS[status.toLowerCase()] ?? "neutral";
+}
+
+export const LIFECYCLE_PHASE_LABELS: Record<string, string> = {
+  setup: "Running setup",
+  teardown: "Running teardown",
+  "resource-provision": "Provisioning resource",
+  "resource-teardown": "Tearing down resource",
+  "resource-resume": "Resuming resource",
+  "resource-pause": "Pausing resource",
+  "resource-status": "Checking resource status",
+};
+
 export type GitStateKind =
   "conflicted" | "rebasing" | "merging" | "cherry-picking" | "reverting" | "detached";
 
@@ -209,54 +241,27 @@ export function useWorktreeStatus({
   const lifecycleLabel = useMemo(() => {
     if (!lifecycle) return undefined;
 
-    const PHASE_LABELS: Record<string, string> = {
-      setup: "Running setup",
-      teardown: "Running teardown",
-      "resource-provision": "Provisioning resource",
-      "resource-teardown": "Tearing down resource",
-      "resource-resume": "Resuming resource",
-      "resource-pause": "Pausing resource",
-      "resource-status": "Checking resource status",
-    };
-
     if (lifecycle.state === "running") {
-      const phase = PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
+      const phase = LIFECYCLE_PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
       if (lifecycle.currentCommand) {
         return `${phase}: ${lifecycle.currentCommand}`;
       }
       return `${phase}...`;
     }
     if (lifecycle.state === "failed") {
-      const phase = PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
+      const phase = LIFECYCLE_PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
       return `${phase.replace(/^(Running |Provisioning |Tearing down |Resuming |Pausing |Checking )/, "")} failed`;
     }
     if (lifecycle.state === "timed-out") {
-      const phase = PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
+      const phase = LIFECYCLE_PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
       return `${phase.replace(/^(Running |Provisioning |Tearing down |Resuming |Pausing |Checking )/, "")} timed out`;
     }
     if (lifecycle.state === "needs-approval") {
-      const phase = PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
+      const phase = LIFECYCLE_PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
       return `${phase.replace(/^(Running |Provisioning |Tearing down |Resuming |Pausing |Checking )/, "")} needs approval`;
     }
     return undefined;
   }, [lifecycle]);
-
-  const KNOWN_STATUS_COLORS: Record<string, ResourceStatusColor> = {
-    running: "green",
-    healthy: "green",
-    ready: "green",
-    up: "green",
-    starting: "yellow",
-    provisioning: "yellow",
-    unhealthy: "red",
-    down: "red",
-    error: "red",
-    failed: "red",
-    paused: "neutral",
-    stopped: "neutral", // graceful fallback — prefer "paused"
-    stopping: "neutral",
-    unknown: "neutral",
-  };
 
   // Synthesize resource status from lifecycle phase when a lifecycle action is in-flight.
   // This prevents showing a stale "down" or null status while provisioning/resuming/pausing.
@@ -273,7 +278,7 @@ export function useWorktreeStatus({
   const hasResourceConfig = !!worktree.hasResourceConfig;
   const resourceStatusLabel = resourceStatus ?? undefined;
   const resourceStatusColor: ResourceStatusColor | undefined = resourceStatus
-    ? (KNOWN_STATUS_COLORS[resourceStatus.toLowerCase()] ?? "neutral")
+    ? resourceStatusColorFor(resourceStatus)
     : undefined;
 
   return {

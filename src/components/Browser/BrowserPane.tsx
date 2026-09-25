@@ -878,6 +878,7 @@ export function BrowserPane({
       onReload={() =>
         void actionService.dispatch("browser.reload", { terminalId: id }, { source: "user" })
       }
+      onStop={handleCancelLoad}
       onHardReload={() =>
         void actionService.dispatch("browser.hardReload", { terminalId: id }, { source: "user" })
       }
@@ -1133,10 +1134,11 @@ export function BrowserPane({
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
               {showLoadingOverlay && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas z-10 gap-3">
-                  {/* aria-busy on the status wrapper suppresses inner live regions,
-                      so the slow-load escalation announces via the sibling
-                      aria-live span below (SkeletonHint pattern). */}
-                  <div role="status" aria-busy="true" aria-label="Loading…">
+                  {/* The slow-load escalation announces via the sibling
+                      aria-live span below, never inside this status region
+                      (SkeletonHint pattern): nested live regions are spoken
+                      twice or not at all depending on the screen reader. */}
+                  <div role="status" aria-label="Loading…">
                     <span className="sr-only">Loading…</span>
                     <Spinner size="2xl" className="text-status-info" />
                   </div>

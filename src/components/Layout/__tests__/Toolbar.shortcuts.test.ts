@@ -50,15 +50,15 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
 
   describe("useKeybindingDisplay hooks", () => {
     it("uses dynamic hook for nav.toggleSidebar", () => {
-      expect(source).toContain('useKeybindingDisplay("nav.toggleSidebar")');
+      expect(source).toContain('useEffectiveCombo("nav.toggleSidebar")');
     });
 
     it("uses dynamic hook for panel.toggleDiagnostics", () => {
-      expect(problemsSource).toContain('useKeybindingDisplay("panel.toggleDiagnostics")');
+      expect(problemsSource).toContain('useEffectiveCombo("panel.toggleDiagnostics")');
     });
 
     it("uses dynamic hook for panel.togglePortal", () => {
-      expect(portalSource).toContain('useKeybindingDisplay("panel.togglePortal")');
+      expect(portalSource).toContain('useEffectiveCombo("panel.togglePortal")');
     });
 
     it("uses dynamic hook for worktree.copyTree", () => {
@@ -66,7 +66,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
 
     it("uses dynamic hook for app.settings", () => {
-      expect(settingsSource).toContain('useKeybindingDisplay("app.settings")');
+      expect(settingsSource).toContain('useEffectiveCombo("app.settings")');
     });
 
     it("uses dynamic hook for devServer.start", () => {
@@ -93,7 +93,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
 
     it("uses createTooltipContent for the file browser tooltip", () => {
-      expect(source).toContain('createTooltipContent("Browse files", fileBrowserShortcut)');
+      expect(source).toContain('createTooltipContent("Browse files", fileBrowserCombo)');
     });
   });
 
@@ -146,11 +146,11 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
 
     it("uses createTooltipContent for copy-tree tooltip", () => {
-      expect(source).toContain('createTooltipContent("Copy context", copyTreeShortcut)');
+      expect(source).toContain('createTooltipContent("Copy context", copyTreeCombo)');
     });
 
     it("uses createTooltipContent for dev-server tooltip", () => {
-      expect(source).toContain('createTooltipContent("Open dev preview", devServerShortcut)');
+      expect(source).toContain('createTooltipContent("Open dev preview", devServerCombo)');
     });
 
     it("uses createTooltipContent for sidebar tooltip with dynamic shortcut", () => {
@@ -417,15 +417,15 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
 
     it("diagnosticsShortcut is in ToolbarProblemsButton", () => {
-      expect(problemsSource).toContain('useKeybindingDisplay("panel.toggleDiagnostics")');
+      expect(problemsSource).toContain('useEffectiveCombo("panel.toggleDiagnostics")');
     });
 
     it("portalShortcut is in ToolbarPortalButton", () => {
-      expect(portalSource).toContain('useKeybindingDisplay("panel.togglePortal")');
+      expect(portalSource).toContain('useEffectiveCombo("panel.togglePortal")');
     });
 
     it("settingsShortcut is in ToolbarSettingsButton", () => {
-      expect(settingsSource).toContain('useKeybindingDisplay("app.settings")');
+      expect(settingsSource).toContain('useEffectiveCombo("app.settings")');
     });
   });
 

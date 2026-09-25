@@ -14,7 +14,10 @@ import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { WorktreeTerminalSection } from "@/components/Worktree/WorktreeCard/WorktreeTerminalSection";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import {
+  buildDestructivePreview,
+  collectRunningAgentTerminals,
+} from "@/utils/destructiveSessionConfirm";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 
 interface DeletedWorktreeCardProps {
@@ -156,13 +159,17 @@ export function DeletedWorktreeCard({
       dismissDeletedWorktree(worktree.id);
       return;
     }
+    // The deleted worktree is gone from the live map, so the row names it.
+    const preview = buildDestructivePreview(panels, () => worktree.title);
     requestDestructiveAction({
       kind: "deletedWorktreeDismiss",
       targetCount: panels.length,
-      runningAgentCount: panels.filter((panel) => deriveTerminalChrome(panel).isAgent).length,
+      runningAgentCount: collectRunningAgentTerminals(panels).length,
       worktreeId: worktree.id,
+      worktreeTitle: worktree.title,
+      preview,
     });
-  }, [panels, worktree.id, requestDestructiveAction, dismissDeletedWorktree]);
+  }, [panels, worktree.id, worktree.title, requestDestructiveAction, dismissDeletedWorktree]);
 
   // `source: "focus"` — viewing a ghost row is an incidental, session-only
   // selection. The user-source path would persist the deleted id as the

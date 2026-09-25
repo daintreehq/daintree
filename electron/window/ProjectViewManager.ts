@@ -28,6 +28,7 @@ import * as PaintGateController from "./ProjectViewPaintGateController.js";
 import { performSwitch } from "./ProjectViewSwitchController.js";
 import { cleanupEntry } from "./ProjectViewLifecycleController.js";
 import { notifyProjectPluginsOpened } from "./projectPluginLifecycle.js";
+import { notifyProjectPresenceChanged } from "./projectPresenceChanges.js";
 import * as EvictionController from "./ProjectViewEvictionController.js";
 import {
   restoreInBackground,
@@ -277,6 +278,31 @@ const UNKNOWN_MCP_ACTIVITY: McpViewActivityReading = {
   unknown: true,
 };
 
+/**
+ * The view inventory, reporting every change to it as a possible change in
+ * where projects are open (#12597). Every controller writes the map directly,
+ * so the map is the one place no creation, restore or teardown path can skip.
+ */
+class PresenceNotifyingViewMap extends Map<string, ViewEntry> {
+  override set(projectId: string, entry: ViewEntry): this {
+    super.set(projectId, entry);
+    notifyProjectPresenceChanged();
+    return this;
+  }
+
+  override delete(projectId: string): boolean {
+    const deleted = super.delete(projectId);
+    if (deleted) notifyProjectPresenceChanged();
+    return deleted;
+  }
+
+  override clear(): void {
+    const hadEntries = this.size > 0;
+    super.clear();
+    if (hadEntries) notifyProjectPresenceChanged();
+  }
+}
+
 export class ProjectViewManager {
   // The fields below are intentionally not `private`: sibling
   // electron/window/ProjectView*.ts modules read/write them via an explicit
@@ -284,9 +310,21 @@ export class ProjectViewManager {
   // compile-time-only annotation — this loosening has no runtime effect and
   // no external consumer (this class remains the sole export) touches these
   // fields directly.
-  views = new Map<string, ViewEntry>();
+  views: Map<string, ViewEntry> = new PresenceNotifyingViewMap();
   webContentsToProject = new Map<number, string>();
-  activeProjectId: string | null = null;
+  private activeProjectIdValue: string | null = null;
+  /**
+   * Written from the switch, rollback, restore and teardown paths alike, so it
+   * reports its own changes rather than trusting each writer to (#12597).
+   */
+  get activeProjectId(): string | null {
+    return this.activeProjectIdValue;
+  }
+  set activeProjectId(projectId: string | null) {
+    if (projectId === this.activeProjectIdValue) return;
+    this.activeProjectIdValue = projectId;
+    notifyProjectPresenceChanged();
+  }
   maxCachedViews = 1;
   memoryPressurePolicy: MemoryPressurePolicy | null = null;
   /** Consecutive sampler readings below the warning edge — see `maybeEvictUnderPressure`. */

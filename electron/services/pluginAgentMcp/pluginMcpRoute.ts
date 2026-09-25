@@ -29,6 +29,13 @@ import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "./types.js"
  */
 export const MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL = 8;
 
+/**
+ * How long an admitted `initialize` may hold its slot before the SDK files it.
+ * The only slow step in that window is receiving the request body, which a
+ * local client sends at once; plugin activation and roster discovery come after.
+ */
+const PLUGIN_MCP_HANDSHAKE_TIMEOUT_MS = 10_000;
+
 export interface PluginMcpRouteDeps {
   /** Whether the plugin instance is loaded right now (`PluginService.hasPlugin`). */
   isPluginLoaded: (pluginInstanceId: string) => boolean | Promise<boolean>;
@@ -38,6 +45,7 @@ export interface PluginMcpRouteDeps {
   grantRegistry?: PluginMcpGrantRegistry;
   endpointRegistry?: AgentMcpEndpointRegistry;
   idleTimeoutMs?: number;
+  handshakeTimeoutMs?: number;
   callTimeoutMs?: number;
   maxResultBytes?: number;
 }
@@ -53,6 +61,12 @@ interface PluginMcpSession {
   lifetime: AbortController;
   /** Follow-up responses handed to the SDK and not yet finished. */
   openResponses: Set<http.ServerResponse>;
+}
+
+interface PendingHandshake {
+  deadline: ReturnType<typeof setTimeout>;
+  /** Ends the handshake's connection; the SDK has no way to cancel one mid-read. */
+  abandon: () => void;
 }
 
 /**
@@ -125,12 +139,15 @@ function writeWorkspaceRejected(res: http.ServerResponse, code: string, message:
 export class PluginMcpRoute implements PluginMcpRouteHandler {
   private readonly sessions = new Map<string, PluginMcpSession>();
   private readonly sessionsByCredential = new Map<string, Set<string>>();
+  /** Admitted handshakes not yet filed as sessions, by credential then reserved session id. */
+  private readonly pendingByCredential = new Map<string, Map<string, PendingHandshake>>();
   private readonly isPluginLoaded: PluginMcpRouteDeps["isPluginLoaded"];
   private readonly activatePlugin: PluginMcpRouteDeps["activatePlugin"];
   private readonly isEndpointEnabled: NonNullable<PluginMcpRouteDeps["isEndpointEnabled"]>;
   private readonly grants: PluginMcpGrantRegistry;
   private readonly endpoints: AgentMcpEndpointRegistry;
   private readonly idleTimeoutMs: number;
+  private readonly handshakeTimeoutMs: number;
   private readonly callTimeoutMs: number | undefined;
   private readonly maxResultBytes: number | undefined;
   private readonly offRevoked: () => void;
@@ -148,6 +165,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     this.grants = deps.grantRegistry ?? pluginMcpGrantRegistry;
     this.endpoints = deps.endpointRegistry ?? agentMcpEndpointRegistry;
     this.idleTimeoutMs = deps.idleTimeoutMs ?? MCP_SSE_IDLE_TIMEOUT_MS;
+    this.handshakeTimeoutMs = deps.handshakeTimeoutMs ?? PLUGIN_MCP_HANDSHAKE_TIMEOUT_MS;
     this.callTimeoutMs = deps.callTimeoutMs;
     this.maxResultBytes = deps.maxResultBytes;
     // Grants are deleted before this fires, so any request racing the close
@@ -174,6 +192,9 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
 
   closeAllSessions(): void {
     this.epoch += 1;
+    for (const credentialId of [...this.pendingByCredential.keys()]) {
+      this.abandonHandshakes(credentialId);
+    }
     for (const sessionId of [...this.sessions.keys()]) this.closeSession(sessionId);
   }
 
@@ -294,13 +315,28 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       return;
     }
     if (
-      (this.sessionsByCredential.get(grant.credentialId)?.size ?? 0) >=
+      (this.sessionsByCredential.get(grant.credentialId)?.size ?? 0) +
+        (this.pendingByCredential.get(grant.credentialId)?.size ?? 0) >=
       MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL
     ) {
       writeText(res, 429, "Too many sessions for this credential");
       return;
     }
-    await this.handleNewSession(req, res, grant, port, epoch);
+    // Reserved in the same turn as the cap check: a session is only filed once
+    // the SDK has read its body and initialised it, and every handshake
+    // admitted in the meantime has to count this one.
+    const newSessionId = randomUUID();
+    this.reserveHandshake(grant.credentialId, newSessionId, () => {
+      // The request drops its connection even when a pipelined response is
+      // still queued behind another and has no socket for `res` to destroy.
+      req.destroy();
+      res.destroy();
+    });
+    try {
+      await this.handleNewSession(req, res, grant, port, epoch, newSessionId);
+    } finally {
+      this.releaseHandshake(grant.credentialId, newSessionId);
+    }
   }
 
   private authenticate(req: http.IncomingMessage): PluginMcpGrant | null {
@@ -314,7 +350,8 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     res: http.ServerResponse,
     grant: PluginMcpGrant,
     port: number,
-    epoch: number
+    epoch: number,
+    newSessionId: string
   ): Promise<void> {
     const caller: PluginMcpCaller = Object.freeze({
       credentialId: grant.credentialId,
@@ -336,7 +373,6 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       ...(this.maxResultBytes !== undefined ? { maxResultBytes: this.maxResultBytes } : {}),
     });
 
-    const newSessionId = randomUUID();
     // enableDnsRebindingProtection / allowedHosts / allowedOrigins are
     // deprecated in SDK ^1.27.1; the listener's manual gate is authoritative.
     const transport = new StreamableHTTPServerTransport({
@@ -346,6 +382,9 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       allowedOrigins: [`http://127.0.0.1:${port}`, `http://localhost:${port}`],
       onsessioninitialized: (initializedSessionId) => {
         if (lifetime.signal.aborted) return;
+        // The reservation becomes the session in one step, so the cap never
+        // counts it twice or not at all. One already abandoned stays that way.
+        if (!this.releaseHandshake(grant.credentialId, initializedSessionId)) return;
         const idleTimer = this.createIdleTimer(initializedSessionId);
         this.sessions.set(initializedSessionId, {
           transport,
@@ -401,6 +440,44 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     }
   }
 
+  private reserveHandshake(credentialId: string, sessionId: string, abandon: () => void): void {
+    const deadline = setTimeout(
+      () => this.releaseHandshake(credentialId, sessionId)?.abandon(),
+      this.handshakeTimeoutMs
+    );
+    deadline.unref?.();
+    let handshakes = this.pendingByCredential.get(credentialId);
+    if (!handshakes) {
+      handshakes = new Map();
+      this.pendingByCredential.set(credentialId, handshakes);
+    }
+    handshakes.set(sessionId, { deadline, abandon });
+  }
+
+  /** Idempotent: promotion, the deadline, sweeps and the handshake's own exit all release here. */
+  private releaseHandshake(credentialId: string, sessionId: string): PendingHandshake | undefined {
+    const handshakes = this.pendingByCredential.get(credentialId);
+    const handshake = handshakes?.get(sessionId);
+    if (!handshakes || !handshake) return undefined;
+    clearTimeout(handshake.deadline);
+    handshakes.delete(sessionId);
+    if (handshakes.size === 0) this.pendingByCredential.delete(credentialId);
+    return handshake;
+  }
+
+  /**
+   * Drop the connection of every handshake the credential still has pending.
+   * Its body read then fails and the handshake unwinds through its own
+   * failure paths, instead of holding the listener's drain or its slot open.
+   */
+  private abandonHandshakes(credentialId: string): void {
+    const handshakes = this.pendingByCredential.get(credentialId);
+    if (!handshakes) return;
+    for (const sessionId of [...handshakes.keys()]) {
+      this.releaseHandshake(credentialId, sessionId)?.abandon();
+    }
+  }
+
   private createIdleTimer(sessionId: string): ReturnType<typeof setTimeout> {
     const timer = setTimeout(() => this.closeSession(sessionId), this.idleTimeoutMs);
     timer.unref?.();
@@ -413,6 +490,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   }
 
   private closeCredentialSessions(credentialId: string): void {
+    this.abandonHandshakes(credentialId);
     const ids = this.sessionsByCredential.get(credentialId);
     if (!ids) return;
     for (const sessionId of [...ids]) this.closeSession(sessionId);

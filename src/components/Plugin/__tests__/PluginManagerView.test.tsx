@@ -1,13 +1,20 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PluginManagerView } from "../PluginManagerView";
 import { CAPABILITY_META } from "../capabilityMeta";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { LoadedPluginInfo, SettingDefinition } from "@shared/types/plugin";
+import type {
+  LoadedPluginInfo,
+  PluginInstallProgressEvent,
+  PluginInstallResult,
+  SettingDefinition,
+} from "@shared/types/plugin";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -20,6 +27,28 @@ vi.mock("@/utils/logger", () => ({
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (s: { currentProject: { id: string } | null }) => unknown) =>
     selector({ currentProject: null }),
+}));
+
+// Pass-through dropdown mock: the title bar's Install menu renders its items
+// inline as buttons, so the install flows stay drivable without Radix's
+// pointer-event choreography in jsdom.
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  DropdownMenuTrigger: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children?: ReactNode }) => (
+    <div data-testid="install-menu">{children}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+  }: {
+    children?: ReactNode;
+    onSelect?: (e: Event) => void;
+  }) => (
+    <button type="button" onClick={() => onSelect?.(new Event("select"))}>
+      {children}
+    </button>
+  ),
 }));
 
 // ScrollShadow uses ResizeObserver, which jsdom lacks.
@@ -192,9 +221,9 @@ function pluginRow(name: string): HTMLElement {
 }
 
 describe("PluginManagerView", () => {
-  it("renders the section header immediately", async () => {
+  it("renders the search field immediately", async () => {
     renderDialog();
-    expect(screen.getByText("All plugins")).toBeTruthy();
+    expect(screen.getByLabelText("Search plugins")).toBeTruthy();
   });
 
   it("moves focus into the view on open so the keyboard isn't left on the background", async () => {
@@ -519,7 +548,7 @@ describe("PluginManagerView", () => {
     ]);
     renderDialog();
     await waitFor(() => {
-      expect(screen.getByText("Restart required")).toBeTruthy();
+      expect(screen.getAllByText("Restart required").length).toBeGreaterThan(0);
     });
     const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
@@ -721,6 +750,10 @@ describe("PluginManagerView", () => {
     await waitFor(() => expect(screen.getByText("Already up to date")).toBeTruthy());
   });
 
+  // The preview's digest, deliberately distinct from the installed record's
+  // `archiveHash` ("abc123"): the install must be held to what was reviewed.
+  const REVIEWED_HASH = "d".repeat(64);
+
   it("opens a confirm dialog with the new version and reinstalls on confirm", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([urlPlugin()]);
     (window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -728,6 +761,7 @@ describe("PluginManagerView", () => {
       name: "acme.demo",
       version: "2.0.0",
       capabilities: ["network:fetch"],
+      archiveHash: REVIEWED_HASH,
     });
     renderDialog();
     await selectPlugin();
@@ -742,11 +776,38 @@ describe("PluginManagerView", () => {
     expect(screen.getByText(CAPABILITY_META["network:fetch"].label)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    // Bound to the reviewed archive (#12612) so main refuses a different one.
     await waitFor(() =>
       expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
         "https://example.com/p.dntr",
-        expect.any(String)
+        expect.any(String),
+        { pluginId: "acme.demo", archiveHash: REVIEWED_HASH }
       )
+    );
+  });
+
+  it("explains a refused install when the download no longer matches the preview", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([urlPlugin()]);
+    vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+      status: "available",
+      name: "acme.demo",
+      version: "2.0.0",
+      capabilities: [],
+      archiveHash: REVIEWED_HASH,
+    });
+    vi.mocked(window.electron.plugin.installFromUrl).mockResolvedValue({
+      status: "failed",
+      errors: [{ code: "archive_mismatch", message: "raw" }],
+    });
+    renderDialog();
+    await selectPlugin();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
+    await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/no longer matches what you reviewed/)).toBeTruthy()
     );
   });
 
@@ -871,6 +932,75 @@ describe("PluginManagerView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Install from file" }));
     await waitFor(() => expect(screen.getByText(/isn't available yet/)).toBeTruthy());
+  });
+
+  it("shows no install progress while the native file picker is still open", async () => {
+    let emit: ((event: PluginInstallProgressEvent) => void) | undefined;
+    vi.mocked(window.electron.plugin.onInstallProgress).mockImplementation((cb) => {
+      emit = cb;
+      return () => {};
+    });
+    let settleInstall: ((result: PluginInstallResult) => void) | undefined;
+    vi.mocked(window.electron.plugin.installFromFile).mockImplementation(
+      () => new Promise((resolve) => (settleInstall = resolve))
+    );
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from file" }));
+    // Main opens the picker first and only begins the job once a path exists,
+    // so past the gate there is still nothing to report — or to cancel.
+    await new Promise((resolve) => setTimeout(resolve, UI_DOHERTY_THRESHOLD + 150));
+    expect(screen.queryByRole("button", { name: "Cancel install" })).toBeNull();
+
+    const jobId = String(vi.mocked(window.electron.plugin.installFromFile).mock.calls[0]![0]);
+    act(() => emit!({ jobId, phase: "extracting", cancellable: true, source: "acme.dntr" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Cancel install" })).toBeTruthy()
+    );
+    expect(screen.getByText("acme.dntr")).toBeTruthy();
+
+    await act(async () => settleInstall!({ status: "cancelled" }));
+  });
+
+  it("drops a refused cancel and holds Cancel unavailable for the rest of the job", async () => {
+    let emit: ((event: PluginInstallProgressEvent) => void) | undefined;
+    vi.mocked(window.electron.plugin.onInstallProgress).mockImplementation((cb) => {
+      emit = cb;
+      return () => {};
+    });
+    let settleInstall: ((result: PluginInstallResult) => void) | undefined;
+    vi.mocked(window.electron.plugin.installFromUrl).mockImplementation(
+      () => new Promise((resolve) => (settleInstall = resolve))
+    );
+    // The install raced past its commit point before the request landed.
+    vi.mocked(window.electron.plugin.cancelInstall).mockResolvedValue(false);
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalled());
+    const jobId = String(vi.mocked(window.electron.plugin.installFromUrl).mock.calls[0]![1]);
+    act(() => emit!({ jobId, phase: "validating", cancellable: true }));
+
+    const cancel = await screen.findByRole(
+      "button",
+      { name: "Cancel install" },
+      { timeout: UI_DOHERTY_THRESHOLD + 1000 }
+    );
+    fireEvent.click(cancel);
+    expect(window.electron.plugin.cancelInstall).toHaveBeenCalledWith(jobId);
+
+    await waitFor(() => expect(screen.queryAllByText("Cancelling the install")).toHaveLength(0));
+    expect(screen.getAllByText("Checking the plugin").length).toBeGreaterThan(0);
+    expect(cancel.getAttribute("aria-disabled")).toBe("true");
+
+    await act(async () => settleInstall!({ status: "cancelled" }));
   });
 
   it("gates an http:// URL behind a confirm dialog before calling installFromUrl", async () => {
@@ -1004,6 +1134,7 @@ describe("PluginManagerView", () => {
       name: "acme.demo",
       version: "2.0.0",
       capabilities: [],
+      archiveHash: REVIEWED_HASH,
     });
     renderDialog();
     await selectPlugin();
@@ -1017,12 +1148,88 @@ describe("PluginManagerView", () => {
     expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Install over HTTP" }));
+    // The binding survives the HTTP detour — the unencrypted path is exactly
+    // where a swapped second download is easiest (#12612).
     await waitFor(() =>
       expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
         "http://example.com/p.dntr",
-        expect.any(String)
+        expect.any(String),
+        { pluginId: "acme.demo", archiveHash: REVIEWED_HASH }
       )
     );
+  });
+
+  it("skips an http reinstall whose plugin was uninstalled while the warning was open", async () => {
+    let fireProvenance: (() => void) | undefined;
+    vi.mocked(window.electron.plugin.onProvenanceChanged).mockImplementation((cb) => {
+      fireProvenance = () => cb({});
+      return () => {};
+    });
+    const listMock = vi.mocked(window.electron.plugin.list);
+    listMock.mockResolvedValue([urlPlugin({ originalUrl: "http://example.com/p.dntr" })]);
+    vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+      status: "available",
+      name: "acme.demo",
+      version: "2.0.0",
+      capabilities: [],
+      archiveHash: REVIEWED_HASH,
+    });
+    renderDialog();
+    await selectPlugin();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
+    await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
+
+    // Another window uninstalls it; the refreshed list no longer has it.
+    listMock.mockResolvedValue([]);
+    fireProvenance?.();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install over HTTP" }));
+    await waitFor(() => expect(screen.queryByText("Install over HTTP?")).toBeNull());
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("leaves a manual http install unbound after a cancelled http reinstall", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([
+      urlPlugin({ originalUrl: "http://example.com/p.dntr" }),
+    ]);
+    vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+      status: "available",
+      name: "acme.demo",
+      version: "2.0.0",
+      capabilities: [],
+      archiveHash: REVIEWED_HASH,
+    });
+    renderDialog();
+    await selectPlugin();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
+    await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" })
+    );
+    await waitFor(() => expect(screen.queryByText("Install over HTTP?")).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Plugin URL"), {
+      target: { value: "http://example.com/other.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Install over HTTP" }));
+
+    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalledTimes(1));
+    // A stale binding here would refuse an unrelated plugin as a "mismatch".
+    expect(vi.mocked(window.electron.plugin.installFromUrl).mock.calls[0]).toEqual([
+      "http://example.com/other.dntr",
+      expect.any(String),
+    ]);
   });
 
   it("hides the empty state when the initial list load fails", async () => {
@@ -1145,6 +1352,33 @@ describe("PluginManagerView", () => {
         expect(screen.getByText("Restart required to apply plugin changes")).toBeTruthy()
       );
       expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy();
+    });
+
+    it("holds the Restart offer back while an install is running", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ disabled: true, pendingRestart: true }),
+      ]);
+      let settleInstall: ((result: PluginInstallResult) => void) | undefined;
+      vi.mocked(window.electron.plugin.installFromUrl).mockImplementation(
+        () => new Promise((resolve) => (settleInstall = resolve))
+      );
+      renderDialog();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+      await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+      fireEvent.change(screen.getByLabelText("Plugin URL"), {
+        target: { value: "https://example.com/p.dntr" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Install" }));
+      await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalled());
+
+      // Relaunching now would take the install down with it.
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Restart" })).toBeNull());
+      expect(screen.getByText(/Restart once the install finishes/)).toBeTruthy();
+
+      await act(async () => settleInstall!({ status: "cancelled" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy());
     });
 
     it("does not surface the restart bar after toggling a live plugin (#10887)", async () => {
@@ -1544,7 +1778,11 @@ describe("PluginManagerView", () => {
       const input = await screen.findByLabelText("Search plugins");
       fireEvent.change(input, { target: { value: "zzzznomatch" } });
       await waitFor(() => expect(screen.getByText("No matching plugins")).toBeTruthy());
-      fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+      // The canvas owns the recovery action; the field's own clear button is
+      // the other "Clear search" on screen.
+      const canvas = screen.getByRole("region", { name: "Installed plugins" });
+      await waitFor(() => expect(within(canvas).getByText("Try another search")).toBeTruthy());
+      fireEvent.click(within(canvas).getByRole("button", { name: "Clear search" }));
       await screen.findAllByText("Plugin00");
     });
 
@@ -1561,8 +1799,140 @@ describe("PluginManagerView", () => {
       await waitFor(() => expect(screen.getByRole("button", { name: /uninstall/i })).toBeTruthy());
       const input = screen.getByLabelText("Search plugins");
       fireEvent.change(input, { target: { value: "Notepad" } });
-      // Plugin00 is filtered out, so the detail pane falls back to its empty state.
-      await waitFor(() => expect(screen.getByText("Installed plugins")).toBeTruthy());
+      // Plugin00 is filtered out, so the detail pane falls back to the results.
+      await waitFor(() => expect(screen.getByText("Matching plugins")).toBeTruthy());
+    });
+  });
+
+  describe("row and search design invariants", () => {
+    const manyPlugins = (count: number) =>
+      Array.from({ length: count }, (_, i) => {
+        const name = `Plugin${String(i).padStart(2, "0")}`;
+        return makePlugin({
+          instanceId: `pkg.${name}`,
+          manifest: { ...makePlugin().manifest, name: `pkg.${name}`, displayName: name },
+        });
+      });
+
+    it("gives a plugin's operational signal the row's second line instead of its blurb", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([
+        makePlugin(),
+        makePlugin({
+          instanceId: "acme.broken",
+          manifest: {
+            ...makePlugin().manifest,
+            name: "acme.broken",
+            displayName: "Acme Broken",
+            description: "Broken blurb",
+          },
+          loadError: { message: "boom", at: 1 },
+        }),
+      ]);
+      renderDialog();
+      await findPluginRowButton("Acme Broken");
+      const healthyLine = within(pluginRow("Acme Demo")).getByTestId("plugin-row-badges");
+      const brokenLine = within(pluginRow("Acme Broken")).getByTestId("plugin-row-badges");
+      expect(healthyLine.textContent).toContain("A demo plugin");
+      expect(brokenLine.textContent).toContain("Failed to load");
+      expect(brokenLine.textContent).not.toContain("Broken blurb");
+    });
+
+    it("keeps the version out of the row so the name owns its line", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([
+        makePlugin({ manifest: { ...makePlugin().manifest, version: "9.8.7-rc.1" } }),
+      ]);
+      renderDialog();
+      await findPluginRowButton("Acme Demo");
+      expect(pluginRow("Acme Demo").textContent).not.toContain("9.8.7-rc.1");
+    });
+
+    it("shows the same signal on the catalog card as on the row", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([
+        makePlugin({ loadError: { message: "boom", at: 1 } }),
+      ]);
+      renderDialog();
+      const canvas = await screen.findByRole("region", { name: "Installed plugins" });
+      await waitFor(() => expect(within(canvas).getByText("Failed to load")).toBeTruthy());
+      expect(within(pluginRow("Acme Demo")).getByText("Failed to load")).toBeTruthy();
+    });
+
+    it("announces the result count once typing pauses, without moving focus", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue(manyPlugins(3));
+      renderDialog();
+      const input = await screen.findByLabelText("Search plugins");
+      await findPluginRowButton("Plugin00");
+      input.focus();
+      fireEvent.change(input, { target: { value: "Plugin01" } });
+      // The search announcer, not the install banner's step announcer that
+      // shares the view.
+      const status = within(
+        screen.getByRole("group", { name: "Filter plugins" }).parentElement!
+      ).getByRole("status", { hidden: true });
+      await waitFor(() => expect(status.textContent).toBe("1 matching plugin"), {
+        timeout: 2000,
+      });
+      expect(document.activeElement).toBe(input);
+      fireEvent.change(input, { target: { value: "zzzz" } });
+      await waitFor(() => expect(status.textContent).toBe("No matching plugins"), {
+        timeout: 2000,
+      });
+    });
+
+    it("leaves focus on a filter chip after toggling it", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+      renderDialog();
+      await findPluginRowButton("Acme Demo");
+      const group = screen.getByRole("group", { name: "Filter plugins" });
+      const chip = within(group).getByRole("button", { name: "Disabled" });
+      chip.focus();
+      fireEvent.click(chip);
+      await waitFor(() => expect(chip.getAttribute("aria-pressed")).toBe("true"));
+      expect(document.activeElement).toBe(chip);
+    });
+
+    it("hands focus to search when a filtered toggle removes the focused row", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin({ disabled: true })]);
+      renderDialog();
+      await findPluginRowButton("Acme Demo");
+      const group = screen.getByRole("group", { name: "Filter plugins" });
+      fireEvent.click(within(group).getByRole("button", { name: "Disabled" }));
+      const toggle = await waitFor(() =>
+        within(pluginRow("Acme Demo")).getByRole("switch", { name: "Enable Acme Demo" })
+      );
+      toggle.focus();
+      fireEvent.click(toggle);
+      // Enabling it removes it from the "@disabled" results, switch and all.
+      await waitFor(() => expect(toggle.isConnected).toBe(false));
+      await waitFor(() =>
+        expect(document.activeElement).toBe(screen.getByLabelText("Search plugins"))
+      );
+    });
+
+    it("retries a failed plugin by reloading it through the enable path", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([
+        makePlugin({ loadError: { message: "boom", at: 1 } }),
+      ]);
+      renderDialog();
+      await selectPlugin();
+      const detail = await screen.findByRole("region", { name: "Details for Acme Demo" });
+      fireEvent.click(within(detail).getByRole("button", { name: "Retry" }));
+      await waitFor(() =>
+        expect(vi.mocked(window.electron.plugin.setEnabled).mock.calls).toEqual([
+          ["acme.demo", false],
+          ["acme.demo", true],
+        ])
+      );
+    });
+
+    it("lets the detail pane switch a plugin back on", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin({ disabled: true })]);
+      renderDialog();
+      await selectPlugin();
+      const detail = await screen.findByRole("region", { name: "Details for Acme Demo" });
+      fireEvent.click(within(detail).getByRole("switch", { name: "Enable Acme Demo" }));
+      await waitFor(() =>
+        expect(window.electron.plugin.setEnabled).toHaveBeenCalledWith("acme.demo", true)
+      );
     });
   });
 
@@ -1594,7 +1964,13 @@ describe("PluginManagerView", () => {
       ]);
       checkMock().mockImplementation(async (id: string) =>
         id === "acme.a"
-          ? { status: "available", name: "acme.a", version: "2.0.0", capabilities: [] }
+          ? {
+              status: "available",
+              name: "acme.a",
+              version: "2.0.0",
+              capabilities: [],
+              archiveHash: "a".repeat(64),
+            }
           : { status: "up-to-date" }
       );
       renderDialog();
@@ -1610,18 +1986,21 @@ describe("PluginManagerView", () => {
       await waitFor(() =>
         expect(installMock()).toHaveBeenCalledWith(
           "https://example.com/acme.a.dntr",
-          expect.any(String)
+          expect.any(String),
+          { pluginId: "acme.a", archiveHash: "a".repeat(64) }
         )
       );
     });
 
     it("drains multiple available updates one confirm at a time", async () => {
       listMock().mockResolvedValue([makeUrl("acme.a", "Plugin A"), makeUrl("acme.b", "Plugin B")]);
+      const digestFor = (id: string) => (id === "acme.a" ? "a" : "b").repeat(64);
       checkMock().mockImplementation(async (id: string) => ({
         status: "available",
         name: id,
         version: "2.0.0",
         capabilities: [],
+        archiveHash: digestFor(id),
       }));
       renderDialog();
       fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
@@ -1634,6 +2013,11 @@ describe("PluginManagerView", () => {
 
       await waitFor(() => expect(installMock()).toHaveBeenCalledTimes(2));
       await waitFor(() => expect(screen.queryByText(/^Update '/)).toBeNull());
+      // Each queued update is held to its own preview, never its neighbour's.
+      expect(installMock().mock.calls.map((c) => c[2])).toEqual([
+        { pluginId: "acme.a", archiveHash: digestFor("acme.a") },
+        { pluginId: "acme.b", archiveHash: digestFor("acme.b") },
+      ]);
     });
 
     it("routes an http update through the HTTP confirm before installing", async () => {
@@ -1643,6 +2027,7 @@ describe("PluginManagerView", () => {
         name: "acme.a",
         version: "2.0.0",
         capabilities: [],
+        archiveHash: "a".repeat(64),
       });
       renderDialog();
       fireEvent.click(await screen.findByRole("button", { name: "Update all" }));

@@ -151,7 +151,7 @@ const LAUNCH_ERROR_BODY: Record<LaunchErrorKind, string> = {
     "Daintree's assistant services didn't start. Check assistant settings, then try again.",
   "mcp-probe-failed": "Daintree's assistant services didn't respond in time. Try again.",
   "skills-sync-failed":
-    "Daintree couldn't refresh this project's assistant commands and skills, so the session didn't start. Retry, or check the logs if it keeps failing.",
+    "Daintree couldn't load this project's assistant folder, so the session didn't start. Retry, or check the logs if it keeps failing.",
   "spawn-failed": "The agent didn't start. Try again.",
   // Same wording as the command/MCP path in `helpActions.ts` — one refusal,
   // one sentence, whichever surface the user hit it from.

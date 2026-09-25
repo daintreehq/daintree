@@ -1,5 +1,11 @@
 import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
+import {
+  UI_ENTER_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_DURATION,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
 
 export interface ScrollPillProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type"> {
   /** Whether the pill is in its shown state (drives opacity + resting transform). */
@@ -24,7 +30,7 @@ export interface ScrollPillProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
  * overridden — scroll chrome must never submit a form.
  */
 export const ScrollPill = forwardRef<HTMLButtonElement, ScrollPillProps>(
-  ({ isVisible, translateDirection, className, ...rest }, ref) => {
+  ({ isVisible, translateDirection, className, style, ...rest }, ref) => {
     const hiddenTransform =
       translateDirection === "up"
         ? "opacity-0 -translate-y-2"
@@ -47,16 +53,25 @@ export const ScrollPill = forwardRef<HTMLButtonElement, ScrollPillProps>(
           // interleaved with the pill's chevron and count.
           "bg-surface-panel-elevated border border-border-default text-text-primary shadow-[var(--theme-shadow-floating)]",
           "text-xs font-medium cursor-pointer",
-          "hover:bg-overlay-subtle hover:border-border-strong",
+          // The hover tint is layered as a background IMAGE over the opaque
+          // fill. The overlay ladder is alpha-only, so as a background-color
+          // it replaced the fill: the pill went see-through on hover and, on a
+          // light theme over a dark terminal, took its dark label with it.
+          "hover:bg-[linear-gradient(var(--color-overlay-hover),var(--color-overlay-hover))] hover:border-border-strong",
           // Tailwind v4 translate-* emits the individual `translate` property,
           // which `transform` in a transition list does NOT cover — list it
           // explicitly or the slide snaps and only the fade animates.
-          "transition-[opacity,translate] duration-150",
+          "transition-[opacity,translate]",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:translate-none",
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1",
           isVisible ? "opacity-100 translate-y-0" : hiddenTransform,
           className
         )}
+        style={{
+          transitionDuration: `${isVisible ? UI_ENTER_DURATION : UI_EXIT_DURATION}ms`,
+          transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+          ...style,
+        }}
         {...rest}
         type="button"
       />

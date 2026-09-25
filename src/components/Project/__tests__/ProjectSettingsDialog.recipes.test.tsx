@@ -11,7 +11,7 @@ describe("ProjectSettingsDialog - Recipes Tab", () => {
     const tabTitles: Record<string, string> = {
       general: "General",
       context: "Context",
-      automation: "Worktree Setup",
+      automation: "Worktree setup",
       recipes: "Recipes",
       commands: "Commands",
     };

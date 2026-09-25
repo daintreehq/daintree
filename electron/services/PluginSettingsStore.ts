@@ -13,8 +13,8 @@ const SETTINGS_FILE_MODE = 0o600;
 /**
  * Discriminator marking an at-rest value as an OS-keychain ciphertext envelope
  * rather than a plaintext setting. A plain plaintext-stored secret (or any
- * non-secret value) carries no such tag, so a value written before encryption
- * was available is transparently migrated on its next write (#9167).
+ * non-secret value) carries no such tag, so a legacy secret written before
+ * encryption was available is transparently migrated on its next write (#9167).
  */
 const SECRET_ENVELOPE_TAG = "daintree:secret:v1";
 
@@ -39,6 +39,12 @@ interface SecretOptions {
 }
 
 /**
+ * The at-rest form of a secret already on disk. `"plaintext"` only ever
+ * describes a legacy value — no secret is written in plaintext any more.
+ */
+export type StoredSecretTier = "keychain" | "plaintext";
+
+/**
  * JSON-backed key/value store for one plugin + scope, identified by its resolved
  * file path. Loads lazily on first access and caches the decoded object in
  * memory; writes go through {@link resilientAtomicWriteFile} with `chmod 0o600`
@@ -46,10 +52,10 @@ interface SecretOptions {
  *
  * Values for keys declared `type: "secret"` are routed through an injected
  * {@link SecretCipher} (Electron `safeStorage`) and persisted as a tagged
- * ciphertext envelope when an OS keychain is available; when it is not, they
- * fall back to the same plaintext-0600 path as ordinary settings (#9167). The
- * `secret` flag is supplied per call by the caller (the manager knows the
- * declared type), so a single store handles both tiers across its keys.
+ * ciphertext envelope (#9167). When no OS keychain is available the write is
+ * refused — a secret is never written in plaintext (#12613). The `secret` flag
+ * is supplied per call by the caller (the manager knows the declared type), so
+ * a single store holds secret and ordinary keys side by side.
  *
  * Change subscriptions are intentionally NOT owned here — `PluginService` holds
  * them so they survive project-root switches that change the resolved path.
@@ -70,7 +76,7 @@ export class PluginSettingsStore {
 
   /**
    * The at-rest tier a secret write would use right now (`keychain` when an OS
-   * keychain is available, else `plaintext`). Disclosed in the settings UI.
+   * keychain is available, else `unavailable`). Disclosed in the settings UI.
    */
   secretTier(): SecretStorageTier {
     return this.cipher.tier();
@@ -78,12 +84,11 @@ export class PluginSettingsStore {
 
   /**
    * The at-rest tier the value currently stored at `key` is in. `keychain` when
-   * it's an encrypted envelope, `plaintext` when stored unencrypted (keychain
-   * unavailable at write time, or not yet migrated), `undefined` when unset.
-   * Lets the UI flag a value still sitting in plaintext even though a keychain is
-   * now available.
+   * it's an encrypted envelope, `plaintext` when it's a legacy unencrypted value
+   * not yet migrated, `undefined` when unset. Lets the UI flag a value still
+   * sitting in plaintext.
    */
-  async storedSecretTier(key: string): Promise<SecretStorageTier | undefined> {
+  async storedSecretTier(key: string): Promise<StoredSecretTier | undefined> {
     const cache = await this.load();
     const raw = cache.get(key);
     if (raw === undefined) return undefined;
@@ -99,8 +104,8 @@ export class PluginSettingsStore {
       return this.cipher.decrypt(raw.cipher) as T;
     }
     // Return a detached copy so a caller mutating the result can't reach into
-    // the in-memory cache and diverge it from disk. A secret stored as plaintext
-    // (keychain unavailable, or pre-migration) falls through here unchanged.
+    // the in-memory cache and diverge it from disk. A legacy secret stored as
+    // plaintext falls through here unchanged.
     return cloneValue(raw) as T | undefined;
   }
 
@@ -148,11 +153,12 @@ export class PluginSettingsStore {
   }
 
   /**
-   * Persist a secret value at its at-rest tier. With an OS keychain it is stored
-   * as a {@link SecretEnvelope} (base64 ciphertext); without one it falls back to
-   * plaintext, exactly as a non-secret value would. Migration is implicit: a
-   * value previously stored plaintext is rewritten as an envelope on this write
-   * once a keychain becomes available, and never silently dropped.
+   * Persist a secret value as a {@link SecretEnvelope} (base64 ciphertext).
+   * Without an OS keychain the write is refused before anything changes, in
+   * memory or on disk: a plaintext secret written here would be
+   * indistinguishable from an ordinary setting, and nothing would ever tell the
+   * user it was exposed (#12613). Migration is implicit: a legacy plaintext
+   * value is rewritten as an envelope on its next write, never silently dropped.
    *
    * No-op detection decrypts the stored value first so an idempotent re-set of an
    * already-encrypted secret skips the write (ciphertext is non-deterministic, so
@@ -170,16 +176,19 @@ export class PluginSettingsStore {
     // JSON-encoded (mirrors how the manager stringifies non-string secrets).
     const plaintext = typeof stored === "string" ? stored : JSON.stringify(stored);
     const ciphertext = this.cipher.encrypt(plaintext);
-    const next: unknown =
-      ciphertext === null ? stored : { __daintreeSecret: SECRET_ENVELOPE_TAG, cipher: ciphertext };
+    if (ciphertext === null) {
+      throw new Error(
+        `Secure storage is unavailable on this device, so the secret "${key}" wasn't saved`
+      );
+    }
+    const next: SecretEnvelope = { __daintreeSecret: SECRET_ENVELOPE_TAG, cipher: ciphertext };
 
     if (had) {
       const prevPlain = this.decodeSecretPlaintext(prev);
-      // Skip only when the plaintext is unchanged AND the at-rest tier isn't
-      // changing — a plaintext-stored secret migrating up to an envelope (or
-      // back) must still write so the on-disk representation is corrected.
-      const tierUnchanged = isSecretEnvelope(prev) === isSecretEnvelope(next);
-      if (tierUnchanged && prevPlain === plaintext) return false;
+      // Skip only when the plaintext is unchanged AND it is already an
+      // envelope — a legacy plaintext secret must still write so the on-disk
+      // representation is corrected.
+      if (isSecretEnvelope(prev) && prevPlain === plaintext) return false;
     }
 
     cache.set(key, next);

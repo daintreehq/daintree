@@ -18,9 +18,10 @@ import {
   type ScrollerProps,
   type VirtuosoHandle,
 } from "react-virtuoso";
-import { AlertTriangle, FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
+import { FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { boundedErrorText } from "@/utils/errorText";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { ScrollIndicator } from "@/components/Worktree/ScrollIndicator";
 import {
@@ -30,11 +31,16 @@ import {
   useWorktreeActions,
   useAriaKeyshortcuts,
   useKeybindingDisplay,
+  useEffectiveCombo,
   useDohertyGate,
   useKeepMounted,
 } from "@/hooks";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
-import { WorktreeSidebarSearchBar, QuickStateFilterBar } from "@/components/Worktree";
+import {
+  WorktreeSidebarSearchBar,
+  QuickStateFilterBar,
+  QuickStateArmButton,
+} from "@/components/Worktree";
 import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
@@ -96,6 +102,7 @@ import { StaticWorktreeRow } from "./StaticWorktreeRow";
 import { WorkspaceRootSidebar } from "./WorkspaceRootSidebar";
 import { WorktreeCardPlaceholder } from "./WorktreeCardPlaceholder";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useScrollIndicator } from "./useScrollIndicator";
 import { useSidebarVirtuosoReset } from "./useSidebarVirtuosoReset";
@@ -154,8 +161,7 @@ const SIDEBAR_VIRTUOSO_OVERSCAN_PX = 600;
 // ~14s workspace-host restart budget so it fires before `setFatalError`.
 const RECONNECT_ESCALATE_MS = 10_000;
 
-const WORKTREE_DISCONNECTED_MESSAGE =
-  "The workspace service isn't connected, so worktrees can't load.";
+const WORKTREE_DISCONNECTED_MESSAGE = "The workspace service isn't connected to this project.";
 
 // Fixed-count shimmer card placeholders for the worktree sidebar loading state.
 // Follows the same 3-bone structure as the `.skel-card` design in the
@@ -370,7 +376,7 @@ interface SidebarContentProps {
 
 function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const overviewShortcut = useKeybindingDisplay("worktree.overview");
-  const refreshShortcut = useKeybindingDisplay("worktree.refresh");
+  const refreshShortcut = useEffectiveCombo("worktree.refresh");
   const createWorktreeShortcut = useKeybindingDisplay("worktree.createDialog.open");
   const overviewAriaShortcut = useAriaKeyshortcuts("worktree.overview");
   const refreshAriaShortcut = useAriaKeyshortcuts("worktree.refresh");
@@ -424,7 +430,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     // keyboard reorder reads the same headline the user sees on the card rather
     // than the bare (rarely-visible) name (issue #10317).
     const wt = worktreesRef.current.find((w) => w.id === worktreeId);
-    const label = wt?.issueTitle ?? wt?.branch ?? wt?.name ?? worktreeId;
+    const label = wt?.issueTitle ?? wt?.branch ?? wt?.name ?? "worktree";
     const message = `Moved '${label}' to position ${targetIdx + 1} of ${visible.length}`;
     if (reorderAnnouncementTimerRef.current !== null) {
       clearTimeout(reorderAnnouncementTimerRef.current);
@@ -468,7 +474,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       const wt = worktreeId ? worktreesRef.current.find((w) => w.id === worktreeId) : undefined;
       // Match DndProvider.resolveWorktreeLabel so the assertive interrupt
       // reads the same human-readable name the polite announcer would.
-      const label = wt?.issueTitle ?? wt?.branch ?? wt?.name ?? worktreeId ?? "worktree";
+      const label = wt?.issueTitle ?? wt?.branch ?? wt?.name ?? "worktree";
       // Drop any pending trailing reorder announcement so the polite region
       // doesn't speak a stale "Moved to position N" after the cancel lands.
       if (reorderAnnouncementTimerRef.current !== null) {
@@ -489,8 +495,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       }, 50);
     },
   });
-  const { worktrees, isLoading, isInitialized, isReconnecting, reconnectingAt, error, refresh } =
-    useWorktrees();
+  const {
+    worktrees,
+    isLoading: isStoreLoading,
+    isInitialized,
+    isReconnecting,
+    reconnectingAt,
+    error,
+    refresh,
+  } = useWorktrees();
   const [bannerDismissed, setBannerDismissed] = useState(false);
   useEffect(() => {
     setBannerDismissed(false);
@@ -556,6 +569,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // can't see a scratch, which is why the sidebar had nothing to render in one.
   const workspaceRoot = useWorkspaceRoot();
   const worktreeLoadError = useProjectStore((state) => state.worktreeLoadError);
+  // A load that already failed is not still loading. The store keeps
+  // `isLoading` when a switch's load throws or the host dies before the first
+  // snapshot, and the skeleton branch would say the list is loading while
+  // hiding the only recovery — Retry for the one, Restart for the other.
+  const isLoading = isStoreLoading && worktreeLoadError === null && error === null;
   useProjectSettings();
   const { availability, agentSettings } = useAgentLauncher();
   const {
@@ -1433,16 +1451,32 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // Computed after `sidebarItems` because the indicator counts hidden worktree
   // rows directly from the flat list geometry (variable-height rows + section
   // headers, issue #9666), so it needs the full item array as its input.
+  // The quick-state bar's "Attention" bucket, by the bar's own predicate, so
+  // each pill's mark is a directional share of the number shown just above the
+  // list and clicking the "Attention" segment filters to exactly these rows.
+  const attentionWorktreeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const [id, meta] of derivedMetaMap) {
+      if (matchesQuickStateFilter("waiting", meta)) ids.add(id);
+    }
+    return ids;
+  }, [derivedMetaMap]);
+
+  const skipMotion = useShouldSkipMotion();
+
   const {
     hiddenAbove,
     hiddenBelow,
-    scrollToTop,
-    scrollToBottom,
+    revealAbove,
+    revealBelow,
     scrollerRef: scrollIndicatorScrollerRef,
     handleScroll,
     handleItemsRendered,
   } = useScrollIndicator({
     items: sidebarItems,
+    attentionWorktreeIds,
+    virtuosoRef,
+    smoothScroll: !skipMotion,
   });
 
   const setScrollerElement = useCallback(
@@ -1554,14 +1588,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       </ErrorBoundary>
     );
 
-  // Hoisted before the early returns so the failed-switch banner (#8400)
-  // surfaces regardless of which loading/empty/error branch the sidebar is in
-  // — when a switch's worktree load throws, the store stays empty so every
-  // other branch would otherwise show no trace of the failure.
-  const worktreeLoadErrorBanner = worktreeLoadError ? (
-    <WorktreeLoadErrorBanner error={worktreeLoadError} />
-  ) : null;
-
   // An open project whose worktree store never received a snapshot has no port
   // to the workspace service. That is a connection failure, not an empty
   // repository, so it must never fall through to the "Open a Git repository"
@@ -1578,9 +1604,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const errorBanner =
     error !== null && (!bannerDismissed || !canDismissErrorBanner) ? (
       <InlineStatusBanner
-        icon={AlertTriangle}
         title="Workspace service unavailable"
-        contextLine={error}
+        // A wrapping description, not the one-line mono context line: the
+        // reason is the part worth reading, and at sidebar width the context
+        // line clipped it to "Workspace host exit…" with the rest on hover only.
+        description={boundedErrorText(error)}
         severity="warning"
         role="status"
         ariaLive="polite"
@@ -1596,6 +1624,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         ]}
       />
     ) : null;
+
+  // Hoisted before the early returns so the failed-switch banner (#8400)
+  // surfaces regardless of which empty/populated branch the sidebar is in —
+  // when a switch's worktree load throws, the store stays empty so every
+  // other branch would otherwise show no trace of the failure. An open project
+  // with no snapshot once loading has settled is a connection failure (#12576)
+  // and takes the same banner. It yields to any service error, shown or
+  // dismissed: a crashed host needs Restart, and Retry offers a fix that
+  // cannot work.
+  const loadFailure =
+    worktreeLoadError ??
+    (isProjectDisconnected && !isLoading && error === null ? WORKTREE_DISCONNECTED_MESSAGE : null);
+  const worktreeLoadErrorBanner =
+    loadFailure !== null && error === null ? <WorktreeLoadErrorBanner error={loadFailure} /> : null;
 
   // Mounted in both the zero-worktree early return and the main return path so
   // the errorBanner's "Restart Service" action stays reachable when
@@ -1638,7 +1680,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   if (isLoading && worktrees.length === 0) {
     return (
       <div className="flex flex-col h-full">
-        {worktreeLoadErrorBanner}
         <div className="flex items-center px-3 py-3 border-b border-divider shrink-0">
           <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
             Worktrees
@@ -1664,7 +1705,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               </div>
             ))}
           </Skeleton>
-          <SkeletonHint className="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-auto" />
+          <SkeletonHint className="absolute bottom-4 inset-x-4 flex justify-center pointer-events-auto" />
         </div>
       </div>
     );
@@ -1674,16 +1715,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return (
       <>
         <div className="flex flex-col h-full">
-          {worktreeLoadErrorBanner ??
-            (isProjectDisconnected && error === null ? (
-              <WorktreeLoadErrorBanner error={WORKTREE_DISCONNECTED_MESSAGE} />
-            ) : null)}
           <div className="flex items-center px-3 py-3 border-b border-divider shrink-0">
             <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
               Worktrees
             </h2>
           </div>
           {errorBanner}
+          {worktreeLoadErrorBanner}
 
           {/* A failed load or a missing connection already has an open
               project — the "Open a Git repository" nudge would contradict the
@@ -1748,31 +1786,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         ? "All matching agents are armed"
         : "All agents are armed";
   const armMatchingButton = (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-disabled={!canArmMatching || undefined}
-          onClick={() => {
-            if (!canArmMatching) return;
-            actionService.dispatch(
-              "fleet.armMatchingFilter",
-              { worktreeIds: filteredWorktrees.map((w) => w.id) },
-              { source: "user" }
-            );
-          }}
-          className="inline-flex items-center justify-center self-stretch px-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06] aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/60"
-          aria-label={armMatchingLabel}
-        >
-          <Zap className="w-3 h-3" aria-hidden="true" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">{armMatchingLabel}</TooltipContent>
-    </Tooltip>
+    <QuickStateArmButton
+      label={armMatchingLabel}
+      disabled={!canArmMatching}
+      onArm={() =>
+        actionService.dispatch(
+          "fleet.armMatchingFilter",
+          { worktreeIds: filteredWorktrees.map((w) => w.id) },
+          { source: "user" }
+        )
+      }
+    />
   );
   return (
     <div className="flex flex-col h-full">
-      {worktreeLoadErrorBanner}
       {/* Header Section */}
       {/* The control zone carries ONE horizontal rule, at its bottom edge. When
           the search rail renders it owns that rule, so the header goes without;
@@ -1896,7 +1923,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         />
       )}
 
+      {/* Both failure banners take the slot below the control zone, so a
+          failure about the list reads as belonging to the list. */}
       {errorBanner}
+      {worktreeLoadErrorBanner}
 
       {/* SR-only live region for keyboard reorder announcements. dnd-kit's
           built-in announcer can't see external mutations like Alt+Arrow, so
@@ -2113,17 +2143,24 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               />
             </SortableContext>
           )}
+          {/* Out of the accessibility tree on purpose: these sit inside the
+              grid, where only rows may be owned, and the grid's own rows
+              already carry each worktree's state. Keyboard users have the
+              same reach through arrow navigation, the "Attention" segment,
+              and "Focus next waiting agent". */}
           <ScrollIndicator
             direction="above"
-            count={hiddenAbove}
-            onClick={scrollToTop}
+            count={hiddenAbove.count}
+            attentionCount={hiddenAbove.attention}
+            onClick={revealAbove}
             ariaHidden
             tabIndex={-1}
           />
           <ScrollIndicator
             direction="below"
-            count={hiddenBelow}
-            onClick={scrollToBottom}
+            count={hiddenBelow.count}
+            attentionCount={hiddenBelow.attention}
+            onClick={revealBelow}
             ariaHidden
             tabIndex={-1}
           />

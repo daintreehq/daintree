@@ -1448,3 +1448,112 @@ describe("RepoFetchCoordinator", () => {
     });
   });
 });
+
+describe("RepoFetchCoordinator — remote inventory", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.clearAllMocks();
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // A local-only repo is a normal state. `git fetch origin` there fails, and
+  // every non-auth failure used to surface as "Couldn't reach the remote".
+  it("skips without spawning git when the repo has no remotes", async () => {
+    const mockGit = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+    const coord = new RepoFetchCoordinator({ readRemotes: async () => [] });
+
+    const result = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+
+    expect(result).toMatchObject({
+      status: "skipped",
+      skipReason: "no-remotes",
+      lastFetchedAt: null,
+      authFailed: false,
+      networkFailed: false,
+      hasRemote: false,
+    });
+    expect(result.remote).toBeUndefined();
+    expect(mockGit.raw).not.toHaveBeenCalled();
+  });
+
+  it("reports no failure for a worktree whose remote has since been removed", async () => {
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(() => Promise.reject(new Error("Could not resolve host: example.com")))
+    );
+    let remotes: string[] = ["origin"];
+    const coord = new RepoFetchCoordinator({ readRemotes: async () => remotes });
+
+    const failed = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(failed.networkFailed).toBe(true);
+
+    remotes = [];
+    const skipped = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(skipped).toMatchObject({ skipReason: "no-remotes", networkFailed: false });
+    // Per-remote state is shared across siblings, so one worktree's answer
+    // leaves it for the siblings that may still have the remote.
+    expect(coord.hasFailureFor("/repo/.git", "origin")).toBe(true);
+  });
+
+  it("re-reads the remotes on a forced fetch", async () => {
+    mockCreateBackgroundFetchGit.mockReturnValue(makeMockGit(() => Promise.resolve()));
+    const readRemotes = vi.fn(async (_path: string, _commonDir: string, _fresh: boolean) => [
+      "origin",
+    ]);
+    const coord = new RepoFetchCoordinator({ readRemotes });
+
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo", force: true });
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+
+    expect(readRemotes.mock.calls.map((call) => call[2])).toEqual([true, false]);
+  });
+
+  it("fetches the sole remote when it is not named origin", async () => {
+    const mockGit = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+    const coord = new RepoFetchCoordinator({ readRemotes: async () => ["canonical"] });
+
+    const result = await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      remotes: ["origin"],
+      primaryRemote: "origin",
+    });
+
+    expect(result).toMatchObject({ status: "success", remote: "canonical", hasRemote: true });
+    expect(mockGit.raw).toHaveBeenCalledTimes(1);
+    expect(mockGit.raw.mock.calls[0][0][1]).toBe("canonical");
+  });
+
+  it("drops a requested remote the repo does not have", async () => {
+    const mockGit = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+    const coord = new RepoFetchCoordinator({ readRemotes: async () => ["origin"] });
+
+    await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      remotes: ["upstream", "origin"],
+      primaryRemote: "upstream",
+    });
+
+    expect(mockGit.raw.mock.calls.map((call) => call[0][1])).toEqual(["origin"]);
+  });
+
+  // Unreadable is unknown, never "none": the caller's plan stands.
+  it("keeps the caller's plan when the remotes cannot be read", async () => {
+    const mockGit = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+    const coord = new RepoFetchCoordinator({ readRemotes: async () => null });
+
+    const result = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+
+    expect(result.status).toBe("success");
+    expect(result.hasRemote).toBeUndefined();
+    expect(mockGit.raw.mock.calls[0][0][1]).toBe("origin");
+  });
+});

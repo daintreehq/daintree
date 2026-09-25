@@ -73,9 +73,13 @@ function buildRawZip(entries: RawEntry[]): Buffer {
       uncompressedSize = stored.length;
       crc = zlib.crc32(stored) >>> 0;
     }
+    // Bit 11 marks the name as UTF-8; without it yauzl decodes as CP437 and a
+    // non-ASCII name would never round-trip.
+    const flags = /^[\x20-\x7e]*$/.test(e.name) ? 0 : 0x0800;
     const lfh = Buffer.alloc(30);
     lfh.writeUInt32LE(0x04034b50, 0);
     lfh.writeUInt16LE(20, 4);
+    lfh.writeUInt16LE(flags, 6);
     lfh.writeUInt16LE(method, 8);
     lfh.writeUInt32LE(crc, 14);
     lfh.writeUInt32LE(stored.length, 18);
@@ -89,6 +93,7 @@ function buildRawZip(entries: RawEntry[]): Buffer {
     cdh.writeUInt32LE(0x02014b50, 0);
     cdh.writeUInt16LE(20, 4);
     cdh.writeUInt16LE(20, 6);
+    cdh.writeUInt16LE(flags, 8);
     cdh.writeUInt16LE(method, 10);
     cdh.writeUInt32LE(crc, 16);
     cdh.writeUInt32LE(stored.length, 20);
@@ -250,6 +255,33 @@ describe("extractPluginArchive", () => {
     await fs.mkdir(dest, { recursive: true });
 
     await expect(extractPluginArchive(archivePath, dest)).rejects.toThrow(/Duplicate entry/);
+  });
+
+  // #12612: an update preview reads the first `plugin.json`; on a case- or
+  // normalization-insensitive filesystem a later alias would overwrite it on
+  // extraction, installing capabilities nobody reviewed under a matching digest.
+  it.each([
+    ["a case-only alias of plugin.json", "Plugin.json"],
+    ["a case-only alias of a payload file", "DIST/index.js"],
+    ["an NFD alias of an NFC name", "dist/caf\u0065\u0301.js"],
+  ])("rejects %s before it can overwrite the original", async (_label, alias) => {
+    const archivePath = path.join(tmpDir, "alias.dntr");
+    await fs.writeFile(
+      archivePath,
+      buildRawZip([
+        { name: "plugin.json", content: JSON.stringify(validManifest()) },
+        { name: "dist/index.js", content: "reviewed" },
+        { name: "dist/caf\u00e9.js", content: "reviewed" },
+        { name: alias, content: JSON.stringify(validManifest({ version: "6.6.6" })) },
+      ])
+    );
+    const dest = path.join(tmpDir, "extracted-alias");
+    await fs.mkdir(dest, { recursive: true });
+
+    await expect(extractPluginArchive(archivePath, dest)).rejects.toThrow(/Duplicate entry/);
+    // Whatever landed before the rejection is still the reviewed content.
+    const manifest = JSON.parse(await fs.readFile(path.join(dest, "plugin.json"), "utf-8"));
+    expect(manifest.version).toBe(validManifest().version);
   });
 
   it("rejects an oversize archive before extracting", async () => {

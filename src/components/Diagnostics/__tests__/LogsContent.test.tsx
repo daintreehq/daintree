@@ -130,3 +130,34 @@ describe("LogsContent — filtered-empty recovery", () => {
     });
   });
 });
+
+describe("LogsContent — failed reads", () => {
+  beforeEach(() => {
+    mockGetAll.mockReset();
+    mockGetSources.mockReset().mockResolvedValue([]);
+    useLogsStore.setState({ logs: [], filters: {}, autoScroll: true, expandedIds: new Set() });
+  });
+
+  it("keeps the entries already on screen when a read fails", async () => {
+    // Entries that arrived live after an earlier failed read, then a Retry fails too.
+    useLogsStore.setState({ logs: [makeLog("live-1"), makeLog("live-2")] });
+    mockGetAll.mockRejectedValue(new Error("log buffer unavailable"));
+
+    render(<LogsContent />);
+
+    await waitFor(() => expect(mockGetAll).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useLogsStore.getState().logs.map((l) => l.id)).toEqual(["live-1", "live-2"]);
+  });
+
+  it("replaces the list with the read when it succeeds", async () => {
+    useLogsStore.setState({ logs: [makeLog("stale")] });
+    mockGetAll.mockResolvedValue([makeLog("fresh")]);
+
+    render(<LogsContent />);
+
+    await waitFor(() => expect(useLogsStore.getState().logs.map((l) => l.id)).toEqual(["fresh"]));
+  });
+});

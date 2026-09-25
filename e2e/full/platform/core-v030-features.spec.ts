@@ -149,8 +149,8 @@ test.describe.serial("Core: v0.3.0 Features", () => {
         "Worktree",
         "Toolbar",
         "Integrations",
-        "MCP Server",
-        "Privacy & Data",
+        "MCP server",
+        "Privacy & data",
         "Environment",
       ];
 

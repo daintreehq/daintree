@@ -191,6 +191,7 @@ export type BuiltInKeyAction =
   | "pilot.openProject"
   | "project.switcherPalette"
   | "project.mruCycleOlder"
+  | "project.openInNewWindow"
 
   // Help/Settings
   | "help.shortcuts"
@@ -380,6 +381,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "pilot.openProject",
   "project.switcherPalette",
   "project.mruCycleOlder",
+  "project.openInNewWindow",
   "help.shortcuts",
   "help.shortcutsAlt",
   "help.launchAgent",

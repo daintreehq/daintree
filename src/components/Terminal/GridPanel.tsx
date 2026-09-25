@@ -10,7 +10,7 @@ import {
   subscribeToPanelKindDefinitions,
   type PanelComponentProps,
 } from "@/registry";
-import { ContentPanel, PluginMissingPanel, triggerPanelTransition } from "@/components/Panel";
+import { ContentPanel, PluginMissingPanel, animatePanelMove } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
 import { buildPanelProps } from "@/utils/panelProps";
@@ -86,33 +86,7 @@ export const GridPanel = React.memo(function GridPanel({
   }, [toggleMaximize, terminalId, getPanelGroup]);
 
   const handleMinimize = useCallback(() => {
-    const panelElement = document.querySelector(`[data-panel-id="${terminalId}"]`);
-    if (panelElement) {
-      const sourceRect = panelElement.getBoundingClientRect();
-      const dockElement = document.querySelector("[data-dock-density]");
-      if (dockElement) {
-        const dockRect = dockElement.getBoundingClientRect();
-        const targetRect = {
-          x: dockRect.x + dockRect.width / 2 - 50,
-          y: dockRect.y + dockRect.height / 2 - 16,
-          width: 100,
-          height: 32,
-        };
-        triggerPanelTransition(
-          terminalId,
-          "minimize",
-          {
-            x: sourceRect.x,
-            y: sourceRect.y,
-            width: sourceRect.width,
-            height: sourceRect.height,
-          },
-          targetRect
-        );
-      }
-    }
-
-    moveTerminalToDock(terminalId);
+    animatePanelMove(terminalId, "minimize", () => moveTerminalToDock(terminalId));
   }, [moveTerminalToDock, terminalId]);
 
   // Subscribe to definition registry mutations so a plugin re-registering its

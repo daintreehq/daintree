@@ -15,11 +15,8 @@ import {
   CircleDot,
   PanelLeftOpen,
   PanelLeftClose,
-  ChevronsUpDown,
   MonitorPlay,
   Ellipsis,
-  GitBranch,
-  FileText,
   Pencil,
   Pin,
   PinOff,
@@ -50,6 +47,7 @@ import {
   type ToolbarButtonPlacementState,
 } from "@/lib/toolbarVisibilityDispatch";
 import { cn } from "@/lib/utils";
+import { formatCountExact } from "@/lib/formatCount";
 import { isMac, isLinux, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
@@ -61,7 +59,7 @@ import {
   type PluginTrayGroup,
 } from "./PluginTrayButton";
 import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
-import { deriveAgentDominantStates } from "@/lib/agentDominantStates";
+import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
 import { DockLaunchButton } from "./DockLaunchButton";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useLauncherData } from "./useLauncherData";
@@ -93,13 +91,13 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { middleTruncate } from "@/utils/textParsing";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import {
   useAriaKeyshortcuts,
   useDohertyGate,
+  useEffectiveCombo,
   useKeepMounted,
   useKeybindingDisplay,
   useShortcutHintHover,
@@ -119,9 +117,13 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useShallow } from "zustand/react/shallow";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
-import { agentStateDotColor } from "@/components/Worktree/AgentStatusIndicator";
+import {
+  agentStateDotColor,
+  STATE_LABELS,
+  type AttentionAgentState,
+} from "@/components/Worktree/terminalStateConfig";
 import { notify } from "@/lib/notify";
-import type { CliAvailability, AgentSettings, AgentState } from "@shared/types";
+import type { CliAvailability, AgentSettings } from "@shared/types";
 import { isGitBackedProject } from "@shared/types";
 import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
 import { isAgentPinned, isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
@@ -132,6 +134,8 @@ import { isPanelLimitError } from "@/services/actions/definitions/panelLimitErro
 import { LazyProjectSwitcherPalette } from "@/lazyPanels";
 import { ProjectIdentityEditor } from "@/components/Project/ProjectIdentityEditor";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
+import { ToolbarProjectPill, ToolbarProjectPillTooltipBody } from "./ToolbarProjectPill";
+import { shortSha } from "@/utils/textParsing";
 import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
@@ -181,10 +185,10 @@ const NO_PINNED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
 
 function ForgeStatsPlaceholder() {
   return (
-    <div className="toolbar-stats app-no-drag relative mr-2 flex h-8 w-[13rem] shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))] opacity-0 pointer-events-none">
-      <div className="h-8 flex-1" />
-      <div className="h-8 flex-1" />
-      <div className="h-8 flex-1" />
+    <div className="toolbar-stats app-no-drag relative mr-2 flex h-8 w-[13rem] shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border opacity-0 pointer-events-none">
+      <div data-stat-segment="" className="h-8 flex-1" />
+      <div data-stat-segment="" className="h-8 flex-1" />
+      <div data-stat-segment="" className="h-8 flex-1" />
     </div>
   );
 }
@@ -218,7 +222,7 @@ interface OverflowMenuProps {
   // Per-session agent states behind the badge, already worded — derived by
   // the same rule as `severity`, so the name never says less than the dot.
   agentObservations: readonly string[];
-  agentDominantStates: Map<string, AgentState | null>;
+  agentAttentionStates: Map<string, AttentionAgentState | null>;
   hasActiveWorktree: boolean;
   forgeStatsRef: React.RefObject<ForgeStatsHandle | null>;
   // Display name of the resolved forge provider, or null when none resolves
@@ -260,7 +264,7 @@ function OverflowMenu({
   errorCount,
   notificationUnreadCount,
   agentObservations,
-  agentDominantStates,
+  agentAttentionStates,
   hasActiveWorktree,
   forgeStatsRef,
   forgeProviderName,
@@ -397,7 +401,10 @@ function OverflowMenu({
                   <DropdownMenuLabel>Git</DropdownMenuLabel>
                   <DropdownMenuItem key="forge-commits" disabled>
                     <GitCommit className="mr-2 h-3.5 w-3.5" />
-                    Commits {repoStats?.commitCount != null ? `(${repoStats.commitCount})` : ""}
+                    Commits{" "}
+                    {repoStats?.commitCount != null
+                      ? `(${formatCountExact(repoStats.commitCount)})`
+                      : ""}
                   </DropdownMenuItem>
                 </DropdownMenuGroup>,
                 ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
@@ -411,18 +418,25 @@ function OverflowMenu({
                   onClick={() => forgeStatsRef.current?.openIssues()}
                 >
                   <CircleDot className="mr-2 h-3.5 w-3.5 text-pr-open" />
-                  Issues {repoStats?.issueCount != null ? `(${repoStats.issueCount})` : ""}
+                  Issues{" "}
+                  {repoStats?.issueCount != null
+                    ? `(${formatCountExact(repoStats.issueCount)})`
+                    : ""}
                 </DropdownMenuItem>
                 <DropdownMenuItem key="forge-prs" onClick={() => forgeStatsRef.current?.openPrs()}>
                   <GitPullRequest className="mr-2 h-3.5 w-3.5 text-pr-merged" />
-                  Pull Requests {repoStats?.prCount != null ? `(${repoStats.prCount})` : ""}
+                  Pull Requests{" "}
+                  {repoStats?.prCount != null ? `(${formatCountExact(repoStats.prCount)})` : ""}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   key="forge-commits"
                   onClick={() => forgeStatsRef.current?.openCommits()}
                 >
                   <GitCommit className="mr-2 h-3.5 w-3.5" />
-                  Commits {repoStats?.commitCount != null ? `(${repoStats.commitCount})` : ""}
+                  Commits{" "}
+                  {repoStats?.commitCount != null
+                    ? `(${formatCountExact(repoStats.commitCount)})`
+                    : ""}
                 </DropdownMenuItem>
               </DropdownMenuGroup>,
               ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
@@ -483,15 +497,13 @@ function OverflowMenu({
             return [
               ...inlinedAgents.map((agentId) => {
                 const agentMeta = OVERFLOW_MENU_META[agentId]!;
-                const dominantState = agentDominantStates.get(agentId) ?? null;
-                const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
                 return (
                   <AgentOverflowItem
                     key={`launcher-${agentId}`}
                     id={agentId}
                     label={agentMeta.label}
                     Icon={agentMeta.icon}
-                    dotColor={dotColor}
+                    attentionState={agentAttentionStates.get(agentId) ?? null}
                     onSelect={() => overflowActions[agentId]?.()}
                   />
                 );
@@ -518,15 +530,13 @@ function OverflowMenu({
           const meta = OVERFLOW_MENU_META[id] ?? dynamicOverflowMeta[id];
           if (!meta) return [];
           if (isBuiltInAgentId(id)) {
-            const dominantState = agentDominantStates.get(id) ?? null;
-            const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
             return [
               <AgentOverflowItem
                 key={id}
                 id={id}
                 label={meta.label}
                 Icon={meta.icon}
-                dotColor={dotColor}
+                attentionState={agentAttentionStates.get(id) ?? null}
                 onSelect={() => overflowActions[id]?.()}
               />,
             ];
@@ -564,16 +574,17 @@ function AgentOverflowItem({
   id,
   label,
   Icon,
-  dotColor,
+  attentionState,
   onSelect,
 }: {
   id: string;
   label: string;
   Icon: React.ComponentType<{ className?: string }>;
-  dotColor: string | null;
+  attentionState: AttentionAgentState | null;
   onSelect: () => void;
 }) {
   const shortcut = useKeybindingDisplay(`agent.${id}`);
+  const dotColor = attentionState ? agentStateDotColor(attentionState) : null;
   return (
     <DropdownMenuItem onClick={onSelect}>
       <span className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center">
@@ -582,13 +593,20 @@ function AgentOverflowItem({
           <span
             aria-hidden="true"
             className={cn(
-              "status-mark absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-surface-canvas",
+              "toolbar-menu-pip status-mark absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-surface-canvas",
               dotColor
             )}
           />
         )}
       </span>
-      <span className="flex-1">{label}</span>
+      <span className="flex-1">
+        {label}
+        {/* The pip is aria-hidden; the row's name carries what it draws, in
+            the agent button's own "— waiting" form. */}
+        {attentionState && dotColor && (
+          <span className="sr-only">{` — ${STATE_LABELS[attentionState]}`}</span>
+        )}
+      </span>
       {shortcut && <DropdownMenuShortcut>{shortcut}</DropdownMenuShortcut>}
     </DropdownMenuItem>
   );
@@ -651,13 +669,13 @@ export function Toolbar({
   // AgentButton) rather than extending useOverflowBadgeSeverity to return a
   // composite map (would risk the selector-identity churn of lesson #3730).
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
-  // Per-agent dominant state across panels in the active worktree, used to draw
+  // Per-agent pip state across panels in the active worktree, used to draw
   // the agent-state dot on overflow menu items. Shares the launcher's
   // derivation so the overflow dot matches the visible agent button; computed
-  // inside useShallow so agent ticks that don't change a dominant state don't
+  // inside useShallow so agent ticks that don't change a pip state don't
   // re-render the whole toolbar (issue #7451 pattern).
-  const agentDominantStates = usePanelStore(
-    useShallow((s) => deriveAgentDominantStates(s.panelsById, s.panelIds, activeWorktreeId))
+  const agentAttentionStates = usePanelStore(
+    useShallow((s) => deriveAgentAttentionStates(s.panelsById, s.panelIds, activeWorktreeId))
   );
 
   useEffect(() => {
@@ -763,7 +781,7 @@ export function Toolbar({
   const forgeStatsRef = useRef<ForgeStatsHandle>(null);
 
   const { handleCopyTree, handleCopyTreeWithOptions } = useWorktreeActions();
-  const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
+  const sidebarShortcut = useEffectiveCombo("nav.toggleSidebar");
   const copyTreeShortcut = useKeybindingDisplay("worktree.copyTree");
   const devServerShortcut = useKeybindingDisplay("devServer.start");
   const notificationsShortcut = useKeybindingDisplay("notifications.toggle");
@@ -774,6 +792,9 @@ export function Toolbar({
   const terminalShortcut = useKeybindingDisplay("agent.terminal");
   const browserShortcut = useKeybindingDisplay("agent.browser");
   const fileBrowserShortcut = useKeybindingDisplay("worktree.openFileBrowserPanel");
+  const copyTreeCombo = useEffectiveCombo("worktree.copyTree");
+  const devServerCombo = useEffectiveCombo("devServer.start");
+  const fileBrowserCombo = useEffectiveCombo("worktree.openFileBrowserPanel");
   const sidebarAriaShortcut = useAriaKeyshortcuts("nav.toggleSidebar");
   const copyTreeAriaShortcut = useAriaKeyshortcuts("worktree.copyTree");
   const fileBrowserAriaShortcut = useAriaKeyshortcuts("worktree.openFileBrowserPanel");
@@ -1273,31 +1294,33 @@ export function Toolbar({
         render: () => (
           <ContextMenu>
             <ContextMenuTrigger asChild>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    {...(hasWorkspace ? fileBrowserHintHover : {})}
-                    variant="ghost"
-                    size="icon"
-                    data-toolbar-item=""
-                    onClick={hasWorkspace ? openFileBrowser : undefined}
-                    aria-disabled={!hasWorkspace || undefined}
-                    className={cn(
-                      toolbarIconButtonClass,
-                      "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                    )}
-                    aria-label="Browse files"
-                    aria-keyshortcuts={fileBrowserAriaShortcut}
-                  >
-                    <FolderTree />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {hasWorkspace
-                    ? createTooltipContent("Browse files", fileBrowserShortcut)
-                    : "Open a project or scratch to browse files"}
-                </TooltipContent>
-              </Tooltip>
+              <span className="inline-flex">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      {...(hasWorkspace ? fileBrowserHintHover : {})}
+                      variant="ghost"
+                      size="icon"
+                      data-toolbar-item=""
+                      onClick={hasWorkspace ? openFileBrowser : undefined}
+                      aria-disabled={!hasWorkspace || undefined}
+                      className={cn(
+                        toolbarIconButtonClass,
+                        "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                      )}
+                      aria-label="Browse files"
+                      aria-keyshortcuts={fileBrowserAriaShortcut}
+                    >
+                      <FolderTree />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {hasWorkspace
+                      ? createTooltipContent("Browse files", fileBrowserCombo)
+                      : "Open a project or scratch to browse files"}
+                  </TooltipContent>
+                </Tooltip>
+              </span>
             </ContextMenuTrigger>
             <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
               <ToolbarContextMenuItems buttonId="file-browser" side="left" />
@@ -1311,26 +1334,28 @@ export function Toolbar({
           currentProject ? (
             <ContextMenu>
               <ContextMenuTrigger asChild>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      {...devServerHintHover}
-                      variant="ghost"
-                      size="icon"
-                      data-toolbar-item=""
-                      onClick={() =>
-                        actionService.dispatch("devServer.start", undefined, { source: "user" })
-                      }
-                      className={toolbarIconButtonClass}
-                      aria-label="Open dev preview"
-                    >
-                      <MonitorPlay />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {createTooltipContent("Open dev preview", devServerShortcut)}
-                  </TooltipContent>
-                </Tooltip>
+                <span className="inline-flex">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        {...devServerHintHover}
+                        variant="ghost"
+                        size="icon"
+                        data-toolbar-item=""
+                        onClick={() =>
+                          actionService.dispatch("devServer.start", undefined, { source: "user" })
+                        }
+                        className={toolbarIconButtonClass}
+                        aria-label="Open dev preview"
+                      >
+                        <MonitorPlay />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {createTooltipContent("Open dev preview", devServerCombo)}
+                    </TooltipContent>
+                  </Tooltip>
+                </span>
               </ContextMenuTrigger>
               <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
                 <ToolbarContextMenuItems buttonId="dev-server" side="left" />
@@ -1445,7 +1470,7 @@ export function Toolbar({
                     ) : !activeWorktree ? (
                       "Open a worktree first"
                     ) : (
-                      createTooltipContent("Copy context", copyTreeShortcut)
+                      createTooltipContent("Copy context", copyTreeCombo)
                     )}
                   </TooltipContent>
                 </Tooltip>
@@ -1586,6 +1611,7 @@ export function Toolbar({
       sidebarAriaShortcut,
       sidebarHintHover,
       copyTreeShortcut,
+      copyTreeCombo,
       copyTreeAriaShortcut,
       currentProject,
       handleCopyTreeOpenChange,
@@ -1611,10 +1637,10 @@ export function Toolbar({
       notificationsEnabled,
       pluginButtonIds,
       pluginConfigs,
-      devServerShortcut,
+      devServerCombo,
       devServerHintHover,
       openFileBrowser,
-      fileBrowserShortcut,
+      fileBrowserCombo,
       fileBrowserAriaShortcut,
       fileBrowserHintHover,
     ]
@@ -2132,7 +2158,7 @@ export function Toolbar({
       errorCount={errorCount}
       notificationUnreadCount={notificationUnreadCount}
       agentObservations={agentObservations}
-      agentDominantStates={agentDominantStates}
+      agentAttentionStates={agentAttentionStates}
       hasActiveWorktree={!!activeWorktree}
       forgeStatsRef={forgeStatsRef}
       forgeProviderName={forgeProviderName}
@@ -2176,12 +2202,19 @@ export function Toolbar({
   }, [handleDropdownClose, suppressPillTooltipForFocusRestore]);
 
   const activeSearchableProject = projectSwitcher.activeProject;
-  const truncatedBranchName = branchName ? middleTruncate(branchName, 24) : undefined;
+  const headSha = activeWorktree?.isDetached ? activeWorktree.head : undefined;
   const chipState = branchChipState(
     workspaceIdentity.kind,
     branchName,
-    isGitBackedProject(currentProject)
+    isGitBackedProject(currentProject),
+    activeWorktree?.isDetached ?? false
   );
+  const pillBranchLabel =
+    chipState === "visible"
+      ? branchName
+      : chipState === "detached"
+        ? `detached at ${shortSha(headSha) ?? "unknown commit"}`
+        : undefined;
   const { copy: copyPillPath } = useCopyWithFeedback({ announcement: "Path copied" });
   const handleCopyProjectPath = useCallback(() => {
     if (!currentProject) return;
@@ -2250,56 +2283,16 @@ export function Toolbar({
   const projectSwitcherTrigger = (
     <ContextMenuTrigger asChild>
       <TooltipTrigger asChild>
-        <button
-          data-toolbar-item=""
-          className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-          data-testid="project-switcher-trigger"
-          aria-label={workspaceIdentity.ariaLabel}
-          role={workspaceIdentity.kind !== "none" ? "combobox" : undefined}
-          aria-haspopup={workspaceIdentity.kind !== "none" ? "listbox" : undefined}
-          aria-expanded={workspaceIdentity.kind !== "none" ? isDropdownOpen : undefined}
+        <ToolbarProjectPill
+          workspaceIdentity={workspaceIdentity}
+          emoji={currentProject?.emoji}
+          chipState={chipState}
+          branchName={branchName}
+          headSha={headSha}
+          isDropdownOpen={isDropdownOpen}
           onClick={() => projectSwitcher.open("dropdown")}
           onPointerEnter={clearPillTooltipFocusSuppression}
-        >
-          {workspaceIdentity.kind === "scratch" ? (
-            <FileText
-              className="h-4 w-4 leading-none shrink-0 text-text-secondary"
-              aria-hidden="true"
-            />
-          ) : (
-            <span
-              className={cn("text-base leading-none shrink-0", !currentProject && "opacity-0")}
-              aria-label={currentProject ? "Project emoji" : undefined}
-              aria-hidden={currentProject ? undefined : true}
-            >
-              {currentProject?.emoji ?? "•"}
-            </span>
-          )}
-          <span
-            className={cn(
-              "min-w-0 truncate text-xs tracking-wide text-text-primary",
-              workspaceIdentity.kind !== "none" ? "font-semibold" : "font-medium"
-            )}
-          >
-            {workspaceIdentity.name}
-          </span>
-          {chipState !== "hidden" && (
-            <span
-              className={cn(
-                "toolbar-project-chip shrink-0 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono tabular-nums",
-                chipState === "reserved" && "opacity-0"
-              )}
-              aria-label={chipState === "visible" ? `Current branch ${branchName}` : undefined}
-              aria-hidden={chipState === "visible" ? undefined : true}
-            >
-              <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
-              <span className="toolbar-project-chip-label">
-                {chipState === "visible" ? truncatedBranchName : "main"}
-              </span>
-            </span>
-          )}
-          <ChevronsUpDown className="toolbar-project-meta h-3 w-3 shrink-0" />
-        </button>
+        />
       </TooltipTrigger>
     </ContextMenuTrigger>
   );
@@ -2316,7 +2309,13 @@ export function Toolbar({
             aria-label="Main toolbar"
             onKeyDown={handleToolbarKeyDown}
             onFocusCapture={handleToolbarFocusCapture}
-            className="@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-3 h-12 items-center px-4 shrink-0 app-drag-region surface-toolbar border-b border-divider"
+            className={cn(
+              "@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-3 h-12 items-center px-4 shrink-0 app-drag-region surface-toolbar border-b border-divider",
+              // macOS paints its window-rim highlight over our top pixel row, and
+              // the eye reads it as separate from the strip; centre in what's left.
+              // Fullscreen has no rim.
+              isMac() && !isFullscreen && "pt-px"
+            )}
           >
             {!isLinux() && <div className="window-resize-strip" />}
 
@@ -2520,23 +2519,20 @@ export function Toolbar({
                 </ContextMenu>
                 {currentProject && (
                   <TooltipContent side="bottom" className="max-w-[28rem]">
-                    <div className="flex flex-col gap-0.5">
-                      <div className="text-xs font-medium">
-                        {currentProject.name}
-                        {branchName ? ` · ${branchName}` : ""}
-                      </div>
-                      <div className="text-text-muted font-mono text-2xs truncate">
-                        {currentProject.path}
-                      </div>
-                    </div>
+                    <ToolbarProjectPillTooltipBody
+                      name={currentProject.name}
+                      branchLabel={pillBranchLabel}
+                      path={currentProject.path}
+                    />
                   </TooltipContent>
                 )}
                 {!currentProject && currentScratch && (
                   <TooltipContent side="bottom" className="max-w-[28rem]">
-                    <div className="flex flex-col gap-0.5">
-                      <div className="text-xs font-medium">{currentScratch.name}</div>
-                      <div className="text-text-muted text-2xs">Scratch workspace</div>
-                    </div>
+                    <ToolbarProjectPillTooltipBody
+                      name={currentScratch.name}
+                      branchLabel={undefined}
+                      path={undefined}
+                    />
                   </TooltipContent>
                 )}
               </Tooltip>

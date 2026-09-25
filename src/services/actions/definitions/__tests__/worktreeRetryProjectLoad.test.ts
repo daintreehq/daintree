@@ -103,7 +103,17 @@ describe("worktree.retryProjectLoad (#8400)", () => {
     viewState = { isInitialized: false, isLoading: false, error: "Workspace service crashed" };
     const action = getAction();
     expect(action.isEnabled({})).toBe(false);
-    expect(action.disabledReason({})).toBe("No worktree load failure to retry");
+    expect(action.disabledReason({})).toMatch(/restart/i);
+  });
+
+  it("leaves a crashed service to Restart even when a load failure is also reported", () => {
+    // A dead host is usually why the load failed; a reload can't fix either.
+    worktreeLoadError = "Not a git repository";
+    currentProject = { id: "p1" };
+    viewState = { isInitialized: true, isLoading: false, error: "Workspace service crashed" };
+    const action = getAction();
+    expect(action.isEnabled({})).toBe(false);
+    expect(action.disabledReason({})).toMatch(/restart/i);
   });
 
   it("stays disabled for an unbound view", () => {

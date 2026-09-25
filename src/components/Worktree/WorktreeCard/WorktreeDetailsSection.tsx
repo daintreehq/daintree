@@ -27,6 +27,7 @@ import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { actionService } from "@/services/ActionService";
 import type { ComputedSubtitle, WorktreeReviewState } from "./hooks/useWorktreeStatus";
 import { SECTION_LABEL, CARD_DENSITY } from "./sectionChrome";
+import { useCardFocusHandoff } from "./hooks/useCardFocusHandoff";
 import { resourceLifecycleVisibility } from "../utils/resourceLifecycle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -510,7 +511,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 e.stopPropagation();
                                 onResourceResume();
                               }}
-                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-success hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-text-secondary hover:text-text-primary hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                               aria-label="Resume resource"
                             >
                               <Play className="w-3 h-3" />
@@ -560,6 +561,8 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   lastCommitTimestampMs={worktree.worktreeChanges?.lastCommitTimestampMs}
                   author={worktree.worktreeChanges?.lastCommitAuthor}
                   commitMessage={worktree.worktreeChanges?.lastCommitMessage}
+                  commitBody={worktree.worktreeChanges?.lastCommitBody}
+                  commitSha={worktree.worktreeChanges?.headOid}
                   forgeAvatarUrl={forgeAuthorAvatarUrl}
                   lastActivityTimestamp={worktree.lastActivityTimestamp}
                 />
@@ -736,8 +739,12 @@ export function WorktreeDeleteErrorBanner({
     e.stopPropagation();
     onDismiss?.();
   };
+  // Retry and Dismiss both clear the error, which unmounts this banner from
+  // under the button that was pressed.
+  const focusHandoffRef = useCardFocusHandoff<HTMLDivElement>();
   return (
     <div
+      ref={focusHandoffRef}
       role="alert"
       aria-live="assertive"
       data-testid="worktree-delete-error-banner"
@@ -826,8 +833,12 @@ export function WorktreeIssueErrorBanner({
     e.stopPropagation();
     onDismiss?.();
   };
+  // Retry and Dismiss both drop the outbox entry, which unmounts this banner
+  // from under the button that was pressed.
+  const focusHandoffRef = useCardFocusHandoff<HTMLDivElement>();
   return (
     <div
+      ref={focusHandoffRef}
       role="alert"
       aria-live="assertive"
       data-testid="worktree-issue-error-banner"

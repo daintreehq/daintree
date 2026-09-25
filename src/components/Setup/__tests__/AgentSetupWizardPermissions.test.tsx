@@ -70,7 +70,7 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/services/KeybindingService", () => ({
-  keybindingService: { getDisplayCombo: () => "" },
+  keybindingService: { getDisplayCombo: () => "", getEffectiveCombo: () => undefined },
 }));
 
 vi.mock("../useAgentSetupPoll", () => ({

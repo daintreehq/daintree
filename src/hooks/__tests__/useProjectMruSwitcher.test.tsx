@@ -20,6 +20,7 @@ const { actionDispatchMock, keybindingServiceMock } = vi.hoisted(() => {
     popPendingChord: vi.fn(),
     getEffectiveCombo: vi.fn<() => string | undefined>(() => undefined),
     matchesEvent: vi.fn(() => false),
+    isCapturingShortcut: vi.fn(() => false),
     subscribe: vi.fn(() => () => {}),
     setWhenContextProvider: vi.fn(),
   };

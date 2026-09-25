@@ -1,29 +1,28 @@
-import { useState, useEffect, useId } from "react";
-import { Play, Bell, BellOff, Volume2, AudioLines, Moon, Zap } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsCheckbox } from "./SettingsCheckbox";
+import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
+import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { SettingsPresetGroup } from "./SettingsPresetGroup";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { NotificationSettings } from "@shared/types";
+import { formatTimeOfDay } from "@shared/utils/quietHours";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
-
-const AVAILABLE_SOUNDS: { file: string; label: string }[] = [
-  { file: "chime.wav", label: "Chime" },
-  { file: "ping.wav", label: "Ping" },
-  { file: "complete.wav", label: "Complete" },
-  { file: "waiting.wav", label: "Waiting" },
-  { file: "error.wav", label: "Error" },
-  { file: "pulse.wav", label: "Pulse" },
-];
-
-const ESCALATION_DELAY_OPTIONS: { value: number; label: string }[] = [
-  { value: 60_000, label: "1 minute" },
-  { value: 180_000, label: "3 minutes" },
-  { value: 300_000, label: "5 minutes" },
-  { value: 600_000, label: "10 minutes" },
-];
+import {
+  ESCALATION_DELAY_OPTIONS,
+  NOTIFICATION_COPY,
+  SoundPickerRow,
+  previewNotificationSound,
+  type SoundFileKey,
+} from "./notificationSettingsShared";
 
 const DEFAULT_SETTINGS: NotificationSettings = {
   enabled: true,
@@ -45,482 +44,646 @@ const DEFAULT_SETTINGS: NotificationSettings = {
   quietHoursWeekdays: [],
 };
 
-const HOUR_OPTIONS: { value: number; label: string }[] = Array.from({ length: 24 }, (_, h) => ({
-  value: h,
-  label: String(h).padStart(2, "0"),
-}));
+/** Every quarter hour, as minutes since midnight. */
+const TIME_OPTIONS = Array.from({ length: 96 }, (_, i) => i * 15);
 
-const MINUTE_OPTIONS: { value: number; label: string }[] = [0, 15, 30, 45].map((m) => ({
-  value: m,
-  label: String(m).padStart(2, "0"),
-}));
-
-const WEEKDAYS: { value: number; label: string }[] = [
-  { value: 0, label: "Sun" },
-  { value: 1, label: "Mon" },
-  { value: 2, label: "Tue" },
-  { value: 3, label: "Wed" },
-  { value: 4, label: "Thu" },
-  { value: 5, label: "Fri" },
-  { value: 6, label: "Sat" },
+const WEEKDAYS: { value: number; label: string; name: string }[] = [
+  { value: 0, label: "Sun", name: "Sunday" },
+  { value: 1, label: "Mon", name: "Monday" },
+  { value: 2, label: "Tue", name: "Tuesday" },
+  { value: 3, label: "Wed", name: "Wednesday" },
+  { value: 4, label: "Thu", name: "Thursday" },
+  { value: 5, label: "Fri", name: "Friday" },
+  { value: 6, label: "Sat", name: "Saturday" },
 ];
 
-function splitMinutes(total: number): { hour: number; minute: number } {
-  const safe = Math.max(0, Math.min(1439, Math.floor(total)));
-  return { hour: Math.floor(safe / 60), minute: safe % 60 };
+function clampMinutes(total: number): number {
+  return Math.max(0, Math.min(1439, Math.floor(total)));
 }
 
-function joinMinutes(hour: number, minute: number): number {
-  return Math.max(0, Math.min(1439, hour * 60 + minute));
+function describeSchedule(startMin: number, endMin: number): string {
+  if (startMin === endMin) {
+    return "Start and end match, so the schedule does nothing until the times differ";
+  }
+  const range = `${formatTimeOfDay(startMin)} to ${formatTimeOfDay(endMin)}`;
+  return endMin < startMin ? `${range} the next day` : range;
 }
 
-function SoundFileSelect({
+/**
+ * A switch row whose `id` lands on the switch itself rather than the row, so the
+ * control stays addressable by the ids end-to-end specs and deep links already use.
+ */
+function SwitchRow({
+  id,
+  rowId,
   label,
-  value,
+  description,
+  checked,
   onChange,
-  onPreview,
+  isModified,
+  onReset,
 }: {
+  id: string;
+  /** Search deep-link anchor for the row. */
+  rowId?: string;
   label: string;
-  value: string;
-  onChange: (value: string) => void;
-  onPreview: () => void;
+  description: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  isModified?: boolean;
+  onReset?: () => void;
 }) {
-  const id = useId();
   return (
-    <div className="space-y-1">
-      <label htmlFor={id} className="text-sm font-medium text-text-primary block">
-        {label}
-      </label>
-      <div className="flex items-center gap-2">
-        <select
+    <SettingsRow
+      id={rowId}
+      label={label}
+      description={description}
+      isModified={isModified}
+      onReset={onReset}
+      onRowClick={() => onChange(!checked)}
+      control={({ labelId, descriptionId, disabled }) => (
+        <SettingsSwitch
           id={id}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="flex-1 px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
-        >
-          {AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => (
-            <option key={file} value={file}>
-              {soundLabel}
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={onPreview}
-          title={`Preview ${label.toLowerCase()}`}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-default bg-surface-canvas text-text-primary hover:bg-tint/[0.06] transition-colors"
-        >
-          <Play className="h-3.5 w-3.5" />
-          Preview
-        </button>
-      </div>
-    </div>
+          checked={checked}
+          onCheckedChange={onChange}
+          disabled={disabled}
+          aria-labelledby={labelId}
+          aria-describedby={descriptionId}
+        />
+      )}
+    />
   );
 }
 
 type LoadState = "loading" | "ready" | "error";
 
+type SaveGroup = "agent" | "sound" | "quiet";
+
+const SAVE_GROUP_BY_KEY: Record<keyof NotificationSettings, SaveGroup> = {
+  enabled: "agent",
+  completedEnabled: "agent",
+  waitingEnabled: "agent",
+  waitingEscalationEnabled: "agent",
+  waitingEscalationDelayMs: "agent",
+  flashEnabled: "agent",
+  groupByContext: "agent",
+  soundEnabled: "sound",
+  completedSoundFile: "sound",
+  waitingSoundFile: "sound",
+  escalationSoundFile: "sound",
+  workingPulseEnabled: "sound",
+  workingPulseSoundFile: "sound",
+  uiFeedbackSoundEnabled: "sound",
+  quietHoursEnabled: "quiet",
+  quietHoursStartMin: "quiet",
+  quietHoursEndMin: "quiet",
+  quietHoursWeekdays: "quiet",
+};
+
+/** The keys the renderer's notification store mirrors, so the notification center stays in step. */
+const STORE_MIRRORED_KEYS = [
+  "enabled",
+  "completedEnabled",
+  "waitingEnabled",
+  "workingPulseEnabled",
+  "uiFeedbackSoundEnabled",
+  "flashEnabled",
+  "quietHoursEnabled",
+  "quietHoursStartMin",
+  "quietHoursEndMin",
+  "quietHoursWeekdays",
+] as const;
+
+type StoreMirror = Partial<Pick<NotificationSettings, (typeof STORE_MIRRORED_KEYS)[number]>>;
+
+function storeSlice(source: object, keys: readonly string[]): StoreMirror {
+  const slice: StoreMirror = {};
+  for (const key of STORE_MIRRORED_KEYS) {
+    const value: unknown = Reflect.get(source, key);
+    if (keys.includes(key) && value !== undefined) Object.assign(slice, { [key]: value });
+  }
+  return slice;
+}
+
+function restoredPatch(
+  patch: Partial<NotificationSettings>,
+  keys: readonly string[]
+): Partial<NotificationSettings> {
+  const kept: Partial<NotificationSettings> = {};
+  for (const key of keys) Object.assign(kept, { [key]: Reflect.get(patch, key) });
+  return kept;
+}
+
+function withoutKeys(
+  failures: Partial<Record<SaveGroup, SaveFailure>>,
+  keys: readonly string[]
+): Partial<Record<SaveGroup, SaveFailure>> {
+  let changed = false;
+  const next: Partial<Record<SaveGroup, SaveFailure>> = {};
+  for (const failure of Object.values(failures)) {
+    const remaining = Object.keys(failure.patch).filter((k) => !keys.includes(k));
+    if (remaining.length !== Object.keys(failure.patch).length) changed = true;
+    if (remaining.length > 0) {
+      next[failure.group] = {
+        group: failure.group,
+        patch: restoredPatch(failure.patch, remaining),
+      };
+    }
+  }
+  return changed ? next : failures;
+}
+
+function saveGroupOf(patch: Partial<NotificationSettings>): SaveGroup {
+  for (const [key, group] of Object.entries(SAVE_GROUP_BY_KEY)) {
+    if (key in patch) return group;
+  }
+  return "agent";
+}
+
+interface SaveFailure {
+  group: SaveGroup;
+  patch: Partial<NotificationSettings>;
+}
+
 export function NotificationSettingsTab() {
   const [settings, setSettings] = useState<NotificationSettings>(DEFAULT_SETTINGS);
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [loadNonce, setLoadNonce] = useState(0);
+  // A failed save rolls the control back, which on its own looks like the click never
+  // registered — so the failure stays on its group until a later save there covers it.
+  const [saveFailures, setSaveFailures] = useState<Partial<Record<SaveGroup, SaveFailure>>>({});
   const loading = loadState === "loading";
-  // Gate the inline "Loading…" hint past the Doherty threshold so fast IPC
-  // resolutions don't flash a loading state for sub-400ms work.
-  const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
-  const escalationDelayId = useId();
-  const activeDaysId = useId();
+  // What main is known to hold, per key, and the newest edit made to each key. A failed
+  // save only rolls back a key it is still the newest edit for, and rolls it back to the
+  // last value main confirmed — never to whatever the screen showed when it was sent.
+  const confirmedRef = useRef<NotificationSettings>(DEFAULT_SETTINGS);
+  const revisionRef = useRef(new Map<string, number>());
+  const confirmedRevisionRef = useRef(new Map<string, number>());
+  // The revision of the newest edit per key that failed and hasn't been superseded.
+  const failedRevisionRef = useRef(new Map<string, number>());
 
   useEffect(() => {
-    let settled = false;
+    setLoadState("loading");
+    // A retry supersedes the request before it: only the newest may settle the page.
+    let current = true;
     const timer = setTimeout(() => {
-      if (!settled) setLoadState("error");
+      if (current) setLoadState("error");
     }, 10_000);
 
     window.electron?.notification
       ?.getSettings()
       .then((s) => {
-        settled = true;
+        if (!current) return;
         clearTimeout(timer);
+        confirmedRef.current = s;
         setSettings(s);
         setLoadState("ready");
       })
       .catch(() => {
-        settled = true;
+        if (!current) return;
         clearTimeout(timer);
         setLoadState("error");
       });
 
-    return () => clearTimeout(timer);
-  }, []);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [loadNonce]);
 
-  const update = async (patch: Partial<NotificationSettings>) => {
-    const prevStore = useNotificationSettingsStore.getState();
-    setSettings((prev) => {
-      const next = { ...prev, ...patch };
-      window.electron?.notification?.setSettings(patch).catch(() => {
-        setSettings(prev);
-        const revert: Partial<{
-          enabled: boolean;
-          completedEnabled: boolean;
-          waitingEnabled: boolean;
-          workingPulseEnabled: boolean;
-          uiFeedbackSoundEnabled: boolean;
-          flashEnabled: boolean;
-          quietHoursEnabled: boolean;
-          quietHoursStartMin: number;
-          quietHoursEndMin: number;
-          quietHoursWeekdays: number[];
-        }> = {};
-        if (patch.enabled !== undefined) revert.enabled = prevStore.enabled;
-        if (patch.completedEnabled !== undefined)
-          revert.completedEnabled = prevStore.completedEnabled;
-        if (patch.waitingEnabled !== undefined) revert.waitingEnabled = prevStore.waitingEnabled;
-        if (patch.workingPulseEnabled !== undefined)
-          revert.workingPulseEnabled = prevStore.workingPulseEnabled;
-        if (patch.uiFeedbackSoundEnabled !== undefined)
-          revert.uiFeedbackSoundEnabled = prevStore.uiFeedbackSoundEnabled;
-        if (patch.flashEnabled !== undefined) revert.flashEnabled = prevStore.flashEnabled;
-        if (patch.quietHoursEnabled !== undefined)
-          revert.quietHoursEnabled = prevStore.quietHoursEnabled;
-        if (patch.quietHoursStartMin !== undefined)
-          revert.quietHoursStartMin = prevStore.quietHoursStartMin;
-        if (patch.quietHoursEndMin !== undefined)
-          revert.quietHoursEndMin = prevStore.quietHoursEndMin;
-        if (patch.quietHoursWeekdays !== undefined)
-          revert.quietHoursWeekdays = prevStore.quietHoursWeekdays;
-        if (Object.keys(revert).length > 0) {
-          useNotificationSettingsStore.setState(revert);
-        }
-      });
-      return next;
-    });
-    const storePatch: Partial<{
-      enabled: boolean;
-      completedEnabled: boolean;
-      waitingEnabled: boolean;
-      workingPulseEnabled: boolean;
-      uiFeedbackSoundEnabled: boolean;
-      flashEnabled: boolean;
-      quietHoursEnabled: boolean;
-      quietHoursStartMin: number;
-      quietHoursEndMin: number;
-      quietHoursWeekdays: number[];
-    }> = {};
-    if (patch.enabled !== undefined) storePatch.enabled = patch.enabled;
-    if (patch.completedEnabled !== undefined) storePatch.completedEnabled = patch.completedEnabled;
-    if (patch.waitingEnabled !== undefined) storePatch.waitingEnabled = patch.waitingEnabled;
-    if (patch.workingPulseEnabled !== undefined)
-      storePatch.workingPulseEnabled = patch.workingPulseEnabled;
-    if (patch.uiFeedbackSoundEnabled !== undefined)
-      storePatch.uiFeedbackSoundEnabled = patch.uiFeedbackSoundEnabled;
-    if (patch.flashEnabled !== undefined) storePatch.flashEnabled = patch.flashEnabled;
-    if (patch.quietHoursEnabled !== undefined)
-      storePatch.quietHoursEnabled = patch.quietHoursEnabled;
-    if (patch.quietHoursStartMin !== undefined)
-      storePatch.quietHoursStartMin = patch.quietHoursStartMin;
-    if (patch.quietHoursEndMin !== undefined) storePatch.quietHoursEndMin = patch.quietHoursEndMin;
-    if (patch.quietHoursWeekdays !== undefined)
-      storePatch.quietHoursWeekdays = patch.quietHoursWeekdays;
-    if (Object.keys(storePatch).length > 0) {
-      useNotificationSettingsStore.setState(storePatch);
+  const update = (patch: Partial<NotificationSettings>) => {
+    const group = saveGroupOf(patch);
+    const keys = Object.keys(patch);
+    const revisions = revisionRef.current;
+    const mine = new Map<string, number>();
+    for (const key of keys) {
+      const next = (revisions.get(key) ?? 0) + 1;
+      revisions.set(key, next);
+      mine.set(key, next);
     }
+    const isNewest = (key: string) => revisions.get(key) === mine.get(key);
+
+    setSettings((current) => ({ ...current, ...patch }));
+    const mirrored = storeSlice(patch, keys);
+    if (Object.keys(mirrored).length > 0) useNotificationSettingsStore.setState(mirrored);
+
+    window.electron?.notification
+      ?.setSettings(patch)
+      .then(() => {
+        const confirmedRevisions = confirmedRevisionRef.current;
+        const failedRevisions = failedRevisionRef.current;
+        const confirmedNow: string[] = [];
+        const retired: string[] = [];
+        for (const key of keys) {
+          const revision = mine.get(key) ?? 0;
+          if (revision > (confirmedRevisions.get(key) ?? 0)) {
+            confirmedRevisions.set(key, revision);
+            confirmedRef.current = { ...confirmedRef.current, [key]: Reflect.get(patch, key) };
+            confirmedNow.push(key);
+          }
+          const failed = failedRevisions.get(key);
+          if (failed !== undefined && revision > failed) {
+            failedRevisions.delete(key);
+            retired.push(key);
+          }
+        }
+        // An older write landed after the newest one had already failed and rolled the
+        // screen back: main now holds this value, so the screen follows it.
+        const landedBehindFailure = confirmedNow.filter(
+          (key) => failedRevisions.get(key) === revisions.get(key)
+        );
+        if (landedBehindFailure.length > 0) {
+          const landed = restoredPatch(confirmedRef.current, landedBehindFailure);
+          setSettings((current) => ({ ...current, ...landed }));
+          const landedStore = storeSlice(landed, landedBehindFailure);
+          if (Object.keys(landedStore).length > 0) {
+            useNotificationSettingsStore.setState(landedStore);
+          }
+        }
+        // Only a newer success supersedes a failed value, so Retry never resends it
+        // over something the user changed since — and an older success never hides it.
+        if (retired.length > 0) setSaveFailures((failures) => withoutKeys(failures, retired));
+      })
+      .catch(() => {
+        const stale = keys.filter(isNewest);
+        if (stale.length === 0) return;
+        for (const key of stale) failedRevisionRef.current.set(key, mine.get(key) ?? 0);
+        const restored = restoredPatch(confirmedRef.current, stale);
+        setSettings((current) => ({ ...current, ...restored }));
+        const restoredStore = storeSlice(restored, stale);
+        if (Object.keys(restoredStore).length > 0) {
+          useNotificationSettingsStore.setState(restoredStore);
+        }
+        // Only the keys this save still owns are worth retrying.
+        setSaveFailures((failures) => ({
+          ...failures,
+          [group]: { group, patch: { ...failures[group]?.patch, ...restoredPatch(patch, stale) } },
+        }));
+      });
   };
 
-  const handlePreview = (soundFile: string) => {
-    window.electron?.notification?.playSound(soundFile).catch(() => {});
+  const loadFailed = loadState === "error";
+  // Until the real settings arrive every row shows a default, and editing one would
+  // save over a value the user never saw — so nothing is editable while loading or
+  // after a failed load.
+  const unavailable = loading || loadFailed;
+  const reset = <K extends keyof NotificationSettings>(key: K) => ({
+    isModified: !unavailable && settings[key] !== DEFAULT_SETTINGS[key],
+    onReset: () => update({ [key]: DEFAULT_SETTINGS[key] } as Partial<NotificationSettings>),
+  });
+
+  // The master switch gates every section below. Each row takes the disabled state
+  // explicitly: a group resets the dependents context, so it can't reach across
+  // sections from one wrapper.
+  const masterOff = !settings.enabled || unavailable;
+  const masterOffReason = unavailable ? undefined : "Turn on notifications to use this";
+
+  const saveError = (group: SaveGroup) => {
+    const failure = saveFailures[group];
+    return failure ? (
+      <SettingsLoadErrorBanner
+        title="Couldn't save that change"
+        message="The setting is back to its previous value."
+        onRetry={() => update(failure.patch)}
+      />
+    ) : null;
   };
 
-  if (loadState === "error") {
-    return (
-      <div className="text-sm text-text-secondary">
-        Could not load notification settings. Restart Daintree and try again.
-      </div>
-    );
-  }
+  const soundRow = (key: SoundFileKey) => (
+    <SoundPickerRow
+      label={NOTIFICATION_COPY.soundFiles[key]}
+      value={settings[key]}
+      onChange={(v) => {
+        const patch: Partial<NotificationSettings> = {};
+        patch[key] = v;
+        update(patch);
+      }}
+      onPreview={previewNotificationSound}
+      {...reset(key)}
+    />
+  );
+
+  const scheduleModified =
+    !unavailable &&
+    (settings.quietHoursStartMin !== DEFAULT_SETTINGS.quietHoursStartMin ||
+      settings.quietHoursEndMin !== DEFAULT_SETTINGS.quietHoursEndMin);
 
   return (
-    <div className="space-y-6">
-      {showInlineLoading && <p className="text-xs text-text-secondary">Loading…</p>}
-      <SettingsSwitchCard
-        variant="compact"
-        title="Enable notifications"
-        subtitle="Show toast popups and the notification bell. When disabled, notifications are still recorded in history."
-        isEnabled={settings.enabled}
-        onChange={() => update({ enabled: !settings.enabled })}
-        ariaLabel="Enable notifications"
-        icon={settings.enabled ? Bell : BellOff}
-        disabled={loading}
-      />
-
-      <div
-        className={cn(
-          "space-y-6",
-          (!settings.enabled || loading) && "opacity-50 pointer-events-none"
+    <div className="space-y-8">
+      <SettingsSection title="Agent notifications">
+        {loadFailed && (
+          <SettingsLoadErrorBanner
+            title="Notification settings didn't load"
+            message="Every setting on this page is unavailable until they do."
+            onRetry={() => setLoadNonce((n) => n + 1)}
+          />
         )}
-      >
-        <SettingsSection
-          icon={Bell}
-          title="Agent notifications"
-          description="OS notifications are off by default. Enable individual event types below to receive native alerts for agent activity. Notifications are suppressed when you are already viewing the relevant worktree."
-        >
-          <div className="contents">
-            <SettingsCheckbox
+        {saveError("agent")}
+        <SettingsGroup>
+          <SettingsSwitchCard
+            title="Enable notifications"
+            subtitle="Show toasts, the notification bell and OS notifications. While it's off, history still records everything."
+            isEnabled={settings.enabled}
+            onChange={() => update({ enabled: !settings.enabled })}
+            ariaLabel="Enable notifications"
+            disabled={unavailable}
+            {...reset("enabled")}
+          />
+
+          <SettingsDependents disabled={masterOff} reason={masterOffReason}>
+            <SwitchRow
               id="notif-completed"
-              label="Agent completed"
-              description="Show a notification when an agent finishes its task"
+              rowId="notifications-completed"
+              label={NOTIFICATION_COPY.completed.label}
+              description={NOTIFICATION_COPY.completed.description}
               checked={settings.completedEnabled}
               onChange={(v) => update({ completedEnabled: v })}
+              {...reset("completedEnabled")}
             />
-            <SettingsCheckbox
+            <SwitchRow
               id="notif-waiting"
-              label="Agent waiting for input"
-              description="Show a notification immediately when an agent needs input — always fires regardless of focus"
+              rowId="notifications-waiting"
+              label={NOTIFICATION_COPY.waiting.label}
+              description={NOTIFICATION_COPY.waiting.description}
               checked={settings.waitingEnabled}
               onChange={(v) => update({ waitingEnabled: v })}
+              {...reset("waitingEnabled")}
             />
-            {settings.waitingEnabled && (
-              <div className="ml-6 space-y-3 border-l border-border-default pl-4">
-                <SettingsCheckbox
-                  id="notif-waiting-escalation"
-                  label="Escalate if still waiting"
-                  description="Fire an additional OS notification if a docked agent remains waiting after the delay below"
-                  checked={settings.waitingEscalationEnabled}
-                  onChange={(v) => update({ waitingEscalationEnabled: v })}
-                />
-                {settings.waitingEscalationEnabled && (
-                  <div className="space-y-1">
-                    <label
-                      htmlFor={escalationDelayId}
-                      className="text-sm font-medium text-text-primary block"
-                    >
-                      Escalation delay
-                    </label>
-                    <select
-                      id={escalationDelayId}
-                      value={settings.waitingEscalationDelayMs}
-                      onChange={(e) => update({ waitingEscalationDelayMs: Number(e.target.value) })}
-                      className="px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
-                    >
-                      {ESCALATION_DELAY_OPTIONS.map(({ value, label }) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-            )}
-            <SettingsCheckbox
+            <SettingsDependents
+              disabled={!settings.waitingEnabled}
+              reason={masterOff ? undefined : NOTIFICATION_COPY.waitingOffReason}
+            >
+              <SwitchRow
+                id="notif-waiting-escalation"
+                label={NOTIFICATION_COPY.escalation.label}
+                description={NOTIFICATION_COPY.escalation.description}
+                checked={settings.waitingEscalationEnabled}
+                onChange={(v) => update({ waitingEscalationEnabled: v })}
+                {...reset("waitingEscalationEnabled")}
+              />
+              <SettingsPresetGroup<number>
+                label={NOTIFICATION_COPY.escalationDelay.label}
+                description={NOTIFICATION_COPY.escalationDelay.description}
+                options={ESCALATION_DELAY_OPTIONS}
+                value={settings.waitingEscalationDelayMs}
+                onChange={(v) => update({ waitingEscalationDelayMs: v })}
+                disabled={!settings.waitingEscalationEnabled}
+                disabledReason={
+                  masterOff || !settings.waitingEnabled
+                    ? undefined
+                    : NOTIFICATION_COPY.escalationOffReason
+                }
+                {...reset("waitingEscalationDelayMs")}
+              />
+            </SettingsDependents>
+            <SwitchRow
+              id="notif-all-clear-flash"
+              label="Flash when agents stop working"
+              description="Briefly flash the window, with or without sound, once two or more agents were working and none still is. An agent waiting for input counts as stopped."
+              checked={settings.flashEnabled}
+              onChange={(v) => update({ flashEnabled: v })}
+              {...reset("flashEnabled")}
+            />
+          </SettingsDependents>
+        </SettingsGroup>
+      </SettingsSection>
+
+      <SettingsSection title="Sound">
+        {saveError("sound")}
+        <SettingsGroup>
+          <SettingsSwitchCard
+            id="notifications-sound"
+            title={NOTIFICATION_COPY.sound.label}
+            subtitle={NOTIFICATION_COPY.sound.description}
+            isEnabled={settings.soundEnabled}
+            onChange={() => update({ soundEnabled: !settings.soundEnabled })}
+            ariaLabel="Play sound for notifications"
+            disabled={masterOff}
+            disabledReason={masterOffReason}
+            {...reset("soundEnabled")}
+          />
+
+          <SettingsDependents
+            disabled={!settings.soundEnabled || masterOff}
+            reason={
+              !masterOff && !settings.soundEnabled
+                ? "Turn on Play sound to choose sounds and hear UI feedback"
+                : undefined
+            }
+          >
+            {soundRow("completedSoundFile")}
+            {soundRow("waitingSoundFile")}
+            {soundRow("escalationSoundFile")}
+            <SwitchRow
               id="notif-working-pulse"
-              label="Working pulse"
-              description="Play a quiet periodic sound while a watched or docked agent is working in the background"
+              label={NOTIFICATION_COPY.workingPulse.label}
+              description={NOTIFICATION_COPY.workingPulse.description}
               checked={settings.workingPulseEnabled}
               onChange={(v) => update({ workingPulseEnabled: v })}
+              {...reset("workingPulseEnabled")}
             />
-          </div>
-        </SettingsSection>
-
-        <SettingsSection
-          icon={Volume2}
-          title="Sound"
-          description="Play a sound when a notification fires."
-        >
-          <div className="contents">
+            <SettingsDependents
+              disabled={!settings.workingPulseEnabled}
+              reason={
+                masterOff || !settings.soundEnabled
+                  ? undefined
+                  : NOTIFICATION_COPY.workingPulseOffReason
+              }
+            >
+              {soundRow("workingPulseSoundFile")}
+            </SettingsDependents>
             <SettingsSwitchCard
-              variant="compact"
-              title="Play sound"
-              subtitle="Master switch for every sound, including UI feedback sounds"
-              isEnabled={settings.soundEnabled}
-              onChange={() => update({ soundEnabled: !settings.soundEnabled })}
-              ariaLabel="Play sound for notifications"
+              title="UI feedback sounds"
+              subtitle="Short audio cues for git commit and push, worktree create and delete, agent spawn, and context injection"
+              isEnabled={settings.uiFeedbackSoundEnabled}
+              onChange={() => update({ uiFeedbackSoundEnabled: !settings.uiFeedbackSoundEnabled })}
+              {...reset("uiFeedbackSoundEnabled")}
             />
+          </SettingsDependents>
+        </SettingsGroup>
+      </SettingsSection>
 
-            {settings.soundEnabled && (
-              <div className="contents">
-                <SoundFileSelect
-                  label="Completed sound"
-                  value={settings.completedSoundFile}
-                  onChange={(v) => update({ completedSoundFile: v })}
-                  onPreview={() => handlePreview(settings.completedSoundFile)}
-                />
-                <SoundFileSelect
-                  label="Waiting sound"
-                  value={settings.waitingSoundFile}
-                  onChange={(v) => update({ waitingSoundFile: v })}
-                  onPreview={() => handlePreview(settings.waitingSoundFile)}
-                />
-                <SoundFileSelect
-                  label="Escalation sound"
-                  value={settings.escalationSoundFile}
-                  onChange={(v) => update({ escalationSoundFile: v })}
-                  onPreview={() => handlePreview(settings.escalationSoundFile)}
-                />
-                <SoundFileSelect
-                  label="Working pulse sound"
-                  value={settings.workingPulseSoundFile}
-                  onChange={(v) => update({ workingPulseSoundFile: v })}
-                  onPreview={() => handlePreview(settings.workingPulseSoundFile)}
-                />
-              </div>
-            )}
-          </div>
-        </SettingsSection>
-
-        <SettingsSection
-          icon={Zap}
-          title="Screen flash"
-          description="Flash the screen once a working fleet of agents goes fully idle."
-        >
+      <SettingsSection
+        title="Quiet hours"
+        description="History still records everything, and agents waiting for input always get through"
+      >
+        {saveError("quiet")}
+        <SettingsGroup>
           <SettingsSwitchCard
-            variant="compact"
-            title="Flash on all-clear"
-            subtitle="Briefly flash the screen when a working fleet goes fully idle"
-            isEnabled={settings.flashEnabled}
-            onChange={() => update({ flashEnabled: !settings.flashEnabled })}
-            ariaLabel="Flash screen on all-clear"
+            title="Mute on a schedule"
+            subtitle="Suppress in-app toasts and OS notifications during a daily time window"
+            isEnabled={settings.quietHoursEnabled}
+            onChange={() => update({ quietHoursEnabled: !settings.quietHoursEnabled })}
+            disabled={masterOff}
+            disabledReason={masterOffReason}
+            {...reset("quietHoursEnabled")}
           />
-        </SettingsSection>
 
-        <SettingsSection
-          icon={Moon}
-          title="Quiet hours"
-          description="Suppress in-app toasts and OS notifications during a daily time window. History still records everything, and agents waiting for input always page through."
-        >
-          <div className="contents">
-            <SettingsSwitchCard
-              variant="compact"
-              title="Enable quiet hours"
-              subtitle="Mute non-urgent notifications during the configured window"
-              isEnabled={settings.quietHoursEnabled}
-              onChange={() => update({ quietHoursEnabled: !settings.quietHoursEnabled })}
-              ariaLabel="Enable quiet hours"
-            />
-
-            {settings.quietHoursEnabled && (
-              <div className="space-y-4 ml-6 border-l border-border-default pl-4">
-                <QuietHoursTimeRow
-                  label="Starts at"
-                  totalMinutes={settings.quietHoursStartMin}
-                  onChange={(value) => update({ quietHoursStartMin: value })}
-                />
-                <QuietHoursTimeRow
-                  label="Ends at"
-                  totalMinutes={settings.quietHoursEndMin}
-                  onChange={(value) => update({ quietHoursEndMin: value })}
-                />
-                {settings.quietHoursStartMin === settings.quietHoursEndMin && (
-                  <div className="text-xs text-text-secondary">
-                    Start and end match — the schedule is effectively disabled until the times
-                    differ.
+          {settings.quietHoursEnabled && (
+            <SettingsDependents disabled={masterOff}>
+              <SettingsRow
+                label="Hours"
+                description={describeSchedule(
+                  settings.quietHoursStartMin,
+                  settings.quietHoursEndMin
+                )}
+                isModified={scheduleModified}
+                onReset={() =>
+                  update({
+                    quietHoursStartMin: DEFAULT_SETTINGS.quietHoursStartMin,
+                    quietHoursEndMin: DEFAULT_SETTINGS.quietHoursEndMin,
+                  })
+                }
+                resetAriaLabel="Reset quiet hours to 22:00 to 08:00"
+                control={({ descriptionId, disabled }) => (
+                  <div className="flex items-center gap-2">
+                    <TimePicker
+                      label="Starts at"
+                      totalMinutes={settings.quietHoursStartMin}
+                      describedBy={descriptionId}
+                      disabled={disabled}
+                      onChange={(value) => update({ quietHoursStartMin: value })}
+                    />
+                    <span className="text-xs text-text-secondary" aria-hidden="true">
+                      to
+                    </span>
+                    <TimePicker
+                      label="Ends at"
+                      totalMinutes={settings.quietHoursEndMin}
+                      describedBy={descriptionId}
+                      disabled={disabled}
+                      onChange={(value) => update({ quietHoursEndMin: value })}
+                    />
                   </div>
                 )}
-                <div className="space-y-1">
-                  <span id={activeDaysId} className="text-sm font-medium text-text-primary block">
-                    Active days
-                  </span>
-                  <div className="text-xs text-text-secondary mb-2">
-                    Leave all boxes checked to apply every day.
-                  </div>
-                  <div role="group" aria-labelledby={activeDaysId} className="flex flex-wrap gap-2">
-                    {WEEKDAYS.map(({ value, label }) => {
-                      const active =
-                        settings.quietHoursWeekdays.length === 0 ||
-                        settings.quietHoursWeekdays.includes(value);
-                      return (
-                        <button
-                          key={value}
-                          type="button"
-                          onClick={() => {
-                            const current = settings.quietHoursWeekdays;
-                            const allDays = current.length === 0;
-                            const next = allDays
-                              ? WEEKDAYS.map((d) => d.value).filter((d) => d !== value)
-                              : current.includes(value)
-                                ? current.filter((d) => d !== value)
-                                : [...current, value].sort((a, b) => a - b);
-                            const normalized = next.length === WEEKDAYS.length ? [] : next;
-                            update({ quietHoursWeekdays: normalized });
-                          }}
-                          className={cn(
-                            "px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors",
-                            active
-                              ? "border-border-strong bg-overlay-medium text-text-primary"
-                              : "border-border-default bg-surface-canvas text-text-secondary hover:text-text-primary"
-                          )}
-                          aria-pressed={active}
-                        >
-                          {label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </SettingsSection>
-
-        <SettingsSection
-          icon={AudioLines}
-          title="UI feedback sounds"
-          description="Play subtle audio cues for git operations, worktree lifecycle, agent spawning, and context injection. They only play while Play sound is on."
-        >
-          <SettingsSwitchCard
-            variant="compact"
-            title="Enable UI feedback sounds"
-            subtitle="Short audio cues for git commit, push, worktree create/delete, agent spawn, and context injection"
-            isEnabled={settings.uiFeedbackSoundEnabled}
-            onChange={() => update({ uiFeedbackSoundEnabled: !settings.uiFeedbackSoundEnabled })}
-            ariaLabel="Enable UI feedback sounds"
-          />
-        </SettingsSection>
-      </div>
+              />
+              <WeekdayRow
+                weekdays={settings.quietHoursWeekdays}
+                onChange={(next) => update({ quietHoursWeekdays: next })}
+                isModified={!unavailable && settings.quietHoursWeekdays.length > 0}
+                onReset={() => update({ quietHoursWeekdays: [] })}
+              />
+            </SettingsDependents>
+          )}
+        </SettingsGroup>
+      </SettingsSection>
     </div>
   );
 }
 
-function QuietHoursTimeRow({
+function TimePicker({
   label,
   totalMinutes,
+  describedBy,
+  disabled,
   onChange,
 }: {
   label: string;
   totalMinutes: number;
+  describedBy: string | undefined;
+  disabled: boolean;
   onChange: (value: number) => void;
 }) {
-  const { hour, minute } = splitMinutes(totalMinutes);
-  const selectClass =
-    "px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors";
+  const current = clampMinutes(totalMinutes);
+  // A stored time off the 15-minute grid still shows as itself rather than blank.
+  const times = TIME_OPTIONS.includes(current)
+    ? TIME_OPTIONS
+    : [...TIME_OPTIONS, current].sort((a, b) => a - b);
   return (
-    <div className="space-y-1">
-      <span className="text-sm font-medium text-text-primary block">{label}</span>
-      <div className="flex items-center gap-2">
-        <select
-          aria-label={`${label} hour`}
-          value={hour}
-          onChange={(e) => onChange(joinMinutes(Number(e.target.value), minute))}
-          className={selectClass}
+    <Select value={String(current)} onValueChange={(v) => onChange(Number(v))} disabled={disabled}>
+      <SelectTrigger aria-label={label} aria-describedby={describedBy} className="w-24">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {times.map((minutes) => (
+          <SelectItem key={minutes} value={String(minutes)}>
+            {formatTimeOfDay(minutes)}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/**
+ * `[]` is stored as "every day", so the schedule can never be narrowed to no days at
+ * all: the last selected day stays selected, and the description says why. Clearing
+ * it would otherwise flip the schedule from one day to all seven.
+ */
+function WeekdayRow({
+  weekdays,
+  onChange,
+  isModified,
+  onReset,
+}: {
+  weekdays: number[];
+  onChange: (next: number[]) => void;
+  isModified: boolean;
+  onReset: () => void;
+}) {
+  const everyDay = weekdays.length === 0;
+  const isActive = (day: number) => everyDay || weekdays.includes(day);
+  const activeCount = everyDay ? WEEKDAYS.length : weekdays.length;
+
+  const toggle = (day: number) => {
+    const current = everyDay ? WEEKDAYS.map((d) => d.value) : weekdays;
+    const next = current.includes(day)
+      ? current.filter((d) => d !== day)
+      : [...current, day].sort((a, b) => a - b);
+    if (next.length === 0) return;
+    onChange(next.length === WEEKDAYS.length ? [] : next);
+  };
+
+  return (
+    <SettingsRow
+      label="Active days"
+      description={
+        activeCount === 1
+          ? "At least one day stays selected — turn off the schedule to stop it entirely"
+          : "An overnight window counts toward the day it starts"
+      }
+      layout="stacked"
+      isModified={isModified}
+      onReset={onReset}
+      resetAriaLabel="Reset active days to every day"
+      control={({ labelId, descriptionId, disabled }) => (
+        <div
+          role="group"
+          aria-labelledby={labelId}
+          aria-describedby={descriptionId}
+          className="flex flex-wrap gap-2"
         >
-          {HOUR_OPTIONS.map(({ value, label: hourLabel }) => (
-            <option key={value} value={value}>
-              {hourLabel}
-            </option>
-          ))}
-        </select>
-        <span className="text-sm text-daintree-text/60">:</span>
-        <select
-          aria-label={`${label} minute`}
-          value={minute}
-          onChange={(e) => onChange(joinMinutes(hour, Number(e.target.value)))}
-          className={selectClass}
-        >
-          {MINUTE_OPTIONS.map(({ value, label: minuteLabel }) => (
-            <option key={value} value={value}>
-              {minuteLabel}
-            </option>
-          ))}
-        </select>
-      </div>
-    </div>
+          {WEEKDAYS.map(({ value, label, name }) => {
+            const active = isActive(value);
+            const locked = active && activeCount === 1;
+            return (
+              <button
+                key={value}
+                type="button"
+                disabled={disabled}
+                aria-disabled={locked || undefined}
+                aria-label={name}
+                onClick={() => {
+                  if (!locked) toggle(value);
+                }}
+                className={cn(
+                  "px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
+                  "disabled:cursor-not-allowed disabled:opacity-50",
+                  // The selected outline is a text-ramp token so it clears 3:1 against the
+                  // card on every theme; the border ramp's strongest step does not.
+                  active
+                    ? "border-text-secondary bg-overlay-medium text-text-primary"
+                    : "border-border-default bg-transparent text-text-secondary hover:text-text-primary"
+                )}
+                aria-pressed={active}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    />
   );
 }

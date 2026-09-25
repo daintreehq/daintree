@@ -9,6 +9,7 @@ import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 import {
   navigateToAgentSettings,
+  confirmPresetDelete,
   addCustomPreset,
   removeCcrConfig,
   waitForCcrPresets,
@@ -239,8 +240,8 @@ test.describe.serial("Presets: Custom Add (13–24)", () => {
 
     const deleteButtons = ctx.window.locator(SEL.preset.section).locator(SEL.preset.deleteButton);
     await expect(deleteButtons.first()).toBeVisible({ timeout: T_MEDIUM });
-    ctx.window.once("dialog", (dialog) => dialog.accept());
     await deleteButtons.last().click();
+    await confirmPresetDelete(ctx.window);
 
     // No orphan: the persisted custom-preset count drops by exactly one and the
     // section still renders (didn't crash or vanish).

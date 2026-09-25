@@ -274,7 +274,6 @@ export function MissingCliGate({
         {refreshFailed && (
           <InlineStatusBanner
             severity="error"
-            icon={AlertTriangle}
             title="Couldn't re-check the CLI"
             description="The availability probe didn't finish. Try again, or run the agent anyway if you know the binary works."
           />

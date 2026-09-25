@@ -1,4 +1,5 @@
 import {
+  useId,
   useMemo,
   useRef,
   useState,
@@ -6,9 +7,16 @@ import {
   type FormEvent,
   type MouseEvent,
 } from "react";
-import { AlertCircle, AlertTriangle, Monitor, Shuffle } from "lucide-react";
+import { Shuffle } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
+import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
 import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { runThemeReveal } from "@/lib/appThemeViewTransition";
@@ -28,6 +36,12 @@ import type {
   AppThemeWarningKind,
 } from "@shared/types/appTheme";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import {
+  SETTINGS_CONTROL_WIDTH,
+  SettingsDependents,
+  SettingsGroup,
+  SettingsRow,
+} from "./SettingsGroup";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { useImageError } from "@/hooks/useImageError";
@@ -75,55 +89,93 @@ function shuffleArray<T>(arr: T[]): T[] {
   return a;
 }
 
+/** One casing for every hex on the row: the picker reports lowercase, themes uppercase. */
+function formatHex(color: string | undefined): string {
+  return (color ?? "").toUpperCase();
+}
+
 async function persistCustomSchemes() {
   const { customSchemes } = useAppThemeStore.getState();
   await appThemeClient.setCustomSchemes(customSchemes);
 }
 
-function PreferredSchemePicker({
+/**
+ * A theme as a chip: its canvas with its accent set in it. Canvas alone told the dark
+ * themes apart from nothing — they are all near-black. The frame is text-secondary so
+ * the chip keeps a 3:1 edge on either card.
+ */
+function ThemeSwatch({ scheme }: { scheme: AppColorScheme }) {
+  return (
+    <span
+      className="inline-flex w-3.5 h-3.5 shrink-0 items-center justify-center rounded-sm border border-text-secondary"
+      style={{ backgroundColor: scheme.tokens[APP_THEME_PREVIEW_KEYS.background] }}
+      aria-hidden="true"
+    >
+      <span
+        className="w-1.5 h-1.5 rounded-full"
+        style={{ backgroundColor: scheme.tokens["accent-primary"] }}
+      />
+    </span>
+  );
+}
+
+function PreferredSchemeRow({
   label,
   schemes,
   selectedId,
+  defaultId,
   onSelect,
 }: {
   label: string;
   schemes: AppColorScheme[];
   selectedId: string;
+  defaultId: string;
   onSelect: (id: string) => void;
 }) {
+  const defaultName = schemes.find((s) => s.id === defaultId)?.name ?? defaultId;
   return (
-    <div className="space-y-1">
-      <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary">{label}</p>
-      <div className="flex flex-wrap gap-1.5">
-        {schemes.map((scheme) => (
-          <button
-            key={scheme.id}
-            type="button"
-            onClick={() => onSelect(scheme.id)}
-            className={cn(
-              "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] border text-xs transition-colors",
-              selectedId === scheme.id
-                ? "border-border-strong bg-overlay-medium text-text-primary"
-                : "border-border-default text-text-secondary hover:bg-surface-hover"
-            )}
+    <SettingsRow
+      label={label}
+      description={`Default: ${defaultName}`}
+      isModified={selectedId !== defaultId}
+      onReset={() => onSelect(defaultId)}
+      control={({ labelId, descriptionId, disabled }) => (
+        <Select value={selectedId} onValueChange={onSelect} disabled={disabled}>
+          <SelectTrigger
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            className={SETTINGS_CONTROL_WIDTH.select}
           >
-            <div
-              className="w-3 h-3 rounded-sm shrink-0"
-              style={{ backgroundColor: scheme.tokens[APP_THEME_PREVIEW_KEYS.background] }}
-            />
-            {scheme.name}
-          </button>
-        ))}
-      </div>
-    </div>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {schemes.map((scheme) => (
+              <SelectItem key={scheme.id} value={scheme.id}>
+                <span className="flex items-center gap-2">
+                  <ThemeSwatch scheme={scheme} />
+                  {scheme.name}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    />
   );
 }
+
+const DEFAULT_PREFERRED_DARK = "daintree";
+const DEFAULT_PREFERRED_LIGHT = "bondi";
 
 interface AppThemePickerProps {
   onClose?: () => void;
 }
 
 type EpochKey = "scheme" | "accent" | "followSystem" | "preferredDark" | "preferredLight";
+
+type FileResult =
+  | { kind: "imported"; message: string; warnings: AppThemeValidationWarning[] }
+  | { kind: "error"; title: string; description: string; retry: () => void };
 
 interface SaveError {
   domain: EpochKey;
@@ -147,11 +199,11 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   const setAccentColorOverride = useAppThemeStore((s) => s.setAccentColorOverride);
   const setRecentSchemeIds = useAppThemeStore((s) => s.setRecentSchemeIds);
   const recentSchemeIds = useAppThemeStore((s) => s.recentSchemeIds);
-  const [importWarnings, setImportWarnings] = useState<AppThemeValidationWarning[]>([]);
-  const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [fileResult, setFileResult] = useState<FileResult | null>(null);
   const [saveError, setSaveError] = useState<SaveError | null>(null);
 
   const shuffleQueueRef = useRef<string[]>([]);
+  const accentWarningId = useId();
 
   // What each field currently looks like on disk. Seeded from the hydrated store
   // on mount and advanced only as writes land, so a rollback restores durable
@@ -425,24 +477,30 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       }
     );
 
-  // The import result block mounts after an async resolve, so screen-reader users
-  // get no announcement from it appearing. Route the summary through the shared
-  // announcer (AppDialog mounts AccessibilityAnnouncer in-subtree, handling the
-  // Chromium aria-modal filter and document.ariaNotify).
-  const announceImportResult = (message: string) => {
-    setImportMessage(message);
-    useAnnouncerStore.getState().announce(message);
+  // Results mount after an async resolve, so screen-reader users get no announcement
+  // from them appearing. Route the summary through the shared announcer (AppDialog
+  // mounts AccessibilityAnnouncer in-subtree, handling the Chromium aria-modal filter
+  // and document.ariaNotify).
+  const showFileResult = (result: FileResult) => {
+    setFileResult(result);
+    useAnnouncerStore
+      .getState()
+      .announce(result.kind === "error" ? result.description : result.message);
   };
 
   const handleImport = async () => {
-    setImportMessage(null);
-    setImportWarnings([]);
+    setFileResult(null);
 
     try {
       const result = await appThemeClient.importTheme();
       if (!result.ok) {
         if (!result.errors.includes("Import cancelled")) {
-          announceImportResult(result.errors[0] ?? "Failed to import app theme.");
+          showFileResult({
+            kind: "error",
+            title: "Couldn't import theme",
+            description: result.errors[0] ?? "The file isn't a theme Daintree can read.",
+            retry: () => void handleImport(),
+          });
         }
         return;
       }
@@ -451,32 +509,43 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       await persistCustomSchemes();
       await handleSelect(result.scheme.id);
 
-      if (result.warnings.length > 0) {
-        setImportWarnings(result.warnings);
-        // Count the deduplicated kind rows the user actually sees, not the raw
-        // diagnostic count (those live under "Technical details") — otherwise
-        // "12 warnings" next to 2 visible rows reads as missing content.
-        const warningCount = groupWarningsByKind(result.warnings).length;
-        announceImportResult(
-          `Imported "${result.scheme.name}" with ${warningCount} warning${warningCount === 1 ? "" : "s"}.`
-        );
-      } else {
-        announceImportResult(`Imported "${result.scheme.name}".`);
-      }
+      // Count the deduplicated kind rows the user actually sees, not the raw
+      // diagnostic count (those live under "Technical details") — otherwise
+      // "12 warnings" next to 2 visible rows reads as missing content.
+      const warningCount = groupWarningsByKind(result.warnings).length;
+      showFileResult({
+        kind: "imported",
+        warnings: result.warnings,
+        message:
+          warningCount > 0
+            ? `Imported "${result.scheme.name}" with ${warningCount} warning${warningCount === 1 ? "" : "s"}.`
+            : `Imported "${result.scheme.name}".`,
+      });
     } catch (error) {
       logError("Failed to import app theme", error);
-      announceImportResult("Failed to import app theme.");
+      showFileResult({
+        kind: "error",
+        title: "Couldn't import theme",
+        description: "Something went wrong reading the file.",
+        retry: () => void handleImport(),
+      });
     }
   };
 
   const handleExport = async () => {
     if (!selectedScheme) return;
+    setFileResult(null);
     try {
       const effectiveScheme = applyAccentOverrideToScheme(selectedScheme, accentColorOverride);
       await appThemeClient.exportTheme(effectiveScheme);
     } catch (error) {
       logError("Failed to export app theme", error);
-      announceImportResult("Failed to export app theme.");
+      showFileResult({
+        kind: "error",
+        title: "Couldn't export theme",
+        description: "The theme file wasn't written.",
+        retry: () => void handleExport(),
+      });
     }
   };
 
@@ -491,73 +560,214 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     }
 
     const nextId = shuffleQueueRef.current.shift()!;
-    handleSelect(nextId, { x: e.clientX, y: e.clientY });
+    void handleSelect(nextId, { x: e.clientX, y: e.clientY });
   };
 
   const handleChangeTheme = () => {
     window.dispatchEvent(new CustomEvent("daintree:open-theme-browser"));
   };
 
-  return (
-    <div className="space-y-3">
-      {saveError && (
-        <InlineStatusBanner
-          className="rounded-[var(--radius-md)]"
-          severity="error"
-          icon={AlertCircle}
-          title={saveError.title}
-          description={saveError.description}
-          action={{ id: "retry", label: "Retry", onClick: saveError.retry }}
-          onClose={() => setSaveError(null)}
-          closeAriaLabel="Dismiss theme error"
-        />
-      )}
+  const themeDefaultAccent = selectedScheme.tokens["accent-primary"];
+  const defaultSchemeName =
+    allSchemes.find((scheme) => scheme.id === DEFAULT_APP_SCHEME_ID)?.name ?? "the default";
 
-      <SettingsSwitchCard
-        icon={Monitor}
-        title="Match system appearance"
-        subtitle="Automatically switch between dark and light themes"
-        isEnabled={followSystem}
-        onChange={() => void handleToggleFollowSystem()}
-        ariaLabel="Toggle automatic theme switching"
-        variant="compact"
+  return (
+    <SettingsGroup>
+      {/* The theme's place is the hero of this group rather than a card of its own, so
+          the theme, how it follows the OS, and how it is tuned read as one surface. */}
+      <div className="relative h-[200px] overflow-hidden rounded-t-[var(--radius-lg)]">
+        {selectedScheme.heroImage && !heroError ? (
+          <img
+            ref={heroImgRef}
+            src={selectedScheme.heroImage}
+            alt=""
+            onError={onHeroError}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div
+            className="w-full h-full flex items-center justify-center"
+            style={{
+              backgroundColor: selectedScheme.tokens[APP_THEME_PREVIEW_KEYS.background],
+            }}
+          >
+            <PaletteStrip scheme={selectedScheme} />
+          </div>
+        )}
+        {/* Media-overlay caption: sits on a guaranteed-dark scrim over the hero
+            image, so the white label text is intentional and stays readable on
+            every theme. `text-inverse` flips dark on dark themes — not usable here. */}
+        <div className="absolute bottom-0 inset-x-0 bg-scrim-strong backdrop-blur-sm px-4 py-1.5 flex items-center justify-between gap-4">
+          <span className="text-sm font-medium text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+            {selectedScheme.name}
+          </span>
+          {selectedScheme.location && (
+            <span className="min-w-0 truncate text-2xs text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+              {selectedScheme.location}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <SettingsRow
+        label="Theme"
+        description={
+          followSystem
+            ? "Picking a theme turns off system matching"
+            : `${allSchemes.length} themes to browse, each with a live preview`
+        }
+        isModified={!followSystem && selectedSchemeId !== DEFAULT_APP_SCHEME_ID}
+        onReset={() => void handleSelect(DEFAULT_APP_SCHEME_ID)}
+        resetAriaLabel={`Reset app theme to ${defaultSchemeName}`}
+        control={
+          <>
+            {allSchemes.length > 1 && (
+              <Button variant="outline" size="sm" onClick={handleShuffle}>
+                <Shuffle aria-hidden="true" />
+                Random theme
+              </Button>
+            )}
+            {onClose && (
+              <Button variant="contrast" size="sm" onClick={handleChangeTheme}>
+                Change theme…
+              </Button>
+            )}
+          </>
+        }
       />
 
-      {followSystem && (
-        <div className="space-y-2 pl-1">
-          <PreferredSchemePicker
-            label="Preferred dark theme"
-            schemes={darkSchemes}
-            selectedId={preferredDarkSchemeId}
-            onSelect={(id) => void handlePreferredDarkChange(id)}
-          />
-          <PreferredSchemePicker
-            label="Preferred light theme"
-            schemes={lightSchemes}
-            selectedId={preferredLightSchemeId}
-            onSelect={(id) => void handlePreferredLightChange(id)}
+      <SettingsSwitchCard
+        title="Match system appearance"
+        subtitle="Switches between a dark and a light theme when your OS appearance changes"
+        isEnabled={followSystem}
+        onChange={() => void handleToggleFollowSystem()}
+        isModified={followSystem}
+        onReset={() => void handleToggleFollowSystem()}
+      />
+      <SettingsDependents
+        disabled={!followSystem}
+        reason="Used while Match system appearance is on"
+      >
+        <PreferredSchemeRow
+          label="Dark theme"
+          schemes={darkSchemes}
+          selectedId={preferredDarkSchemeId}
+          defaultId={DEFAULT_PREFERRED_DARK}
+          onSelect={(id) => void handlePreferredDarkChange(id)}
+        />
+        <PreferredSchemeRow
+          label="Light theme"
+          schemes={lightSchemes}
+          selectedId={preferredLightSchemeId}
+          defaultId={DEFAULT_PREFERRED_LIGHT}
+          onSelect={(id) => void handlePreferredLightChange(id)}
+        />
+      </SettingsDependents>
+
+      <SettingsRow
+        label="Accent color"
+        isModified={!!accentColorOverride}
+        onReset={handleAccentReset}
+        resetAriaLabel="Reset accent color to the theme's"
+        resetTestId="accent-color-override-reset"
+        description={
+          accentColorOverride
+            ? `${formatHex(effectiveAccent)} · Theme default: ${formatHex(themeDefaultAccent)}`
+            : `The theme's own, ${formatHex(themeDefaultAccent)}. Pick a color to override it.`
+        }
+        control={({ labelId, descriptionId }) => (
+          <label
+            htmlFor="accent-color-override-input"
+            className={cn(
+              "relative block w-8 h-8 shrink-0 cursor-pointer rounded-[var(--radius-md)]",
+              // The input is invisible, so its focus has to show on the well it sits in.
+              "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2",
+              "has-[input:focus-visible]:outline-accent-primary has-[input:focus-visible]:outline-offset-2"
+            )}
+          >
+            {/* A colour well: the text-secondary frame keeps an edge at 3:1 whatever
+                colour fills it, including an override that matches the card. */}
+            <span
+              className="block w-full h-full rounded-[var(--radius-md)] border border-text-secondary"
+              style={{ backgroundColor: effectiveAccent }}
+              aria-hidden="true"
+            />
+            <input
+              id="accent-color-override-input"
+              data-testid="accent-color-override-input"
+              type="color"
+              value={pickerValue}
+              onInput={handleAccentInput}
+              onChange={handleAccentCommit}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              aria-labelledby={labelId}
+              aria-describedby={
+                [descriptionId, accentContrastFail ? accentWarningId : null]
+                  .filter(Boolean)
+                  .join(" ") || undefined
+              }
+            />
+          </label>
+        )}
+      />
+      {accentContrastFail && (
+        <div className="px-4 py-3" id={accentWarningId}>
+          <InlineStatusBanner
+            className="rounded-[var(--radius-md)]"
+            severity="warning"
+            role="status"
+            title="Low contrast accent"
+            description={
+              accentContrastFail.mode === "foreground"
+                ? `Button text scores ${accentContrastFail.worstRatio.toFixed(2)}:1 on this accent. Pick a lighter or darker one.`
+                : `The accent scores ${accentContrastFail.worstRatio.toFixed(2)}:1 on ${selectedScheme.name} surfaces. Pick a more distinct one.`
+            }
           />
         </div>
       )}
 
-      {importMessage && (
-        <div
-          role="status"
-          className="rounded-[var(--radius-md)] border border-overlay bg-surface-panel px-3 py-2"
-        >
-          <div className="flex items-start gap-2">
-            <AlertTriangle
-              className={cn(
-                "mt-0.5 h-3.5 w-3.5 shrink-0",
-                importWarnings.length > 0 ? "text-status-warning" : "text-status-info"
-              )}
-            />
-            <div className="min-w-0">
-              <p className="text-xs text-text-primary">{importMessage}</p>
-              {importWarnings.length > 0 && (
+      <SettingsRow
+        label="Theme files"
+        description="Load a theme from a file, or save this one to share it"
+        control={({ disabled }) => (
+          <>
+            <Button variant="outline" size="sm" onClick={handleImport} disabled={disabled}>
+              Import…
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleExport} disabled={disabled}>
+              Export…
+            </Button>
+          </>
+        )}
+      />
+
+      {fileResult?.kind === "error" && (
+        <div className="px-4 py-3">
+          <InlineStatusBanner
+            className="rounded-[var(--radius-md)]"
+            severity="error"
+            title={fileResult.title}
+            description={fileResult.description}
+            action={{ id: "retry", label: "Retry", onClick: fileResult.retry }}
+            onClose={() => setFileResult(null)}
+            closeAriaLabel="Dismiss theme file error"
+          />
+        </div>
+      )}
+      {fileResult?.kind === "imported" && (
+        <div className="px-4 py-3">
+          <InlineStatusBanner
+            className="rounded-[var(--radius-md)]"
+            severity={fileResult.warnings.length > 0 ? "warning" : "info"}
+            role="status"
+            title={fileResult.message}
+            onClose={() => setFileResult(null)}
+            closeAriaLabel="Dismiss import result"
+            descriptionExtras={
+              fileResult.warnings.length > 0 ? (
                 <ul className="mt-1 space-y-1.5">
-                  {groupWarningsByKind(importWarnings).map(({ kind, messages }) => (
-                    <li key={kind} className="text-2xs text-text-secondary">
+                  {groupWarningsByKind(fileResult.warnings).map(({ kind, messages }) => (
+                    <li key={kind} className="text-xs text-text-secondary">
                       {WARNING_KIND_COPY[kind] ?? "Some theme values may need attention"}
                       <details className="mt-0.5">
                         <summary className="cursor-pointer text-text-secondary transition-colors hover:text-text-primary">
@@ -574,140 +784,25 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
                     </li>
                   ))}
                 </ul>
-              )}
-            </div>
-          </div>
+              ) : undefined
+            }
+          />
         </div>
       )}
 
-      <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default overflow-hidden">
-        <div className="relative h-[200px] shrink-0 overflow-hidden">
-          {selectedScheme.heroImage && !heroError ? (
-            <img
-              ref={heroImgRef}
-              src={selectedScheme.heroImage}
-              alt=""
-              onError={onHeroError}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div
-              className="w-full h-full flex items-center justify-center"
-              style={{
-                backgroundColor: selectedScheme.tokens[APP_THEME_PREVIEW_KEYS.background],
-              }}
-            >
-              <PaletteStrip scheme={selectedScheme} />
-            </div>
-          )}
-          {/* Media-overlay caption: sits on a guaranteed-dark scrim over the hero
-              image, so the white label text is intentional and stays readable on
-              every theme. `text-inverse` flips dark on dark themes — not usable here. */}
-          <div className="absolute bottom-0 inset-x-0 bg-scrim-strong backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
-            <span className="text-sm font-medium text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
-              {selectedScheme.name}
-            </span>
-            {selectedScheme.location && (
-              <span className="text-2xs text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
-                {selectedScheme.location}
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-border-default bg-surface-canvas">
-          <span className="min-w-0 truncate text-xs text-text-secondary">Current theme</span>
-          {onClose && (
-            <Button variant="contrast" size="sm" onClick={handleChangeTheme} className="shrink-0">
-              Change theme…
-            </Button>
-          )}
-        </div>
-      </div>
-
-      <section
-        aria-label="Accent color"
-        className="flex items-center gap-3 p-2 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas"
-      >
-        <label
-          htmlFor="accent-color-override-input"
-          className="relative shrink-0 cursor-pointer"
-          style={{ width: 32, height: 32 }}
-        >
-          <div
-            className="w-full h-full rounded-md border border-border-default"
-            style={{ backgroundColor: effectiveAccent }}
-            aria-hidden="true"
+      {saveError && (
+        <div className="px-4 py-3">
+          <InlineStatusBanner
+            className="rounded-[var(--radius-md)]"
+            severity="error"
+            title={saveError.title}
+            description={saveError.description}
+            action={{ id: "retry", label: "Retry", onClick: saveError.retry }}
+            onClose={() => setSaveError(null)}
+            closeAriaLabel="Dismiss theme error"
           />
-          <input
-            id="accent-color-override-input"
-            data-testid="accent-color-override-input"
-            type="color"
-            value={pickerValue}
-            onInput={handleAccentInput}
-            onChange={handleAccentCommit}
-            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-            aria-label="Accent color"
-          />
-        </label>
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-text-primary">Accent color</div>
-          <div className="text-xs text-text-secondary">
-            {accentColorOverride
-              ? `Overriding theme accent (${effectiveAccent})`
-              : "Click the swatch to override the theme accent"}
-          </div>
-        </div>
-        {accentColorOverride && (
-          <button
-            type="button"
-            onClick={handleAccentReset}
-            data-testid="accent-color-override-reset"
-            className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors shrink-0"
-          >
-            Reset to theme default
-          </button>
-        )}
-      </section>
-
-      {accentContrastFail && (
-        <div
-          role="status"
-          className="flex items-start gap-2 rounded-[var(--radius-md)] border border-overlay bg-surface-panel px-3 py-2"
-        >
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning" />
-          <p className="min-w-0 text-xs text-text-primary">
-            {accentContrastFail.mode === "foreground"
-              ? `Low contrast: button text scores only ${accentContrastFail.worstRatio.toFixed(2)}:1 on the accent color — pick a lighter or darker accent`
-              : `Low contrast: the accent scores only ${accentContrastFail.worstRatio.toFixed(2)}:1 on ${selectedScheme.name} surfaces — pick a more distinct accent`}
-          </p>
         </div>
       )}
-
-      <div className="flex items-center gap-3">
-        <button
-          onClick={handleExport}
-          className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
-        >
-          Export app theme...
-        </button>
-        <button
-          onClick={handleImport}
-          className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
-        >
-          Import app theme...
-        </button>
-        {allSchemes.length > 1 && (
-          <button
-            type="button"
-            onClick={handleShuffle}
-            className="ml-auto flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
-          >
-            <Shuffle className="h-3 w-3" />
-            Random theme
-          </button>
-        )}
-      </div>
-    </div>
+    </SettingsGroup>
   );
 }

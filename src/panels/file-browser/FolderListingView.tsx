@@ -8,6 +8,7 @@ import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { FILE_DRAG_MIME, encodeFileDragPaths } from "@/lib/fileDragPayload";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
+import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import type { FileEntryLike, FolderListingRow } from "./fileBrowserTree";
 import { FILE_TREE_ICON_CLASS, FILE_TREE_ICON_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
 
@@ -39,7 +40,7 @@ export interface FolderListingViewProps {
    * handler here could never fire. Re-rooting a folder from this surface lives
    * in the row's context menu ("Set as root"), which is reachable.
    */
-  onSelect: (path: string, isDirectory: boolean) => void;
+  onSelect: (path: string, isDirectory: boolean, viaKeyboard?: boolean) => void;
   /** Same callback the tree uses, so both surfaces offer the identical menu. */
   rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
   /**
@@ -89,7 +90,9 @@ export function FolderListingView({
     <div
       role="group"
       aria-label={label}
-      className="flex min-h-0 w-full flex-1 flex-col overflow-hidden"
+      // A size container, so the Modified column can step aside at a narrow
+      // width and give its room to the names — the column a reader scans.
+      className="@container/listing flex min-h-0 w-full flex-1 flex-col overflow-hidden"
     >
       {/*
         Decorative, and deliberately not a sortable header: sorting has exactly
@@ -105,7 +108,7 @@ export function FolderListingView({
       >
         <span className="min-w-0 flex-1">Name</span>
         <span className="w-20 shrink-0 text-right">Size</span>
-        <span className="w-24 shrink-0 text-right">Modified</span>
+        <span className={cn("w-24 shrink-0 text-right", MODIFIED_COLUMN_CLASS)}>Modified</span>
       </div>
       <div className="min-h-0 flex-1">
         <Virtuoso<FolderListingRow, ListingContext>
@@ -123,7 +126,7 @@ export function FolderListingView({
 }
 
 interface ListingContext {
-  onSelect: (path: string, isDirectory: boolean) => void;
+  onSelect: (path: string, isDirectory: boolean, viaKeyboard?: boolean) => void;
   rowContextMenu?: ((row: FileEntryLike) => React.ReactNode) | undefined;
   basePath: string;
 }
@@ -195,15 +198,42 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
           : `Symlink to ${row.symlink.target}`
     : null;
 
+  // Enter and Space do what a click does, and Up/Down walk the rows, so the
+  // listing is usable without the tree — which matters most when the tree
+  // column is collapsed and this is the only navigator on screen.
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      // Flagged so the host can hand focus to whatever replaces this row —
+      // activating it is what unmounts it.
+      onSelect(row.path, row.isDirectory, true);
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const group = event.currentTarget.closest('[role="group"]');
+    if (!group) return;
+    const rows = Array.from(group.querySelectorAll<HTMLElement>("[data-listing-row]"));
+    const index = rows.indexOf(event.currentTarget);
+    const next = rows[index + (event.key === "ArrowDown" ? 1 : -1)];
+    if (!next) return;
+    event.preventDefault();
+    next.focus();
+  };
+
   const menuItems = context.rowContextMenu?.(row);
   const rowSurface = (
     <div
+      role="button"
+      tabIndex={0}
+      data-listing-row=""
+      onKeyDown={handleKeyDown}
       aria-label={row.name}
       draggable={context.basePath !== ""}
       onDragStart={handleDragStart}
       onClick={handleClick}
       className={cn(
-        "flex h-7 w-full cursor-default select-none items-center gap-3 rounded px-2 text-xs",
+        "flex h-7 w-full cursor-default select-none items-center gap-3 rounded-lg px-2 text-xs",
+        PALETTE_ROW_FOCUS_CLASS,
         // Neutral hover, no selected state: clicking a row always replaces what
         // this listing is showing, so no row is ever the standing selection —
         // a highlight would only ever paint for the frame before it unmounts.
@@ -224,7 +254,12 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
       <span className="w-20 shrink-0 text-right tabular-nums text-text-secondary">
         {formatSize(row)}
       </span>
-      <span className="w-24 shrink-0 truncate text-right tabular-nums text-text-secondary">
+      <span
+        className={cn(
+          "w-24 shrink-0 truncate text-right tabular-nums text-text-secondary",
+          MODIFIED_COLUMN_CLASS
+        )}
+      >
         {row.mtimeMs == null ? UNKNOWN : formatRelativeTime(row.mtimeMs)}
       </span>
     </div>
@@ -262,3 +297,11 @@ function formatSize(row: FolderListingRow): string {
   }
   return row.size == null ? UNKNOWN : formatBytes(row.size);
 }
+
+/**
+ * Below ~26rem the relative time is the first thing to go: a name clipped to
+ * "corrupt-thumb…" beside a complete "8 seconds ago" spends the row on the
+ * wrong column. Size stays — it is short, and it is what tells a stub from a
+ * real file at a glance.
+ */
+const MODIFIED_COLUMN_CLASS = "@max-[26rem]/listing:hidden";

@@ -8,6 +8,7 @@ const registeredTaskRuns = new Map<string, () => unknown>();
 // Hoisted: the HelpSessionService mock factory now runs at import time
 // (globalServicesInit value-imports the singleton statically).
 const setMcpRegistry = vi.hoisted(() => vi.fn());
+const setProjectMetadataReader = vi.hoisted(() => vi.fn());
 let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
 let storeFreshAtBoot = false;
@@ -301,6 +302,7 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     setMcpRegistry,
     setPendingHibernationStore: vi.fn(),
     setPtyClient: vi.fn(),
+    setProjectMetadataReader,
     startOrphanSweep: vi.fn(),
     validateToken: vi.fn(),
     gcStaleSessions: vi.fn(async () => {}),
@@ -723,6 +725,7 @@ describe("initGlobalServices task ordering", () => {
     // mockReset (not mockClear) so mockImplementation set in one test doesn't
     // leak into the next — keeps tests independent as the suite grows.
     setMcpRegistry.mockReset();
+    setProjectMetadataReader.mockReset();
     pruneOldLogs.mockReset();
     pruneOldLogsAsync.mockReset();
     pruneHeapSnapshots.mockReset();
@@ -983,6 +986,20 @@ describe("initGlobalServices task ordering", () => {
 
     expect(setIdx).toBeGreaterThanOrEqual(0);
     expect(mcpIdx).toBeGreaterThan(setIdx);
+  });
+
+  it("wires the help-session project metadata reader before any deferred task can provision", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    setProjectMetadataReader.mockImplementation(() => {
+      registeredTaskNames.push("__setProjectMetadataReader__");
+    });
+
+    await initGlobalServices(fakeRegistry);
+
+    expect(setProjectMetadataReader).toHaveBeenCalledWith(expect.any(Function));
+    const setIdx = registeredTaskNames.indexOf("__setProjectMetadataReader__");
+    expect(setIdx).toBeGreaterThanOrEqual(0);
+    expect(registeredTaskNames.indexOf("mcp-server")).toBeGreaterThan(setIdx);
   });
 
   it("skips MCP-related tasks when no windowRegistry is supplied", async () => {

@@ -139,6 +139,16 @@ describe("TerminalInfoDialog", () => {
       expect(body.contains(overview)).toBe(true);
     });
 
+    // Arriving on the first control would scroll the body past the overview, since
+    // every control sits below it. Focus has to start inside what is read first.
+    it("arrives inside the overview, not on a control below it", async () => {
+      dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+      renderDialog();
+
+      const overview = await screen.findByTestId("terminal-info-overview");
+      await waitFor(() => expect(overview.contains(document.activeElement)).toBe(true));
+    });
+
     it("keeps the deep diagnostics collapsed until asked for", async () => {
       dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
       renderDialog();
@@ -374,9 +384,7 @@ describe("TerminalInfoDialog", () => {
       });
 
       renderDialog();
-      await screen.findByTestId("terminal-info-body");
-
-      expect(screen.getByText("--verbose")).toBeTruthy();
+      expect(await screen.findByText("--verbose")).toBeTruthy();
       expect(screen.getByText("claude-opus-4-6")).toBeTruthy();
       const overview = screen.getByTestId("terminal-info-overview");
       // The agent and its state belong in the overview, not four sections down.
@@ -400,9 +408,9 @@ describe("TerminalInfoDialog", () => {
       });
 
       renderDialog();
-      await screen.findByTestId("terminal-info-body");
-
-      expect(screen.getByText("Agent has exited")).toBeTruthy();
+      // The body renders before `terminal.info.get` resolves, so wait for the
+      // fetched value itself rather than the container.
+      expect(await screen.findByText("Agent has exited")).toBeTruthy();
     });
   });
 });

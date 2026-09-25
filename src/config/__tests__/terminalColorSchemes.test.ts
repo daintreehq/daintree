@@ -27,7 +27,7 @@ describe("terminalColorSchemes", () => {
 
   it("default scheme ID exists", () => {
     expect(getSchemeById(DEFAULT_SCHEME_ID)).toBeDefined();
-    expect(getSchemeById(DEFAULT_SCHEME_ID)!.name).toBe("Match App Theme");
+    expect(getSchemeById(DEFAULT_SCHEME_ID)!.name).toBe("Match app theme");
   });
 
   it("getSchemeById returns undefined for unknown ID", () => {

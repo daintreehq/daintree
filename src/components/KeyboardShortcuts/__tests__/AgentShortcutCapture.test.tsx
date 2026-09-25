@@ -3,11 +3,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { AgentShortcutCapture } from "../AgentShortcutCapture";
+import { keybindingService } from "@/services/KeybindingService";
+import type { KeybindingConflict } from "@/services/keybindingUtils";
 
 vi.mock("@/services/KeybindingService", () => ({
   CHORD_TIMEOUT_MS: 1000,
+  combosFieldsEqual: vi.fn((a: string, b: string) => a.toLowerCase() === b.toLowerCase()),
   keybindingService: {
     findConflicts: vi.fn(() => []),
+    beginShortcutCapture: vi.fn(() => () => {}),
     formatComboForDisplay: vi.fn((combo: string) => combo),
     getOverride: vi.fn(() => undefined),
     getDefaultCombo: vi.fn(() => undefined),
@@ -29,6 +33,29 @@ vi.mock("@/store/notificationStore", () => ({
   useNotificationStore: { getState: vi.fn(() => ({ addNotification: vi.fn() })) },
 }));
 
+// Off macOS the recorder maps ctrlKey to the internal "Cmd" prefix.
+function press(key: string, mods: { ctrl?: boolean; alt?: boolean; shift?: boolean } = {}) {
+  act(() => {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key,
+        ctrlKey: !!mods.ctrl,
+        altKey: !!mods.alt,
+        shiftKey: !!mods.shift,
+        bubbles: true,
+      })
+    );
+  });
+}
+
+function field() {
+  return screen.getByTestId("shortcut-capture-field");
+}
+
+function saveButton() {
+  return screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+}
+
 describe("AgentShortcutCapture", () => {
   const onCapture = vi.fn();
   const onCancel = vi.fn();
@@ -42,79 +69,161 @@ describe("AgentShortcutCapture", () => {
     vi.useRealTimers();
   });
 
-  it("accepts a Cmd+Alt+letter combo and forwards to onCapture", () => {
+  it("opens armed and states the agent rule before the first attempt", () => {
     render(<AgentShortcutCapture agentId="claude" onCapture={onCapture} onCancel={onCancel} />);
 
-    fireEvent.click(screen.getByText("Click to record shortcut"));
-
-    // On non-Mac, ctrlKey + altKey + KeyK produces the internal "Cmd+Alt+k" combo
-    // via SettingsShortcutCapture's normalization (ctrlKey -> "Cmd" prefix).
-    const ev = new KeyboardEvent("keydown", {
-      key: "k",
-      code: "KeyK",
-      ctrlKey: true,
-      altKey: true,
-      bubbles: true,
-    });
-
-    act(() => {
-      window.dispatchEvent(ev);
-      vi.advanceTimersByTime(1100);
-    });
-
+    expect(field().getAttribute("data-recording")).toBe("true");
+    expect(field().textContent).toMatch(/letter/);
     expect(screen.queryByTestId("shortcut-capture-validation-error")).toBeNull();
-    const save = screen.getByText("Save") as HTMLButtonElement;
-    expect(save.disabled).toBe(false);
-    fireEvent.click(save);
+  });
+
+  it("finishes on the first stroke without waiting out the chord window", () => {
+    render(<AgentShortcutCapture agentId="claude" onCapture={onCapture} onCancel={onCancel} />);
+
+    press("k", { ctrl: true, alt: true });
+
+    expect(saveButton().disabled).toBe(false);
+    fireEvent.click(saveButton());
     expect(onCapture).toHaveBeenCalledWith("Cmd+Alt+k");
   });
 
-  it("rejects a Cmd+letter combo (missing Alt) and disables Save", () => {
+  it("keeps recording after a combo that breaks the rule, so the next press is the retry", () => {
     render(<AgentShortcutCapture agentId="claude" onCapture={onCapture} onCancel={onCancel} />);
 
-    fireEvent.click(screen.getByText("Click to record shortcut"));
-
-    const ev = new KeyboardEvent("keydown", {
-      key: "k",
-      code: "KeyK",
-      ctrlKey: true,
-      bubbles: true,
-    });
-
-    act(() => {
-      window.dispatchEvent(ev);
-      vi.advanceTimersByTime(1100);
-    });
+    press("k", { ctrl: true, shift: true });
 
     expect(screen.getByTestId("shortcut-capture-validation-error")).toBeTruthy();
-    expect(screen.getByText(/Ctrl\+Alt\+letter/)).toBeTruthy();
-    const save = screen.getByText("Save") as HTMLButtonElement;
-    expect(save.disabled).toBe(true);
-    fireEvent.click(save);
+    expect(field().getAttribute("data-recording")).toBe("true");
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+
+    press("k", { ctrl: true, alt: true });
+
+    expect(screen.queryByTestId("shortcut-capture-validation-error")).toBeNull();
+    expect(saveButton().disabled).toBe(false);
+  });
+
+  it("rejects an extra modifier the same way as a missing one", () => {
+    render(<AgentShortcutCapture agentId="claude" onCapture={onCapture} onCancel={onCancel} />);
+
+    press("k", { ctrl: true, alt: true, shift: true });
+
+    expect(screen.getByTestId("shortcut-capture-validation-error")).toBeTruthy();
     expect(onCapture).not.toHaveBeenCalled();
   });
 
-  it("rejects Cmd+Shift+Alt+letter (extra modifier) and disables Save", () => {
+  it("shows held modifiers before the letter lands", () => {
+    render(<AgentShortcutCapture agentId="claude" onCapture={onCapture} onCancel={onCancel} />);
+    const before = field().textContent;
+
+    press("Control", { ctrl: true });
+
+    expect(field().textContent).not.toBe(before);
+    expect(field().textContent).toContain("Ctrl");
+  });
+
+  it("does not offer Save for the binding already in force", () => {
+    render(
+      <AgentShortcutCapture
+        agentId="claude"
+        currentCombo="Cmd+Alt+C"
+        onCapture={onCapture}
+        onCancel={onCancel}
+      />
+    );
+
+    press("c", { ctrl: true, alt: true });
+
+    expect(saveButton().disabled).toBe(true);
+    fireEvent.click(saveButton());
+    expect(onCapture).not.toHaveBeenCalled();
+  });
+
+  it("holds Save until a combo taken by another action is unbound", () => {
+    const codex: KeybindingConflict = {
+      actionId: "agent.codex",
+      description: "Launch Codex agent",
+      combo: "Cmd+Alt+X",
+      scope: "global",
+      priority: 0,
+      kind: "conflict",
+    };
+    vi.mocked(keybindingService.findConflicts).mockReturnValue([codex]);
     render(<AgentShortcutCapture agentId="claude" onCapture={onCapture} onCancel={onCancel} />);
 
-    fireEvent.click(screen.getByText("Click to record shortcut"));
+    press("x", { ctrl: true, alt: true });
 
-    const ev = new KeyboardEvent("keydown", {
-      key: "k",
-      code: "KeyK",
-      ctrlKey: true,
-      shiftKey: true,
-      altKey: true,
-      bubbles: true,
-    });
+    expect(saveButton().disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "Unbind Launch Codex agent" })).toBeTruthy();
+  });
 
-    act(() => {
-      window.dispatchEvent(ev);
-      vi.advanceTimersByTime(1100);
-    });
+  it("keeps teaching the rule while modifiers are down", () => {
+    render(<AgentShortcutCapture agentId="claude" onCapture={onCapture} onCancel={onCancel} />);
 
-    expect(screen.getByTestId("shortcut-capture-validation-error")).toBeTruthy();
-    const save = screen.getByText("Save") as HTMLButtonElement;
-    expect(save.disabled).toBe(true);
+    press("Shift", { ctrl: true, alt: true, shift: true });
+    expect(field().textContent).toMatch(/Release/);
+
+    press("Alt", { alt: true });
+    expect(field().textContent).toMatch(/Add/);
+
+    press("Control", { ctrl: true, alt: true });
+    expect(field().textContent).toMatch(/letter/);
+  });
+
+  it("hands the keyboard back on Tab instead of recording it", () => {
+    render(
+      <AgentShortcutCapture
+        agentId="claude"
+        currentCombo="Cmd+Alt+C"
+        onCapture={onCapture}
+        onCancel={onCancel}
+      />
+    );
+
+    press("Tab");
+
+    expect(field().getAttribute("data-recording")).toBeNull();
+    expect(document.activeElement).toBe(field());
+    expect(screen.queryByTestId("shortcut-capture-validation-error")).toBeNull();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("never leaves focus on a disabled Save when Escape restores a draft", () => {
+    render(
+      <AgentShortcutCapture
+        agentId="claude"
+        currentCombo="Cmd+Alt+C"
+        onCapture={onCapture}
+        onCancel={onCancel}
+      />
+    );
+
+    press("c", { ctrl: true, alt: true });
+    fireEvent.click(screen.getByRole("button", { name: "Record again" }));
+    press("Escape");
+
+    const focused = document.activeElement;
+    expect(focused instanceof HTMLButtonElement && !focused.disabled).toBe(true);
+  });
+
+  it("offers Remove only when there is a binding to remove", () => {
+    const { rerender } = render(
+      <AgentShortcutCapture
+        agentId="claude"
+        currentCombo=""
+        onCapture={onCapture}
+        onCancel={onCancel}
+      />
+    );
+    expect(screen.queryByRole("button", { name: /^Remove/ })).toBeNull();
+
+    rerender(
+      <AgentShortcutCapture
+        agentId="claude"
+        currentCombo="Cmd+Alt+C"
+        onCapture={onCapture}
+        onCancel={onCancel}
+      />
+    );
+    expect(screen.getByRole("button", { name: /^Remove/ })).toBeTruthy();
   });
 });

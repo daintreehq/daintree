@@ -1,12 +1,15 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { Pin, PinOff, EyeOff, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { createTooltipWithShortcut } from "@/lib/platform";
+import { createTooltipWithShortcut, isMac } from "@/lib/platform";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { paletteSummary } from "@/lib/paletteSummary";
+import { KbdChord } from "@/components/ui/Kbd";
+import { HighlightedText } from "@/components/ui/HighlightedText";
+import { getActionMatchRanges } from "@/lib/actionPaletteSearch";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
 import { ACTION_CATEGORY_COLORS, ACTION_CATEGORY_DEFAULT_COLOR } from "@/config/categoryColors";
-
-const PIN_REJECT_DURATION_MS = 2500;
 
 /**
  * Palette-local chords for the row controls, which are presentational spans
@@ -19,6 +22,11 @@ const PIN_REJECT_DURATION_MS = 2500;
  */
 export const PIN_SHORTCUT = "Alt+P";
 export const HIDE_SHORTCUT = "Alt+H";
+
+export { paletteSummary };
+
+const ROW_CONTROL_CLASS =
+  "inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-sm)] bg-transparent border-0 text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors";
 
 interface ActionPaletteItemProps {
   item: ActionPaletteItemType;
@@ -48,6 +56,14 @@ interface ActionPaletteItemProps {
   posInSet?: number;
   /** Total navigable rows, excluding any inert section headers. */
   setSize?: number;
+  /**
+   * Whether to name the row's category. Off under a category section header,
+   * which already says it for every row beneath it; on everywhere a row can
+   * sit beside rows from other categories (Favorites, Recently used, search).
+   */
+  showCategory?: boolean;
+  /** The query this row was ranked for, when it was. Drives match emphasis. */
+  highlightQuery?: string;
 }
 
 function ActionPaletteItemInner({
@@ -63,22 +79,10 @@ function ActionPaletteItemInner({
   footerHintId,
   posInSet,
   setSize,
+  showCategory = true,
+  highlightQuery,
 }: ActionPaletteItemProps) {
   const categoryColor = ACTION_CATEGORY_COLORS[item.category] ?? ACTION_CATEGORY_DEFAULT_COLOR;
-  const [pinRejected, setPinRejected] = useState(false);
-  const rejectTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    // Cleanup the pin-rejection auto-dismiss timer on unmount so a row that's
-    // unmounted between pin-click and the 2.5s timeout doesn't fire setState
-    // on a torn-down component.
-    return () => {
-      if (rejectTimerRef.current !== null) {
-        window.clearTimeout(rejectTimerRef.current);
-        rejectTimerRef.current = null;
-      }
-    };
-  }, []);
 
   const handleHover = useCallback(() => {
     onHoverIndex?.(index);
@@ -88,22 +92,8 @@ function ActionPaletteItemInner({
     (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      if (isPinned) {
-        onUnpin?.(item.id);
-        setPinRejected(false);
-        return;
-      }
-      const ok = onPin?.(item) ?? false;
-      if (!ok) {
-        setPinRejected(true);
-        if (rejectTimerRef.current !== null) {
-          window.clearTimeout(rejectTimerRef.current);
-        }
-        rejectTimerRef.current = window.setTimeout(() => {
-          setPinRejected(false);
-          rejectTimerRef.current = null;
-        }, PIN_REJECT_DURATION_MS);
-      }
+      if (isPinned) onUnpin?.(item.id);
+      else onPin?.(item);
     },
     [isPinned, onPin, onUnpin, item]
   );
@@ -117,23 +107,17 @@ function ActionPaletteItemInner({
     [onHide, item]
   );
 
-  const handleSelectClick = useCallback(() => {
-    if (!item.enabled) {
-      // Mirror the previous `disabled` behavior — disabled actions still
-      // dispatch (so ActionService surfaces the disabled-reason toast), but
-      // the click only fires if the user explicitly hits the row body. The
-      // pin/hide buttons live in a sibling element so they remain reachable
-      // even when the row is disabled.
-      onSelect(item);
-      return;
-    }
-    onSelect(item);
-  }, [item, onSelect]);
-
-  const canShowPin = Boolean(onPin || (isPinned && onUnpin));
-  const canShowHide = Boolean(onHide) && !isPinned && item.danger !== "confirm";
+  // Disabled actions still dispatch so ActionService surfaces the
+  // disabled-reason toast; the pin and hide controls stop propagation, so they
+  // stay usable on a disabled row.
+  const handleSelectClick = useCallback(() => onSelect(item), [item, onSelect]);
 
   const isConfirmTier = item.danger === "confirm";
+  // A destructive action can't be pinned (#7481), so the row doesn't offer it:
+  // a control that exists only to be refused is a trap, not an affordance.
+  const canShowPin = !isConfirmTier && Boolean(onPin || (isPinned && onUnpin));
+  const canShowHide = Boolean(onHide) && !isPinned && !isConfirmTier;
+
   const hasRationale = isConfirmTier && Boolean(item.dangerRationale);
   const rationaleId = hasRationale ? `${item.id}-danger-rationale` : undefined;
   // Rationale node is CSS-hidden on unselected rows but stays in the DOM, so we
@@ -141,18 +125,42 @@ function ActionPaletteItemInner({
   // visible, so it's announced for every option.
   const describedBy =
     [footerHintId, isSelected ? rationaleId : undefined].filter(Boolean).join(" ") || undefined;
-  // HIG ellipsis (U+2026) signals "activation requires further input or confirmation".
-  // Appended at render time; the action definition's title is never mutated.
-  const displayTitle = isConfirmTier ? `${item.title} …` : item.title;
+  // HIG ellipsis (U+2026) signals "activation requires further input or
+  // confirmation". Set tight against the title, as the app's own "Pick theme…"
+  // titles are, and never doubled onto a title that already carries one.
+  const displayTitle = isConfirmTier && !item.title.endsWith("…") ? `${item.title}…` : item.title;
+
+  const summary = useMemo(() => paletteSummary(item.description), [item.description]);
+
+  const match = useMemo(
+    () =>
+      highlightQuery
+        ? getActionMatchRanges(highlightQuery, {
+            title: item.title,
+            titleLower: item.titleLower,
+            description: summary,
+            descriptionLower: summary.toLowerCase(),
+          })
+        : null,
+    [highlightQuery, item.title, item.titleLower, summary]
+  );
+
+  // The chip adds nothing when the title already says it ("Focus terminal 1"
+  // under a "terminal" chip).
+  const categoryInTitle = item.titleLower.includes(item.categoryLower);
+
+  const ariaKeyshortcuts = useMemo(
+    () => (item.shortcut ? comboToAriaKeyshortcuts(item.shortcut, isMac()) : undefined),
+    [item.shortcut]
+  );
 
   return (
     <div
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)]",
+        "group w-full flex items-start gap-3 px-3 py-1.5 rounded-[var(--radius-md)]",
         "text-text-secondary",
-        "hover:bg-overlay-subtle hover:text-text-primary",
-        !item.enabled && "opacity-50"
+        "hover:bg-overlay-subtle"
       )}
       id={`action-option-${item.id}`}
       role="option"
@@ -170,6 +178,9 @@ function ActionPaletteItemInner({
       // button left to hold them.
       aria-haspopup={isConfirmTier ? "dialog" : undefined}
       aria-describedby={describedBy}
+      // The visible chord sits in the presentational trailing cluster, so the
+      // binding is exposed here instead of through the option's name.
+      aria-keyshortcuts={ariaKeyshortcuts}
       onPointerDown={(e) => e.preventDefault()}
       onPointerMove={handleHover}
       // Activation lives on the option now that no inner button can hold it.
@@ -178,77 +189,73 @@ function ActionPaletteItemInner({
     >
       {/* A div, not a button. `role="option"` must not contain interactive
           descendants — axe reports the nesting as `nested-interactive`
-          (serious), and a negative tabindex does not exempt it: "using a
-          negative tabindex on an element inside an interactive control does not
-          prevent assistive technologies from focusing the element". Activation
-          lives here; the option's name computes from this subtree's text. */}
-      <div
-        className={cn(
-          "flex-1 min-w-0 flex items-center gap-3 text-left",
-          !item.enabled && "cursor-not-allowed"
-        )}
-      >
-        {/* Fixed-width COLUMN holding a natural-width chip. Category names run
-            from "git" to "preferences", so an auto-width badge started every
-            title at a different x and the list read as a ragged left edge. The
-            wrapper reserves the column so titles align; the chip inside stays
-            its own size, because a 3-letter category stretched to 80px reads as
-            a button rather than a label. */}
-        <span className="w-20 shrink-0">
+          (serious), and a negative tabindex does not exempt it. Activation
+          lives on the option; its name computes from this subtree's text. */}
+      <div className={cn("flex-1 min-w-0 text-left", !item.enabled && "cursor-not-allowed")}>
+        {/* Title first, at the row's leading edge. The category used to hold a
+            fixed 80px column ahead of it, which put a coloured pill before
+            every title the eye ran down, and under a category header said the
+            same word on every row. It now follows the title, and only where a
+            row can sit beside rows from other categories. */}
+        <div className="flex items-center gap-2 min-w-0">
+          {/* Unavailable steps the title down the ramp instead of fading the
+              whole row. Opacity took the selection rail, the reason line and
+              the still-working pin and hide controls down with it, to about
+              2.5:1 — the reason is the one line on the row that has to be read. */}
           <span
             className={cn(
-              // Natural width inside the fixed column, not stretched to fill it:
-              // a 3-letter category in an 80px pill reads as a stretched button.
-              "inline-block max-w-full truncate rounded px-1.5 py-0.5 text-3xs font-medium leading-tight",
-              categoryColor
+              "text-sm font-medium truncate",
+              item.enabled ? "text-text-primary" : "text-text-secondary"
             )}
           >
-            {item.category}
+            <HighlightedText
+              text={displayTitle}
+              indices={match?.field === "title" ? match.ranges : undefined}
+            />
           </span>
-        </span>
-
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium truncate">{displayTitle}</div>
-          {item.description && (
-            <div className="text-xs leading-snug text-text-secondary truncate">
-              {item.description}
-            </div>
-          )}
-          {!item.enabled && item.disabledReason && (
-            <div className="text-3xs leading-snug text-text-secondary italic truncate">
-              {item.disabledReason}
-            </div>
-          )}
-          {hasRationale && (
-            <div
-              id={rationaleId}
-              className="hidden group-aria-selected:block text-xs leading-snug text-text-secondary italic truncate"
+          {showCategory && !categoryInTitle && (
+            <span
+              className={cn(
+                "shrink-0 max-w-32 truncate rounded-[var(--radius-sm)] px-1.5 py-px text-3xs font-medium leading-tight",
+                categoryColor
+              )}
             >
-              {item.dangerRationale}
-            </div>
-          )}
-          {pinRejected && (
-            <div
-              // Severity rides the glyph, never the prose: the message keeps the
-              // secondary text ramp and the triangle carries the refusal.
-              className="flex items-center gap-1 text-3xs leading-snug text-text-secondary mt-0.5 truncate"
-              role="status"
-              aria-live="polite"
-            >
-              <TriangleAlert className="shrink-0 size-3 text-status-error" aria-hidden="true" />
-              Can't pin destructive actions
-            </div>
+              {item.category}
+            </span>
           )}
         </div>
+        {summary && (
+          <div className="text-xs leading-snug text-text-secondary truncate">
+            <HighlightedText
+              text={summary}
+              indices={match?.field === "description" ? match.ranges : undefined}
+            />
+          </div>
+        )}
+        {!item.enabled && item.disabledReason && (
+          <div className="text-xs leading-snug text-text-secondary italic truncate">
+            {item.disabledReason}
+          </div>
+        )}
+        {hasRationale && (
+          <div
+            id={rationaleId}
+            // Two lines, not one: this is the consequence the confirmation
+            // exists to state, and a single truncated line cut it mid-clause.
+            className="hidden group-aria-selected:line-clamp-2 text-xs leading-snug text-text-secondary italic"
+          >
+            {item.dangerRationale}
+          </div>
+        )}
       </div>
 
       {/* Presentational, for the same reason as the row body above: these sit
           inside `role="option"`, where ARIA treats children as presentational
-          and a real <button> trips `nested-interactive`. They were already
-          `tabIndex={-1}`, so no keyboard path is lost — the palette's focus
-          stays on the search input and drives rows via aria-activedescendant.
-          `title` keeps the mouse tooltip; `data-testid` keeps them addressable. */}
-      <div className="shrink-0 flex items-center gap-1 pt-0.5" aria-hidden="true">
+          and a real <button> trips `nested-interactive`. The palette's focus
+          stays on the search input and drives rows via aria-activedescendant;
+          Alt+P and Alt+H reach these from there. `title` keeps the mouse
+          tooltip; `data-testid` keeps them addressable. */}
+      <div className="shrink-0 flex items-center gap-1.5 min-h-5" aria-hidden="true">
         {canShowHide && (
           <span
             role="presentation"
@@ -257,10 +264,8 @@ function ActionPaletteItemInner({
             onPointerDown={(e) => e.preventDefault()}
             onClick={handleHideClick}
             className={cn(
-              "inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-sm)] bg-transparent border-0",
-              "text-text-secondary opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100",
-              "hover:bg-overlay-soft hover:text-text-primary transition-colors",
-              "focus-visible:opacity-100"
+              ROW_CONTROL_CLASS,
+              "opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100"
             )}
           >
             <EyeOff className="w-3.5 h-3.5" aria-hidden />
@@ -278,32 +283,36 @@ function ActionPaletteItemInner({
             onPointerDown={(e) => e.preventDefault()}
             onClick={handlePinClick}
             className={cn(
-              "inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-sm)] bg-transparent border-0",
-              "transition-colors hover:bg-overlay-soft",
-              isPinned
-                ? "text-text-secondary opacity-100"
-                : "text-text-secondary opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100",
-              "hover:text-text-primary focus-visible:opacity-100"
+              ROW_CONTROL_CLASS,
+              !isPinned && "opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100"
             )}
           >
             {isPinned ? (
-              <PinOff className="w-3.5 h-3.5" aria-hidden />
+              <>
+                {/* At rest a pinned row states what it is; the struck-through
+                    glyph is the action, so it appears only where the action is
+                    offered. Showing PinOff at rest read as "not pinned". */}
+                <Pin
+                  className="w-3.5 h-3.5 group-hover:hidden group-aria-selected:hidden"
+                  aria-hidden
+                />
+                <PinOff
+                  className="w-3.5 h-3.5 hidden group-hover:block group-aria-selected:block"
+                  aria-hidden
+                />
+              </>
             ) : (
               <Pin className="w-3.5 h-3.5" aria-hidden />
             )}
           </span>
         )}
 
-        {item.keybinding && (
-          <span className="text-2xs font-mono text-text-secondary transition-colors group-aria-selected:text-text-primary">
-            {item.keybinding}
-          </span>
-        )}
+        {item.shortcut && <KbdChord shortcut={item.shortcut} density="compact" />}
 
         {isConfirmTier && (
           <TriangleAlert
             aria-hidden="true"
-            className="shrink-0 size-3 text-text-secondary transition-colors group-aria-selected:text-text-primary"
+            className="shrink-0 size-3.5 text-text-secondary transition-colors group-aria-selected:text-text-primary"
           />
         )}
       </div>

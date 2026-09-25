@@ -76,6 +76,20 @@ export interface HelpSessionSlotState {
   figures: HelpFigure[];
   /** The figure a clickable `[image #N]` reference last activated (#9830). */
   activeFigureNumber: number | null;
+  /**
+   * An unhandled `[image #N]` activation for the rail to act on — reveal the
+   * thumbnail, and open the lightbox when `open` is set. Separate from
+   * `activeFigureNumber` because re-activating the figure that is already
+   * current still has to scroll it back into view. The rail clears it once
+   * handled, so a lane switch can't replay it.
+   */
+  figureRequest?: HelpFigureRequest;
+}
+
+export interface HelpFigureRequest {
+  figureNumber: number;
+  open: boolean;
+  seq: number;
 }
 
 function emptySlot(): HelpSessionSlotState {
@@ -176,6 +190,10 @@ interface HelpPanelActions {
   clearFigures: (slot: number) => void;
   /** Set the figure a clickable `[image #N]` reference activated (#9830). */
   setActiveFigureNumber: (slot: number, figureNumber: number | null) => void;
+  /** Make a figure current and ask the rail to reveal it, or open it with `open`. */
+  activateFigure: (slot: number, figureNumber: number, open: boolean) => void;
+  /** The rail has acted on the lane's pending `figureRequest`. */
+  clearFigureRequest: (slot: number) => void;
 }
 
 const initialState: HelpPanelState = {
@@ -197,6 +215,11 @@ const initialState: HelpPanelState = {
  * state unchanged when the lane isn't open — a late callback from a lane the
  * user just closed must not resurrect it.
  */
+// Monotonic across the store's lifetime rather than derived from the pending
+// request: the rail clears a request once handled, and a count restarted from
+// that cleared state would reissue a number the rail has already acted on.
+let figureRequestSeq = 0;
+
 function patchSlot(
   state: HelpPanelState,
   slot: number,
@@ -388,6 +411,7 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
             // navigate to a previous session's image (#9830).
             figures: [],
             activeFigureNumber: null,
+            figureRequest: undefined,
           }))
         ),
 
@@ -481,7 +505,11 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
         set((s) =>
           patchSlot(s, slot, (entry) => {
             const existing = entry.figures.findIndex((f) => f.imageId === figure.imageId);
-            if (existing === -1) return { ...entry, figures: [...entry.figures, figure] };
+            // A new figure is the one the assistant is talking about now, so it
+            // takes over as current from whatever an earlier reference picked.
+            if (existing === -1) {
+              return { ...entry, figures: [...entry.figures, figure], activeFigureNumber: null };
+            }
             // Idempotent upsert: a duplicate push (e.g. StrictMode double-mount
             // replaying the listener) replaces rather than appends.
             const figures = entry.figures.slice();
@@ -493,9 +521,11 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
       clearFigures: (slot) =>
         set((s) =>
           patchSlot(s, slot, (entry) =>
-            entry.figures.length === 0 && entry.activeFigureNumber === null
+            entry.figures.length === 0 &&
+            entry.activeFigureNumber === null &&
+            entry.figureRequest === undefined
               ? entry
-              : { ...entry, figures: [], activeFigureNumber: null }
+              : { ...entry, figures: [], activeFigureNumber: null, figureRequest: undefined }
           )
         ),
 
@@ -505,6 +535,22 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
             entry.activeFigureNumber === figureNumber
               ? entry
               : { ...entry, activeFigureNumber: figureNumber }
+          )
+        ),
+
+      activateFigure: (slot, figureNumber, open) =>
+        set((s) =>
+          patchSlot(s, slot, (entry) => ({
+            ...entry,
+            activeFigureNumber: figureNumber,
+            figureRequest: { figureNumber, open, seq: ++figureRequestSeq },
+          }))
+        ),
+
+      clearFigureRequest: (slot) =>
+        set((s) =>
+          patchSlot(s, slot, (entry) =>
+            entry.figureRequest === undefined ? entry : { ...entry, figureRequest: undefined }
           )
         ),
     }),

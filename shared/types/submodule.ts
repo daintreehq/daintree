@@ -84,6 +84,14 @@ export interface SubmoduleAtRiskCommit {
   oid: string;
   /** First line of the commit message. */
   subject: string;
+  /**
+   * Repo-relative paths of every submodule checkout the commit was found in —
+   * where a push would have to run from. More than one when two module stores
+   * hold the same commit: pushing it from one leaves the other's copy
+   * stranded. Absent for a module store that could not be bound to a
+   * checkout: its commits are still at risk, but there is no path to name.
+   */
+  submodulePaths?: string[];
 }
 
 /**

@@ -5,34 +5,16 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { buildDefaultKeybindings } from "../../shared/config/defaultKeybindings.js";
+import {
+  buildDefaultKeybindings,
+  KEYBINDING_CATEGORY_ORDER as CATEGORY_ORDER,
+} from "../../shared/config/defaultKeybindings.js";
 import type { KeybindingConfig } from "../../shared/types/keybinding.js";
 
 const DOC_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../docs/keyboard-shortcuts.md"
 );
-
-const CATEGORY_ORDER = [
-  "Navigation",
-  "Terminal",
-  "Agents",
-  "Fleet",
-  "Worktrees",
-  "Worktree Sessions",
-  "Panels",
-  "Portal",
-  "Dev Preview",
-  "Project",
-  "Git",
-  "Search",
-  "View",
-  "Layout",
-  "Voice",
-  "Help",
-  "App",
-  "System",
-];
 
 const ARROW_DISPLAY: Record<string, string> = {
   ArrowUp: "↑",

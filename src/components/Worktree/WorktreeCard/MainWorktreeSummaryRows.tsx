@@ -1,5 +1,6 @@
 import type { ForgeProjectHealthPayload } from "@shared/types/ipc/forge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
+import { formatCompactCount, formatCountExact } from "@/lib/formatCount";
 import { CheckCircle2, XCircle, Clock, CircleMinus, GitPullRequest, CircleDot } from "lucide-react";
 
 export interface AggregateCounts {
@@ -61,17 +62,25 @@ export function MainWorktreeSummaryRows({ health }: MainWorktreeSummaryRowsProps
             </span>
             <span className="flex items-center gap-0.5">
               <GitPullRequest className="w-2.5 h-2.5" />
-              <span className="font-mono tabular-nums">{health.prCount}</span>
+              {/* Compact on screen, exact for assistive tech: the exact
+                  figures otherwise live only in a pointer tooltip. */}
+              <span className="font-mono tabular-nums" aria-hidden="true">
+                {formatCompactCount(health.prCount)}
+              </span>
+              <span className="sr-only">{formatCountExact(health.prCount)} open pull requests</span>
             </span>
             <span className="flex items-center gap-0.5">
               <CircleDot className="w-2.5 h-2.5 text-pr-open" />
-              <span className="font-mono tabular-nums">{health.issueCount}</span>
+              <span className="font-mono tabular-nums" aria-hidden="true">
+                {formatCompactCount(health.issueCount)}
+              </span>
+              <span className="sr-only">{formatCountExact(health.issueCount)} open issues</span>
             </span>
           </div>
         </TooltipTrigger>
         <TooltipContent side="right" className="text-xs">
-          CI: {ciStatusLabel(health.ciStatus)} · {health.prCount} open PR
-          {health.prCount !== 1 ? "s" : ""} · {health.issueCount} open issue
+          CI: {ciStatusLabel(health.ciStatus)} · {formatCountExact(health.prCount)} open PR
+          {health.prCount !== 1 ? "s" : ""} · {formatCountExact(health.issueCount)} open issue
           {health.issueCount !== 1 ? "s" : ""}
         </TooltipContent>
       </Tooltip>

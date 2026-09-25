@@ -112,24 +112,24 @@ export function WorktreeDetails({
 
   const lastActiveLine = (
     <div
-      className="flex items-center gap-2 text-xs"
+      className="flex items-center gap-2 rounded-[var(--radius-sm)] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
       role="group"
       aria-label="Last activity"
       tabIndex={0}
     >
-      <ActivityLight lastActivityTimestamp={activityTime} className="h-1.5 w-1.5 shrink-0" />
+      <ActivityLight lastActivityTimestamp={activityTime} />
       {activityAuthor && (
         <CommitAuthorAvatar author={activityAuthor} forgeAvatarUrl={forgeAvatarUrl} size={20} />
       )}
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="shrink-0 font-medium text-text-secondary">Last active</span>
-        <LiveTimeAgo timestamp={activityTime} className="shrink-0 text-text-muted" noTooltip />
+        <LiveTimeAgo timestamp={activityTime} className="shrink-0 text-text-secondary" noTooltip />
         {activityAuthor && (
           <>
-            <span className="shrink-0 text-text-muted" aria-hidden="true">
+            <span className="shrink-0 text-text-secondary" aria-hidden="true">
               ·
             </span>
-            <span className="min-w-0 truncate text-text-muted">{activityAuthor.name}</span>
+            <span className="min-w-0 truncate text-text-secondary">{activityAuthor.name}</span>
           </>
         )}
       </div>
@@ -165,8 +165,11 @@ export function WorktreeDetails({
           {/* Errors (if any) */}
           {worktreeErrors.length > 0 && (
             <CompactErrorList
+              variant="inset"
               errors={worktreeErrors}
-              maxInline={3}
+              // Rows wrap their message rather than clip it, so two is what the
+              // details area's 208px holds before the rest move to the disclosure.
+              maxInline={2}
               onDismiss={onDismissError}
               onRetry={onRetryError}
               onCancelRetry={onCancelRetry}
@@ -365,13 +368,15 @@ export function WorktreeDetails({
         </div>
 
         {showLastActive && (
-          <Tooltip autoDismiss={false}>
+          <Tooltip autoDismiss={false} dismissOnDialogTransition={false}>
             <TooltipTrigger asChild>{lastActiveLine}</TooltipTrigger>
             <TooltipContent side="bottom" className="p-3">
               <CommitInfoTooltip
                 lastCommitTimestampMs={lastCommitTs}
                 author={lastCommitAuthor}
                 commitMessage={rawLastCommitMsg}
+                commitBody={worktree.worktreeChanges?.lastCommitBody}
+                commitSha={worktree.worktreeChanges?.headOid}
                 forgeAvatarUrl={forgeAvatarUrl}
                 lastActivityTimestamp={activityTime}
               />

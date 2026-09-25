@@ -224,6 +224,13 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
 
   "worktree.list",
   "worktree.getCurrent",
+  // The supervision counterpart to `terminal.waitUntilIdle` (#12717). A queue
+  // that starts the next agent once this one has opened its PR had only a
+  // hand-written `gh pr list` loop, which swallowed errors and missed PRs in a
+  // real session. Daintree already detects the PR; this only lets a caller
+  // wait on that cached observation. Read-only, and bounded by the renderer
+  // dispatch ceiling, so a caller re-calls rather than holding a request open.
+  "worktree.waitForPullRequest",
   "worktree.createWithRecipe",
   // The counterpart to `worktree.createWithRecipe`, and only that: it deletes a
   // worktree this session created and refuses everything else (#11909). The

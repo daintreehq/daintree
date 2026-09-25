@@ -6,7 +6,7 @@ export { CopyableCommand };
 
 export function InstallBlock({ block }: { block: AgentInstallBlock }) {
   return (
-    <div className="rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/50 p-3">
+    <div className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/50 p-3">
       {block.label && (
         <div className="text-xs font-medium text-text-secondary mb-2">{block.label}</div>
       )}

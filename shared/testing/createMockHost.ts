@@ -56,6 +56,7 @@ import type {
   PluginWorktreesResult,
   PluginAgentSnapshot,
   PluginPanelLifecycleEvent,
+  PanelReloadResult,
   PluginSystemWakeEvent,
   PluginGitCommitResult,
   PluginPanelBadge,
@@ -187,6 +188,11 @@ export interface MockHostState {
   readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
   readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
+  /**
+   * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only
+   * calls that got past argument validation are recorded.
+   */
+  readonly reloadPanelCalls: ReadonlyArray<string>;
   readonly showQuickPickCalls: ReadonlyArray<ShowQuickPickRecord>;
   readonly showInputBoxCalls: ReadonlyArray<ShowInputBoxRecord>;
   readonly showConfirmCalls: ReadonlyArray<ShowConfirmRecord>;
@@ -334,6 +340,14 @@ export interface CreateMockHostOptions {
    * mirrors `ActionService.dispatch` closely enough for activation-time tests.
    */
   dispatch?: (actionId: ActionId, args?: unknown) => Promise<ActionDispatchResult>;
+  /**
+   * Custom resolver for `host.reloadPanel` (#12610). The default answers from
+   * the phases pushed through `simulatePanelLifecycleChange`, like the real
+   * host answers from its lifecycle broker: `"mounted"` → `"scheduled"`,
+   * `"render-failed"` → `"unavailable"`, any other known phase or an unknown
+   * id → `"not-mounted"`, and a panel reported for another plugin rejects.
+   */
+  reloadPanel?: (panelId: string) => PanelReloadResult | Promise<PanelReloadResult>;
   /**
    * Declared plugin capabilities (`manifest.capabilities`), gating the agent
    * APIs the way production does (#10617). `getAgentState` requires `agent:read`
@@ -545,6 +559,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const registeredMcpTools: RegisteredMcpToolsRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
   const setPanelBadgeCalls: SetPanelBadgeRecord[] = [];
+  const reloadPanelCalls: string[] = [];
+  /** Latest simulated lifecycle event per panel id, for `reloadPanel`. */
+  const panelPhases = new Map<string, PluginPanelLifecycleEvent>();
   const showQuickPickCalls: ShowQuickPickRecord[] = [];
   const showInputBoxCalls: ShowInputBoxRecord[] = [];
   const showConfirmCalls: ShowConfirmRecord[] = [];
@@ -1211,6 +1228,21 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       setPanelBadgeCalls.push({ panelId, badge: badge ?? null });
       return Promise.resolve();
     },
+    async reloadPanel(panelId) {
+      if (typeof panelId !== "string" || panelId.trim().length === 0) {
+        throw new Error("reloadPanel: panelId must be a non-empty string");
+      }
+      reloadPanelCalls.push(panelId);
+      if (options.reloadPanel) return options.reloadPanel(panelId);
+      const known = panelPhases.get(panelId);
+      if (!known) return "not-mounted";
+      if (known.pluginId !== pluginId) {
+        throw new Error(`reloadPanel: panel "${panelId}" belongs to another plugin`);
+      }
+      if (known.phase === "mounted") return "scheduled";
+      if (known.phase === "render-failed") return "unavailable";
+      return "not-mounted";
+    },
     async showToast(opts: PluginToastOptions) {
       // Full production parity (#10617): message length, type enum, durationMs
       // bounds — not just a truthy-message check. A shape the real host rejects
@@ -1541,6 +1573,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     registeredMcpTools,
     invalidationCalls,
     setPanelBadgeCalls,
+    reloadPanelCalls,
     showQuickPickCalls,
     showInputBoxCalls,
     showConfirmCalls,
@@ -1571,6 +1604,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       // Frozen like production delivery, so a plugin that mutates the event
       // fails in tests rather than in the wild.
       const frozen = Object.freeze({ ...event });
+      if (frozen.phase === "removed") panelPhases.delete(frozen.panelId);
+      else if (frozen.phase !== "restored") panelPhases.set(frozen.panelId, frozen);
       for (const cb of [...panelLifecycleSubs]) cb(frozen);
     },
     simulateSystemWake(event) {

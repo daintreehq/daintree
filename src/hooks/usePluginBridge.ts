@@ -6,6 +6,8 @@ import type {
   PluginActionManifestEntry,
 } from "@shared/types/actions";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { handlePanelReloadRequest } from "@/services/plugin/pluginPanelReload";
+import type { PluginPanelReloadResponse } from "@shared/types/pluginPanelReload";
 
 /**
  * Project an internal {@link ActionManifestEntry} onto the slim, IPC-safe
@@ -44,6 +46,8 @@ function toPluginManifestEntry(entry: ActionManifestEntry): PluginActionManifest
  *   `ActionService.list()`/`get()` to the slim {@link PluginActionManifestEntry}.
  *   `get()` additionally filters out `danger:"restricted"` so a single lookup
  *   matches `list()`'s "restricted is invisible to plugins" contract.
+ * - `host.reloadPanel()` (#12610) → the panel's registered view, after
+ *   re-validating the target against this renderer's live panel record.
  *
  * The dispatch success send sits inside the try block so a non-serializable
  * action result (a DataCloneError on `ipcRenderer.send`) is caught and replaced
@@ -111,11 +115,28 @@ export function usePluginBridge(): void {
       }
     );
 
+    const cleanupPanelReload = window.electron.pluginBridge.onPanelReloadRequest?.((request) => {
+      const send = (response: PluginPanelReloadResponse): void => {
+        if (disposed) return;
+        try {
+          window.electron.pluginBridge.sendPanelReloadResponse(response);
+        } catch {
+          // Main settles the request as "unavailable" on its own timeout.
+        }
+      };
+      // Always answer: an unanswered request holds the plugin's call open until
+      // main's timeout.
+      void handlePanelReloadRequest(request).then(send, () =>
+        send({ requestId: request.requestId, result: "unavailable" })
+      );
+    });
+
     return () => {
       disposed = true;
       cleanupDispatch();
       cleanupActionsList();
       cleanupActionsGet();
+      cleanupPanelReload?.();
     };
   }, []);
 }

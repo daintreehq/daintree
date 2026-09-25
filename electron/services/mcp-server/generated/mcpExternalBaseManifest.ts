@@ -250,14 +250,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         presetId: {
           description:
             "Applies one of the user's saved launch presets for this agent. Pass an explicit null to ignore the configured default preset rather than inherit it.",
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              type: "null",
-            },
-          ],
+          type: ["string", "null"],
         },
         activateDockOnCreate: {
           description:
@@ -335,14 +328,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "boolean",
         },
         terminalId: {
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              type: "null",
-            },
-          ],
+          type: ["string", "null"],
         },
         location: {
           anyOf: [
@@ -367,44 +353,16 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           ],
         },
         worktreeId: {
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              type: "null",
-            },
-          ],
+          type: ["string", "null"],
         },
         worktreePath: {
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              type: "null",
-            },
-          ],
+          type: ["string", "null"],
         },
         branch: {
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              type: "null",
-            },
-          ],
+          type: ["string", "null"],
         },
         cwd: {
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              type: "null",
-            },
-          ],
+          type: ["string", "null"],
         },
       },
       required: [
@@ -917,14 +875,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                         type: "string",
                       },
                       worktreeId: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            type: "null",
-                          },
-                        ],
+                        type: ["string", "null"],
                       },
                       submission: {
                         type: "string",
@@ -938,14 +889,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                         type: "string",
                       },
                       agentState: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            type: "null",
-                          },
-                        ],
+                        type: ["string", "null"],
                       },
                       waitingReason: {
                         type: "string",
@@ -972,14 +916,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                         type: "object",
                         properties: {
                           command: {
-                            anyOf: [
-                              {
-                                type: "string",
-                              },
-                              {
-                                type: "null",
-                              },
-                            ],
+                            type: ["string", "null"],
                           },
                           passed: {
                             type: "boolean",
@@ -988,14 +925,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                             type: "number",
                           },
                           failureSummary: {
-                            anyOf: [
-                              {
-                                type: "string",
-                              },
-                              {
-                                type: "null",
-                              },
-                            ],
+                            type: ["string", "null"],
                           },
                           truncated: {
                             type: "boolean",
@@ -1414,14 +1344,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
         },
         content: {
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              type: "null",
-            },
-          ],
+          type: ["string", "null"],
         },
         lineCount: {
           type: "number",
@@ -1482,7 +1405,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         includeOutput: {
           description:
-            "Opt-in. Adds `recentOutput` (last N scrollback lines) and `lastOutputChangeAt` when observed. Off by default to keep responses small.",
+            "Opt-in. Adds `recentOutput` (last N scrollback lines), plus `lastOutputChangeAt` and `lastTypedInputAt` when observed. Off by default to keep responses small.",
           type: "object",
           properties: {
             lines: {
@@ -1517,24 +1440,10 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 type: "string",
               },
               agentId: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "null",
-                  },
-                ],
+                type: ["string", "null"],
               },
               agentState: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "null",
-                  },
-                ],
+                type: ["string", "null"],
               },
               waitingReason: {
                 type: "string",
@@ -1545,6 +1454,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               lastOutputChangeAt: {
                 description:
                   "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.",
+                type: "number",
+              },
+              lastTypedInputAt: {
+                description:
+                  "Epoch ms of the last raw input Daintree recorded for the PTY (keys, paste, broadcast; not submit-lane writes). Before `lastTransitionAt` = none since. Not proof of delivery or authorship.",
                 type: "number",
               },
               exitCode: {
@@ -1579,14 +1493,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 type: "object",
                 properties: {
                   command: {
-                    anyOf: [
-                      {
-                        type: "string",
-                      },
-                      {
-                        type: "null",
-                      },
-                    ],
+                    type: ["string", "null"],
                   },
                   passed: {
                     type: "boolean",
@@ -1595,14 +1502,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                     type: "number",
                   },
                   failureSummary: {
-                    anyOf: [
-                      {
-                        type: "string",
-                      },
-                      {
-                        type: "null",
-                      },
-                    ],
+                    type: ["string", "null"],
                   },
                   truncated: {
                     type: "boolean",
@@ -1617,16 +1517,9 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 type: "object",
                 properties: {
                   message: {
-                    anyOf: [
-                      {
-                        type: "string",
-                      },
-                      {
-                        type: "null",
-                      },
-                    ],
                     description:
                       "Rows rejoined, so lossy — never data. Null for a bare marker. Read the agent's last message for exact text.",
+                    type: ["string", "null"],
                   },
                   observedAt: {
                     type: "number",
@@ -1642,14 +1535,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 additionalProperties: false,
               },
               recentOutput: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "null",
-                  },
-                ],
+                type: ["string", "null"],
               },
               recentOutputTruncated: {
                 description:
@@ -1713,7 +1599,14 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "array",
           items: {
             type: "string",
-            enum: ["armed", "lastCheckResult", "exitCode", "hasPty", "lastOutputChangeAt"],
+            enum: [
+              "armed",
+              "lastCheckResult",
+              "exitCode",
+              "hasPty",
+              "lastOutputChangeAt",
+              "lastTypedInputAt",
+            ],
           },
           description:
             "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false.",
@@ -1874,48 +1767,20 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 ],
               },
               worktreeId: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "null",
-                  },
-                ],
+                type: ["string", "null"],
               },
               title: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "null",
-                  },
-                ],
+                type: ["string", "null"],
               },
               location: {
                 type: "string",
                 enum: ["grid", "dock", "overlay", "trash", "background", "dialog"],
               },
               agentId: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "null",
-                  },
-                ],
+                type: ["string", "null"],
               },
               agentState: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "null",
-                  },
-                ],
+                type: ["string", "null"],
               },
               isInputLocked: {
                 type: "boolean",
@@ -2074,14 +1939,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   type: "object",
                   properties: {
                     id: {
-                      anyOf: [
-                        {
-                          type: "string",
-                        },
-                        {
-                          type: "null",
-                        },
-                      ],
+                      type: ["string", "null"],
                     },
                     text: {
                       type: "string",
@@ -2093,38 +1951,17 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                       description: "The start of the message was cut to fit.",
                     },
                     recordedAt: {
-                      anyOf: [
-                        {
-                          type: "number",
-                        },
-                        {
-                          type: "null",
-                        },
-                      ],
+                      type: ["number", "null"],
                     },
                     stopReason: {
-                      anyOf: [
-                        {
-                          type: "string",
-                        },
-                        {
-                          type: "null",
-                        },
-                      ],
                       description:
                         "Raw from the transcript, not a verdict on whether the turn ended.",
+                      type: ["string", "null"],
                     },
                     nextCursor: {
-                      anyOf: [
-                        {
-                          type: "string",
-                        },
-                        {
-                          type: "null",
-                        },
-                      ],
                       description:
                         "Pass as `cursor` for the text before this. Null once nothing earlier is in reach.",
+                      type: ["string", "null"],
                     },
                   },
                   required: ["id", "text", "truncated", "recordedAt", "stopReason", "nextCursor"],
@@ -2923,5 +2760,90 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     name: "worktree.setActive",
     requiresArgs: true,
     title: "Set active worktree",
+  },
+  {
+    band: "reversible",
+    category: "worktree",
+    danger: "safe",
+    description:
+      "Wait until any given worktree has a detected pull request. Detection is a cached background poll: a PR seen, not a PR opened, and not proof its agent finished. Returns at once if one is already detected. A timeout is not a failure: call again without the worktrees that matched.",
+    enabled: true,
+    id: "worktree.waitForPullRequest",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeIds: {
+          minItems: 1,
+          maxItems: 32,
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+          description: "Worktrees to wait on, 1 to 32.",
+        },
+        timeoutMs: {
+          description: "Milliseconds to wait; 0 reads now. Default and max 25000.",
+          type: "integer",
+          minimum: 0,
+          maximum: 25000,
+        },
+      },
+      required: ["worktreeIds"],
+    },
+    kind: "query",
+    mcpAnnotations: {
+      readOnlyHint: true,
+      idempotentHint: false,
+      destructiveHint: false,
+    },
+    name: "worktree.waitForPullRequest",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktrees: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              worktreeId: {
+                type: "string",
+              },
+              prNumber: {
+                type: ["number", "null"],
+              },
+              prUrl: {
+                type: ["string", "null"],
+              },
+              prState: {
+                anyOf: [
+                  {
+                    type: "string",
+                    enum: ["open", "merged", "closed", "declined"],
+                  },
+                  {
+                    type: "null",
+                  },
+                ],
+              },
+            },
+            required: ["worktreeId", "prNumber", "prUrl", "prState"],
+            additionalProperties: false,
+          },
+          description: "One per requested worktree, in order; PR fields null until detected.",
+        },
+        timedOut: {
+          type: "boolean",
+          description:
+            "True if no PR was detected in time. Detection pauses while the project is backgrounded.",
+        },
+      },
+      required: ["worktrees", "timedOut"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Wait for worktree pull request",
   },
 ];

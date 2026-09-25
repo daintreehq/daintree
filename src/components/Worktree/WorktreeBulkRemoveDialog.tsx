@@ -7,6 +7,7 @@ import {
   buildSubmoduleCommitRows,
   buildSubmoduleFileRows,
   buildWorktreeChangeRows,
+  splitDisplayChanges,
   submoduleCommitsAreCapped,
   type WorktreeChangeRow,
 } from "./worktreeDeletePreview";
@@ -39,6 +40,44 @@ const BULK_PREVIEW_FILE_LIMIT = 5;
 
 /** Max at-risk commit rows on a blocked target. */
 const BULK_COMMIT_LIMIT = 3;
+
+/**
+ * The teardown this row's delete runs first. A batch confirm is one consent
+ * for every operation it runs, so a teardown it would run, skip, or couldn't
+ * read is named on the row it belongs to.
+ */
+function TeardownLine({ teardown }: { teardown: BulkRemoveTarget["teardown"] }) {
+  if (teardown === undefined || teardown === null) return null;
+  if (teardown === "unreadable") {
+    return (
+      <p className="mt-1 text-xs text-text-secondary" data-testid="bulk-remove-teardown">
+        Project teardown may also run — its commands couldn&apos;t be read
+      </p>
+    );
+  }
+  if (teardown.phases.length === 0) return null;
+  return (
+    <div className="mt-1 text-xs text-text-secondary" data-testid="bulk-remove-teardown">
+      {teardown.phases.map((phase) => {
+        const noun = phase.phase === "resource-teardown" ? "Resource teardown" : "Project teardown";
+        return phase.approved ? (
+          <div key={phase.phase}>
+            {noun} runs first, and the removal continues if it fails:
+            <ul className="mt-0.5 space-y-0.5 font-mono text-2xs">
+              {phase.commands.map((command, index) => (
+                <li key={index} className="[overflow-wrap:anywhere]">
+                  {command}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <p key={phase.phase}>{noun} will be skipped — its commands haven&apos;t been approved</p>
+        );
+      })}
+    </div>
+  );
+}
 
 function FileRows({ rows, label }: { rows: WorktreeChangeRow[]; label: string }) {
   if (rows.length === 0) return null;
@@ -143,8 +182,13 @@ function TargetBody({ target }: { target: BulkRemoveTarget }) {
   // returns non-null for every other settled state.
   if (status.state !== "verified") return null;
   const risks = describeBulkRemoveRisks(target);
-  const changeRows = buildWorktreeChangeRows(
+  const { files, submoduleRows } = splitDisplayChanges(
     status.preview.changes,
+    status.preview.rootPath,
+    status.preview.submodules
+  );
+  const changeRows = buildWorktreeChangeRows(
+    [...submoduleRows, ...files],
     BULK_PREVIEW_FILE_LIMIT,
     status.preview.rootPath
   );
@@ -153,10 +197,12 @@ function TargetBody({ target }: { target: BulkRemoveTarget }) {
     BULK_PREVIEW_FILE_LIMIT
   );
 
-  if (risks.length === 0) return null;
+  const teardownLine = <TeardownLine teardown={target.teardown} />;
+  if (risks.length === 0) return teardownLine;
 
   return (
     <div className="mt-1">
+      {teardownLine}
       <div
         className="flex items-start gap-1.5 text-xs text-status-warning"
         data-testid="bulk-remove-risks"
@@ -178,6 +224,12 @@ function TargetBody({ target }: { target: BulkRemoveTarget }) {
 
 export interface WorktreeBulkRemoveDialogProps {
   bulkRemove: UseWorktreeBulkRemoveReturn;
+  /**
+   * Where focus lands when the confirm closes. The button that opened it
+   * belongs to a bulk bar that leaves with the selection, so the default
+   * restore would find nothing and fall back behind the overview.
+   */
+  restoreFocusTo?: React.ComponentProps<typeof ConfirmDialog>["restoreFocusTo"];
 }
 
 /**
@@ -188,7 +240,10 @@ export interface WorktreeBulkRemoveDialogProps {
  * target, which is a DOM suite's worth of behaviour and does not belong inside
  * a 1,500-line modal.
  */
-export function WorktreeBulkRemoveDialog({ bulkRemove }: WorktreeBulkRemoveDialogProps) {
+export function WorktreeBulkRemoveDialog({
+  bulkRemove,
+  restoreFocusTo,
+}: WorktreeBulkRemoveDialogProps) {
   const {
     targets,
     excludedMainCount,
@@ -252,6 +307,7 @@ export function WorktreeBulkRemoveDialog({ bulkRemove }: WorktreeBulkRemoveDialo
   return (
     <ConfirmDialog
       isOpen={bulkRemove.isConfirmOpen}
+      restoreFocusTo={restoreFocusTo}
       onClose={bulkRemove.handleCancel}
       title={title}
       description={description}
@@ -277,7 +333,7 @@ export function WorktreeBulkRemoveDialog({ bulkRemove }: WorktreeBulkRemoveDialo
     >
       {targets.length > 0 && (
         <div
-          className="border border-divider rounded-[var(--radius-md)] max-h-64 overflow-y-auto divide-y divide-divider"
+          className="border border-divider rounded-[var(--radius-md)] max-h-64 overflow-y-auto divide-y divide-[var(--border-divider)]"
           data-testid="bulk-remove-target-list"
         >
           {targets.map((target) => {

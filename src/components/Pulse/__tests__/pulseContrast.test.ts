@@ -109,10 +109,13 @@ describe("PulseSummary — visual contrast (issue #2645)", () => {
   // would erase the highlight it exists to contrast with. The manifest records
   // it as a semantic-state-pair carve-out.
 
-  it("delta insertions/deletions use at least /80 semantic colour", async () => {
+  it("delta insertions/deletions use their solid semantic colour, never a slash-alpha text colour", async () => {
+    // Slash-alpha on a text colour bakes into color-mix() and the contrast
+    // cannot be recovered (design-system rule); the counts read at full token.
     const content = await readFile(SUMMARY_PATH, "utf-8");
-    expect(content).toContain("text-status-success/80");
-    expect(content).toContain("text-status-error/80");
+    expect(content).toContain("text-status-success");
+    expect(content).toContain("text-status-error");
+    expect(content).not.toMatch(/text-status-(success|error)\/\d+/);
   });
 });
 
@@ -298,9 +301,12 @@ describe("PulseHeatmap — legend (issue #9819)", () => {
     expect(legendBlock![0]).not.toContain("ring-accent-primary");
   });
 
-  it("legend shares the heatmap row width via getPulseHeatmapRowWidth", async () => {
+  it("legend sits outside the heatmap's horizontal scroller, so it can never be scrolled away", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("getPulseHeatmapRowWidth");
+    // The scroller closes after the grid and before the legend begins.
+    expect(content).toMatch(
+      /overflow-x-auto[^>]*>\s*<PulseHeatmap[\s\S]*?\/>\s*<\/div>\s*<PulseHeatmapLegend/
+    );
   });
 
   it("legend swatches reuse the pulse-heat-cell shape cue so they stay distinguishable in forced-colors", async () => {
@@ -350,16 +356,23 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
     expect(block).toContain('.pulse-heat-cell[data-heat-level="4"] .pulse-heat-cell-shape');
   });
 
-  it("forced-colors block borders the empty legend swatch so it stays visible", async () => {
+  it("forced-colors block borders every legend swatch like the grid cells it explains", async () => {
     const content = await readFile(INDEX_CSS_PATH, "utf-8");
     const block = mediaBlockSlice(content, "@media (forced-colors: active)");
-    // The level-0 legend swatch is a <span> (no button border) with no shape
-    // span, so it needs an explicit border or it paints Canvas-on-Canvas.
-    expect(block).toContain(
-      '[data-testid="pulse-heatmap-legend"] .pulse-heat-cell:not([data-heat-level])'
-    );
+    // Legend swatches are <span>s, so they miss the ButtonText border every
+    // grid <button> gets. Without one the empty swatch paints Canvas-on-Canvas
+    // and the filled ones float as bare squares that don't match the cells.
+    // The selector must not be narrowed to the empty swatch alone.
     expect(block).toMatch(
-      /\[data-testid="pulse-heatmap-legend"\] \.pulse-heat-cell:not\(\[data-heat-level\]\)\s*{[^}]*border:\s*1px solid CanvasText/
+      /\[data-testid="pulse-heatmap-legend"\] \.pulse-heat-cell\s*{[^}]*border:\s*1px solid CanvasText/
+    );
+  });
+
+  it("forced-colors block redraws the latest-active marker as a non-shadow outline", async () => {
+    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const block = mediaBlockSlice(content, "@media (forced-colors: active)");
+    expect(block).toMatch(
+      /\.pulse-heat-cell\[data-latest-active\]\s*{[^}]*outline:[^;]*CanvasText/
     );
   });
 

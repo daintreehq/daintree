@@ -1,13 +1,15 @@
 import { create } from "zustand";
 import type { TerminalResourceBatchPayload, TerminalResourceProcess } from "@shared/types/pty-host";
 
-const CPU_HISTORY_SIZE = 30;
+export const CPU_HISTORY_SIZE = 30;
 
 export interface TerminalResourceState {
   cpuPercent: number;
   memoryKb: number;
   cpuHistory: number[];
   breakdown: TerminalResourceProcess[];
+  /** Processes in the tree; `breakdown` holds at most ten of them. */
+  processCount?: number;
 }
 
 interface ResourceMonitoringStore {
@@ -43,6 +45,7 @@ export const useResourceMonitoringStore = create<ResourceMonitoringStore>((set) 
           memoryKb: sample.memoryKb,
           cpuHistory: newHistory,
           breakdown: sample.breakdown,
+          processCount: sample.processCount,
         });
       }
       return { metrics: next };

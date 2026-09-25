@@ -1226,16 +1226,16 @@ describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
     });
   });
 
-  it("trash button opens a confirm dialog instead of deleting immediately", async () => {
+  it("requesting delete opens a confirm dialog instead of deleting immediately", async () => {
     const actionServiceModule = await import("@/services/ActionService");
     const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
 
     useFleetArmingStore.getState().armIds(["a", "b"]);
     render(<FleetArmingRibbon />);
 
-    const trash = screen.getByTestId("fleet-saved-row-delete");
+    // The fixture fleet is stale (no terminals), so selecting it asks to delete.
     await act(async () => {
-      fireEvent.click(trash);
+      fireEvent.click(screen.getByText("My fleet"));
     });
 
     // No immediate dispatch — the confirm must gate the deletion.
@@ -1253,7 +1253,7 @@ describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
     render(<FleetArmingRibbon />);
 
     await act(async () => {
-      fireEvent.click(screen.getByTestId("fleet-saved-row-delete"));
+      fireEvent.click(screen.getByText("My fleet"));
     });
 
     const confirmBtn = screen.getByRole("button", { name: "Delete fleet" });
@@ -1278,7 +1278,7 @@ describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
     render(<FleetArmingRibbon />);
 
     await act(async () => {
-      fireEvent.click(screen.getByTestId("fleet-saved-row-delete"));
+      fireEvent.click(screen.getByText("My fleet"));
     });
     expect(screen.getByText("Delete 'My fleet'?")).toBeTruthy();
 
@@ -1292,26 +1292,97 @@ describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
     dispatchSpy.mockRestore();
   });
 
-  it("clears the pending delete when the armed set drains below 2", async () => {
+  it("keeps the delete confirm open when the armed set drains below 2", async () => {
     useFleetArmingStore.getState().armIds(["a", "b"]);
     render(<FleetArmingRibbon />);
 
     await act(async () => {
-      fireEvent.click(screen.getByTestId("fleet-saved-row-delete"));
+      fireEvent.click(screen.getByText("My fleet"));
     });
     expect(screen.getByText("Delete 'My fleet'?")).toBeTruthy();
 
-    // Drain to 1 — the ribbon (and dialog) unmount via the armedCount<2 guard.
+    // The ribbon goes; the saved fleet is still there, so the cleanup stands.
     await act(async () => {
       useFleetArmingStore.getState().armIds(["a"]);
     });
-    expect(screen.queryByText("Delete 'My fleet'?")).toBeNull();
+    expect(screen.queryByTestId("fleet-selection-menu-trigger")).toBeNull();
+    expect(screen.getByText("Delete 'My fleet'?")).toBeTruthy();
+  });
 
-    // Re-arm: the dialog must NOT resurface for the stale fleet id.
+  it("drops the pending delete when the saved fleet itself disappears", async () => {
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    render(<FleetArmingRibbon />);
     await act(async () => {
-      useFleetArmingStore.getState().armIds(["a", "b"]);
+      fireEvent.click(screen.getByText("My fleet"));
+    });
+    await act(async () => {
+      useProjectSettingsStore.setState({
+        settings: { runCommands: [], fleetSavedScopes: [] } as ProjectSettings,
+      });
     });
     expect(screen.queryByText("Delete 'My fleet'?")).toBeNull();
+  });
+});
+
+describe("FleetArmingRibbon — fleet dialogs absorb bare Escape", () => {
+  beforeEach(() => {
+    resetStores();
+    useProjectSettingsStore.setState({
+      settings: {
+        runCommands: [],
+        fleetSavedScopes: [
+          { kind: "snapshot", id: "fs-1", name: "My fleet", terminalIds: [], createdAt: 1 },
+        ],
+      } as ProjectSettings,
+    });
+  });
+
+  // Esc closes the dialog; a second quick Esc from the control that regained
+  // focus must not read as the double-tap that interrupts every armed agent.
+  for (const [label, open] of [
+    ["delete confirm", () => fireEvent.click(screen.getByText("My fleet"))],
+    ["save dialog", () => fireEvent.click(screen.getByText("Save as fleet…"))],
+  ] as const) {
+    it(`a double bare Escape while the ${label} is open does not interrupt`, async () => {
+      const actionServiceModule = await import("@/services/ActionService");
+      const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+      useFleetArmingStore.getState().armIds(["a", "b"]);
+      render(<FleetArmingRibbon />);
+      await act(async () => {
+        open();
+      });
+      fireEvent.keyDown(window, { key: "Escape" });
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+      dispatchSpy.mockRestore();
+    });
+  }
+});
+
+describe("FleetArmingRibbon — save dialog outlives the ribbon", () => {
+  beforeEach(() => {
+    resetStores();
+    useProjectSettingsStore.setState({
+      settings: { runCommands: [], fleetSavedScopes: [] } as ProjectSettings,
+    });
+  });
+
+  it("keeps the dialog and its typed name when the armed set drains below two", async () => {
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    render(<FleetArmingRibbon />);
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save as fleet…"));
+    });
+    fireEvent.change(screen.getByTestId("fleet-save-form-name"), {
+      target: { value: "Morning triage" },
+    });
+    await act(async () => {
+      useFleetArmingStore.getState().armIds(["a"]);
+    });
+    expect(screen.queryByTestId("fleet-selection-menu-trigger")).toBeNull();
+    expect(screen.getByDisplayValue("Morning triage")).toBe(
+      screen.getByTestId("fleet-save-form-name")
+    );
   });
 });
 

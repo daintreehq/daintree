@@ -269,6 +269,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
+import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 
 const WORKTREE_PATH = "/home/user/project";
@@ -879,10 +880,12 @@ describe("ReviewHub", () => {
       expect(screen.getByTestId("review-readiness-level").dataset.level).toBe("needs-review");
       act(() => void fireEvent.click(screen.getByTestId("readiness-cta-behind-remote")));
 
-      // D2 stays intact: the CTA only opens the confirm dialog, never the IPC.
-      const dialog = await screen.findByRole("alertdialog");
-      expect(dialog).toBeDefined();
+      // The CTA only asks the shared confirm, never the IPC.
+      await waitFor(() =>
+        expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH)
+      );
       expect(pullRebaseMock).not.toHaveBeenCalled();
+      useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
     });
 
     it("surfaces failing PR CI with a click-through to the forge", async () => {

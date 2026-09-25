@@ -503,7 +503,16 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // holding an earlier reading has nothing else to tell that session from its
   // successor, and would otherwise go on addressing a conversation that ended.
   // Its description was written under the property target rather than over it.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 62_200;
+  // 62_200 → 63_300 for #12717's `worktree.waitForPullRequest`, measured at
+  // 63_298 B on top of #12745's `lastTypedInputAt`, which landed first and
+  // took 285 B of the headroom — the tool's prose was cut again to absorb it
+  // rather than raise past 63_300. The spend is its description, the
+  // `worktreeIds`/`timeoutMs` arguments, and the output schema, since the per-worktree rows are read back as structured
+  // content. `timedOut` names that detection pauses while the project is in
+  // the background — without it a supervisor reads a string of expired waits
+  // on a backgrounded project as "no PR yet". The property descriptions were
+  // cut to the target before measuring.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_300;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -622,7 +631,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // descriptions were cut to the target before measuring.
   // 226_350 → 226_600 for #12535, measured at 226_541 B: the same spend as the
   // external raise above, on a tool that is on both surfaces.
-  const MAX_COHORT_PAYLOAD_BYTES = 226_600;
+  // 226_600 → 227_300 for #12611's `plugin.reloadPanel`, measured at 227_263 B.
+  // In-app only, on the action tier, so the external ceiling above does not
+  // move. The spend is its 257 B description, the `panelId` argument, and the
+  // output schema: the scheduling outcome is read back as structured content.
+  const MAX_COHORT_PAYLOAD_BYTES = 227_300;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

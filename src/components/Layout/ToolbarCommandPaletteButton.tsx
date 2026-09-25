@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { actionService } from "@/services/ActionService";
 
@@ -19,7 +19,7 @@ interface ToolbarCommandPaletteButtonProps {
 export function ToolbarCommandPaletteButton({
   "data-toolbar-item": dataToolbarItem,
 }: ToolbarCommandPaletteButtonProps) {
-  const shortcut = useKeybindingDisplay(PALETTE_ACTION_ID);
+  const shortcut = useEffectiveCombo(PALETTE_ACTION_ID);
   const ariaShortcut = useAriaKeyshortcuts(PALETTE_ACTION_ID);
   const hover = useShortcutHintHover(PALETTE_ACTION_ID);
 
@@ -33,29 +33,31 @@ export function ToolbarCommandPaletteButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              onPointerEnter={hover.onPointerEnter}
-              onPointerLeave={hover.onPointerLeave}
-              onPointerDown={hover.onPointerDown}
-              onFocus={hover.onFocus}
-              onBlur={hover.onBlur}
-              variant="ghost"
-              size="icon"
-              data-toolbar-item={dataToolbarItem}
-              onClick={handleClick}
-              className={toolbarIconButtonClass}
-              aria-label={PALETTE_LABEL}
-              aria-keyshortcuts={ariaShortcut}
-            >
-              <SquareMenu />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {createTooltipContent(PALETTE_LABEL, shortcut)}
-          </TooltipContent>
-        </Tooltip>
+        <span className="inline-flex">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                onPointerEnter={hover.onPointerEnter}
+                onPointerLeave={hover.onPointerLeave}
+                onPointerDown={hover.onPointerDown}
+                onFocus={hover.onFocus}
+                onBlur={hover.onBlur}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item={dataToolbarItem}
+                onClick={handleClick}
+                className={toolbarIconButtonClass}
+                aria-label={PALETTE_LABEL}
+                aria-keyshortcuts={ariaShortcut}
+              >
+                <SquareMenu />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {createTooltipContent(PALETTE_LABEL, shortcut)}
+            </TooltipContent>
+          </Tooltip>
+        </span>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
         <ToolbarContextMenuItems buttonId="command-palette" side="right" />

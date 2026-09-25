@@ -8,9 +8,21 @@ Views render **inline** in Daintree's React tree, not in an iframe. Same documen
 
 The host mounts your default export under an error boundary and a `Suspense` boundary, inside a container that is `flex flex-col flex-1 min-h-0 w-full`. Make your root element fill it: `height: 100%` with `display: flex; flex-direction: column; min-height: 0` is the shape that scrolls correctly, because `min-height: 0` is what lets a flex child shrink below its content and hand the overflow to an inner scroller. A root that is only `height: 100%` will push the panel's own scrollbar around instead of owning it.
 
-You receive [`PanelViewProps`](./contribution-points.md#views--shipped-panel-surface): `panelId`, `pluginId`, `disposeSignal`, `panelRemovedSignal`, `initialArgs`, `stateVersion`, `persistState`, `styleRootAttributes`. Two of these are misread in every first plugin. `pluginId` is your host-side id, which for a project plugin is the instance key, not your manifest name; pass it through to the bridge as given. `disposeSignal` aborts on every unmount, including the temporary ones (a sibling pane maximised, a dock tab left), so it is for cancelling fetches, never for deciding something is finished. `stateVersion` says which shape `initialArgs` holds, and is only meaningful once you declare `stateVersion` on the panel contribution — see [panel state versioning](./contribution-points.md#panels--shipped).
+You receive [`PanelViewProps`](./contribution-points.md#views--shipped-panel-surface): `panelId`, `pluginId`, `worktreeId`, `disposeSignal`, `panelRemovedSignal`, `initialArgs`, `stateVersion`, `persistState`, `requestReload`, `setHasUnsavedChanges`, `styleRootAttributes`. Two of these are misread in every first plugin. `pluginId` is your host-side id, which for a project plugin is the instance key, not your manifest name; pass it through to the bridge as given. `disposeSignal` aborts on every unmount, including the temporary ones (a sibling pane maximised, a dock tab left), so it is for cancelling fetches, never for deciding something is finished. `stateVersion` says which shape `initialArgs` holds, and is only meaningful once you declare `stateVersion` on the panel contribution — see [panel state versioning](./contribution-points.md#panels--shipped).
 
 A render error shows the host's diagnostics pane with a Try again that re-imports the module, Close panel, Copy diagnostics and View logs. The rest of Daintree keeps working.
+
+## Reloading a view
+
+`requestReload()` asks the host to throw away the view you are running and mount a new one for the same panel. Use it when a view has built up more than it can shed — a long session of rendering, caches that only grow — and starting over is simpler than cleaning up in place. Your plugin's backend keeps running throughout.
+
+What a reload is, plainly: a new React attempt using the module that is already loaded. The current attempt's `disposeSignal` aborts and its React cleanup runs; the new attempt gets a fresh `disposeSignal` and fresh DOM, and `initialArgs` holds the latest state the host accepted through `persistState`, with its `stateVersion`. `panelId`, `panelRemovedSignal` (the same object, still open), the panel's place in the layout and the backend all carry over. The module is reused, not evaluated again.
+
+What a reload is not: module-scope variables, anything registered document-wide and anything you attached to `window` survive it untouched, so it frees only what your cleanup releases. It makes no promise about reclaiming memory, and it cannot rescue a view that is blocking the renderer — a stuck render loop never gets as far as asking.
+
+It is a request. The host may refuse it, nothing tells you whether or when the new attempt mounted, and calls in the same tick coalesce into one reload. The callback belongs to the attempt that received it, so one you held on to after your view was torn down does nothing. The host polices loops: a fourth reload within 30 seconds of three accepted ones stops the view and shows the user an error with a Reload panel action, and automatic reloads stay off until the user uses it. Plugin panels get `requestReload` whether they sit in the grid, the dock or a dialog; a project surface does not, so call it optionally. Your backend can ask for the same thing with [`host.reloadPanel(panelId)`](./host-api.md#reloadpanel), which draws on the same budget.
+
+The user can reload the panel too, from Reload panel in its menus and dialog header, and an agent can through the host's tools. That reload is the same new attempt, it is never rationed, and it is what lifts a stopped view. It does not ask first, because what you persisted comes back. If your view holds work it has not persisted — an unsaved draft, a half-filled form — call `setHasUnsavedChanges(true)` while it does and `setHasUnsavedChanges(false)` once it is saved or dropped; while it is set, the user is asked to confirm before the view is discarded, whichever way the reload was asked for. Your own `requestReload` is never held up by it. Like `requestReload`, the setter belongs to its attempt, a new attempt starts with nothing unsaved, and it is absent where there is no reload to guard.
 
 ## Styling
 
@@ -133,6 +145,44 @@ Nothing reaches a view unless the worker sends it. The bridge is `window.electro
 
 A bundled view gets the same three calls as hooks: `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` from `@daintreehq/plugin-sdk/react`. A raw `plugin://` view cannot import that subpath — the host import map serves exactly five specifiers (`react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, `react-dom/client`) and nothing else — so it uses the bridge directly.
 
+## Resources your view owns
+
+An unmount frees what your component held and nothing it attached elsewhere. A `window` or `document` listener, an interval, an animation-frame loop, an observer never disconnected, a `Worker`, an object URL and a WebGL context all outlive it unless something releases them, and because `disposeSignal` aborts on every temporary unmount too, a view that forgets gains another set with each maximise or tab switch. WebGL runs out first: Chromium keeps a canvas's context until garbage collection and evicts the oldest once a renderer holds about sixteen.
+
+`createViewScope(disposeSignal)` from `@daintreehq/plugin-sdk/react` ties them to the mount attempt and releases them together, newest first, when the signal aborts or your effect's cleanup calls `dispose()`, whichever comes first:
+
+```tsx
+import { createViewScope } from "@daintreehq/plugin-sdk/react";
+
+useEffect(() => {
+  const scope = createViewScope(disposeSignal);
+  scope.listen(window, "resize", onResize);
+  scope.setInterval(refresh, 5_000);
+  const observer = new ResizeObserver(onBoxChange);
+  observer.observe(boxRef.current!);
+  scope.observe(observer);
+  const gl = scope.webgl(canvasRef.current!.getContext("webgl2")!);
+  void loadScene(gl, { signal: scope.signal });
+  return scope.dispose;
+}, [disposeSignal]);
+```
+
+| Method | Released with |
+| --- | --- |
+| `listen(target, type, listener, options?)` | `removeEventListener`, with the capture flag it was added with |
+| `setTimeout`, `setInterval`, `requestAnimationFrame` | the matching clear or cancel |
+| `observe(observer)` | `disconnect()` |
+| `worker(worker)` | `terminate()` |
+| `objectURL(blob)` | `URL.revokeObjectURL` |
+| `webgl(gl)` | `WEBGL_lose_context.loseContext()`, when the context is still live and the extension exists |
+| `add(fn)` | calling `fn` |
+
+`listen`, the timers and `add` return a function that releases early. Start an observer before adopting it, as above: a scope that is already disposed disconnects what it adopts on arrival, and an observer started after that would escape it. A timeout, a frame or a `{ once: true }` listener forgets itself as it fires, so a render loop that re-requests frames does not grow the scope. `scope.signal` aborts when the scope does; pass it to `fetch` and anything else signal-aware.
+
+Disposal is idempotent and never throws: a cleanup that throws is logged and the rest still run. Anything registered after disposal, typically from an `await` that settled after the view went away, is released on arrival and logged once, so check `scope.signal.aborted` before a continuation starts new work. Create a fresh scope in each effect setup; a disposed one stays disposed.
+
+`scope.stats()`, and the `onReport` option called once after disposal, count what the scope released, which cleanups threw and what arrived late. They see only what went through the scope, so zero proves nothing about what else the view kept alive; a heap snapshot is the tool for that. Nothing durable belongs here, for the reason `disposeSignal` exists: it belongs in the worker. A raw `plugin://` view cannot import the SDK and releases these by hand.
+
 ## Media and binary files
 
 `host.fs.readFile` returns UTF-8 text and nothing else. For an image, an audio file or anything binary, don't route the bytes through the worker at all: the renderer can fetch the file itself over the `daintree-file://` protocol, which is how Daintree's own audio and video previews work (`useMediaBlobUrl` in the repo).
@@ -143,10 +193,39 @@ A bundled view gets the same three calls as hooks: `useHostChannel`, `usePluginE
 // under `root` and refuses anything outside it.
 const url = `daintree-file://load?path=${encodeURIComponent(absPath)}&root=${encodeURIComponent(projectRoot)}`;
 const blob = await (await fetch(url, { signal: disposeSignal })).blob();
-const objectUrl = URL.createObjectURL(blob); // <audio src={objectUrl}>; revoke it on cleanup
+const objectUrl = URL.createObjectURL(blob); // <audio src={objectUrl}>; revoke it on cleanup, or use scope.objectURL(blob)
 ```
 
 Fetch into a blob rather than pointing an element's `src` at the URL directly; the blob path is the one the host has verified against Electron's media pipeline. This works because views are inline; it is not part of the host API, and a future move to an isolated view host would replace it with one.
+
+## Project switches and staleness
+
+"The user just switched to my project, refresh" is a question the DOM cannot answer, and the obvious answer is wrong in a way that fails silently.
+
+Switching projects does not unmount anything: the outgoing project's `WebContentsView` is detached and marked `setVisible(false)`, its renderer keeps running, and your view stays mounted with its React state intact. Neither of those operations changes page visibility, because Chromium tracks that at the `BrowserWindow` level — so a backgrounded project view goes on reporting whatever its window reports, `document.visibilityState === "visible"` while that window is on screen, and its `requestAnimationFrame` callbacks can keep firing at the full rate. Every gate written as `document.visibilityState !== "visible"` is dead code in a project the user has switched away from, which is how one backgrounded project ended up at 4.5% CPU and 3300 idle wakeups a second (#11212). `document` tells you whether the window is on screen, never whether your project is the one being shown.
+
+The signal that does answer it is main's explicit lifecycle broadcast, which exists precisely because no DOM event covers this. Views are inline, so it is on `window.electron.app`:
+
+| Call | What it means |
+| --- | --- |
+| `isViewCached()` | Not an event — the current state, latched in preload before any page script ran. This is what you seed from. |
+| `onViewCached(cb)` | Main has detached and hidden this project view. Nothing can observe it until it returns: stop periodic work here. |
+| `onViewWarmActivated(cb)` | Main has re-attached the view. It may still sit behind the anti-flash bridge where Chromium culls paints, so this means "running again", not "on screen". Fires on **every** reactivation. |
+| `onViewRevealed(cb)` | The view is the presenting foreground surface. Sent only when it is still the active project by the time the swap completes, so a switch superseded mid-flight never produces one. |
+
+Four things follow, and the first is the one that bites.
+
+**They are edges, and nothing replays.** A cold switch can be released as early as the pre-React skeleton, so a switch storm can cache the view before your module has evaluated. Seed from `isViewCached()` and subscribe; a subscription alone answers "not cached" forever for a view that was already cached. Clear your own cached flag on `onViewWarmActivated`, not on `onViewRevealed`: warm activation is the cached-to-active edge and precedes presentation, while a reveal is only sent if this project is still the active one when the swap completes — a cold switch that rolls back reactivates the view and sends warm activation alone, so a flag cleared only on reveal can stay demoted with the view running.
+
+**This bridge is the host's own, not part of the plugin API.** It works because views are inline, exactly like `daintree-file://` above, and an isolated view host would replace it. The host's internal wrapper (`src/lib/viewCacheState.ts`, with `usePollingLifecycle` and `useProjectViewRevealed` on top) is what Daintree's own panes use; read it before you build anything elaborate.
+
+**Combine it with document visibility rather than replacing it.** Minimising the window is a real `visibilitychange` — as is being fully covered by another window, on the platforms that report occlusion — and both are independent of caching, so a view can be uncached and unseen. The host's own consumers AND the two together. Whether a backgrounded renderer's timers actually stop varies: main deliberately applies no CPU throttling, and an explicit `Page.setWebLifecycleState` freeze is conditional and is skipped while the cached project has a live agent or an MCP binding — the cases that cost the most. So treat "my timers stopped" and "my timers kept running" as both possible, and demote your own periodic work on `onViewCached` instead of hoping the platform does it for you. A poll that must not miss a beat belongs in the worker, which for a non-builtin plugin is a separate utility process that does not freeze with the view (builtins run in main).
+
+**Memory pressure turns the flip into a fresh mount.** The host can reclaim a backgrounded project view and destroy its renderer. That is not a close — the project stays open and your worker keeps running — but the recreated view mounts from scratch, so the work you do on reveal must be the same work you do on mount or the user gets one of two states depending on whether their renderer survived. The worker is told nothing about the destruction itself: the host drops what that renderer reported rather than synthesizing a `removed` phase, since a reclaimed renderer says nothing about whether the user closed a panel. It does see the recreated view's `mounted`.
+
+[Patterns → Refresh when the user comes back](./patterns.md#refresh-when-the-user-comes-back) is the whole recipe, worker half included.
+
+Worker-side there is no equivalent, and the three subscriptions that look close are not it. `onDidChangePanelLifecycle` reports mount and unmount, which a switch does not cause. `onDidChangeActiveWorktree` fires on worktree activation and, for an unbound plugin, resolves against whichever project is focused — mid-switch that can still be the outgoing one, and the snapshot it hands you carries no `projectId` to check, so confirming which project you are looking at means a `getWorktreesResult()` with `status === "ok"` and a comparison against its `projectId`. `onDidWake` is machine sleep, explicitly machine-scoped. Keep the "is this stale?" decision in the view.
 
 ## Global registration survives reload
 
@@ -200,7 +279,7 @@ The mechanism — CDP binding, prelude, validation — is described in [`docs/ar
 A built-in plugin's view is compiled into the host bundle, so some of this page reads differently for it. [Architecture → Built-in plugin views](./architecture.md#built-in-plugin-views) covers registration; these are the practical differences once it renders:
 
 - **It may import host modules.** `@/store/...` and `@/components/ui/...` resolve normally. Follow the host's store rules: cross-store reads go through `src/store/storeAccessors.ts`, and nothing imports a partner store at module evaluation.
-- **Finding your worktree.** `PanelViewProps` gives you `panelId`, not a worktree. Read the panel's `worktreeId` from the panel store and its path from the worktree store. A plugin view is not guaranteed to sit under the worktree store's provider, so use the optional accessor (`useWorktreeStoreOptional`) with `getWorktreePathIndex()` as a fallback — the non-optional hook throws there. The project id comes from the project store.
+- **Finding your worktree.** `PanelViewProps.worktreeId` is the worktree the panel was spawned with (`undefined` for a panel spawned without one), so start there rather than dispatching `worktree.getCurrent`, which answers for the _visible_ worktree and is wrong for a background or restored panel. To turn it into a path, read the worktree store. A plugin view is not guaranteed to sit under the worktree store's provider, so use the optional accessor (`useWorktreeStoreOptional`) with `getWorktreePathIndex()` as a fallback — the non-optional hook throws there. The project id comes from the project store.
 - **Styling is the host's Tailwind.** The per-plugin runtime stylesheet described above does not run for a built-in; you get the host's full design system and must follow its rules — `.claude/rules/design-system.md` in the repo.
 - **Registering a `lazy()` view is fine.** The host wraps every built-in view in its own `lazy()` for activation; it renders yours from a plain component so React never sees a lazy resolving to a lazy (error #306).
 - **Never alias a lowercase component binding to a capitalised name for JSX.** The React Compiler folds `const View = component; return <View />` back into `jsx("component")`, which renders an unknown `<component>` DOM element — no error, just an empty panel. Use `createElement(component, props)`.

@@ -13,6 +13,8 @@ import type {
   WorktreeLifecyclePhase,
   WorktreeLifecyclePhaseCategory,
   WorktreeLifecycleState,
+  WorktreeTeardownPhasePreview,
+  WorktreeTeardownPreview,
 } from "../../shared/types/worktree.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import {
@@ -1019,22 +1021,19 @@ export class WorktreeLifecycleService {
   }
 
   /**
-   * Orchestrate the teardown phase for a worktree: resource teardown first
-   * (when configured), then regular teardown, reporting progress through the
-   * monitor's lifecycle status. Teardown failures are logged but never thrown
-   * — deletion must proceed regardless.
-   *
-   * A phase whose commands come from the repository and are not approved is
-   * skipped and recorded as `needs-approval` rather than waited on: the delete
-   * is often an agent's, with nobody there to answer, and it must not hang.
+   * Where a worktree's teardown commands come from. Shared by the run and the
+   * delete-confirm preview so the dialog can never describe a teardown other
+   * than the one the delete will actually attempt.
    */
-  async runLifecycleTeardown(
-    worktreeId: string,
+  private async resolveTeardownSources(
     monitor: WorktreeMonitor,
-    force: boolean,
-    ctx: WorkspaceHostContext
-  ): Promise<void> {
-    const projectRootPath = ctx.projectRootPath;
+    projectRootPath: string
+  ): Promise<{
+    resolvedConfig: ResolvedLifecycleConfig | null;
+    config: DaintreeLifecycleConfig | null;
+    teardownResource: ResourceConfig | undefined;
+    teardownEnvironments: ResolvedResourceEnvironments | null;
+  }> {
     const resolvedConfig = await this.resolveConfig(monitor.path, projectRootPath);
     const config = resolvedConfig?.config ?? null;
     let teardownEnvironments: ResolvedResourceEnvironments | null = null;
@@ -1061,6 +1060,67 @@ export class WorktreeLifecycleService {
         if (teardownResource) teardownEnvironments = envs;
       }
     }
+
+    return { resolvedConfig, config, teardownResource, teardownEnvironments };
+  }
+
+  /**
+   * The teardown a delete of this worktree would attempt, without running it:
+   * each phase in execution order, its substituted commands, and whether its
+   * config is approved. An unapproved phase is skipped by the delete, so a
+   * confirm surface has to say so rather than promise cleanup that won't run.
+   */
+  async previewLifecycleTeardown(
+    monitor: WorktreeMonitor,
+    ctx: WorkspaceHostContext
+  ): Promise<WorktreeTeardownPreview> {
+    const projectRootPath = ctx.projectRootPath;
+    const { resolvedConfig, config, teardownResource, teardownEnvironments } =
+      await this.resolveTeardownSources(monitor, projectRootPath);
+    const vars = this.buildVariables(monitor.path, projectRootPath, monitor.name, monitor.branch);
+    const sub = (cmd: string) => this.substituteVariables(cmd, vars);
+    const phases: WorktreeTeardownPhasePreview[] = [];
+
+    if (teardownResource?.teardown?.length && monitor.hasResourceConfig) {
+      phases.push({
+        phase: "resource-teardown",
+        commands: teardownResource.teardown.map(sub),
+        approved: await this.isResourceApproved(
+          resolvedConfig,
+          teardownEnvironments,
+          projectRootPath
+        ),
+      });
+    }
+    if (config?.teardown?.length && resolvedConfig) {
+      phases.push({
+        phase: "teardown",
+        commands: config.teardown.map(sub),
+        approved: await this.isConfigApproved(resolvedConfig, projectRootPath),
+      });
+    }
+    return { phases };
+  }
+
+  /**
+   * Orchestrate the teardown phase for a worktree: resource teardown first
+   * (when configured), then regular teardown, reporting progress through the
+   * monitor's lifecycle status. Teardown failures are logged but never thrown
+   * — deletion must proceed regardless.
+   *
+   * A phase whose commands come from the repository and are not approved is
+   * skipped and recorded as `needs-approval` rather than waited on: the delete
+   * is often an agent's, with nobody there to answer, and it must not hang.
+   */
+  async runLifecycleTeardown(
+    worktreeId: string,
+    monitor: WorktreeMonitor,
+    force: boolean,
+    ctx: WorkspaceHostContext
+  ): Promise<void> {
+    const projectRootPath = ctx.projectRootPath;
+    const { resolvedConfig, config, teardownResource, teardownEnvironments } =
+      await this.resolveTeardownSources(monitor, projectRootPath);
 
     // Start a fresh accumulation for this teardown invocation. Owned by the
     // orchestrator (not coupled to setLifecycleStatus(undefined)) so a monitor

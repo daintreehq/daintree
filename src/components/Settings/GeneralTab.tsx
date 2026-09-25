@@ -1,34 +1,21 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import {
-  ChevronRight,
-  History,
-  Moon,
-  ShieldBan,
-  KeyRound,
-  Wrench,
-  LayoutGrid,
-  PanelBottom,
-  Keyboard,
-  Info,
-  ExternalLink,
-  RefreshCw,
-  Gauge,
-  Type,
-  Bell,
-  MemoryStick,
-} from "lucide-react";
+import { ChevronRight, ShieldBan, KeyRound, Wrench, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DaintreeIcon, Activity } from "@/components/icons";
+import { DaintreeIcon } from "@/components/icons";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { KeepAwakeSection } from "@/components/Settings/KeepAwakeSection";
+import { WindowOpeningSection } from "@/components/Settings/WindowOpeningSection";
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
+import { SettingsDependents, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { getAgentIds } from "@/config/agents";
 import { AgentIdentityBlock, resolveIdentity } from "@/components/agents/AgentCard";
 import { Button } from "@/components/ui/button";
+import { KbdChord } from "@/components/ui/Kbd";
+import { Badge } from "@/components/ui/badge";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import type {
   HibernationConfig,
@@ -48,9 +35,8 @@ import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { getBuildChannelLabel } from "@shared/config/distribution";
-import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
-import { formatTimeAgo } from "@/utils/timeAgo";
+import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { useDistributionStore } from "@/store/distributionStore";
 
 const GENERAL_SUBTABS: SettingsSubtabItem[] = [
@@ -115,6 +101,13 @@ const IDLE_BACKGROUND_THRESHOLD_PRESETS = [
   { value: 120, label: "2h" },
 ] as const;
 
+// Mirrors the electron-store defaults, so a row can say when it has moved off them.
+const DEFAULT_HIBERNATION_THRESHOLD_HOURS = 24;
+const DEFAULT_IDLE_TERMINAL_THRESHOLD_MINUTES = 60;
+const DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES = 15;
+const DEFAULT_UPDATE_CHANNEL = "stable";
+const DEFAULT_SESSION_RESTORE_ENABLED = true;
+
 const UPDATE_CHECK_REFRESH_INTERVAL_MS = 60_000;
 
 const UPDATE_CHANNEL_OPTIONS = [
@@ -122,9 +115,24 @@ const UPDATE_CHANNEL_OPTIONS = [
   { value: "nightly", label: "Nightly" },
 ] as const satisfies readonly { value: "stable" | "nightly"; label: string }[];
 
+function describeUpdateChannel(
+  channel: "stable" | "nightly" | null,
+  lastCheck: number | null
+): string {
+  const base =
+    channel === "nightly"
+      ? "Nightly builds may contain unstable features. You can switch back to stable at any time."
+      : "Stable releases, or nightly builds with the newest changes";
+  if (!lastCheck) return base;
+  const checked = `Last checked ${formatRelativeTime(lastCheck)}.`;
+  return base.endsWith(".") ? `${base} ${checked}` : `${base}. ${checked}`;
+}
+
+type SaveTarget = "sessionRestore" | "updates" | "idleNotify" | "idleAutoClose" | "hibernation";
+
 interface ShortcutDisplay {
   actionId: string;
-  key: string;
+  combo: string;
   description: string;
 }
 
@@ -148,6 +156,7 @@ export function GeneralTab({
   const buildChannelLabel = getBuildChannelLabel(appVersion);
 
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [showReadyAgents, setShowReadyAgents] = useState(false);
   const [hibernationConfig, setHibernationConfig] = useState<HibernationConfig | null>(null);
   const [sessionRestoreConfig, setSessionRestoreConfig] = useState<SessionRestoreConfig | null>(
     null
@@ -173,6 +182,43 @@ export function GeneralTab({
    */
   const [sectionErrors, setSectionErrors] = useState<Record<string, string | null>>({});
   const [configRetryNonce, setConfigRetryNonce] = useState(0);
+  /**
+   * A failed save rolls its control back, which on its own reads as a click that never
+   * landed. The failure stays on the group it belongs to, with a Retry that resends the
+   * attempted value, until a save there succeeds.
+   */
+  const [saveFailures, setSaveFailures] = useState<
+    Partial<Record<SaveTarget, () => Promise<void>>>
+  >({});
+  // A retry in flight per group: the banner clears on the first click, but a second
+  // click can land before it re-renders, and two resends race each other's rollback.
+  const retryingRef = useRef(new Set<SaveTarget>());
+  const recordSaveFailure = (target: SaveTarget, retry: () => Promise<void>) =>
+    setSaveFailures((failures) => ({ ...failures, [target]: retry }));
+  // Cleared when a save to the group succeeds, and when a new edit there begins: the new
+  // edit supersedes whatever the old Retry would have resent.
+  const clearSaveFailure = (target: SaveTarget) =>
+    setSaveFailures((failures) => {
+      if (!failures[target]) return failures;
+      const next = { ...failures };
+      delete next[target];
+      return next;
+    });
+  const saveFailureBanner = (target: SaveTarget) => {
+    const retry = saveFailures[target];
+    return retry ? (
+      <SettingsLoadErrorBanner
+        title="Couldn't save that change"
+        message="The setting is back to its previous value."
+        onRetry={() => {
+          if (retryingRef.current.has(target)) return;
+          retryingRef.current.add(target);
+          clearSaveFailure(target);
+          void retry().finally(() => retryingRef.current.delete(target));
+        }}
+      />
+    ) : null;
+  };
 
   /**
    * What the section header says about the roster. The old copy — "Agents ready to use on
@@ -186,18 +232,18 @@ export function GeneralTab({
    * keyed only on availability let the two disagree.
    */
   const systemStatusSummary = (() => {
-    if (cliCheckFailed) return "Which agents are installed on this machine.";
-    if (!cliAvailability) return "Checking which agents are installed on this machine.";
+    if (cliCheckFailed) return "Which agents are installed on this machine";
+    if (!cliAvailability) return "Checking which agents are installed on this machine";
     const installed = getAgentIds().filter((id) => isAgentInstalled(cliAvailability[id]));
-    if (installed.length === 0) return "Which agents are installed on this machine.";
+    if (installed.length === 0) return "Which agents are installed on this machine";
     const attention = installed.filter((id) => !isAgentReady(cliAvailability[id]));
     if (attention.length === 0) {
       return installed.length === 1
-        ? "1 agent installed and ready to use."
-        : `All ${installed.length} installed agents are ready to use.`;
+        ? "1 agent installed and ready to use"
+        : `All ${installed.length} installed agents are ready to use`;
     }
     const ready = installed.length - attention.length;
-    return `${ready} of ${installed.length} installed agents are ready — ${attention.length} need${attention.length === 1 ? "s" : ""} attention.`;
+    return `${ready} of ${installed.length} installed agents are ready — ${attention.length} need${attention.length === 1 ? "s" : ""} attention`;
   })();
   const [shortcuts, setShortcuts] = useState<ShortcutCategory[]>([]);
   const [updateChannel, setUpdateChannel] = useState<"stable" | "nightly" | null>(null);
@@ -301,28 +347,18 @@ export function GeneralTab({
     if (storeUpdateSettingsSaving || storeUpdateNotificationsEnabled === null) return;
     if (!window.electron?.storeUpdate?.setSettings) return;
     const prev = storeUpdateNotificationsEnabled;
+    clearSaveFailure("updates");
     const next = !prev;
     setStoreUpdateNotificationsEnabled(next);
     setStoreUpdateSettingsSaving(true);
     try {
       const result = await window.electron.storeUpdate.setSettings(next);
       if (isMountedRef.current) setStoreUpdateNotificationsEnabled(result.enabled);
+      if (isMountedRef.current) clearSaveFailure("updates");
     } catch (error) {
       logError("Failed to set store update notification settings", error);
       if (isMountedRef.current) setStoreUpdateNotificationsEnabled(prev);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Update notification preference couldn't be saved.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleStoreUpdateNotificationsToggle(),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("updates", () => handleStoreUpdateNotificationsToggle());
     } finally {
       if (isMountedRef.current) setStoreUpdateSettingsSaving(false);
     }
@@ -332,27 +368,17 @@ export function GeneralTab({
     if (updatesManagedByStore) return;
     if (channelSaving || channel === updateChannel) return;
     const prev = updateChannel;
+    clearSaveFailure("updates");
     setUpdateChannel(channel);
     setChannelSaving(true);
     try {
       const result = await window.electron.update.setChannel(channel);
       if (isMountedRef.current) setUpdateChannel(result);
+      if (isMountedRef.current) clearSaveFailure("updates");
     } catch (error) {
       logError("Failed to set update channel", error);
       if (isMountedRef.current) setUpdateChannel(prev);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Update channel couldn't be changed.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleChannelChange(channel),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("updates", () => handleChannelChange(channel));
     } finally {
       if (isMountedRef.current) setChannelSaving(false);
     }
@@ -515,7 +541,7 @@ export function GeneralTab({
 
             return {
               actionId,
-              key: keybindingService.formatComboForDisplay(effectiveCombo),
+              combo: effectiveCombo,
               description: binding.description || actionId,
             };
           })
@@ -548,6 +574,7 @@ export function GeneralTab({
   const handleHibernationToggle = async () => {
     if (!hibernationConfig || isSaving) return;
     const prev = hibernationConfig;
+    clearSaveFailure("hibernation");
     setHibernationConfig({ ...prev, enabled: !prev.enabled });
     setIsSaving(true);
     try {
@@ -561,19 +588,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setHibernationConfig(result.result as HibernationConfig);
+      clearSaveFailure("hibernation");
     } catch (error) {
       if (!isMountedRef.current) return;
       setHibernationConfig(prev);
       logError("Failed to update hibernation config", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Auto-hibernation couldn't be updated.",
-        actions: [
-          { label: "Try again", variant: "primary", onClick: () => void handleHibernationToggle() },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("hibernation", () => handleHibernationToggle());
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);
@@ -584,6 +604,7 @@ export function GeneralTab({
   const handleSessionRestoreToggle = async () => {
     if (!sessionRestoreConfig || isSessionRestoreSaving) return;
     const prev = sessionRestoreConfig;
+    clearSaveFailure("sessionRestore");
     setSessionRestoreConfig({ enabled: !prev.enabled });
     setIsSessionRestoreSaving(true);
     try {
@@ -597,23 +618,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setSessionRestoreConfig(result.result as SessionRestoreConfig);
+      clearSaveFailure("sessionRestore");
     } catch (error) {
       if (!isMountedRef.current) return;
       setSessionRestoreConfig(prev);
       logError("Failed to update session restore config", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Project restore couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleSessionRestoreToggle(),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("sessionRestore", () => handleSessionRestoreToggle());
     } finally {
       if (isMountedRef.current) {
         setIsSessionRestoreSaving(false);
@@ -624,6 +634,7 @@ export function GeneralTab({
   const handleIdleNotifyToggle = async () => {
     if (!idleNotifyConfig || isIdleNotifySaving) return;
     const prev = idleNotifyConfig;
+    clearSaveFailure("idleNotify");
     setIdleNotifyConfig({ ...prev, enabled: !prev.enabled });
     setIsIdleNotifySaving(true);
     try {
@@ -637,19 +648,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setIdleNotifyConfig(result.result as IdleTerminalNotifyConfig);
+      clearSaveFailure("idleNotify");
     } catch (error) {
       if (!isMountedRef.current) return;
       setIdleNotifyConfig(prev);
       logError("Failed to update idle terminal notify config", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Idle terminal notifications couldn't be updated.",
-        actions: [
-          { label: "Try again", variant: "primary", onClick: () => void handleIdleNotifyToggle() },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("idleNotify", () => handleIdleNotifyToggle());
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
@@ -660,6 +664,7 @@ export function GeneralTab({
   const handleIdleNotifyThresholdChange = async (value: number) => {
     if (!idleNotifyConfig || isIdleNotifySaving) return;
     const prev = idleNotifyConfig;
+    clearSaveFailure("idleNotify");
     setIdleNotifyConfig({ ...prev, thresholdMinutes: value });
     setIsIdleNotifySaving(true);
     try {
@@ -673,23 +678,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setIdleNotifyConfig(result.result as IdleTerminalNotifyConfig);
+      clearSaveFailure("idleNotify");
     } catch (error) {
       if (!isMountedRef.current) return;
       setIdleNotifyConfig(prev);
       logError("Failed to update idle terminal notify threshold", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Idle threshold couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleIdleNotifyThresholdChange(value),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("idleNotify", () => handleIdleNotifyThresholdChange(value));
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
@@ -700,6 +694,7 @@ export function GeneralTab({
   const handleIdleAutoCloseToggle = async () => {
     if (!idleAutoCloseConfig || isIdleAutoCloseSaving) return;
     const prev = idleAutoCloseConfig;
+    clearSaveFailure("idleAutoClose");
     setIdleAutoCloseConfig({ ...prev, enabled: !prev.enabled });
     setIsIdleAutoCloseSaving(true);
     try {
@@ -713,23 +708,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setIdleAutoCloseConfig(result.result as IdleBackgroundAutoCloseConfig);
+      clearSaveFailure("idleAutoClose");
     } catch (error) {
       if (!isMountedRef.current) return;
       setIdleAutoCloseConfig(prev);
       logError("Failed to update idle background auto-close config", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Auto-close for idle projects couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleIdleAutoCloseToggle(),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("idleAutoClose", () => handleIdleAutoCloseToggle());
     } finally {
       if (isMountedRef.current) {
         setIsIdleAutoCloseSaving(false);
@@ -740,6 +724,7 @@ export function GeneralTab({
   const handleIdleAutoCloseThresholdChange = async (value: number) => {
     if (!idleAutoCloseConfig || isIdleAutoCloseSaving) return;
     const prev = idleAutoCloseConfig;
+    clearSaveFailure("idleAutoClose");
     setIdleAutoCloseConfig({ ...prev, thresholdMinutes: value });
     setIsIdleAutoCloseSaving(true);
     try {
@@ -753,23 +738,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setIdleAutoCloseConfig(result.result as IdleBackgroundAutoCloseConfig);
+      clearSaveFailure("idleAutoClose");
     } catch (error) {
       if (!isMountedRef.current) return;
       setIdleAutoCloseConfig(prev);
       logError("Failed to update idle background auto-close threshold", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Idle auto-close threshold couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleIdleAutoCloseThresholdChange(value),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("idleAutoClose", () => handleIdleAutoCloseThresholdChange(value));
     } finally {
       if (isMountedRef.current) {
         setIsIdleAutoCloseSaving(false);
@@ -780,6 +754,7 @@ export function GeneralTab({
   const handleThresholdChange = async (value: number) => {
     if (!hibernationConfig || isSaving) return;
     const prev = hibernationConfig;
+    clearSaveFailure("hibernation");
     setHibernationConfig({ ...prev, inactiveThresholdHours: value });
     setIsSaving(true);
     try {
@@ -793,23 +768,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setHibernationConfig(result.result as HibernationConfig);
+      clearSaveFailure("hibernation");
     } catch (error) {
       if (!isMountedRef.current) return;
       setHibernationConfig(prev);
       logError("Failed to update hibernation threshold", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Inactivity threshold couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleThresholdChange(value),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("hibernation", () => handleThresholdChange(value));
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);
@@ -827,33 +791,30 @@ export function GeneralTab({
         ariaLabel="General settings sections"
       />
 
-      <div {...subtabPanelProps("general", effectiveSubtab)} className="space-y-6">
+      <div {...subtabPanelProps("general", effectiveSubtab)} className="space-y-8">
         {effectiveSubtab === "overview" && (
           <>
             <SettingsSection
-              icon={Info}
               title="System status"
-              description={systemStatusSummary}
+              description={<span role="status">{systemStatusSummary}</span>}
               id="general-system-status"
             >
               {cliCheckFailed ? (
-                <div className="flex flex-wrap items-center gap-3">
-                  <p className="text-sm text-status-error">
-                    Couldn't check which agents are installed
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => void loadAgentAvailability()}
-                    disabled={isRecheckingAgents}
-                    className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline disabled:opacity-60"
-                  >
-                    {isRecheckingAgents ? "Checking…" : "Retry"}
-                  </button>
-                </div>
+                <SettingsLoadErrorBanner
+                  title="Couldn't check which agents are installed"
+                  message={
+                    isRecheckingAgents
+                      ? "Checking again…"
+                      : "The agent list stays empty until the check succeeds."
+                  }
+                  onRetry={() => {
+                    if (!isRecheckingAgents) void loadAgentAvailability();
+                  }}
+                />
               ) : !cliAvailability ? (
-                <div className="text-sm text-text-secondary">
-                  Checking which agents are installed…
-                </div>
+                <SettingsGroup>
+                  <SettingsEmptyRow>Checking which agents are installed…</SettingsEmptyRow>
+                </SettingsGroup>
               ) : (
                 (() => {
                   const allAgentIds = getAgentIds();
@@ -863,282 +824,360 @@ export function GeneralTab({
                   // Anything wanting the user's attention sorts to the top; registry order
                   // is preserved inside each group so the roster does not reshuffle between
                   // visits. The rows a user can act on are why they opened this section.
-                  const installedAgentIds = [
-                    ...installed.filter((id) => !isAgentReady(cliAvailability[id])),
-                    ...installed.filter((id) => isAgentReady(cliAvailability[id])),
-                  ];
-                  const hiddenCount = allAgentIds.length - installedAgentIds.length;
+                  const attentionAgentIds = installed.filter(
+                    (id) => !isAgentReady(cliAvailability[id])
+                  );
+                  const readyAgentIds = installed.filter((id) => isAgentReady(cliAvailability[id]));
+                  const hiddenCount = allAgentIds.length - installed.length;
 
-                  if (installedAgentIds.length === 0) {
+                  if (installed.length === 0) {
                     return (
-                      <div className="space-y-3">
-                        <p className="text-sm text-text-secondary">
-                          No agent CLIs found on this machine. Install one and Daintree will pick it
-                          up.
-                        </p>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() =>
-                              window.dispatchEvent(
-                                new CustomEvent("daintree:open-agent-setup-wizard")
-                              )
-                            }
-                          >
-                            Run setup wizard
-                          </Button>
-                          {onNavigateToAgents && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => onNavigateToAgents?.()}
-                            >
-                              Browse available agents
-                            </Button>
-                          )}
-                        </div>
-                      </div>
+                      <SettingsGroup>
+                        <SettingsEmptyRow
+                          action={
+                            <div className="flex flex-wrap items-center gap-2">
+                              {onNavigateToAgents && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => onNavigateToAgents?.()}
+                                >
+                                  Browse available agents
+                                </Button>
+                              )}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                  window.dispatchEvent(
+                                    new CustomEvent("daintree:open-agent-setup-wizard")
+                                  )
+                                }
+                              >
+                                Run setup wizard
+                              </Button>
+                            </div>
+                          }
+                        >
+                          No agent CLIs found on this machine — install one and Daintree picks it up
+                        </SettingsEmptyRow>
+                      </SettingsGroup>
                     );
                   }
 
-                  return (
-                    <div className="space-y-3">
-                      {/* A list, not a stack of divs: eighteen agents is a collection, and a
-                        screen-reader user gets the count and the position from the role. */}
-                      <ul className="rounded-[var(--radius-md)] border border-border-default overflow-hidden">
-                        {installedAgentIds.map((id, index) => {
-                          const identity = resolveIdentity(id);
-                          const name = identity?.name ?? id;
-                          const ready = isAgentReady(cliAvailability[id]);
-                          const unauthenticated = isAgentUnauthenticated(cliAvailability[id]);
-                          const blocked = isAgentBlocked(cliAvailability[id]);
-                          // Wording states what the probe saw, never what it implies: an
-                          // `unauthenticated` agent is still launchable (isAgentLaunchable)
-                          // because the CLI resolves credentials at runtime. "Login required"
-                          // would send a user to fix something that may not be broken.
-                          // Ready is the expected state, so it still gets no per-row chrome —
-                          // labelling fourteen rows "Ready" is noise, and the section's summary
-                          // line above already states how many are good. Only states needing the
-                          // user's attention are called out. Each carries its own glyph: a blocked
-                          // agent is installed but can't run, and reads distinctly from the
-                          // authentication-needed case so the user doesn't waste time
-                          // re-authenticating a binary that an endpoint security tool is blocking.
-                          // Attention states are tested before `ready` so a probe that ever reports
-                          // both still surfaces the problem rather than falling silent.
-                          const status = blocked
-                            ? { label: "Blocked", Icon: ShieldBan }
-                            : unauthenticated
-                              ? { label: "No credentials detected", Icon: KeyRound }
-                              : ready
-                                ? null
-                                : { label: "Needs setup", Icon: Wrench };
+                  const renderAgentRow = (id: string, bordered: boolean) => {
+                    const identity = resolveIdentity(id);
+                    const name = identity?.name ?? id;
+                    const ready = isAgentReady(cliAvailability[id]);
+                    const unauthenticated = isAgentUnauthenticated(cliAvailability[id]);
+                    const blocked = isAgentBlocked(cliAvailability[id]);
+                    // Wording states what the probe saw, never what it implies: an
+                    // `unauthenticated` agent is still launchable (isAgentLaunchable)
+                    // because the CLI resolves credentials at runtime. "Login required"
+                    // would send a user to fix something that may not be broken.
+                    // Ready is the expected state, so it still gets no per-row chrome —
+                    // labelling fourteen rows "Ready" is noise, and the section's summary
+                    // line above already states how many are good. Only states needing the
+                    // user's attention are called out. Each carries its own glyph: a blocked
+                    // agent is installed but can't run, and reads distinctly from the
+                    // authentication-needed case so the user doesn't waste time
+                    // re-authenticating a binary that an endpoint security tool is blocking.
+                    // Attention states are tested before `ready` so a probe that ever reports
+                    // both still surfaces the problem rather than falling silent.
+                    const status = blocked
+                      ? { label: "Blocked", Icon: ShieldBan }
+                      : unauthenticated
+                        ? { label: "No credentials detected", Icon: KeyRound }
+                        : ready
+                          ? null
+                          : { label: "Needs setup", Icon: Wrench };
 
-                          return (
-                            <li key={id}>
-                              <button
-                                type="button"
-                                data-agent-row={id}
-                                className={cn(
-                                  "settings-list-item group flex w-full items-center gap-3 px-3 py-2 text-left",
-                                  "cursor-pointer transition-colors",
-                                  "hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]",
-                                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
-                                  index > 0 && "border-t border-border-default"
-                                )}
-                                aria-label={`${name} — ${status ? status.label : "ready"}. Open agent settings`}
-                                onClick={() => onNavigateToAgents?.(id)}
-                              >
-                                {identity ? (
-                                  <AgentIdentityBlock
-                                    Icon={identity.Icon}
-                                    color={identity.color}
-                                    name={name}
-                                    description={identity.description}
-                                    compact
-                                    showDescription={false}
-                                  />
-                                ) : (
-                                  <span className="flex-1 text-sm text-text-primary">{name}</span>
-                                )}
-                                {status && (
-                                  <span
-                                    data-agent-status={status.label}
-                                    className="flex shrink-0 items-center gap-1.5"
-                                    aria-hidden="true"
-                                  >
-                                    {/* Severity rides the glyph, never the prose. Status-coloured
+                    return (
+                      <li key={id}>
+                        <button
+                          type="button"
+                          data-agent-row={id}
+                          className={cn(
+                            "settings-list-item group flex w-full items-center gap-3 py-2 pl-4 pr-4 text-left",
+                            "cursor-pointer transition-colors",
+                            "hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]",
+                            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+                            bordered && "border-t border-border-subtle"
+                          )}
+                          aria-label={`${name} — ${status ? status.label : "ready"}. Open agent settings`}
+                          onClick={() => onNavigateToAgents?.(id)}
+                        >
+                          {identity ? (
+                            <AgentIdentityBlock
+                              Icon={identity.Icon}
+                              color={identity.color}
+                              name={name}
+                              description={identity.description}
+                              compact
+                              showDescription={false}
+                            />
+                          ) : (
+                            <span className="flex-1 text-sm text-text-primary">{name}</span>
+                          )}
+                          {status && (
+                            <span
+                              data-agent-status={status.label}
+                              className="flex shrink-0 items-center gap-1.5"
+                              aria-hidden="true"
+                            >
+                              {/* Severity rides the glyph, never the prose. Status-coloured
                                         text was measured and rejected: the status tokens fail
                                         4.5:1 as body text on most themes, and the notification
                                         surfaces already carry warnings this way. */}
-                                    <status.Icon className="w-3.5 h-3.5 text-status-warning" />
-                                    <span className="text-xs text-text-secondary">
-                                      {status.label}
-                                    </span>
-                                  </span>
-                                )}
-                                {/* The row has always navigated; nothing on it said so. A
+                              <status.Icon className="w-3.5 h-3.5 text-status-warning" />
+                              <span className="text-xs text-text-secondary">{status.label}</span>
+                            </span>
+                          )}
+                          {/* The row has always navigated; nothing on it said so. A
                                     hover-only chevron answers that only after the user has
                                     already guessed, so it rests visible and brightens on
                                     hover. Solid tokens rather than an opacity ramp: dimming
                                     an icon with opacity is lint-banned here, and at 60% this
                                     one measured about 1.7:1 under forced-colors — well under
                                     the 3:1 floor for the only cue that the row is a link. */}
-                                <ChevronRight
-                                  className="w-4 h-4 shrink-0 text-text-secondary transition-colors group-hover:text-text-primary group-focus-visible:text-text-primary"
-                                  aria-hidden="true"
-                                />
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
+                          <ChevronRight
+                            className="w-4 h-4 shrink-0 text-text-secondary transition-colors group-hover:text-text-primary group-focus-visible:text-text-primary"
+                            aria-hidden="true"
+                          />
+                        </button>
+                      </li>
+                    );
+                  };
 
+                  return (
+                    <SettingsGroup className="divide-y-0 overflow-hidden">
+                      {/* A list, not a stack of divs: eighteen agents is a collection, and a
+                        screen-reader user gets the count and the position from the role.
+                        Agents needing attention always show; the healthy remainder is an
+                        inventory the section summary already counts, so it sits behind a
+                        disclosure rather than filling the first viewport. */}
+                      {attentionAgentIds.length > 0 && (
+                        <ul>
+                          {attentionAgentIds.map((id, index) => renderAgentRow(id, index > 0))}
+                        </ul>
+                      )}
+
+                      {readyAgentIds.length > 0 && (
+                        <>
+                          <button
+                            type="button"
+                            aria-expanded={showReadyAgents}
+                            aria-controls="general-system-status-ready-agents"
+                            onClick={() => setShowReadyAgents((v) => !v)}
+                            className={cn(
+                              "settings-list-item group flex w-full items-center gap-3 py-2 pl-4 pr-4 text-left",
+                              "cursor-pointer transition-colors",
+                              "hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]",
+                              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+                              attentionAgentIds.length > 0 && "border-t border-border-subtle"
+                            )}
+                          >
+                            <span className="flex w-7 shrink-0 justify-center" aria-hidden="true">
+                              <ChevronRight
+                                data-animated-chevron
+                                className={cn(
+                                  "w-3.5 h-3.5 text-text-secondary transition-transform duration-150 group-hover:text-text-primary",
+                                  showReadyAgents ? "rotate-90" : "rotate-0"
+                                )}
+                              />
+                            </span>
+                            <span className="flex-1 text-sm text-text-secondary group-hover:text-text-primary transition-colors">
+                              {showReadyAgents
+                                ? "Hide ready agents"
+                                : `Show ${readyAgentIds.length} ready ${readyAgentIds.length === 1 ? "agent" : "agents"}`}
+                            </span>
+                          </button>
+                          <div id="general-system-status-ready-agents">
+                            {showReadyAgents && (
+                              <ul>{readyAgentIds.map((id) => renderAgentRow(id, true))}</ul>
+                            )}
+                          </div>
+                        </>
+                      )}
+
+                      {/* The roster's last row rather than a loose link under it: it
+                          navigates exactly like the agent rows above, so it takes their shape. */}
                       {hiddenCount > 0 && onNavigateToAgents && (
                         <button
                           type="button"
                           onClick={() => onNavigateToAgents?.()}
-                          className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline"
+                          className={cn(
+                            "settings-list-item group flex w-full items-center gap-3 py-2 pl-4 pr-4 text-left",
+                            "cursor-pointer transition-colors border-t border-border-subtle",
+                            "hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]",
+                            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                          )}
                         >
-                          {`Daintree supports ${hiddenCount} more ${hiddenCount === 1 ? "agent" : "agents"} →`}
+                          <span className="w-7 shrink-0" aria-hidden="true" />
+                          <span className="flex-1 text-sm text-text-secondary group-hover:text-text-primary transition-colors">
+                            {`Daintree supports ${hiddenCount} more ${hiddenCount === 1 ? "agent" : "agents"}`}
+                          </span>
+                          <ChevronRight
+                            className="w-4 h-4 shrink-0 text-text-secondary transition-colors group-hover:text-text-primary group-focus-visible:text-text-primary"
+                            aria-hidden="true"
+                          />
                         </button>
                       )}
-                    </div>
+                    </SettingsGroup>
                   );
                 })()
               )}
             </SettingsSection>
 
-            {(sessionRestoreConfig || sectionErrors.sessionRestore) && (
-              <SettingsSection
-                icon={History}
-                title="Startup"
-                description="What comes back when Daintree restarts."
-                id="general-session-restore"
-              >
-                {sectionErrors.sessionRestore ? (
-                  <SettingsLoadErrorBanner
-                    message={sectionErrors.sessionRestore}
-                    onRetry={() => setConfigRetryNonce((n) => n + 1)}
-                  />
-                ) : sessionRestoreConfig ? (
-                  <SettingsSwitchCard
-                    icon={History}
-                    title="Restore live projects"
-                    subtitle="Bring back every project that was running, not just the one each window was showing"
-                    isEnabled={sessionRestoreConfig.enabled}
-                    onChange={() => void handleSessionRestoreToggle()}
-                    ariaLabel="Restore Live Projects Toggle"
-                    disabled={isSessionRestoreSaving}
-                  />
-                ) : null}
-              </SettingsSection>
-            )}
+            {/* Rendered before the config arrives so the page keeps its shape; the
+                row stays disabled until the stored value is known, so a click can't
+                save over a value the user never saw. */}
+            <SettingsSection
+              title="Startup"
+              description="What comes back when Daintree restarts"
+              id="general-session-restore"
+            >
+              {sectionErrors.sessionRestore && (
+                <SettingsLoadErrorBanner
+                  message={sectionErrors.sessionRestore}
+                  onRetry={() => setConfigRetryNonce((n) => n + 1)}
+                />
+              )}
+              {saveFailureBanner("sessionRestore")}
+              <SettingsGroup>
+                <SettingsSwitchCard
+                  title="Restore live projects"
+                  subtitle="Bring back every project that was running, not just the one each window was showing"
+                  isEnabled={sessionRestoreConfig?.enabled ?? DEFAULT_SESSION_RESTORE_ENABLED}
+                  onChange={() => void handleSessionRestoreToggle()}
+                  disabled={!sessionRestoreConfig || isSessionRestoreSaving}
+                  isModified={
+                    !!sessionRestoreConfig &&
+                    sessionRestoreConfig.enabled !== DEFAULT_SESSION_RESTORE_ENABLED
+                  }
+                  onReset={() => void handleSessionRestoreToggle()}
+                />
+              </SettingsGroup>
+            </SettingsSection>
+
+            <WindowOpeningSection />
 
             <KeepAwakeSection />
 
             {updatesManagedByStore ? (
               <SettingsSection
-                icon={RefreshCw}
                 title="Updates"
-                description="Updates are managed by the Microsoft Store on Windows."
+                description="Updates are managed by the Microsoft Store on Windows"
                 id="general-update-channel"
               >
-                <SettingsSwitchCard
-                  icon={RefreshCw}
-                  title="Notify when a new version is available"
-                  subtitle="Show an inbox notification with a link to the Microsoft Store"
-                  isEnabled={storeUpdateNotificationsEnabled ?? true}
-                  onChange={() => void handleStoreUpdateNotificationsToggle()}
-                  ariaLabel="Toggle Microsoft Store update notifications"
-                  disabled={storeUpdateNotificationsEnabled === null}
-                />
+                {saveFailureBanner("updates")}
+                <SettingsGroup>
+                  <SettingsSwitchCard
+                    title="Notify when a new version is available"
+                    subtitle="Show an inbox notification with a link to the Microsoft Store"
+                    isEnabled={storeUpdateNotificationsEnabled ?? true}
+                    onChange={() => void handleStoreUpdateNotificationsToggle()}
+                    disabled={storeUpdateNotificationsEnabled === null}
+                  />
+                </SettingsGroup>
               </SettingsSection>
             ) : (
-              <SettingsSection
-                icon={RefreshCw}
-                title="Update channel"
-                description="Choose between stable releases and nightly builds."
-                id="general-update-channel"
-              >
-                {updateChannelLoadFailed ? (
+              <SettingsSection title="Updates" id="general-update-channel">
+                {updateChannelLoadFailed && (
                   <SettingsLoadErrorBanner
                     message="Couldn't load the update channel"
                     onRetry={() => setChannelRetryNonce((n) => n + 1)}
                   />
-                ) : (
-                  <>
-                    <SettingsPresetGroup
-                      label="Channel"
-                      options={UPDATE_CHANNEL_OPTIONS}
-                      value={updateChannel}
-                      onChange={(ch) => void handleChannelChange(ch)}
-                      disabled={updateChannel === null || channelSaving}
-                    />
-                    {updateChannel === "nightly" && (
-                      <p className="text-xs text-status-warning">
-                        Nightly builds may contain unstable features. You can switch back to stable
-                        at any time.
-                      </p>
-                    )}
-                  </>
                 )}
-                {lastUpdateCheck && (
-                  <p className="text-xs text-text-secondary">
-                    Last checked: {formatTimeAgo(lastUpdateCheck)}
-                  </p>
-                )}
+                {saveFailureBanner("updates")}
+                {/* The row stays through a failed load, with no channel selected: an
+                    unknown channel must never read as "stable". */}
+                <SettingsGroup>
+                  <SettingsPresetGroup<"stable" | "nightly">
+                    label="Update channel"
+                    description={describeUpdateChannel(updateChannel, lastUpdateCheck)}
+                    options={UPDATE_CHANNEL_OPTIONS}
+                    value={updateChannel}
+                    onChange={(ch) => void handleChannelChange(ch)}
+                    disabled={updateChannel === null || channelSaving}
+                    isModified={updateChannel !== null && updateChannel !== DEFAULT_UPDATE_CHANNEL}
+                    onReset={() => void handleChannelChange(DEFAULT_UPDATE_CHANNEL)}
+                  />
+                </SettingsGroup>
               </SettingsSection>
             )}
 
             <SettingsSection
-              icon={Keyboard}
               title="Quick reference"
-              description="Common keyboard shortcuts. Edit all shortcuts in the Keyboard settings tab."
+              description="Common keyboard shortcuts"
+              action={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent("daintree:open-settings-tab", { detail: { tab: "keyboard" } })
+                    )
+                  }
+                >
+                  Edit shortcuts
+                </Button>
+              }
             >
-              <button
-                type="button"
-                onClick={() => setIsShortcutsOpen(!isShortcutsOpen)}
-                aria-expanded={isShortcutsOpen}
-                aria-controls="keyboard-shortcuts-content"
-                className="flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors"
-              >
-                <ChevronRight
-                  data-animated-chevron
+              <SettingsGroup className="divide-y-0 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setIsShortcutsOpen(!isShortcutsOpen)}
+                  aria-expanded={isShortcutsOpen}
+                  aria-controls="keyboard-shortcuts-content"
                   className={cn(
-                    "w-3.5 h-3.5 transition-transform duration-150",
-                    isShortcutsOpen && "rotate-90"
+                    "settings-list-item group flex w-full items-center gap-3 py-2.5 pl-4 pr-4 text-left",
+                    "cursor-pointer transition-colors",
+                    "hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
                   )}
-                />
-                <span>{isShortcutsOpen ? "Hide shortcuts" : "Show shortcuts"}</span>
-              </button>
+                >
+                  <ChevronRight
+                    data-animated-chevron
+                    className={cn(
+                      "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 group-hover:text-text-primary",
+                      isShortcutsOpen ? "rotate-90" : "rotate-0"
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span className="flex-1 text-sm text-text-secondary group-hover:text-text-primary transition-colors">
+                    {isShortcutsOpen ? "Hide shortcuts" : "Show shortcuts"}
+                  </span>
+                </button>
 
-              {isShortcutsOpen && (
-                <div id="keyboard-shortcuts-content" className="space-y-4">
-                  {shortcuts.map((category) => (
-                    <div key={category.category} className="space-y-2">
-                      <h5 className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
-                        {category.category}
-                      </h5>
-                      <dl className="space-y-1">
-                        {category.shortcuts.map((shortcut) => (
-                          <div
-                            key={shortcut.actionId}
-                            className="flex items-center justify-between text-sm py-1"
-                          >
-                            <dt className="text-text-primary">{shortcut.description}</dt>
-                            <dd>
-                              <kbd className="settings-kbd px-2 py-1 rounded border text-xs font-mono text-text-primary">
-                                {shortcut.key}
-                              </kbd>
-                            </dd>
-                          </div>
-                        ))}
-                      </dl>
-                    </div>
-                  ))}
+                <div id="keyboard-shortcuts-content">
+                  {isShortcutsOpen &&
+                    shortcuts.map((category) => (
+                      <div key={category.category} className="border-t border-border-subtle">
+                        <h5 className="pt-3 pb-1 pl-4 pr-4 text-xs font-medium text-text-secondary">
+                          {category.category}
+                        </h5>
+                        <dl className="pb-2">
+                          {category.shortcuts.map((shortcut) => (
+                            <div
+                              key={shortcut.actionId}
+                              className="flex items-center justify-between gap-4 py-1.5 pl-4 pr-4 text-sm"
+                            >
+                              <dt className="min-w-0 text-text-primary">{shortcut.description}</dt>
+                              <dd className="shrink-0">
+                                <KbdChord
+                                  shortcut={shortcut.combo}
+                                  density="bare"
+                                  foreground="primary"
+                                />
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </div>
+                    ))}
                 </div>
-              )}
+              </SettingsGroup>
             </SettingsSection>
 
             {/* Identity sits at the FOOT of Overview, not the head of it. A user opens
@@ -1161,12 +1200,9 @@ export function GeneralTab({
                 </span>
               )}
               {buildChannelLabel && (
-                <span
-                  data-testid="about-build-channel"
-                  className="text-3xs font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info leading-none"
-                >
+                <Badge size="xs" data-testid="about-build-channel">
                   {buildChannelLabel}
-                </span>
+                </Badge>
               )}
               <button
                 onClick={() =>
@@ -1187,277 +1223,289 @@ export function GeneralTab({
 
         {effectiveSubtab === "hibernation" && (
           <>
-            {(idleNotifyConfig || sectionErrors.idleNotify) && (
-              <SettingsSection
-                icon={Bell}
-                title="Idle terminal notifications"
-                description="Get a friendly reminder when terminals in background projects have been idle for a while. Doesn't kill anything — just lets you decide."
-                id="general-idle-terminal-notify"
-              >
-                {sectionErrors.idleNotify ? (
-                  <SettingsLoadErrorBanner
-                    message={sectionErrors.idleNotify}
-                    onRetry={() => setConfigRetryNonce((n) => n + 1)}
-                  />
-                ) : idleNotifyConfig ? (
-                  <>
-                    <SettingsSwitchCard
-                      icon={Bell}
-                      title="Notify me about idle terminals"
-                      subtitle="Applies to background projects only — the active one is never flagged"
-                      isEnabled={idleNotifyConfig.enabled}
-                      onChange={handleIdleNotifyToggle}
-                      ariaLabel="Idle Terminal Notifications Toggle"
-                    />
-
-                    {idleNotifyConfig.enabled && (
-                      <SettingsPresetGroup
-                        id="general-idle-terminal-threshold"
-                        disabled={isIdleNotifySaving}
-                        label="Idle threshold"
-                        options={IDLE_TERMINAL_THRESHOLD_PRESETS}
-                        value={idleNotifyConfig.thresholdMinutes}
-                        onChange={(v) => handleIdleNotifyThresholdChange(v)}
-                        description={
-                          "A toast appears when background project terminals have been quiet this long, with options to close them or dismiss the reminder."
-                        }
-                      />
-                    )}
-                  </>
-                ) : null}
-              </SettingsSection>
-            )}
-            {(idleAutoCloseConfig || sectionErrors.idleAutoClose) && (
-              <SettingsSection
-                icon={MemoryStick}
-                title="Auto-close idle projects"
-                description="Reclaim memory from background projects that have no terminals and have been idle for a while. They stay in the switcher and reopen right where you left off."
-                id="general-idle-background-auto-close"
-              >
-                {sectionErrors.idleAutoClose ? (
-                  <SettingsLoadErrorBanner
-                    message={sectionErrors.idleAutoClose}
-                    onRetry={() => setConfigRetryNonce((n) => n + 1)}
-                  />
-                ) : idleAutoCloseConfig ? (
-                  <>
-                    <SettingsSwitchCard
-                      icon={MemoryStick}
-                      title="Close idle projects automatically"
-                      subtitle="Only projects with no open terminals — panels are restored when you reopen them"
-                      isEnabled={idleAutoCloseConfig.enabled}
-                      onChange={handleIdleAutoCloseToggle}
-                      ariaLabel="Auto-Close Idle Projects Toggle"
-                    />
-
-                    {idleAutoCloseConfig.enabled && (
-                      <SettingsPresetGroup
-                        id="general-idle-background-threshold"
-                        disabled={isIdleAutoCloseSaving}
-                        label="Idle threshold"
-                        options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
-                        value={idleAutoCloseConfig.thresholdMinutes}
-                        onChange={(v) => handleIdleAutoCloseThresholdChange(v)}
-                        description={
-                          "Only projects with no terminals are auto-closed. The active project is never touched, and reopening a project restores its panels."
-                        }
-                      />
-                    )}
-                  </>
-                ) : null}
-              </SettingsSection>
-            )}
-            {configError ? (
-              <SettingsLoadErrorBanner
-                title="Couldn't load hibernation settings"
-                message={configError}
-                onRetry={() => setConfigRetryNonce((n) => n + 1)}
-              />
-            ) : hibernationConfig ? (
-              <SettingsSection
-                icon={Moon}
-                title="Auto-hibernation"
-                description="Automatically stop terminals and servers for projects that have been inactive for a period of time. Reduces system resource usage."
-                id="general-hibernation"
-              >
-                <SettingsSwitchCard
-                  icon={Moon}
-                  title="Hibernate inactive projects"
-                  subtitle="Stops their terminals and dev servers; the project reopens where you left it"
-                  isEnabled={hibernationConfig.enabled}
-                  onChange={handleHibernationToggle}
-                  ariaLabel="Auto-Hibernation Toggle"
+            {/* Every group renders before its config arrives. Until the stored value is
+                known each switch shows the default, disabled, and each threshold shows no
+                selection — a load error sits on the group it belongs to, with Retry. */}
+            {/* One section for everything Daintree does about projects left in the
+                background: remind, close, or stop their processes. Idle-terminal reminders
+                were a section of their own whose only row repeated its heading. */}
+            <SettingsSection
+              title="Background projects"
+              description="What happens to projects you haven't used in a while — the active project is never touched"
+            >
+              {sectionErrors.idleNotify && (
+                <SettingsLoadErrorBanner
+                  message={sectionErrors.idleNotify}
+                  onRetry={() => setConfigRetryNonce((n) => n + 1)}
                 />
-
-                {hibernationConfig.enabled && (
-                  <SettingsPresetGroup
-                    id="general-hibernation-threshold"
-                    disabled={isSaving}
-                    label="Inactivity threshold"
-                    options={THRESHOLD_PRESETS}
-                    value={hibernationConfig.inactiveThresholdHours}
-                    onChange={(v) => handleThresholdChange(v)}
-                    description={
-                      "Projects idle longer than this will have their processes stopped automatically."
+              )}
+              {saveFailureBanner("idleNotify")}
+              <SettingsGroup id="general-idle-terminal-notify">
+                <SettingsSwitchCard
+                  title="Notify me about idle terminals"
+                  subtitle="A reminder when terminals in background projects go quiet, offering to close them — nothing closes on its own"
+                  isEnabled={idleNotifyConfig?.enabled ?? true}
+                  onChange={handleIdleNotifyToggle}
+                  disabled={!idleNotifyConfig}
+                  isModified={!!idleNotifyConfig && !idleNotifyConfig.enabled}
+                  onReset={() => void handleIdleNotifyToggle()}
+                />
+                <SettingsDependents
+                  disabled={!idleNotifyConfig?.enabled}
+                  reason={
+                    idleNotifyConfig
+                      ? "Turn on idle terminal reminders to choose when they appear"
+                      : undefined
+                  }
+                >
+                  <SettingsPresetGroup<number>
+                    id="general-idle-terminal-threshold"
+                    label="Remind after"
+                    description="How long background terminals stay quiet before the reminder"
+                    options={IDLE_TERMINAL_THRESHOLD_PRESETS}
+                    value={idleNotifyConfig?.thresholdMinutes ?? null}
+                    onChange={(v) => void handleIdleNotifyThresholdChange(v)}
+                    disabled={isIdleNotifySaving}
+                    isModified={
+                      !!idleNotifyConfig &&
+                      idleNotifyConfig.thresholdMinutes !== DEFAULT_IDLE_TERMINAL_THRESHOLD_MINUTES
+                    }
+                    onReset={() =>
+                      void handleIdleNotifyThresholdChange(DEFAULT_IDLE_TERMINAL_THRESHOLD_MINUTES)
                     }
                   />
-                )}
-              </SettingsSection>
-            ) : (
-              <div className="text-sm text-text-secondary">Loading hibernation settings…</div>
-            )}
+                </SettingsDependents>
+              </SettingsGroup>
+              {sectionErrors.idleAutoClose && (
+                <SettingsLoadErrorBanner
+                  message={sectionErrors.idleAutoClose}
+                  onRetry={() => setConfigRetryNonce((n) => n + 1)}
+                />
+              )}
+              {saveFailureBanner("idleAutoClose")}
+              <SettingsGroup id="general-idle-background-auto-close">
+                <SettingsSwitchCard
+                  title="Close idle projects automatically"
+                  subtitle="Frees memory from background projects with no open terminals. They stay in the switcher and reopen with their panels."
+                  isEnabled={idleAutoCloseConfig?.enabled ?? false}
+                  onChange={handleIdleAutoCloseToggle}
+                  disabled={!idleAutoCloseConfig}
+                  isModified={!!idleAutoCloseConfig?.enabled}
+                  onReset={() => void handleIdleAutoCloseToggle()}
+                />
+                <SettingsDependents
+                  disabled={!idleAutoCloseConfig?.enabled}
+                  reason={
+                    idleAutoCloseConfig
+                      ? "Turn on closing idle projects to choose when it happens"
+                      : undefined
+                  }
+                >
+                  <SettingsPresetGroup<number>
+                    id="general-idle-background-threshold"
+                    label="Close after"
+                    description="How long a background project sits idle before it closes"
+                    options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
+                    value={idleAutoCloseConfig?.thresholdMinutes ?? null}
+                    onChange={(v) => void handleIdleAutoCloseThresholdChange(v)}
+                    disabled={isIdleAutoCloseSaving}
+                    isModified={
+                      !!idleAutoCloseConfig &&
+                      idleAutoCloseConfig.thresholdMinutes !==
+                        DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES
+                    }
+                    onReset={() =>
+                      void handleIdleAutoCloseThresholdChange(
+                        DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES
+                      )
+                    }
+                  />
+                </SettingsDependents>
+              </SettingsGroup>
+              {configError && (
+                <SettingsLoadErrorBanner
+                  title="Couldn't load hibernation settings"
+                  message={configError}
+                  onRetry={() => setConfigRetryNonce((n) => n + 1)}
+                />
+              )}
+              {saveFailureBanner("hibernation")}
+              <SettingsGroup id="general-hibernation">
+                <SettingsSwitchCard
+                  title="Hibernate inactive projects"
+                  subtitle="Stops their terminals and dev servers to free resources; the project reopens where you left it"
+                  isEnabled={hibernationConfig?.enabled ?? false}
+                  onChange={handleHibernationToggle}
+                  disabled={!hibernationConfig}
+                  isModified={!!hibernationConfig?.enabled}
+                  onReset={() => void handleHibernationToggle()}
+                />
+                <SettingsDependents
+                  disabled={!hibernationConfig?.enabled}
+                  reason={
+                    hibernationConfig ? "Turn on hibernation to choose when it happens" : undefined
+                  }
+                >
+                  <SettingsPresetGroup<number>
+                    id="general-hibernation-threshold"
+                    label="Hibernate after"
+                    description="How long a project sits idle before its processes are stopped"
+                    options={THRESHOLD_PRESETS}
+                    value={hibernationConfig?.inactiveThresholdHours ?? null}
+                    onChange={(v) => void handleThresholdChange(v)}
+                    disabled={isSaving}
+                    isModified={
+                      !!hibernationConfig &&
+                      hibernationConfig.inactiveThresholdHours !==
+                        DEFAULT_HIBERNATION_THRESHOLD_HOURS
+                    }
+                    onReset={() => void handleThresholdChange(DEFAULT_HIBERNATION_THRESHOLD_HOURS)}
+                  />
+                </SettingsDependents>
+              </SettingsGroup>
+            </SettingsSection>
           </>
         )}
 
         {effectiveSubtab === "display" && (
           <SettingsSection
-            icon={Activity}
             title="Interface elements"
-            description="Choose what Daintree shows while you work."
+            description="What Daintree shows while you work"
             id="general-project-pulse"
           >
-            <SettingsSwitchCard
-              icon={Activity}
-              title="Project pulse"
-              subtitle="Show activity heatmap on the empty panel grid"
-              isEnabled={showProjectPulse}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.showProjectPulse.set",
-                  { show: !showProjectPulse },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Project Pulse Toggle"
-              isModified={!showProjectPulse}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.showProjectPulse.set",
-                  { show: true },
-                  { source: "user" }
-                )
-              }
-            />
+            <SettingsGroup>
+              <SettingsSwitchCard
+                title="Project pulse"
+                subtitle="Show an activity heatmap on the empty panel grid"
+                isEnabled={showProjectPulse}
+                onChange={() =>
+                  void actionService.dispatch(
+                    "preferences.showProjectPulse.set",
+                    { show: !showProjectPulse },
+                    { source: "user" }
+                  )
+                }
+                ariaLabel="Project Pulse Toggle"
+                isModified={!showProjectPulse}
+                onReset={() =>
+                  void actionService.dispatch(
+                    "preferences.showProjectPulse.set",
+                    { show: true },
+                    { source: "user" }
+                  )
+                }
+              />
 
-            <SettingsSwitchCard
-              id="general-developer-tools"
-              icon={Wrench}
-              title="Developer tools"
-              subtitle="Show problems panel button in the toolbar"
-              isEnabled={showDeveloperTools}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.showDeveloperTools.set",
-                  { show: !showDeveloperTools },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Developer Tools Toggle"
-              isModified={showDeveloperTools}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.showDeveloperTools.set",
-                  { show: false },
-                  { source: "user" }
-                )
-              }
-            />
+              <SettingsSwitchCard
+                id="general-developer-tools"
+                title="Developer tools"
+                subtitle="Show the Problems button in the toolbar — it appears on its own while file watching is degraded"
+                isEnabled={showDeveloperTools}
+                onChange={() =>
+                  void actionService.dispatch(
+                    "preferences.showDeveloperTools.set",
+                    { show: !showDeveloperTools },
+                    { source: "user" }
+                  )
+                }
+                isModified={showDeveloperTools}
+                onReset={() =>
+                  void actionService.dispatch(
+                    "preferences.showDeveloperTools.set",
+                    { show: false },
+                    { source: "user" }
+                  )
+                }
+              />
 
-            <SettingsSwitchCard
-              id="general-grid-agent-highlights"
-              icon={LayoutGrid}
-              title="Grid panel agent highlights"
-              subtitle="Show waiting and working state borders on grid panels. Failed state borders are always visible."
-              isEnabled={showGridAgentHighlights}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.showGridAgentHighlights.set",
-                  { show: !showGridAgentHighlights },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Grid Panel Agent Highlights Toggle"
-              isModified={showGridAgentHighlights}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.showGridAgentHighlights.set",
-                  { show: false },
-                  { source: "user" }
-                )
-              }
-            />
+              <SettingsSwitchCard
+                id="general-grid-agent-highlights"
+                title="Grid panel agent highlights"
+                subtitle="Show waiting and working borders on grid panels — failed borders always show"
+                isEnabled={showGridAgentHighlights}
+                onChange={() =>
+                  void actionService.dispatch(
+                    "preferences.showGridAgentHighlights.set",
+                    { show: !showGridAgentHighlights },
+                    { source: "user" }
+                  )
+                }
+                isModified={showGridAgentHighlights}
+                onReset={() =>
+                  void actionService.dispatch(
+                    "preferences.showGridAgentHighlights.set",
+                    { show: false },
+                    { source: "user" }
+                  )
+                }
+              />
 
-            <SettingsSwitchCard
-              id="general-dock-agent-highlights"
-              icon={PanelBottom}
-              title="Dock item agent highlights"
-              subtitle="Show waiting state borders on dock items. Failed state borders are always visible."
-              isEnabled={showDockAgentHighlights}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.showDockAgentHighlights.set",
-                  { show: !showDockAgentHighlights },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Dock Item Agent Highlights Toggle"
-              isModified={showDockAgentHighlights}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.showDockAgentHighlights.set",
-                  { show: false },
-                  { source: "user" }
-                )
-              }
-            />
+              <SettingsSwitchCard
+                id="general-dock-agent-highlights"
+                title="Dock item agent highlights"
+                subtitle="Show waiting borders on dock items — failed borders always show"
+                isEnabled={showDockAgentHighlights}
+                onChange={() =>
+                  void actionService.dispatch(
+                    "preferences.showDockAgentHighlights.set",
+                    { show: !showDockAgentHighlights },
+                    { source: "user" }
+                  )
+                }
+                isModified={showDockAgentHighlights}
+                onReset={() =>
+                  void actionService.dispatch(
+                    "preferences.showDockAgentHighlights.set",
+                    { show: false },
+                    { source: "user" }
+                  )
+                }
+              />
 
-            <SettingsSwitchCard
-              id="general-agent-task-titles"
-              icon={Type}
-              title="Agent task in terminal titles"
-              subtitle="Show the agent's current task next to its name in tabs and panel headers"
-              isEnabled={showAgentTaskTitles}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.showAgentTaskTitles.set",
-                  { show: !showAgentTaskTitles },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Agent Task Titles Toggle"
-              isModified={!showAgentTaskTitles}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.showAgentTaskTitles.set",
-                  { show: true },
-                  { source: "user" }
-                )
-              }
-            />
+              <SettingsSwitchCard
+                id="general-agent-task-titles"
+                title="Agent task in terminal titles"
+                subtitle="Show the agent's current task next to its name in tabs and panel headers"
+                isEnabled={showAgentTaskTitles}
+                onChange={() =>
+                  void actionService.dispatch(
+                    "preferences.showAgentTaskTitles.set",
+                    { show: !showAgentTaskTitles },
+                    { source: "user" }
+                  )
+                }
+                isModified={!showAgentTaskTitles}
+                onReset={() =>
+                  void actionService.dispatch(
+                    "preferences.showAgentTaskTitles.set",
+                    { show: true },
+                    { source: "user" }
+                  )
+                }
+              />
 
-            <SettingsSwitchCard
-              id="general-reduce-animations"
-              icon={Gauge}
-              title="Reduce UI animations"
-              subtitle="Minimize motion across the interface, independent of your OS reduce-motion setting"
-              isEnabled={reduceAnimations}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.reduceAnimations.set",
-                  { value: !reduceAnimations },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Reduce UI Animations Toggle"
-              isModified={reduceAnimations}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.reduceAnimations.set",
-                  { value: false },
-                  { source: "user" }
-                )
-              }
-            />
+              <SettingsSwitchCard
+                id="general-reduce-animations"
+                title="Reduce UI animations"
+                subtitle="Minimize motion across the interface, independent of your OS reduce-motion setting"
+                isEnabled={reduceAnimations}
+                onChange={() =>
+                  void actionService.dispatch(
+                    "preferences.reduceAnimations.set",
+                    { value: !reduceAnimations },
+                    { source: "user" }
+                  )
+                }
+                isModified={reduceAnimations}
+                onReset={() =>
+                  void actionService.dispatch(
+                    "preferences.reduceAnimations.set",
+                    { value: false },
+                    { source: "user" }
+                  )
+                }
+              />
+            </SettingsGroup>
           </SettingsSection>
         )}
       </div>

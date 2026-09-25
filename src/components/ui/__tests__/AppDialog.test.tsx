@@ -2,6 +2,7 @@
 import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { AppDialog } from "../AppDialog";
+import { AppPaletteDialog } from "../AppPaletteDialog";
 import { buttonVariants } from "../button";
 import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { _resetForTests } from "@/lib/escapeStack";
@@ -135,6 +136,39 @@ describe("AppDialog focus trapping", () => {
     expect((document.activeElement as HTMLElement).textContent).toBe("First");
   });
 
+  it("arrives past the header close button when the dialog has anything else to focus", async () => {
+    renderDialog({
+      children: (
+        <>
+          <AppDialog.Header>
+            <AppDialog.Title>Title</AppDialog.Title>
+            <AppDialog.CloseButton />
+          </AppDialog.Header>
+          <AppDialog.Body>
+            <button type="button">Body action</button>
+          </AppDialog.Body>
+        </>
+      ),
+    });
+    await act(() => vi.runAllTimersAsync());
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Body action" }));
+  });
+
+  it("falls back to the header close button when it is the only control", async () => {
+    renderDialog({
+      children: (
+        <AppDialog.Header>
+          <AppDialog.Title>Title</AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+      ),
+    });
+    await act(() => vi.runAllTimersAsync());
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close dialog" }));
+  });
+
   it("wraps focus forward from last to first element on Tab", async () => {
     renderDialog();
     await act(() => vi.runAllTimersAsync());
@@ -252,6 +286,91 @@ describe("AppDialog focus trapping", () => {
     clickBackdrop();
 
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // A locked dialog stacked over a dismissible one (a running confirm over
+  // Settings) must swallow Escape, not let it fall through to the dialog
+  // underneath — that closes Settings and unmounts the confirm mid-run.
+  it("keeps Escape from reaching the dialog underneath a locked one", async () => {
+    const onCloseBelow = vi.fn();
+    const onCloseAbove = vi.fn();
+    const stack = (aboveDismissible: boolean) => (
+      <>
+        <Dispatcher />
+        <AppDialog isOpen={true} onClose={onCloseBelow} data-testid="below">
+          <AppDialog.Body>
+            <button type="button">Below</button>
+          </AppDialog.Body>
+        </AppDialog>
+        <AppDialog
+          isOpen={true}
+          onClose={onCloseAbove}
+          dismissible={aboveDismissible}
+          zIndex="nested"
+          data-testid="above"
+        >
+          <AppDialog.Body>
+            <button type="button">Above</button>
+          </AppDialog.Body>
+        </AppDialog>
+      </>
+    );
+    // From the focused element, as a real keypress travels: through the
+    // document-level backstops and on to the window dispatcher.
+    const escapeFromFocus = () =>
+      act(() => {
+        (document.activeElement ?? document.body).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
+        );
+      });
+    const { rerender } = render(stack(false));
+    await act(() => vi.runAllTimersAsync());
+
+    escapeFromFocus();
+    expect(onCloseAbove).not.toHaveBeenCalled();
+    expect(onCloseBelow).not.toHaveBeenCalled();
+
+    // Once the lock lifts, Escape closes the top dialog and only that one.
+    rerender(stack(true));
+    await act(() => vi.runAllTimersAsync());
+    escapeFromFocus();
+    expect(onCloseAbove).toHaveBeenCalledOnce();
+    expect(onCloseBelow).not.toHaveBeenCalled();
+  });
+
+  // A locked dialog and a palette that open in the same commit stack in render
+  // order: the palette, rendered after, is on top and owns Escape. Registering
+  // the locked dialog's backstop later than the palette's would put it on top
+  // and swallow the palette's Escape.
+  it("lets a palette opened alongside a locked dialog keep Escape", async () => {
+    const onCloseDialog = vi.fn();
+    const onClosePalette = vi.fn();
+    const tree = (open: boolean) => (
+      <>
+        <Dispatcher />
+        <AppDialog isOpen={open} onClose={onCloseDialog} dismissible={false}>
+          <AppDialog.Body>
+            <button type="button">Locked</button>
+          </AppDialog.Body>
+        </AppDialog>
+        <AppPaletteDialog isOpen={open} onClose={onClosePalette} ariaLabel="Palette" tier="command">
+          <input aria-label="Search" />
+        </AppPaletteDialog>
+      </>
+    );
+    const { rerender } = render(tree(false));
+    rerender(tree(true));
+    await act(() => vi.runAllTimersAsync());
+    screen.getByLabelText("Search").focus();
+
+    act(() => {
+      (document.activeElement ?? document.body).dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
+      );
+    });
+
+    expect(onClosePalette).toHaveBeenCalledOnce();
+    expect(onCloseDialog).not.toHaveBeenCalled();
   });
 
   it("restores focus to previously focused element on close", async () => {
@@ -412,6 +531,67 @@ describe("AppDialog focus trapping", () => {
         </>
       );
     }
+
+    async function openClosePreferring(
+      restoreFocusTo: FocusTarget,
+      preferRestoreFocusTo: boolean
+    ): Promise<void> {
+      const dialog = (isOpen: boolean) => (
+        <>
+          <Dispatcher />
+          <AppDialog
+            isOpen={isOpen}
+            onClose={() => {}}
+            restoreFocusTo={restoreFocusTo}
+            preferRestoreFocusTo={preferRestoreFocusTo}
+          >
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      const { rerender } = render(dialog(true));
+      await act(() => vi.runAllTimersAsync());
+      rerender(dialog(false));
+    }
+
+    it("tries restoreFocusTo before a still-mounted trigger when preferred", async () => {
+      const { root, trigger } = setupTriggerAndRoot();
+      const preferred = document.createElement("button");
+      preferred.textContent = "Preferred";
+      document.body.appendChild(preferred);
+
+      await openClosePreferring(() => preferred, true);
+
+      expect(document.activeElement).toBe(preferred);
+      preferred.remove();
+      trigger.remove();
+      root.remove();
+    });
+
+    it("still returns to the trigger when the preferred target resolves to nothing", async () => {
+      const { root, trigger } = setupTriggerAndRoot();
+
+      await openClosePreferring(() => null, true);
+
+      expect(document.activeElement).toBe(trigger);
+      trigger.remove();
+      root.remove();
+    });
+
+    it("returns to a still-mounted trigger when restoreFocusTo is not preferred", async () => {
+      const { root, trigger } = setupTriggerAndRoot();
+      const successor = document.createElement("button");
+      document.body.appendChild(successor);
+
+      await openClosePreferring(() => successor, false);
+
+      expect(document.activeElement).toBe(trigger);
+      successor.remove();
+      trigger.remove();
+      root.remove();
+    });
 
     it("focuses a connected ref target instead of the #root fallback", async () => {
       const { root, fallbackButton, trigger } = setupTriggerAndRoot();
@@ -1304,6 +1484,29 @@ describe("AppDialog Escape yielded by the layer underneath", () => {
     pressEscape();
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // A locked dialog (a confirm mid-run) is still the surface that owns Escape:
+  // the dock must step aside for it, or Radix dismisses the dock underneath.
+  it("keeps the dock popover open under a locked dialog, and the dialog too", () => {
+    const onClose = vi.fn();
+    render(
+      <AppDialog isOpen onClose={onClose} dismissible={false}>
+        <button>Confirm</button>
+      </AppDialog>
+    );
+    openRadixLayerBehind();
+    screen.getByText("Confirm").focus();
+    armDockGuard(document.createElement("div"));
+
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    act(() => {
+      (document.activeElement ?? document.body).dispatchEvent(event);
+    });
+
+    // The dock's Radix layer honours preventDefault on its escape handler.
+    expect(event.defaultPrevented).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("leaves the dock popover to handle Escape while focus is still in the terminal", () => {

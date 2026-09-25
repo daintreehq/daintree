@@ -1166,6 +1166,13 @@ export async function initGlobalServices(
     // stub `.mcp.json` missing the daintree entry. The setter is just a
     // reference store — no MCP SDK loaded.
     helpSessionService.setMcpRegistry(registryRef);
+    // Wired here with the reader itself lazy, for the same reason: the first
+    // provision can land before any deferred task has run.
+    helpSessionService.setProjectMetadataReader(async (projectId, projectPath) => {
+      const { readHelpSessionProjectFacts } =
+        await import("../services/helpSessionProjectMetadataReader.js");
+      return readHelpSessionProjectFacts(projectId, projectPath);
+    });
 
     // Arm the periodic orphan-bearer sweep (#10698): a defense-in-depth bound
     // that revokes provisional session tokens minted by a launch that hung and

@@ -26,6 +26,8 @@ interface TrashBinItemProps {
   terminal: PanelInstance;
   trashedInfo: TrashedTerminal;
   worktreeName?: string;
+  /** False under "This worktree", where the section already names it. */
+  showWorktree?: boolean;
   /** Raise a permanent removal for the container to confirm. */
   onRequestRemove: (request: TrashRemovalRequest) => void;
 }
@@ -34,6 +36,7 @@ export function TrashBinItem({
   terminal,
   trashedInfo,
   worktreeName,
+  showWorktree = true,
   onRequestRemove,
 }: TrashBinItemProps) {
   const restoreTerminal = usePanelStore((s) => s.restoreTerminal);
@@ -102,14 +105,14 @@ export function TrashBinItem({
             the deadline never does. */}
         <div className="flex items-center gap-1.5 mt-0.5 text-2xs">
           <TrashCountdownLabel countdown={countdown} name={terminalName} />
-          {worktreeName ? (
+          {worktreeName && showWorktree ? (
             <>
               <span aria-hidden="true" className="text-text-muted">
                 &middot;
               </span>
               <span className="truncate text-text-secondary">{worktreeName}</span>
             </>
-          ) : isOrphan ? (
+          ) : isOrphan && showWorktree ? (
             <>
               <span aria-hidden="true" className="text-text-muted">
                 &middot;
@@ -131,7 +134,7 @@ export function TrashBinItem({
           <TooltipTrigger asChild>
             <span className="inline-flex">
               <Button
-                variant="ghost-success"
+                variant="ghost"
                 size="icon-sm"
                 onClick={handleRestore}
                 disabled={!canRestore}

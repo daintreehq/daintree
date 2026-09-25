@@ -144,7 +144,10 @@ export function shouldExposeTool(
   if (isWithheldFromBoundSession(entry, tier, session)) {
     return false;
   }
-  return isTierPermitted(tier, entry.id, session.rendererOwnedOrigin === true);
+  return (
+    isTierPermitted(tier, entry.id, session.rendererOwnedOrigin === true) ||
+    isApprovalRequestable(tier, entry.id, session.paneApproval === true)
+  );
 }
 
 export interface SessionSurfacePolicy {
@@ -161,6 +164,61 @@ export interface SessionSurfacePolicy {
    * session gets the narrower surface rather than the assistant's.
    */
   rendererOwnedOrigin?: boolean;
+  /**
+   * Whether the session is an agent pane, authenticated by the per-pane bearer
+   * Daintree wrote into its `--mcp-config` (#12692). Only a pane's project tier
+   * is an auto-approval line rather than a ceiling: it may ask for anything up
+   * to {@link PANE_APPROVAL_CEILING}, and at `system` it skips the ordinary
+   * confirmation. Read as `=== true`, so an unclassified session keeps the
+   * refusal semantics.
+   */
+  paneApproval?: boolean;
+}
+
+/**
+ * The most an agent pane can ever ask for (#12692): the `system` surface, less
+ * the tools reserved for a renderer-owned origin (#12407). Approval raises a
+ * pane to this line and never past it — asking cannot unlock the assistant's
+ * unscoped terminal input, a hidden or restricted action, or an external-only
+ * tool.
+ */
+export const PANE_APPROVAL_CEILING: ReadonlySet<string> = NON_RENDERER_OWNED_TIER_ALLOWLISTS.system;
+
+/**
+ * Whether a pane call above its tier should ask the user rather than be
+ * refused (#12692). False for anything the tier already permits — that runs
+ * without asking — and for every non-pane session, whose tier stays a hard
+ * ceiling.
+ */
+export function isApprovalRequestable(
+  tier: McpTier,
+  actionId: string,
+  paneApproval: boolean
+): boolean {
+  if (!paneApproval || tier === "external") return false;
+  if (isTierPermitted(tier, actionId, false)) return false;
+  return PANE_APPROVAL_CEILING.has(actionId);
+}
+
+/**
+ * Whether a pane's tier alone pre-authorizes the ordinary `danger: "confirm"`
+ * dialog for this tool (#12692). Only at `system`, the tier whose settings copy
+ * says it removes that step. Tools that act on every target they resolve at
+ * dispatch time are excluded for the reason native grants exclude them
+ * (#12121): their dialog is also where the user picks the targets, so there
+ * is no bare approval to stand in for.
+ *
+ * Covers the D2 click only. The typed-name D3 gate on a force delete is
+ * re-derived by the renderer bridge whenever a dispatch arrives preconfirmed,
+ * so the tier never reaches it (#12115).
+ */
+export function isTierAutoConfirmed(
+  tier: McpTier,
+  actionId: string,
+  paneApproval: boolean
+): boolean {
+  if (!paneApproval || tier !== "system") return false;
+  return isTierPermitted(tier, actionId, false) && isGenericNativeGrantEligible(actionId);
 }
 
 /**
@@ -234,6 +292,22 @@ export function isTierPermitted(
   rendererOwnedOrigin = false
 ): boolean {
   return getTierPermittedActionIds(tier, rendererOwnedOrigin).has(actionId);
+}
+
+/**
+ * Everything a session can reach: its tier, plus — for an agent pane — what it
+ * may ask for (#12692). Discovery enumerates this rather than the tier alone,
+ * so an ask-reachable tool is both listed and introspectable; hiding it would
+ * leave the pane unable to request what the gate would put to the user.
+ */
+export function getReachableActionIds(
+  tier: McpTier,
+  rendererOwnedOrigin = false,
+  paneApproval = false
+): ReadonlySet<string> {
+  const permitted = getTierPermittedActionIds(tier, rendererOwnedOrigin);
+  if (!paneApproval || tier === "external") return permitted;
+  return new Set([...permitted, ...PANE_APPROVAL_CEILING]);
 }
 
 /**
@@ -358,7 +432,7 @@ function isIntrospectableForSession(
  * that stamps it, so the shared module stays a type-only import from here and
  * its `zod` value import never becomes an eager edge on main's boot path.
  */
-export const MCP_TARGET_POLICY_VERSION = 1;
+export const MCP_TARGET_POLICY_VERSION = 2;
 
 /**
  * The session facts a target policy is evaluated against, captured once at
@@ -384,6 +458,11 @@ export interface TargetPolicySessionSnapshot {
    * approval flow it can never reach.
    */
   rendererOwnedOrigin: boolean;
+  /**
+   * Whether the session is an agent pane (#12692) — see
+   * {@link SessionSurfacePolicy.paneApproval}. Optional and read as `=== true`.
+   */
+  paneApproval?: boolean;
   /** Live per-tool grants, from the non-evicting snapshot. */
   perToolGrantedActionIds: ReadonlySet<string>;
   /** Live native automation grants' `allowedTools`, unioned. */
@@ -465,8 +544,13 @@ export function buildTargetPolicy(
   // origin — so this is belt-and-braces against a stale entry outliving the
   // origin that minted it, and it keeps the reported authorization identical to
   // the one the dispatch gate would reach.
+  const paneApproval = snapshot.paneApproval === true;
+  // A pane holds per-tool grants too, minted only by the user's "Allow for
+  // this session" in the approval dialog (#12692). Native grants stay
+  // renderer-owned only.
   const grantsReachable = snapshot.rendererOwnedOrigin;
-  const perToolGranted = grantsReachable && snapshot.perToolGrantedActionIds.has(id);
+  const perToolGranted =
+    (grantsReachable || paneApproval) && snapshot.perToolGrantedActionIds.has(id);
   // Membership in a grant's allowlist is not the same question the gate asks:
   // `peekNativeGrant` refuses a per-resolved-target tool outright (#12121), so
   // reading the allowlist alone would promise a confirmation bypass the gate
@@ -496,14 +580,28 @@ export function buildTargetPolicy(
   // grant, then native grant — so a client reading this learns which mechanism
   // would actually admit its next call, and therefore whether that access can
   // lapse.
-  const authorizedBy = isTierPermitted(snapshot.tier, id, snapshot.rendererOwnedOrigin)
+  const tierPermitted = isTierPermitted(snapshot.tier, id, snapshot.rendererOwnedOrigin);
+  const authorizedBy = tierPermitted
     ? "tier"
     : perToolGranted
       ? "grant"
       : nativeGranted
         ? "nativeGrant"
-        : null;
+        : isApprovalRequestable(snapshot.tier, id, paneApproval)
+          ? "approval"
+          : null;
   if (authorizedBy === null) return null;
+
+  // Mirrors `dispatchConfirmed` in `sessionServer`, for a pane: an above-tier
+  // call always asks, and the ask IS the confirmation; at `system`, or under a
+  // session approval, the ordinary dialog is skipped for every tool whose
+  // dialog is not also a target picker.
+  const paneConfirmWaived =
+    paneApproval &&
+    isGenericNativeGrantEligible(id) &&
+    ((tierPermitted && isTierAutoConfirmed(snapshot.tier, id, true)) || perToolGranted);
+  const requiresConfirmation =
+    authorizedBy === "approval" || (danger === "confirm" && !nativeGranted && !paneConfirmWaived);
 
   // Strict rather than `!== false`: a malformed `enabled` (absent, or the
   // string "false") would otherwise be reported as callable, which is the one
@@ -575,13 +673,17 @@ export function buildTargetPolicy(
     danger,
     // A native grant is an explicit user approval of the tool's scope, so it
     // pre-authorises the modal (`dispatchConfirmed` in `sessionServer`). A
-    // per-tool grant only widens the floor and never bypasses confirmation.
-    requiresConfirmation: danger === "confirm" && !nativeGranted,
+    // per-tool grant only widens the floor and never bypasses confirmation —
+    // except a pane's, which the user minted from the dialog itself (#12692).
+    requiresConfirmation,
     confirmationMayEscalate,
     // Exactly the two checks `issueGrant` enforces, minus the runtime
     // caller-pin: the origin must be able to hold a grant, and the tool must be
-    // one some non-external tier already permits.
-    grantable: grantsReachable && minimumPermittingTier(id) !== null,
+    // one some non-external tier already permits. A pane's grant comes from its
+    // own approval dialog, so it is grantable up to the pane ceiling.
+    grantable:
+      (grantsReachable && minimumPermittingTier(id) !== null) ||
+      (paneApproval && PANE_APPROVAL_CEILING.has(id) && isGenericNativeGrantEligible(id)),
     authorizedBy,
     dynamicInvocation: "allowed",
     preferredTool: null,

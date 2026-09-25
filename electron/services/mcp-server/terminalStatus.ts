@@ -258,6 +258,11 @@ function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalS
     entry.lastOutputChangeAt = record.lastOutputChangeAt;
   }
 
+  // Absent means no raw input has been written to this PTY (#12718).
+  if (record.lastTypedInputAt !== undefined) {
+    entry.lastTypedInputAt = record.lastTypedInputAt;
+  }
+
   if (agentState === "waiting" && record.waitingReason !== undefined) {
     entry.waitingReason = record.waitingReason;
   }

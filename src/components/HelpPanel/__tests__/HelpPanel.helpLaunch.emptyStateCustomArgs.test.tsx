@@ -137,6 +137,15 @@ const {
   mockNotifyUserInput: vi.fn(),
 }));
 
+// Passthrough tooltips: the footer's Radix provider is incidental to these
+// suites, and its unmount timers collide with their stubbed globals.
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: unknown }) => children,
+  Tooltip: ({ children }: { children: unknown }) => children,
+  TooltipTrigger: ({ children }: { children: unknown }) => children,
+  TooltipContent: () => null,
+}));
+
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
 
 vi.mock("@/components/ui/button", () => ({
@@ -735,7 +744,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "system.openExternal",
-      { url: "https://daintree.org/assistant" },
+      { url: "https://daintree.org/docs/daintree-assistant" },
       { source: "user" }
     );
   });
@@ -761,7 +770,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     );
     expect(mockDispatch).toHaveBeenCalledWith(
       "system.openExternal",
-      { url: "https://daintree.org/assistant" },
+      { url: "https://daintree.org/docs/daintree-assistant" },
       { source: "user" }
     );
     expect(mockDispatch).not.toHaveBeenCalledWith(
@@ -793,7 +802,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "system.openExternal",
-      { url: "https://daintree.org/assistant" },
+      { url: "https://daintree.org/docs/daintree-assistant" },
       { source: "user" }
     );
   });
@@ -1004,7 +1013,9 @@ describe("HelpPanel — close hides without tearing down the agent", () => {
     render(<HelpPanel width={380} />);
 
     const escapeMock = vi.mocked(useEscapeStack);
-    const callback = escapeMock.mock.calls.at(-1)?.[1];
+    // The panel's own close is the enabled registration; the header's overflow
+    // menu registers too, disabled until it opens.
+    const callback = escapeMock.mock.calls.filter(([enabled]) => enabled).at(-1)?.[1];
     expect(callback).toBeTypeOf("function");
 
     act(() => {

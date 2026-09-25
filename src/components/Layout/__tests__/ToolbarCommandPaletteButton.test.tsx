@@ -101,7 +101,7 @@ const hoverFocusSpy = vi.fn();
 const hoverPointerEnterSpy = vi.fn();
 vi.mock("@/hooks", () => ({
   useAriaKeyshortcuts: () => "Meta+Shift+P",
-  useKeybindingDisplay: () => "⌘⇧P",
+  useEffectiveCombo: () => "Cmd+Shift+P",
   useShortcutHintHover: () => ({
     onPointerEnter: hoverPointerEnterSpy,
     onPointerLeave: vi.fn(),

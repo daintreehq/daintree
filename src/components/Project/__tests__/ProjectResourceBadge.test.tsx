@@ -586,7 +586,7 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     expect(trigger?.textContent).not.toMatch(/[↑↓]/);
   });
 
-  it("suppresses the value (stays hidden) when metrics are unavailable", async () => {
+  it("keeps counting projects when the memory read fails, without inventing a figure", async () => {
     mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
     statsStoreState.stats = { p1: { processCount: 1 } };
     mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 0, unavailable: true });
@@ -595,9 +595,39 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
 
     await flush();
 
-    // No misleading "0MB"; the badge withholds the reading entirely.
-    expect(container.textContent ?? "").not.toContain("0MB");
-    expect(container.textContent ?? "").not.toContain("project active");
+    // The count comes from the stats store, not from main's process read, so
+    // a failed read must not freeze or hide it — but it must not produce a
+    // memory figure either, and a zero reading must not trip the warning.
+    expect(container.querySelector("[data-status-readout]")?.textContent).toBe("1 project active");
+    expect(container.textContent ?? "").not.toMatch(/\d\s*MB/);
+    expect(container.querySelector('[data-testid="sidebar-status-items"]')).toBeNull();
+  });
+
+  it("keeps counting projects when the memory read rejects outright", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = { p1: { processCount: 1 } };
+    mockGetAppMetrics.mockRejectedValue(new Error("metrics ipc down"));
+
+    const { container } = render(<ProjectResourceBadge />);
+    await flush();
+
+    expect(container.querySelector("[data-status-readout]")?.textContent).toBe("1 project active");
+  });
+
+  it("keeps whatever the footer pins beside the readout before the first read lands", async () => {
+    mockGetAll.mockReturnValue(new Promise(() => {}));
+    mockGetAppMetrics.mockReturnValue(new Promise(() => {}));
+    statsStoreState.stats = {};
+
+    const { container } = render(
+      <ProjectResourceBadge trailing={<button type="button">Run command</button>} />
+    );
+    await flush();
+
+    // Run command has nothing to do with whether the metrics read has
+    // landed; it used to vanish with the readout.
+    expect(container.querySelector("[data-status-readout]")).toBeNull();
+    expect(container.textContent).toContain("Run command");
   });
 
   it("keeps the readout in place with nothing running, rather than vanishing", async () => {
@@ -633,6 +663,24 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     // and a monochrome or forced-colors rendering.
     expect(workingMark).not.toBe(idleMark);
     expect(/\bborder\b/.test(workingMark)).not.toBe(/\bborder\b/.test(idleMark));
+  });
+
+  it("sits its mark in the footer's shared glyph column", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = { p1: { processCount: 1, activeAgentCount: 1 } };
+
+    const { container } = render(<ProjectResourceBadge />);
+    await flush();
+
+    // The footer's other rows share this leading column; a mark sized by
+    // itself put this label at a different x from Run command's (#12587).
+    const readout = container.querySelector("[data-status-readout]");
+    const slots = readout?.querySelectorAll('[data-sidebar-footer-slot="glyph"]') ?? [];
+    expect(slots).toHaveLength(1);
+    // The forced-colors hooks stay on the mark itself, not on its column.
+    const mark = slots[0]!.querySelector(".status-mark");
+    expect(mark?.getAttribute("data-working")).toBe("true");
+    expect(slots[0]!.nextElementSibling?.textContent).toBe("1 project active");
   });
 
   it("reads work from agent activity, not from processes being up", async () => {
@@ -687,15 +735,15 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
 
     const { container } = render(<ProjectResourceBadge />);
     await flush();
-    expect(container.textContent ?? "").not.toContain("High memory");
+    expect(container.textContent ?? "").not.toContain("High app memory");
 
     // 0.33 of 16GB is ~5.4GB; 9GB is past it.
     mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 9_000 });
     await advance(10_000);
 
-    expect(container.textContent ?? "").toContain("High memory");
+    expect(container.textContent ?? "").toContain("High app memory");
     const trigger = container.querySelector("[data-status-readout]");
-    expect(trigger?.textContent ?? "").not.toContain("High memory");
+    expect(trigger?.textContent ?? "").not.toContain("High app memory");
   });
 
   it("removes visibility listener on unmount", () => {

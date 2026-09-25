@@ -132,9 +132,15 @@ describe("Dock Popover Visual Layer - Issue #2316", () => {
         const filePath = path.resolve(__dirname, relativePath);
         const content = await fs.readFile(filePath, "utf-8");
 
-        expect(content).toContain("bg-overlay-emphasis border-border-default");
+        expect(content).toContain("isOpen && DOCK_STATUS_PILL_OPEN_CLASS");
       });
     }
+
+    it("defines the shared open lift from neutral tokens", async () => {
+      const { DOCK_STATUS_PILL_OPEN_CLASS } = await import("../dockStatusPill");
+      expect(DOCK_STATUS_PILL_OPEN_CLASS).toContain("bg-overlay-emphasis");
+      expect(DOCK_STATUS_PILL_OPEN_CLASS).not.toContain("accent");
+    });
   });
 
   describe("Conditional Escape Key Guard - Issue #4572", () => {

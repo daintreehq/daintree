@@ -491,17 +491,14 @@ async function resolveContainedRealPath(
 }
 
 /**
- * Shared read core for daintree-file://, daintree-html:// and daintree-pdf://:
+ * Shared open core for daintree-file://, daintree-html:// and daintree-pdf://:
  * realpath containment, a size cap (per maxBytesForFile, selected by `kind`),
- * and O_RDONLY|O_NOFOLLOW open. Returns the file bytes plus the canonical path
- * (for MIME), or an error Response. Callers own the success headers so each
- * scheme sets its own CSP. The flow (realpath → path.relative → stat →
+ * and O_RDONLY|O_NOFOLLOW open. Returns the open handle plus the canonical path
+ * (for MIME) and the cap it was admitted under, or an error Response. The
+ * caller owns closing the handle. The flow (realpath → path.relative → stat →
  * O_NOFOLLOW open) and its TOCTOU defenses are unchanged.
  */
-// Return type is inferred, not annotated: annotating `buffer: Buffer` widens it
-// to `Buffer<ArrayBufferLike>`, which `new Response(...)` rejects as a BodyInit.
-// Inference preserves the exact `readFile()` result type the Response accepts.
-async function readContainedDaintreeFile(
+async function openContainedDaintreeFile(
   normalizedRoot: string,
   normalizedFile: string,
   kind: DaintreeReadKind
@@ -560,6 +557,25 @@ async function readContainedDaintreeFile(
     throw err;
   }
 
+  return { fileHandle, realFile, maxBytes };
+}
+
+/**
+ * The bytes of a contained file, or an error Response. Callers own the success
+ * headers so each scheme sets its own CSP.
+ */
+// Return type is inferred, not annotated: annotating `buffer: Buffer` widens it
+// to `Buffer<ArrayBufferLike>`, which `new Response(...)` rejects as a BodyInit.
+// Inference preserves the exact `readFile()` result type the Response accepts.
+async function readContainedDaintreeFile(
+  normalizedRoot: string,
+  normalizedFile: string,
+  kind: DaintreeReadKind
+) {
+  const opened = await openContainedDaintreeFile(normalizedRoot, normalizedFile, kind);
+  if (opened instanceof Response) return opened;
+  const { fileHandle, realFile, maxBytes } = opened;
+
   try {
     const buffer = await fileHandle.readFile();
     // The pre-read stat is advisory: a writer can grow or swap the file between
@@ -576,6 +592,47 @@ async function readContainedDaintreeFile(
     return { buffer, realFile };
   } finally {
     // Swallow close errors so they don't mask a preceding readFile failure.
+    await fileHandle.close().catch(() => {});
+  }
+}
+
+/**
+ * The size of a contained file, or an error Response — the HEAD half of
+ * {@link readContainedDaintreeFile}. It passes the same containment, gate, cap
+ * and O_NOFOLLOW open a GET would, so a probe refuses everything the read
+ * refuses structurally, but it never reads the bytes it only has to measure.
+ * A read can still fail where the stat passed — a rewrite in between, or an
+ * I/O error only the read surfaces — so this is admission, not a guarantee.
+ */
+async function statContainedDaintreeFile(
+  normalizedRoot: string,
+  normalizedFile: string,
+  kind: DaintreeReadKind
+) {
+  const opened = await openContainedDaintreeFile(normalizedRoot, normalizedFile, kind);
+  if (opened instanceof Response) return opened;
+  const { fileHandle, realFile, maxBytes } = opened;
+
+  try {
+    // Measured on the descriptor, not the pre-open stat, for the same reason
+    // the read re-checks its buffer: the file can grow in between. A directory
+    // named `x.pdf` opens fine but can't be read, so it isn't admitted either.
+    const stats = await fileHandle.stat();
+    if (!stats.isFile()) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+    const { size } = stats;
+    if (size > maxBytes) {
+      return new Response("Payload Too Large", {
+        status: 413,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+    return { size, realFile };
+  } finally {
     await fileHandle.close().catch(() => {});
   }
 }
@@ -955,20 +1012,34 @@ function isDaintreePdfPreviewUrl(url: string | undefined): boolean {
   return typeof url === "string" && url.startsWith("daintree-pdf://");
 }
 
+// Chromium's built-in PDF viewer component extension (`kPdfExtensionId`). The
+// PDFium document installs this origin's `index.html` as a child frame and
+// loads its scripts from here, and Electron's webRequest sees all of it.
+const PDF_VIEWER_EXTENSION_ORIGIN = "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/";
+
+function isPdfViewerExtensionUrl(url: string | undefined): boolean {
+  return typeof url === "string" && url.startsWith(PDF_VIEWER_EXTENSION_ORIGIN);
+}
+
 /**
- * Preview documents whose protocol-handler response headers must survive the
- * session-wide CSP overlay untouched. Both schemes need the pass-through, for
- * opposite reasons:
+ * Responses whose headers must survive the session-wide CSP overlay untouched.
+ * Each needs the pass-through for its own reason:
  *   daintree-html:// carries a token-scoped CSP and a COEP that the overlay
  *     would replace with the trusted app policy.
  *   daintree-pdf:// carries NEITHER, and must not acquire either: a `sandbox`
  *     CSP blocks PDFium outright (ERR_BLOCKED_BY_CLIENT), and a COEP header
  *     makes the PDF document an embedder whose own internal viewer frame is
- *     then blocked (ERR_BLOCKED_BY_RESPONSE). Both verified against
- *     Electron 42 / Chromium 148.
+ *     then blocked (ERR_BLOCKED_BY_RESPONSE).
+ *   The PDF viewer extension ships its own manifest CSP. Stamping the app
+ *     policy over it blocks the `chrome://resources` scripts and styles the
+ *     viewer boots from, so it never creates its content frame and the preview
+ *     stays blank with no error anywhere the user can see (#12598).
+ * All verified against Electron 42 / Chromium 148 on a persist: partition.
  */
 function shouldPreservePreviewResponseHeaders(url: string | undefined): boolean {
-  return isDaintreeHtmlPreviewUrl(url) || isDaintreePdfPreviewUrl(url);
+  return (
+    isDaintreeHtmlPreviewUrl(url) || isDaintreePdfPreviewUrl(url) || isPdfViewerExtensionUrl(url)
+  );
 }
 
 /**
@@ -1026,36 +1097,58 @@ function buildDaintreePdfHeaders(realFile: string, contentLength: number): Recor
  * Range headers are ignored: PDFium renders fine from a single buffered 200
  * with an accurate Content-Length, so there is no reason to carry the video
  * path's ranged-streaming machinery here.
+ *
+ * The viewer HEADs the same URL before framing it (#12598), so the trusted app
+ * origin gets the CORS grant on every path — an error response it can't read
+ * would surface as an opaque TypeError instead of the status it needs to name.
  */
 function createDaintreePdfProtocolHandler() {
   return async (request: GlobalRequest) => {
-    try {
-      const parsed = parseContainedFileRequest(request);
-      if (parsed instanceof Response) return parsed;
+    const response = await respondToDaintreePdfRequest(request);
+    const corsOrigin = trustedAppCorsOrigin(request);
+    if (corsOrigin) response.headers.set("Access-Control-Allow-Origin", corsOrigin);
+    return response;
+  };
+}
 
-      const result = await readContainedDaintreeFile(
+async function respondToDaintreePdfRequest(request: GlobalRequest): Promise<Response> {
+  try {
+    const parsed = parseContainedFileRequest(request);
+    if (parsed instanceof Response) return parsed;
+
+    // HEAD is the viewer's admission probe, sent before every frame load, so
+    // it answers from a stat rather than reading up to the PDF cap to discard.
+    if (request.method === "HEAD") {
+      const stat = await statContainedDaintreeFile(
         parsed.normalizedRoot,
         parsed.normalizedFile,
         "pdf"
       );
-      if (result instanceof Response) return result;
-
-      const headers = buildDaintreePdfHeaders(result.realFile, result.buffer.length);
-      // HEAD answers with the metadata only. The bytes were already read to
-      // size the response honestly, but attaching a body up to the PDF cap to
-      // a request that discards it is pure waste.
-      return new Response(request.method === "HEAD" ? null : result.buffer, {
+      if (stat instanceof Response) return stat;
+      return new Response(null, {
         status: 200,
-        headers,
-      });
-    } catch (err) {
-      console.error("[MAIN] daintree-pdf protocol error:", err);
-      return new Response("Internal Server Error", {
-        status: 500,
-        headers: buildDaintreeFileErrorHeaders(),
+        headers: buildDaintreePdfHeaders(stat.realFile, stat.size),
       });
     }
-  };
+
+    const result = await readContainedDaintreeFile(
+      parsed.normalizedRoot,
+      parsed.normalizedFile,
+      "pdf"
+    );
+    if (result instanceof Response) return result;
+
+    return new Response(result.buffer, {
+      status: 200,
+      headers: buildDaintreePdfHeaders(result.realFile, result.buffer.length),
+    });
+  } catch (err) {
+    console.error("[MAIN] daintree-pdf protocol error:", err);
+    return new Response("Internal Server Error", {
+      status: 500,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
 }
 
 const ONE_YEAR_SECONDS = 31_536_000;
@@ -1543,9 +1636,9 @@ export function setupWebviewCSP(): void {
         // Chromium 148), so without this bypass mergeCspHeaders would replace
         // a daintree-html:// page's token-scoped CSP with the trusted app CSP
         // — breaking its scripts AND re-exposing connect-src daintree-file: —
-        // and would stamp that same policy onto a daintree-pdf:// document,
-        // whose `frame-src` omits chrome-extension: and would therefore block
-        // PDFium's internal viewer frame. Pass both through untouched.
+        // and would stamp that same policy onto a daintree-pdf:// document and
+        // onto PDFium's own viewer frame, which then can't boot. Pass all of
+        // them through untouched.
         if (shouldPreservePreviewResponseHeaders(details.url)) {
           callback({ responseHeaders: details.responseHeaders });
           return;

@@ -4,8 +4,6 @@ Scaffold your first plugin, package it, and install it in Daintree.
 
 > **This is the path for a plugin that belongs to you** — installed to `~/.daintree/plugins/` and present in every project. If you are writing a plugin that belongs to a **project**, committed to its repository at `<projectRoot>/.daintree/plugins/`, stop here and read the [agent brief](./agent-brief.md) instead. The two differ in ways that matter on the first line of the manifest, and the command-handler convention below is one project plugins reject.
 
-> **The tooling isn't on npm yet.** `daintree-plugin`, `create-daintree-plugin`, `@daintreehq/plugin-sdk`, and `@daintreehq/plugin-vite` all live in-repo under `packages/` and are workspace-linked, so every command and import below works from inside a Daintree checkout — and every `npx daintree-plugin …` / `npm install @daintreehq/…` outside one returns E404 today. Until they publish, either develop inside a checkout, or build the plugin by hand against the [Manifest reference](./manifest.md) and sideload it (see [Distribution → Sideload](./distribution.md#sideload)). `plugins/sample/hello-daintree/` in the repo is a working example to read alongside this page.
-
 ## Prerequisites
 
 - Node.js 22 or newer
@@ -15,11 +13,11 @@ Scaffold your first plugin, package it, and install it in Daintree.
 ## Create a plugin
 
 ```bash
-npx daintree-plugin new my-first-plugin
+npm create daintree-plugin@latest my-first-plugin
 cd my-first-plugin
 ```
 
-`npx create-daintree-plugin my-first-plugin` is an equivalent npm-init shim that forwards to the same scaffolder.
+`npx daintree-plugin new my-first-plugin` is equivalent — `create-daintree-plugin` is the npm-init shim that forwards to the same scaffolder. `plugins/sample/hello-daintree/` in the Daintree repository is a complete working plugin to read alongside this page.
 
 The scaffolder asks for a publisher segment, a display name, and a template (command, view, mcp, or full) and generates:
 
@@ -93,14 +91,15 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
 
 ## Run it
 
-Build, package, and install the plugin into your running Daintree:
+Install the dev dependencies, then build, package, and install the plugin into your running Daintree:
 
 ```bash
+npm install
 npm run package
 npx daintree-plugin install ./acme.my-first-plugin-0.1.0.dntr
 ```
 
-`npm run package` produces `acme.my-first-plugin-0.1.0.dntr` in the project root — a zip file containing the manifest and compiled bundle. `daintree-plugin install` loads it into the running app.
+The generated `package.json` lists `daintree-plugin` as a devDependency alongside the SDK and the Vite preset, so `npm install` brings the CLI in and the `package` and `validate` scripts run it from `node_modules` — nothing to install globally. `npm run package` produces `acme.my-first-plugin-0.1.0.dntr` in the project root — a zip file containing the manifest and compiled bundle. `daintree-plugin install` loads it into the running app.
 
 In Daintree, open the command palette and run **My First Plugin: Say Hello**. A toast appears.
 

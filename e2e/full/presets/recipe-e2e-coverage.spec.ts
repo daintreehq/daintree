@@ -30,7 +30,7 @@ async function closeAppDialog(window: Page): Promise<void> {
   await expect(window.locator('[role="dialog"]')).toHaveCount(0, { timeout: T_MEDIUM });
 }
 
-function getRecipeEditor(window: Page, title: "Create Recipe" | "Edit Recipe" = "Create Recipe") {
+function getRecipeEditor(window: Page, title: "Create Recipe" | "Edit recipe" = "Create Recipe") {
   return window.getByRole("dialog").filter({ hasText: title });
 }
 
@@ -126,8 +126,8 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       const manager = await openRecipeManager(window);
       await app.evaluate(({ clipboard }) => clipboard.writeText(""));
 
-      const exportBtn = manager.locator(SEL.recipeManager.exportButton("Export Me"));
-      await exportBtn.click({ force: true });
+      await manager.locator(SEL.recipeManager.moreButton("Export Me")).click({ force: true });
+      await window.locator(SEL.recipeManager.copyJsonItem).click();
 
       // UI feedback flips only when the clipboard write resolves, so its
       // appearance confirms the copy succeeded before we read it back.
@@ -146,7 +146,15 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       const { window } = ctx;
       const manager = await openRecipeManager(window);
 
-      await manager.locator(SEL.recipeManager.importButton).first().click({ force: true });
+      // An empty manager offers import inline; a populated one files it under
+      // the toolbar's Import menu.
+      const inlineImport = manager.locator(SEL.recipeManager.importButton);
+      if ((await inlineImport.count()) > 0) {
+        await inlineImport.first().click({ force: true });
+      } else {
+        await manager.locator(SEL.recipeManager.importMenuTrigger).click({ force: true });
+        await window.locator(SEL.recipeManager.importFromClipboardItem).click();
+      }
       const importDialog = window.locator(SEL.recipeManager.importDialog);
       await expect(importDialog).toBeVisible({ timeout: T_MEDIUM });
 
@@ -192,7 +200,7 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       // Reopen the recipe and confirm the agent type persisted across the round-trip.
       const reopenManager = await openRecipeManager(window);
       await reopenManager.getByLabel("Edit recipe Typed Recipe").click({ force: true });
-      const reopened = getRecipeEditor(window, "Edit Recipe");
+      const reopened = getRecipeEditor(window, "Edit recipe");
       await expect(reopened).toBeVisible({ timeout: T_MEDIUM });
       await expect(reopened.locator(SEL.recipeEditor.terminalType(0))).toHaveValue("claude", {
         timeout: T_SHORT,
@@ -220,13 +228,16 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       await expect(promptField).toBeVisible({ timeout: T_SHORT });
       await promptField.fill("Work on {{branch_name}} now");
 
-      // No worktree context in the create flow → tokens stay highlighted and the
-      // preview tells the user they resolve at run time.
-      await expect(editor.getByText("Resolved prompt")).toBeVisible({ timeout: T_SHORT });
-      await expect(editor.getByText("Resolving at run time")).toBeVisible({ timeout: T_SHORT });
-      await expect(editor.locator(".bg-category-amber-subtle").first()).toBeVisible({
+      // No worktree context in the create flow → tokens stay marked and the
+      // preview says their values fill in at launch.
+      await expect(editor.getByText("Prompt preview")).toBeVisible({ timeout: T_SHORT });
+      await expect(editor.getByText("Values fill in from the worktree at launch")).toBeVisible({
         timeout: T_SHORT,
       });
+      await expect(editor.locator('[data-segment="variable"]').first()).toHaveText(
+        "{{branch_name}}",
+        { timeout: T_SHORT }
+      );
 
       // Cancel without saving (dirty → discard-changes confirm dialog).
       await editor.locator(SEL.recipeEditor.cancelButton).click();

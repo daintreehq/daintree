@@ -33,6 +33,26 @@ export const LINK_TEMPLATES: Record<string, LinkTemplate> = {
     url: "https://gemini.google.com/app",
     icon: "gemini",
   },
+  grok: {
+    title: "Grok",
+    url: "https://grok.com/",
+    icon: "grok",
+  },
+  mistral: {
+    title: "Le Chat",
+    url: "https://chat.mistral.ai/chat",
+    icon: "mistral",
+  },
+  qwen: {
+    title: "Qwen",
+    url: "https://chat.qwen.ai/",
+    icon: "qwen",
+  },
+  kimi: {
+    title: "Kimi",
+    url: "https://www.kimi.com/",
+    icon: "kimi",
+  },
 };
 
 export const DEFAULT_SYSTEM_LINKS: PortalLink[] = Object.entries(LINK_TEMPLATES).map(

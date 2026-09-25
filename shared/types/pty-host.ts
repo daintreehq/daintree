@@ -1510,6 +1510,8 @@ export interface TerminalResourceSample {
   cpuPercent: number;
   memoryKb: number;
   breakdown: TerminalResourceProcess[];
+  /** Processes in the tree; `breakdown` holds at most ten of them. */
+  processCount?: number;
 }
 
 /** Batched resource metrics for all monitored terminals */

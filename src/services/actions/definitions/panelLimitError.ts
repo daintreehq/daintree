@@ -23,3 +23,11 @@ export const PANEL_LIMIT_ERROR_SUFFIX = "panel limit reached";
 export function isPanelLimitError(message: string | undefined): boolean {
   return message !== undefined && message.endsWith(PANEL_LIMIT_ERROR_SUFFIX);
 }
+
+/**
+ * The failure reason batch spawns record for panels the user chose not to open
+ * at the panel-limit confirm. Deliberately not suffixed like the refusal above:
+ * a decline is the user's answer, never the limit refusing, and reporting it as
+ * a failure would blame the limit for a Cancel the user pressed a moment ago.
+ */
+export const PANEL_LIMIT_DECLINED_REASON = "Cancelled at the panel limit confirmation";

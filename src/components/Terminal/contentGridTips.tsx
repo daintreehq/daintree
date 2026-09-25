@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
-import { Kbd } from "@/components/ui/Kbd";
-import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { Kbd, KbdChord } from "@/components/ui/Kbd";
+import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -35,7 +35,7 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to jump between open panels
+        Press <KbdChord shortcut={shortcut} /> to jump between open panels
       </>
     ),
     actionId: "nav.quickSwitcher",
@@ -51,7 +51,7 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to open a new terminal in this worktree
+        Press <KbdChord shortcut={shortcut} /> to open a new terminal in this worktree
       </>
     ),
     actionId: "terminal.new",
@@ -68,8 +68,8 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to open the panel palette — add terminals, file browsers, web
-        browsers, or dev previews
+        Press <KbdChord shortcut={shortcut} /> to open the panel palette — add terminals, file
+        browsers, web browsers, or dev previews
       </>
     ),
     actionId: "panel.palette",
@@ -80,15 +80,26 @@ export const TIPS: TipEntry[] = [
     id: "launch-claude",
     message: (
       <>
-        Press <Kbd>⌘⌥N</Kbd> to launch a Claude agent in this worktree
+        Press <Kbd>⌘⌥C</Kbd> to launch a Claude agent in this worktree
       </>
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to launch a Claude agent in this worktree
+        Press <KbdChord shortcut={shortcut} /> to launch a Claude agent in this worktree
       </>
     ),
-    actionId: "agent.terminal",
+    // `agent.claude`, NOT `agent.terminal`. The tip says "launch a Claude
+    // agent" and ⌘⌥N is `agent.terminal`, whose own description is "open a
+    // plain shell terminal with no agent attached" — so the tip taught a
+    // binding that does something else, and the button under it launched a
+    // bare shell. Both now point at the action the sentence names.
+    //
+    // `agent.claude` is bound by default (⌘⌥C, the same chord the launcher
+    // chip prints), so the tip stays eligible whenever the Claude CLI is
+    // available and now teaches the key that actually does what it says. If a
+    // user unbinds it, `requiresShortcut` hides the tip rather than letting it
+    // fall back to a chord for a different action.
+    actionId: "agent.claude",
     actionLabel: "Launch agent",
     requiresShortcut: true,
     requiredAgents: ["claude"],
@@ -97,15 +108,16 @@ export const TIPS: TipEntry[] = [
     id: "launch-gemini",
     message: (
       <>
-        Press <Kbd>⌘⌥N</Kbd> to launch a Gemini agent in this worktree
+        Press <Kbd>⌘⌥G</Kbd> to launch a Gemini agent in this worktree
       </>
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to launch a Gemini agent in this worktree
+        Press <KbdChord shortcut={shortcut} /> to launch a Gemini agent in this worktree
       </>
     ),
-    actionId: "agent.terminal",
+    // Same correction as the Claude tip above.
+    actionId: "agent.gemini",
     actionLabel: "Launch agent",
     requiresShortcut: true,
     requiredAgents: ["gemini"],
@@ -119,7 +131,8 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to inject the project file tree into the focused terminal
+        Press <KbdChord shortcut={shortcut} /> to inject the project file tree into the focused
+        terminal
       </>
     ),
     actionId: "terminal.inject",
@@ -135,7 +148,8 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to open the command palette and search all available commands
+        Press <KbdChord shortcut={shortcut} /> to open the command palette and search all available
+        commands
       </>
     ),
     actionId: "action.palette.open",
@@ -151,7 +165,7 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to open the worktree palette and switch branches
+        Press <KbdChord shortcut={shortcut} /> to open the worktree palette and switch branches
       </>
     ),
     actionId: "worktree.openPalette",
@@ -162,12 +176,13 @@ export const TIPS: TipEntry[] = [
     id: "worktree-overview",
     message: (
       <>
-        Press <Kbd>⌘⇧O</Kbd> to open the worktrees overview and manage all your branches
+        Press <Kbd>⌘⌥R</Kbd> to open the worktrees overview and manage all your branches
       </>
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to open the worktrees overview and manage all your branches
+        Press <KbdChord shortcut={shortcut} /> to open the worktrees overview and manage all your
+        branches
       </>
     ),
     actionId: "worktree.overview.open",
@@ -184,7 +199,7 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to quickly switch between available AI agents
+        Press <KbdChord shortcut={shortcut} /> to quickly switch between available AI agents
       </>
     ),
     actionId: "agent.palette",
@@ -202,7 +217,7 @@ export const TIPS: TipEntry[] = [
     message: <>Create a new worktree to isolate each task on its own branch</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to create a new worktree
+        Press <KbdChord shortcut={shortcut} /> to create a new worktree
       </>
     ),
     actionId: "worktree.createDialog.open",
@@ -213,7 +228,7 @@ export const TIPS: TipEntry[] = [
 export function LiveTipMessage({ tip }: { tip: TipEntry }) {
   "use memo";
   const lookupId = tip.shortcutActionId ?? tip.actionId ?? "";
-  const shortcut = useKeybindingDisplay(lookupId);
+  const shortcut = useEffectiveCombo(lookupId);
   if (tip.messageWithShortcut && shortcut) {
     return <>{tip.messageWithShortcut(shortcut)}</>;
   }
@@ -248,7 +263,7 @@ export function RotatingTip() {
     const counts = shortcutHintStore.getState().counts;
     // Use shortcutActionId when present (mirrors LiveTipMessage lookup) so a tip
     // whose kbd shortcut dispatches a different action than its label-click
-    // (e.g. worktree-overview: ⌘⇧O → "worktree.overview", click → ".open") still
+    // (e.g. worktree-overview: ⌘⌥R → "worktree.overview", click → ".open") still
     // counts toward "used" when the user invokes it via keyboard.
     const lookupKey = (tipEntry: TipEntry) => tipEntry.shortcutActionId ?? tipEntry.actionId ?? "";
     const prioritized = [...filteredTips]
@@ -294,7 +309,7 @@ export function RotatingTip() {
             // centred text at the same size and colour as the sentence above
             // it, the only control that names the user's actual goal read as a
             // second sentence — an affordance nobody could see was there.
-            className="tip-action text-xs text-text-secondary underline decoration-text-muted underline-offset-2 hover:text-text-primary hover:decoration-current transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded px-1"
+            className="tip-action text-xs text-text-secondary underline decoration-text-muted underline-offset-2 hover:text-text-primary hover:decoration-current transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-[var(--radius-sm)] px-1"
           >
             {tip.actionLabel}
           </button>

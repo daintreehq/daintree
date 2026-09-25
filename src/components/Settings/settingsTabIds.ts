@@ -10,6 +10,7 @@ export const GLOBAL_SETTINGS_TAB_IDS = [
   "keyboard",
   "notifications",
   "privacy",
+  "import-export",
   "terminal",
   "worktree",
   "toolbar",

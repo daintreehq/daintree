@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { keybindingService } from "@/services/KeybindingService";
 
 const DOUBLE_TAP_WINDOW_MS = 300;
 const COOLDOWN_MS = 500;
@@ -28,6 +29,11 @@ export function useDoubleShift(callback: () => void, enabled: boolean = true): v
 
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key !== "Shift") return;
+      // Shift pressed into a shortcut recorder is part of a combo, not a gesture.
+      if (keybindingService.isCapturingShortcut()) {
+        shiftDownWithoutOtherKeys = false;
+        return;
+      }
 
       if (!shiftDownWithoutOtherKeys) {
         shiftDownWithoutOtherKeys = false;

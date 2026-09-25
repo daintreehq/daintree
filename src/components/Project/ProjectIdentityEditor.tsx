@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
+import { Info } from "lucide-react";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { useProjectStore } from "@/store/projectStore";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
@@ -142,6 +143,10 @@ export function ProjectIdentityEditor({
   // accepting a suggestion in one pass suggests for the NEW name. The tree is
   // the "unset" signal, so the suggestion is offered here rather than silently
   // stored at creation.
+  // Blank is not an error — commit treats it as "no change" — but the field
+  // should say so rather than leave the user guessing what dismissal will do.
+  const isNameBlank = isNameDirty && draftName.trim() === "";
+
   const suggestion =
     project.emoji === DEFAULT_PROJECT_EMOJI
       ? suggestProjectEmoji(draftName.trim() || project.name)
@@ -225,12 +230,19 @@ export function ProjectIdentityEditor({
       >
         <div className="flex flex-col">
           <div className="flex flex-col gap-1.5 border-b border-border-default p-3">
-            <label
-              htmlFor="project-identity-name"
-              className="text-xs font-medium text-text-secondary"
-            >
-              Project name
-            </label>
+            <div className="flex items-baseline justify-between gap-3">
+              <label
+                htmlFor="project-identity-name"
+                className="text-xs font-medium text-text-secondary"
+              >
+                Project name
+              </label>
+              {/* The commit model is settled but invisible — this is the only
+                  place it is written down. */}
+              <span id="project-identity-name-hint" className="text-xs text-text-secondary">
+                Enter saves · Esc cancels
+              </span>
+            </div>
             <input
               id="project-identity-name"
               type="text"
@@ -238,6 +250,11 @@ export function ProjectIdentityEditor({
               // open (onOpenAutoFocus above defers to it).
               autoFocus
               value={draftName}
+              aria-describedby={
+                isNameBlank
+                  ? "project-identity-name-hint project-identity-name-blank"
+                  : "project-identity-name-hint"
+              }
               onChange={(event) => {
                 setDraftName(event.target.value);
                 setIsNameDirty(true);
@@ -245,28 +262,44 @@ export function ProjectIdentityEditor({
               onKeyDown={(event) => {
                 // Escape is handled by onEscapeKeyDown on the content — Radix
                 // sees it first, on a document capture listener.
-                if (event.key === "Enter") {
+                // An Enter that confirms an IME composition is text entry, not
+                // a request to save and close.
+                if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                   event.preventDefault();
                   lastInputWasKeyboardRef.current = true;
                   commitIdentity();
                   onOpenChange(false);
                 }
               }}
-              className="w-[280px] rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-3 py-1.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
-              placeholder={project.name}
+              // Neutral rather than the accent ring: the field is autofocused on
+              // every opening, so an accent there is chrome that is always lit —
+              // the same call as the picker's search strip below it.
+              className="w-full rounded-[var(--radius-md)] border border-border-input bg-surface-input px-3 py-1.5 text-sm text-text-primary transition-colors duration-150 ease-out focus:outline-hidden focus:border-selection-outline"
             />
+            {isNameBlank && (
+              <p
+                id="project-identity-name-blank"
+                className="flex items-center gap-1.5 text-xs text-text-secondary"
+              >
+                <Info className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span>A project needs a name — the current one is kept</span>
+              </p>
+            )}
             {suggestion && (
               <button
                 type="button"
                 onClick={() => handleEmojiSelect(suggestion)}
-                className="flex items-center gap-2 self-start rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-overlay-subtle"
+                className="-ml-1 flex min-h-6 items-center gap-1.5 self-start rounded-[var(--radius-md)] px-1 py-0.5 text-xs text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary"
               >
                 <span className="text-base leading-none">{suggestion}</span>
-                <span>Use suggested</span>
+                <span>Use suggested icon</span>
               </button>
             )}
           </div>
-          <EmojiPicker onEmojiSelect={({ emoji }) => handleEmojiSelect(emoji)} />
+          <EmojiPicker
+            currentEmoji={project.emoji}
+            onEmojiSelect={({ emoji }) => handleEmojiSelect(emoji)}
+          />
         </div>
       </PopoverContent>
     </Popover>

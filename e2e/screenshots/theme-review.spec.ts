@@ -500,6 +500,8 @@ test("theme review — chrome, overlays, states", async () => {
       await page.locator(SEL.actionPalette.searchInput).fill("theme");
       await settle(page, 600);
       await snap(page, "17-action-palette");
+      // The first Escape clears the query; the second closes the palette.
+      await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
       await settle(page, 300);
     });

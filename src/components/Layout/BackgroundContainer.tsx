@@ -12,7 +12,6 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
-import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useExitLaggedCount } from "@/hooks/useExitLaggedCount";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -24,6 +23,15 @@ import type { TrashedTerminalGroupMetadata } from "@/store/slices";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useBackgroundedTerminals } from "@/hooks/useTerminalSelectors";
 import { useWorktrees } from "@/hooks/useWorktrees";
+import {
+  DOCK_STATUS_PILL_CLASS,
+  DOCK_STATUS_PILL_OPEN_CLASS,
+  DOCK_POPOVER_SECTIONS,
+  DockPopoverSection,
+  DockStatusPillLabel,
+  dockStatusScopeDescription,
+  useDockPopoverFocusHandoff,
+} from "./dockStatusPill";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
@@ -105,6 +113,10 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
     () => terminals.filter((t) => t.agentState === "waiting").length,
     [terminals]
   );
+  const hereCount = useMemo(
+    () => terminals.filter((t) => (t.worktreeId ?? null) === (activeWorktreeId ?? null)).length,
+    [terminals, activeWorktreeId]
+  );
 
   const displayItems = useMemo((): BackgroundDisplayItem[] => {
     const groups = new Map<
@@ -160,6 +172,22 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
     return items;
   }, [terminals, backgroundedTerminals]);
 
+  // Same split as the Waiting popover; order holds within each section.
+  const { hereItems, elsewhereItems } = useMemo(() => {
+    const here: BackgroundDisplayItem[] = [];
+    const elsewhere: BackgroundDisplayItem[] = [];
+    for (const item of displayItems) {
+      const worktreeId =
+        item.type === "group"
+          ? (item.groupMetadata.worktreeId ?? item.terminals[0]?.worktreeId)
+          : item.terminal.worktreeId;
+      ((worktreeId ?? null) === (activeWorktreeId ?? null) ? here : elsewhere).push(item);
+    }
+    return { hereItems: here, elsewhereItems: elsewhere };
+  }, [displayItems, activeWorktreeId]);
+
+  const focusHandoff = useDockPopoverFocusHandoff();
+
   const handleRestoreSingle = useCallback(
     (terminal: PtyPanelData) => {
       const worktreeId = terminal.worktreeId?.trim();
@@ -170,9 +198,11 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
       restoreBackgroundTerminal(terminal.id);
       activateTerminal(terminal.id);
       pingTerminal(terminal.id);
+      focusHandoff.markHandoff();
       setIsOpen(false);
     },
     [
+      focusHandoff,
       activeWorktreeId,
       trackTerminalFocus,
       selectWorktree,
@@ -196,10 +226,12 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
         }
         activateTerminal(activeId);
         pingTerminal(activeId);
+        focusHandoff.markHandoff();
       }
       setIsOpen(false);
     },
     [
+      focusHandoff,
       activeWorktreeId,
       trackTerminalFocus,
       selectWorktree,
@@ -252,9 +284,8 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   // .dock-status-pill exit transition instead of flashing "(0)".
   const displayCount = useExitLaggedCount(count);
   const triggerLabel =
-    waitingCount > 0
-      ? `Background (${displayCount} · ${waitingCount} waiting)`
-      : `Background (${displayCount})`;
+    `Background: ${displayCount} ${displayCount === 1 ? "panel" : "panels"} ${dockStatusScopeDescription(displayCount, hereCount)}` +
+    (waitingCount > 0 ? `, ${waitingCount} waiting` : "");
 
   useEffect(() => {
     if (count === 0) {
@@ -266,51 +297,38 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   return (
     <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"}>
       <Popover open={isOpen} onOpenChange={setIsOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="pill"
-            size="sm"
-            className={cn(
-              compact ? "px-1.5 min-w-0" : "px-3",
-              isOpen && "bg-overlay-emphasis border-border-default"
-            )}
-            aria-haspopup="dialog"
-            aria-expanded={isOpen}
-            aria-controls="background-container-popover"
-            aria-label={triggerLabel}
-          >
-            <span className="relative">
-              <Moon className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
-              {compact && displayCount > 0 && (
-                <span
-                  className={cn(
-                    "absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-3xs font-bold tabular-nums shadow-sm",
-                    waitingCount > 0
-                      ? "bg-state-waiting text-surface-canvas"
-                      : "bg-daintree-text/20 text-text-primary"
-                  )}
-                >
-                  <AnimatedLabel label={displayCount > 9 ? "9+" : String(displayCount)} />
-                </span>
-              )}
-            </span>
-            {!compact && (
-              <span className="font-medium tabular-nums">
-                Background (<AnimatedLabel label={String(displayCount)} />
-                {waitingCount > 0 && (
-                  <>
-                    {" · "}
-                    <span className="text-state-waiting">
-                      <AnimatedLabel label={String(waitingCount)} /> waiting
-                    </span>
-                  </>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="pill"
+                size="sm"
+                className={cn(
+                  DOCK_STATUS_PILL_CLASS,
+                  compact ? "px-2 min-w-0" : "px-3",
+                  isOpen && DOCK_STATUS_PILL_OPEN_CLASS
                 )}
-                )
-              </span>
-            )}
-          </Button>
-        </PopoverTrigger>
+                aria-haspopup="dialog"
+                aria-expanded={isOpen}
+                aria-controls="background-container-popover"
+                aria-label={triggerLabel}
+              >
+                <DockStatusPillLabel
+                  icon={<Moon className="text-text-secondary" aria-hidden="true" />}
+                  label="Background"
+                  count={displayCount}
+                  detail={waitingCount > 0 ? `${waitingCount} waiting` : undefined}
+                  hasLocal={hereCount > 0}
+                  compact={compact}
+                />
+              </Button>
+            </PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {`Sent to background ${dockStatusScopeDescription(displayCount, hereCount)}`}
+          </TooltipContent>
+        </Tooltip>
 
         <PopoverContent
           id="background-container-popover"
@@ -321,7 +339,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
           align="end"
           sideOffset={8}
           onOpenAutoFocus={(e) => e.preventDefault()}
-          onCloseAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
           onPointerDownOutside={(e) => {
             // Keep the popover anchored while the kill confirm dialog is open;
             // AppDialog is a react-dom portal with no Radix marker on its root,
@@ -339,43 +357,54 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
             <div className="px-3 py-2 border-b border-divider bg-surface-canvas/50 flex justify-between items-center">
               <span className="text-xs font-medium text-text-secondary">Background panels</span>
               {waitingCount > 0 && (
-                <span className="text-3xs font-medium text-state-waiting tabular-nums">
+                <span className="text-3xs font-medium text-text-secondary tabular-nums">
                   {waitingCount} waiting
                 </span>
               )}
             </div>
 
             <div className="p-1 flex flex-col gap-1 max-h-[360px] overflow-y-auto">
-              {displayItems.map((item) => {
-                if (item.type === "group") {
-                  return (
-                    <BackgroundGroupItem
-                      key={item.groupRestoreId}
-                      groupRestoreId={item.groupRestoreId}
-                      groupMetadata={item.groupMetadata}
-                      terminals={item.terminals}
-                      worktreeMap={worktreeMap}
-                      watchedPanels={watchedPanels}
-                      onRestoreGroup={handleRestoreGroup}
-                      onRestoreSingle={handleRestoreSingle}
-                      onWatchToggle={handleWatchToggle}
-                      onKill={(id) => setKillConfirmId(id)}
-                    />
-                  );
-                }
-                const worktreeName = item.terminal.worktreeId
-                  ? worktreeMap.get(item.terminal.worktreeId)?.name
-                  : undefined;
+              {DOCK_POPOVER_SECTIONS.map((section) => {
+                const items = section.key === "here" ? hereItems : elsewhereItems;
+                if (items.length === 0) return null;
+                const showWorktree = section.key === "elsewhere";
                 return (
-                  <BackgroundSingleItem
-                    key={item.terminal.id}
-                    terminal={item.terminal}
-                    worktreeName={worktreeName}
-                    isWatched={watchedPanels.has(item.terminal.id)}
-                    onRestore={handleRestoreSingle}
-                    onWatchToggle={handleWatchToggle}
-                    onKill={(id) => setKillConfirmId(id)}
-                  />
+                  <DockPopoverSection key={section.key} label={section.label}>
+                    {items.map((item) => {
+                      if (item.type === "group") {
+                        return (
+                          <BackgroundGroupItem
+                            key={item.groupRestoreId}
+                            groupRestoreId={item.groupRestoreId}
+                            groupMetadata={item.groupMetadata}
+                            terminals={item.terminals}
+                            worktreeMap={worktreeMap}
+                            showWorktree={showWorktree}
+                            watchedPanels={watchedPanels}
+                            onRestoreGroup={handleRestoreGroup}
+                            onRestoreSingle={handleRestoreSingle}
+                            onWatchToggle={handleWatchToggle}
+                            onKill={(id) => setKillConfirmId(id)}
+                          />
+                        );
+                      }
+                      const worktreeName =
+                        showWorktree && item.terminal.worktreeId
+                          ? worktreeMap.get(item.terminal.worktreeId)?.name
+                          : undefined;
+                      return (
+                        <BackgroundSingleItem
+                          key={item.terminal.id}
+                          terminal={item.terminal}
+                          worktreeName={worktreeName}
+                          isWatched={watchedPanels.has(item.terminal.id)}
+                          onRestore={handleRestoreSingle}
+                          onWatchToggle={handleWatchToggle}
+                          onKill={(id) => setKillConfirmId(id)}
+                        />
+                      );
+                    })}
+                  </DockPopoverSection>
                 );
               })}
             </div>
@@ -443,7 +472,7 @@ function BackgroundSingleItem({
         <div className="flex items-center gap-1.5 min-w-0">
           <span
             className={cn(
-              "truncate font-medium text-daintree-text/80 group-hover:text-text-primary transition-colors",
+              "truncate font-medium text-text-primary transition-colors",
               compact ? "text-2xs" : "text-xs"
             )}
           >
@@ -459,17 +488,17 @@ function BackgroundSingleItem({
         <div className="flex items-center gap-1.5 mt-0.5 text-2xs text-text-secondary">
           {worktreeName && <span className="truncate">{worktreeName}</span>}
           {worktreeName && (stateLabel || terminal.activityHeadline) && (
-            <span className="text-daintree-text/30">·</span>
+            <span aria-hidden="true">·</span>
           )}
           {StateIcon && stateLabel && (
-            <span className={cn("inline-flex items-center gap-1 shrink-0", stateColor)}>
-              <StateIcon className="h-2.5 w-2.5" />
+            <span className="inline-flex items-center gap-1 shrink-0">
+              <StateIcon className={cn("h-2.5 w-2.5", stateColor)} />
               <span>{stateLabel}</span>
             </span>
           )}
           {terminal.activityHeadline && (
             <>
-              {(worktreeName || stateLabel) && <span className="text-daintree-text/30">·</span>}
+              {(worktreeName || stateLabel) && <span aria-hidden="true">·</span>}
               <span className="truncate italic text-text-secondary">
                 {terminal.activityHeadline}
               </span>
@@ -505,7 +534,7 @@ function BackgroundSingleItem({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant="ghost-success"
+                variant="ghost"
                 size="icon-sm"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -548,6 +577,7 @@ function BackgroundGroupItem({
   groupMetadata,
   terminals,
   worktreeMap,
+  showWorktree,
   watchedPanels,
   onRestoreGroup,
   onRestoreSingle,
@@ -558,6 +588,7 @@ function BackgroundGroupItem({
   groupMetadata: TrashedTerminalGroupMetadata;
   terminals: PtyPanelData[];
   worktreeMap: ReturnType<typeof useWorktrees>["worktreeMap"];
+  showWorktree: boolean;
   watchedPanels: Set<string>;
   onRestoreGroup: (groupRestoreId: string, metadata: TrashedTerminalGroupMetadata) => void;
   onRestoreSingle: (terminal: PtyPanelData) => void;
@@ -568,6 +599,10 @@ function BackgroundGroupItem({
   const tabCount = terminals.length;
   const groupName = `Tab group (${tabCount} ${tabCount === 1 ? "tab" : "tabs"})`;
   const groupWaiting = terminals.filter((t) => t.agentState === "waiting").length;
+  // Named on the header too, so a collapsed group still says where it lives.
+  const groupWorktreeId = groupMetadata.worktreeId ?? terminals[0]?.worktreeId;
+  const groupWorktreeName =
+    showWorktree && groupWorktreeId ? worktreeMap.get(groupWorktreeId)?.name : undefined;
 
   return (
     <div className="rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors">
@@ -582,21 +617,26 @@ function BackgroundGroupItem({
           aria-controls={`bg-group-${groupRestoreId}`}
         >
           {isExpanded ? (
-            <ChevronDown className="w-3 h-3 text-daintree-text/60" />
+            <ChevronDown className="w-3 h-3 text-text-secondary" />
           ) : (
-            <ChevronRight className="w-3 h-3 text-daintree-text/60" />
+            <ChevronRight className="w-3 h-3 text-text-secondary" />
           )}
         </Button>
 
         <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-          <Layers className="w-3 h-3 text-daintree-text/70" />
+          <Layers className="w-3 h-3 text-text-secondary" />
         </div>
 
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors">
             {groupName}
+            {groupWorktreeName && (
+              <span className="ml-1.5 text-3xs text-text-secondary font-normal">
+                {groupWorktreeName}
+              </span>
+            )}
             {groupWaiting > 0 && (
-              <span className="ml-1.5 text-3xs text-state-waiting font-normal tabular-nums">
+              <span className="ml-1.5 text-3xs text-text-secondary font-normal tabular-nums">
                 · {groupWaiting} waiting
               </span>
             )}
@@ -627,9 +667,10 @@ function BackgroundGroupItem({
               return 0;
             })
             .map((terminal) => {
-              const worktreeName = terminal.worktreeId
-                ? worktreeMap.get(terminal.worktreeId)?.name
-                : undefined;
+              const worktreeName =
+                showWorktree && terminal.worktreeId
+                  ? worktreeMap.get(terminal.worktreeId)?.name
+                  : undefined;
               return (
                 <BackgroundSingleItem
                   key={terminal.id}

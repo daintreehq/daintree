@@ -10,7 +10,9 @@ import { useFieldControl } from "@/components/ui/field";
  * fill: a filled circle in a pale track reads as an illuminated "on" indicator.
  * The solid fill belongs to the ON track; the OFF thumb is a mid-tone, and the
  * OFF track carries its own boundary so the control stays discernible against
- * the page (WCAG 1.4.11).
+ * the page (WCAG 1.4.11). The mid-tone is `text-secondary`, not `text-muted`:
+ * the thumb's position IS the state, so it needs 3:1 against the track, and
+ * `text-muted` has no dark-theme floor (2.2:1 on Namib).
  *
  * An inset ring rather than a border — `border` would shrink the track's content
  * box and shift the checked thumb 2px off its resting inset.
@@ -45,7 +47,7 @@ const switchVariants = cva(
 // Faster than the track and on a different curve: the thumb's travel is what the
 // eye follows, the track's tint is what settles behind it.
 const switchThumbVariants = cva(
-  "block rounded-full bg-text-muted shadow-sm transition-transform duration-100 ease-[var(--ease-out-expo)] data-[state=checked]:bg-text-inverse",
+  "block rounded-full bg-text-secondary shadow-sm transition-transform duration-100 ease-[var(--ease-out-expo)] data-[state=checked]:bg-text-inverse",
   {
     variants: {
       size: {

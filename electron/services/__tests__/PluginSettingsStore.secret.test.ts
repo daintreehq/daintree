@@ -17,7 +17,7 @@ function fakeCipher(available = true): SecretCipher & { encryptCalls: string[] }
   return {
     encryptCalls,
     tier(): SecretStorageTier {
-      return available ? "keychain" : "plaintext";
+      return available ? "keychain" : "unavailable";
     },
     encrypt(plaintext: string): string | null {
       if (!available) return null;
@@ -67,28 +67,44 @@ describe("PluginSettingsStore secret tier", () => {
     expect(await store.storedSecretTier("token")).toBe("keychain");
   });
 
-  it("falls back to plaintext at rest when the keychain is unavailable", async () => {
+  it("refuses a secret write when the keychain is unavailable, touching neither memory nor disk", async () => {
     const cipher = fakeCipher(false);
     const filePath = path.join(tmpDir, "acme.plugin.json");
     const store = new PluginSettingsStore(filePath, cipher);
 
-    await store.set("token", "fallback-secret", { secret: true });
-    expect(await store.get<string>("token", { secret: true })).toBe("fallback-secret");
+    await expect(store.set("token", "fallback-secret", { secret: true })).rejects.toThrow(
+      /Secure storage is unavailable on this device, so the secret "token" wasn't saved/
+    );
+    await expect(fs.access(filePath)).rejects.toThrow();
+    expect(await store.get<string>("token", { secret: true })).toBeUndefined();
+    expect(await store.storedSecretTier("token")).toBeUndefined();
+    expect(store.secretTier()).toBe("unavailable");
 
-    // Stored as a bare string — no envelope — matching the legacy plaintext path.
-    const raw = await readRaw(filePath);
-    expect(raw.token).toBe("fallback-secret");
+    // The write chain survives the refusal, and a later ordinary write can't
+    // carry the refused value to disk through the shared cache.
+    expect(await store.set("endpoint", "https://x")).toBe(true);
+    expect(await readRaw(filePath)).toEqual({ endpoint: "https://x" });
+  });
 
-    expect(store.secretTier()).toBe("plaintext");
-    expect(await store.storedSecretTier("token")).toBe("plaintext");
+  it("keeps an existing encrypted secret when a rewrite is refused", async () => {
+    const filePath = path.join(tmpDir, "acme.plugin.json");
+    await new PluginSettingsStore(filePath, fakeCipher(true)).set("token", "sk-old", {
+      secret: true,
+    });
+    const before = await fs.readFile(filePath, "utf-8");
+
+    const store = new PluginSettingsStore(filePath, fakeCipher(false));
+    await expect(store.set("token", "sk-new", { secret: true })).rejects.toThrow(
+      /Secure storage is unavailable/
+    );
+    expect(await fs.readFile(filePath, "utf-8")).toBe(before);
+    expect(await store.storedSecretTier("token")).toBe("keychain");
   });
 
   it("migrates an existing plaintext secret to a keychain envelope on next write", async () => {
     const filePath = path.join(tmpDir, "acme.plugin.json");
-    // Seed a value written under the old plaintext path (no keychain).
-    const plaintextStore = new PluginSettingsStore(filePath, fakeCipher(false));
-    await plaintextStore.set("token", "old-token", { secret: true });
-    expect((await readRaw(filePath)).token).toBe("old-token");
+    // Seed a value an older Daintree wrote in plaintext when it had no keychain.
+    await fs.writeFile(filePath, JSON.stringify({ token: "old-token" }), "utf-8");
 
     // A fresh store with a keychain now available rewrites it as an envelope on
     // re-save, even though the plaintext value is identical (tier change forces a write).

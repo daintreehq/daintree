@@ -123,7 +123,7 @@ describe("useTypeAnywhere", () => {
       voiceSubmittingPanels: new Set(),
       hybridInputEnabled: true,
     });
-    useTypingLocatorStore.setState({ label: null, revision: 0 });
+    useTypingLocatorStore.setState({ message: null, revision: 0 });
   });
 
   afterEach(() => {
@@ -359,7 +359,7 @@ describe("useTypeAnywhere", () => {
 
       expect(scrollIntoView).toHaveBeenCalled();
       expect(pingTerminal).toHaveBeenCalledWith("a1");
-      expect(useTypingLocatorStore.getState().label).toContain("Claude");
+      expect(useTypingLocatorStore.getState().message?.target).toContain("Claude");
       // The key belongs to that terminal — it must land there, untouched.
       expect(e.defaultPrevented).toBe(false);
       expect(setFocused).not.toHaveBeenCalled();
@@ -374,7 +374,7 @@ describe("useTypeAnywhere", () => {
       const e = press("h");
 
       expect(pingTerminal).not.toHaveBeenCalled();
-      expect(useTypingLocatorStore.getState().label).toBeNull();
+      expect(useTypingLocatorStore.getState().message).toBeNull();
       expect(e.defaultPrevented).toBe(false);
     });
 
@@ -388,7 +388,7 @@ describe("useTypeAnywhere", () => {
       press("l");
 
       expect(pingTerminal).toHaveBeenCalledWith("sh");
-      expect(useTypingLocatorStore.getState().label).toContain("zsh");
+      expect(useTypingLocatorStore.getState().message?.target).toContain("zsh");
     });
 
     it("locates once per episode, not once per keystroke", () => {
@@ -503,7 +503,7 @@ describe("useTypeAnywhere", () => {
       document.body.innerHTML += `<div id="elsewhere" tabindex="0"></div>`;
       document.getElementById("elsewhere")?.focus();
       press("e");
-      expect(useTypingLocatorStore.getState().label).toContain("Claude");
+      expect(useTypingLocatorStore.getState().message?.target).toContain("Claude");
 
       focusOffscreenTerminal("a1");
       press("y");

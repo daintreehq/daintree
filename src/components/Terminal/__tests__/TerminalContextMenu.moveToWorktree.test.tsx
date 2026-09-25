@@ -370,6 +370,15 @@ describe("TerminalContextMenu — Move to worktree (#12445)", () => {
 
     expect(screen.queryByText("Move to worktree")).toBeNull();
   });
+
+  it("offers the submenu to a panel whose worktree has gone when one other remains", () => {
+    // Counted against the panel's own worktree, not as `length > 1`: the
+    // header's overflow menu counts the same way (#12606).
+    openMenu([main], "wt-gone");
+
+    expect(labels(moveRows())).toEqual([getWorktreeHeadline(main).label]);
+    expect(moveRows()[0]?.disabled).toBe(false);
+  });
 });
 
 const MORE = "More worktrees…";
@@ -420,6 +429,8 @@ const MENU_BRANCHES: Array<[string, Record<string, unknown>]> = [
   ["dev-preview", { kind: "dev-preview", browserUrl: "http://localhost:3000" }],
   ["review", { kind: "review" }],
   ["file", { kind: "file", filePath: "/repo/README.md" }],
+  ["diff", { kind: "diff" }],
+  ["plugin", { kind: "acme.dashboard", pluginId: "acme" }],
   ["terminal", { kind: "terminal", cwd: "/repo" }],
 ];
 

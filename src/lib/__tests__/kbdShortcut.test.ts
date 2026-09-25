@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  describeChord,
   parseChord,
   MODIFIER_SEARCH_MAP,
   VALID_KEY_PATTERN,
@@ -7,6 +8,7 @@ import {
   normalizeQuery,
   comboToAriaKeyshortcuts,
 } from "../kbdShortcut";
+import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 
 describe("parseChord — macOS glyphs", () => {
   it("maps Cmd/Option/Shift/Ctrl to glyphs", () => {
@@ -133,6 +135,18 @@ describe("parseChord — edge cases", () => {
 
   it("trims whitespace around + separators", () => {
     expect(parseChord(" Cmd + Shift + P ", true)).toEqual([["⌘", "⇧", "P"]]);
+  });
+
+  it("keeps a literal plus key as its own chord step", () => {
+    expect(parseChord("Cmd+K +", true)).toEqual([["⌘", "K"], ["+"]]);
+    expect(parseChord("Cmd+K +", false)).toEqual([["Ctrl", "K"], ["+"]]);
+  });
+
+  it("keeps a trailing literal plus from swallowing the next step", () => {
+    expect(parseChord("Cmd++ Cmd+P", true)).toEqual([
+      ["⌘", "+"],
+      ["⌘", "P"],
+    ]);
   });
 
   it("treats a bare + as a literal + key", () => {
@@ -390,9 +404,9 @@ describe("comboToAriaKeyshortcuts — edge cases", () => {
     expect(comboToAriaKeyshortcuts("   ", true)).toBeUndefined();
   });
 
-  it("handles literal + key (Ctrl++)", () => {
-    expect(comboToAriaKeyshortcuts("Ctrl++", false)).toBe("Control++");
-    expect(comboToAriaKeyshortcuts("Cmd+Shift++", true)).toBe("Meta+Shift++");
+  it("spells a literal + key as Plus (Ctrl++)", () => {
+    expect(comboToAriaKeyshortcuts("Ctrl++", false)).toBe("Control+Plus");
+    expect(comboToAriaKeyshortcuts("Cmd+Shift++", true)).toBe("Meta+Shift+Plus");
   });
 
   it("uppercases single-char keys", () => {
@@ -433,5 +447,76 @@ describe("parseChord — pre-glyphed input (formatComboForDisplay → KbdChord p
 
   it("preserves unknown glyphed tokens as-is", () => {
     expect(parseChord("⌘+X", true)).toEqual([["⌘", "X"]]);
+  });
+});
+
+describe("describeChord", () => {
+  const combos = buildDefaultKeybindings(false)
+    .map((binding) => binding.combo)
+    .filter((combo) => combo.length > 0);
+
+  it("never speaks a glyph for any shipped binding, on either platform", () => {
+    for (const combo of combos) {
+      for (const mac of [true, false]) {
+        const spoken = describeChord(combo, mac);
+        expect(spoken, combo).not.toMatch(/[⌘⌥⇧⌃⏎⎋⇥⌫⌦↑↓←→]/);
+        expect(spoken.trim().length, combo).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("says 'then' once between each pair of chord steps", () => {
+    for (const combo of combos) {
+      const steps = parseChord(combo, true).length;
+      expect(describeChord(combo, true).split(", then ").length, combo).toBe(steps);
+    }
+  });
+
+  it("names every key of a step, in order", () => {
+    for (const combo of combos) {
+      const stepKeys = parseChord(combo, false).map((keys) => keys.length);
+      const spokenKeys = describeChord(combo, false)
+        .split(", then ")
+        .map((step) => step.split(" ").filter((word) => /^[A-Z0-9]/.test(word)).length);
+      stepKeys.forEach((count, i) => expect(spokenKeys[i], combo).toBeGreaterThanOrEqual(count));
+    }
+  });
+
+  it("uses each platform's own modifier names", () => {
+    expect(describeChord("Cmd+Alt+T", true)).not.toBe(describeChord("Cmd+Alt+T", false));
+    expect(describeChord("Cmd+Alt+T", false)).not.toMatch(/Command|Option/);
+  });
+
+  it("reads a key range as a range", () => {
+    expect(describeChord("Cmd+Alt+1–9", true)).toMatch(/1 through 9$/);
+  });
+
+  it("returns an empty string for an empty shortcut", () => {
+    expect(describeChord("", true)).toBe("");
+  });
+
+  it("omits every sequence the chips show as more than one step", () => {
+    const edgeCases = ["Cmd++ Cmd+P", "Cmd+K +", "Cmd+K  Cmd+S", "Ctrl++", "Cmd+Shift+P"];
+    for (const combo of [...edgeCases, ...combos]) {
+      for (const mac of [true, false]) {
+        const aria = comboToAriaKeyshortcuts(combo, mac);
+        if (parseChord(combo, mac).length > 1) expect(aria, combo).toBeUndefined();
+        else expect(aria, combo).not.toMatch(/\+\+|\+$/);
+      }
+    }
+  });
+
+  it("speaks exactly the steps and keys the chips show, literal plus included", () => {
+    const edgeCases = ["Cmd++ Cmd+P", "Cmd+K +", "Ctrl++", " Cmd + Shift + P ", "Cmd+K  Cmd+S"];
+    for (const combo of [...edgeCases, ...combos]) {
+      for (const mac of [true, false]) {
+        const shown = parseChord(combo, mac);
+        const spoken = describeChord(combo, mac).split(", then ");
+        expect(spoken.length, combo).toBe(shown.length);
+        spoken.forEach((step, i) => {
+          if (shown[i]!.includes("+")) expect(step, combo).toMatch(/\bPlus\b/);
+        });
+      }
+    }
   });
 });

@@ -7,9 +7,12 @@ import type { UseDevServerReturn } from "@/hooks/useDevServer";
 
 vi.mock("@/components/ui/popover", () => ({
   Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  PopoverTrigger: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button {...props}>{children}</button>
-  ),
+  PopoverTrigger: ({
+    children,
+    asChild,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }) =>
+    asChild ? <>{children}</> : <button {...props}>{children}</button>,
   PopoverContent: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="overflow-content">{children}</div>
   ),
@@ -120,7 +123,7 @@ describe("DevPreviewStuckBanner", () => {
     const restartButton = screen.getByRole("button", {
       name: /restart dev server/i,
     }) as HTMLButtonElement;
-    expect(restartButton.disabled).toBe(true);
+    expect(restartButton.getAttribute("aria-disabled")).toBe("true");
   });
 });
 

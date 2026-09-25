@@ -1,5 +1,12 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
+import {
+  render as rtlRender,
+  screen,
+  waitFor,
+  act,
+  fireEvent,
+  within,
+} from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach, type MockInstance } from "vitest";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
@@ -8,6 +15,25 @@ import { useUIStore } from "@/store/uiStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import * as notifyLib from "@/lib/notify";
 import { NotificationCenter } from "../NotificationCenter";
+import { useProjectStore } from "@/store/projectStore";
+import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+// The header's icon controls carry real tooltips, which the app mounts under
+// App.tsx's provider.
+function render(ui: React.ReactElement) {
+  return rtlRender(ui, { wrapper: TooltipProvider });
+}
+
+async function openHeaderMenu(label: string): Promise<void> {
+  const trigger = screen.getByLabelText(label);
+  await act(async () => {
+    fireEvent.pointerDown(trigger, { button: 0 });
+    fireEvent.pointerUp(trigger, { button: 0 });
+    fireEvent.click(trigger);
+  });
+}
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 const getMock = vi.hoisted(() => vi.fn());
@@ -38,6 +64,8 @@ const worktreeStoreMock = vi.hoisted(() => ({
 }));
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: <T,>(selector: (state: typeof worktreeStoreMock) => T) =>
+    selector(worktreeStoreMock),
+  useWorktreeStoreOptional: <T,>(selector: (state: typeof worktreeStoreMock) => T) =>
     selector(worktreeStoreMock),
 }));
 
@@ -444,15 +472,10 @@ describe("NotificationCenter pause menu", () => {
     expect(vi.mocked(notifyLib.notify)).not.toHaveBeenCalled();
   });
 
-  it("dispatches notification settings tab from the footer link", async () => {
+  it("dispatches notification settings tab from the overflow menu", async () => {
     const onClose = vi.fn();
     render(<NotificationCenter open onClose={onClose} />);
-    const trigger = screen.getByLabelText("Pause notifications");
-    await act(async () => {
-      fireEvent.pointerDown(trigger, { button: 0 });
-      fireEvent.pointerUp(trigger, { button: 0 });
-      fireEvent.click(trigger);
-    });
+    await openHeaderMenu("More notification actions");
 
     await act(async () => {
       fireEvent.click(screen.getByLabelText("Notification settings"));
@@ -466,18 +489,17 @@ describe("NotificationCenter pause menu", () => {
     );
   });
 
-  it("dispatches notification settings tab from 'Custom…' (deferred picker stub)", async () => {
+  it("routes 'Schedule quiet hours…' to the notification settings tab", async () => {
     const onClose = vi.fn();
     render(<NotificationCenter open onClose={onClose} />);
-    const trigger = screen.getByLabelText("Pause notifications");
-    await act(async () => {
-      fireEvent.pointerDown(trigger, { button: 0 });
-      fireEvent.pointerUp(trigger, { button: 0 });
-      fireEvent.click(trigger);
-    });
+    await openHeaderMenu("Pause notifications");
 
+    // One route to settings per menu: the pause menu used to offer both
+    // "Custom…" and "Notification settings…", and both went to the same tab.
+    expect(screen.queryByText("Custom…")).toBeNull();
+    expect(screen.queryByLabelText("Notification settings")).toBeNull();
     await act(async () => {
-      fireEvent.click(screen.getByText("Custom…"));
+      fireEvent.click(screen.getByText("Schedule quiet hours…"));
     });
 
     expect(onClose).toHaveBeenCalled();
@@ -493,6 +515,21 @@ describe("NotificationCenter muted pill", () => {
   it("does not render the pill when neither session nor scheduled mute is active", () => {
     render(<NotificationCenter open onClose={() => {}} />);
     expect(screen.queryByTestId("notification-muted-pill")).toBeNull();
+  });
+
+  it("names OS Do Not Disturb beside a session mute rather than hiding it", () => {
+    useNotificationSettingsStore.setState({
+      quietUntil: Date.now() + 60 * 60 * 1000,
+      osDndActive: true,
+    });
+    try {
+      render(<NotificationCenter open onClose={() => {}} />);
+      const pill = screen.getByTestId("notification-muted-pill");
+      expect(pill.textContent).toContain("Muted until");
+      expect(pill.textContent).toContain("OS Do Not Disturb is active");
+    } finally {
+      useNotificationSettingsStore.setState({ osDndActive: undefined });
+    }
   });
 
   it("renders a session-mute pill with formatted end time and a Resume button", () => {
@@ -560,6 +597,10 @@ describe("NotificationCenter muted pill", () => {
       });
 
       render(<NotificationCenter open onClose={() => {}} />);
+      // Before Resume, the strip already says the schedule outlasts the mute.
+      expect(screen.getByTestId("notification-muted-pill").textContent).toContain(
+        "Quiet hours continue until"
+      );
       const resume = screen.getByLabelText("Resume notifications");
 
       act(() => {
@@ -573,6 +614,7 @@ describe("NotificationCenter muted pill", () => {
       expect(vi.mocked(notifyLib.setSessionQuietUntil)).toHaveBeenCalledWith(0);
       const pill = screen.getByTestId("notification-muted-pill");
       expect(pill.textContent).toContain("Quiet hours");
+      expect(pill.textContent).not.toContain("continue until");
       expect(screen.queryByLabelText("Resume notifications")).toBeNull();
       expect(useNotificationSettingsStore.getState().quietHoursEnabled).toBe(true);
     } finally {
@@ -671,6 +713,8 @@ describe("NotificationCenter muted pill", () => {
       const pill = screen.getByTestId("notification-muted-pill");
       expect(pill.textContent).toContain("Quiet hours");
       expect(screen.queryByLabelText("Resume notifications")).toBeNull();
+      // Nothing to resume, but the schedule is one click from here.
+      expect(within(pill).getByRole("button", { name: "Manage" })).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }
@@ -768,7 +812,7 @@ describe("NotificationThread — dismiss removes entire thread", () => {
     });
 
     const thread = screen.getByTestId("notification-thread");
-    const dismissButton = within(thread).getByLabelText("Dismiss notification");
+    const dismissButton = within(thread).getByLabelText(/^Dismiss /);
     await act(async () => {
       fireEvent.click(dismissButton);
     });
@@ -814,7 +858,7 @@ describe("NotificationThread — dismiss removes entire thread", () => {
     });
 
     const thread = screen.getByTestId("notification-thread");
-    const dismissButton = within(thread).getByLabelText("Dismiss notification");
+    const dismissButton = within(thread).getByLabelText(/^Dismiss /);
     await act(async () => {
       fireEvent.click(dismissButton);
     });
@@ -855,7 +899,7 @@ describe("NotificationThread — dismiss removes entire thread", () => {
     });
 
     const thread = screen.getByTestId("notification-thread");
-    const dismissButton = within(thread).getByLabelText("Dismiss notification");
+    const dismissButton = within(thread).getByLabelText(/^Dismiss /);
     await act(async () => {
       fireEvent.click(dismissButton);
     });
@@ -1002,9 +1046,21 @@ describe("NotificationCenter empty state — muted", () => {
 });
 
 describe("NotificationCenter overflow menu", () => {
-  it("does not render overflow trigger when there are no entries", () => {
+  it("keeps settings reachable with an empty inbox but offers nothing to clear", async () => {
     render(<NotificationCenter open onClose={() => {}} />);
-    expect(screen.queryByLabelText("More notification actions")).toBeNull();
+    await openHeaderMenu("More notification actions");
+    expect(screen.getByLabelText("Notification settings")).toBeTruthy();
+    expect(screen.queryByText("Clear all…")).toBeNull();
+    expect(screen.queryByRole("menuitemcheckbox")).toBeNull();
+  });
+
+  it("never opens onto a lone item once there is history", async () => {
+    setEntries([makeEntry()]);
+    render(<NotificationCenter open onClose={() => {}} />);
+    await openHeaderMenu("More notification actions");
+    const items =
+      screen.getAllByRole("menuitem").length + screen.queryAllByRole("menuitemcheckbox").length;
+    expect(items).toBeGreaterThan(1);
   });
 
   it("renders overflow trigger as a button when entries exist", () => {
@@ -1036,7 +1092,7 @@ describe("NotificationCenter overflow menu", () => {
       fireEvent.click(trigger);
     });
 
-    const clearItem = screen.getByText("Clear all");
+    const clearItem = screen.getByText("Clear all…");
     await act(async () => {
       fireEvent.click(clearItem);
     });
@@ -1064,7 +1120,6 @@ describe("NotificationCenter overflow menu", () => {
     expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(callOrder).toEqual(["clearAll", "onClose"]);
-    expect(screen.queryByLabelText("More notification actions")).toBeNull();
   });
 
   it("leaves the history intact when the clear confirm is dismissed", async () => {
@@ -1078,7 +1133,7 @@ describe("NotificationCenter overflow menu", () => {
       fireEvent.click(trigger);
     });
     await act(async () => {
-      fireEvent.click(screen.getByText("Clear all"));
+      fireEvent.click(screen.getByText("Clear all…"));
     });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
@@ -1149,7 +1204,7 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     expect(within(chrono).queryByText("All notifications")).toBeNull();
   });
 
-  it("caps the pinned section at 5 entries even when more unread severe entries exist", () => {
+  it("caps the pinned section below the number of severe unread threads when there are many", () => {
     const baseT = Date.now();
     const items = Array.from({ length: 7 }, (_, i) =>
       makeEntry({
@@ -1166,7 +1221,8 @@ describe("NotificationCenter — Needs attention pinned section", () => {
 
     const pinned = screen.getByTestId("needs-attention-section");
     const messages = within(pinned).getAllByText(/^Failure \d$/);
-    expect(messages).toHaveLength(5);
+    expect(messages.length).toBeGreaterThan(0);
+    expect(messages.length).toBeLessThan(items.length);
   });
 
   it("shows a '+N more below' note when severe unread threads exceed the pinned cap", async () => {
@@ -1185,20 +1241,30 @@ describe("NotificationCenter — Needs attention pinned section", () => {
 
     render(<NotificationCenter open onClose={vi.fn()} />);
 
-    // 7 severe unread threads, 5 pinned → the remaining 2 are acknowledged,
-    // not silently dropped; "below" must be literally true — the overflowed
-    // entries stay reachable in the chronological list.
-    expect(screen.getByTestId("needs-attention-overflow").textContent).toBe("+2 more below");
+    // Every thread past the cap is acknowledged, not silently dropped, and
+    // "below" is literally true — the overflowed ones stay in the list.
+    const pinnedNames = () =>
+      within(screen.getByTestId("needs-attention-section"))
+        .getAllByText(/^Failure \d$/)
+        .map((m) => m.textContent);
+    const overflowed = Array.from({ length: 7 }, (_, i) => `Failure ${i}`).filter(
+      (name) => !pinnedNames().includes(name)
+    );
+    expect(overflowed.length).toBeGreaterThan(0);
+    expect(screen.getByTestId("needs-attention-overflow").textContent).toBe(
+      `+${overflowed.length} more below`
+    );
     const chrono = screen.getByTestId("chrono-section");
-    expect(within(chrono).getByText("Failure 5")).toBeTruthy();
-    expect(within(chrono).getByText("Failure 6")).toBeTruthy();
+    for (const name of overflowed) expect(within(chrono).getByText(name)).toBeTruthy();
 
     // The pinned rail is computed from the global unread set, so the note
     // (and the reachable rows) survive switching to the Unread filter.
     await act(async () => {
       fireEvent.click(screen.getByText("Unread"));
     });
-    expect(screen.getByTestId("needs-attention-overflow").textContent).toBe("+2 more below");
+    expect(screen.getByTestId("needs-attention-overflow").textContent).toBe(
+      `+${overflowed.length} more below`
+    );
     expect(within(screen.getByTestId("chrono-section")).getByText("Failure 6")).toBeTruthy();
   });
 
@@ -1286,51 +1352,49 @@ describe("NotificationCenter — Needs attention pinned section", () => {
 });
 
 describe("NotificationCenter — Group by context toggle", () => {
-  it("does not render the toggle when there are no entries", () => {
+  it("offers no grouping choice when there are no entries", async () => {
     render(<NotificationCenter open onClose={vi.fn()} />);
-    expect(screen.queryByLabelText("Group by project or worktree")).toBeNull();
+    await openHeaderMenu("More notification actions");
+    expect(
+      screen.queryByRole("menuitemcheckbox", { name: /Group by project or worktree/ })
+    ).toBeNull();
   });
 
-  it("renders the toggle when entries exist", () => {
+  it("offers grouping as a checked menu item when entries exist", async () => {
     setEntries([makeEntry()]);
     render(<NotificationCenter open onClose={vi.fn()} />);
-    expect(screen.getByLabelText("Group by project or worktree")).toBeTruthy();
+    await openHeaderMenu("More notification actions");
+    const item = screen.getByRole("menuitemcheckbox", { name: /Group by project or worktree/ });
+    expect(item.getAttribute("aria-checked")).toBe("false");
   });
 
-  it("clicking the toggle flips groupByContext optimistically", async () => {
+  it("selecting the item flips groupByContext", async () => {
     setEntries([makeEntry()]);
     render(<NotificationCenter open onClose={vi.fn()} />);
-
-    const toggle = screen.getByLabelText("Group by project or worktree");
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    await openHeaderMenu("More notification actions");
 
     await act(async () => {
-      fireEvent.click(toggle);
+      fireEvent.click(
+        screen.getByRole("menuitemcheckbox", { name: /Group by project or worktree/ })
+      );
     });
 
     expect(useNotificationSettingsStore.getState().groupByContext).toBe(true);
-    expect(screen.getByLabelText("Group by project or worktree").getAttribute("aria-pressed")).toBe(
-      "true"
-    );
   });
 
-  it("uses aria-pressed as the sole state signal — no border outline in either state", async () => {
+  it("reflects an existing grouping as checked, and clears it when selected again", async () => {
+    useNotificationSettingsStore.setState({ groupByContext: true });
     setEntries([makeEntry()]);
     render(<NotificationCenter open onClose={vi.fn()} />);
-
-    // The shared toolbar-icon-button armed styling keys off aria-pressed; a
-    // per-state border class would be a contradictory second signal and make
-    // the toggle's geometry differ from its sibling icon buttons.
-    const toggle = screen.getByLabelText("Group by project or worktree");
-    expect(toggle.className).not.toMatch(/\bborder\b|border-daintree-text\/15|border-transparent/);
+    await openHeaderMenu("More notification actions");
+    const item = screen.getByRole("menuitemcheckbox", { name: /Group by project or worktree/ });
+    expect(item.getAttribute("aria-checked")).toBe("true");
 
     await act(async () => {
-      fireEvent.click(toggle);
+      fireEvent.click(item);
     });
 
-    const pressed = screen.getByLabelText("Group by project or worktree");
-    expect(pressed.getAttribute("aria-pressed")).toBe("true");
-    expect(pressed.className).not.toMatch(/\bborder\b|border-daintree-text\/15|border-transparent/);
+    expect(useNotificationSettingsStore.getState().groupByContext).toBe(false);
   });
 
   it("renders context section headers with worktree names when groupByContext is on", () => {
@@ -1356,10 +1420,11 @@ describe("NotificationCenter — Group by context toggle", () => {
     expect(headers.map((h) => h.textContent)).toEqual(
       expect.arrayContaining([expect.stringContaining("feature/billing")])
     );
-    // Falls back to projectId when worktreeId is absent.
-    expect(headers.map((h) => h.textContent)).toEqual(
-      expect.arrayContaining([expect.stringContaining("proj-x")])
-    );
+    // A project this view can't name is called that, never by its id — real
+    // project ids are sha256 hashes, and one printed as a heading is noise.
+    const labels = headers.map((h) => h.textContent ?? "");
+    expect(labels.some((l) => l.includes("proj-x"))).toBe(false);
+    expect(labels).toEqual(expect.arrayContaining([expect.stringContaining("Another project")]));
   });
 
   it("falls back to raw worktreeId when no name is registered", () => {
@@ -1373,14 +1438,16 @@ describe("NotificationCenter — Group by context toggle", () => {
     expect(header.textContent).toContain("wt-unknown");
   });
 
-  it("falls back to 'Other' only when the entry has no worktreeId or projectId", () => {
-    useNotificationSettingsStore.setState({ groupByContext: true });
+  it("names an entry with no project or worktree as the app's own, in the header and on the row", () => {
     setEntries([makeEntry({ message: "Contextless" })]);
+    const { unmount } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const rowSource = screen.getByTestId("notification-source").textContent ?? "";
+    expect(rowSource).toBe(APP_SOURCE_LABEL);
+    unmount();
 
+    useNotificationSettingsStore.setState({ groupByContext: true });
     render(<NotificationCenter open onClose={vi.fn()} />);
-
-    const header = screen.getByTestId("context-section-header");
-    expect(header.textContent).toContain("Other");
+    expect(screen.getByTestId("context-section-header").textContent).toContain(rowSource);
   });
 
   it("renders distinct context sections for two unknown worktrees (no merge into one 'Other')", () => {
@@ -1851,6 +1918,34 @@ describe("NotificationCenter — Jump to new pill", () => {
     expect(screen.getByTestId("jump-to-new-pill").className).toMatch(/opacity-0/);
   });
 
+  it("retires the pill on a scroll that jumps straight past the divider", () => {
+    const closedAt = Date.now() - 5000;
+    useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
+    setEntries([makeEntry({ message: "Newer", timestamp: closedAt + 4000 })]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    act(() => {
+      fireObserver({ top: 0, bottom: 400, left: 0, right: 360 }, 500, false);
+    });
+    expect(screen.getByTestId("jump-to-new-pill").className).toMatch(/opacity-100/);
+
+    // End / a scrollbar drag: the divider goes from below the viewport to above
+    // it without ever intersecting, so the observer reports nothing. The scroll
+    // itself has to be enough to retire the pill.
+    const scroller = screen.getByRole("list", { name: "Notifications" });
+    const divider = screen.getByTestId("new-since-last-looked");
+    vi.spyOn(divider, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: -200, width: 360, height: 16 })
+    );
+    vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 0, width: 360, height: 400 })
+    );
+    act(() => {
+      fireEvent.scroll(scroller);
+    });
+    expect(screen.getByTestId("jump-to-new-pill").className).toMatch(/opacity-0/);
+  });
+
   it("announces 'New notifications below' when pill becomes visible", () => {
     const closedAt = Date.now() - 5000;
     useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
@@ -1867,10 +1962,21 @@ describe("NotificationCenter — Jump to new pill", () => {
     expect(useAnnouncerStore.getState().polite?.msg).toBe("New notifications below");
   });
 
-  it("clicking the pill calls scrollIntoView and focus on the divider", () => {
+  it("clicking the pill scrolls to the divider and lands focus on the first new row in the list", () => {
     const closedAt = Date.now() - 5000;
     useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
-    setEntries([makeEntry({ message: "Newer", timestamp: closedAt + 4000 })]);
+    // Unread and severe, so a copy of it is pinned in the rail above too —
+    // focus has to land on the list's row, the one under the divider.
+    setEntries([
+      makeEntry({
+        id: "new-err",
+        type: "error",
+        message: "Newer",
+        timestamp: closedAt + 4000,
+        seenAsToast: false,
+      }),
+      makeEntry({ id: "old", message: "Older", timestamp: closedAt - 60_000 }),
+    ]);
 
     const proto = HTMLElement.prototype as unknown as {
       scrollIntoView?: (...args: unknown[]) => void;
@@ -1882,9 +1988,6 @@ describe("NotificationCenter — Jump to new pill", () => {
     try {
       render(<NotificationCenter open onClose={vi.fn()} />);
 
-      const divider = screen.getByTestId("new-since-last-looked");
-      const focusSpy = vi.spyOn(divider, "focus").mockImplementation(() => undefined);
-
       act(() => {
         fireObserver({ top: 0, bottom: 400, left: 0, right: 360 }, 500, false);
       });
@@ -1892,7 +1995,11 @@ describe("NotificationCenter — Jump to new pill", () => {
       fireEvent.click(screen.getByTestId("jump-to-new-pill"));
 
       expect(scrollSpy).toHaveBeenCalledWith({ block: "start", behavior: "instant" });
-      expect(focusSpy).toHaveBeenCalled();
+      // A row, not the divider: the list's keys only move between rows.
+      const active = document.activeElement;
+      expect(active?.getAttribute("role")).toBe("listitem");
+      expect(active?.textContent).toContain("Newer");
+      expect(screen.getByTestId("chrono-section").contains(active)).toBe(true);
     } finally {
       proto.scrollIntoView = originalScroll;
     }
@@ -2373,7 +2480,7 @@ describe("NotificationCenter — keyboard navigation", () => {
     });
 
     // Open the kebab menu on the first row — emulates Radix DropdownMenu open.
-    const trigger = within(rows[0]!).getByLabelText("Notification options");
+    const trigger = within(rows[0]!).getByLabelText(/^Options for /);
     act(() => {
       fireEvent.pointerDown(trigger, { button: 0 });
       fireEvent.pointerUp(trigger, { button: 0 });
@@ -2440,7 +2547,7 @@ describe("NotificationCenter — keyboard navigation", () => {
       rows[0]?.focus();
     });
 
-    const trigger = within(rows[0]!).getByLabelText("Notification options");
+    const trigger = within(rows[0]!).getByLabelText(/^Options for /);
     await act(async () => {
       fireEvent.pointerDown(trigger, { button: 0 });
       fireEvent.pointerUp(trigger, { button: 0 });
@@ -2474,7 +2581,7 @@ describe("NotificationCenter — keyboard navigation", () => {
       rows[0]?.focus();
     });
 
-    const trigger = within(rows[0]!).getByLabelText("Notification options");
+    const trigger = within(rows[0]!).getByLabelText(/^Options for /);
     await act(async () => {
       fireEvent.pointerDown(trigger, { button: 0 });
       fireEvent.pointerUp(trigger, { button: 0 });
@@ -2642,7 +2749,7 @@ describe("archived tab and 'e' archive keybinding", () => {
     expect(screen.queryByText("No archived notifications")).not.toBeNull();
   });
 
-  it("'e' in the Archived tab permanently deletes the focused entry", async () => {
+  it("'e' in the Archived tab leaves the entry alone", async () => {
     setEntries([
       makeEntry({ id: "live", message: "Live entry" }),
       makeEntry({ id: "done", message: "Archived entry", archivedAt: Date.now() }),
@@ -2659,10 +2766,23 @@ describe("archived tab and 'e' archive keybinding", () => {
       fireEvent.keyDown(list, { key: "e" });
     });
 
-    // Archived entry is gone from store entirely.
+    // `e` means archive everywhere; one tab over it must not become a delete.
     const entries = useNotificationHistoryStore.getState().entries;
-    expect(entries.find((e) => e.id === "done")).toBeUndefined();
+    expect(entries.find((e) => e.id === "done")).not.toBeUndefined();
     expect(entries.find((e) => e.id === "live")).not.toBeUndefined();
+  });
+
+  it("a modified 'e' does not archive", async () => {
+    setEntries([makeEntry({ id: "keep", message: "Keep me" })]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const list = container.querySelector<HTMLElement>('[role="list"]')!;
+    act(() => {
+      getRows(container)[0]?.focus();
+    });
+    await act(async () => {
+      fireEvent.keyDown(list, { key: "e", metaKey: true });
+    });
+    expect(useNotificationHistoryStore.getState().entries[0]?.archivedAt).toBeNull();
   });
 
   it("the Archived button is not rendered when there are zero entries", () => {
@@ -2894,5 +3014,326 @@ describe("NotificationCenter — scroll shadows", () => {
     flushFrames();
 
     expect(readCues(scroller)).toEqual([false, true]);
+  });
+});
+
+describe("NotificationCenter — fleet-volume triage", () => {
+  const HASH = "3e31f96c37be90df805ad2ea7e10d4f0ae8f1c2b9d6a4e7f0c1b2a3d4e5f6a7b8";
+
+  it("never prints an id as a place: rows and grouped headers name by path segment, not hash or path", () => {
+    const wtPath = "/Users/dev/Projects/atlas-api-worktrees/feature-rate-limits";
+    setEntries([
+      makeEntry({
+        id: "a",
+        title: "Agent exited",
+        message: "Codex exited with code 137.",
+        context: { projectId: HASH, worktreeId: wtPath },
+      }),
+      makeEntry({
+        id: "b",
+        title: "Idle",
+        message: "Terminals idle.",
+        context: { projectId: HASH },
+      }),
+    ]);
+    const { unmount } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const sources = screen.getAllByTestId("notification-source").map((s) => s.textContent ?? "");
+    // An unregistered project is named as such, never printed as its hash and
+    // never dropped (a row with no source reads as this project's).
+    expect(sources).toEqual(["Another project · feature-rate-limits", "Another project"]);
+    unmount();
+
+    useNotificationSettingsStore.setState({ groupByContext: true });
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    for (const header of screen.getAllByTestId("context-section-header")) {
+      const text = header.textContent ?? "";
+      expect(text).not.toMatch(/[0-9a-f]{16}/i);
+      expect(text).not.toContain("/Users/");
+    }
+    // Grouped, the header names the place and the rows don't repeat it.
+    expect(screen.queryAllByTestId("notification-source")).toHaveLength(0);
+  });
+
+  it("marks where new ends: an 'Earlier' boundary sits before the first row older than the watermark", () => {
+    const closedAt = Date.now() - 60_000;
+    useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
+    setEntries([
+      makeEntry({ id: "n1", message: "New one", timestamp: closedAt + 30_000 }),
+      makeEntry({ id: "o1", message: "Old one", timestamp: closedAt - 30_000 }),
+      makeEntry({ id: "o2", message: "Older one", timestamp: closedAt - 90_000 }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    const boundaries = screen.getAllByTestId("notification-earlier-boundary");
+    expect(boundaries).toHaveLength(1);
+    const rows = screen.getAllByRole("listitem");
+    const firstOld = rows.find((r) => r.textContent?.includes("Old one"))!;
+    const newRow = rows.find((r) => r.textContent?.includes("New one"))!;
+    const follows = (a: Node, b: Node) =>
+      !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(newRow, boundaries[0]!)).toBe(true);
+    expect(follows(boundaries[0]!, firstOld)).toBe(true);
+  });
+
+  it("draws no boundary when everything is new or everything is old", () => {
+    const closedAt = Date.now() - 60_000;
+    useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
+    setEntries([
+      makeEntry({ message: "Old one", timestamp: closedAt - 30_000 }),
+      makeEntry({ message: "Older one", timestamp: closedAt - 90_000 }),
+    ]);
+    const { unmount } = render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.queryByTestId("notification-earlier-boundary")).toBeNull();
+    unmount();
+    setEntries([
+      makeEntry({ message: "New one", timestamp: closedAt + 10_000 }),
+      makeEntry({ message: "Newer one", timestamp: closedAt + 20_000 }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.queryByTestId("notification-earlier-boundary")).toBeNull();
+  });
+
+  it("pins an agent asking for input ahead of failures, however much newer the failures are", () => {
+    const now = Date.now();
+    setEntries([
+      makeEntry({
+        id: "err",
+        type: "error",
+        title: "Tests failed",
+        message: "12 failed.",
+        timestamp: now - 1_000,
+        seenAsToast: false,
+      }),
+      makeEntry({
+        id: "ask",
+        type: "warning",
+        title: "Claude is waiting for input",
+        message: "Asked a question.",
+        timestamp: now - 600_000,
+        seenAsToast: false,
+        context: { eventKind: "waiting" },
+      }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    const pinnedRows = within(screen.getByTestId("needs-attention-section")).getAllByRole(
+      "listitem"
+    );
+    expect(pinnedRows[0]!.textContent).toContain("waiting for input");
+  });
+
+  it("previews pinned rows without their body; the list's copy keeps it", () => {
+    setEntries([
+      makeEntry({
+        type: "error",
+        title: "Push rejected",
+        message: "The remote has commits your branch doesn't.",
+        seenAsToast: false,
+      }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    const pinned = screen.getByTestId("needs-attention-section");
+    const chrono = screen.getByTestId("chrono-section");
+    expect(within(pinned).getByText("Push rejected")).toBeTruthy();
+    expect(within(pinned).queryByText(/remote has commits/)).toBeNull();
+    expect(within(chrono).getByText(/remote has commits/)).toBeTruthy();
+  });
+
+  it("keeps focus in the list when marking a pinned row read promotes another into its slot", () => {
+    const now = Date.now();
+    setEntries(
+      Array.from({ length: 7 }, (_, i) =>
+        makeEntry({
+          id: `sev-${i}`,
+          type: "error",
+          title: `Failure ${i}`,
+          message: "Broke.",
+          timestamp: now - i * 1_000,
+          seenAsToast: false,
+        })
+      )
+    );
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    const firstPinned = within(screen.getByTestId("needs-attention-section")).getAllByRole(
+      "listitem"
+    )[0]!;
+    act(() => firstPinned.focus());
+    act(() => {
+      fireEvent.keyDown(firstPinned, { key: "u" });
+    });
+    // The pinned count stays at five, so nothing about the row COUNT changed —
+    // and yet the focused element was replaced.
+    const active = document.activeElement;
+    expect(active).not.toBe(document.body);
+    expect(active?.getAttribute("role")).toBe("listitem");
+  });
+
+  it("gives every row's controls a name that says which row they act on", () => {
+    setEntries([
+      makeEntry({ id: "a", title: "Push rejected", message: "m", context: { projectId: "p" } }),
+      makeEntry({ id: "b", title: "Tests failed", message: "m", context: { projectId: "p" } }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    for (const pattern of [/^Dismiss /, /^Options for /]) {
+      const names = screen.getAllByLabelText(pattern).map((b) => b.getAttribute("aria-label"));
+      expect(new Set(names).size).toBe(names.length);
+    }
+  });
+
+  it("shows the quiet strip for silences the user made, but not for shipped defaults", () => {
+    setEntries([makeEntry({ message: "One" })]);
+    // Completed ships off, so it being off is not a silence — counting it
+    // would put the strip in front of everyone who never touched a setting.
+    expect(useNotificationSettingsStore.getInitialState().completedEnabled).toBe(false);
+    useNotificationSettingsStore.setState({ completedEnabled: false });
+    const defaults = render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.queryByTestId("notification-muted-pill")).toBeNull();
+    defaults.unmount();
+
+    useNotificationSettingsStore.setState({ waitingEnabled: false });
+    const global = render(<NotificationCenter open onClose={vi.fn()} />);
+    const strip = screen.getByTestId("notification-muted-pill");
+    expect(strip.textContent).toContain("Waiting");
+    // A route to undo it, since no Resume applies to a silence.
+    expect(within(strip).getByRole("button").textContent).toBeTruthy();
+    global.unmount();
+
+    useNotificationSettingsStore.setState({ waitingEnabled: true });
+    const load = vi
+      .spyOn(useProjectSettingsStore.getState(), "loadNotificationOverridesForProjects")
+      .mockResolvedValue(undefined);
+    useProjectStore.setState({
+      currentProject: { id: "p1", path: "/repo", name: "Repo", emoji: "🌲", lastOpened: 0 },
+    });
+    useProjectSettingsStore.setState({
+      notificationOverridesByProjectId: { p1: { waitingEnabled: false } },
+    });
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.getByTestId("notification-muted-pill").textContent).toContain("This project");
+    // Re-read on open: the row menu's silence writes the settings file only.
+    expect(load).toHaveBeenCalledWith(["p1"]);
+    load.mockRestore();
+    useProjectStore.setState({ currentProject: null });
+    useProjectSettingsStore.setState({ notificationOverridesByProjectId: {} });
+  });
+
+  it("says how much of each grouped place is new", () => {
+    const closedAt = Date.now() - 60_000;
+    useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
+    useNotificationSettingsStore.setState({ groupByContext: true });
+    setEntries([
+      makeEntry({ message: "a", timestamp: closedAt + 10_000, context: { worktreeId: "/w/one" } }),
+      makeEntry({ message: "b", timestamp: closedAt - 10_000, context: { worktreeId: "/w/one" } }),
+      makeEntry({ message: "c", timestamp: closedAt - 20_000, context: { worktreeId: "/w/two" } }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    const headers = screen.getAllByTestId("context-section-header");
+    const one = headers.find((h) => h.textContent?.includes("one"))!;
+    const two = headers.find((h) => h.textContent?.includes("two"))!;
+    expect(within(one).getByTestId("context-section-new").textContent).toContain("1 new");
+    expect(within(two).queryByTestId("context-section-new")).toBeNull();
+  });
+
+  it("names each grouped section by its place for assistive tech, not a generic label", () => {
+    useNotificationSettingsStore.setState({ groupByContext: true });
+    worktreeStoreMock.worktrees.set("/w/login", { worktreeId: "/w/login", name: "feature/login" });
+    setEntries([makeEntry({ message: "m", context: { worktreeId: "/w/login" } })]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.getByRole("group", { name: /feature\/login/ })).toBeTruthy();
+  });
+
+  it("reports silences in other projects the inbox has heard from", () => {
+    const load = vi
+      .spyOn(useProjectSettingsStore.getState(), "loadNotificationOverridesForProjects")
+      .mockResolvedValue(undefined);
+    useProjectStore.setState({
+      projects: [{ id: "p2", path: "/atlas", name: "Atlas API", emoji: "🌲", lastOpened: 0 }],
+    });
+    useProjectSettingsStore.setState({
+      notificationOverridesByProjectId: { p2: { completedEnabled: false } },
+    });
+    setEntries([makeEntry({ message: "From Atlas", context: { projectId: "p2" } })]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.getByTestId("notification-muted-pill").textContent).toContain("Atlas API");
+    expect(load).toHaveBeenCalledWith(["p2"]);
+    load.mockRestore();
+    useProjectStore.setState({ projects: [] });
+    useProjectSettingsStore.setState({ notificationOverridesByProjectId: {} });
+  });
+
+  it("returns to the row after `h` then Escape, so j/k keep working", async () => {
+    setEntries([
+      makeEntry({ id: "a", title: "First", message: "m", correlationId: "c1" }),
+      makeEntry({ id: "b", title: "Second", message: "m", correlationId: "c2" }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    const rows = screen.getAllByRole("listitem");
+    act(() => rows[0]!.focus());
+    act(() => {
+      fireEvent.keyDown(rows[0]!, { key: "h" });
+    });
+    const items = await screen.findAllByRole("menuitem");
+    await waitFor(() => expect(document.activeElement).toBe(items[0]));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await waitFor(() => expect(document.activeElement).toBe(rows[0]));
+  });
+});
+
+describe("NotificationCenter — row menu triage", () => {
+  async function openRowMenu(container: HTMLElement, index = 0): Promise<void> {
+    const row = container.querySelectorAll<HTMLElement>('[role="listitem"]')[index]!;
+    const trigger = within(row).getByLabelText(/^Options for /);
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+  }
+
+  it("reads an unread row, and offers to unread it once read", async () => {
+    setEntries([makeEntry({ id: "r1", type: "info", seenAsToast: false })]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+
+    await openRowMenu(container);
+    expect(screen.queryByRole("menuitem", { name: /Mark as unread/ })).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /Mark as read/ }));
+    });
+    expect(useNotificationHistoryStore.getState().entries[0]?.seenAsToast).toBe(true);
+
+    await openRowMenu(container);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /Mark as unread/ }));
+    });
+    expect(useNotificationHistoryStore.getState().entries[0]?.seenAsToast).toBe(false);
+  });
+
+  it("archives the whole thread from its row, keeping every entry", async () => {
+    setEntries([
+      makeEntry({ id: "t1", correlationId: "thread-a", timestamp: 2 }),
+      makeEntry({ id: "t2", correlationId: "thread-a", timestamp: 1 }),
+    ]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+
+    await openRowMenu(container);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /^Archive/ }));
+    });
+
+    const entries = useNotificationHistoryStore.getState().entries;
+    expect(entries).toHaveLength(2);
+    expect(entries.every((e) => e.archivedAt !== null)).toBe(true);
+  });
+
+  it("offers no Archive on a row that is already archived", async () => {
+    // A correlation id so the row still has a menu (Copy correlation ID).
+    setEntries([makeEntry({ id: "old", correlationId: "c-old", archivedAt: Date.now() - 1000 })]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+    });
+
+    await openRowMenu(container);
+    expect(screen.queryByRole("menuitem", { name: /^Archive/ })).toBeNull();
+    // Read state doesn't apply to a filed row, so neither command is offered.
+    expect(screen.queryByRole("menuitem", { name: /Mark as/ })).toBeNull();
   });
 });

@@ -10,6 +10,7 @@
 @import "./styles/components/sidebar.css";
 @import "./styles/components/panels.css";
 @import "./styles/components/dock.css";
+@import "./styles/components/search-field.css";
 
 @font-face {
   font-family: "JetBrains Mono";
@@ -152,6 +153,9 @@ code.hljs {
    * Tier 40: Fixed panels (dock, sidebars)
    * Tier 50: Portal overlay
    * Tier 55: Maximized content (terminals)
+   * Tier 56: Ambient overlays — the window visual bell (the all-clear flash)
+   *          and the panel move ghost — so they stay under every modal scrim,
+   *          popover and toast
    * Tier 60: Modal dialogs (full-screen overlays)
    * Tier 70: Popovers, dropdowns, tooltips (can appear above modals)
    * Tier 75: Nested dialogs (dialogs triggered from within popovers)
@@ -160,6 +164,7 @@ code.hljs {
   --z-panel: 40;
   --z-portal: 50;
   --z-maximized: 55;
+  --z-visual-bell: 56;
   --z-modal: 60;
   --z-popover: 70;
   --z-nested-dialog: 75;
@@ -224,6 +229,15 @@ code.hljs {
   --scrollbar-thumb-hover: var(
     --theme-scrollbar-thumb-hover,
     color-mix(in oklab, var(--scrollbar-thumb) 85%, var(--color-text-primary))
+  );
+  /* The grabbed step, one further along the same ramp as hover — xterm's slider
+     has the same three (rest / hover / active), and a drag that looks like a
+     hover gives no confirmation the handle was caught. Derived, not a theme
+     token: every theme's ramp already points toward its own text colour. */
+  --scrollbar-thumb-active: color-mix(
+    in oklab,
+    var(--scrollbar-thumb-hover) 70%,
+    var(--color-text-primary)
   );
   --scrollbar-track: var(--theme-scrollbar-track, transparent);
   --scroll-shadow-color: var(--color-surface-panel);
@@ -349,21 +363,19 @@ code.hljs {
     @apply border-border;
   }
 
-  /* Native checkboxes/radios tint to the theme accent instead of the OS
-     cobalt — the only non-theme hue otherwise rendered in the app. The
-     AccentColor keyword keeps any context without the var on OS behavior.
+  /* Native checkboxes/radios paint their checked state in the text colour,
+     matching the house `Checkbox` primitive — never the OS cobalt, and not the
+     theme accent either. A checked option is membership, and accent restraint
+     allows at most ONE load-bearing accent per focus region; a checkbox group
+     spending it on every tick is precisely what the rule excludes.
 
-     `--checkbox-accent` is an opt-out seam, not a new default: it resolves to
-     the same accent unless an ancestor sets it, so every existing surface is
-     byte-identical. It exists because accent restraint allows at most ONE
-     load-bearing accent per focus region, and a group of option checkboxes is
-     membership — precisely what the rule excludes. A surface with several
-     checked options in one focus trap (the worktree delete dialog) sets this
-     to a neutral token so the accent stays available for the thing that
-     actually needs it. */
+     `--checkbox-accent` stays as a seam for the rare control whose colour
+     carries meaning; a semantic accent-colour utility still wins, since
+     utilities sit in a later layer. The AccentColor keyword keeps any context
+     without the vars on OS behaviour. */
   input[type="checkbox"],
   input[type="radio"] {
-    accent-color: var(--checkbox-accent, var(--theme-accent-primary, AccentColor));
+    accent-color: var(--checkbox-accent, var(--color-text-primary, AccentColor));
   }
 
   /* Neutral option controls: membership, not emphasis. */
@@ -499,13 +511,20 @@ code.hljs {
     letter-spacing: 0 !important;
   }
 
-  /* Consistent monospace font stack */
+  /* Consistent monospace font stack.
+
+     Ligatures off: the mono face (JetBrains Mono) draws `--` as one long dash,
+     `->` and `!=` as arrows and symbols, and in the UI the mono face is almost
+     always showing something to be read or typed character for character — a
+     command's `--flag`, a path, a hash. The terminal and the editor set their
+     own font and are untouched by this. */
   code,
   kbd,
   samp,
   pre,
   .font-mono {
     font-family: var(--font-mono);
+    font-variant-ligatures: none;
   }
 
   /* CodeMirror defaults to a bare `monospace`, which renders as serif on
@@ -545,6 +564,39 @@ body,
   overflow: hidden;
 }
 
+/* Daintree Tour click marker — one ring blooming from the mockup pointer's tip.
+ * Keyed remounts replay it; the scale is the signal, so reduced motion drops it. */
+@keyframes tour-click-ring {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.3);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+
+.tour-click-ring {
+  animation: tour-click-ring 450ms ease-out 1 both;
+}
+
+/* Daintree Tour end card — the ring around Next drains over the auto-advance
+ * countdown. Its length is the countdown, so the duration comes from the
+ * component (--tour-countdown) rather than a shared tier. */
+@keyframes tour-countdown {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: var(--tour-ring-length);
+  }
+}
+
+.tour-countdown-ring {
+  animation: tour-countdown var(--tour-countdown) linear 1 both;
+}
+
 /* Activity light pulse animation for very recent activity */
 @keyframes activity-pulse {
   0%,
@@ -563,30 +615,6 @@ body,
   will-change: opacity, transform;
 }
 
-/* Agent status indicator flash — single-shot scale+opacity on state transition.
- * Previously infinite (1.5s loop), now a 150ms one-shot driven by the consumer
- * toggling the class on state change (see AgentStatusIndicator).
- */
-@keyframes agent-pulse {
-  0% {
-    opacity: 0.7;
-    transform: scale(0.92);
-  }
-  60% {
-    opacity: 1;
-    transform: scale(1.06);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.animate-agent-pulse {
-  animation: agent-pulse var(--duration-150) var(--ease-out-expo) 1 both;
-  will-change: opacity, transform;
-}
-
 @keyframes checkbox-check-in {
   from {
     opacity: 0;
@@ -599,7 +627,7 @@ body,
 }
 
 /* The indicator mounts with this class already on it and keeps it for the whole
- * checked lifetime — unlike .animate-agent-pulse, which is dropped on
+ * checked lifetime — unlike a one-shot flash, which is dropped on
  * animationend. Hence `backwards` rather than `both`: it still pins the opening
  * frame to `from` (no flash of an opaque checkmark before the animation runs),
  * but releases the element on completion instead of parking a permanent
@@ -680,35 +708,59 @@ body,
   will-change: transform;
 }
 
-/* Delayed pulse animation for skeleton loading states
- * Prevents "flash of loading state" (FOLS) for fast operations (<400ms).
- * Skeleton starts invisible and fades in only when animation begins after delay.
- */
-@keyframes pulse-delayed {
-  0% {
+/* An empty bucket's glyph in the quick state filters (sidebar and Pilot).
+ * Faded "slightly — it should still be clearly visible" (#10353): the glyph is
+ * the segment's only visible name, so it has to hold 3:1 against the bar at
+ * rest, hovered and selected, while still reading as quieter than a populated
+ * one. Opacity rather than a slash-alpha colour so one rule covers every hue.
+ * Increase Contrast and forced colors reset it in their own blocks below. */
+.quick-state-glyph-empty {
+  opacity: 0.8;
+}
+
+/* Skeleton bone motion: a one-shot reveal, then a continuous pulse.
+ *
+ * They are two animations on purpose. The gate used to live inside the pulse's
+ * own keyframes (`0% { opacity: 0 }` then `0.1% { opacity: 1 }`), so every 2s
+ * iteration restarted from that invisible frame and each bone blinked out once a
+ * cycle. The reveal runs once, after the anti-flicker gate, filling backwards so
+ * the bone is hidden while the gate runs (prevents a flash of loading state for
+ * sub-400ms operations); the pulse starts where the reveal ends, at full
+ * opacity, and never drops below its floor. */
+@keyframes skeleton-reveal {
+  from {
     opacity: 0;
   }
-  0.1% {
+  to {
     opacity: 1;
   }
-  50% {
-    opacity: 0.5;
-  }
+}
+
+@keyframes skeleton-pulse {
+  0%,
   100% {
     opacity: 1;
+  }
+  /* The floor is a visibility budget, not a style choice: at the trough a bone
+   * is 70% of its 10% tint, the faintest it ever gets, and that still has to
+   * read on the palest surface of the lightest theme and the darkest sidebar. */
+  50% {
+    opacity: 0.7;
   }
 }
 
 .animate-pulse-delayed {
-  opacity: 0;
-  animation: pulse-delayed 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  animation-delay: var(--anti-flicker-delay);
+  animation-name: skeleton-reveal, skeleton-pulse;
+  animation-duration: 200ms, 2s;
+  animation-timing-function: ease-out, cubic-bezier(0.4, 0, 0.6, 1);
+  animation-delay: var(--anti-flicker-delay), calc(var(--anti-flicker-delay) + 200ms);
+  animation-iteration-count: 1, infinite;
+  animation-fill-mode: backwards, none;
   will-change: opacity;
 }
 
 .animate-pulse-immediate {
-  opacity: 1;
-  animation: pulse-delayed 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  animation: skeleton-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   will-change: opacity;
 }
 
@@ -773,10 +825,11 @@ body,
   will-change: transform;
 }
 
-/* Companion to long-running skeletons. SkeletonHint renders this class on its
- * visible row when the hint phase escalates so the new copy crossfades in
- * rather than snapping. Opacity-only — no spatial motion — so reduced-motion
- * bypasses just need to skip past the entry frame to opacity: 1.
+/* Companion to long-running skeletons. SkeletonHint renders this class on the
+ * copy each time it escalates, and on a recovery button as it surfaces, so new
+ * content fades in rather than snapping. The 200ms entry tier. Opacity-only — no
+ * spatial motion — so reduced-motion bypasses just need to skip past the entry
+ * frame to opacity: 1.
  */
 @keyframes hint-fade-in {
   from {
@@ -789,27 +842,8 @@ body,
 
 .animate-hint-fade-in {
   opacity: 0;
-  animation: hint-fade-in 500ms ease-out forwards;
+  animation: hint-fade-in 200ms ease-out forwards;
   will-change: opacity;
-}
-
-/* Agent status working state - pulsing animation. Animates opacity, not
-   color: color keyframes tick style-recalc + paint on the main thread for
-   every visible working badge — the steady state of this app, often across
-   many worktree cards at once — while opacity runs on the compositor. */
-@keyframes status-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.7;
-  }
-}
-
-.status-working {
-  color: var(--color-state-working);
-  animation: status-pulse 2s ease-in-out infinite;
 }
 
 /* Badge bump animation - for count/state changes */
@@ -978,22 +1012,40 @@ body,
   0% {
     opacity: 0;
   }
-  15% {
-    opacity: 0.12;
+  25% {
+    opacity: var(--all-clear-flash-peak);
   }
   100% {
     opacity: 0;
   }
 }
 
+/* The all-clear flash is the window's visual bell: an opt-in visual
+ * counterpart of the all-clear sound. It is a neutral luminance shift
+ * (`--theme-tint`: white on dark, black on light), never a status hue, because
+ * "no agent is still working" is not a success and may include agents waiting
+ * for input. The same alpha reads far louder as a dim on a light canvas than
+ * as a lift on a dark one, so the peak is set per polarity. Rest opacity is 0
+ * so a killed animation (performance mode) leaves nothing on screen. The
+ * duration comes from the component (ALL_CLEAR_FLASH_DURATION), never here. */
+:root {
+  --all-clear-flash-peak: 0.09;
+}
+
+.light {
+  --all-clear-flash-peak: 0.07;
+}
+
 .animate-all-clear-flash {
-  animation: all-clear-flash 450ms ease-out forwards;
+  opacity: 0;
+  background-color: var(--theme-tint);
+  animation: all-clear-flash var(--all-clear-flash-duration) ease-out forwards;
   will-change: opacity;
 }
 
 /* Onboarding checklist completion — short opacity flash that replaces the
- * confetti for users who opt out of motion. Subtler than all-clear because
- * this is a one-off milestone, not an ambient signal. */
+ * confetti for users who opt out of motion. A one-off milestone, not an
+ * ambient signal. */
 @keyframes checklist-complete-flash {
   0% {
     opacity: 0;
@@ -1096,19 +1148,21 @@ body,
   will-change: opacity;
 }
 
-/* Figure-rail "just arrived" highlight — a one-shot accent ring that fades out
- * as the newest thumbnail mounts (help.displayImage, #9829). This is a transient
- * single-element signal (one figure highlights at a time, settling to nothing),
- * so the accent ring is permitted under the accent-restraint rule rather than a
- * persistent multi-element marker. `forwards` settles to a transparent ring so
- * no residual outline lingers; the stable `key={imageId}` means it fires exactly
- * once per figure on mount. */
+/* Figure-rail "just arrived" highlight — a one-shot ring that fades out as the
+ * newest thumbnail mounts (help.displayImage, #9829). Neutral, not accent: a
+ * figure can arrive while another thumbnail holds the accent keyboard-focus
+ * ring, and two accent signals in one focus region is exactly what the accent
+ * rule forbids. The 1200ms decay is the signal itself, so it sits outside the
+ * shared motion tiers. `forwards` settles to transparent, and the stable
+ * `key={imageId}` means it fires once per figure. The ring sits at 5px so it
+ * clears the rail's current-figure outline (offset 1px, 2px wide), which is what
+ * carries "current" once the pulse has gone. */
 @keyframes figure-arrive {
   0% {
-    box-shadow: 0 0 0 2px var(--color-accent-primary);
+    box-shadow: 0 0 0 5px var(--color-text-secondary);
   }
   100% {
-    box-shadow: 0 0 0 2px transparent;
+    box-shadow: 0 0 0 5px transparent;
   }
 }
 
@@ -1271,7 +1325,6 @@ body,
  */
 @variant reduce-motion {
   .animate-activity-pulse,
-  .animate-agent-pulse,
   .animate-checkbox-check,
   .animate-breathe,
   .animate-spin,
@@ -1280,12 +1333,10 @@ body,
   .animate-pulse-immediate,
   .animate-skeleton-shimmer,
   .animate-hint-fade-in,
-  .status-working,
   .animate-badge-bump,
   .animate-action-row-bump,
   .animate-activity-blip,
   .animate-trash-pulse,
-  .animate-all-clear-flash,
   .animate-diagnostics-flash,
   .animate-upstream-badge-flash,
   .animate-border-flash,
@@ -1294,6 +1345,30 @@ body,
     opacity: 1;
     transform: none;
     will-change: auto;
+  }
+
+  /* Reduced motion removes the pulse, not the anti-flicker gate: a static bone
+   * that appears for a 100ms load is exactly the flash the gate exists to stop.
+   * A zero-length reveal filling backwards holds the bone hidden for the gate,
+   * then shows it in one step — no motion at all. */
+  .animate-pulse-delayed {
+    animation: skeleton-reveal 0s var(--anti-flicker-delay) backwards;
+  }
+
+  .tour-click-ring {
+    display: none;
+  }
+
+  /* The countdown still runs; the draining ring is motion, so it holds full. */
+  .tour-countdown-ring {
+    animation: none;
+  }
+
+  /* The all-clear flash has no static form: snapping it to opacity 1 like the
+   * cues above would paint the whole window. The component skips mounting it,
+   * and this covers a preference that flips mid-pulse. */
+  .animate-all-clear-flash {
+    display: none;
   }
 
   /* The global `transition: none` rules below would strip the anti-flicker
@@ -1446,9 +1521,7 @@ body,
   }
 
   .animate-activity-pulse,
-  .animate-agent-pulse,
   .animate-breathe,
-  .status-working,
   .panel-state-compiling,
   .panel-state-working {
     transition: none;
@@ -1517,9 +1590,12 @@ body,
 
 /* Terminal Selection State.
    panel-focus-border / panel-focus-shadow / panel-selected-bg are OPTIONAL
-   extension keys; the fallbacks are the pre-extension recipes verbatim. The
-   high-contrast `prefers-contrast: more` and `forced-colors: active` blocks
-   below keep their own hardcoded recipes and continue to win. */
+   extension keys. The border fallback is deliberately quiet: the focused pane
+   is also carried by its selected background and header, and a 3:1 edge (a 68%
+   mix, tried in #12641) read as a bright outline and was walked back. Users who
+   need a stronger edge get one from the high-contrast blocks. The high-contrast
+   `prefers-contrast: more` and `forced-colors: active` blocks below keep their
+   own hardcoded recipes and continue to win. */
 .terminal-selected {
   border-color: var(
     --panel-focus-border,
@@ -1533,40 +1609,27 @@ body,
   );
 }
 
-/* Ensure header separator uses overlay token for consistency */
-.terminal-selected > div:first-child {
-  border-bottom-color: var(--border-overlay);
-}
-
-/* Lone-pane focus state (#11837) — a single-pane grid has no sibling to
-   contrast against, so it carries no selection chrome at all and reads the
-   same whether the pane or the Daintree Assistant owns the keystrokes.
-
-   Deliberately NOT built from the same properties as `.terminal-selected`.
-   A pane root's border-color and box-shadow are already spoken for by the
-   agent-state borders, their `.light` overrides further down, and the
-   dictation lock — all single-class rules that land later and replace both
-   outright. `.terminal-selected` survives that because its surface-lift fill
-   remains, but this cue has no fill by design (the fill is what made an
-   always-lit lone pane too heavy when the guard was removed outright in
-   #7544). So the cue is anchored on `outline`, which nothing else on the
-   pane claims: it composes with whatever state owns the border instead of
-   fighting it, and a negative offset keeps it inside the border box so no
-   ancestor's paint containment can clip it. The border ink is still set for
-   the common uncontested case, where the two read as one 2px focus edge.
-   Applied only while the Assistant is open, so a bare lone pane stays the
-   default otherwise. */
-.terminal-selected-quiet {
-  border-color: var(
-    --panel-focus-border,
-    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
-  );
+/* A non-PTY pane's root takes real DOM focus when it becomes the focused pane
+   (usePanelRootFocus), and after a keyboard move Chromium rings it in its own
+   blue — a second, louder focus language that terminals, whose focus lives in
+   xterm, never show. The ring it gets instead is the selected edge itself,
+   drawn over the border in the same ink, so the pane looks the same however
+   its focus arrived. The border steps aside while the ring shows: the ink is
+   translucent on most themes, and two layers of it composite into a visibly
+   stronger edge than the terminal next door. */
+.terminal-selected:focus-visible {
+  border-color: transparent;
   outline: 1px solid
     var(
       --panel-focus-border,
       color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
     );
   outline-offset: -1px;
+}
+
+/* Ensure header separator uses overlay token for consistency */
+.terminal-selected > div:first-child {
+  border-bottom-color: var(--border-overlay);
 }
 
 /* Daintree Assistant focus state — anchors the active-surface affordance on
@@ -2049,8 +2112,8 @@ label:focus-within .brand-mark,
  * Inset and separately rounded rather than an inset box-shadow, which would
  * follow the card's own radius and taper to a crescent at both ends.
  *
- * Not stated in `forced-colors`, where `background-color` is stripped: the
- * system-outline fallback further down already marks the row there.
+ * `forced-colors` strips its `background-color`, so that block re-asserts the
+ * rail in CanvasText beside the system-outline fallback further down.
  */
 .palette-row::before {
   content: "";
@@ -2384,15 +2447,7 @@ body[data-performance-mode="true"] .surface-toolbar {
   background-color: var(--color-surface-toolbar) !important;
 }
 
-body[data-performance-mode="true"] .settings-section-header {
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
-  background: var(--settings-section-header-bg-solid, var(--theme-surface-panel)) !important;
-}
-
 /* Disable terminal glow in performance mode */
-/* `.terminal-selected-quiet` is absent on purpose: it carries no box-shadow
-   to simplify, and its outline is a 1px hairline with no glow to strip. */
 body[data-performance-mode="true"] .terminal-selected,
 body[data-performance-mode="true"] .terminal-focused,
 body[data-performance-mode="true"] .assistant-focused {
@@ -2420,7 +2475,6 @@ body[data-power-saving="true"] .animate-activity-pulse,
 body[data-power-saving="true"] .animate-breathe,
 body[data-power-saving="true"] .animate-pulse,
 body[data-power-saving="true"] .motion-safe\:animate-pulse,
-body[data-power-saving="true"] .status-working,
 body[data-power-saving="true"] .forge-status-error {
   animation: none;
   will-change: auto;
@@ -2446,7 +2500,6 @@ body[data-motion-rate="reduced"] .animate-activity-pulse,
 body[data-motion-rate="reduced"] .animate-breathe,
 body[data-motion-rate="reduced"] .animate-pulse,
 body[data-motion-rate="reduced"] .motion-safe\:animate-pulse,
-body[data-motion-rate="reduced"] .status-working,
 body[data-motion-rate="reduced"] .forge-status-error {
   animation-timing-function: steps(2, end);
 }
@@ -2468,9 +2521,39 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
    outline-color and removes box-shadow entirely. We ensure critical UI boundaries
    remain visible by using CSS system color keywords. */
 @media (forced-colors: active) {
+  /* Every dock chip already wears a system-colour border here, so the panel
+     transition's receiving cue, drawn on top of one, would vanish into it. */
+  [data-panel-transition-cue] {
+    border: 2px solid Highlight;
+  }
+
+  /* Every mark at full strength; the digit beside it still says "empty". */
+  .quick-state-glyph-empty {
+    opacity: 1;
+  }
+
   *:focus-visible {
     outline: 2px solid Highlight !important;
     outline-offset: 2px !important;
+  }
+
+  /* Chromium forces an inherited `currentColor` but not a colour set on the SVG
+     itself, by class or inline style — so a severity glyph kept its amber stroke
+     on the white canvas at ~2.6:1. The glyph's shape carries the severity here;
+     its stroke only has to be seen. The attribute marks glyphs coloured inline;
+     the class match catches every icon tinted with a status utility directly,
+     which is most of them. */
+  [data-severity-glyph],
+  svg[class*="-status-"] {
+    color: CanvasText !important;
+  }
+
+  /* Rings drawn inset on purpose — inside an overflow-hidden group or an
+     unpadded scroller, where an outward ring is clipped — must stay inset
+     here, or forced colors pushes them back out to be clipped. */
+  [class*="focus-visible:-outline-offset-"]:focus-visible,
+  [class*="focus-visible:outline-offset-[-"]:focus-visible {
+    outline-offset: -2px !important;
   }
 
   /* The working glyph is nothing but a masked background, which the forced
@@ -2484,6 +2567,29 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     forced-color-adjust: none;
   }
 
+  /* An avatar placeholder is only a tinted background, which forced colors
+     erases — the slot would read as a gap in a row of faces. An inset outline
+     keeps its shape and size; the failed glyph takes the text colour. */
+  [data-avatar-fallback] {
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
+    color: CanvasText;
+  }
+
+  /* The grid scrollbar's thumb survives on its 2px border, which forced colors
+     paints CanvasText; its fill does not. Hover and drag lose their fill steps
+     the same way, so they move to the border and then the fill in Highlight —
+     the same rest / hover / grabbed ladder, in system colours. */
+  [data-grid-scrollbar-thumb][data-phase="hover"] {
+    border-color: Highlight;
+  }
+
+  [data-grid-scrollbar-thumb][data-phase="drag"] {
+    forced-color-adjust: none;
+    background-color: Highlight;
+    border-color: Highlight;
+  }
+
   /* The trash TTL meter is a coloured background against a coloured track, and
    * forced colors replaces both — which leaves a bar whose length carries the
    * remaining-time signal with no edge to see it against. Give the fill a
@@ -2492,6 +2598,15 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   [data-trash-meter] {
     outline: 1px solid CanvasText;
     outline-offset: 0;
+  }
+
+  /* Skeleton bones are nothing but a translucent fill, which forced colors
+   * replaces with the canvas — the whole silhouette would vanish and a loading
+   * pane would read as an empty one. An inset GrayText outline keeps each
+   * bone's shape; GrayText is the system's own "not yet available" colour. */
+  [data-skeleton-bone] {
+    outline: 1px solid GrayText;
+    outline-offset: -1px;
   }
 
   [data-trash-meter] > * {
@@ -2517,10 +2632,18 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     opacity: 1 !important;
   }
 
-  .terminal-selected {
+  .terminal-selected,
+  .terminal-selected:focus-visible {
     outline: 2px solid Highlight;
     outline-offset: -2px;
     border-color: Highlight;
+  }
+
+  /* The global forced-colors ring above pushes every focus outline 2px out
+     with !important; a focused root's ring is its pane edge, so it stays in
+     where a terminal's does. */
+  .terminal-selected:focus-visible {
+    outline-offset: -2px !important;
   }
 
   .terminal-focused {
@@ -2559,19 +2682,6 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     border-color: Highlight;
     outline: 2px solid Highlight;
     outline-offset: -2px;
-  }
-
-  /* Must come after every rule above that also outlines the pane. Forced
-     colors collapses this palette to a handful of system colors, so a lone
-     focused pane that is also locked or waiting would otherwise carry the
-     identical solid Highlight outline as the same pane with the Assistant
-     focused. Stroke style is one of the few things the UA leaves alone, so
-     the focus cue is dashed and the states stay solid — the distinction
-     survives where colour cannot carry it. */
-  .terminal-selected-quiet {
-    outline: 2px dashed Highlight;
-    outline-offset: -2px;
-    border-color: Highlight;
   }
 
   .terminal-pane {
@@ -2623,6 +2733,18 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   .palette-row[data-selected="true"] {
     outline: 2px solid SelectedItem;
     outline-offset: -2px;
+  }
+
+  /* …and the leading rail again, in CanvasText, as a second cue. SelectedItem
+     is whatever the OS theme picks, and several pair it with Canvas at well
+     under 3:1 — Chromium's own default is a pale blue on white at about 1.7:1 —
+     so on those the outline alone was a faint box. CanvasText is the one colour
+     the mode guarantees against Canvas. The rail's fill is a background, which
+     forced colours strip, so it has to be re-asserted with !important, exactly
+     like the inbox unread dot below. */
+  .palette-row[aria-selected="true"]::before,
+  .palette-row[data-selected="true"]::before {
+    background-color: CanvasText !important;
   }
 
   /* The selected session tab is a raised fill plus a neutral rail, and forced
@@ -2752,6 +2874,14 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     border: none;
   }
 
+  /* A list row whose selection target is a button beside a sibling control
+     (the plugin manager's rows: select button + enable switch). The row is the
+     frame and owns the selected outline; the blanket border drew a second box
+     round the text half and left the switch outside it. */
+  .row-select-target {
+    border: none;
+  }
+
   /* A destructive button is distinguished only by its fill, and the UA replaces
    * every fill with a system colour — so "Delete worktree" and "Cancel" render
    * as the same white pill with the same border, and nothing marks which one
@@ -2763,13 +2893,24 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     border: 2px solid ButtonText;
   }
 
+  /* The standard dialog primary has the same problem: its high-contrast fill is
+   * the only thing separating it from the outline and ghost actions beside it,
+   * and the UA flattens all three to one system pill. Same stroke-weight cue,
+   * which reads as the platform's own default-button border. A dialog carries a
+   * destructive or a contrast primary, never both, so the two never compete. */
+  button[data-variant="contrast"] {
+    border: 2px solid ButtonText;
+  }
+
   /* …and the weight has to be re-asserted on everything else, or the signal
    * above collapses. The `prefers-contrast: more` block later in this file sets
    * `border-width: 2px` on bare `button` to anchor click targets, and Chromium
    * reports `prefers-contrast: more` alongside `forced-colors: active` on a
    * high-contrast Windows palette — so on the platform this block exists for,
    * Cancel reached 2px, the destructive button was already 2px, and the two
-   * rendered identically. Pinning the others back to 1px rather than raising the
+   * rendered identically. The same held for a notification's primary action,
+   * whose 2px hook sits at (0,1,0) and lost to this rule until it was exempted.
+   * Pinning the others back to 1px rather than raising the
    * destructive to 3px: the 1px/2px pair is the distinction that was designed,
    * and the later block's own purpose — a visible border where Preflight left
    * none — is already served by the 1px shorthand above.
@@ -2788,7 +2929,9 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
    *     control back to idle. */
   html
     :where(button, [role="button"], [type="button"], [type="submit"], [type="reset"]):not(
-      [data-variant="destructive"]
+      [data-variant="destructive"],
+      [data-variant="contrast"],
+      [data-notification-action="primary"]
     ) {
     border-width: 1px;
   }
@@ -2855,10 +2998,33 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     border: 2px solid ButtonText;
   }
 
-  /* Inbox row actions. Primary is marked by a status-info fill and border; both
-     are flattened, leaving "Pull and rebase" and "Open review" identical, so the
-     recommended action loses its recommendation at exactly the moment the row is
-     reporting a failure. */
+  /* The quick state filters (sidebar and Pilot) mark the selected segment with
+     an inset box-shadow underline, which forced colors removes entirely. Redraw
+     the underline in the same place rather than borrowing the chips' border —
+     a border would shift the segment's contents by its width. ButtonText, not
+     Highlight, for the same reason as the chips above. */
+  [data-quick-state-segment][aria-pressed="true"],
+  [data-quick-state-segment][aria-checked="true"],
+  .pulse-range [role="radio"][aria-checked="true"] {
+    position: relative;
+  }
+
+  [data-quick-state-segment][aria-pressed="true"]::after,
+  [data-quick-state-segment][aria-checked="true"]::after,
+  .pulse-range [role="radio"][aria-checked="true"]::after {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    height: 2px;
+    forced-color-adjust: none;
+    background: ButtonText;
+  }
+
+  /* Notification actions, in inbox rows and the grid bar. Primary is marked by
+     a fill and border that forced colours flatten, leaving "Pull and rebase" and
+     "Open review" identical, so the recommended action loses its recommendation
+     at exactly the moment the notification is reporting a failure. */
   [data-notification-action="primary"] {
     border: 2px solid ButtonText;
   }
@@ -2903,6 +3069,25 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   [role="tab"] .spinner-circle,
   [role="radio"] .spinner-circle {
     background: ButtonText;
+  }
+
+  /* The stroked state circles (waiting ring, interacting, exited) paint in
+     `currentColor` from a state-hue class, and an SVG keeps a colour it was
+     given outright — so the hue survived onto the forced canvas, where an
+     amber ring on white is 1.7:1. Inheriting instead hands the glyph whatever
+     ink the UA forced onto its parent: CanvasText on the canvas, ButtonText on
+     a real button, HighlightText on a selected row. Naming a system colour
+     here would guess that pairing from the role, and roles do not change it.
+     Their shape is the state in this mode, as with the spinner. */
+  [data-agent-state-glyph] {
+    color: inherit;
+  }
+
+  /* Resource readouts' warning marks and the pane badge's CPU line, for the
+     same reason: their hue is an amber or red the forced canvas cannot hold,
+     and the mark's shape and the line's height already say what the hue did. */
+  [data-resource-glyph] {
+    color: inherit;
   }
 
   /* The one mark whose emptiness IS the state.
@@ -2997,8 +3182,39 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
      on Canvas — invisible. Grid empty cells stay visible because they're
      <button>s with the border; give the legend's empty swatch an equivalent
      CanvasText border so "Less" remains a visible box. */
-  [data-testid="pulse-heatmap-legend"] .pulse-heat-cell:not([data-heat-level]) {
+  [data-testid="pulse-heatmap-legend"] .pulse-heat-cell {
     border: 1px solid CanvasText;
+  }
+
+  /* The latest-active ring is a box-shadow, which forced colors drops. Redraw
+     it as a dotted outline — distinct from the solid Highlight focus outline
+     above, so "last active" and "focused here" never read as one mark. */
+  .pulse-heat-cell[data-latest-active] {
+    outline: 1px dotted CanvasText;
+    outline-offset: 1px;
+  }
+
+  /* The canvas-home's collapsed pulse ribbon (ProjectPulseStrip.MiniRibbon).
+     Same span-not-button problem as the legend above, at 6px: a size-coded
+     inner shape is too small to read here, so the ribbon codes activity as
+     filled-vs-outlined instead. Every cell keeps a CanvasText outline so the
+     18-day TRACK stays visible — without it the active days float with no
+     baseline and the strip reads as scattered marks rather than a sequence —
+     and an active day fills solid. */
+  [data-testid="pulse-mini-ribbon"] .pulse-heat-cell {
+    border: 1px solid CanvasText;
+  }
+  [data-testid="pulse-mini-ribbon"] .pulse-heat-cell[data-heat-level] .pulse-heat-cell-shape {
+    width: 100%;
+    height: 100%;
+  }
+
+  /* The streak flame's tier colour is an inline author style, and SVG keeps
+     its parent's colour under forced colors, so it stayed orange on a system
+     Canvas. The day count beside it carries the meaning; the glyph follows the
+     text it sits with. */
+  .pulse-streak-flame {
+    color: CanvasText !important;
   }
 
   /* Diff-viewer forced-colors rules live in src/components/Worktree/DiffViewer.css
@@ -3013,10 +3229,29 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
  * above but keeps theme colors (the user wants more contrast, not a
  * system-color repaint). */
 @media (prefers-contrast: more) {
+  /* Every quick-state glyph at full strength; the digit still says "empty". */
+  .quick-state-glyph-empty {
+    opacity: 1;
+  }
+
+  /* Skeleton bones double their tint. At 10% a bone is deliberately quiet; a
+   * user who asked for more contrast should not have to hunt for the shape of
+   * what is loading. Still a tint of `--theme-tint`, so it keeps contrasting
+   * with whatever surface it sits on. */
+  [data-skeleton-bone] {
+    background-color: color-mix(in oklab, var(--theme-tint) 20%, transparent);
+  }
+
   .terminal-selected,
-  .terminal-selected-quiet,
   .terminal-focused {
     border-width: 2px;
+  }
+
+  /* The focused root's ring stands in for the border, so it takes the
+     border's widened stroke. */
+  .terminal-selected:focus-visible {
+    outline-width: 2px;
+    outline-offset: -2px;
   }
 
   /* Inbox filter segments. This mode outlines the unselected chips but leaves
@@ -3041,23 +3276,6 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   [data-slot="segmented-thumb"] {
     outline: 1px solid var(--color-border-strong);
     outline-offset: -1px;
-  }
-
-  /* Overview grid membership: the neutral leading rail is deliberately quiet
-     at normal contrast (accent restraint reserves the loud mark for the
-     keyboard cursor), which leaves it thin here. Widen the rail rather than
-     recolour it or add a second mark — the same ink, the same geometry, just
-     no longer a hairline, so membership does not change identity between the
-     two contrast modes. */
-  [role="gridcell"][aria-selected="true"][data-worktree-overview-cell]::before {
-    width: 5px;
-  }
-
-  /* Track the widened border so the cue's hairline stays inside it rather
-     than painting on top of it. */
-  .terminal-selected-quiet {
-    outline-width: 2px;
-    outline-offset: -2px;
   }
 
   .assistant-focused {
@@ -3094,6 +3312,12 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
      rather than merged: the launcher's teaching link must not be framed into a
      button. Its underline carries the affordance. */
   .tip-action {
+    border-width: 0;
+  }
+
+  /* Same exemption, same reason: the row, not its inner select button, is the
+     click target's frame. */
+  .row-select-target {
     border-width: 0;
   }
 
@@ -3196,13 +3420,19 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     --overlay-surface-solid: var(--color-surface-panel-elevated);
   }
 
-  /* Cmd+K command HUD — a distinct dark-glass "spotlight" surface. Deeper and
-   * more translucent than .surface-overlay (canvas plane @70% vs sidebar @94%)
-   * so it reads as its own command mode floating over the terminals. The blur +
-   * saturation are applied on the element via Tailwind using the theme material
-   * tokens; this rule carries the tint + float shadow. */
+  /* Cmd+K command HUD — a distinct dark-glass "spotlight" surface. Deeper than
+   * .surface-overlay (canvas plane vs sidebar) so it reads as its own command
+   * mode floating over the terminals. The blur + saturation are applied on the
+   * element via Tailwind using the theme material tokens; this rule carries the
+   * tint + float shadow.
+   *
+   * The tint is dense enough to hold the text on its own. It sits over scrolling
+   * terminal output, and blur does not lower the luminance of what is behind it;
+   * at 70% a Retina Chromium frame that drops the blur for a band near the panel
+   * edge showed that output crisply through the rows and the footer. At 88% the
+   * content behind contributes an eighth, which reads as texture, not text. */
   .command-hud-glass {
-    background-color: color-mix(in oklab, var(--color-surface-canvas) 70%, transparent);
+    background-color: color-mix(in oklab, var(--color-surface-canvas) 88%, transparent);
     box-shadow:
       var(--shadow-modal),
       inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
@@ -3211,7 +3441,7 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   /* Light schemes: lift to the elevated plane and brighten the inner sheen so the
    * glass stays legible over a near-white canvas. */
   .light .command-hud-glass {
-    background-color: color-mix(in oklab, var(--color-surface-panel-elevated) 82%, transparent);
+    background-color: color-mix(in oklab, var(--color-surface-panel-elevated) 92%, transparent);
     box-shadow:
       var(--shadow-modal),
       inset 0 1px 0 0 rgba(255, 255, 255, 0.55);
@@ -3233,6 +3463,32 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     }
 
     /* High-contrast users want solid chrome — drop the frosted material. */
+    .command-hud-glass {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background-color: var(--color-surface-sidebar);
+    }
+
+    .light .command-hud-glass {
+      background-color: var(--color-surface-panel-elevated);
+    }
+  }
+
+  /* Reduce Transparency (macOS) / transparency effects off (Windows) asks for
+   * solid chrome; same fallbacks as prefers-contrast above, kept as their own
+   * at-rule because the two preferences are set independently. The toolbar and
+   * panel chrome carry the same rule in their own sheets. */
+  @media (prefers-reduced-transparency: reduce) {
+    .surface-overlay {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background-color: var(--color-surface-sidebar);
+    }
+
+    .light .surface-overlay {
+      background-color: var(--color-surface-panel-elevated);
+    }
+
     .command-hud-glass {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;

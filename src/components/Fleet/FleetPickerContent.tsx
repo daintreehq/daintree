@@ -1,6 +1,6 @@
 import { useCallback, useMemo, type ReactElement } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
-import { CheckIcon, MinusIcon, Search } from "lucide-react";
+import { CheckIcon, MinusIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
@@ -111,9 +111,18 @@ export function FleetPickerContent({
       if (e.key === "Enter") {
         e.preventDefault();
         handleConfirm();
+        return;
+      }
+      // Inside a palette dialog the escape-stack entry above never sees the
+      // press — the dialog's document-level backstop closes first — so the
+      // field clears its own query. An empty field lets Escape close.
+      if (e.key === "Escape" && query !== "") {
+        e.preventDefault();
+        e.stopPropagation();
+        clearSearch();
       }
     },
-    [focusFirstNode, handleConfirm]
+    [focusFirstNode, handleConfirm, query, clearSearch]
   );
 
   const handleGroupHeaderToggle = useCallback(
@@ -141,9 +150,6 @@ export function FleetPickerContent({
           hosts still read as the same surface. */}
       <div className="px-3 pt-2 pb-2 border-b border-border-strong shrink-0">
         <AppPaletteDialog.Input
-          inputPrefix={
-            <Search className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
-          }
           autoFocus={autoFocusSearch}
           value={query}
           onChange={(e) => setQuery(e.target.value)}

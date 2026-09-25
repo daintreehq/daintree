@@ -116,20 +116,14 @@ describe("Forge stats token error UX — issue #5024", () => {
     expect(source).toMatch(/subtab:\s*providerId/);
   });
 
-  it("dims Issues and PR buttons with opacity-40 on token error", () => {
-    const issuesButton = source.slice(
-      source.indexOf("buttonRef={issuesButtonRef}"),
-      source.indexOf("buttonRef={issuesButtonRef}") + 2500
-    );
-    expect(issuesButton).toContain("isTokenError");
-    expect(issuesButton).toContain("opacity-40");
-
-    const prsButton = source.slice(
-      source.indexOf("buttonRef={prsButtonRef}"),
-      source.indexOf("buttonRef={prsButtonRef}") + 2500
-    );
-    expect(prsButton).toContain("isTokenError");
-    expect(prsButton).toContain("opacity-40");
+  it("marks Issues and PR buttons unavailable on token error without dimming the button", () => {
+    // Whole-button opacity dimmed the focus ring and hover along with the
+    // content and made the token-repair click read as disabled.
+    for (const ref of ["buttonRef={issuesButtonRef}", "buttonRef={prsButtonRef}"]) {
+      const button = source.slice(source.indexOf(ref), source.indexOf(ref) + 2500);
+      expect(button).toMatch(/tone=\{isTokenError \? "unavailable"/);
+      expect(button).not.toMatch(/opacity-\d/);
+    }
   });
 
   it("does not apply token error handling to the Commits button", () => {

@@ -66,10 +66,14 @@ describe("TerminalScrollIndicator", () => {
     expect(terminalInstanceService.resumeAutoScroll).toHaveBeenCalledWith("t1");
   });
 
-  it("has correct accessible label", () => {
+  it("keeps the visible label at the start of the accessible name (WCAG 2.5.3)", () => {
     mockHasUnseenOutput = true;
     render(<TerminalScrollIndicator terminalId="t1" />);
-    expect(screen.getByLabelText("Scroll to latest output")).toBeTruthy();
+    const button = screen.getByRole("button");
+    const visible = button.textContent?.trim() ?? "";
+    expect(visible.length).toBeGreaterThan(0);
+    const name = button.getAttribute("aria-label") ?? visible;
+    expect(name.toLowerCase().startsWith(visible.toLowerCase())).toBe(true);
   });
 
   it("restores terminal focus after clicking pill", () => {

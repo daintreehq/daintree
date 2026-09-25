@@ -112,15 +112,19 @@ describe("getTrendDirection", () => {
 
 describe("formatMemory", () => {
   it("formats as MB below 1024", () => {
-    expect(formatMemory(512)).toBe("512MB");
-    expect(formatMemory(0)).toBe("0MB");
-    expect(formatMemory(1023)).toBe("1023MB");
+    expect(formatMemory(512)).toBe("512 MB");
+    expect(formatMemory(0)).toBe("0 MB");
+    expect(formatMemory(1023)).toBe("1023 MB");
+  });
+
+  it("rounds fractional megabytes instead of printing false precision", () => {
+    expect(formatMemory(704.296875)).toBe("704 MB");
   });
 
   it("formats as GB at 1024+", () => {
-    expect(formatMemory(1024)).toBe("1.0GB");
-    expect(formatMemory(1536)).toBe("1.5GB");
-    expect(formatMemory(2048)).toBe("2.0GB");
+    expect(formatMemory(1024)).toBe("1.0 GB");
+    expect(formatMemory(1536)).toBe("1.5 GB");
+    expect(formatMemory(2048)).toBe("2.0 GB");
   });
 });
 

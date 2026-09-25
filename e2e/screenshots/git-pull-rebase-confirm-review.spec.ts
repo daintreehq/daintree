@@ -73,6 +73,7 @@ const TID = {
   noUpstream: '[data-testid="git-pull-rebase-no-destination"]',
   unfetched: '[data-testid="git-pull-rebase-empty-unfetched"]',
   behindOnly: '[data-testid="git-pull-rebase-behind-nothing-to-replay"]',
+  inSync: '[data-testid="git-pull-rebase-in-sync"]',
   loading: '[data-testid="git-pull-rebase-commits-loading"]',
   retry: '[data-testid="git-pull-rebase-commits-retry"]',
   commitRow: '[data-testid="git-pull-rebase-commit-row"]',
@@ -158,7 +159,13 @@ const SUBJECTS: Array<[string, string]> = [
  *     reading the push destination would name the wrong ref.
  *   - `spike/unconfigured-remote` has no upstream at all.
  */
-function createFixtureRepo(): { dir: string; cleanup: () => void } {
+function createFixtureRepo(): {
+  dir: string;
+  midRebaseDir: string;
+  dirtyDir: string;
+  noRemoteDir: string;
+  cleanup: () => void;
+} {
   const root = mkdtempSync(path.join(tmpdir(), "daintree-gitrebase-shots-"));
   const dir = path.join(root, "helios-dashboard");
   const originDir = path.join(root, "origin.git");
@@ -254,10 +261,56 @@ function createFixtureRepo(): { dir: string; cleanup: () => void } {
     "Ada Lovelace"
   );
 
+  // diverged: two local commits to replay AND fourteen incoming from the upstream.
+  // The ordinary shape of a pull-rebase, and the one where what comes in matters as
+  // much as what gets rewritten.
+  git(["checkout", "-b", "feat/diverged-from-upstream", "main~14"], dir);
+  git(["branch", "--set-upstream-to=origin/release/next", "feat/diverged-from-upstream"], dir);
+  commit(dir, "src/local-a.ts", "export const a = 1;\n", "feat: local change one", "Ada Lovelace");
+  commit(dir, "src/local-b.ts", "export const b = 2;\n", "feat: local change two", "Ada Lovelace");
+
   git(["checkout", "main"], dir);
+
+  // in-progress: a linked worktree halted mid-rebase on a conflict. HEAD is detached
+  // there, which is what makes "no branch checked out" the tempting wrong diagnosis.
+  const midRebaseDir = path.join(wtRoot, "mid-rebase");
+  git(["worktree", "add", "-b", "fix/mid-rebase", midRebaseDir, "main~14"], dir);
+  commit(midRebaseDir, "README.md", "# Helios Dashboard\nlocal\n", "docs: local", "Ada Lovelace");
+  git(["branch", "rebase-conflict-base", "main~14"], dir);
+  git(["worktree", "add", path.join(wtRoot, "conflict-base"), "rebase-conflict-base"], dir);
+  commit(
+    path.join(wtRoot, "conflict-base"),
+    "README.md",
+    "# Helios Dashboard\nother\n",
+    "docs: other",
+    "Grace Hopper"
+  );
+  try {
+    git(["rebase", "rebase-conflict-base"], midRebaseDir);
+  } catch {
+    // Expected: the rebase halts on the README conflict, which is the state wanted.
+  }
+
+  // dirty: a linked worktree with uncommitted changes to a tracked file, plus an
+  // untracked one that must not count. Git refuses to rebase over the first.
+  const dirtyDir = path.join(wtRoot, "dirty");
+  git(["worktree", "add", "-b", "fix/dirty-worktree", dirtyDir, "main~14"], dir);
+  git(["branch", "--set-upstream-to=origin/release/next", "fix/dirty-worktree"], dir);
+  commit(dirtyDir, "src/dirty.ts", "export const d = 1;\n", "fix: local work", "Ada Lovelace");
+  writeFileSync(path.join(dirtyDir, "README.md"), "# Helios Dashboard\nedited\n");
+  writeFileSync(path.join(dirtyDir, "scratch.txt"), "notes\n");
+
+  // no remote at all: a repository nothing has ever been pulled into.
+  const noRemoteDir = path.join(root, "scratch-notes");
+  git(["init", "-b", "main", noRemoteDir], root);
+  git(["config", "commit.gpgsign", "false"], noRemoteDir);
+  commit(noRemoteDir, "notes.md", "# notes\n", "notes: start", "Ada Lovelace");
 
   return {
     dir,
+    midRebaseDir,
+    dirtyDir,
+    noRemoteDir,
     cleanup: () => {
       if (existsSync(wtRoot)) rmSync(wtRoot, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
@@ -451,7 +504,7 @@ test("git pull-rebase confirm review — preview states", async () => {
     await step("level", "chore/bump-electron", async () => {
       await openRebaseConfirm(page, repo.dir);
       await snap(page, "20-nothing-to-replay", {
-        marker: SEL.confirmDialog.confirm,
+        marker: TID.inSync,
         locator: DIALOG,
       });
     });
@@ -472,7 +525,7 @@ test("git pull-rebase confirm review — preview states", async () => {
     //     shape with step 3 and must not share its wording.
     await step("behind", "docs/behind-upstream", async () => {
       await openRebaseConfirm(page, repo.dir);
-      await snap(page, "21-behind-only", { marker: SEL.confirmDialog.confirm, locator: DIALOG });
+      await snap(page, "21-behind-only", { marker: TID.behindOnly, locator: DIALOG });
     });
 
     // 5b. Upstream configured but never fetched here — the one state where the
@@ -490,6 +543,36 @@ test("git pull-rebase confirm review — preview states", async () => {
     await step("no-upstream", "spike/unconfigured-remote", async () => {
       await openRebaseConfirm(page, repo.dir);
       await snap(page, "30-no-upstream", { marker: TID.noUpstream, locator: DIALOG });
+    });
+
+    // 6b. Diverged: local commits to replay and incoming commits from the upstream.
+    await step("diverged", "feat/diverged-from-upstream", async () => {
+      await openRebaseConfirm(page, repo.dir);
+      await snap(page, "23-diverged", { marker: TID.commitRow, locator: DIALOG });
+    });
+
+    // 6c. A rebase is already halted in this worktree.
+    await step("in-progress", null, async () => {
+      await openRebaseConfirm(page, repo.midRebaseDir);
+      await snap(page, "35-rebase-in-progress", {
+        marker: '[role="alert"]',
+        locator: DIALOG,
+      });
+    });
+
+    // 6c'. Uncommitted changes to a tracked file: the pull would be refused.
+    await step("dirty", null, async () => {
+      await openRebaseConfirm(page, repo.dirtyDir);
+      await snap(page, "37-dirty-worktree", {
+        marker: '[data-testid="git-pull-rebase-dirty"]',
+        locator: DIALOG,
+      });
+    });
+
+    // 6d. A repository with no remote at all.
+    await step("no-remote", null, async () => {
+      await openRebaseConfirm(page, repo.noRemoteDir);
+      await snap(page, "36-no-remote", { marker: '[role="alert"]', locator: DIALOG });
     });
 
     // 6. Preview load failure and its retry, through the real error path.

@@ -58,13 +58,13 @@ Green here reports what happened when something ran: CI passed, the clone finish
 
 Some green the app inherited rather than invented, and repainting it would make the app wrong rather than restrained. Git status letters (`A`, `?`), diff insertion counts, ahead arrows, added lines in a patch. This is the ruling's exemption and it is narrow: it covers notation, not anything that merely feels conventional.
 
-### Affordances — an open question, not a ruled category
+### Affordances go neutral
 
-`affordance` is a fifth category, and the ruling did not name it. It covers the affirmative half of a control pair — run, apply, stage, resume, save, retry — where green means "go" rather than "good". These controls are not reporting state at all, so the review question ("can this green be named as a result, a checked item, or a live operation?") has no honest answer for them: they are not any of the three, and they are not health either.
+Run, apply, resume, restore and save controls used to paint themselves green to mean "go". They report no state, so none of the categories above admits them, and the ruling is that they don't get green at all. A control's importance is carried by the button hierarchy instead: the one primary action in a region takes the neutral high-contrast `contrast` Button (the same answer the accent rule gives), secondary actions take `subtle` or `ghost`, and icon-only controls use `text-text-secondary` with a hover step to `text-text-primary`.
 
-They are also not in the #12002 ruling's demote list, so this series left them alone rather than widening its scope. Naming them separately is the point: folding them into `domain` would have quietly restated what the ruling meant by that word, and the sites would have stopped being visible as a decision anyone made.
+The cost was concrete. On the terminal artifact overlay a green "Apply patch" sat directly above a diff whose added lines are green, so the control and the notation read as the same signal, and in some themes the green button looked disabled. The same conflation applied to every green play glyph beside a row of green insertion counts.
 
-If they should go neutral, delete the category — the guard will then list every site that needs fixing. If they should stay, this section is where the reasoning lives.
+The `affordance` inventory category is gone, and so is `button.tsx`'s `ghost-success` variant. A new green go-control now fails the guard as an unclassified site.
 
 ### Live operations
 
@@ -97,7 +97,7 @@ Use the semantic spelling, not the legacy `daintree-*` aliases — `border-borde
 
 Enforcement is a contract test, at occurrence level: `src/config/__tests__/statusSuccessGuard.contract.test.ts`, with its data in `statusSuccessInventory.ts`.
 
-The inventory's `category` field uses five short keys, which map onto the prose above: `transient` (transient confirmations), `verification` (finite gates and checklists), `outcome` (enumerated outcomes), `domain` (domain notation), and `affordance` (the open question below). There is deliberately no key for the demoted categories — a site in one of those should not exist.
+The inventory's `category` field uses four short keys, which map onto the prose above: `transient` (transient confirmations), `verification` (finite gates and checklists), `outcome` (enumerated outcomes) and `domain` (domain notation). There is deliberately no key for the demoted categories or for affordances — a site in one of those should not exist.
 
 It parses every production `.ts`/`.tsx` under `src/` and under the builtin plugin renderers (which ship in the app and paint the same tokens) and collects **paint sites** — string literals and template quasis containing a `status-success` Tailwind utility or a `var(--color-status-success)` read. Every site must appear in the inventory with a category and a rationale. Sites are keyed by a **signature** (the success-bearing lexemes of the literal, whitespace collapsed) plus an optional **anchor** (any substring of an enclosing node) when a signature repeats inside one file. Reformatting a component does not churn the inventory; changing which success utility it paints does.
 
@@ -114,7 +114,7 @@ What it catches: a new green in any scanned root, a second green in a file that 
 What it does not catch, stated plainly because a guard trusted past its reach is worse than no guard:
 
 - **A rationale that is not true.** Nothing mechanical can check whether the timer a `transient` entry claims actually exists. That is what review is for.
-- **Activations of an approved definition.** `badge.tsx`'s `tone="success"` and `button.tsx`'s `ghost-success` are each one inventoried site; every `<Badge tone="success">` that follows is invisible to the scanner. `InlineStatusBanner`'s `severity="success"` is the exception, and only because the type now forces it to dismiss itself.
+- **Activations of an approved definition.** `badge.tsx`'s `tone="success"` is one inventoried site; every `<Badge tone="success">` that follows is invisible to the scanner. `InlineStatusBanner`'s `severity="success"` is the exception, and only because the type now forces it to dismiss itself.
 - **The token reached indirectly.** A class name assembled from a variable, an interpolated `var(${token})`, a theme object read like `t["status-success"]`, or a value pulled through CSSOM all paint the colour without ever writing a utility a parser can see.
 - **A one-for-one swap inside one file.** Deleting an approved site and adding the same signature back under the same anchor — or anywhere in that file, if the entry needed no anchor — holds every count and every per-site check. The anchors make this narrow, not impossible.
 - **The Tailwind grammar drifting.** The utility roots are enumerated against the pinned Tailwind version, so a colour utility added upstream is unguarded until the list catches up.

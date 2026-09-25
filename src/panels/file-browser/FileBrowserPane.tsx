@@ -463,6 +463,7 @@ export function FileBrowserPane({
     listingStatus,
     listingHasHiddenDotfiles,
     listingHiddenCounts,
+    selectionMissing,
   } = useFileBrowserTree({
     source,
     expandedPaths: stableExpandedPaths,
@@ -1342,8 +1343,9 @@ export function FileBrowserPane({
                 data-testid="file-browser-sidebar-resize"
                 className={cn(
                   "group absolute -right-1.5 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center",
-                  "transition-colors hover:bg-overlay-soft focus:bg-tint/[0.04] focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/50",
-                  isResizing && "bg-overlay-medium"
+                  "transition-colors outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+                  // Hover styling is off while resizing, or it outranks the drag state.
+                  isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft"
                 )}
                 onMouseDown={handleResizeStart}
                 onDoubleClick={handleResizeDoubleClick}
@@ -1351,9 +1353,11 @@ export function FileBrowserPane({
               >
                 <div
                   className={cn(
-                    "h-8 w-px rounded-full transition-[width] delay-100 duration-150 group-hover:w-0.5",
-                    "bg-daintree-text/20 group-hover:bg-daintree-text/35 group-focus:bg-accent-primary",
-                    isResizing && "bg-daintree-text/50"
+                    "h-8 rounded-full transition-[width] delay-100 duration-150",
+                    // The focus outline is the accent; the grip stays neutral.
+                    isResizing
+                      ? "w-0.5 bg-text-primary/50"
+                      : "w-px bg-text-primary/20 group-hover:w-0.5 group-hover:bg-text-primary/35 group-focus-visible:w-0.5 group-focus-visible:bg-text-primary/50"
                   )}
                 />
               </div>
@@ -1422,6 +1426,13 @@ export function FileBrowserPane({
               hideDotfiles={hideDotfiles}
               onHideDotfilesChange={handleHideDotfilesChange}
               hiddenCounts={hiddenCounts}
+              // The open file vanished from disk. Only a file: a vanished
+              // folder has no listing to show and falls back like any other
+              // unresolved selection.
+              missingFilePath={
+                selectionMissing && selectedPath !== null && selectionInRoot ? selectedPath : null
+              }
+              onShowFolder={showFolderContents}
             />
           </div>
         )}
@@ -1511,8 +1522,8 @@ export function FileBrowserPane({
                 : hiddenCounts.alwaysHidden > 0
                   ? "Everything here is on the always-hidden list"
                   : rootPath
-                    ? "This folder is empty"
-                    : "This worktree is empty"
+                    ? "Add a file to this folder"
+                    : "Add a file to this worktree"
             }
             action={
               canRevealDotfiles ? (
@@ -1532,21 +1543,6 @@ export function FileBrowserPane({
 
     return (
       <>
-        {/* A root failure with a tree on screen: the banner sits above the
-            rows rather than replacing them (same shape as FilePane's stale
-            strip), so the last-known files stay usable while the error is
-            visible and retryable. */}
-        {rootError !== null && (
-          <div className="shrink-0 p-2">
-            <InlineStatusBanner
-              severity="error"
-              icon={FolderTree}
-              title={rootPath ? "Couldn't refresh this folder" : "Couldn't refresh this worktree"}
-              description={`Showing the last known files. ${rootError}`}
-              action={{ id: "retry", label: "Retry", onClick: handleRefresh }}
-            />
-          </div>
-        )}
         <FileTreeView
           rows={rows}
           cursorPath={cursorPath}
@@ -1569,6 +1565,23 @@ export function FileBrowserPane({
           label={rootPath === "" ? `Files in ${title}` : `Files in ${title}/${rootPath}`}
           gitStatusIndex={gitStatusIndex}
         />
+        {/* A root failure with a tree on screen: the banner joins the rows
+            rather than replacing them, so the last-known files stay usable
+            while the error is visible and retryable. Below the rows, like the
+            strips under it: a background refresh can fail at any moment, and
+            above the rows its arrival would shift them under a click in
+            progress. */}
+        {rootError !== null && (
+          <div className="shrink-0 border-t border-border-default p-2">
+            <InlineStatusBanner
+              severity="error"
+              icon={FolderTree}
+              title={rootPath ? "Couldn't refresh this folder" : "Couldn't refresh this worktree"}
+              description={`Showing the last known files. ${rootError}`}
+              action={{ id: "retry", label: "Retry", onClick: handleRefresh }}
+            />
+          </div>
+        )}
         {/* What the dotfile filter is currently removing, and the one gesture
             that puts it back. Conditional by construction — it renders nothing
             while nothing is hidden — so the tree never pays height for it at
@@ -1579,10 +1592,14 @@ export function FileBrowserPane({
             click makes the selection reachable, and sitting above the rows it
             would shift them mid-gesture — the second click of a double-click
             would land one row off. */}
+        {/* Never for a selection that no longer exists: expanding its
+            ancestors cannot bring back a deleted row, so the strip would
+            promise something it cannot do. The viewer says it is gone. */}
         {selectedPath !== null &&
           selectionInRoot &&
           !selectedIsReachable &&
-          !selectionFilteredHidden && (
+          !selectionFilteredHidden &&
+          !selectionMissing && (
             <button
               type="button"
               onClick={revealSelection}

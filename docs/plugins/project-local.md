@@ -11,7 +11,7 @@ The whole design is shaped by one case: an agent working in a fresh worktree sho
 ```
 <projectRoot>/.daintree/
 ├── recipes/                     # existing, git-tracked
-├── plugin-settings/             # existing, git-tracked, project-scope settings
+├── plugin-settings/             # existing, git-tracked, project-scope settings (never secrets)
 └── plugins/
     └── acme.dashboard/
         ├── plugin.json          # must declare "scope": "project"
@@ -184,13 +184,13 @@ Rules:
 
 A project plugin's host object is bound to its project at construction, and every closure reads that binding rather than the focused project view. `host.dispatch` and `host.actions.*` target the bound project's renderer; `showQuickPick` / `showInputBox` / `showConfirm` are delivered into that project's view so the user finds the prompt when they switch to it; `getWorktrees` / `getActiveWorktree` / `getWorktreeStatus` and the worktree change events see only that project's worktrees; `sendToActiveAgent` reaches only agents belonging to it; toasts and renderer pushes go to its views.
 
-There is no fallback to the focused view. `host.dispatch` and the UI prompts reject with `PROJECT_VIEW_UNAVAILABLE` when the bound project has no live renderer, rather than landing somewhere else — handing project A's plugin project B's renderer is the confused-deputy bug the binding exists to prevent. The read-only catalog surfaces (`host.actions.list` / `get` / `canDispatch`) never throw by contract, so they answer empty in the same situation. A project view that has been evicted under memory pressure still counts as live: the project is open, just backgrounded.
+There is no fallback to the focused view. `host.dispatch` and the UI prompts reject with `PROJECT_VIEW_UNAVAILABLE` when the bound project has no live renderer, rather than landing somewhere else — handing project A's plugin project B's renderer is the confused-deputy bug the binding exists to prevent. The read-only catalog surfaces (`host.actions.list` / `get` / `canDispatch`) never throw by contract, so they answer empty in the same situation. A project view that has been backgrounded and cached still counts as live: the project is open, just not on screen. A renderer actually reclaimed under memory pressure does not — there is nothing to target until the user opens that project's view again.
 
 Installed and builtin plugins keep their existing ambient behaviour — they have no project of their own, so the focused view is the only thing their calls can mean.
 
 ## Settings and storage
 
-`host.settings` with `scope: "project"` resolves from the bound project root, so a project plugin writes `<projectRoot>/.daintree/plugin-settings/<manifestId>.json` — never moved by a project switch. `host.storage` has three scopes and follows the same split:
+`host.settings` with `scope: "project"` resolves from the bound project root, so a project plugin writes `<projectRoot>/.daintree/plugin-settings/<manifestId>.json` — never moved by a project switch. Secret settings are the exception: a `type: "secret"` value is never written into the repository, so a project-scope secret goes to this machine's per-project local file, `~/.daintree/plugin-settings/local/<projectId>/<instanceKey>.json`, keyed by the same bound project. `host.storage` has three scopes and follows the same split:
 
 | Scope      | File                                                        |
 | ---------- | ----------------------------------------------------------- |

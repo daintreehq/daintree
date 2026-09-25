@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -15,10 +15,10 @@ import { logError } from "@/utils/logger";
 import type { CliAvailability } from "@shared/types";
 import { useAgentSetupPoll } from "./useAgentSetupPoll";
 import { isAgentInstalled, isAgentLaunchable } from "../../../shared/utils/agentAvailability";
-import { Sparkles, ChevronLeft, ArrowRight, Check, Sun, Moon } from "lucide-react";
+import { Sparkles, ChevronLeft, ArrowRight, Check, Sun, Moon, FolderOpen } from "lucide-react";
 import { AnimatePresence, m, useReducedMotion, type Variants } from "framer-motion";
 import { Plug } from "@/components/icons";
-import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
+import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import {
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
@@ -29,6 +29,8 @@ import {
 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
+import { DEFAULT_APP_SCHEME_ID } from "@shared/theme/themes";
+import { KbdChord } from "@/components/ui/Kbd";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import type { AppColorScheme } from "@shared/types/appTheme";
@@ -463,6 +465,12 @@ interface AgentSetupWizardProps {
   onClose: () => void;
   initialAvailability?: CliAvailability;
   isFirstRun?: boolean;
+  /**
+   * Whether a project or scratch is open. First run opens from the welcome
+   * screen, before any exists, and an agent launched from there starts in the
+   * home directory — so completion leads to a project instead.
+   */
+  hasWorkspace?: boolean;
   onStepChange?: (step: WizardStep) => void;
 }
 
@@ -471,6 +479,7 @@ export function AgentSetupWizard({
   onClose,
   initialAvailability,
   isFirstRun = false,
+  hasWorkspace = true,
   onStepChange,
 }: AgentSetupWizardProps) {
   const [state, dispatch] = useReducer(
@@ -499,7 +508,7 @@ export function AgentSetupWizard({
 
   // Telemetry state (first-run only)
   const [telemetryEnabled, setTelemetryEnabled] = useState(false);
-  const telemetryCommittedRef = useRef(false);
+  const telemetryCommittedRef = useRef<"errors" | "off" | null>(null);
   // Tracks whether the user explicitly engaged the privacy toggle (in either
   // direction). Distinct from `telemetryCommittedRef`: silent close paths still
   // commit telemetry off, but only fire the inbox confirmation when the user
@@ -526,7 +535,7 @@ export function AgentSetupWizard({
       });
       initRef.current = false;
       hasAutoSelected.current = false;
-      telemetryCommittedRef.current = false;
+      telemetryCommittedRef.current = null;
       telemetryToggleTouchedRef.current = false;
       setTelemetryEnabled(false);
       setPermissionsEnabled(false);
@@ -559,6 +568,9 @@ export function AgentSetupWizard({
     if (!isFirstRun || !isOpen || hasAutoSelected.current) return;
     if (state.step.type !== "appearance") return;
     hasAutoSelected.current = true;
+    // Only a theme nobody chose is replaced: a user who picked one before
+    // opening setup keeps it.
+    if (selectedSchemeId !== DEFAULT_APP_SCHEME_ID) return;
     const prefersLight = window.matchMedia("(prefers-color-scheme: light)").matches;
     const targetId = prefersLight ? "bondi" : "daintree";
     if (selectedSchemeId !== targetId) {
@@ -592,24 +604,32 @@ export function AgentSetupWizard({
   // confirmation even if the prompt-shown bookkeeping fails — otherwise a
   // partial failure would silently re-introduce the bug this guard exists
   // to prevent.
-  const commitTelemetry = useCallback(async (level: "errors" | "off"): Promise<boolean> => {
-    if (telemetryCommittedRef.current) return false;
-    try {
-      await window.electron.privacy.setTelemetryLevel(level);
-      telemetryCommittedRef.current = true;
-    } catch (error) {
-      logError("Failed to commit telemetry preference", error);
-      return false;
-    }
-    try {
-      await window.electron.telemetry.markPromptShown();
-    } catch (error) {
-      // Non-fatal: the preference is persisted; the prompt will re-show next
-      // launch, but the user's choice this session is honored.
-      logError("Failed to mark telemetry prompt shown", error);
-    }
-    return true;
-  }, []);
+  //
+  // `explicit` is the privacy step's own Continue: a choice the user made, so a
+  // revised one after Back is written again. The silent close paths never
+  // overwrite a choice already saved.
+  const commitTelemetry = useCallback(
+    async (level: "errors" | "off", explicit = false): Promise<boolean> => {
+      const committed = telemetryCommittedRef.current;
+      if (committed !== null && (!explicit || committed === level)) return false;
+      try {
+        await window.electron.privacy.setTelemetryLevel(level);
+        telemetryCommittedRef.current = level;
+      } catch (error) {
+        logError("Failed to commit telemetry preference", error);
+        throw error;
+      }
+      try {
+        await window.electron.telemetry.markPromptShown();
+      } catch (error) {
+        // Non-fatal: the preference is persisted; the prompt will re-show next
+        // launch, but the user's choice this session is honored.
+        logError("Failed to mark telemetry prompt shown", error);
+      }
+      return true;
+    },
+    []
+  );
 
   const handleTelemetryChange = useCallback((enabled: boolean) => {
     telemetryToggleTouchedRef.current = true;
@@ -668,7 +688,12 @@ export function AgentSetupWizard({
   const flow = useMemo(() => visibleFlowSteps(state), [state]);
   const totalSteps = flow.length;
   const stepNumber = Math.max(0, flow.indexOf(state.step.type));
-  const stepMeta = STEP_META[state.step.type];
+  // "Complete" is only true when something is ready; a deferred install saves
+  // the user's choices and says so rather than claiming success.
+  const stepMeta =
+    state.step.type === "complete" && installedAgents.length === 0
+      ? { ...STEP_META.complete, title: "Setup saved" }
+      : STEP_META[state.step.type];
 
   const handleAppearanceContinue = useCallback(() => {
     directionRef.current = 1;
@@ -692,8 +717,18 @@ export function AgentSetupWizard({
     directionRef.current = 1;
     setIsSaving(true);
     try {
-      await commitTelemetry(telemetryEnabled ? "errors" : "off");
+      await commitTelemetry(telemetryEnabled ? "errors" : "off", true);
       dispatch({ type: "PRIVACY_CONTINUE" });
+    } catch {
+      // Stay on the step: advancing would imply a choice that was not saved.
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+      notify({
+        type: "error",
+        title: "Couldn't save crash reporting",
+        message: "Your choice wasn't saved. Try again.",
+        priority: "high",
+        context: { eventKind: "settings" },
+      });
     } finally {
       setIsSaving(false);
     }
@@ -748,6 +783,11 @@ export function AgentSetupWizard({
     onClose();
   }, [onClose]);
 
+  const handleOpenProject = useCallback(() => {
+    void actionService.dispatch("project.add", undefined, { source: "user" });
+    onClose();
+  }, [onClose]);
+
   const notifyTelemetryDefault = useCallback(() => {
     notify({
       type: "info",
@@ -766,7 +806,7 @@ export function AgentSetupWizard({
     try {
       let committedNow = false;
       if (isFirstRun) {
-        committedNow = await commitTelemetry("off");
+        committedNow = await commitTelemetry("off").catch(() => false);
       }
       if (committedNow && !telemetryToggleTouchedRef.current) {
         notifyTelemetryDefault();
@@ -782,17 +822,28 @@ export function AgentSetupWizard({
 
   // Rides AppDialog's own hint slot (bottom-left), which is where the progress
   // dots used to sit and where every other dialog puts footer context.
-  const footerHint =
-    state.step.type === "agents" && !showLoadingSelections && selectedAgentIds.length === 0 ? (
-      <span aria-live="polite">Select at least one agent to continue</span>
-    ) : undefined;
+  const agentsHint =
+    state.step.type !== "agents" || showLoadingSelections
+      ? null
+      : hasFatalHealthFailure
+        ? "Install the missing system tools to continue"
+        : selectedAgentIds.length === 0
+          ? "Select at least one agent to continue"
+          : null;
+  const footerHint = agentsHint ? <span aria-live="polite">{agentsHint}</span> : undefined;
+
+  // Nothing on the install step is usable until one of the picked agents is,
+  // so its forward move is a deferral until then, and says so.
+  const hasUsableSelection = selectedAgentIds.some((id) =>
+    isAgentLaunchable(state.availability[id])
+  );
 
   const handleBeforeClose = useCallback(async () => {
     // Any first-run close before the summary records telemetry off — silence is
     // not consent. Once the user reaches `complete` they have already passed the
     // privacy step, so their choice is committed and we must not re-commit.
     if (isFirstRun && state.step.type !== "complete") {
-      const committedNow = await commitTelemetry("off");
+      const committedNow = await commitTelemetry("off").catch(() => false);
       if (committedNow && !telemetryToggleTouchedRef.current) {
         notifyTelemetryDefault();
       }
@@ -904,7 +955,9 @@ export function AgentSetupWizard({
                   onPermissionsChange={setPermissionsEnabled}
                 />
               )}
-              {state.step.type === "complete" && <CompleteStep installedAgents={installedAgents} />}
+              {state.step.type === "complete" && (
+                <CompleteStep installedAgents={installedAgents} hasWorkspace={hasWorkspace} />
+              )}
             </m.div>
           </AnimatePresence>
         </div>
@@ -973,12 +1026,23 @@ export function AgentSetupWizard({
               <ArrowRight className="w-4 h-4 ml-1" />
             </Button>
           )}
-          {state.step.type === "cli" && (
-            <Button variant="contrast" onClick={handleCliContinue} disabled={isInstalling}>
-              Continue
-              <ArrowRight className="w-4 h-4 ml-1" />
-            </Button>
-          )}
+          {state.step.type === "cli" &&
+            (hasUsableSelection ? (
+              <Button variant="contrast" onClick={handleCliContinue} disabled={isInstalling}>
+                Continue
+                <ArrowRight className="w-4 h-4 ml-1" />
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                onClick={handleCliContinue}
+                disabled={isInstalling}
+                data-testid="agent-cli-defer"
+                className="text-text-secondary hover:text-text-primary"
+              >
+                Set up later
+              </Button>
+            ))}
           {state.step.type === "permissions" && (
             <Button variant="contrast" onClick={handlePermissionsContinue} disabled={isSaving}>
               Continue
@@ -991,7 +1055,16 @@ export function AgentSetupWizard({
               agents installed there is nothing to launch, so finishing is the
               only action and it takes the primary slot. */}
           {state.step.type === "complete" &&
-            (hasInstalledAgents ? (
+            (!hasWorkspace ? (
+              <Button
+                variant="contrast"
+                onClick={handleOpenProject}
+                data-testid="complete-step-open-project"
+              >
+                <FolderOpen className="w-4 h-4 mr-1" />
+                Open a project
+              </Button>
+            ) : hasInstalledAgents ? (
               <Button
                 variant="contrast"
                 onClick={handleLaunchAgent}
@@ -1020,46 +1093,64 @@ function AppearanceStep({
   selectedSchemeId?: string;
   onThemeSelect: (id: string) => void;
 }) {
-  const schemes = [daintreeScheme, bondiScheme] as const;
+  // A user who already picked another theme sees it offered first and
+  // selected, rather than a choice of two with neither marked. Held from the
+  // step's first render, so trying Daintree does not take the way back away.
+  const [openingSchemeId] = useState(selectedSchemeId);
+  const current = BUILT_IN_APP_SCHEMES.find(
+    (scheme) =>
+      scheme.id === openingSchemeId &&
+      scheme.id !== daintreeScheme.id &&
+      scheme.id !== bondiScheme.id
+  );
+  const schemes = current ? [current, daintreeScheme, bondiScheme] : [daintreeScheme, bondiScheme];
 
   return (
     <section>
-      <div className="grid grid-cols-2 gap-4" role="listbox" aria-label="Select theme">
+      {/* Native radios: one choice among a few, so arrow keys move the
+          selection and Tab enters the group once, with nothing hand-rolled. */}
+      <div
+        className={cn("grid gap-4", schemes.length === 3 ? "grid-cols-3" : "grid-cols-2")}
+        role="radiogroup"
+        aria-label="Theme"
+      >
         {schemes.map((scheme) => {
           const isSelected = selectedSchemeId === scheme.id;
           const isDark = scheme.type === "dark";
           return (
-            <button
+            <label
               key={scheme.id}
-              type="button"
-              role="option"
-              aria-selected={isSelected}
-              onClick={() => onThemeSelect(scheme.id)}
               className={cn(
-                "flex flex-col gap-2 p-3 rounded-[var(--radius-md)] border transition-colors text-left",
-                // Without this the cards fell through to the browser's default
-                // focus ring, which is the OS accent colour and ignores the
-                // theme and forced-colors entirely.
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
+                "flex flex-col gap-2 p-3 rounded-[var(--radius-md)] border transition-colors text-left cursor-pointer",
+                // The ring rides the card, not the visually hidden radio.
+                "has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent-primary",
                 isSelected
                   ? "border-border-strong bg-overlay-selected"
-                  : "border-border-default bg-surface-canvas hover:border-daintree-text/30"
+                  : "border-border-default bg-surface-canvas hover:border-text-secondary"
               )}
             >
+              <input
+                type="radio"
+                name="first-run-theme"
+                value={scheme.id}
+                checked={isSelected}
+                onChange={() => onThemeSelect(scheme.id)}
+                className="sr-only"
+              />
               <ThemeMockup scheme={scheme} />
               <div className="flex items-center justify-between px-0.5">
                 <div className="flex items-center gap-1.5">
                   {isDark ? (
-                    <Moon className="w-3 h-3 text-daintree-text/50" />
+                    <Moon className="w-3 h-3 text-text-secondary" />
                   ) : (
-                    <Sun className="w-3 h-3 text-daintree-text/50" />
+                    <Sun className="w-3 h-3 text-text-secondary" />
                   )}
                   <span className="text-sm font-medium text-text-primary">{scheme.name}</span>
                   <span className="text-xs text-text-secondary">{isDark ? "Dark" : "Light"}</span>
                 </div>
                 {isSelected && <Check className="w-3.5 h-3.5 text-text-primary shrink-0" />}
               </div>
-            </button>
+            </label>
           );
         })}
       </div>
@@ -1111,7 +1202,7 @@ function AgentsStep({
             {Array.from({ length: 5 }).map((_, i) => (
               <div
                 key={i}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
+                className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30"
               >
                 <SkeletonBone className="w-4 h-4 shrink-0" />
                 <SkeletonBone className="w-8 h-8 rounded-[var(--radius-sm)] shrink-0" />
@@ -1177,40 +1268,29 @@ function PrivacyStep({
   telemetryEnabled?: boolean;
   onTelemetryChange: (enabled: boolean) => void;
 }) {
-  const crashReportingLabelId = useId();
-
   return (
-    <section>
-      <div className="space-y-3 rounded-[var(--radius-lg)] border border-border-default p-4">
-        <div className="flex items-center justify-between gap-3">
-          <p id={crashReportingLabelId} className="text-sm font-medium text-text-primary">
-            Enable crash reporting
-          </p>
-          <SettingsSwitch
-            checked={telemetryEnabled ?? false}
-            onCheckedChange={onTelemetryChange}
-            aria-labelledby={crashReportingLabelId}
-          />
-        </div>
-        <p className="text-xs text-text-secondary">
-          No file contents or credentials are ever sent.
-        </p>
-        {/* Underlined at rest: previously this read as a third line of body
-            copy and only became identifiable as a control on hover. */}
-        <button
-          type="button"
-          className="text-xs text-text-link underline underline-offset-2 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary rounded-xs"
-          onClick={() =>
-            void actionService.dispatch(
-              "telemetry.togglePreview",
-              { active: true },
-              { source: "user" }
-            )
-          }
-        >
-          Preview what would be sent
-        </button>
-      </div>
+    <section className="space-y-2">
+      <SettingsSwitchCard
+        title="Enable crash reporting"
+        subtitle="No file contents or credentials are ever sent"
+        isEnabled={telemetryEnabled ?? false}
+        onChange={() => onTelemetryChange(!(telemetryEnabled ?? false))}
+      />
+      {/* Underlined at rest: previously this read as a third line of body
+          copy and only became identifiable as a control on hover. */}
+      <button
+        type="button"
+        className="text-xs text-text-link underline underline-offset-2 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary rounded-xs"
+        onClick={() =>
+          void actionService.dispatch(
+            "telemetry.togglePreview",
+            { active: true },
+            { source: "user" }
+          )
+        }
+      >
+        Preview what would be sent
+      </button>
     </section>
   );
 }
@@ -1224,45 +1304,43 @@ function PermissionsStep({
   permissionsEnabled?: boolean;
   onPermissionsChange: (enabled: boolean) => void;
 }) {
-  const labelId = useId();
-  const descriptionId = useId();
-
   return (
     <section>
-      <div className="space-y-3 rounded-[var(--radius-lg)] border border-border-default p-4">
-        <div className="flex items-center justify-between gap-3">
-          <p id={labelId} className="text-sm font-medium text-text-primary">
-            Skip permission prompts for agents
-          </p>
-          <SettingsSwitch
-            checked={permissionsEnabled ?? false}
-            onCheckedChange={onPermissionsChange}
-            aria-labelledby={labelId}
-            aria-describedby={descriptionId}
-          />
-        </div>
-        <p id={descriptionId} className="text-xs text-text-secondary">
-          Agents act without confirmation — faster, but they run commands and edit files on their
-          own. You can change this anytime in Settings → Agents.
-        </p>
-      </div>
+      <SettingsSwitchCard
+        title="Skip permission prompts for agents"
+        subtitle="Agents act without confirmation — faster, but they run commands and edit files on their own. You can change this anytime in Settings → Agents."
+        isEnabled={permissionsEnabled ?? false}
+        onChange={() => onPermissionsChange(!(permissionsEnabled ?? false))}
+      />
     </section>
   );
 }
 
 // --- Complete step ---
 
-export function CompleteStep({ installedAgents }: { installedAgents: string[] }) {
+export function CompleteStep({
+  installedAgents,
+  hasWorkspace = true,
+}: {
+  installedAgents: string[];
+  hasWorkspace?: boolean;
+}) {
   const hasAgents = installedAgents.length > 0;
+  const readyLine = `You have ${installedAgents.length} agent${installedAgents.length === 1 ? "" : "s"} ready to use.`;
 
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-3">
-        <Sparkles className="w-5 h-5 text-status-success shrink-0 mt-0.5" aria-hidden="true" />
+        {/* Celebrate only a result: a deferred install is not one. */}
+        {hasAgents && (
+          <Sparkles className="w-5 h-5 text-status-success shrink-0 mt-0.5" aria-hidden="true" />
+        )}
         <p className="text-sm text-text-secondary">
           {hasAgents
-            ? `You have ${installedAgents.length} agent${installedAgents.length === 1 ? "" : "s"} ready to use. Launch them from the toolbar or with keyboard shortcuts.`
-            : "No agents were installed. You can install them later from Settings → Agents."}
+            ? hasWorkspace
+              ? `${readyLine} Launch them from the toolbar or with keyboard shortcuts.`
+              : `${readyLine} Open a project to start one in it.`
+            : "No agent is ready yet. Install one from Settings → Agents, or re-run this setup, whenever you're ready."}
         </p>
       </div>
 
@@ -1273,7 +1351,7 @@ export function CompleteStep({ installedAgents }: { installedAgents: string[] })
             if (!agent) return null;
             const Icon = agent.icon;
             const presetCount = agent.presets?.length ?? 0;
-            const shortcut = keybindingService.getDisplayCombo(`agent.${id}`);
+            const shortcut = keybindingService.getEffectiveCombo(`agent.${id}`);
 
             return (
               <div
@@ -1293,16 +1371,18 @@ export function CompleteStep({ installedAgents }: { installedAgents: string[] })
                     {presetCount} presets
                   </span>
                 )}
-                {shortcut && (
-                  <span className="text-2xs text-text-muted ml-auto tabular-nums">{shortcut}</span>
-                )}
+                {shortcut && <KbdChord shortcut={shortcut} className="ml-auto" />}
               </div>
             );
           })}
         </div>
       )}
 
-      <p className="text-xs text-text-muted">You can re-run this wizard from Settings → Agents</p>
+      {hasAgents && (
+        <p className="text-xs text-text-secondary">
+          You can re-run this setup from Settings → Agents
+        </p>
+      )}
     </div>
   );
 }

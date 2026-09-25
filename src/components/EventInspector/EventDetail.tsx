@@ -3,12 +3,15 @@ import { cn } from "@/lib/utils";
 import { useEventStore, type EventRecord, type EventFilterOptions } from "@/store/eventStore";
 import { Copy, Check, ChevronDown, ChevronRight, Filter, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import { logError } from "@/utils/logger";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { sanitizeErrorText } from "@/utils/errorText";
 
 interface EventDetailProps {
   event: EventRecord | null;
+  /** False when there is nothing to select yet, so the pane doesn't ask for a selection. */
+  hasEvents?: boolean;
   className?: string;
 }
 
@@ -26,7 +29,7 @@ function ContextPill({ label, value, filterKey, currentFilters, onToggle }: Cont
 
   return (
     <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
-      <span className="text-muted-foreground">{label}:</span>
+      <span className="text-text-secondary">{label}:</span>
       <Tooltip>
         <TooltipTrigger asChild>
           <button
@@ -35,16 +38,16 @@ function ContextPill({ label, value, filterKey, currentFilters, onToggle }: Cont
               onToggle(filterKey, value);
             }}
             className={cn(
-              "group flex items-center gap-2 px-2 py-1 rounded text-xs font-mono text-left w-fit transition max-w-full focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+              "group flex items-center gap-2 px-2 py-1 rounded-[var(--radius-sm)] text-xs font-mono text-left w-fit transition max-w-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
               isActive
-                ? "bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25"
-                : "hover:bg-muted border border-transparent hover:border-border text-foreground"
+                ? "bg-overlay-medium text-text-primary border border-border-strong hover:bg-overlay-strong"
+                : "hover:bg-overlay-soft border border-transparent hover:border-border-default text-text-primary"
             )}
             aria-pressed={isActive}
           >
             <span className="truncate">{strValue}</span>
             {isActive ? (
-              <X className="w-3 h-3 flex-shrink-0 text-text-muted" />
+              <X className="w-3 h-3 flex-shrink-0 text-text-secondary" />
             ) : (
               <Filter className="w-3 h-3 flex-shrink-0 opacity-0 group-hover:opacity-30" />
             )}
@@ -58,7 +61,7 @@ function ContextPill({ label, value, filterKey, currentFilters, onToggle }: Cont
   );
 }
 
-export function EventDetail({ event, className }: EventDetailProps) {
+export function EventDetail({ event, hasEvents = true, className }: EventDetailProps) {
   const filters = useEventStore((state) => state.filters);
   const setFilters = useEventStore((state) => state.setFilters);
   const [copied, setCopied] = useState(false);
@@ -96,11 +99,11 @@ export function EventDetail({ event, className }: EventDetailProps) {
     return (
       <div
         className={cn(
-          "flex items-center justify-center text-sm text-muted-foreground h-full",
+          "flex items-center justify-center text-xs text-text-secondary h-full",
           className
         )}
       >
-        <p>Select an event to view details</p>
+        <p>{hasEvents ? "Select an event to see its payload" : "Nothing to inspect yet"}</p>
       </div>
     );
   }
@@ -136,9 +139,13 @@ export function EventDetail({ event, className }: EventDetailProps) {
     }
   };
 
+  // Local time, matching the timeline row; the ISO string stays in the tooltip.
   const formatTimestamp = (timestamp: number) => {
     const date = new Date(timestamp);
-    return date.toISOString();
+    const time = [date.getHours(), date.getMinutes(), date.getSeconds()]
+      .map((n) => n.toString().padStart(2, "0"))
+      .join(":");
+    return `${date.toLocaleDateString()} ${time}.${date.getMilliseconds().toString().padStart(3, "0")}`;
   };
 
   const getTimeSince = (timestamp: number) => {
@@ -151,191 +158,192 @@ export function EventDetail({ event, className }: EventDetailProps) {
   };
 
   return (
-    <div className={cn("flex flex-col h-full bg-background", className)}>
-      <div className="flex-shrink-0 p-4 border-b">
+    <div className={cn("flex flex-col h-full min-h-0", className)}>
+      <div className="flex-shrink-0 px-3 py-2 border-b border-divider">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0 space-y-1">
-            <h3 className="font-mono text-sm font-semibold truncate">{event.type}</h3>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="font-mono">{formatTimestamp(event.timestamp)}</span>
+            <h3 className="font-mono text-xs font-semibold text-text-primary truncate">
+              {event.type}
+            </h3>
+            <div className="flex items-center gap-2 text-2xs text-text-secondary">
+              <span className="font-mono" title={new Date(event.timestamp).toISOString()}>
+                {formatTimestamp(event.timestamp)}
+              </span>
               <span>•</span>
               <span>{getTimeSince(event.timestamp)}</span>
               <span>•</span>
               <span className="capitalize">{event.source}</span>
             </div>
           </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={copyPayload}
-                aria-label="Copy payload"
-                className="flex-shrink-0 p-2 hover:bg-muted rounded transition-colors"
-              >
-                {copied ? (
-                  <Check className="w-4 h-4 text-status-success" />
-                ) : (
-                  <Copy className="w-4 h-4" />
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Copy payload</TooltipContent>
-          </Tooltip>
+          <Button
+            variant="subtle"
+            size="xs"
+            onClick={copyPayload}
+            aria-label={copied ? "Copied payload" : "Copy payload JSON"}
+          >
+            {copied ? <Check /> : <Copy />}
+            {copied ? "Copied" : "Copy JSON"}
+          </Button>
         </div>
       </div>
 
-      <div className="flex-shrink-0 border-b">
-        <button
-          onClick={() => toggleSection("metadata")}
-          aria-expanded={expandedSections.has("metadata")}
-          className="w-full px-4 py-2 flex items-center gap-2 hover:bg-muted/50 transition-colors"
-        >
-          {expandedSections.has("metadata") ? (
-            <ChevronDown className="w-4 h-4" />
-          ) : (
-            <ChevronRight className="w-4 h-4" />
+      {/* One scroll container for everything below the header, payload first:
+          it's what someone opens an event to read, and at the default dock
+          height a separately-scrolling payload box had room for one line. */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="border-b border-divider">
+          <button
+            onClick={() => toggleSection("payload")}
+            aria-expanded={expandedSections.has("payload")}
+            className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
+          >
+            {expandedSections.has("payload") ? (
+              <ChevronDown className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5" />
+            )}
+            <span className="text-xs font-medium">Payload</span>
+          </button>
+          {expandedSections.has("payload") && (
+            <div className="px-3 pb-2.5">
+              <pre className="text-xs font-mono text-text-primary bg-surface-canvas border border-divider p-2.5 rounded-[var(--radius-md)] overflow-x-auto select-text">
+                {formattedPayload}
+              </pre>
+            </div>
           )}
-          <span className="text-sm font-medium">Metadata</span>
-        </button>
-        {expandedSections.has("metadata") && (
-          <div className="px-4 pb-3 space-y-2 text-sm">
-            <div className="grid grid-cols-[100px_1fr] gap-2">
-              <span className="text-muted-foreground">Event ID:</span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="font-mono text-xs truncate">{event.id}</span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{event.id}</TooltipContent>
-              </Tooltip>
+        </div>
+
+        {event.payload &&
+          (event.payload.worktreeId ||
+            event.payload.agentId ||
+            event.payload.runId ||
+            event.payload.terminalId ||
+            event.payload.issueNumber ||
+            event.payload.prNumber) && (
+            <div className="flex-shrink-0">
+              <button
+                onClick={() => toggleSection("context")}
+                aria-expanded={expandedSections.has("context")}
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
+              >
+                {expandedSections.has("context") ? (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronRight className="w-3.5 h-3.5" />
+                )}
+                <span className="text-xs font-medium">Context</span>
+              </button>
+              {expandedSections.has("context") && (
+                <div className="px-3 pb-2.5 space-y-1.5 text-xs">
+                  {event.payload.worktreeId !== undefined && (
+                    <ContextPill
+                      label="Worktree"
+                      value={event.payload.worktreeId}
+                      filterKey="worktreeId"
+                      currentFilters={filters}
+                      onToggle={handleContextToggle}
+                    />
+                  )}
+                  {event.payload.agentId !== undefined && (
+                    <ContextPill
+                      label="Agent"
+                      value={event.payload.agentId}
+                      filterKey="agentId"
+                      currentFilters={filters}
+                      onToggle={handleContextToggle}
+                    />
+                  )}
+                  {event.payload.runId !== undefined && (
+                    <ContextPill
+                      label="Run"
+                      value={event.payload.runId}
+                      filterKey="runId"
+                      currentFilters={filters}
+                      onToggle={handleContextToggle}
+                    />
+                  )}
+                  {event.payload.terminalId !== undefined && (
+                    <ContextPill
+                      label="Terminal"
+                      value={event.payload.terminalId}
+                      filterKey="terminalId"
+                      currentFilters={filters}
+                      onToggle={handleContextToggle}
+                    />
+                  )}
+                  {event.payload.issueNumber !== undefined && (
+                    <ContextPill
+                      label="Issue #"
+                      value={event.payload.issueNumber}
+                      filterKey="issueNumber"
+                      currentFilters={filters}
+                      onToggle={handleContextToggle}
+                    />
+                  )}
+                  {event.payload.prNumber !== undefined && (
+                    <ContextPill
+                      label="PR #"
+                      value={event.payload.prNumber}
+                      filterKey="prNumber"
+                      currentFilters={filters}
+                      onToggle={handleContextToggle}
+                    />
+                  )}
+                </div>
+              )}
             </div>
-            <div className="grid grid-cols-[100px_1fr] gap-2">
-              <span className="text-muted-foreground">Type:</span>
-              <span className="font-mono text-xs">{event.type}</span>
-            </div>
-            <div className="grid grid-cols-[100px_1fr] gap-2">
-              <span className="text-muted-foreground">Source:</span>
-              <span className="font-mono text-xs capitalize">{event.source}</span>
-            </div>
-            <div className="grid grid-cols-[100px_1fr] gap-2">
-              <span className="text-muted-foreground">Timestamp:</span>
-              <span className="font-mono text-xs">{event.timestamp}</span>
-            </div>
-            {event.payload?.traceId && (
+          )}
+        <div className="border-b border-divider">
+          <button
+            onClick={() => toggleSection("metadata")}
+            aria-expanded={expandedSections.has("metadata")}
+            className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
+          >
+            {expandedSections.has("metadata") ? (
+              <ChevronDown className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5" />
+            )}
+            <span className="text-xs font-medium">Metadata</span>
+          </button>
+          {expandedSections.has("metadata") && (
+            <div className="px-3 pb-2.5 space-y-1.5 text-xs">
               <div className="grid grid-cols-[100px_1fr] gap-2">
-                <span className="text-muted-foreground">Trace ID:</span>
+                <span className="text-text-secondary">Event ID:</span>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className="font-mono text-xs truncate">{event.payload.traceId}</span>
+                    <span className="font-mono text-xs truncate">{event.id}</span>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">{event.payload.traceId}</TooltipContent>
+                  <TooltipContent side="bottom">{event.id}</TooltipContent>
                 </Tooltip>
               </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="flex-1 flex flex-col border-b">
-        <button
-          onClick={() => toggleSection("payload")}
-          aria-expanded={expandedSections.has("payload")}
-          className="flex-shrink-0 px-4 py-2 flex items-center gap-2 hover:bg-muted/50 transition-colors"
-        >
-          {expandedSections.has("payload") ? (
-            <ChevronDown className="w-4 h-4" />
-          ) : (
-            <ChevronRight className="w-4 h-4" />
-          )}
-          <span className="text-sm font-medium">Payload</span>
-        </button>
-        {expandedSections.has("payload") && (
-          <div className="flex-1 overflow-auto px-4 pb-3">
-            <pre className="text-xs font-mono bg-muted/50 p-3 rounded overflow-x-auto select-text">
-              {formattedPayload}
-            </pre>
-          </div>
-        )}
-      </div>
-
-      {event.payload &&
-        (event.payload.worktreeId ||
-          event.payload.agentId ||
-          event.payload.runId ||
-          event.payload.terminalId ||
-          event.payload.issueNumber ||
-          event.payload.prNumber) && (
-          <div className="flex-shrink-0">
-            <button
-              onClick={() => toggleSection("context")}
-              aria-expanded={expandedSections.has("context")}
-              className="w-full px-4 py-2 flex items-center gap-2 hover:bg-muted/50 transition-colors"
-            >
-              {expandedSections.has("context") ? (
-                <ChevronDown className="w-4 h-4" />
-              ) : (
-                <ChevronRight className="w-4 h-4" />
-              )}
-              <span className="text-sm font-medium">Context</span>
-            </button>
-            {expandedSections.has("context") && (
-              <div className="px-4 pb-3 space-y-1.5 text-sm">
-                {event.payload.worktreeId !== undefined && (
-                  <ContextPill
-                    label="Worktree"
-                    value={event.payload.worktreeId}
-                    filterKey="worktreeId"
-                    currentFilters={filters}
-                    onToggle={handleContextToggle}
-                  />
-                )}
-                {event.payload.agentId !== undefined && (
-                  <ContextPill
-                    label="Agent"
-                    value={event.payload.agentId}
-                    filterKey="agentId"
-                    currentFilters={filters}
-                    onToggle={handleContextToggle}
-                  />
-                )}
-                {event.payload.runId !== undefined && (
-                  <ContextPill
-                    label="Run"
-                    value={event.payload.runId}
-                    filterKey="runId"
-                    currentFilters={filters}
-                    onToggle={handleContextToggle}
-                  />
-                )}
-                {event.payload.terminalId !== undefined && (
-                  <ContextPill
-                    label="Terminal"
-                    value={event.payload.terminalId}
-                    filterKey="terminalId"
-                    currentFilters={filters}
-                    onToggle={handleContextToggle}
-                  />
-                )}
-                {event.payload.issueNumber !== undefined && (
-                  <ContextPill
-                    label="Issue #"
-                    value={event.payload.issueNumber}
-                    filterKey="issueNumber"
-                    currentFilters={filters}
-                    onToggle={handleContextToggle}
-                  />
-                )}
-                {event.payload.prNumber !== undefined && (
-                  <ContextPill
-                    label="PR #"
-                    value={event.payload.prNumber}
-                    filterKey="prNumber"
-                    currentFilters={filters}
-                    onToggle={handleContextToggle}
-                  />
-                )}
+              <div className="grid grid-cols-[100px_1fr] gap-2">
+                <span className="text-text-secondary">Type:</span>
+                <span className="font-mono text-xs">{event.type}</span>
               </div>
-            )}
-          </div>
-        )}
+              <div className="grid grid-cols-[100px_1fr] gap-2">
+                <span className="text-text-secondary">Source:</span>
+                <span className="font-mono text-xs capitalize">{event.source}</span>
+              </div>
+              <div className="grid grid-cols-[100px_1fr] gap-2">
+                <span className="text-text-secondary">Timestamp:</span>
+                <span className="font-mono text-xs">{event.timestamp}</span>
+              </div>
+              {event.payload?.traceId && (
+                <div className="grid grid-cols-[100px_1fr] gap-2">
+                  <span className="text-text-secondary">Trace ID:</span>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="font-mono text-xs truncate">{event.payload.traceId}</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{event.payload.traceId}</TooltipContent>
+                  </Tooltip>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

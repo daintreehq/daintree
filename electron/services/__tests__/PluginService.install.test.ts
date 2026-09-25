@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "crypto";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -117,6 +118,8 @@ import * as PluginArchive from "../PluginArchive.js";
 import { pluginInstallJobs } from "../plugin/PluginInstallJobRegistry.js";
 import { resilientRename } from "../../utils/fs.js";
 import { PluginBlocklistService } from "../plugin/PluginBlocklistService.js";
+import { broadcastToRenderer } from "../../ipc/utils.js";
+import { CHANNELS } from "../../ipc/channels.js";
 
 /** A PluginBlocklistService backed by an in-memory list (no network/disk). */
 function fakeBlocklist(entries: Array<Record<string, unknown>>): PluginBlocklistService {
@@ -365,23 +368,32 @@ describe("installPlugin — validation failures (rollback)", () => {
     service.dispose();
   });
 
-  it("rejects an incompatible engines.daintree range", async () => {
+  it("installs and loads a plugin outside its engines.daintree range, with a warning", async () => {
     const archive = await makeArchive({
       name: "acme.future",
       version: "1.0.0",
       engines: { daintree: ">=99.0.0" },
     });
     const service = new PluginService(pluginsRoot, "0.0.0");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const result = await service.installPlugin(archive);
+    try {
+      const result = await service.installPlugin(archive);
 
-    expect(result.status).toBe("failed");
-    if (result.status === "failed") {
-      expect(result.errors[0].code).toBe("engine_incompatible");
+      expect(result.status).toBe("installed");
+      expect(await exists(path.join(pluginsRoot, "acme.future"))).toBe(true);
+      expect(service.hasPlugin("acme.future")).toBe(true);
+      expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
+        expect.objectContaining({
+          type: "warning",
+          message: expect.stringContaining('"acme.future" targets Daintree >=99.0.0'),
+        })
+      );
+    } finally {
+      warnSpy.mockRestore();
+      service.dispose();
     }
-    expect(await exists(path.join(pluginsRoot, "acme.future"))).toBe(false);
-
-    service.dispose();
   });
 
   it("returns archive_invalid for a missing source path", async () => {
@@ -611,6 +623,64 @@ describe("installPlugin — load + provenance edge cases", () => {
     expect(installed.source).toBe("sideload");
 
     service.dispose();
+  });
+
+  it("installs a disabled out-of-range plugin without loading it or warning", async () => {
+    storeState.set("plugins", { disabled: ["acme.disabled-future"] });
+    const archive = await makeArchive({
+      name: "acme.disabled-future",
+      version: "1.0.0",
+      engines: { daintree: ">=99.0.0" },
+    });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    try {
+      const result = await service.installPlugin(archive);
+
+      expect(result).toEqual({ status: "installed", pluginId: "acme.disabled-future" });
+      expect(service.hasPlugin("acme.disabled-future")).toBe(false);
+      expect(
+        vi
+          .mocked(broadcastToRenderer)
+          .mock.calls.filter(([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST)
+      ).toHaveLength(0);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("upgrades to an out-of-range version, loading it with a warning", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const v1 = await makeArchive({ name: "acme.future-up", version: "1.0.0" });
+      expect((await service.installPlugin(v1)).status).toBe("installed");
+
+      const v2 = await makeArchive(
+        { name: "acme.future-up", version: "2.0.0", engines: { daintree: ">=99.0.0" } },
+        { "v2.txt": "two" }
+      );
+      expect((await service.installPlugin(v2)).status).toBe("installed");
+
+      expect(service.listPlugins().find((p) => p.manifest.name === "acme.future-up")).toMatchObject(
+        { manifest: { version: "2.0.0" } }
+      );
+      expect(await exists(path.join(pluginsRoot, "acme.future-up", "v2.txt"))).toBe(true);
+      expect((await fs.readdir(pluginsRoot)).filter((e) => e.includes(".old-"))).toHaveLength(0);
+      expect(
+        vi
+          .mocked(broadcastToRenderer)
+          .mock.calls.filter(
+            ([channel, payload]) =>
+              channel === CHANNELS.NOTIFICATION_SHOW_TOAST &&
+              (payload as { message?: string }).message?.includes('"acme.future-up"')
+          )
+      ).toHaveLength(1);
+    } finally {
+      warnSpy.mockRestore();
+      service.dispose();
+    }
   });
 
   it("does not leak a parked old dir when a disabled plugin is upgraded", async () => {
@@ -1152,6 +1222,173 @@ describe("installPlugin — blocklist interaction (#10891)", () => {
     expect(info?.blocklisted).toBe(false);
     expect(info?.manifest.version).toBe("1.0.0");
     expect(info?.loadedAt).toBeGreaterThan(0);
+
+    service.dispose();
+  });
+});
+
+// #12612: a confirmed update re-downloads its URL, so the installer is handed the
+// reviewed archive's identity + digest and must refuse anything else — before
+// extraction for the digest, before any destination is touched for the name.
+describe("installPlugin — reviewed-update binding (#12612)", () => {
+  async function sha256(file: string): Promise<string> {
+    return createHash("sha256")
+      .update(await fs.readFile(file))
+      .digest("hex");
+  }
+
+  function recordedHash(pluginId: string): string | null {
+    const plugins = storeState.get("plugins") as {
+      installed: Record<string, { archiveHash: string | null }>;
+    };
+    return plugins.installed[pluginId]?.archiveHash ?? null;
+  }
+
+  async function stagingLeftovers(): Promise<string[]> {
+    const entries = await fs.readdir(pluginsRoot);
+    return entries.filter((e) => e.startsWith(".install-tmp-") || e.includes(".old-"));
+  }
+
+  it("updates to an archive whose digest and name match the expectation", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const v1 = await makeArchive({ name: "acme.bound", version: "1.0.0" });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+    const v2 = await makeArchive({ name: "acme.bound", version: "2.0.0" });
+    const archiveHash = await sha256(v2);
+
+    const result = await service.installPlugin(v2, {
+      source: "url",
+      originalUrl: "https://example.com/bound.dntr",
+      expected: { pluginId: "acme.bound", archiveHash },
+    });
+
+    expect(result).toEqual({ status: "installed", pluginId: "acme.bound" });
+    expect(recordedHash("acme.bound")).toBe(archiveHash);
+
+    service.dispose();
+  });
+
+  it("refuses a reviewed update for a plugin uninstalled since its preview", async () => {
+    // An update replaces what is installed; it must not quietly resurrect a
+    // plugin the user removed (e.g. from another window) while it was parked.
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const archive = await makeArchive({ name: "acme.gone", version: "2.0.0" });
+
+    const result = await service.installPlugin(archive, {
+      source: "url",
+      expected: { pluginId: "acme.gone", archiveHash: await sha256(archive) },
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.errors[0]?.code).toBe("archive_mismatch");
+      expect(result.errors[0]?.message).toContain("no longer installed");
+    }
+    expect(await exists(path.join(pluginsRoot, "acme.gone"))).toBe(false);
+    expect(await stagingLeftovers()).toHaveLength(0);
+
+    service.dispose();
+  });
+
+  it("reports a cancel during hashing as cancelled, not as a mismatch", async () => {
+    const archive = await makeArchive({ name: "acme.hash-cancel", version: "1.0.0" });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const jobId = "cancel-while-hashing";
+    const hashSpy = vi
+      .spyOn(PluginArchive, "computeArchiveHash")
+      .mockImplementationOnce(async () => {
+        pluginInstallJobs.cancel(jobId);
+        return "0".repeat(64);
+      });
+    const extractSpy = vi.spyOn(PluginArchive, "extractPluginArchive");
+
+    try {
+      pluginInstallJobs.begin(jobId, () => {});
+      const result = await service.installPlugin(archive, {
+        jobId,
+        expected: { pluginId: "acme.hash-cancel", archiveHash: "f".repeat(64) },
+      });
+
+      expect(result).toEqual({ status: "cancelled" });
+      expect(extractSpy).not.toHaveBeenCalled();
+      expect(await stagingLeftovers()).toHaveLength(0);
+      // The lock was released: the next install goes through.
+      expect(await service.installPlugin(archive)).toEqual({
+        status: "installed",
+        pluginId: "acme.hash-cancel",
+      });
+    } finally {
+      pluginInstallJobs.end(jobId);
+      hashSpy.mockRestore();
+      extractSpy.mockRestore();
+      service.dispose();
+    }
+  });
+
+  it("refuses a digest mismatch before extracting a single entry", async () => {
+    const archive = await makeArchive(
+      { name: "acme.swapped", version: "2.0.0" },
+      { "dist/index.js": "module.exports = {};" }
+    );
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const extractSpy = vi.spyOn(PluginArchive, "extractPluginArchive");
+
+    try {
+      const result = await service.installPlugin(archive, {
+        source: "url",
+        expected: { pluginId: "acme.swapped", archiveHash: "0".repeat(64) },
+      });
+
+      expect(result.status).toBe("failed");
+      if (result.status === "failed") expect(result.errors[0]?.code).toBe("archive_mismatch");
+      expect(extractSpy).not.toHaveBeenCalled();
+      expect(await exists(path.join(pluginsRoot, "acme.swapped"))).toBe(false);
+      expect(await stagingLeftovers()).toHaveLength(0);
+    } finally {
+      extractSpy.mockRestore();
+      service.dispose();
+    }
+  });
+
+  it("refuses an archive naming another installed plugin even when its digest matches", async () => {
+    // The digest check alone would pass here — the renderer's binding named the
+    // wrong plugin — so the name check is what keeps `acme.victim` in place.
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const victim = await makeArchive({ name: "acme.victim", version: "1.0.0" }, { "v1.txt": "1" });
+    expect((await service.installPlugin(victim)).status).toBe("installed");
+    const victimHash = recordedHash("acme.victim");
+
+    const hostile = await makeArchive({ name: "acme.victim", version: "6.6.6" }, { "v6.txt": "6" });
+    const result = await service.installPlugin(hostile, {
+      source: "url",
+      expected: { pluginId: "acme.target", archiveHash: await sha256(hostile) },
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.errors[0]?.code).toBe("archive_mismatch");
+      expect(result.errors[0]?.message).toContain("acme.victim");
+    }
+    expect(await exists(path.join(pluginsRoot, "acme.victim", "v1.txt"))).toBe(true);
+    expect(await exists(path.join(pluginsRoot, "acme.victim", "v6.txt"))).toBe(false);
+    expect(recordedHash("acme.victim")).toBe(victimHash);
+    expect(await stagingLeftovers()).toHaveLength(0);
+
+    service.dispose();
+  });
+
+  it("refuses a directory source, which has no digest to verify", async () => {
+    const src = await makeSourceDir({ name: "acme.dir-bound", version: "1.0.0" });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const result = await service.installPlugin(src, {
+      expected: { pluginId: "acme.dir-bound", archiveHash: "0".repeat(64) },
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") expect(result.errors[0]?.code).toBe("archive_mismatch");
+    expect(await exists(path.join(pluginsRoot, "acme.dir-bound"))).toBe(false);
+    expect(await stagingLeftovers()).toHaveLength(0);
 
     service.dispose();
   });

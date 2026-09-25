@@ -1,41 +1,42 @@
 import type { ScopeKind } from "./scopeUtils";
 
-interface ScopeBannerProps {
-  scopeKind: ScopeKind;
-  scopeLabel: string;
+/**
+ * Where the selected preset comes from, beside the preset row's label. The agent's own
+ * default has no chip: it is the baseline, not a source. One word per source, and the
+ * same word the picker's trigger uses.
+ */
+export function ScopeBadge({ scopeKind }: { scopeKind: ScopeKind }) {
+  if (scopeKind === "default") return null;
+  const { label, testid } =
+    scopeKind === "custom"
+      ? { label: "Custom", testid: "preset-badge-custom" }
+      : scopeKind === "project"
+        ? { label: "Project · read-only", testid: "preset-badge-project" }
+        : { label: "CCR · read-only", testid: "preset-badge-auto" };
+  return (
+    <span
+      data-testid={testid}
+      className="rounded-[var(--radius-sm)] bg-overlay-subtle px-1.5 py-0.5 text-2xs text-text-secondary"
+    >
+      {label}
+    </span>
+  );
 }
 
-export function ScopeBanner({ scopeKind, scopeLabel }: ScopeBannerProps) {
-  return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="text-text-secondary">Editing:</span>
-      <span className="text-text-primary font-medium" data-testid="scope-banner-label">
-        {scopeLabel}
-      </span>
-      {scopeKind === "ccr" && (
-        <span
-          data-testid="preset-badge-auto"
-          className="text-3xs text-text-secondary bg-daintree-text/10 px-1.5 py-0.5 rounded"
-        >
-          auto
-        </span>
-      )}
-      {scopeKind === "project" && (
-        <span
-          data-testid="preset-badge-project"
-          className="text-3xs text-text-secondary bg-daintree-text/10 px-1.5 py-0.5 rounded"
-        >
-          project
-        </span>
-      )}
-      {scopeKind === "custom" && (
-        <span
-          data-testid="preset-badge-custom"
-          className="text-3xs text-status-info bg-status-info/10 px-1.5 py-0.5 rounded"
-        >
-          custom
-        </span>
-      )}
-    </div>
-  );
+/**
+ * What choosing this preset means. Picking a preset here is not "open it for editing":
+ * it is the preset the agent launches with, so the description says that first and
+ * then says what the rows below it edit.
+ */
+export function describeScope(scopeKind: ScopeKind, agentName: string): string {
+  switch (scopeKind) {
+    case "default":
+      return `New ${agentName} sessions launch with the agent's own settings, below. A worktree can still pick a preset of its own.`;
+    case "custom":
+      return `New ${agentName} sessions launch with this preset. The settings below edit it; anything left on Default follows the agent's own settings.`;
+    case "project":
+      return `New ${agentName} sessions launch with this preset, which this project shares with everyone who opens it`;
+    case "ccr":
+      return `New ${agentName} sessions launch through this Claude Code Router route`;
+  }
 }

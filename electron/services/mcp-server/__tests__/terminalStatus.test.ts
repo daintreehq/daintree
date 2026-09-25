@@ -359,6 +359,25 @@ describe("buildViewlessTerminalStatus results", () => {
     expect(result.unavailableFields).not.toContain("lastOutputChangeAt");
   });
 
+  it("reports each terminal's last typed-input time and never lists it as unavailable (#12718)", async () => {
+    const result = await buildViewlessTerminalStatus(
+      deps([
+        record({ id: "typed", lastStateChange: 1000, lastTypedInputAt: 2000 }),
+        record({ id: "untouched", lastStateChange: 1000 }),
+        // Reported raw: an input before the settle is not dropped or reinterpreted.
+        record({ id: "earlier", lastStateChange: 1000, lastTypedInputAt: 500 }),
+      ]),
+      WORKSPACE,
+      { terminalIds: ["typed", "untouched", "earlier"], includeOutput: {} }
+    );
+
+    expect(result.terminals[0]).toMatchObject({ lastTransitionAt: 1000, lastTypedInputAt: 2000 });
+    // No write observed is absent, not a time.
+    expect(result.terminals[1]).not.toHaveProperty("lastTypedInputAt");
+    expect(result.terminals[2]?.lastTypedInputAt).toBe(500);
+    expect(result.unavailableFields).not.toContain("lastTypedInputAt");
+  });
+
   it("reports each terminal's own handback and never lists it as unavailable (#12488)", async () => {
     const handback = { message: "shipped", observedAt: 4_000, truncated: false };
     const result = await buildViewlessTerminalStatus(

@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginConfirmStore, type PluginConfirmationDecision } from "@/store/pluginConfirmStore";
+import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 
 /**
  * Lower-bound read-time gate for destructive dispatches. `resolveOnce` guards
@@ -31,6 +32,7 @@ export function PluginConfirmDialog() {
   const current = usePluginConfirmStore((state) => state.current);
   const resolveCurrent = usePluginConfirmStore((state) => state.resolveCurrent);
   const resetKey = current?.requestId ?? "null";
+  const attribution = usePluginAttribution(current?.pluginId ?? "");
 
   // `resolveCurrent` is synchronous: it resolves the promise and advances the
   // queue so `current` becomes the next item before React re-renders. A rapid
@@ -76,8 +78,7 @@ export function PluginConfirmDialog() {
         onClose={() => resolveOnce(current.requestId, "rejected")}
         title={`Run '${current.actionTitle}'?`}
         description={
-          current.actionDescription.trim() ||
-          `Action contributed by the '${current.pluginId}' plugin.`
+          current.actionDescription.trim() || `Action contributed by the ${attribution.label}.`
         }
         confirmLabel={current.actionTitle}
         cancelLabel="Cancel"

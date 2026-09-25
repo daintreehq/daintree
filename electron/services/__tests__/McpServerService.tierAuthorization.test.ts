@@ -1001,6 +1001,13 @@ describe("McpServerService", () => {
         title: "Reload Project Plugins",
         description: "Re-scan the open project's committed plugins",
       }),
+      // Action-tier since #12611: it discards view state a plugin never
+      // persisted, so a read-only workbench session must not reach it.
+      createManifestEntry({
+        id: "plugin.reloadPanel" as ActionId,
+        title: "Reload Panel",
+        description: "Discard a plugin panel's view and mount a fresh one",
+      }),
       createManifestEntry({
         id: "terminal.sendCommand" as ActionId,
         title: "Send Terminal Command",

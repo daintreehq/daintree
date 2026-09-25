@@ -6,3 +6,4 @@ export { WorktreeSidebarSearchBar } from "./WorktreeSidebarSearchBar";
 export { WorktreeOverviewModal } from "./WorktreeOverviewModal";
 export { QuickCreatePalette } from "./QuickCreatePalette";
 export { QuickStateFilterBar } from "./QuickStateFilterBar";
+export { QuickStateArmButton } from "./QuickStateArmButton";

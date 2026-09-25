@@ -97,6 +97,8 @@ export interface PanelContribution {
    * `false` to opt out (for a kind with no meaningful compact chip-row form).
    */
   dockable?: boolean;
+  /** Schema version stamped on every persisted panel-state write; bump only for an incompatible shape change. */
+  stateVersion?: number;
 }
 
 export interface ToolbarButtonContribution {
@@ -362,12 +364,14 @@ export interface PanelViewProps {
   /**
    * Lifetime of THIS mounted view attempt — not of the panel (#11301).
    *
-   * Aborts on React unmount, on "Try again", and when a
-   * `plugin:panel-kinds-changed` push drops this kind. Crucially, a temporary
-   * unmount aborts it too: maximizing a sibling pane, switching away from a
-   * dock tab, or caching a background project view all tear the subtree down
-   * while the panel itself lives on. Tie only view-scoped work to it — in-flight
-   * `fetch`es, DOM observers, `postToPanel` subscriptions.
+   * Aborts on React unmount, on "Try again", on an accepted
+   * {@link requestReload}, and when a `plugin:panel-kinds-changed` push drops
+   * this kind. Crucially, a temporary unmount aborts it too: maximizing a
+   * sibling pane, switching away from a dock tab, or caching a background
+   * project view all tear the subtree down while the panel itself lives on.
+   * Tie only view-scoped work to it — in-flight `fetch`es, DOM observers,
+   * `postToPanel` subscriptions. On unmount it aborts just after React has run
+   * your effect cleanups, so a cleanup may still see it open.
    *
    * NEVER tie a durable resource (a spawned process, a long-lived session) to
    * this signal: it will be killed the first time the user maximizes another
@@ -458,6 +462,48 @@ export interface PanelViewProps {
    */
   readonly persistState?: (patch: Record<string, unknown>) => boolean;
   /**
+   * Ask the host to discard this view attempt and mount a fresh one for the
+   * same panel (#12609) — for a view that has built up more than it can shed
+   * and wants to start over without restarting the plugin's backend.
+   *
+   * A reload is a new React attempt using the module that is already loaded.
+   * This attempt's {@link disposeSignal} aborts and its React cleanup runs;
+   * the next attempt gets a new `disposeSignal`, the latest state accepted
+   * through {@link persistState} as {@link initialArgs}, and the same
+   * `panelId`, {@link panelRemovedSignal} and backend. Module-scope state,
+   * document-wide registrations and anything attached to `window` survive it,
+   * so a reload frees only what your cleanup releases. It does not promise to
+   * reclaim memory, and it cannot rescue a view that is blocking the renderer.
+   *
+   * A request, not a command: the host may refuse it, and nothing reports
+   * whether or when the next attempt mounted. Calls in the same tick coalesce
+   * into one reload. The callback belongs to the attempt that received it, so
+   * one held past this attempt's teardown does nothing. A fourth reload within
+   * 30 seconds of three accepted ones stops the view instead, and the panel
+   * stays stopped until the user reloads it.
+   *
+   * Absent where the host offers no reload (a project surface, for one), so
+   * call it optionally.
+   */
+  readonly requestReload?: () => void;
+  /**
+   * Tell the host whether this view holds work that a reload would lose
+   * (#12611).
+   *
+   * The user can reload a plugin panel from its menus, and an agent can do the
+   * same through the host's tools. Neither asks first by default, because what
+   * you accepted through {@link persistState} comes back. While this is set to
+   * `true`, both ask the user to confirm before discarding the view. Set it
+   * back to `false` once the work is saved or dropped.
+   *
+   * Your own {@link requestReload} is never held up by it. The setter belongs to
+   * the attempt that received it: one held past this attempt's teardown does
+   * nothing, and a new attempt starts with no unsaved work until it says so.
+   *
+   * Absent where the host offers no reload, so call it optionally.
+   */
+  readonly setHasUnsavedChanges?: (hasUnsavedChanges: boolean) => void;
+  /**
    * The worktree the panel instance belongs to, as recorded on the panel at
    * spawn time. Lets a view reconstruct its own context without dispatching
    * `worktree.getCurrent` — which resolves the *visible* worktree, not the
@@ -499,9 +545,11 @@ export interface PanelViewProps {
  * of trash (a transition, never a resting state), and `removed` is the terminal
  * event — the panel is gone and will never come back under this id.
  *
- * `render-failed` means the current view attempt reached the host's error
- * boundary. It is cleared by a successful retry. The failure detail stays in the
- * renderer's diagnostics pane; only the fact of failure crosses to the worker.
+ * `render-failed` means the panel has no working view: the current attempt
+ * reached the host's error boundary, or the host stopped a view that kept
+ * asking to reload (#12609). It clears when a retry starts or the user reloads
+ * the panel, so the next phase is the new attempt's own. The failure detail
+ * stays in the renderer; only the fact of failure crosses to the worker.
  */
 export type PluginPanelLifecyclePhase =
   "mounted" | "hidden" | "backgrounded" | "trashed" | "restored" | "removed" | "render-failed";
@@ -516,10 +564,32 @@ export interface PluginPanelLifecycleEvent {
   readonly panelId: string;
   /** Namespaced panel kind, i.e. `${pluginId}.${panel.id}`. */
   readonly panelKindId: string;
-  /** Owning plugin's manifest `name`. Always this plugin's own id. */
+  /**
+   * Owning plugin's runtime id — the manifest `name` for an installed or
+   * builtin plugin, the project-qualified instance key for a project plugin.
+   * Always this plugin's own id.
+   */
   readonly pluginId: string;
   readonly phase: PluginPanelLifecyclePhase;
 }
+
+/**
+ * What the host did with a `host.reloadPanel()` request (#12610). An
+ * acknowledgment of scheduling only — never proof that the fresh view
+ * rendered, and never a statement about memory.
+ *
+ * - `"scheduled"` — the panel's view was mounted and a fresh attempt is queued.
+ * - `"not-mounted"` — the panel exists but has no mounted view (hidden,
+ *   backgrounded, trashed), or the host knows no such panel. Nothing is opened
+ *   or focused; the panel's next ordinary mount is already fresh.
+ * - `"rate-limited"` — the panel's reload budget is spent or its view is
+ *   already stopped for reloading too often. Shared with the view's own
+ *   `requestReload`.
+ * - `"unavailable"` — the host could not act right now: the panel's window is
+ *   cached, closed, or unresponsive, its view is showing an error, or its
+ *   backend is restarting.
+ */
+export type PanelReloadResult = "scheduled" | "not-mounted" | "rate-limited" | "unavailable";
 
 /**
  * One machine wake observation delivered to a plugin (#12175). Frozen before
@@ -628,11 +698,13 @@ export interface PluginMcpCaller {
 export type PluginMcpJsonSchema = { type: "object" } & Record<string, unknown>;
 
 /**
- * One tool on an `agentMcp` endpoint. `execute` receives the arguments the
- * agent sent (validated only as a JSON object — checking them against
- * `inputSchema` is the plugin's job), the caller's provenance, and a signal
- * aborted when the call is cancelled, times out, or the plugin unloads. The
- * return value must be JSON-serializable; it reaches the agent as the tool
+ * One tool on an `agentMcp` endpoint. Both schemas are compiled at
+ * registration. `execute` receives the arguments the agent sent, already
+ * checked against `inputSchema` and never coerced, defaulted or stripped; a
+ * call that does not match never reaches it. It also receives the caller's
+ * provenance, and a signal aborted when the call is cancelled, times out, or
+ * the plugin unloads. The return value must be JSON-serializable, and match
+ * `outputSchema` when one is declared; it reaches the agent as the tool
  * result. A thrown error becomes a tool error carrying its message.
  */
 export interface PluginMcpToolDefinition {
@@ -923,6 +995,8 @@ export interface PluginAuthor {
 export type PluginOrigin = "builtin" | "user" | "project";
 
 export interface PluginManifest {
+  /** JSON Schema URL for editor completion; accepted by the validator, never read by the host. */
+  $schema?: string;
   name: string;
   version: string;
   displayName?: string;
@@ -1126,9 +1200,9 @@ export interface SettingDefinition {
   /**
    * Legacy secret hint (F19). The manifest schema normalizes `secret: true` to
    * `type: "secret"`; new manifests should use the type. Once normalized, the
-   * value follows the same at-rest tier as any `type: "secret"` setting —
-   * keychain-backed via Electron `safeStorage` when available, plaintext JSON
-   * only as a fallback (see {@link PluginSecretStorageTier}, #9167).
+   * value is stored like any `type: "secret"` setting — encrypted through the
+   * OS keychain via Electron `safeStorage`, and refused rather than written in
+   * plaintext when no keychain is available (see {@link PluginSecretStorageTier}).
    */
   secret?: boolean;
 }
@@ -1166,6 +1240,12 @@ export interface PluginPickPathFilter {
  * machine's per-project plugin state, never in the repo. An interpreter path is
  * the canonical example — committing it publishes one machine's layout, and
  * putting it in user scope applies it to unrelated projects.
+ *
+ * Secret settings are the exception to where `"project"` writes: a secret is
+ * never stored under the project root, whatever its scope. A `"project"`-scoped
+ * secret is still read, written, and subscribed to under `"project"` and shown
+ * in the settings form's project section, but its value is stored in the
+ * `"local"` file on this machine — so it is per project, and never committed.
  */
 export type PluginSettingsScope = "user" | "project" | "local";
 
@@ -1194,22 +1274,26 @@ export interface PluginSettingsUiValues {
   secretsSet: string[];
   /**
    * At-rest tier new secret writes will use right now (#9167). `"keychain"` when
-   * the OS keychain (Electron `safeStorage`) is available, `"plaintext"` when it
-   * is not (e.g. a headless Linux box) and secrets fall back to `chmod 0o600`
-   * JSON. The settings UI discloses this honestly per secret field.
+   * the OS keychain (Electron `safeStorage`) is available, `"unavailable"` when
+   * it is not (e.g. a headless Linux box) and secret writes are refused. The
+   * settings UI discloses this honestly per secret field.
    */
   secretTier: PluginSecretStorageTier;
   /**
    * Ids of secret settings whose *currently stored* value is still plaintext —
-   * either written before a keychain was available, or not yet migrated. A value
-   * here that's absent from a `"keychain"` tier means the UI should nudge the
-   * user to re-save it. Migration happens automatically on the next write.
+   * written by an older Daintree before secrets were refused without a keychain.
+   * The UI should nudge the user to re-save it; migration into the keychain
+   * happens automatically on the next write.
    */
   secretsPlaintext: string[];
 }
 
-/** At-rest storage tier for a secret setting value (#9167). */
-export type PluginSecretStorageTier = "keychain" | "plaintext";
+/**
+ * At-rest storage tier for new secret setting values. Secrets are never written
+ * in plaintext: with no OS keychain the tier is `"unavailable"` and a write is
+ * refused (#12613).
+ */
+export type PluginSecretStorageTier = "keychain" | "unavailable";
 
 /**
  * Persistent, plugin-scoped key/value settings exposed on
@@ -1217,10 +1301,12 @@ export type PluginSecretStorageTier = "keychain" | "plaintext";
  * `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or
  * `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` (project scope),
  * with `chmod 0o600` applied on POSIX. Settings declared `type: "secret"` are
- * encrypted at rest through the OS keychain (Electron `safeStorage`) when one is
- * available, falling back to the same plaintext-0600 path when it is not (#9167);
- * the `get`/`set` API shape is identical either way. Non-secret values are always
- * plaintext JSON — do not store credentials in non-secret keys.
+ * encrypted at rest through the OS keychain (Electron `safeStorage`), and are
+ * never stored under the project root: a project-scoped secret lives in this
+ * machine's per-project local file instead (see {@link PluginSettingsScope}).
+ * With no keychain available a secret write is refused rather than stored in
+ * plaintext. Non-secret values are always plaintext JSON — do not store
+ * credentials in non-secret keys.
  *
  * `scope` defaults to `"user"`. Project scope resolves the active project at
  * call time, so it tracks project switches: `get` returns `undefined` and `set`
@@ -1267,7 +1353,8 @@ export interface SettingsApi {
   /**
    * Persist a setting. Rejects `undefined` and non-JSON-serializable values.
    * For `"project"` scope with no active project, throws. When the manifest
-   * declares `contributes.settings`, an undeclared key is rejected.
+   * declares `contributes.settings`, an undeclared key is rejected. A declared
+   * secret is rejected when no OS keychain is available to encrypt it.
    */
   set<T = unknown>(key: string, value: T, scope?: PluginSettingsScope): Promise<void>;
   /**
@@ -1434,6 +1521,12 @@ export type PluginCheckUpdateResult =
       version: string;
       displayName?: string;
       capabilities: PluginCapability[];
+      /**
+       * SHA-256 of the archive this preview was read from. A confirmed update
+       * passes it back as {@link PluginInstallExpectation.archiveHash} so the
+       * install refuses any bytes other than the ones the user reviewed (#12612).
+       */
+      archiveHash: string;
     }
   | { status: "invalid-id" }
   | { status: "fetch-failed"; message: string };
@@ -1548,10 +1641,13 @@ export interface InstalledPluginRecord {
  * - `lock_failed` — couldn't acquire the cross-process `install.lock`
  * - `archive_invalid` — `.dntr` extraction failed (bad zip, path traversal, oversize)
  * - `manifest_invalid` — `plugin.json` failed the strict Zod schema
- * - `engine_incompatible` — `engines.daintree` range doesn't satisfy the running version
  * - `namespace_unauthorized` — reserved `daintree.*` name or publisher/name disagreement
  * - `name_collision` — the id matches a built-in or a launch-reserved plugin name; rejected before the swap so no broken dir is left
  * - `hash_failed` — couldn't compute the archive SHA-256
+ * - `archive_mismatch` — the install carried an {@link PluginInstallExpectation} (a
+ *   reviewed update) and the archive's digest or `manifest.name` differs from it;
+ *   refused before extraction (digest) or before the swap (name), so nothing runs
+ *   or is replaced
  * - `unload_failed` — the existing plugin's disposer cascade threw
  * - `swap_failed` — atomic rename failed but the prior state was restored
  * - `swap_unrecoverable` — rename failed AND rollback failed; on-disk state is inconsistent
@@ -1572,10 +1668,10 @@ export type PluginInstallErrorCode =
   | "archive_invalid"
   | "extraction_timeout"
   | "manifest_invalid"
-  | "engine_incompatible"
   | "namespace_unauthorized"
   | "name_collision"
   | "hash_failed"
+  | "archive_mismatch"
   | "unload_failed"
   | "swap_failed"
   | "swap_unrecoverable"
@@ -1639,6 +1735,24 @@ export interface PluginInstallOptions {
    * without progress events or a cancel target. Not persisted.
    */
   jobId?: string;
+  /**
+   * The archive a user approved from an update preview. When set, the install
+   * is refused unless the archive's SHA-256 and `manifest.name` both match it.
+   * Transient: checked, never persisted.
+   */
+  expected?: PluginInstallExpectation;
+}
+
+/**
+ * Binds a confirmed update to the archive its preview was read from (#12612).
+ * The confirm re-downloads the URL, so without this the server could answer the
+ * check with one archive and the install with another. Both fields come from the
+ * `available` {@link PluginCheckUpdateResult}: `pluginId` is the installed
+ * plugin's `manifest.name`, `archiveHash` the reviewed archive's digest.
+ */
+export interface PluginInstallExpectation {
+  pluginId: string;
+  archiveHash: string;
 }
 
 /**
@@ -1665,6 +1779,11 @@ export interface PluginInstallProgressEvent {
   entry?: string;
   /** False once the install has passed the commit point and can no longer be cancelled. */
   cancellable: boolean;
+  /**
+   * What is being installed: the archive's file name, or the URL without its
+   * query string. Set by main on every event of a job.
+   */
+  source?: string;
 }
 
 export interface LoadedPluginInfo {
@@ -2442,8 +2561,8 @@ export interface PluginFsStat {
 }
 
 /**
- * Options for the checked write path of {@link PluginFsApi.writeFile}
- * (#12323). Passing any options object selects the checked path.
+ * Options for {@link PluginFsApi.writeFile} (#12323). Omitting them is the
+ * same write as passing `{}`.
  */
 export interface PluginFsWriteOptions {
   /**
@@ -2465,9 +2584,10 @@ export interface PluginFsWriteResult {
 }
 
 /**
- * Error codes a checked {@link PluginFsApi.writeFile} rejects with, carried on
+ * Error codes {@link PluginFsApi.writeFile} rejects with, carried on
  * the error's `code` property alongside a `message` that starts with the same
- * token. In-process callers (built-in plugins) receive the error object
+ * token. The reads reject with `TARGET_IS_SYMLINK` and `TARGET_UNAVAILABLE` the
+ * same way — see {@link PluginFsApi.readFile}. In-process callers (built-in plugins) receive the error object
  * intact; an error crossing the plugin worker port or the renderer bridge
  * keeps only its message, so a caller behind either boundary should match on
  * the message prefix.
@@ -2509,6 +2629,13 @@ export interface PluginFsApi {
    * Read a file as UTF-8 text. Resolves the contained absolute path; rejects on
    * a missing read capability, an out-of-scope path, or a non-file target. Pass
    * `options.signal` to cancel a read that is no longer needed.
+   *
+   * A symlink the caller names is followed when it resolves inside a root.
+   * Once open, the descriptor must be the entry standing at the contained path
+   * (#12618): a leaf swapped for a symlink after containment rejects with
+   * `TARGET_IS_SYMLINK`, and a descriptor that is not the file now at the path
+   * with `TARGET_UNAVAILABLE`. A read that races a legitimate replace can see
+   * the latter and is safe to retry.
    */
   readFile(filePath: string, options?: PluginHostCallOptions): Promise<string>;
   /**
@@ -2529,18 +2656,22 @@ export interface PluginFsApi {
    * out-of-scope path. Recorded in the audit trail. No cancellation signal —
    * partial-write semantics are deliberately out of scope.
    *
-   * Without `options` this is the plain write it has always been. Passing an
-   * `options` object — even an empty one — selects the checked write
-   * (#12323): the host serialises writes per resolved path, refuses a symlink
-   * target, replaces the file atomically (sibling temp file, flush, rename,
-   * original mode preserved), and compares the file's current bytes against
-   * {@link PluginFsWriteOptions.expectedRevision} before touching it. Either
-   * path resolves the revision of the bytes actually written, so the next
-   * `expectedRevision` needs no re-read.
+   * Every write is checked (#12323, #12618), with or without `options`: the
+   * host serialises writes per resolved path, re-proves containment once the
+   * consent prompt and the queue wait are over, refuses a symlink target
+   * (`TARGET_IS_SYMLINK`), and — when
+   * {@link PluginFsWriteOptions.expectedRevision} is a revision — compares the
+   * file's current bytes against it before touching it. The file is then
+   * replaced atomically (sibling temp file, flush, rename, original mode
+   * preserved), so a file watcher sees the old inode go and a new one arrive.
+   * A create-new write (`expectedRevision: null`) is an exclusive create at
+   * the target instead, with no temp file. The write resolves the revision of
+   * the bytes actually written, so the next `expectedRevision` needs no
+   * re-read.
    *
-   * What the checked write promises: it never clobbers a change the caller has
-   * not seen, never leaves a partial file, and serialises every host-mediated
-   * writer. What it does not promise: a lock against an uncooperative external
+   * What the write promises: a replace never leaves a partial file, every
+   * host-mediated writer is serialised, and — given an `expectedRevision` — no
+   * change the caller has not seen is clobbered. What it does not promise: a lock against an uncooperative external
    * process — a write that lands between the hash check and the rename is
    * overwritten. The window is small, and callers that care keep their own
    * copy of what they asked to write.
@@ -3258,6 +3389,31 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
   /**
+   * Ask the host to discard one of this plugin's own panel views and mount a
+   * fresh one (#12610) — the backend-side twin of the view's
+   * `PanelViewProps.requestReload`. Use it when the worker has finished work
+   * whose view should start clean, without restarting the worker and rebinding
+   * every panel it owns. Panel ids come from {@link onDidChangePanelLifecycle}.
+   *
+   * No capability is required: only panels of kinds this plugin instance
+   * contributed can be targeted, and the caller's identity comes from this
+   * host, never from an argument. A project plugin reaches only its own
+   * project's panels.
+   *
+   * Resolves with a {@link PanelReloadResult} — a scheduling acknowledgment,
+   * never confirmation of a render. Reloads draw on the same per-panel budget
+   * as `requestReload` (three per rolling 30 seconds, after which the view is
+   * stopped until the user reloads it). A panel that is not mounted resolves
+   * `"not-mounted"` and is not opened or focused.
+   *
+   * Like {@link setPanelBadge} this is NOT revoke-guarded, and resolves
+   * `"unavailable"` once the plugin is unloaded.
+   *
+   * @throws {Error} (as a rejection) if `panelId` is not a non-empty string,
+   *   names another plugin's panel, or names a panel that belongs to no plugin.
+   */
+  reloadPanel(panelId: string): Promise<PanelReloadResult>;
+  /**
    * Surface a toast notification. The host namespaces the message as
    * `{pluginId}: {message}` for provenance — a plugin cannot spoof another
    * plugin's id since `pluginId` is bound to the host at activation. Routes
@@ -3352,8 +3508,9 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   showConfirm(options: PluginConfirmOptions, callOptions?: PluginHostCallOptions): Promise<boolean>;
   /**
-   * Persistent, plugin-scoped key/value settings. Plaintext JSON storage with
-   * `chmod 0o600` on POSIX — no OS keychain (#9167). See {@link SettingsApi}.
+   * Persistent, plugin-scoped key/value settings. JSON storage with `chmod 0o600`
+   * on POSIX; declared secrets are encrypted through the OS keychain. See
+   * {@link SettingsApi}.
    */
   readonly settings: SettingsApi;
   /**

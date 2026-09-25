@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState, useCallback } from "react";
-import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { useEffectiveCombo, useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { useTabLoad } from "@/hooks";
 import { getAgentIds, getAgentConfig, getMergedPresets, type AgentPreset } from "@/config/agents";
 import { useAgentSettingsStore, useCliAvailabilityStore, useAgentPreferencesStore } from "@/store";
@@ -9,7 +9,6 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { logError } from "@/utils/logger";
 
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import {
   DEFAULT_AGENT_SETTINGS,
   getAgentSettingsEntry,
@@ -18,28 +17,51 @@ import {
 } from "@shared/types";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
-import { RotateCcw, ExternalLink } from "lucide-react";
-import { Plug } from "@/components/icons";
+import { ExternalLink } from "lucide-react";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { SettingsSection } from "./SettingsSection";
+import { SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { SettingsSelect } from "./SettingsSelect";
 import { AddPresetDialog } from "./AddPresetDialog";
-import { AgentScopeEditor } from "./AgentScopeEditor";
+import { AgentScopeEditor, resolveSkipPermissions } from "./AgentScopeEditor";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { actionService } from "@/services/ActionService";
 import { AgentHelpOutput } from "./AgentHelpOutput";
-import { AgentCard, AgentInstallSection } from "@/components/agents/AgentCard";
+import { AgentInstallSection } from "@/components/agents/AgentCard";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { AgentInventorySection } from "./AgentInventorySection";
+import { isAgentLaunchable, isAgentReady } from "../../../shared/utils/agentAvailability";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
+import { KbdChord } from "@/components/ui/Kbd";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
 import type { DefaultAgentId } from "@/store/agentPreferencesStore";
 
 const GENERAL_SUBTAB_ID = "general";
+/** Radix Select reserves the empty string, so "no default" needs a sentinel value. */
+const NO_DEFAULT_AGENT = "__none__";
 
 function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; agentName: string }) {
   const actionId = `agent.${agentId}`;
-  const displayCombo = useKeybindingDisplay(actionId);
+  const currentCombo = useEffectiveCombo(actionId) ?? "";
   const [isEditing, setIsEditing] = useState(false);
   const [isOverridden, setIsOverridden] = useState(() => keybindingService.hasOverride(actionId));
+  const editRef = useRef<HTMLButtonElement>(null);
+  // The Change button unmounted with the row's rest state; closing the recorder
+  // hands focus back to it rather than letting it fall to the dialog.
+  const restoreFocusRef = useRef(false);
+
+  const closeEditor = useCallback(() => {
+    restoreFocusRef.current = true;
+    setIsEditing(false);
+  }, []);
+
+  useEffect(() => {
+    if (isEditing || !restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    editRef.current?.focus();
+  }, [isEditing]);
 
   useEffect(() => {
     const update = () => setIsOverridden(keybindingService.hasOverride(actionId));
@@ -69,9 +91,9 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
         });
         return;
       }
-      setIsEditing(false);
+      closeEditor();
     },
-    [actionId]
+    [actionId, closeEditor]
   );
 
   const handleReset = useCallback(async () => {
@@ -95,61 +117,44 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
   }, [actionId]);
 
   return (
-    <Card
-      padding="sm"
+    <SettingsRow
       id={`agents-shortcut-${agentId}`}
-      data-testid={`agent-shortcut-row-${agentId}`}
-      className="space-y-3"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-medium text-text-primary">Keyboard shortcut</div>
-          <div className="text-xs text-text-secondary mt-0.5 select-text">
-            Launch {agentName} from anywhere with a key combination
-          </div>
-        </div>
-        {!isEditing && (
-          <div className="flex items-center gap-2 shrink-0">
-            {displayCombo ? (
-              <span
-                data-testid={`agent-shortcut-pill-${agentId}`}
-                className="px-2 py-0.5 text-xs font-mono rounded bg-border-default text-text-primary"
-              >
-                {displayCombo}
+      label="Keyboard shortcut"
+      description={`Launch ${agentName} from anywhere with a key combination`}
+      layout={isEditing ? "stacked" : "inline"}
+      isModified={isOverridden && !isEditing}
+      onReset={() => void handleReset()}
+      resetAriaLabel={`Reset ${agentName} shortcut to default`}
+      control={
+        isEditing ? (
+          <AgentShortcutCapture
+            agentId={agentId}
+            currentCombo={currentCombo}
+            onCapture={(combo) => void handleSave(combo)}
+            onCancel={closeEditor}
+          />
+        ) : (
+          <div className="flex items-center gap-3" data-testid={`agent-shortcut-row-${agentId}`}>
+            {currentCombo ? (
+              <span data-testid={`agent-shortcut-pill-${agentId}`}>
+                <KbdChord shortcut={currentCombo} density="bare" foreground="primary" />
               </span>
             ) : (
-              <span className="text-xs text-text-secondary italic">Unbound</span>
+              <span className="text-xs text-text-secondary">Not set</span>
             )}
-            <button
-              type="button"
+            <Button
+              ref={editRef}
+              size="sm"
+              variant="outline"
               onClick={() => setIsEditing(true)}
               data-testid={`agent-shortcut-edit-${agentId}`}
-              className="px-2 py-0.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
             >
-              {displayCombo ? "Change" : "Assign"}
-            </button>
-            {isOverridden && (
-              <button
-                type="button"
-                onClick={() => void handleReset()}
-                aria-label={`Reset ${agentName} shortcut to default`}
-                data-testid={`agent-shortcut-reset-${agentId}`}
-                className="p-0.5 text-daintree-text/60 hover:text-text-primary transition-colors"
-              >
-                <RotateCcw className="w-3 h-3" />
-              </button>
-            )}
+              {currentCombo ? "Change" : "Assign"}
+            </Button>
           </div>
-        )}
-      </div>
-      {isEditing && (
-        <AgentShortcutCapture
-          agentId={agentId}
-          onCapture={(combo) => void handleSave(combo)}
-          onCancel={() => setIsEditing(false)}
-        />
-      )}
-    </Card>
+        )
+      }
+    />
   );
 }
 
@@ -218,15 +223,39 @@ export function AgentSettings({
     }
   }, [isCliLoading, fetchCliDetails]);
 
+  const [recheckStatus, setRecheckStatus] = useState("");
+  const pickerRowRef = useRef<HTMLDivElement>(null);
+
   const handleRefreshCliAvailability = async () => {
     if (isRefreshingCli) return;
+    setRecheckStatus("");
     try {
       // Explicit user gesture — bypass the 30s throttle that exists for
       // passive triggers (tray-open, window focus, visibility change).
       await refreshCliAvailability(true);
       await fetchCliDetails();
+      const agentId = activeAgentId;
+      if (agentId) {
+        const state = useCliAvailabilityStore.getState().availability[agentId];
+        const name = getAgentConfig(agentId)?.name ?? agentId;
+        setRecheckStatus(
+          isAgentReady(state) ? `${name} is ready` : `${name} still needs attention`
+        );
+      } else {
+        setRecheckStatus("Agent check finished");
+      }
+      // A re-check that fixes the agent unmounts the section holding the Re-check
+      // button, which would drop keyboard focus onto the page. Hand it to the picker.
+      requestAnimationFrame(() => {
+        if (document.activeElement === document.body || !document.activeElement) {
+          pickerRowRef.current
+            ?.querySelector<HTMLElement>('[data-testid="agent-selector-trigger"]')
+            ?.focus({ preventScroll: true });
+        }
+      });
     } catch (error) {
       logError("[AgentSettings] Failed to refresh CLI availability", error);
+      setRecheckStatus("Agent check failed");
     }
   };
 
@@ -247,6 +276,7 @@ export function AgentSettings({
   const [editName, setEditName] = useState("");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [addDialogAgentId, setAddDialogAgentId] = useState<string | null>(null);
+  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
 
   const handleCreatePreset = async (presetData: Omit<AgentPreset, "id">) => {
     if (!addDialogAgentId) return;
@@ -263,6 +293,9 @@ export function AgentSettings({
       setAddDialogAgentId(null);
     } catch (error) {
       logError("[AgentSettings] Failed to create preset", error);
+      // The dialog stays open and says so; swallowing this left it open with no
+      // explanation.
+      throw error;
     }
   };
 
@@ -325,6 +358,14 @@ export function AgentSettings({
           const config = getAgentConfig(id);
           if (!config) return null;
           const entry = getAgentSettingsEntry(effectiveSettings, id);
+          const launchPreset = entry.presetId
+            ? getMergedPresets(
+                id,
+                entry.customPresets,
+                ccrPresetsByAgent[id],
+                projectPresetsByAgent[id]
+              ).find((p) => p.id === entry.presetId)
+            : undefined;
           return {
             id,
             name: config.name,
@@ -332,12 +373,20 @@ export function AgentSettings({
             Icon: config.icon,
             usageUrl: config.usageUrl,
             selected: isAgentToolbarVisible(entry, cliAvailability?.[id]),
-            dangerousEnabled: entry.dangerousEnabled ?? false,
+            availability: cliAvailability?.[id],
+            // What a launch would actually do — the launch preset and the global
+            // switch included — not the legacy per-agent boolean.
+            dangerousEnabled: resolveSkipPermissions(
+              id,
+              entry,
+              launchPreset,
+              effectiveSettings.globalSkipPermissions ?? false
+            ),
             hasCustomFlags: Boolean(entry.customFlags?.trim()),
           };
         })
         .filter((a): a is NonNullable<typeof a> => a !== null),
-    [agentIds, effectiveSettings, cliAvailability]
+    [agentIds, effectiveSettings, cliAvailability, ccrPresetsByAgent, projectPresetsByAgent]
   );
 
   const activeAgent = activeAgentId ? agentOptions.find((a) => a.id === activeAgentId) : null;
@@ -350,6 +399,14 @@ export function AgentSettings({
     ? getAgentConfig(activeAgent.id)?.capabilities?.decorations
     : undefined;
 
+  const defaultAgentOptions = useMemo(
+    () => [
+      { value: NO_DEFAULT_AGENT, label: "None (first available)" },
+      ...agentOptions.map((agent) => ({ value: agent.id, label: agent.name })),
+    ],
+    [agentOptions]
+  );
+
   if (agentOptions.length === 0) {
     return (
       <div className="text-sm text-text-secondary">
@@ -359,150 +416,161 @@ export function AgentSettings({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {loadError && <SettingsLoadErrorBanner message={loadError} onRetry={retryAction} />}
 
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h4 className="text-sm font-medium mb-1">CLI agents</h4>
-            <p className="text-xs text-text-secondary select-text">
-              Configure global agent preferences and per-agent settings
-            </p>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
-            }}
-            className="text-text-secondary hover:text-text-primary shrink-0"
-          >
-            <Plug className="w-3.5 h-3.5" />
-            Run setup wizard
-          </Button>
-        </div>
-
-        <AgentSelectorDropdown
-          agentOptions={agentOptions}
-          activeSubtab={isGeneralActive ? GENERAL_SUBTAB_ID : (activeAgentId ?? GENERAL_SUBTAB_ID)}
-          onSubtabChange={onSubtabChange}
-        />
-
-        {isGeneralActive && (
-          <Card id="agents-general" className="space-y-4">
-            <div className="pb-3 border-b border-border-default">
-              <h4 className="text-sm font-medium text-text-primary">Global agent settings</h4>
-              <p className="text-xs text-text-secondary mt-0.5 select-text">
-                Settings that apply across all agents
-              </p>
-            </div>
-            <div id="agents-default-agent" className="space-y-2">
-              <label className="text-sm font-medium text-text-primary block">Default agent</label>
-              <select
-                value={defaultAgent ?? ""}
-                onChange={(e) =>
-                  setDefaultAgent(e.target.value ? (e.target.value as DefaultAgentId) : undefined)
-                }
-                className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
-              >
-                <option value="">None (first available)</option>
-                {agentOptions.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.name}
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-text-secondary select-text">
-                Agent used for the help dock button
-                {helpShortcut && ` (${helpShortcut})`} and automated workflows ("What's Next?",
-                onboarding, project explanations). Distinct from the Portal "Default New Tab Agent"
-                which controls the browser panel opened by the + button.
-              </p>
-            </div>
-            <div id="agents-skip-permissions">
-              <SettingsSwitchCard
-                title="Skip permission prompts for agents"
-                subtitle="Agents run commands and edit files without asking — faster, but you won't get a chance to review first. Sets the default for every agent that supports it; override per agent below. Assistant sessions aren't affected"
-                ariaLabel="Skip permission prompts for agents"
-                isEnabled={settings?.globalSkipPermissions ?? false}
-                onChange={() => {
-                  void (async () => {
-                    await setGlobalSkipPermissions(!(settings?.globalSkipPermissions ?? false));
-                    onSettingsChange?.();
-                  })();
-                }}
-              />
-            </div>
-            <div id="agents-alt-screen">
-              <SettingsSwitchCard
-                variant="compact"
-                title="Use alt-screen mode by default"
-                subtitle="Render supported agents on the full-screen alternate buffer instead of inline. Inline is smoother (WebGL scrollback, clean resize); alt-screen matches the CLI's native full-screen TUI. Sets the default for every agent; override per agent below"
-                ariaLabel="Use alt-screen mode by default"
-                isEnabled={settings?.globalUseAltScreen ?? false}
-                onChange={() => {
-                  void (async () => {
-                    await setGlobalUseAltScreen(!(settings?.globalUseAltScreen ?? false));
-                    onSettingsChange?.();
-                  })();
-                }}
-              />
-            </div>
-          </Card>
-        )}
-
-        {!isGeneralActive && activeAgent && agentOptions.some((a) => a.id === activeAgent.id) && (
-          <AgentCard
-            mode="management"
-            agentId={activeAgent.id}
-            actions={
-              <>
-                {activeAgent.usageUrl && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="text-text-secondary hover:text-text-primary"
-                    onClick={async () => {
-                      const url = activeAgent.usageUrl?.trim();
-                      if (!url) return;
-                      try {
-                        const result = await actionService.dispatch(
-                          "system.openExternal",
-                          { url },
-                          { source: "user" }
-                        );
-                        if (!result.ok) throw new Error(result.error.message);
-                      } catch (error) {
-                        logError("Failed to open usage URL", error);
-                      }
-                    }}
-                  >
-                    <ExternalLink size={14} />
-                    View usage
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-text-secondary hover:text-text-primary"
-                  onClick={async () => {
-                    await reset(activeAgent.id);
-                    onSettingsChange?.();
-                  }}
-                >
-                  <RotateCcw size={14} />
-                  Reset
-                </Button>
-              </>
+      {/* The picker names the agent, so an agent's page opens straight on its sections
+          rather than repeating the name as a second heading. */}
+      <p role="status" className="sr-only">
+        {recheckStatus}
+      </p>
+      <div ref={pickerRowRef} className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <AgentSelectorDropdown
+            agentOptions={agentOptions}
+            activeSubtab={
+              isGeneralActive ? GENERAL_SUBTAB_ID : (activeAgentId ?? GENERAL_SUBTAB_ID)
             }
+            onSubtabChange={onSubtabChange}
+          />
+        </div>
+        {activeAgent?.usageUrl && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0"
+            onClick={async () => {
+              const url = activeAgent.usageUrl?.trim();
+              if (!url) return;
+              try {
+                const result = await actionService.dispatch(
+                  "system.openExternal",
+                  { url },
+                  { source: "user" }
+                );
+                if (!result.ok) throw new Error(result.error.message);
+              } catch (error) {
+                logError("Failed to open usage URL", error);
+              }
+            }}
           >
-            {/* Pin to Toolbar */}
-            <div id="agents-enable">
+            <ExternalLink aria-hidden="true" />
+            View usage
+          </Button>
+        )}
+      </div>
+
+      {isGeneralActive && (
+        <AgentInventorySection
+          agents={agentOptions}
+          availability={cliAvailability}
+          isLoading={isCliLoading}
+          error={cliError}
+          isRefreshing={isRefreshingCli}
+          onRefresh={() => void handleRefreshCliAvailability()}
+          onOpenAgent={onSubtabChange}
+          onRunSetupWizard={() =>
+            window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"))
+          }
+        />
+      )}
+
+      {isGeneralActive && (
+        <SettingsSection
+          id="agents-general"
+          title="All agents"
+          description="Each agent's page can override these"
+        >
+          <SettingsGroup>
+            <SettingsSelect
+              id="agents-default-agent"
+              label="Default agent"
+              description={
+                <>
+                  Used by the help dock button{helpShortcut && ` (${helpShortcut})`} and automated
+                  workflows such as "What's next?", onboarding and project explanations. The
+                  portal's default new tab agent is set separately
+                </>
+              }
+              value={defaultAgent ?? NO_DEFAULT_AGENT}
+              onValueChange={(value) =>
+                setDefaultAgent(value === NO_DEFAULT_AGENT ? undefined : (value as DefaultAgentId))
+              }
+              options={defaultAgentOptions}
+              isModified={defaultAgent !== undefined}
+              onReset={() => setDefaultAgent(undefined)}
+            />
+            <SettingsSwitchCard
+              id="agents-skip-permissions"
+              title="Skip permission prompts"
+              subtitle="Agents run commands and edit files without asking — faster, but you won't get a chance to review first. Applies to every agent that supports it; Assistant sessions aren't affected."
+              isEnabled={settings?.globalSkipPermissions ?? false}
+              onChange={() => {
+                void (async () => {
+                  await setGlobalSkipPermissions(!(settings?.globalSkipPermissions ?? false));
+                  onSettingsChange?.();
+                })();
+              }}
+              isModified={
+                (settings?.globalSkipPermissions ?? false) !==
+                DEFAULT_AGENT_SETTINGS.globalSkipPermissions
+              }
+              onReset={() => {
+                void (async () => {
+                  await setGlobalSkipPermissions(
+                    DEFAULT_AGENT_SETTINGS.globalSkipPermissions ?? false
+                  );
+                  onSettingsChange?.();
+                })();
+              }}
+            />
+            <SettingsSwitchCard
+              id="agents-alt-screen"
+              title="Use alt-screen mode"
+              subtitle="Render supported agents on the full-screen alternate buffer instead of inline. Inline is smoother (WebGL scrollback, clean resize); alt-screen matches the CLI's native full-screen TUI."
+              isEnabled={settings?.globalUseAltScreen ?? false}
+              onChange={() => {
+                void (async () => {
+                  await setGlobalUseAltScreen(!(settings?.globalUseAltScreen ?? false));
+                  onSettingsChange?.();
+                })();
+              }}
+              isModified={
+                (settings?.globalUseAltScreen ?? false) !==
+                DEFAULT_AGENT_SETTINGS.globalUseAltScreen
+              }
+              onReset={() => {
+                void (async () => {
+                  await setGlobalUseAltScreen(DEFAULT_AGENT_SETTINGS.globalUseAltScreen ?? false);
+                  onSettingsChange?.();
+                })();
+              }}
+            />
+          </SettingsGroup>
+        </SettingsSection>
+      )}
+
+      {!isGeneralActive && activeAgent && (
+        <>
+          {/* First on the page when it renders at all: an agent that is missing,
+              blocked or has no credentials is usually why this page was opened. */}
+          <AgentInstallSection
+            agentId={activeAgent.id}
+            agentName={activeAgent.name}
+            availability={cliAvailability[activeAgent.id]}
+            detail={cliDetails[activeAgent.id]}
+            isCliLoading={isCliLoading}
+            isRefreshingCli={isRefreshingCli}
+            cliError={cliError}
+            onRefresh={() => void handleRefreshCliAvailability()}
+          />
+
+          <SettingsSection title="Launching">
+            <SettingsGroup>
               <SettingsSwitchCard
-                variant="compact"
+                id="agents-enable"
                 title="Pin to toolbar"
-                subtitle="When pinned, this agent appears in the toolbar for quick access"
+                subtitle={`Show ${activeAgent.name} in the toolbar for quick access`}
                 isEnabled={isAgentToolbarVisible(activeEntry, cliAvailability?.[activeAgent.id])}
                 onChange={() => {
                   // Tri-state toggle (#7673): flip the *currently visible* state so
@@ -517,42 +585,20 @@ export function AgentSettings({
                     onSettingsChange?.();
                   })();
                 }}
-                ariaLabel={`Pin ${activeAgent.name} to toolbar`}
+                // No modified bar: pinning has no stable default to differ from. First
+                // run pins only the first few installed agents and explicitly unpins the
+                // rest (buildInitialAgentPinUpdates), so any "default" comparison lights
+                // the bar on agents the user never touched.
               />
-            </div>
 
-            {/* Keyboard shortcut — built-in agents only; user-defined agents
-                don't participate in the keybinding registry. */}
-            {isBuiltInAgentId(activeAgent.id) && (
-              <AgentShortcutRow agentId={activeAgent.id} agentName={activeAgent.name} />
-            )}
+              {/* Built-in agents only; user-defined agents don't participate in the keybinding registry. */}
+              {isBuiltInAgentId(activeAgent.id) && (
+                <AgentShortcutRow agentId={activeAgent.id} agentName={activeAgent.name} />
+              )}
 
-            {/* Unified scope editor — one set of controls for Default or any
-                preset. Delegates to AgentScopeEditor (useAgentScope hook + six
-                leaf components). The editor body is keyed on the scope id so
-                rename/edit state resets naturally on scope switch (see #4958). */}
-            <AgentScopeEditor
-              agentId={activeAgent.id}
-              activeEntry={activeEntry}
-              ccrPresets={ccrPresetsByAgent[activeAgent.id]}
-              projectPresets={projectPresetsByAgent[activeAgent.id]}
-              defaultDangerousArg={defaultDangerousArg}
-              editingPresetId={editingPresetId}
-              setEditingPresetId={setEditingPresetId}
-              editName={editName}
-              setEditName={setEditName}
-              lastEditTimeRef={lastEditTimeRef}
-              setIsAddDialogOpen={setIsAddDialogOpen}
-              setAddDialogAgentId={setAddDialogAgentId}
-              updateAgent={updateAgent}
-              onSettingsChange={onSettingsChange}
-            />
-
-            {/* Decorative effects — agents that declare an off switch, always agent-level */}
-            {activeDecorations && (
-              <div id="agents-decorations">
+              {activeDecorations && (
                 <SettingsSwitchCard
-                  variant="compact"
+                  id="agents-decorations"
                   title={activeDecorations.label}
                   subtitle={activeDecorations.description}
                   isEnabled={activeEntry.decorativeEffects === true}
@@ -564,15 +610,19 @@ export function AgentSettings({
                     })();
                   }}
                   ariaLabel={`${activeDecorations.label} for ${activeAgent.name}`}
+                  isModified={activeEntry.decorativeEffects === true}
+                  onReset={() => {
+                    void (async () => {
+                      await updateAgent(activeAgent.id, { decorativeEffects: false });
+                      onSettingsChange?.();
+                    })();
+                  }}
                 />
-              </div>
-            )}
+              )}
 
-            {/* Share Clipboard Directory — Gemini only, always agent-level */}
-            {activeAgent.id === "gemini" && (
-              <div id="agents-clipboard">
+              {activeAgent.id === "gemini" && (
                 <SettingsSwitchCard
-                  variant="compact"
+                  id="agents-clipboard"
                   title="Share clipboard directory"
                   subtitle="Allow Gemini to read pasted clipboard images via --include-directories"
                   isEnabled={activeEntry.shareClipboardDirectory !== false}
@@ -584,33 +634,82 @@ export function AgentSettings({
                     })();
                   }}
                   ariaLabel="Share clipboard directory with Gemini"
+                  isModified={activeEntry.shareClipboardDirectory === false}
+                  onReset={() => {
+                    void (async () => {
+                      await updateAgent(activeAgent.id, { shareClipboardDirectory: undefined });
+                      onSettingsChange?.();
+                    })();
+                  }}
                 />
-              </div>
-            )}
+              )}
+            </SettingsGroup>
+          </SettingsSection>
 
-            {/* Help Output */}
+          {/* Unified scope editor — one set of controls for Default or any preset.
+              The editor body is keyed on the scope id so rename/edit state resets
+              naturally on scope switch (see #4958). */}
+          <AgentScopeEditor
+            agentId={activeAgent.id}
+            activeEntry={activeEntry}
+            ccrPresets={ccrPresetsByAgent[activeAgent.id]}
+            projectPresets={projectPresetsByAgent[activeAgent.id]}
+            defaultDangerousArg={defaultDangerousArg}
+            editingPresetId={editingPresetId}
+            setEditingPresetId={setEditingPresetId}
+            editName={editName}
+            setEditName={setEditName}
+            lastEditTimeRef={lastEditTimeRef}
+            setIsAddDialogOpen={setIsAddDialogOpen}
+            setAddDialogAgentId={setAddDialogAgentId}
+            updateAgent={updateAgent}
+            onSettingsChange={onSettingsChange}
+          />
+
+          {/* Loading help runs the CLI, so it is offered only for one that can run —
+              not a missing or blocked binary, which the section above explains. */}
+          {isAgentLaunchable(cliAvailability[activeAgent.id]) && (
             <AgentHelpOutput
               agentId={activeAgent.id}
               agentName={activeAgent.name}
-              usageUrl={activeAgent.usageUrl}
               availability={cliAvailability[activeAgent.id] ?? "missing"}
-              isCliLoading={isCliLoading}
             />
+          )}
 
-            {/* Installation */}
-            <AgentInstallSection
-              agentId={activeAgent.id}
-              agentName={activeAgent.name}
-              availability={cliAvailability[activeAgent.id]}
-              detail={cliDetails[activeAgent.id]}
-              isCliLoading={isCliLoading}
-              isRefreshingCli={isRefreshingCli}
-              cliError={cliError}
-              onRefresh={() => void handleRefreshCliAvailability()}
+          {/* Last on the page and in a group of its own: it deletes custom presets. */}
+          <SettingsGroup id="agents-reset">
+            <SettingsRow
+              label={`Reset ${activeAgent.name} settings`}
+              description={`Returns launch and runtime settings to their defaults and deletes ${activeAgent.name}'s custom presets`}
+              control={
+                <Button
+                  size="sm"
+                  variant="ghost-danger"
+                  onClick={() => setIsResetConfirmOpen(true)}
+                >
+                  Reset settings
+                </Button>
+              }
             />
-          </AgentCard>
-        )}
-      </div>
+          </SettingsGroup>
+
+          <ConfirmDialog
+            isOpen={isResetConfirmOpen}
+            variant="destructive"
+            onClose={() => setIsResetConfirmOpen(false)}
+            onConfirm={() => {
+              setIsResetConfirmOpen(false);
+              void (async () => {
+                await reset(activeAgent.id);
+                onSettingsChange?.();
+              })();
+            }}
+            title={`Reset ${activeAgent.name} settings?`}
+            description={`Launch and runtime settings go back to their defaults, and ${activeAgent.name}'s custom presets are deleted. Project and CCR presets aren't affected.`}
+            confirmLabel="Reset settings"
+          />
+        </>
+      )}
 
       {addDialogAgentId && (
         <AddPresetDialog

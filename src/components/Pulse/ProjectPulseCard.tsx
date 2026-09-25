@@ -23,13 +23,14 @@ import {
 import { Spinner } from "@/components/ui/Spinner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Activity } from "@/components/icons";
-import { PulseHeatmap, getPulseHeatmapRowWidth, getPulseHeatLevelBackground } from "./PulseHeatmap";
+import { PulseHeatmap, getPulseHeatLevelBackground } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
 import { getCoachLine, getUsableHealth } from "./coachLine";
 import { useProjectHealth } from "@/hooks/useProjectHealth";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { systemClient } from "@/clients/systemClient";
 import { formatTimeSince } from "@/components/Layout/FreshnessUtils";
+import { formatCompactCount, formatCountExact } from "@/lib/formatCount";
 
 // Collapses paired window.focus + visibilitychange events that fire together
 // on restore-from-minimize. Short enough that legitimate user actions
@@ -58,7 +59,7 @@ function CIStatusIcon({ status }: { status: ForgeProjectHealthPayload["ciStatus"
     case "expected":
       return <Clock className="w-3.5 h-3.5 text-status-warning" />;
     default:
-      return <CircleMinus className="w-3.5 h-3.5 text-daintree-text/40" />;
+      return <CircleMinus className="w-3.5 h-3.5 text-text-secondary" />;
   }
 }
 
@@ -92,6 +93,8 @@ function relativeTime(dateStr: string): string {
 interface HealthChipProps {
   icon: React.ReactNode;
   label: string;
+  /** The chip's full meaning when its visible label is only a number. */
+  ariaLabel?: string;
   onClick?: () => void;
   className?: string;
   tone?: "success" | "working" | "warning" | "danger" | "info" | "accent" | "neutral";
@@ -123,7 +126,14 @@ function getPulseChipToneStyle(tone: NonNullable<HealthChipProps["tone"]>): Reac
   };
 }
 
-function HealthChip({ icon, label, onClick, className, tone = "neutral" }: HealthChipProps) {
+function HealthChip({
+  icon,
+  label,
+  ariaLabel,
+  onClick,
+  className,
+  tone = "neutral",
+}: HealthChipProps) {
   const Wrapper = onClick ? "button" : "span";
   return (
     <Wrapper
@@ -134,6 +144,7 @@ function HealthChip({ icon, label, onClick, className, tone = "neutral" }: Healt
       )}
       style={getPulseChipToneStyle(tone)}
       onClick={onClick}
+      aria-label={ariaLabel}
     >
       {icon}
       <span className="font-mono tabular-nums">{label}</span>
@@ -173,13 +184,15 @@ function HealthSignals({
       />
       <HealthChip
         icon={<CircleDot className="w-3.5 h-3.5 text-current" />}
-        label={String(health.issueCount)}
+        label={formatCompactCount(health.issueCount)}
+        ariaLabel={`${formatCountExact(health.issueCount)} open issues`}
         onClick={() => openUrl("/issues")}
         tone="info"
       />
       <HealthChip
         icon={<GitPullRequest className="w-3.5 h-3.5 text-current" />}
-        label={String(health.prCount)}
+        label={formatCompactCount(health.prCount)}
+        ariaLabel={`${formatCountExact(health.prCount)} open pull requests`}
         onClick={() => openUrl("/pulls")}
         tone="working"
       />
@@ -211,10 +224,12 @@ function HealthSignals({
   );
 }
 
-const SKELETON_COLS = 60;
+// The default 60-day range spans nine or ten week columns; the bones hold
+// that calendar's footprint (weekday gutter, month row, seven rows) so the
+// loaded grid lands where the skeleton was.
+const SKELETON_WEEKS = 9;
 const SKELETON_CELL = 10;
 const SKELETON_GAP = 3;
-const SKELETON_ROW_WIDTH = SKELETON_CELL * SKELETON_COLS + SKELETON_GAP * (SKELETON_COLS - 1);
 
 function PulseSkeleton({ className }: { className?: string }) {
   return (
@@ -226,45 +241,69 @@ function PulseSkeleton({ className }: { className?: string }) {
     >
       <div className="pulse-card-header animate-pulse-delayed px-4 py-3 border-b border-border-default flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded-[2px] pulse-skeleton-shimmer shrink-0" />
-          <div className="h-4 pulse-skeleton-shimmer rounded w-36" />
+          <div
+            data-skeleton-bone=""
+            className="w-4 h-4 rounded-[var(--radius-xs)] pulse-skeleton-shimmer shrink-0"
+          />
+          <div
+            data-skeleton-bone=""
+            className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-36"
+          />
         </div>
         <div className="flex items-center gap-2">
-          <div className="h-6 pulse-skeleton-shimmer rounded-md w-32" />
-          <div className="w-6 h-6 rounded-md pulse-skeleton-shimmer" />
+          <div data-skeleton-bone="" className="h-6 pulse-skeleton-shimmer rounded-md w-32" />
+          <div data-skeleton-bone="" className="w-6 h-6 rounded-md pulse-skeleton-shimmer" />
         </div>
       </div>
 
       <div className="p-4 space-y-4 animate-pulse-delayed overflow-x-hidden">
         <div
-          className="flex"
-          style={{ gap: `${SKELETON_GAP}px`, width: `${SKELETON_ROW_WIDTH}px` }}
+          className="grid grid-flow-col"
+          style={{
+            gap: `${SKELETON_GAP}px`,
+            gridTemplateRows: `repeat(7, ${SKELETON_CELL}px)`,
+            marginLeft: 24,
+            paddingTop: 14,
+          }}
         >
-          {Array.from({ length: SKELETON_COLS }).map((_, col) => (
+          {Array.from({ length: SKELETON_WEEKS * 7 }).map((_, index) => (
             <div
-              key={col}
+              key={index}
+              data-skeleton-bone=""
               className="rounded-[2px] pulse-skeleton-shimmer shrink-0"
               style={{ width: `${SKELETON_CELL}px`, height: `${SKELETON_CELL}px` }}
             />
           ))}
         </div>
 
-        <div className="h-3 pulse-skeleton-shimmer rounded w-72" />
+        <div
+          data-skeleton-bone=""
+          className="h-3 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-72"
+        />
 
         <div className="border-t border-border-default pt-3 min-h-9">
           <div className="flex items-center gap-2">
-            <div className="h-5 w-16 rounded-full pulse-skeleton-shimmer" />
-            <div className="h-5 w-12 rounded-full pulse-skeleton-shimmer" />
-            <div className="h-5 w-12 rounded-full pulse-skeleton-shimmer" />
-            <div className="h-5 w-24 rounded-full pulse-skeleton-shimmer" />
+            <div data-skeleton-bone="" className="h-5 w-16 rounded-full pulse-skeleton-shimmer" />
+            <div data-skeleton-bone="" className="h-5 w-12 rounded-full pulse-skeleton-shimmer" />
+            <div data-skeleton-bone="" className="h-5 w-12 rounded-full pulse-skeleton-shimmer" />
+            <div data-skeleton-bone="" className="h-5 w-24 rounded-full pulse-skeleton-shimmer" />
           </div>
         </div>
 
         <div className="border-t border-border-default pt-3">
           <div className="flex items-center gap-4">
-            <div className="h-4 pulse-skeleton-shimmer rounded w-20" />
-            <div className="h-4 pulse-skeleton-shimmer rounded w-24" />
-            <div className="h-4 pulse-skeleton-shimmer rounded w-16" />
+            <div
+              data-skeleton-bone=""
+              className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-20"
+            />
+            <div
+              data-skeleton-bone=""
+              className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-24"
+            />
+            <div
+              data-skeleton-bone=""
+              className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-16"
+            />
           </div>
         </div>
       </div>
@@ -275,10 +314,10 @@ function PulseSkeleton({ className }: { className?: string }) {
 function HealthSectionSkeleton() {
   return (
     <div className="animate-pulse-delayed flex items-center gap-2">
-      <div className="h-5 pulse-skeleton-shimmer rounded-full w-16" />
-      <div className="h-5 pulse-skeleton-shimmer rounded-full w-12" />
-      <div className="h-5 pulse-skeleton-shimmer rounded-full w-12" />
-      <div className="h-5 pulse-skeleton-shimmer rounded-full w-24" />
+      <div data-skeleton-bone="" className="h-5 pulse-skeleton-shimmer rounded-full w-16" />
+      <div data-skeleton-bone="" className="h-5 pulse-skeleton-shimmer rounded-full w-12" />
+      <div data-skeleton-bone="" className="h-5 pulse-skeleton-shimmer rounded-full w-12" />
+      <div data-skeleton-bone="" className="h-5 pulse-skeleton-shimmer rounded-full w-24" />
     </div>
   );
 }
@@ -309,14 +348,7 @@ const HEATMAP_LEGEND_GAP_PX = 3;
 // ramp themes fall back to when they omit the opaque pulse-heat-1..4 stops.
 const LEGEND_LEVELS = [0, 1, 2, 3, 4] as const;
 
-function PulseHeatmapLegend({
-  dayCount,
-  descriptionId,
-}: {
-  dayCount: number;
-  descriptionId: string;
-}) {
-  const rowWidth = getPulseHeatmapRowWidth({ dayCount, compact: false });
+function PulseHeatmapLegend({ descriptionId }: { descriptionId: string }) {
   return (
     <>
       <span id={descriptionId} className="sr-only">
@@ -325,8 +357,8 @@ function PulseHeatmapLegend({
       <div
         aria-hidden="true"
         data-testid="pulse-heatmap-legend"
-        className="flex items-center justify-end text-3xs text-text-secondary select-none"
-        style={{ width: `${rowWidth}px`, gap: `${HEATMAP_LEGEND_GAP_PX}px` }}
+        className="flex items-center self-end text-3xs text-text-secondary select-none"
+        style={{ gap: `${HEATMAP_LEGEND_GAP_PX}px` }}
       >
         <span>Less</span>
         {LEGEND_LEVELS.map((level) => (
@@ -391,6 +423,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   const hasEverLoadedRef = useRef(false);
   const lastFocusProbeRef = useRef(0);
   const minuteTick = useGlobalMinuteTicker();
+  const heatmapScrollerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const hadPulse = !!pulse;
     if (isLoading && hadPulse) {
@@ -439,6 +472,14 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       document.removeEventListener("visibilitychange", handleFocusOrVisible);
     };
   }, [worktreeId, fetchPulse]);
+
+  // If the column is ever narrower than the calendar, open at the newest week
+  // — the days that answer "is this moving right now" — not the oldest.
+  const heatmapLength = pulse?.heatmap.length ?? 0;
+  useEffect(() => {
+    const scroller = heatmapScrollerRef.current;
+    if (scroller) scroller.scrollLeft = scroller.scrollWidth;
+  }, [heatmapLength]);
 
   const handleRefresh = useCallback(() => {
     fetchPulse(worktreeId, true);
@@ -522,7 +563,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             <span className="text-xs">{error}</span>
             <button
               onClick={handleRefresh}
-              className="pulse-control ml-auto rounded-md p-1 text-daintree-text/55 transition-colors hover:text-daintree-text/80"
+              className="pulse-control ml-auto rounded-md p-1 text-text-secondary transition-colors hover:text-text-primary"
               aria-label="Retry now"
             >
               <RefreshCw className="w-3 h-3" aria-hidden="true" />
@@ -584,7 +625,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-text-secondary" />
           <span className="text-sm font-medium text-text-primary">{title}</span>
-          {isLoading && <Spinner size="xs" className="text-daintree-text/55" />}
+          {isLoading && <Spinner size="xs" className="text-text-secondary" />}
         </div>
 
         <div className="flex items-center gap-2">
@@ -624,7 +665,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <button
             onClick={handleRefresh}
             disabled={isLoading}
-            className="pulse-control rounded-md p-1.5 text-daintree-text/55 transition-colors hover:text-daintree-text/80 disabled:opacity-50 disabled:pointer-events-none"
+            className="pulse-control rounded-md p-1.5 text-text-secondary transition-colors hover:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
             aria-label="Refresh"
           >
             <SpinningIcon icon={RefreshCw} active={isLoading} className="w-3 h-3" />
@@ -633,22 +674,22 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       </div>
 
       <div className="p-4 space-y-4">
-        {/* The card used to be `w-fit`, so a 60-day row of fixed-size cells
-            decided its width and it came out a third wider than every other
-            band on the launcher — making the lowest-priority module the
-            largest object on the surface. The card now obeys the column, and
-            the row that genuinely needs the width scrolls inside it. */}
-        <div className="-mx-1 overflow-x-auto px-1">
-          <PulseHeatmap
-            cells={pulse.heatmap}
-            rangeDays={pulse.rangeDays}
-            describedBy={heatmapDescriptionId}
-          />
+        {/* The card obeys the column (it used to be `w-fit`, and a 60-day row
+            of cells made the lowest-priority band the widest on the surface).
+            The week-column calendar fits that width at every range; the
+            scroller is only a backstop for a column narrower than 180 days
+            need, and it opens at the newest week. The legend sits outside it
+            so it is never scrolled away, right-aligned under the grid. */}
+        <div className="inline-flex max-w-full flex-col gap-1.5">
+          <div ref={heatmapScrollerRef} className="-mx-1 overflow-x-auto px-1 pb-0.5">
+            <PulseHeatmap
+              cells={pulse.heatmap}
+              rangeDays={pulse.rangeDays}
+              describedBy={heatmapDescriptionId}
+            />
+          </div>
 
-          <PulseHeatmapLegend
-            dayCount={pulse.heatmap.length}
-            descriptionId={heatmapDescriptionId}
-          />
+          <PulseHeatmapLegend descriptionId={heatmapDescriptionId} />
         </div>
 
         <p className="text-xs text-text-primary">{getCoachLine(pulse, usableHealth)}</p>

@@ -346,12 +346,14 @@ describe("SettingsTextarea", () => {
     expect(textarea.className).toContain("resize-y");
   });
 
-  it("uses semantic text tokens for label and description", () => {
+  // text-muted has no dark-theme contrast floor, and a field's description is text the
+  // user has to read — it must sit on a token that does.
+  it("never puts the description on the floorless muted token", () => {
     render(<SettingsTextarea label="Notes" description="Additional notes" />);
     const label = screen.getByText("Notes");
     const description = screen.getByText("Additional notes");
     expect(label.className).toContain("text-text-secondary");
-    expect(description.className).toContain("text-text-muted");
+    expect(description.className).not.toContain("text-text-muted");
   });
 });
 

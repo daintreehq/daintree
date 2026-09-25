@@ -30,9 +30,10 @@ export type TerminalStatusSource = "renderer" | "pty";
  * answer cannot — a surface listing nothing is not the same as a surface that
  * saw everything. The renderer reads `lastOutputChangeAt` only when the call
  * asked for output (#12495), so it drops out of this list for those calls.
+ * `lastTypedInputAt` rides the same read (#12718) and drops out with it.
  */
 export type TerminalStatusUnavailableField =
-  "armed" | "lastCheckResult" | "exitCode" | "hasPty" | "lastOutputChangeAt";
+  "armed" | "lastCheckResult" | "exitCode" | "hasPty" | "lastOutputChangeAt" | "lastTypedInputAt";
 
 /**
  * Model-facing description of `lastOutputChangeAt`, shared by the status and
@@ -40,6 +41,10 @@ export type TerminalStatusUnavailableField =
  */
 export const LAST_OUTPUT_CHANGE_AT_DESCRIPTION =
   "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.";
+
+/** Model-facing description of `lastTypedInputAt`. */
+export const LAST_TYPED_INPUT_AT_DESCRIPTION =
+  "Epoch ms of the last raw input Daintree recorded for the PTY (keys, paste, broadcast; not submit-lane writes). Before `lastTransitionAt` = none since. Not proof of delivery or authorship.";
 
 /** One terminal's status, in the shape `TerminalStatusEntrySchema` publishes. */
 export interface TerminalStatusEntry {
@@ -56,6 +61,18 @@ export interface TerminalStatusEntry {
    * call asked for output (#12495).
    */
   lastOutputChangeAt?: number;
+  /**
+   * When Daintree last recorded raw input for this PTY (#12718) — keystrokes
+   * including control keys, pastes, staging, broadcast — excluding the submit
+   * lane's own writes and the reports xterm sends by itself. Stamped as the
+   * write is attempted, so it proves neither delivery nor what the composer
+   * holds. A CLI can pre-fill its own suggested prompt, which nothing here
+   * records, so a caller can compare this against `lastTransitionAt` to see
+   * whether any input came through since the terminal settled — never a
+   * verdict on who authored what the screen shows. Read in the pty-host, so
+   * the `renderer` answer reports it only when the call asked for output.
+   */
+  lastTypedInputAt?: number;
   exitCode?: number | null;
   spawnedAt?: number;
   /**
@@ -114,7 +131,8 @@ export interface TerminalStatusEntry {
  * changed.
  */
 export type TerminalOutputActivityLookup =
-  { status: "read"; lastOutputChangeAt?: number } | { status: "unreadable" };
+  | { status: "read"; lastOutputChangeAt?: number; lastTypedInputAt?: number }
+  | { status: "unreadable" };
 
 export interface TerminalStatusResult {
   terminals: TerminalStatusEntry[];

@@ -1,8 +1,24 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
-import { Check, Copy, FileText } from "lucide-react";
+import { Check, ChevronDown, Copy, Ellipsis, FileText, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { SegmentedToggle, type SegmentedToggleOption } from "@/components/ui/SegmentedToggle";
 
 let measureContext: CanvasRenderingContext2D | null = null;
 
@@ -11,6 +27,39 @@ function measureTextWidth(text: string, font: string): number {
   if (!measureContext) return text.length * 8;
   measureContext.font = font;
   return measureContext.measureText(text).width;
+}
+
+/**
+ * The last resort when even the bare file name overflows: collapse the middle
+ * of the name's stem and keep its extension, so a clipped pill still says what
+ * kind of file it is. End truncation ("useContentPanelKeyboardNavigationAndFo…")
+ * throws away exactly the part that distinguishes one file from its siblings.
+ * Below the shortest readable form it keeps just the tail and extension;
+ * CSS truncation is the backstop below that.
+ */
+export function fitFileName(name: string, fits: (text: string) => boolean): string {
+  const dot = name.lastIndexOf(".");
+  // No length cap: ".code-workspace" identifies a file as surely as ".ts".
+  const hasExtension = dot > 0 && dot < name.length - 1;
+  const stem = hasExtension ? name.slice(0, dot) : name;
+  const extension = hasExtension ? name.slice(dot) : "";
+  // A few characters of the stem's tail stay beside the extension — the end of
+  // a name ("…Restoration.ts", "…-v2.png") is often what tells siblings apart.
+  const tail = Math.min(4, Math.floor(stem.length / 3));
+  const build = (kept: number) =>
+    `${stem.slice(0, kept)}…${stem.slice(stem.length - tail)}${extension}`;
+  let hi = Math.max(0, stem.length - tail - 1);
+  // Nothing with a readable stem fits: keep the tail and extension alone
+  // rather than handing back the whole name for CSS to end-truncate, which
+  // would cut the extension first.
+  if (!fits(build(1))) return `…${stem.slice(stem.length - tail)}${extension}`;
+  let lo = 1;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (fits(build(mid))) lo = mid;
+    else hi = mid - 1;
+  }
+  return build(lo);
 }
 
 /**
@@ -70,10 +119,17 @@ function useFittedPath(fullText: string | undefined): {
         setDisplay(candidate);
         return;
       }
-      // Very narrow pane: prefer the bare file name over "…/file.md"; if even
-      // that overflows, CSS truncate is the backstop.
+      // Very narrow pane: prefer the bare file name over "…/file.md".
       const bare = basename.startsWith("/") ? basename.slice(1) : basename;
-      setDisplay(measureTextWidth(`…${basename}`, font) <= available ? `…${basename}` : bare);
+      if (measureTextWidth(`…${basename}`, font) <= available) {
+        setDisplay(`…${basename}`);
+        return;
+      }
+      if (measureTextWidth(bare, font) <= available) {
+        setDisplay(bare);
+        return;
+      }
+      setDisplay(fitFileName(bare, (text) => measureTextWidth(text, font) <= available));
     };
 
     fit();
@@ -125,13 +181,71 @@ export const TOOLBAR_ICON_CLASS = "h-3.5 w-3.5";
  * toolbars on screen would then have two of them. Making it a required prop
  * means the compiler asks every surface which row this is.
  */
-function Root({ label, children }: { label: string; children: React.ReactNode }) {
+const CompactContext = createContext(false);
+const WidthContext = createContext<number | null>(null);
+
+/**
+ * The row's measured width, or null before the first measure (or when the
+ * caller set no `compactBelow`). For a control that has its own, tighter
+ * breakpoint than the row's secondary actions — a mode selector that becomes
+ * a menu only once the actions have already folded.
+ */
+export function useFileViewerToolbarWidth(): number | null {
+  return useContext(WidthContext);
+}
+
+/**
+ * Whether the toolbar is below its caller's `compactBelow` width — the signal
+ * for secondary actions to fold into `MoreActions` rather than squeeze the path
+ * pill. Read by children rendered inside `Root`.
+ */
+export function useFileViewerToolbarCompact(): boolean {
+  return useContext(CompactContext);
+}
+
+function Root({
+  label,
+  compactBelow,
+  children,
+}: {
+  label: string;
+  /**
+   * Width in CSS px under which the row reports itself compact. Width of the
+   * row, never of the pill: the row's width does not depend on which controls
+   * are folded, so the switch cannot oscillate. Omitted, the row is never
+   * compact.
+   */
+  compactBelow?: number;
+  children: React.ReactNode;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const onKeyDown = useToolbarRoving(ref);
+  const [width, setWidth] = useState<number | null>(null);
+  const compact = width !== null && compactBelow !== undefined && width < compactBelow;
+
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element || compactBelow === undefined) {
+      setWidth(null);
+      return;
+    }
+    const measure = () => {
+      const measured = element.getBoundingClientRect().width;
+      // Zero means hidden or not laid out yet; keep the last answer rather than
+      // flashing the compact layout on every reveal.
+      if (measured > 0) setWidth(Math.round(measured));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [compactBelow]);
 
   return (
     <div
       ref={ref}
+      data-compact={compact ? "" : undefined}
       // The APG toolbar pattern: one tab stop for the whole row, Left/Right
       // between its controls. Before this every button here was its own tab
       // stop, so tabbing past a viewer toolbar cost one press per control.
@@ -140,7 +254,9 @@ function Root({ label, children }: { label: string; children: React.ReactNode })
       onKeyDown={onKeyDown}
       className="flex shrink-0 items-center gap-1.5 border-b border-overlay bg-surface px-2 py-1.5"
     >
-      {children}
+      <CompactContext.Provider value={compact}>
+        <WidthContext.Provider value={width}>{children}</WidthContext.Provider>
+      </CompactContext.Provider>
     </div>
   );
 }
@@ -151,8 +267,27 @@ function Root({ label, children }: { label: string; children: React.ReactNode })
  * file name always survives. `path` is what's shown (root-relative where the
  * surface can compute it); what gets copied is the caller's business.
  */
-function Path({ path, copied, onCopy }: { path?: string; copied: boolean; onCopy: () => void }) {
+function Path({
+  path,
+  copied,
+  onCopy,
+  icon: Icon = FileText,
+  copyLabel = "Copy file path",
+}: {
+  path?: string;
+  copied: boolean;
+  onCopy: () => void;
+  /**
+   * The glyph for what the path names — the same type icon the tree shows on
+   * that row, so the pill and the highlighted row read as one object. Defaults
+   * to a plain document.
+   */
+  icon?: LucideIcon;
+  /** Accessible name; stable across the copied flash. A folder says so. */
+  copyLabel?: string;
+}) {
   const { spanRef, display } = useFittedPath(path);
+  const truncated = display !== undefined && display !== path;
 
   return (
     <Tooltip>
@@ -160,26 +295,37 @@ function Path({ path, copied, onCopy }: { path?: string; copied: boolean; onCopy
         <button
           type="button"
           onClick={onCopy}
-          aria-label="Copy file path"
+          data-toolbar-path=""
+          // The subject is part of the name at every width, not only when the
+          // pill had to elide it: the visible text is the path, so a name of
+          // just "Copy file path" would drop what the eye reads (label in name).
+          aria-label={path ? `${copyLabel}: ${path}` : copyLabel}
           className="relative flex items-center min-w-0 flex-1 group/path"
         >
           {copied ? (
             <Check className="absolute left-2 w-3.5 h-3.5 text-status-success pointer-events-none" />
           ) : (
-            <FileText
+            <Icon
               aria-hidden="true"
-              className="absolute left-2 w-3.5 h-3.5 text-daintree-text/40 pointer-events-none"
+              className="absolute left-2 w-3.5 h-3.5 text-text-secondary pointer-events-none"
             />
           )}
           <span
             ref={spanRef}
-            className="w-full pl-7 pr-2 py-1 text-left text-xs rounded bg-surface-canvas border border-overlay text-text-secondary truncate transition-colors group-hover/path:border-border-strong group-hover/path:text-text-primary"
+            className="w-full min-w-0 overflow-hidden pl-7 pr-2 py-1 text-left text-xs rounded-lg bg-surface-canvas border border-overlay text-text-secondary truncate transition-colors group-hover/path:border-border-strong group-hover/path:text-text-primary"
           >
             {display}
           </span>
         </button>
       </TooltipTrigger>
-      <TooltipContent side="bottom">{copied ? "Copied!" : "Click to copy"}</TooltipContent>
+      {/* The whole path when the pill had to elide any of it, so hovering is
+          how a clipped name is read in full; the copy hint rides underneath. */}
+      <TooltipContent side="bottom" className="break-words">
+        {truncated && <span className="block">{path}</span>}
+        <span className={truncated ? "block text-text-secondary" : undefined}>
+          {copied ? "Copied!" : "Click to copy"}
+        </span>
+      </TooltipContent>
     </Tooltip>
   );
 }
@@ -235,7 +381,7 @@ function IconButton({
           data-sidebar-toggle={sidebarToggle ? "" : undefined}
           data-testid={testId}
           className={cn(
-            "toolbar-icon-button p-1.5 rounded",
+            "toolbar-icon-button p-1.5 rounded-lg",
             active ? "text-text-primary" : "text-text-secondary"
           )}
         >
@@ -245,6 +391,34 @@ function IconButton({
       <TooltipContent side="bottom">{label}</TooltipContent>
     </Tooltip>
   );
+}
+
+/**
+ * Copy text from a menu row, with the same confirmation window the copy button
+ * keeps. Returns the flag for `MoreActions`' `confirmed` and the handler to
+ * put on the row. Silent on a refused write, like the button.
+ */
+export function useMenuCopy(): { copied: boolean; copy: (text: string) => void } {
+  const [copied, setCopied] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    },
+    []
+  );
+  const copy = useCallback((text: string) => {
+    if (!navigator.clipboard?.writeText) return;
+    void navigator.clipboard.writeText(text).then(
+      () => {
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        setCopied(true);
+        timeoutRef.current = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
+      },
+      () => {}
+    );
+  }, []);
+  return { copied, copy };
 }
 
 /**
@@ -329,4 +503,152 @@ function CopyContentsButton({ contents }: { contents: string | null }) {
   );
 }
 
-export const FileViewerToolbar = { Root, Path, Actions, IconButton, CopyContentsButton };
+/**
+ * Where secondary actions go once the row is compact: one trigger, the same
+ * footprint as an `IconButton`, holding whatever the caller would otherwise
+ * have laid out as buttons. The caller supplies `DropdownMenuItem`s so each
+ * surface keeps its own handlers. The standard narrow-toolbar pattern —
+ * collapse secondary actions into an overflow menu before the identity or the
+ * mode control has to give up a pixel.
+ */
+function MoreActions({
+  children,
+  confirmed = false,
+  "data-testid": testId,
+}: {
+  children: React.ReactNode;
+  /**
+   * A menu action just succeeded with nothing else left on screen to say so —
+   * Copy, whose own button would have flashed a check. The trigger carries the
+   * check instead, for the same flash, since it is what the menu closed back to.
+   */
+  confirmed?: boolean;
+  "data-testid"?: string;
+}) {
+  const label = "More actions";
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label={label}
+              data-testid={testId}
+              className="toolbar-icon-button shrink-0 p-1.5 rounded-lg text-text-secondary"
+            >
+              {confirmed ? (
+                <Check
+                  className={cn(TOOLBAR_ICON_CLASS, "text-status-success")}
+                  aria-hidden="true"
+                />
+              ) : (
+                <Ellipsis className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
+              )}
+            </button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{label}</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end" className="min-w-[200px]">
+        {children}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Below this row width the mode selector folds from a segmented control into
+ * one menu button naming the current mode — the second step after the file
+ * actions fold, so a renderable file keeps a readable name at the narrowest
+ * widths the viewer reaches.
+ */
+const MODE_MENU_BELOW = 420;
+
+/**
+ * The Source / Rendered (/ Edit) choice. Segmented while it fits, a menu once
+ * the row is tight — the same options in the same order either way, with the
+ * current one named on the trigger so the state is still visible at a glance.
+ */
+function ModeControl<T extends string>({
+  options,
+  value,
+  onChange,
+  menuBelow = MODE_MENU_BELOW,
+}: {
+  options: Array<SegmentedToggleOption<T>>;
+  value: T;
+  onChange: (value: T) => void;
+  /** Row width under which the segments fold into the menu. */
+  menuBelow?: number;
+}) {
+  const width = useFileViewerToolbarWidth();
+  const current = options.find((option) => option.value === value) ?? options[0];
+
+  if (width === null || width >= menuBelow || !current) {
+    return (
+      // Compact density: the toolbar's icon buttons are 26px, and the default
+      // 28px segment made every renderable file's row taller than every other.
+      <SegmentedToggle<T> options={options} value={value} onChange={onChange} density="compact" />
+    );
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`View mode: ${current.ariaLabel ?? current.label}`}
+          title={current.title}
+          data-testid="file-browser-mode-menu"
+          className="toolbar-icon-button flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-text-primary"
+        >
+          {current.label}
+          <ChevronDown className="h-3 w-3 text-text-secondary" aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[160px]">
+        <DropdownMenuRadioGroup
+          aria-label="View mode"
+          value={value}
+          onValueChange={(next) => {
+            const match = options.find((option) => option.value === next);
+            if (match) onChange(match.value);
+          }}
+        >
+          {options.map((option) => (
+            <DropdownMenuRadioItem
+              key={option.value}
+              value={option.value}
+              disabled={option.disabled}
+              aria-label={option.ariaLabel}
+              title={option.title ?? option.ariaLabel}
+            >
+              {option.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Renders `wide` while the row has room and `narrow` once it is compact — the
+ * seam a surface uses to fold its own actions into `MoreActions` without
+ * restructuring its handlers into a separate component.
+ */
+function Responsive({ wide, narrow }: { wide: React.ReactNode; narrow: React.ReactNode }) {
+  return <>{useFileViewerToolbarCompact() ? narrow : wide}</>;
+}
+
+export const FileViewerToolbar = {
+  Root,
+  Path,
+  Actions,
+  IconButton,
+  CopyContentsButton,
+  MoreActions,
+  ModeControl,
+  Responsive,
+};

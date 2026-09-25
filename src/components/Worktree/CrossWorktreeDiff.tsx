@@ -300,7 +300,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           icon={<GitCompare className="w-4 h-4 text-text-muted" />}
           className="text-sm font-semibold text-text-primary"
         >
-          Compare Worktrees
+          Compare worktrees
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
@@ -397,11 +397,13 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                   >
                     <button
                       type="button"
-                      onClick={() => navigateFile(-1)}
-                      disabled={selectedFileIndex <= 0}
+                      onClick={() => {
+                        if (selectedFileIndex > 0) navigateFile(-1);
+                      }}
+                      aria-disabled={selectedFileIndex <= 0 || undefined}
                       aria-label="Previous file"
                       title="Previous file ([)"
-                      className="toolbar-icon-button p-1.5 rounded-lg text-text-secondary disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                      className="toolbar-icon-button p-1.5 rounded-lg text-text-secondary aria-disabled:opacity-40 aria-disabled:pointer-events-none"
                     >
                       <ChevronLeft className="w-3.5 h-3.5" />
                     </button>
@@ -413,11 +415,13 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                     </span>
                     <button
                       type="button"
-                      onClick={() => navigateFile(1)}
-                      disabled={selectedFileIndex >= files.length - 1}
+                      onClick={() => {
+                        if (selectedFileIndex < files.length - 1) navigateFile(1);
+                      }}
+                      aria-disabled={selectedFileIndex >= files.length - 1 || undefined}
                       aria-label="Next file"
                       title="Next file (])"
-                      className="toolbar-icon-button p-1.5 rounded-lg text-text-secondary disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                      className="toolbar-icon-button p-1.5 rounded-lg text-text-secondary aria-disabled:opacity-40 aria-disabled:pointer-events-none"
                     >
                       <ChevronRight className="w-3.5 h-3.5" />
                     </button>

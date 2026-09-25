@@ -59,9 +59,14 @@ export function getTrendDirection(samples: number[], samplesPerMin: number): Tre
   return slopePerMin > 0 ? "up" : "down";
 }
 
+/**
+ * Whole megabytes below a gigabyte, one decimal above, with a space before the
+ * unit. Readings arrive fractional (working-set sums in particular), and
+ * passing them straight through printed false precision like "704.296875MB".
+ */
 export function formatMemory(mb: number): string {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)}GB`;
-  return `${mb}MB`;
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  return `${Math.round(mb)} MB`;
 }
 
 /**

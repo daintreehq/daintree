@@ -630,20 +630,25 @@ describe("PluginService built-in plugin loading", () => {
     });
 
     it("a failed built-in re-enable restores the skipped state (no lost row)", async () => {
-      // Launch-disabled built-in whose engine range can never be satisfied by
-      // the running app version, so the re-enable's loadPlugin() returns null at
-      // the engine gate and must fall through to the restore path.
+      // Launch-disabled built-in whose manifest is corrupted after launch, so the
+      // re-enable's loadPlugin() returns null at the parse step and must fall
+      // through to the restore path.
       storeMock._state.set("plugins", { disabled: ["daintree.future"] });
       await writeBuiltinPlugin("daintree.future", {
         name: "daintree.future",
         version: "1.0.0",
-        engines: { daintree: ">=99.0.0" },
       });
       const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
       await service.initialize();
       expect(service.listPlugins()).toHaveLength(1);
 
-      await service.setEnabled("daintree.future", true);
+      await fs.writeFile(path.join(builtinDir, "daintree.future", "plugin.json"), "{ not json");
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await service.setEnabled("daintree.future", true);
+      } finally {
+        errorSpy.mockRestore();
+      }
 
       // Intent persisted as enabled, but the load failed: the row stays visible,
       // not running, flagged pendingRestart — never silently dropped.

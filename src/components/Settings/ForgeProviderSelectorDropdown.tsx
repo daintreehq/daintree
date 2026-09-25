@@ -1,9 +1,13 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { cn } from "@/lib/utils";
-import { GitBranch, ChevronDown, Search } from "lucide-react";
-import { GitHubIcon } from "@/components/icons/brands";
+import { ChevronDown, GitBranch, Settings2 } from "lucide-react";
+import { GitHubIcon, GitLabIcon } from "@/components/icons/brands";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
+import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
+import {
+  BUILTIN_GITHUB_PROVIDER_ID,
+  BUILTIN_GITLAB_PROVIDER_ID,
+} from "@shared/utils/forgeProviderIds";
 
 export interface ForgeProviderOption {
   /** Canonical `{pluginId}.{contributionId}` forge provider id. */
@@ -14,8 +18,14 @@ export interface ForgeProviderOption {
 
 type ProviderIcon = ComponentType<{ size?: number; className?: string }>;
 
+const BRAND_ICONS: Record<string, ProviderIcon> = {
+  [BUILTIN_GITHUB_PROVIDER_ID]: GitHubIcon,
+  [BUILTIN_GITLAB_PROVIDER_ID]: GitLabIcon,
+};
+
+/** A forge's own mark where we have one; a generic branch for third-party providers. */
 function getProviderIcon(id: string): ProviderIcon {
-  return id === BUILTIN_GITHUB_PROVIDER_ID ? GitHubIcon : GitBranch;
+  return BRAND_ICONS[id] ?? GitBranch;
 }
 
 interface ForgeProviderSelectorDropdownProps {
@@ -52,7 +62,9 @@ export function ForgeProviderSelectorDropdown({
 
   useEffect(() => {
     const q = filterQuery.trim();
-    setActiveIndex(q && items.length > 1 ? 1 : 0);
+    // General stays listed as a destination but is never a search result, so a query
+    // with no match leaves nothing active and Enter picks nothing.
+    setActiveIndex(q ? (items.length > 1 ? 1 : -1) : 0);
   }, [filterQuery]); // eslint-disable-line react-hooks/exhaustive-deps -- items derived from filterQuery
 
   useEffect(() => {
@@ -102,9 +114,10 @@ export function ForgeProviderSelectorDropdown({
           data-testid="forge-provider-selector-trigger"
           className={cn(
             "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-            "border border-border-default bg-surface-canvas text-text-primary",
-            "hover:border-border-strong transition-colors",
-            "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50"
+            "border border-border-strong bg-surface-canvas text-text-primary transition-colors",
+            // Radix hands focus back to the trigger when the list closes, so a `focus:`
+            // indicator stayed lit after every pick — accent only for keyboard focus.
+            "focus:outline-hidden focus-visible:border-accent-primary"
           )}
         >
           {selectedProvider ? (
@@ -112,21 +125,21 @@ export function ForgeProviderSelectorDropdown({
               const Icon = getProviderIcon(selectedProvider.id);
               return (
                 <>
-                  <Icon size={16} className="text-daintree-text/60" />
+                  <Icon size={16} className="text-text-secondary" />
                   <span className="flex-1 text-left truncate">{selectedProvider.name}</span>
                 </>
               );
             })()
           ) : (
             <>
-              <GitBranch size={16} className="text-daintree-text/60" />
+              <Settings2 size={16} className="text-text-secondary" />
               <span className="flex-1 text-left truncate">General</span>
             </>
           )}
           <ChevronDown
             size={14}
             className={cn(
-              "shrink-0 text-daintree-text/40 transition-transform",
+              "shrink-0 text-text-secondary transition-transform",
               open && "rotate-180"
             )}
           />
@@ -139,29 +152,25 @@ export function ForgeProviderSelectorDropdown({
         style={{ width: "var(--radix-popover-trigger-width)" }}
         onEscapeKeyDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border-default">
-          <Search size={14} className="shrink-0 text-daintree-text/40" aria-hidden="true" />
-          <input
-            ref={inputRef}
-            type="text"
-            autoFocus
-            placeholder="Filter providers…"
-            value={filterQuery}
-            onChange={(e) => setFilterQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            role="combobox"
-            aria-label="Filter providers"
-            aria-expanded={open}
-            aria-autocomplete="list"
-            aria-controls="forge-provider-selector-list"
-            aria-activedescendant={
-              items[activeIndex]
-                ? `forge-provider-selector-item-${items[activeIndex].id}`
-                : undefined
-            }
-            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
-          />
-        </div>
+        <PopoverSearchField
+          ref={inputRef}
+          autoFocus
+          placeholder="Filter providers…"
+          value={filterQuery}
+          onChange={(e) => setFilterQuery(e.target.value)}
+          onKeyDown={handleKeyDown}
+          role="combobox"
+          aria-label="Filter providers"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          aria-controls="forge-provider-selector-list"
+          aria-activedescendant={
+            activeIndex >= 0 && items[activeIndex]
+              ? `forge-provider-selector-item-${items[activeIndex].id}`
+              : undefined
+          }
+          className="h-8 text-xs"
+        />
         <div
           role="listbox"
           id="forge-provider-selector-list"
@@ -192,7 +201,7 @@ export function ForgeProviderSelectorDropdown({
               >
                 {item.kind === "general" ? (
                   <>
-                    <GitBranch size={16} className="shrink-0 text-daintree-text/60" />
+                    <Settings2 size={16} className="shrink-0 text-text-secondary" />
                     <div className="flex-1 min-w-0">
                       <div className="truncate">General</div>
                       <div className="text-xs text-text-secondary truncate">
@@ -205,7 +214,7 @@ export function ForgeProviderSelectorDropdown({
                     const Icon = getProviderIcon(item.provider.id);
                     return (
                       <>
-                        <Icon size={16} className="shrink-0 text-daintree-text/60" />
+                        <Icon size={16} className="shrink-0 text-text-secondary" />
                         <span className="flex-1 min-w-0 truncate">{item.provider.name}</span>
                       </>
                     );
@@ -215,8 +224,8 @@ export function ForgeProviderSelectorDropdown({
             );
           })}
           {items.length === 1 && filterQuery && (
-            <div className="px-2 py-3 text-xs text-text-secondary text-center">
-              No providers match "{filterQuery}"
+            <div role="status" className="px-2 py-3 text-xs text-text-secondary">
+              No providers match &ldquo;{filterQuery.trim()}&rdquo;
             </div>
           )}
         </div>

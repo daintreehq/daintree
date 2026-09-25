@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState, useRef } from "react";
-import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
+import { SearchField } from "@/components/ui/SearchField";
 import type { ChipCounts } from "@/lib/worktreeFilters";
 
 interface WorktreeSidebarSearchBarProps {
@@ -17,10 +17,11 @@ interface WorktreeSidebarSearchBarProps {
   /**
    * Where the bar is mounted. The sidebar variant carries the optional
    * `--worktree-filter-bar-bg` theme surface (a recessed strip at the top of
-   * the rail); the modal variant stays transparent so the strip doesn't leak
-   * onto the elevated overview dialog.
+   * the rail). The palette variant is the overview's: it sits inside
+   * `AppPaletteDialog.Header`, which owns the padding and the rule, so it
+   * paints no strip of its own and uses the palette family's field.
    */
-  variant?: "sidebar" | "modal";
+  variant?: "sidebar" | "palette";
   /**
    * Controls rendered on the trailing edge of the field row, after the facet
    * button. For callers whose view-scope controls belong with the filters
@@ -28,6 +29,17 @@ interface WorktreeSidebarSearchBarProps {
    * switch here so the whole working toolbar stays one line.
    */
   trailing?: React.ReactNode;
+  /**
+   * Offered Escape before the field spends it on clearing the query. Return
+   * true to claim the key — the overview uses this so an active selection is
+   * dismissed first, the same precedence Escape has everywhere else on it.
+   */
+  onEscape?: () => boolean;
+  /**
+   * Enter in the field. The overview is a quick switcher as much as a table:
+   * type, Enter, and you are there — the field acts on the results it filters.
+   */
+  onSubmit?: () => void;
   /**
    * Filter scope / reorder status ("1 of 2 worktrees · Drag to reorder is off while
    * searching") rendered under the field, sharing a row with "Clear all".
@@ -65,6 +77,8 @@ export function WorktreeSidebarSearchBar({
   statusText,
   filterSummaryText,
   trailing,
+  onEscape,
+  onSubmit,
 }: WorktreeSidebarSearchBarProps) {
   const query = useWorktreeFilterStore((state) => state.query);
   const liveQuery = useWorktreeFilterStore((state) => state.liveQuery);
@@ -166,6 +180,12 @@ export function WorktreeSidebarSearchBar({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" && onSubmit && !isPopoverOpen && !e.nativeEvent.isComposing) {
+        e.preventDefault();
+        e.stopPropagation();
+        onSubmit();
+        return;
+      }
       // ArrowDown hands off to the results below. The field takes initial
       // focus on this surface, so "type a query, arrow to the match" is the
       // first thing anyone does — and without this it did nothing, because
@@ -191,6 +211,10 @@ export function WorktreeSidebarSearchBar({
         setIsPopoverOpen(false);
         return;
       }
+      if (onEscape?.()) {
+        e.stopPropagation();
+        return;
+      }
       if (liveQuery) {
         e.stopPropagation();
         handleClearSearch();
@@ -198,7 +222,7 @@ export function WorktreeSidebarSearchBar({
       }
       internalRef.current?.blur();
     },
-    [isPopoverOpen, liveQuery, handleClearSearch, onArrowIntoResults]
+    [isPopoverOpen, liveQuery, handleClearSearch, onArrowIntoResults, onEscape, onSubmit]
   );
 
   const setRefs = useCallback(
@@ -226,67 +250,43 @@ export function WorktreeSidebarSearchBar({
         // control zone sits on one 12px inset instead of three (#11991).
         // No top padding in the sidebar: the header's py-3 already sets the
         // 12px above the field. pb-3 matches it below, so the rule under the
-        // rail lands on the same rhythm the title sits on. The modal's header
-        // has no such trailing padding — it ends on its own border — so that
-        // variant supplies the inset itself rather than sitting flush against
-        // the rule above it.
+        // rail lands on the same rhythm the title sits on.
         "px-3 pb-3 border-b border-divider shrink-0",
-        // In the dialog the horizontal neighbours are different too: the header,
-        // the footer and the rows below all sit on AppDialog's 24px column, so
-        // the bar carries that one instead of the rail's 12px. Plain `px-6`:
-        // the body absorbs whatever the platform reserves for a scrollbar out
-        // of its own padding, so nothing out here compensates for it (#12101).
-        variant === "modal" && "pt-3 px-6",
-        variant === "sidebar" && "worktree-filter-bar"
+        variant === "sidebar" && "worktree-filter-bar",
+        // The palette header it sits in owns the inset and the rule.
+        variant === "palette" && "px-0 pb-0 border-b-0"
       )}
     >
-      <div className="flex items-stretch gap-1.5">
-        <div
-          role="search"
-          className={cn(
-            // h-7: 28px is the app's compact control height and the desktop-IDE
-            // norm; the field used to be 34px, which gave the rail more visual
-            // mass than the title above it.
-            "flex h-7 flex-1 min-w-0 items-center gap-1.5 px-2 rounded-[var(--radius-md)]",
-            // Fallback keeps themes without --worktree-search-input-bg byte-identical.
-            "bg-[var(--worktree-search-input-bg,var(--color-surface-canvas))] border border-border-default",
-            "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-accent-primary"
+      <div className={cn("flex gap-1.5", variant === "palette" ? "items-center" : "items-stretch")}>
+        <SearchField
+          size={variant === "palette" ? "palette" : "compact"}
+          fieldProps={{ role: "search" }}
+          // h-7 via the compact size: 28px is the app's compact control height
+          // and the desktop-IDE norm; the field used to be 34px, which gave the
+          // rail more visual mass than the title above it. The theme's raised
+          // field colour, where it sets one, stays the resting well.
+          fieldClassName={cn(
+            "flex-1",
+            variant === "sidebar" &&
+              "[--search-field-bg:var(--worktree-search-input-bg,var(--theme-surface-canvas))]"
           )}
-        >
-          <Search
-            className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none"
-            aria-hidden="true"
-          />
-          <input
-            ref={setRefs}
-            type="text"
-            value={liveQuery}
-            onChange={(e) => handleQueryChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            // Short on purpose: at the 200px minimum "Search worktrees..." clips
-            // to "Search worktree", which reads as a typo rather than as
-            // truncation. The noun is already the heading directly above, and
-            // the full phrase stays the accessible name.
-            placeholder="Search…"
-            aria-label="Search worktrees"
-            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden"
-          />
-          {showClear && (
-            <button
-              type="button"
-              onClick={handleClearSearch}
-              className="flex shrink-0 items-center justify-center w-5 h-5 rounded-[var(--radius-sm)] text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary"
-              aria-label="Clear search"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          )}
-        </div>
+          inputRef={setRefs}
+          value={liveQuery}
+          onChange={(e) => handleQueryChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onClear={showClear ? handleClearSearch : undefined}
+          // Short on purpose: at the 200px minimum "Search worktrees..." clips
+          // to "Search worktree", which reads as a typo rather than as
+          // truncation. The noun is already the heading directly above, and
+          // the full phrase stays the accessible name.
+          placeholder={variant === "palette" ? "Search worktrees…" : "Search…"}
+          aria-label="Search worktrees"
+        />
         {/* Filter/sort lives as its own adjacent control, not buried inside the
             field — matching the app's other search rails (Logs, Keyboard
             Shortcuts, Command Overrides). */}
         <WorktreeFilterPopover
-          appearance="field"
+          appearance={variant === "palette" ? "ghost" : "field"}
           hideSearchInput
           chipCounts={chipCounts}
           open={isPopoverOpen}

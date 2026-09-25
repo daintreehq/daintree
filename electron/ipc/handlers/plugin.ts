@@ -44,6 +44,7 @@ import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { stableArgsSha256 } from "../../utils/pluginMcpHash.js";
 import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { describePluginInstallSource } from "../../../shared/utils/pluginInstallSource.js";
 import {
   getPluginToolbarButtonIds,
   getToolbarButtonConfig,
@@ -79,6 +80,7 @@ import type {
   PluginActionDescriptor,
   PluginInstallOptions,
   PluginInstallError,
+  PluginInstallExpectation,
   PluginInstallResult,
   PluginCheckUpdateResult,
   PluginBackgroundUpdateCheckResult,
@@ -264,11 +266,15 @@ const INSTALL_JOB_ID_PATTERN = /^[0-9a-fA-F-]{8,64}$/;
 async function withInstallJob(
   ctx: IpcContext,
   jobId: string | undefined,
+  source: string,
   run: (effectiveJobId: string | undefined) => Promise<PluginInstallResult>
 ): Promise<PluginInstallResult> {
   if (!jobId || !INSTALL_JOB_ID_PATTERN.test(jobId)) return run(undefined);
+  // The renderer can't name a file-picker install on its own — the path only
+  // exists here — so every event carries the label.
+  const label = describePluginInstallSource(source);
   const registered = pluginInstallJobs.begin(jobId, (event) => {
-    sendToRendererContext(ctx, CHANNELS.PLUGIN_INSTALL_PROGRESS, event);
+    sendToRendererContext(ctx, CHANNELS.PLUGIN_INSTALL_PROGRESS, { ...event, source: label });
   });
   if (!registered) return run(undefined);
   try {
@@ -312,7 +318,8 @@ async function handleInstallFromFile(
   }
   // The job starts once a path exists — time spent in the native picker isn't
   // install progress, and a Cancel button for it would duplicate the picker's own.
-  return withInstallJob(ctx, jobId, (id) => handleInstallFromPath(result.filePaths[0]!, id));
+  const archivePath = result.filePaths[0]!;
+  return withInstallJob(ctx, jobId, archivePath, (id) => handleInstallFromPath(archivePath, id));
 }
 
 // Bounded download limits for install-from-URL (F24). Mirrors the spec in
@@ -365,16 +372,30 @@ async function handleInstallFromPathOp(
   path: string,
   jobId?: string
 ): Promise<PluginInstallResult> {
-  return withInstallJob(ctx, jobId, (id) => handleInstallFromPath(path, id));
+  return withInstallJob(ctx, jobId, path, (id) => handleInstallFromPath(path, id));
 }
 
 /** Namespace entry for install-from-URL — registers the job, then delegates. */
 async function handleInstallFromUrlOp(
   ctx: IpcContext,
   url: string,
-  jobId?: string
+  jobId?: string,
+  expected?: PluginInstallExpectation
 ): Promise<PluginInstallResult> {
-  return withInstallJob(ctx, jobId, (id) => handleInstallFromUrl(url, id));
+  return withInstallJob(ctx, jobId, url, (id) => handleInstallFromUrl(url, id, expected));
+}
+
+const ARCHIVE_HASH_PATTERN = /^[0-9a-f]{64}$/;
+
+function isInstallExpectation(value: unknown): value is PluginInstallExpectation {
+  if (typeof value !== "object" || value === null) return false;
+  const { pluginId, archiveHash } = value as Record<string, unknown>;
+  return (
+    typeof pluginId === "string" &&
+    SCOPED_PLUGIN_NAME_PATTERN.test(pluginId) &&
+    typeof archiveHash === "string" &&
+    ARCHIVE_HASH_PATTERN.test(archiveHash)
+  );
 }
 
 /**
@@ -391,10 +412,16 @@ async function handleInstallFromUrlOp(
  * tailored message; the handler-owned temp file is always removed in `finally`
  * (PluginService extracts into its own temp dir and doesn't take ownership of
  * the download artifact).
+ *
+ * `expected` binds a confirmed update to the archive its preview was read from
+ * (#12612): the installer refuses the download unless its digest and
+ * `manifest.name` match. Omitted for ordinary URL installs, including the
+ * `daintree-plugin install` CLI, which has no preview step.
  */
 export async function handleInstallFromUrl(
   url: string,
-  jobId?: string
+  jobId?: string,
+  expected?: PluginInstallExpectation
 ): Promise<PluginInstallResult> {
   if (typeof url !== "string" || url.trim().length === 0) {
     return { status: "invalid-url" };
@@ -423,6 +450,15 @@ export async function handleInstallFromUrl(
     status: "failed",
     errors: [{ code, message }],
   });
+
+  // A binding that arrives malformed must fail closed — falling back to an
+  // unbound install would quietly drop the guarantee the caller asked for.
+  if (expected !== undefined && !isInstallExpectation(expected)) {
+    return failed(
+      "archive_mismatch",
+      "The update approval was malformed, so nothing was installed."
+    );
+  }
 
   const tempPath = path.join(os.tmpdir(), `daintree-plugin-${crypto.randomUUID()}.dntr`);
   // Redirects are followed MANUALLY so every hop's host is revalidated through
@@ -545,10 +581,15 @@ export async function handleInstallFromUrl(
     const service = await getPluginService();
     // See `handleInstall` — the same init gate, for the same two reasons.
     await service.waitForInit();
-    return service.installPlugin(tempPath, {
+    // Awaited, not returned bare: the `finally` below deletes the download, and
+    // a bare `return` would run it while the installer is still reading it.
+    return await service.installPlugin(tempPath, {
       source: "url",
       originalUrl: trimmed,
       ...(jobId === undefined ? {} : { jobId }),
+      ...(expected === undefined
+        ? {}
+        : { expected: { pluginId: expected.pluginId, archiveHash: expected.archiveHash } }),
     });
   } finally {
     if (wroteTempFile) {
@@ -953,6 +994,19 @@ async function handleReportPanelLifecycle(
   (await getPluginService()).ingestPanelLifecycleEvents(
     ctx.webContentsId,
     events,
+    ctx.event.sender
+  );
+}
+
+async function handleReportPanelInventory(
+  ctx: IpcContext,
+  nonPluginPanelIds: string[]
+): Promise<void> {
+  // Same sender-keyed bucket as the lifecycle batch, so a destroyed view's
+  // inventory is forgotten with its panels (#12610).
+  (await getPluginService()).ingestPanelInventory(
+    ctx.webContentsId,
+    nonPluginPanelIds,
     ctx.event.sender
   );
 }
@@ -1841,6 +1895,11 @@ export const pluginNamespace = defineIpcNamespace({
     reportPanelLifecycle: op(
       PLUGIN_METHOD_CHANNELS.reportPanelLifecycle,
       handleReportPanelLifecycle,
+      { withContext: true }
+    ),
+    reportPanelInventory: op(
+      PLUGIN_METHOD_CHANNELS.reportPanelInventory,
+      handleReportPanelInventory,
       { withContext: true }
     ),
     getRuntimeStatuses: op(PLUGIN_METHOD_CHANNELS.getRuntimeStatuses, handleRuntimeStatusesGet, {

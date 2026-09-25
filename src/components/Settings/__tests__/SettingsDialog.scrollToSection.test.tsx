@@ -97,7 +97,7 @@ describe("useSettingsScrollToSection", () => {
     render(<Probe isActive={true} scrollToSectionId="section-active" onHandled={onHandled} />);
 
     expect(el.scrollIntoView).toHaveBeenCalledTimes(1);
-    expect(onHandled).toHaveBeenCalledWith("section-active");
+    expect(onHandled).toHaveBeenCalledWith("section-active", true);
   });
 
   it("does nothing when not active", () => {
@@ -123,7 +123,7 @@ describe("useSettingsScrollToSection", () => {
 
     render(<Probe isActive={true} scrollToSectionId="section-missing" onHandled={onHandled} />);
 
-    expect(onHandled).toHaveBeenCalledWith("section-missing");
+    expect(onHandled).toHaveBeenCalledWith("section-missing", false);
   });
 
   it("fires once per scrollToSectionId change", () => {
@@ -135,7 +135,7 @@ describe("useSettingsScrollToSection", () => {
       <Probe isActive={true} scrollToSectionId="section-a" onHandled={onHandled} />
     );
     expect(onHandled).toHaveBeenCalledTimes(1);
-    expect(onHandled).toHaveBeenLastCalledWith("section-a");
+    expect(onHandled).toHaveBeenLastCalledWith("section-a", true);
 
     // Same id, same deps — no re-fire.
     rerender(<Probe isActive={true} scrollToSectionId="section-a" onHandled={onHandled} />);
@@ -144,7 +144,7 @@ describe("useSettingsScrollToSection", () => {
     // New id — fires.
     rerender(<Probe isActive={true} scrollToSectionId="section-b" onHandled={onHandled} />);
     expect(onHandled).toHaveBeenCalledTimes(2);
-    expect(onHandled).toHaveBeenLastCalledWith("section-b");
+    expect(onHandled).toHaveBeenLastCalledWith("section-b", true);
   });
 
   it("fires when isActive transitions from false to true with a pending id", () => {
@@ -158,6 +158,6 @@ describe("useSettingsScrollToSection", () => {
 
     rerender(<Probe isActive={true} scrollToSectionId="section-late" onHandled={onHandled} />);
     expect(el.scrollIntoView).toHaveBeenCalledTimes(1);
-    expect(onHandled).toHaveBeenCalledWith("section-late");
+    expect(onHandled).toHaveBeenCalledWith("section-late", true);
   });
 });

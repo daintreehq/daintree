@@ -4,7 +4,8 @@ import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand, buildAgentLaunchFlags, mintAssignedSessionId } from "@shared/types";
 import type { RecipeTerminal } from "@shared/types";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
-import { preflightSpawnBatchLimit } from "@/store/panelLimitStore";
+import { preflightSpawnBatchLimit, type PanelLimitBatchSource } from "@/store/panelLimitStore";
+import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { countPanelsTowardLimit } from "@/store/slices/panelRegistry/panelCount";
@@ -18,6 +19,8 @@ export interface SpawnPanelsOptions {
   /** Pre-fetched clipboard directory. Only meaningful with agentSettings. */
   clipboardDirectory?: string;
   signal?: AbortSignal;
+  /** Names the operation in the panel-limit confirm, if the batch reaches it. */
+  source?: PanelLimitBatchSource;
   onPanelSpawned?: (index: number, panelId: string | null, error?: unknown) => void;
 }
 
@@ -53,14 +56,21 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
   // the same stale count; gate the whole burst once and pass `bypassLimits` on
   // each call. (#9165)
   const currentCount = countPanelsTowardLimit(store.panelsById, store.panelIds);
-  const { allowed } = await preflightSpawnBatchLimit(currentCount, terminals.length);
+  const { allowed, declined } = await preflightSpawnBatchLimit(currentCount, terminals.length, {
+    source: options.source,
+  });
   if (signal?.aborted) return;
+
+  // The user answered the panel-limit confirm with no. Without a per-panel
+  // callback there is nobody to tell, and throwing would report their own
+  // choice back to them as a failure.
+  if (declined && !onPanelSpawned) return;
 
   const errors: { index: number; error: unknown }[] = [];
 
   // Panels beyond the resolved limit can't spawn — report them as failures.
   for (let index = allowed; index < terminals.length; index++) {
-    const err = new Error("Panel limit reached");
+    const err = new Error(declined ? PANEL_LIMIT_DECLINED_REASON : "Panel limit reached");
     if (onPanelSpawned) {
       onPanelSpawned(index, null, err);
     } else {

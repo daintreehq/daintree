@@ -57,7 +57,11 @@ function renderFallback(overrides: Partial<PluginViewDiagnosticsFallbackProps> =
   return { props, ...render(<PluginViewDiagnosticsFallback {...props} />) };
 }
 
-const trace = () => screen.getByTestId("plugin-view-diagnostics-trace").textContent ?? "";
+/** The trace as displayed: one block per line, a blank line drawn as a nbsp. */
+const trace = () =>
+  Array.from(screen.getByTestId("plugin-view-diagnostics-trace").children)
+    .map((line) => (line.textContent === "\u00a0" ? "" : (line.textContent ?? "")))
+    .join("\n");
 
 beforeEach(() => {
   dispatchMock.mockClear();
@@ -291,6 +295,65 @@ describe("PluginViewDiagnosticsFallback", () => {
     rerender(<PluginViewDiagnosticsFallback {...props} />);
 
     expect(announceMock).toHaveBeenCalledTimes(1);
-    expect(announceMock).toHaveBeenCalledWith("Dashboard error", "polite");
+    expect(announceMock).toHaveBeenCalledWith("Dashboard stopped working", "polite");
+  });
+});
+
+describe("recovery before diagnostics", () => {
+  const details = () => screen.getByTestId("plugin-view-diagnostics-trace").closest("details");
+
+  it("keeps the trace folded away for someone who installed the plugin", () => {
+    renderFallback({ devMode: false });
+    expect(details()?.open).toBe(false);
+  });
+
+  it("opens the trace for the plugin's own author", () => {
+    renderFallback({ devMode: true });
+    expect(details()?.open).toBe(true);
+  });
+
+  it("puts every recovery action ahead of the diagnostics in reading order", () => {
+    renderFallback({ onRequestClose: vi.fn() });
+    const disclosure = details()!;
+    for (const id of ["plugin-view-diagnostics-retry", "plugin-view-diagnostics-close"]) {
+      const button = screen.getByTestId(id);
+      expect(
+        button.compareDocumentPosition(disclosure) & Node.DOCUMENT_POSITION_FOLLOWING,
+        id
+      ).toBeTruthy();
+    }
+  });
+
+  it("does not print the manifest's raw names in the headline", () => {
+    renderFallback({ pluginDisplayName: LEAKY_MESSAGE });
+    const region = screen.getByTestId("plugin-view-diagnostics");
+    for (const secret of CAROL_SENSITIVE) expect(region.textContent).not.toContain(secret);
+  });
+});
+
+describe("document-reload refusals", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("offers the plugin window reload in place of a Try again that cannot work", async () => {
+    const { pluginDocumentRuntime } = await import("@/services/plugin/pluginDocumentRuntime");
+    vi.spyOn(pluginDocumentRuntime, "errorSource").mockReturnValue({
+      pluginId: "acme",
+      generation: null,
+      url: "plugin://acme/dashboard.js",
+    });
+    renderFallback();
+    expect(screen.queryByTestId("plugin-view-diagnostics-retry")).toBeNull();
+    fireEvent.click(screen.getByTestId("plugin-view-diagnostics-reload-window"));
+    expect(dispatchMock).toHaveBeenCalledWith("plugin.reloadWindow", undefined, {
+      source: "user",
+    });
+  });
+
+  it("keeps Try again and no reload for an ordinary render failure", () => {
+    renderFallback();
+    expect(screen.getByTestId("plugin-view-diagnostics-retry")).toBeTruthy();
+    expect(screen.queryByTestId("plugin-view-diagnostics-reload-window")).toBeNull();
   });
 });

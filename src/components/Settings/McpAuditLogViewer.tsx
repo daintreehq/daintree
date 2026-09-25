@@ -3,9 +3,21 @@ import { Check, Copy, Download, Layers, RefreshCw, ShieldOff } from "lucide-reac
 import { cn } from "@/lib/utils";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import {
+  AUDIT_TIME_RANGE_MS,
+  InlineErrorRow,
+  AuditFilterBar,
+  AuditFilterInput,
+  AuditFilterSelect,
+  AuditRecordTime,
+  AuditTimeRangeSelect,
+  type AuditTimeRange,
+} from "./auditLogParts";
+import {
+  type McpAuditRecord,
   type McpAuditResult,
   type McpGrantRecord,
   type McpLogRecord,
@@ -17,7 +29,20 @@ import {
   type McpAnomalySignal,
 } from "@shared/types";
 
-type AuditResultFilter = "all" | McpAuditResult;
+/** "problems" is every dispatch that didn't succeed. */
+type AuditResultFilter = "all" | "problems" | McpAuditResult;
+
+const RESULT_FILTER_OPTIONS: { value: AuditResultFilter; label: string }[] = [
+  { value: "all", label: "All results" },
+  { value: "problems", label: "Problems" },
+  { value: "success", label: "Success" },
+  { value: "error", label: "Error" },
+  { value: "confirmation-pending", label: "Awaiting confirmation" },
+  { value: "unauthorized", label: "Unauthorized" },
+  { value: "dedup", label: "Deduplicated" },
+  { value: "collision", label: "Key collision" },
+  { value: "rate_limited", label: "Rate limited" },
+];
 
 const TIER_HINT_LABEL: Record<"workbench" | "action" | "system", string> = {
   workbench: "workbench",
@@ -73,56 +98,41 @@ const ANOMALY_SEVERITY_RANK: Record<McpAnomalySeverity, number> = {
   danger: 2,
 };
 
-const ANOMALY_SEVERITY_VISUAL: Record<
-  McpAnomalySeverity,
-  { label: string; banner: string; text: string; mark: string }
-> = {
+/**
+ * The severity lives in the mark; the words stay in neutral text, since
+ * severity-coloured text fails 4.5:1 on most themes.
+ */
+const ANOMALY_SEVERITY_VISUAL: Record<McpAnomalySeverity, { label: string; mark: string }> = {
   // Info is drawn hollow: forced-colors paints every `.status-mark` fill the
   // same CanvasText, but a border-only diamond stays distinct from a filled one.
-  info: {
-    label: "Anomaly (info)",
-    banner: "bg-overlay-soft border-border-default",
-    text: "text-text-secondary",
-    mark: "border border-text-secondary",
-  },
-  warning: {
-    label: "Anomaly (warning)",
-    banner: "bg-status-warning/10 border-status-warning/20",
-    text: "text-status-warning",
-    mark: "status-mark bg-status-warning",
-  },
-  danger: {
-    label: "Anomaly (error)",
-    banner: "bg-status-danger/10 border-status-danger/20",
-    text: "text-status-danger",
-    mark: "status-mark bg-status-danger",
-  },
+  info: { label: "Anomaly (info)", mark: "border border-text-secondary" },
+  warning: { label: "Anomaly (warning)", mark: "status-mark bg-status-warning" },
+  danger: { label: "Anomaly (error)", mark: "status-mark bg-status-danger" },
 };
 
 function higherSeverity(a: McpAnomalySeverity, b: McpAnomalySeverity): McpAnomalySeverity {
   return ANOMALY_SEVERITY_RANK[b] > ANOMALY_SEVERITY_RANK[a] ? b : a;
 }
 
-function AnomalyMark({ severity }: { severity: McpAnomalySeverity | undefined }) {
+function AnomalyMark({
+  severity,
+  decorative = false,
+}: {
+  severity: McpAnomalySeverity | undefined;
+  decorative?: boolean;
+}) {
   if (!severity) return null;
   const { label, mark } = ANOMALY_SEVERITY_VISUAL[severity];
   return (
     <span
-      role="img"
-      aria-label={label}
+      role={decorative ? undefined : "img"}
+      aria-hidden={decorative || undefined}
+      aria-label={decorative ? undefined : label}
       title={label}
       className={cn("h-2 w-2 rounded-sm rotate-45 shrink-0", mark)}
     />
   );
 }
-
-type TimeRange = "5m" | "1h" | "24h" | "all";
-
-const TIME_RANGE_MS: Record<Exclude<TimeRange, "all">, number> = {
-  "5m": 300_000,
-  "1h": 3_600_000,
-  "24h": 86_400_000,
-};
 
 const OUTCOME_LABEL: Record<string, string> = {
   answered: "Answered",
@@ -131,8 +141,9 @@ const OUTCOME_LABEL: Record<string, string> = {
   "docs-empty": "No docs found",
   "tier-rejected": "Tier rejected",
   "mcp-not-ready": "MCP not ready",
-  "agent-stuck": "Agent stuck",
+  "agent-stuck": "Went quiet",
   "tool-error": "Tool error",
+  "reasoning-loop": "Repeated tool call",
   "hibernate-resume-stale": "Resume stale",
   unknown: "Unknown",
 };
@@ -246,17 +257,8 @@ export function groupRecordsByTurn(
   return { groups, unassociated, lifecycle };
 }
 
-function formatRelativeTimestamp(ts: number, now: number): string {
-  const diffMs = now - ts;
-  if (diffMs < 0) return "just now";
-  const sec = Math.floor(diffMs / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.floor(hr / 24);
-  return `${day}d ago`;
+function plural(count: number, one: string, many: string = `${one}s`): string {
+  return `${count} ${count === 1 ? one : many}`;
 }
 
 interface McpAuditLogViewerProps {
@@ -275,57 +277,108 @@ interface McpAuditLogViewerProps {
   exportFlashActive?: boolean;
   anomalySignals?: McpAnomalySignal[];
   anomalySuppressed?: boolean;
+  /** Shown in place of the list when the records couldn't be read. */
+  loadError?: React.ReactNode;
+  /** A copy or export that failed, shown beside the actions. */
+  actionError?: string | null;
+  /**
+   * What an empty log says. The default is the first-use line; a parent that
+   * just cleared the log passes its own, so a deliberate clear doesn't read as
+   * "nothing has ever happened".
+   */
+  emptyLabel?: string;
+  /** DOM id for the log's group, so a settings deep link can land on it. */
+  id?: string;
 }
 
-/**
- * Single grant-lifecycle row. The flat and grouped views use slightly
- * different padding, controlled by `compact`. Reads no `result` or
- * `durationMs` — those are dispatch-only fields and absent on grant
- * records.
- */
-function GrantRow({
+function DispatchRow({
   record,
   now,
-  compact = false,
+  anomaly,
 }: {
-  record: McpGrantRecord;
+  record: McpAuditRecord;
   now: number;
-  compact?: boolean;
+  anomaly?: McpAnomalySeverity;
 }) {
+  const args = record.argsSummary || "{}";
   return (
-    <li className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
+    <li className="grid grid-cols-[auto_1fr_auto] gap-2 px-4 py-2 text-xs">
+      <div className="flex self-start items-center gap-1 mt-0.5">
+        <SeverityMark
+          severity={RESULT_SEVERITY[record.result]}
+          label={RESULT_LABEL[record.result]}
+          className="h-3 w-3"
+        />
+        <AnomalyMark severity={anomaly} />
+      </div>
+      <div className="min-w-0 select-text">
+        <div className="flex items-center gap-2">
+          <span className="min-w-0 font-mono text-text-primary break-all">{record.toolId}</span>
+          {record.result !== "success" && (
+            <span className="shrink-0 text-text-secondary">
+              {RESULT_LABEL[record.result]}
+              {record.errorCode ? ` · ${record.errorCode}` : ""}
+              {record.result === "rate_limited" && record.resultMeta?.retryAfter
+                ? ` · retry in ${record.resultMeta.retryAfter}s`
+                : ""}
+            </span>
+          )}
+        </div>
+        <div className="mt-0.5 font-mono text-text-secondary break-all line-clamp-3" title={args}>
+          {args}
+        </div>
+        {record.result === "unauthorized" && record.tierHint && (
+          <div className="mt-0.5 text-text-secondary">
+            Raise capability tier to {TIER_HINT_LABEL[record.tierHint]} to allow
+          </div>
+        )}
+        {record.result === "unauthorized" && record.tierHint === null && (
+          <div className="mt-0.5 text-text-secondary">Not permitted at any tier</div>
+        )}
+      </div>
+      <div className="text-right text-text-secondary whitespace-nowrap tabular-nums">
+        <div>
+          <AuditRecordTime ts={record.timestamp} now={now} />
+        </div>
+        <div>{record.durationMs}ms</div>
+      </div>
+    </li>
+  );
+}
+
+/** A grant-lifecycle event. Grants carry no `result` or `durationMs`. */
+function GrantRow({ record, now }: { record: McpGrantRecord; now: number }) {
+  const tierMove =
+    (record.type === "tier.elevated" || record.type === "tier.decayed") &&
+    record.tier &&
+    record.previousTier
+      ? `${record.previousTier} → ${record.tier}`
+      : null;
+  return (
+    <li className="grid grid-cols-[auto_1fr_auto] gap-2 px-4 py-2 text-xs">
       <SeverityMark
         severity={GRANT_TYPE_SEVERITY[record.type]}
         label={GRANT_TYPE_LABEL[record.type]}
         className="mt-0.5 h-3 w-3"
         decorative
       />
-      <div className="min-w-0">
+      <div className="min-w-0 select-text">
         <div className="flex items-center gap-2">
           <span className="text-text-primary">{GRANT_TYPE_LABEL[record.type]}</span>
-          <span className="font-mono text-text-secondary truncate">{record.toolId}</span>
+          <span className="min-w-0 font-mono text-text-secondary break-all">{record.toolId}</span>
         </div>
-        {record.type === "tier.elevated" && record.tier && record.previousTier && (
-          <div className="mt-0.5 text-3xs text-text-secondary">
-            {record.previousTier} → {record.tier}
-          </div>
-        )}
-        {record.type === "tier.decayed" && record.tier && record.previousTier && (
-          <div className="mt-0.5 text-3xs text-text-secondary">
-            {record.previousTier} → {record.tier}
-          </div>
-        )}
+        {tierMove && <div className="mt-0.5 text-text-secondary">{tierMove}</div>}
         {record.type === "grant.revoked" && record.revokedReason && (
-          <div className="mt-0.5 text-3xs text-text-secondary">Reason: {record.revokedReason}</div>
+          <div className="mt-0.5 text-text-secondary">Reason: {record.revokedReason}</div>
         )}
         {record.maxUses !== undefined &&
           (record.type === "grant.used" || record.type === "grant.exhausted") && (
-            <div className="mt-0.5 text-3xs text-text-secondary">
+            <div className="mt-0.5 text-text-secondary">
               {record.remainingUses ?? 0} of {record.maxUses} uses left
             </div>
           )}
         {record.expiresAt !== undefined && record.type === "grant.issued" && (
-          <div className="mt-0.5 text-3xs text-text-secondary">
+          <div className="mt-0.5 text-text-secondary">
             Expires{" "}
             {new Date(record.expiresAt).toLocaleTimeString([], {
               hour: "2-digit",
@@ -334,11 +387,46 @@ function GrantRow({
           </div>
         )}
       </div>
-      <div
-        className={cn("text-right text-text-secondary whitespace-nowrap", !compact && "self-end")}
-      >
-        <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
+      <div className="text-right text-text-secondary whitespace-nowrap tabular-nums">
+        <AuditRecordTime ts={record.timestamp} now={now} />
       </div>
+    </li>
+  );
+}
+
+function LogRow({
+  record,
+  now,
+  anomaly,
+}: {
+  record: McpLogRecord;
+  now: number;
+  anomaly?: McpAnomalySeverity;
+}) {
+  return isAuditRecord(record) ? (
+    <DispatchRow record={record} now={now} anomaly={anomaly} />
+  ) : (
+    <GrantRow record={record} now={now} />
+  );
+}
+
+/** A turn's (or the leftover) records, under a one-line summary. */
+function RecordBlock({
+  heading,
+  summary,
+  children,
+}: {
+  heading: string;
+  summary: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <li className="py-1">
+      <div className="flex flex-wrap items-center gap-x-2 px-4 pt-1.5 text-xs">
+        <span className="font-medium text-text-primary">{heading}</span>
+        <span className="text-text-secondary">{summary}</span>
+      </div>
+      <ul className="ml-4 border-l-2 border-border-default">{children}</ul>
     </li>
   );
 }
@@ -357,10 +445,14 @@ export function McpAuditLogViewer({
   exportFlashActive,
   anomalySignals = [],
   anomalySuppressed = true,
+  emptyLabel = "Tool calls show up here once an agent uses the MCP server",
+  loadError,
+  actionError,
+  id,
 }: McpAuditLogViewerProps) {
   const [toolFilter, setToolFilter] = useState("");
   const [resultFilter, setResultFilter] = useState<AuditResultFilter>("all");
-  const [timeRange, setTimeRange] = useState<TimeRange>("all");
+  const [timeRange, setTimeRange] = useState<AuditTimeRange>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [groupByTurn, setGroupByTurn] = useState(false);
 
@@ -385,35 +477,61 @@ export function McpAuditLogViewer({
   );
 
   const filteredRecords = useMemo(() => {
+    // Grants carry no result or arguments of their own. With no narrowing they
+    // all show; once the view is narrowed, a grant stays only as context for a
+    // session that has a matching call (#10027 keeps them in forensic exports),
+    // so an unrelated session's grant never props up an otherwise empty result.
     const needle = toolFilter.trim().toLowerCase();
     const searchNeedle = searchQuery.trim().toLowerCase();
-    const cutoffMs = timeRange !== "all" ? now - TIME_RANGE_MS[timeRange] : undefined;
-    return visibleRecords.filter((record) => {
-      if (cutoffMs !== undefined && record.timestamp < cutoffMs) return false;
-      // The result filter is dispatch-taxonomy; grant records have no
-      // `result` field, so they pass through the result filter unchanged.
-      // The export must include them — forensic export of a tier-rejection
-      // incident must still surface the grant.issued/grant.revoked events
-      // for that session (#10027).
-      if (resultFilter !== "all" && isAuditRecord(record) && record.result !== resultFilter) {
+    const cutoffMs = timeRange !== "all" ? now - AUDIT_TIME_RANGE_MS[timeRange] : undefined;
+    const narrowed = needle.length > 0 || searchNeedle.length > 0 || resultFilter !== "all";
+    const matchesDispatch = (record: McpAuditRecord) => {
+      if (resultFilter === "problems" && record.result === "success") return false;
+      if (resultFilter !== "all" && resultFilter !== "problems" && record.result !== resultFilter) {
         return false;
       }
-      // Tool filter and search work against the union's common fields.
       if (needle.length > 0 && !record.toolId.toLowerCase().includes(needle)) return false;
-      if (searchNeedle.length > 0) {
-        const haystack = isAuditRecord(record) ? (record.argsSummary ?? "") : "";
-        if (!haystack.toLowerCase().includes(searchNeedle)) return false;
+      if (
+        searchNeedle.length > 0 &&
+        !(record.argsSummary ?? "").toLowerCase().includes(searchNeedle)
+      ) {
+        return false;
       }
       return true;
-    });
+    };
+    const inRange = visibleRecords.filter(
+      (record) => cutoffMs === undefined || record.timestamp >= cutoffMs
+    );
+    const matchingSessions = new Set<string>();
+    for (const record of inRange) {
+      if (isAuditRecord(record) && matchesDispatch(record)) matchingSessions.add(record.sessionId);
+    }
+    return inRange.filter((record) =>
+      isAuditRecord(record)
+        ? matchesDispatch(record)
+        : !narrowed || matchingSessions.has(record.sessionId)
+    );
   }, [visibleRecords, resultFilter, toolFilter, timeRange, searchQuery, now]);
 
+  const canGroup = !!turnRecords && turnRecords.length > 0;
   const turnGroups = useMemo(() => {
     if (!groupByTurn || !turnRecords || turnRecords.length === 0) return null;
     return groupRecordsByTurn(filteredRecords, turnRecords);
   }, [groupByTurn, turnRecords, filteredRecords]);
 
+  const isFiltering =
+    resultFilter !== "all" ||
+    toolFilter.trim().length > 0 ||
+    timeRange !== "all" ||
+    searchQuery.trim().length > 0;
   const showCopyAll = filteredRecords.length === visibleRecords.length;
+
+  const clearFilters = () => {
+    setToolFilter("");
+    setSearchQuery("");
+    setResultFilter("all");
+    setTimeRange("all");
+  };
 
   // Stats are a snapshot fetched on mount/refresh; `expiresAt` lets a view left
   // open drop signals the detector has since stopped emitting.
@@ -449,110 +567,77 @@ export function McpAuditLogViewer({
     return counts;
   }, [visibleSignals]);
 
-  const showTierRejections = () => {
-    setResultFilter("unauthorized");
-  };
+  const relatedEventCount = isFiltering ? filteredRecords.filter(isGrantRecord).length : 0;
+
+  const status = copyFlashActive
+    ? "Copied!"
+    : exportFlashActive
+      ? "Exported!"
+      : isFiltering
+        ? relatedEventCount > 0
+          ? `Showing ${filteredRecords.length - relatedEventCount} of ${visibleRecords.length} · ${plural(relatedEventCount, "related event")}`
+          : `Showing ${filteredRecords.length} of ${visibleRecords.length}`
+        : maxRecords !== undefined
+          ? `${visibleRecords.length} of ${maxRecords}`
+          : plural(visibleRecords.length, "record");
+
+  const hasQuickViews = (unauthorizedCount > 0 && resultFilter !== "unauthorized") || canGroup;
 
   return (
-    <div className="contents">
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          type="text"
-          value={toolFilter}
-          onChange={(e) => setToolFilter(e.target.value)}
-          placeholder="Filter by tool ID"
-          aria-label="Filter audit by tool name"
-          className="flex-1 min-w-[160px] bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search arguments"
-          aria-label="Search audit arguments"
-          className="w-40 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        />
-        <select
-          value={resultFilter}
-          onChange={(e) => {
-            const value = e.target.value;
-            if (
-              value === "all" ||
-              value === "success" ||
-              value === "error" ||
-              value === "confirmation-pending" ||
-              value === "unauthorized" ||
-              value === "dedup" ||
-              value === "collision" ||
-              value === "rate_limited"
-            ) {
-              setResultFilter(value);
-            }
-          }}
-          aria-label="Filter audit by result"
-          className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        >
-          <option value="all">All results</option>
-          <option value="success">Success</option>
-          <option value="error">Error</option>
-          <option value="confirmation-pending">Awaiting confirmation</option>
-          <option value="unauthorized">Unauthorized</option>
-          <option value="dedup">Deduplicated</option>
-          <option value="collision">Key collision</option>
-          <option value="rate_limited">Rate limited</option>
-        </select>
-        <select
-          value={timeRange}
-          onChange={(e) => {
-            const value = e.target.value;
-            if (value === "5m" || value === "1h" || value === "24h" || value === "all") {
-              setTimeRange(value);
-            }
-          }}
-          aria-label="Filter audit by time range"
-          className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        >
-          <option value="all">All</option>
-          <option value="5m">Last 5 minutes</option>
-          <option value="1h">Last hour</option>
-          <option value="24h">Last 24 hours</option>
-        </select>
-        {unauthorizedCount > 0 && resultFilter !== "unauthorized" && (
-          <button
-            type="button"
-            onClick={showTierRejections}
-            className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
-          >
-            <ShieldOff className="w-3.5 h-3.5" />
-            Show tier rejections ({unauthorizedCount})
-          </button>
-        )}
-        {turnRecords && turnRecords.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setGroupByTurn((v) => !v)}
-            className={cn(
-              "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
-              groupByTurn
-                ? "bg-overlay-subtle border-border-default text-text-primary"
-                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
+    <SettingsGroup id={id}>
+      <div>
+        <AuditFilterBar label="Filter MCP audit log">
+          <AuditFilterInput
+            value={toolFilter}
+            onChange={setToolFilter}
+            placeholder="Filter by tool ID"
+            ariaLabel="Filter audit by tool name"
+          />
+          <AuditFilterInput
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder="Search arguments"
+            ariaLabel="Search audit arguments"
+          />
+          <AuditFilterSelect
+            value={resultFilter}
+            onChange={setResultFilter}
+            options={RESULT_FILTER_OPTIONS}
+            ariaLabel="Filter audit by result"
+          />
+          <AuditTimeRangeSelect value={timeRange} onChange={setTimeRange} />
+        </AuditFilterBar>
+        {hasQuickViews && (
+          <div className="flex flex-wrap items-center gap-2 px-4 pb-3 -mt-1">
+            {unauthorizedCount > 0 && resultFilter !== "unauthorized" && (
+              <Button variant="outline" size="sm" onClick={() => setResultFilter("unauthorized")}>
+                <ShieldOff aria-hidden="true" />
+                Show unauthorized ({unauthorizedCount})
+              </Button>
             )}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            Group by turn
-          </button>
+            {canGroup && (
+              <Button
+                variant="outline"
+                size="sm"
+                aria-pressed={groupByTurn}
+                onClick={() => setGroupByTurn((v) => !v)}
+                className={cn(groupByTurn && "bg-overlay-selected text-text-primary")}
+              >
+                <Layers aria-hidden="true" />
+                Group by turn
+              </Button>
+            )}
+          </div>
         )}
       </div>
 
       {bannerSeverity && (
         <div
           data-anomaly-severity={bannerSeverity}
-          className={cn(
-            "flex items-start gap-2 p-2.5 rounded-[var(--radius-md)] border",
-            ANOMALY_SEVERITY_VISUAL[bannerSeverity].banner
-          )}
+          className="flex items-center gap-2 px-4 py-2.5 text-xs text-text-primary"
         >
-          <span className={cn("text-xs", ANOMALY_SEVERITY_VISUAL[bannerSeverity].text)}>
+          <AnomalyMark severity={bannerSeverity} decorative />
+          <span>
             {visibleSignals.length} anomaly signal{visibleSignals.length !== 1 ? "s" : ""}
             {Object.entries(anomalyCountsByKind).length > 0 &&
               ` (${Object.entries(anomalyCountsByKind)
@@ -562,331 +647,131 @@ export function McpAuditLogViewer({
         </div>
       )}
 
-      <div className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas">
-        {loading ? (
-          <Skeleton label="Loading audit records" className="space-y-2 p-3">
-            <SkeletonBone className="h-5 w-5/6" />
-            <SkeletonBone className="h-5 w-4/6" />
-            <SkeletonBone className="h-5 w-3/4" />
-          </Skeleton>
-        ) : filteredRecords.length === 0 ? (
-          visibleRecords.length === 0 ? (
-            <EmptyState
-              variant="zero-data"
-              scale="sidebar"
-              title="No tool dispatches recorded yet"
-            />
-          ) : (
-            <EmptyState
-              variant="filtered-empty"
-              scale="sidebar"
-              title="No records match the current filters"
-            />
-          )
-        ) : groupByTurn && turnGroups ? (
-          <ul className="divide-y divide-border-default">
-            {turnGroups.groups.map((group) => (
-              <li key={group.turnId} className="p-2 text-xs">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="font-medium text-text-primary">
-                    {OUTCOME_LABEL[group.turnRecord.outcome] ?? group.turnRecord.outcome}
-                  </span>
-                  <span className="text-text-secondary">
-                    {formatRelativeTimestamp(group.turnRecord.timestamp, now)}
-                  </span>
-                  <span className="text-text-secondary">
-                    {group.callCount} call{group.callCount !== 1 ? "s" : ""}
-                  </span>
-                  {group.unauthorizedCount > 0 && (
-                    <span className="text-status-danger/70">
-                      {group.unauthorizedCount} unauthorized
-                    </span>
-                  )}
-                  {group.errorCount > 0 && (
-                    <span className="text-status-danger/70">
-                      {group.errorCount} error{group.errorCount !== 1 ? "s" : ""}
-                    </span>
-                  )}
-                  <span className="text-text-secondary">{group.totalDurationMs}ms</span>
-                </div>
-                <ul className="ml-3 space-y-1 border-l-2 border-daintree-border/50 pl-3">
-                  {group.records.map((record) =>
-                    isAuditRecord(record) ? (
-                      <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
-                        <SeverityMark
-                          severity={RESULT_SEVERITY[record.result]}
-                          label={RESULT_LABEL[record.result]}
-                          className="mt-0.5 h-3 w-3"
-                        />
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-text-primary truncate">
-                              {record.toolId}
-                            </span>
-                            {record.errorCode && (
-                              <span className="text-3xs uppercase tracking-wide text-status-danger/80">
-                                {record.errorCode}
-                              </span>
-                            )}
-                          </div>
-                          <div className="font-mono text-text-secondary truncate">
-                            {record.argsSummary || "{}"}
-                          </div>
-                          {record.result === "unauthorized" && record.tierHint && (
-                            <div className="mt-0.5 text-3xs text-text-secondary">
-                              Raise capability tier to {TIER_HINT_LABEL[record.tierHint]} to allow.
-                            </div>
-                          )}
-                          {record.result === "unauthorized" && record.tierHint === null && (
-                            <div className="mt-0.5 text-3xs text-text-secondary">
-                              Tool isn't permitted at any tier.
-                            </div>
-                          )}
-                        </div>
-                        <div className="text-right text-text-secondary whitespace-nowrap">
-                          <div>{record.durationMs}ms</div>
-                        </div>
-                      </li>
-                    ) : (
-                      <GrantRow key={record.id} record={record} now={now} compact />
-                    )
-                  )}
-                </ul>
-                {group.lifecycle.length > 0 && (
-                  <ul className="ml-3 mt-1 space-y-1 border-l-2 border-status-warning/30 pl-3">
-                    {group.lifecycle.map((grant) => (
-                      <GrantRow key={grant.id} record={grant} now={now} compact />
-                    ))}
-                  </ul>
-                )}
-              </li>
-            ))}
-            {turnGroups.unassociated.length > 0 && (
-              <li className="p-2 text-xs">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="font-medium text-text-secondary">Unassociated</span>
-                  <span className="text-text-secondary">
-                    {turnGroups.unassociated.length} record
-                    {turnGroups.unassociated.length !== 1 ? "s" : ""}
-                  </span>
-                </div>
-                <ul className="ml-3 space-y-1 border-l-2 border-daintree-border/50 pl-3">
-                  {turnGroups.unassociated.map((record) =>
-                    isAuditRecord(record) ? (
-                      <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
-                        <SeverityMark
-                          severity={RESULT_SEVERITY[record.result]}
-                          label={RESULT_LABEL[record.result]}
-                          className="mt-0.5 h-3 w-3"
-                        />
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-text-primary truncate">
-                              {record.toolId}
-                            </span>
-                            {record.errorCode && (
-                              <span className="text-3xs uppercase tracking-wide text-status-danger/80">
-                                {record.errorCode}
-                              </span>
-                            )}
-                          </div>
-                          <div className="font-mono text-text-secondary truncate">
-                            {record.argsSummary || "{}"}
-                          </div>
-                        </div>
-                        <div className="text-right text-text-secondary whitespace-nowrap">
-                          <div>{record.durationMs}ms</div>
-                        </div>
-                      </li>
-                    ) : (
-                      <GrantRow key={record.id} record={record} now={now} compact />
-                    )
-                  )}
-                </ul>
-              </li>
-            )}
-            {turnGroups.lifecycle.length > 0 && (
-              <li className="p-2 text-xs">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="font-medium text-text-secondary">Lifecycle events</span>
-                  <span className="text-text-secondary">
-                    {turnGroups.lifecycle.length} event
-                    {turnGroups.lifecycle.length !== 1 ? "s" : ""}
-                  </span>
-                </div>
-                <ul className="ml-3 space-y-1 border-l-2 border-status-warning/30 pl-3">
-                  {turnGroups.lifecycle.map((grant) => (
-                    <GrantRow key={grant.id} record={grant} now={now} compact />
-                  ))}
-                </ul>
-              </li>
-            )}
-          </ul>
-        ) : (
-          <ul className="divide-y divide-border-default">
-            {filteredRecords.map((record) =>
-              isAuditRecord(record) ? (
-                <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
-                  <div className="flex self-start items-center gap-1 mt-0.5">
-                    <SeverityMark
-                      severity={RESULT_SEVERITY[record.result]}
-                      label={RESULT_LABEL[record.result]}
-                      className="h-3 w-3"
-                    />
-                    <AnomalyMark severity={signalSeverityByRecordId.get(record.id)} />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-text-primary truncate">{record.toolId}</span>
-                      {record.errorCode && (
-                        <span className="text-3xs uppercase tracking-wide text-status-danger/80">
-                          {record.errorCode}
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-0.5 font-mono text-text-secondary truncate">
-                      {record.argsSummary || "{}"}
-                    </div>
-                    {record.result === "unauthorized" && record.tierHint && (
-                      <div className="mt-0.5 text-3xs text-text-secondary">
-                        Raise capability tier to {TIER_HINT_LABEL[record.tierHint]} to allow.
-                      </div>
-                    )}
-                    {record.result === "unauthorized" && record.tierHint === null && (
-                      <div className="mt-0.5 text-3xs text-text-secondary">
-                        Tool isn't permitted at any tier.
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-right text-text-secondary whitespace-nowrap">
-                    <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
-                    <div>{record.durationMs}ms</div>
-                  </div>
-                </li>
-              ) : (
-                <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
-                  <SeverityMark
-                    severity={GRANT_TYPE_SEVERITY[record.type]}
-                    label={GRANT_TYPE_LABEL[record.type]}
-                    className="mt-0.5 h-3 w-3"
-                    decorative
-                  />
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-text-primary">{GRANT_TYPE_LABEL[record.type]}</span>
-                      <span className="font-mono text-text-secondary truncate">
-                        {record.toolId}
-                      </span>
-                    </div>
-                    {record.type === "tier.elevated" && record.tier && record.previousTier && (
-                      <div className="mt-0.5 text-3xs text-text-secondary">
-                        {record.previousTier} → {record.tier}
-                      </div>
-                    )}
-                    {record.type === "tier.decayed" && record.tier && record.previousTier && (
-                      <div className="mt-0.5 text-3xs text-text-secondary">
-                        {record.previousTier} → {record.tier}
-                      </div>
-                    )}
-                    {record.type === "grant.revoked" && record.revokedReason && (
-                      <div className="mt-0.5 text-3xs text-text-secondary">
-                        Reason: {record.revokedReason}
-                      </div>
-                    )}
-                    {record.expiresAt !== undefined && record.type === "grant.issued" && (
-                      <div className="mt-0.5 text-3xs text-text-secondary">
-                        Expires{" "}
-                        {new Date(record.expiresAt).toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-right text-text-secondary whitespace-nowrap">
-                    <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
-                  </div>
-                </li>
-              )
-            )}
-          </ul>
-        )}
-      </div>
+      {!loading && loadError && visibleRecords.length > 0 && loadError}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
+      {loading ? (
+        <Skeleton label="Loading audit records" className="space-y-2 px-4 py-3">
+          <SkeletonBone className="h-5 w-5/6" />
+          <SkeletonBone className="h-5 w-4/6" />
+          <SkeletonBone className="h-5 w-3/4" />
+        </Skeleton>
+      ) : loadError && visibleRecords.length === 0 ? (
+        loadError
+      ) : filteredRecords.length === 0 ? (
+        visibleRecords.length === 0 ? (
+          <SettingsEmptyRow>{emptyLabel}</SettingsEmptyRow>
+        ) : (
+          <SettingsEmptyRow
+            action={
+              <Button variant="outline" size="sm" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            }
+          >
+            No records match these filters
+          </SettingsEmptyRow>
+        )
+      ) : groupByTurn && turnGroups ? (
+        <ul className="max-h-80 overflow-y-auto divide-y divide-border-subtle">
+          {turnGroups.groups.map((group) => (
+            <RecordBlock
+              key={group.turnId}
+              heading={OUTCOME_LABEL[group.turnRecord.outcome] ?? group.turnRecord.outcome}
+              summary={
+                <>
+                  <AuditRecordTime ts={group.turnRecord.timestamp} now={now} />
+                  {` · ${plural(group.callCount, "call")}`}
+                  {group.unauthorizedCount > 0 && ` · ${group.unauthorizedCount} unauthorized`}
+                  {group.errorCount > 0 && ` · ${plural(group.errorCount, "error")}`}
+                  {` · ${group.totalDurationMs}ms`}
+                </>
+              }
+            >
+              {group.records.map((record) => (
+                <LogRow key={record.id} record={record} now={now} />
+              ))}
+              {group.lifecycle.map((grant) => (
+                <GrantRow key={grant.id} record={grant} now={now} />
+              ))}
+            </RecordBlock>
+          ))}
+          {turnGroups.unassociated.length > 0 && (
+            <RecordBlock
+              heading="Outside any turn"
+              summary={plural(turnGroups.unassociated.length, "record")}
+            >
+              {turnGroups.unassociated.map((record) => (
+                <LogRow key={record.id} record={record} now={now} />
+              ))}
+            </RecordBlock>
+          )}
+          {turnGroups.lifecycle.length > 0 && (
+            <RecordBlock
+              heading="Lifecycle events"
+              summary={plural(turnGroups.lifecycle.length, "event")}
+            >
+              {turnGroups.lifecycle.map((grant) => (
+                <GrantRow key={grant.id} record={grant} now={now} />
+              ))}
+            </RecordBlock>
+          )}
+        </ul>
+      ) : (
+        <ul className="max-h-80 overflow-y-auto divide-y divide-border-subtle">
+          {filteredRecords.map((record) => (
+            <LogRow
+              key={record.id}
+              record={record}
+              now={now}
+              anomaly={signalSeverityByRecordId.get(record.id)}
+            />
+          ))}
+        </ul>
+      )}
+
+      {actionError && <InlineErrorRow>{actionError}</InlineErrorRow>}
+
+      <SettingsActions status={loading ? null : status}>
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => void onRefresh()}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
           aria-label="Refresh audit log"
         >
-          <RefreshCw className="w-3.5 h-3.5" />
+          <RefreshCw aria-hidden="true" />
           Refresh
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => void onCopy(filteredRecords)}
           disabled={filteredRecords.length === 0}
-          className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
-            filteredRecords.length === 0
-              ? "border-border-default text-text-placeholder cursor-not-allowed"
-              : copyFlashActive
-                ? "text-status-success border-status-success/30"
-                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
-          )}
         >
-          {copyFlashActive ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-          {copyFlashActive ? "Copied!" : `Copy ${showCopyAll ? "all" : "filtered"} as JSON`}
-        </button>
+          {copyFlashActive ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+          {`Copy ${showCopyAll ? "all" : "shown"} as JSON`}
+        </Button>
         {onExport && (
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => void onExport(filteredRecords)}
             disabled={filteredRecords.length === 0}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
-              filteredRecords.length === 0
-                ? "border-border-default text-text-placeholder cursor-not-allowed"
-                : exportFlashActive
-                  ? "text-status-success border-status-success/30"
-                  : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
-            )}
           >
-            {exportFlashActive ? (
-              <Check className="w-3.5 h-3.5" />
-            ) : (
-              <Download className="w-3.5 h-3.5" />
-            )}
-            {exportFlashActive ? "Exported!" : "Export as NDJSON"}
-          </button>
+            {exportFlashActive ? <Check aria-hidden="true" /> : <Download aria-hidden="true" />}
+            Export as NDJSON
+          </Button>
         )}
         {onClear && (
-          <button
-            type="button"
+          <Button
+            variant="ghost-danger"
+            size="sm"
             onClick={onClear}
             disabled={visibleRecords.length === 0}
-            className={cn(
-              "px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
-              visibleRecords.length === 0
-                ? "border-border-default text-text-placeholder cursor-not-allowed"
-                : "border-border-default text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20"
-            )}
           >
-            Clear log
-          </button>
+            Clear audit log…
+          </Button>
         )}
-        <span className="ml-auto text-xs text-text-secondary">
-          {resultFilter !== "all" ||
-          toolFilter.trim().length > 0 ||
-          timeRange !== "all" ||
-          searchQuery.trim().length > 0
-            ? `${filteredRecords.length} of ${visibleRecords.length}`
-            : maxRecords !== undefined
-              ? `${visibleRecords.length} of ${maxRecords}`
-              : `${visibleRecords.length}`}
-        </span>
-      </div>
-    </div>
+      </SettingsActions>
+    </SettingsGroup>
   );
 }

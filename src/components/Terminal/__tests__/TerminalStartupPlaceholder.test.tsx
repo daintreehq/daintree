@@ -23,13 +23,14 @@ describe("TerminalStartupPlaceholder", () => {
 
   it("shows nothing visible before the Doherty gate, then spinner and caption", () => {
     const { container } = render(<TerminalStartupPlaceholder />);
-    // Sub-threshold: the status region exists for AT, but no visible spinner yet.
-    expect(container.querySelector('[role="status"]')).toBeTruthy();
-    expect(container.querySelector('[role="status"] svg')).toBeNull();
+    // Sub-threshold: the status node is mounted empty, so its first text is a change
+    // AT hears, and nothing is visible yet.
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
+    expect(container.querySelector("svg")).toBeNull();
     expect(container.querySelector("p[aria-hidden='true']")).toBeNull();
 
     advance(UI_DOHERTY_THRESHOLD);
-    expect(container.querySelector('[role="status"] svg')).toBeTruthy();
+    expect(container.querySelector("svg")).toBeTruthy();
     expect(container.querySelector("p[aria-hidden='true']")?.textContent).toBe(
       "Starting terminal…"
     );
@@ -50,7 +51,18 @@ describe("TerminalStartupPlaceholder", () => {
     expect(caption).toMatch(/^Starting .+…$/);
     expect(caption).not.toBe("Starting terminal…");
     // The AT announcement and the visible caption must agree.
-    expect(container.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe(caption);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(caption);
+  });
+
+  it("never repeats the caption in the long-wait hint", () => {
+    const { container } = render(
+      <TerminalStartupPlaceholder agentId="claude" onCancel={() => {}} />
+    );
+    advance(8_000);
+    const caption = container.querySelector("p[aria-hidden='true']")?.textContent;
+    const hint = container.querySelector("span.animate-hint-fade-in")?.textContent;
+    expect(hint).toBeTruthy();
+    expect(hint).not.toBe(caption);
   });
 
   it("keeps every aria-live region outside the aria-busy status wrapper", () => {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
 import type { KeepAwakeConfig, KeepAwakeState } from "@shared/types";
 
 const { clientMock, loadMock } = vi.hoisted(() => ({
@@ -33,9 +33,8 @@ function makeState(
 }
 
 function switchFor(container: HTMLElement, label: string): HTMLButtonElement {
-  const el = container.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${label}"]`);
-  if (!el) throw new Error(`no switch labelled ${label}`);
-  return el;
+  // Named by the row's visible title, not a separate aria-label.
+  return within(container).getByRole<HTMLButtonElement>("switch", { name: label });
 }
 
 const MASTER = "Keep awake while agents work";

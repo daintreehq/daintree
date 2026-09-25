@@ -1,4 +1,5 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { isValidPastTimestamp } from "@/utils/timestamps";
 import { ActivityLight } from "../ActivityLight";
 import { LiveTimeAgo } from "../LiveTimeAgo";
@@ -14,6 +15,10 @@ export interface WorktreeActivityChipProps {
   author?: CommitAuthor | null;
   /** Commit subject, shown in the hover tooltip. */
   commitMessage?: string;
+  /** Commit body, shown clamped under the subject in the hover tooltip. */
+  commitBody?: string;
+  /** Full HEAD object id, shown abbreviated in the hover tooltip. */
+  commitSha?: string;
   /** Forge profile picture, tried before Gravatar inside the tooltip. */
   forgeAvatarUrl?: string;
   /** Drives both the activity light and the adjacent relative time. */
@@ -24,6 +29,8 @@ export function WorktreeActivityChip({
   lastCommitTimestampMs,
   author,
   commitMessage,
+  commitBody,
+  commitSha,
   forgeAvatarUrl,
   lastActivityTimestamp,
 }: WorktreeActivityChipProps) {
@@ -37,15 +44,22 @@ export function WorktreeActivityChip({
   if (activityTimestamp === null) return null;
 
   return (
-    <Tooltip autoDismiss={false}>
+    <Tooltip autoDismiss={false} dismissOnDialogTransition={false}>
       <TooltipTrigger asChild>
         <div
-          className="relative z-10 ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-muted"
+          // Secondary, not muted: the age is the chip's whole answer, and
+          // muted has no contrast floor on the dark themes. The ring gets 2px
+          // of air so it frames the dot and the label instead of cutting
+          // through them.
+          className={cn(
+            "relative z-10 ml-3 flex shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] text-xs text-text-secondary",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+          )}
           role="group"
           aria-label="Last activity"
           tabIndex={0}
         >
-          <ActivityLight lastActivityTimestamp={activityTimestamp} className="h-1.5 w-1.5" />
+          <ActivityLight lastActivityTimestamp={activityTimestamp} />
           <LiveTimeAgo timestamp={activityTimestamp} noTooltip />
         </div>
       </TooltipTrigger>
@@ -54,6 +68,8 @@ export function WorktreeActivityChip({
           lastCommitTimestampMs={lastCommitTimestampMs}
           author={author}
           commitMessage={commitMessage}
+          commitBody={commitBody}
+          commitSha={commitSha}
           forgeAvatarUrl={forgeAvatarUrl}
           lastActivityTimestamp={activityTimestamp}
         />

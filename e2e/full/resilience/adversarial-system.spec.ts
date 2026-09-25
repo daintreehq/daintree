@@ -97,11 +97,12 @@ test.describe.serial("Adversarial E2E Tests: System Breakage", () => {
     await input.fill(payload);
     await input.press("Enter");
 
-    // handleCommitEdit rejects any name containing [<>'"&], so the dangerous
-    // markup must NEVER reach the persisted store. Wait for the edit to settle
-    // (the input collapses back to the rename button) and assert the raw
-    // <script> payload is absent from every stored preset name.
-    await expect(input).toBeHidden({ timeout: T_MEDIUM });
+    // The invalid draft remains editable with an inline error, while the
+    // dangerous markup never reaches the persisted store.
+    await expect(input).toHaveAttribute("aria-invalid", "true");
+    await expect(ctx.window.locator(SEL.preset.section).getByRole("alert")).toContainText(
+      "Names can't contain < or >"
+    );
     await expect
       .poll(async () => (await readPresetState(ctx.window)).names, { timeout: T_MEDIUM })
       .not.toContain(payload);

@@ -5,7 +5,7 @@ import { Bell, BellOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
@@ -171,7 +171,7 @@ export function NotificationCenterToolbarButton({
 
   // Toggle a one-shot blip on the bell whenever a new notification lands in the
   // inbox while DND is inactive. Uses boolean class toggle with onAnimationEnd
-  // cleanup (matching AgentStatusIndicator) instead of key-based remounting, so
+  // cleanup instead of key-based remounting, so
   // no will-change layer hint lingers on the long-lived toolbar element.
   const prevEvictedRef = useRef(evictedToInboxCount);
   const lastBellBumpTimeRef = useRef(0);
@@ -254,7 +254,7 @@ export function NotificationCenterToolbarButton({
     setDndAnnouncement(next ? "OS Do Not Disturb active" : "OS Do Not Disturb off");
   }, [osDndActive, isDndActive, notificationsEnabled]);
 
-  const shortcut = useKeybindingDisplay("notifications.toggle");
+  const shortcut = useEffectiveCombo("notifications.toggle");
   const ariaShortcut = useAriaKeyshortcuts("notifications.toggle");
 
   if (!notificationsEnabled) return null;
@@ -275,42 +275,52 @@ export function NotificationCenterToolbarButton({
     <div className="relative">
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                ref={notificationCenterButtonRef}
-                variant="ghost"
-                size="icon"
-                data-toolbar-item={dataToolbarItem}
-                data-dnd-active={isDndActive ? "true" : undefined}
-                onClick={() =>
-                  void actionService.dispatch("notifications.toggle", undefined, {
-                    source: "user",
-                  })
-                }
-                className={toolbarIconButtonClass}
-                aria-label={label}
-                aria-keyshortcuts={ariaShortcut}
-                aria-expanded={notificationCenterOpen}
-                aria-haspopup="dialog"
-              >
-                <span
-                  data-testid="notification-bell-icon"
-                  className={isBellBlipping ? "inline-flex animate-activity-blip" : "inline-flex"}
-                  onAnimationEnd={handleBellAnimationEnd}
-                >
-                  <Icon />
-                </span>
-                <span
-                  data-testid="notification-unread-dot"
-                  data-visible={notificationUnreadCount > 0}
+          <span className="inline-flex">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  ref={notificationCenterButtonRef}
+                  variant="ghost"
+                  size="icon"
+                  data-toolbar-item={dataToolbarItem}
                   data-dnd-active={isDndActive ? "true" : undefined}
-                  className="toolbar-badge absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-daintree-text/50 ring-1 ring-daintree-bg/60"
-                />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{createTooltipContent(label, shortcut)}</TooltipContent>
-          </Tooltip>
+                  onClick={() =>
+                    void actionService.dispatch("notifications.toggle", undefined, {
+                      source: "user",
+                    })
+                  }
+                  className={toolbarIconButtonClass}
+                  aria-label={label}
+                  aria-keyshortcuts={ariaShortcut}
+                  aria-expanded={notificationCenterOpen}
+                  aria-haspopup="dialog"
+                >
+                  {/* Anchored to the glyph, not the button box, with the shared pip
+                    geometry — so the unread dot sits where the agent and
+                    assistant pips sit on their marks. Neutral, never a status
+                    colour: unread is ambient, not something going wrong. */}
+                  <span className="relative inline-flex">
+                    <span
+                      data-testid="notification-bell-icon"
+                      className={
+                        isBellBlipping ? "inline-flex animate-activity-blip" : "inline-flex"
+                      }
+                      onAnimationEnd={handleBellAnimationEnd}
+                    >
+                      <Icon />
+                    </span>
+                    <span
+                      data-testid="notification-unread-dot"
+                      data-visible={notificationUnreadCount > 0}
+                      data-dnd-active={isDndActive ? "true" : undefined}
+                      className="toolbar-pip toolbar-badge bg-text-secondary"
+                    />
+                  </span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{createTooltipContent(label, shortcut)}</TooltipContent>
+            </Tooltip>
+          </span>
         </ContextMenuTrigger>
         <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
           <ToolbarContextMenuItems buttonId="notification-center" side="right" />

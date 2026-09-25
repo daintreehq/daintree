@@ -1,12 +1,14 @@
-import { Card } from "@/components/ui/card";
 import { useState, useRef, useEffect } from "react";
+import type { ReactNode } from "react";
+import { SettingsSection } from "./SettingsSection";
+import { SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { Button } from "@/components/ui/button";
-import { Copy, RefreshCw } from "lucide-react";
+import { Copy, RefreshCw, TriangleAlert } from "lucide-react";
 import { agentHelpClient } from "@/clients";
 
 import type { AgentHelpResult } from "@shared/types/ipc/agent";
 import type { AgentAvailabilityState } from "@shared/types";
-import { isAgentInstalled, isAgentMissing } from "../../../shared/utils/agentAvailability";
+import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { sanitizeErrorText } from "@/utils/errorText";
 import { logError } from "@/utils/logger";
@@ -14,18 +16,10 @@ import { logError } from "@/utils/logger";
 interface AgentHelpOutputProps {
   agentId: string;
   agentName: string;
-  usageUrl?: string;
   availability: AgentAvailabilityState;
-  isCliLoading?: boolean;
 }
 
-export function AgentHelpOutput({
-  agentId,
-  agentName,
-  usageUrl,
-  availability,
-  isCliLoading,
-}: AgentHelpOutputProps) {
+export function AgentHelpOutput({ agentId, agentName, availability }: AgentHelpOutputProps) {
   const [helpResult, setHelpResult] = useState<AgentHelpResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -103,6 +97,8 @@ export function AgentHelpOutput({
     }
   };
 
+  const installed = isAgentInstalled(availability);
+
   const renderOutput = () => {
     if (!helpResult) return null;
 
@@ -111,19 +107,27 @@ export function AgentHelpOutput({
     const hasError = helpResult.exitCode !== 0 || helpResult.timedOut;
 
     return (
-      <div className="space-y-2">
+      <div>
         {hasError && (
-          <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-            <p className="text-xs text-status-warning">
-              {helpResult.timedOut
-                ? "Command timed out"
-                : `Command exited with code ${helpResult.exitCode}`}
-            </p>
-          </div>
+          <p className="flex items-center gap-1.5 px-4 pt-3 text-xs text-text-secondary">
+            <TriangleAlert
+              className="h-3.5 w-3.5 shrink-0 text-status-warning"
+              aria-hidden="true"
+            />
+            {helpResult.timedOut
+              ? "The help command timed out"
+              : `The help command exited with code ${helpResult.exitCode}`}
+          </p>
         )}
-
-        <div className="relative max-h-80 overflow-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas">
-          <pre className="p-3 text-xs font-mono text-text-primary whitespace-pre-wrap break-words select-text">
+        {/* Focusable and named so a keyboard user can reach and scroll the output, and
+            Tab carries on past it. */}
+        <div
+          className="relative max-h-80 overflow-auto focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+          tabIndex={0}
+          role="region"
+          aria-label={`${agentName} help output`}
+        >
+          <pre className="px-4 py-3 text-xs font-mono text-text-primary whitespace-pre select-text">
             {cleanStdout}
             {cleanStderr && (
               <>
@@ -133,7 +137,7 @@ export function AgentHelpOutput({
             )}
           </pre>
           {helpResult.truncated && (
-            <div className="sticky bottom-0 px-3 py-2 bg-daintree-bg/95 border-t border-border-default text-xs text-text-secondary">
+            <div className="settings-card sticky bottom-0 px-4 py-2 border-t border-border-subtle text-xs text-text-secondary">
               Output truncated (exceeded size limit)
             </div>
           )}
@@ -142,85 +146,97 @@ export function AgentHelpOutput({
     );
   };
 
-  return (
-    <Card className="space-y-4">
-      <div className="pb-3 border-b border-border-default">
-        <div className="flex items-center justify-between">
-          <div>
-            <h5 className="text-sm font-medium text-text-primary">Help output</h5>
-            <p className="text-xs text-text-secondary select-text">
-              Available CLI flags for {agentName}
-            </p>
-          </div>
+  // One button, mounted for the whole life of the section: it doesn't swap for a
+  // skeleton or move between the row and the header, so keyboard focus survives a load.
+  // It stays focusable while a load runs — `aria-disabled` rather than `disabled`,
+  // which would drop focus to the page.
+  const loadLabel = helpResult ? "Refresh" : error ? "Retry" : "Load";
+  const loadButton = (
+    <Button
+      size="sm"
+      variant="outline"
+      onClick={() => {
+        if (!isLoading) void loadHelp(!!helpResult);
+      }}
+      aria-disabled={isLoading || undefined}
+    >
+      <RefreshCw aria-hidden="true" />
+      {loadLabel}
+    </Button>
+  );
 
-          {isAgentInstalled(availability) && (
-            <div className="flex items-center gap-2">
+  const statusMessage = isLoading
+    ? "Loading help output"
+    : error
+      ? "Couldn't run the help command"
+      : helpResult?.timedOut
+        ? "The help command timed out"
+        : helpResult && helpResult.exitCode !== 0
+          ? `The help command exited with code ${helpResult.exitCode}`
+          : helpResult
+            ? "Help output loaded"
+            : "";
+
+  let body: ReactNode = null;
+  if (isLoading) {
+    body = (
+      <div className="px-4 py-3 space-y-2 animate-pulse-delayed" aria-hidden="true">
+        <div data-skeleton-bone="" className="h-3 bg-overlay-medium rounded-sm w-3/4" />
+        <div data-skeleton-bone="" className="h-3 bg-overlay-medium rounded-sm w-1/2" />
+        <div data-skeleton-bone="" className="h-3 bg-overlay-medium rounded-sm w-5/6" />
+        <div data-skeleton-bone="" className="h-3 bg-overlay-medium rounded-sm w-2/3" />
+        <div data-skeleton-bone="" className="h-3 bg-overlay-medium rounded-sm w-1/3" />
+      </div>
+    );
+  } else if (error) {
+    body = (
+      <SettingsEmptyRow>
+        <span className="flex items-start gap-1.5">
+          <TriangleAlert
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning"
+            aria-hidden="true"
+          />
+          <span>Couldn&apos;t run the help command: {error}</span>
+        </span>
+      </SettingsEmptyRow>
+    );
+  } else if (helpResult) {
+    body = renderOutput();
+  } else if (installed) {
+    body = (
+      <SettingsEmptyRow>
+        Load runs {agentName}&apos;s help command and shows what it prints
+      </SettingsEmptyRow>
+    );
+  }
+
+  return (
+    <SettingsSection
+      title="Help output"
+      description={`The flags ${agentName} accepts, as its own --help prints them`}
+      action={
+        installed ? (
+          <>
+            {loadButton}
+            {helpResult && (
               <Button
                 size="sm"
-                variant="ghost"
-                onClick={() => void loadHelp(!!helpResult)}
+                variant="outline"
+                onClick={() => void handleCopy()}
                 disabled={isLoading}
-                className="text-text-secondary hover:text-text-primary"
               >
-                <RefreshCw size={14} />
-                {helpResult ? "Refresh" : "Load"}
+                <Copy aria-hidden="true" />
+                {isCopied ? "Copied" : "Copy"}
               </Button>
-
-              {helpResult && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => void handleCopy()}
-                  disabled={isLoading}
-                  className="text-text-secondary hover:text-text-primary"
-                >
-                  <Copy size={14} />
-                  {isCopied ? "Copied!" : "Copy"}
-                </Button>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {isLoading && (
-        <div className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas p-3 animate-pulse-delayed">
-          <div className="space-y-2">
-            <div className="h-3 bg-daintree-border/50 rounded w-3/4" />
-            <div className="h-3 bg-daintree-border/50 rounded w-1/2" />
-            <div className="h-3 bg-daintree-border/50 rounded w-5/6" />
-            <div className="h-3 bg-daintree-border/50 rounded w-2/3" />
-            <div className="h-3 bg-daintree-border/50 rounded w-1/3" />
-          </div>
-        </div>
-      )}
-
-      {!isLoading && isAgentMissing(availability) && !isCliLoading && (
-        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-border-default bg-surface text-center space-y-2">
-          <p className="text-sm text-text-secondary">CLI not found</p>
-          <p className="text-xs text-text-secondary select-text">
-            {agentName} is not installed or not in your PATH
-          </p>
-          {usageUrl && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => window.electron.system.openExternal(usageUrl)}
-              className="mt-2"
-            >
-              Install instructions
-            </Button>
-          )}
-        </div>
-      )}
-
-      {!isLoading && error && (
-        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5 text-center">
-          <p className="text-sm text-status-error">{error}</p>
-        </div>
-      )}
-
-      {!isLoading && !error && renderOutput()}
-    </Card>
+            )}
+          </>
+        ) : undefined
+      }
+    >
+      <p role="status" className="sr-only">
+        {statusMessage}
+      </p>
+      {body && <SettingsGroup>{body}</SettingsGroup>}
+    </SettingsSection>
   );
 }

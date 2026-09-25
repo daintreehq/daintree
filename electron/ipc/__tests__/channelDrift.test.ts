@@ -74,6 +74,10 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // answer to an imperative plugin UI prompt (#10522). Paired with the
   // `plugin:ui-prompt-request` event declared in IpcEventMap.
   "plugin:ui-prompt-response",
+  // fire-and-forget — renderer→main `ipcRenderer.send` reply acknowledging a
+  // `host.reloadPanel()` request (#12610). Paired with the
+  // `plugin:panel-reload-request` event declared in IpcEventMap.
+  "plugin:panel-reload-response",
 
   // fire-and-forget — main→renderer broadcast for in-app demo command
   // forwarding (`sendCommandAndAwait` in handlers/demo.ts). The renderer

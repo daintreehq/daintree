@@ -180,7 +180,7 @@ const EXCEPTIONS: {
   {
     file: "src/components/Pulse/ProjectPulseCard.tsx",
     match: "rounded-[2px]",
-    count: 3,
+    count: 2,
     reason: "Same heat-cell geometry as PulseHeatmap, plus its loading skeleton",
   },
   {
@@ -242,7 +242,7 @@ const EXCEPTIONS: {
     file: "src/utils/renderBootstrapError.ts",
     match: "border-radius:",
     prefix: true,
-    count: 2,
+    count: 3,
     reason: "Same fatal-boot screen; see above",
   },
 ];

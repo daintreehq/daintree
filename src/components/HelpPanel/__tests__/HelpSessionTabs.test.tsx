@@ -510,6 +510,48 @@ describe("HelpSessionTabs", () => {
     expect(fixed.some((p) => p.textContent === " 1")).toBe(true);
   });
 
+  it("truncates a task title from its end, without pinning its last word", () => {
+    // A task's last word identifies nothing, so the split that protects `Session N`
+    // would truncate the start of the sentence instead of the end.
+    const { container } = renderStrip({
+      tabs: [
+        { slot: 0, label: "fix auth tests", fullTitle: "fix auth tests", agentState: undefined },
+      ],
+      activeSlot: 0,
+    });
+    const tab = tabs(container)[0]!;
+    const spans = Array.from(tab.querySelectorAll("span"));
+
+    expect(spans).toHaveLength(1);
+    expect(spans[0]!.className).toContain("truncate");
+    expect(spans[0]!.textContent).toBe("fix auth tests");
+  });
+
+  it("names a task-titled tab by its whole title everywhere but the visible label", () => {
+    const { container } = renderStrip({
+      tabs: [
+        { slot: 0, label: "Session 1", agentState: undefined },
+        {
+          slot: 1,
+          label: "refactor the assistant…",
+          fullTitle: "refactor the assistant session strip",
+          agentState: undefined,
+        },
+      ],
+    });
+    const [plain, titled] = tabs(container);
+
+    // Capped titles that share an opening would otherwise announce identically.
+    expect(titled!.textContent).toBe("refactor the assistant…");
+    expect(titled!.getAttribute("aria-label")).toBe("refactor the assistant session strip");
+    expect(titled!.getAttribute("title")).toBe("refactor the assistant session strip");
+    expect(
+      container.querySelector('button[title="Close refactor the assistant session strip"]')
+    ).not.toBeNull();
+    // A `Session N` tooltip would only repeat the tab.
+    expect(plain!.hasAttribute("title")).toBe(false);
+  });
+
   it("states each selector's accessible name instead of deriving it from the split", () => {
     // The accessible-name algorithm trims each element's contribution before joining,
     // so the split label computes as "Session1" unless the name is stated outright.

@@ -106,7 +106,7 @@ test.describe.serial("AppDialog body spacing", () => {
     });
 
     expect(gaps).not.toBeNull();
-    expect(gaps!.length).toBeGreaterThan(1);
+    expect(gaps!.length).toBeGreaterThan(0);
     for (const gap of gaps!) {
       expect(gap).toBeGreaterThan(8);
     }

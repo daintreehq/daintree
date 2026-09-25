@@ -117,7 +117,8 @@ vi.mock("@/services/ActionService", () => ({
 // Pin state. `dispatchToolbarVisibility` is deliberately NOT mocked — it is the
 // seam Settings → Toolbar shares, and mocking it would let the launcher write
 // the pin any way it liked while the suite still passed.
-let mockAgentSettings: { agents?: Record<string, { pinned?: boolean }> } | null = { agents: {} };
+let mockAgentSettings: { agents?: Record<string, { pinned?: boolean; presetId?: string }> } | null =
+  { agents: {} };
 let mockAgentAvailability: Record<string, string> = {};
 let mockToolbarLayout: {
   pinnedButtons: Record<string, boolean>;
@@ -172,6 +173,7 @@ const mockKeybindings: Record<string, string> = {};
 vi.mock("@/hooks", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   useKeybindingDisplay: (actionId: string) => mockKeybindings[actionId] ?? "",
+  useEffectiveCombo: (actionId: string) => mockKeybindings[actionId],
 }));
 
 vi.mock("@/components/KeyboardShortcuts", () => ({
@@ -423,52 +425,42 @@ function qualifierTextOf(row: HTMLElement): string {
   return row.querySelector("[data-launcher-qualifier]")?.textContent?.trim() ?? "";
 }
 
+/** The option whose accessible name starts `Name,` — the e2e helpers' contract. */
+function rowByName(container: HTMLElement, name: string): HTMLElement {
+  const row = options(container).find((o) => o.getAttribute("aria-label")?.startsWith(`${name},`));
+  if (!row) throw new Error(`no row for ${name}`);
+  return row;
+}
+
+/** Rows wearing the "Recent" mark — the recency group at the head of the agents. */
+function recentRows(container: HTMLElement): HTMLElement[] {
+  return options(container).filter((row) => qualifierTextOf(row) === "Recent");
+}
+
 function listbox(container: HTMLElement): HTMLElement {
   const node = container.querySelector<HTMLElement>('[role="listbox"]');
   if (!node) throw new Error("listbox not found");
   return node;
 }
 
-const POINTER_FACTORIES = {
-  pointermove: createEvent.pointerMove,
-  pointerleave: createEvent.pointerLeave,
-  pointerover: createEvent.pointerOver,
-} as const;
-
 /**
- * jsdom defaults `pointerType` to "" and offers no way to set `timeStamp`
- * through the init dict, so a plain `fireEvent.pointerMove` exercises neither
- * the mouse-only guard nor the velocity sampler — it just passes through.
+ * A mouse move over `target`. jsdom has no `movementX`/`movementY` on its
+ * pointer events, so they are stamped on — the platform's own "this was real
+ * movement" signal, which the selection hook reads before it has a reference
+ * point of its own.
  */
-function firePointer(
+function movePointer(
   target: Element,
-  type: keyof typeof POINTER_FACTORIES,
-  sample: { x: number; y: number; t: number }
+  { x, y, movement = 1 }: { x: number; y: number; movement?: number }
 ): void {
-  const event = POINTER_FACTORIES[type](target, {
+  const event = createEvent.pointerMove(target, {
     pointerType: "mouse",
-    clientX: sample.x,
-    clientY: sample.y,
+    clientX: x,
+    clientY: y,
   });
-  Object.defineProperty(event, "timeStamp", { value: sample.t, configurable: true });
+  Object.defineProperty(event, "movementX", { value: 0, configurable: true });
+  Object.defineProperty(event, "movementY", { value: movement, configurable: true });
   fireEvent(target, event);
-}
-
-/**
- * A row's `onPointerEnter` is synthesised by React from `pointerover`, so a
- * real `pointerenter` never reaches it — which is why react-testing-library
- * aliases `fireEvent.pointerEnter` to `pointerOver`. The gate's own listeners
- * are native and take the real thing.
- */
-function fireRowEnter(row: Element, sample: { x: number; y: number; t: number }): void {
-  firePointer(row, "pointerover", sample);
-}
-
-/** Two samples 30px apart in 10ms — well past the sweep threshold. */
-function startSweep(container: HTMLElement): void {
-  const list = listbox(container);
-  firePointer(list, "pointermove", { x: 0, y: 0, t: 0 });
-  firePointer(list, "pointermove", { x: 0, y: 30, t: 10 });
 }
 
 // jsdom implements no layout, so it ships no scrollIntoView at all. The
@@ -582,21 +574,14 @@ describe("DockLaunchButton", () => {
     const { getAllByTestId } = renderButton();
 
     const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
-    // Gemini is blocked in the fixture, so it lands under its own setup band
-    // rather than being offered as a launch; "More" carries the footer cue.
-    expect(labels).toEqual([
-      "Launch agent",
-      "Open in dock",
-      "Open in grid",
-      "Launch recipe",
-      "Needs setup",
-      "More",
-    ]);
+    // Gemini is blocked in the fixture; it stays in the agent column under the
+    // one "Agents" heading and says "Setup" on its own row. With two agents
+    // against the full panel set, recipes stack under the agents. The footer
+    // actions are placed, not headed.
+    expect(labels).toEqual(["Agents", "Recipes", "Open in dock", "Open in grid"]);
   });
 
-  it("splits agents into Pinned/Other groups when pinnedCount is a strict subset", () => {
-    // Two LAUNCHABLE agents: the split is counted against the launchable group,
-    // so a blocked second agent would leave "Other" describing nothing.
+  it("lists pinned and unpinned agents under one Agents heading, pinned first", () => {
     const { getAllByTestId, container } = renderButton({
       pinnedCount: 1,
       agents: [
@@ -606,20 +591,14 @@ describe("DockLaunchButton", () => {
     });
 
     const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
-    expect(labels.slice(0, 2)).toEqual(["Pinned", "Other"]);
-
-    // Assert document order so a regression that puts both agents under one
-    // group (or swaps them) is caught: Pinned → Claude → Other → Codex.
-    const text = container.textContent ?? "";
-    expect(text.indexOf("Pinned")).toBeLessThan(text.indexOf("Claude"));
-    expect(text.indexOf("Claude")).toBeLessThan(text.indexOf("Other"));
-    expect(text.indexOf("Other")).toBeLessThan(text.indexOf("Codex"));
-  });
-
-  it("keeps a flat Launch agent group when all agents are pinned", () => {
-    const { getAllByTestId } = renderButton({ pinnedCount: AGENTS.length });
-    const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
-    expect(labels[0]).toBe("Launch agent");
+    expect(labels.filter((label) => label === "Agents")).toHaveLength(1);
+    expect(labels).not.toContain("Pinned");
+    expect(labels).not.toContain("Other");
+    const names = options(container).map((row) => row.getAttribute("aria-label") ?? "");
+    const claude = names.findIndex((name) => name.startsWith("Claude,"));
+    const codex = names.findIndex((name) => name.startsWith("Codex,"));
+    expect(claude).toBeGreaterThanOrEqual(0);
+    expect(claude).toBeLessThan(codex);
   });
 
   it("invokes onLaunchAgent for a launchable agent", () => {
@@ -967,17 +946,62 @@ describe("DockLaunchButton", () => {
       expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     });
 
-    it("keeps the recency band navigable without highlighting its twin", () => {
-      // The band repeats agents listed again below, so the two rows must be
-      // keyed apart — sharing an id would light both up at once.
+    it("lists a recently launched agent once, first, and marked Recent", () => {
       mockMruEntries = [{ id: "agent.claude", score: 1, lastAccessedAt: 1000 }];
       const { container } = renderButton();
 
       const rows = options(container);
       const claudeRows = rows.filter((row) => row.textContent?.includes("Claude"));
-      expect(claudeRows).toHaveLength(2);
-      expect(claudeRows[0]!.id).not.toBe(claudeRows[1]!.id);
+      expect(claudeRows).toHaveLength(1);
+      expect(rows[0]).toBe(claudeRows[0]);
+      expect(qualifierTextOf(claudeRows[0]!)).toBe("Recent");
       expect(container.querySelectorAll(SELECTED_OPTION)).toHaveLength(1);
+    });
+
+    it("hands typing on the results region back to the search box", () => {
+      const { container } = renderButton();
+      const region = container.querySelector<HTMLElement>('[aria-label="Launcher results"]')!;
+      region.focus();
+
+      fireEvent.keyDown(region, { key: "c" });
+      expect(document.activeElement).toBe(searchInput(container));
+    });
+
+    it("still speaks Recent on a recently launched agent while searching", () => {
+      mockMruEntries = [{ id: "agent.claude", score: 1, lastAccessedAt: 1000 }];
+      const { container } = renderButton();
+      fireEvent.change(searchInput(container), { target: { value: "claude" } });
+
+      expect(rowByName(container, "Claude").getAttribute("aria-label")).toContain("Recent");
+    });
+
+    it("speaks the state its corner pip draws, and nothing for a passive session", () => {
+      const saved = { panelsById: panelStoreState.panelsById, panelIds: panelStoreState.panelIds };
+      const session = (state: string) => ({
+        "pty-1": {
+          id: "pty-1",
+          kind: "terminal",
+          location: "grid",
+          detectedAgentId: "claude",
+          agentState: state,
+        },
+      });
+      try {
+        Object.assign(panelStoreState, { panelsById: session("waiting"), panelIds: ["pty-1"] });
+        const waiting = renderButton();
+        expect(rowByName(waiting.container, "Claude").getAttribute("aria-label")).toContain(
+          "Agent waiting"
+        );
+        waiting.unmount();
+
+        Object.assign(panelStoreState, { panelsById: session("working"), panelIds: ["pty-1"] });
+        const working = renderButton();
+        expect(rowByName(working.container, "Claude").getAttribute("aria-label")).not.toMatch(
+          /Agent (working|waiting|directing)/
+        );
+      } finally {
+        Object.assign(panelStoreState, saved);
+      }
     });
 
     it("does not swallow modified keys, so app shortcuts still work", () => {
@@ -1192,7 +1216,7 @@ describe("DockLaunchButton", () => {
       expect(input.value).toBe("");
     });
 
-    it("mirrors pointer hover into selection and keeps focus off the row", () => {
+    it("mirrors pointer movement into selection and keeps focus off the row", () => {
       const { container } = renderButton();
       fireEvent.change(searchInput(container), { target: { value: "e" } });
 
@@ -1200,7 +1224,7 @@ describe("DockLaunchButton", () => {
       expect(rows.length).toBeGreaterThan(1);
 
       const second = rows[1]!;
-      fireEvent.pointerEnter(second);
+      movePointer(second, { x: 10, y: 40 });
       expect(second.getAttribute("aria-selected")).toBe("true");
       expect(container.querySelectorAll(SELECTED_OPTION)).toHaveLength(1);
 
@@ -1209,185 +1233,73 @@ describe("DockLaunchButton", () => {
       expect(fireEvent.pointerDown(second)).toBe(false);
     });
 
-    it("hovering an unfiltered band row also moves the selection", () => {
-      // The state the user is in the instant the launcher opens — the browse
-      // rows were the ones left unguarded against pointer focus-steal.
+    it("moving over an unfiltered band row also moves the selection", () => {
       const { container } = renderButton();
 
       const rows = options(container);
       expect(rows.length).toBeGreaterThan(1);
 
-      fireEvent.pointerEnter(rows[1]!);
+      movePointer(rows[1]!, { x: 10, y: 40 });
       expect(selectedOption(container)).toBe(rows[1]);
       expect(fireEvent.pointerDown(rows[1]!)).toBe(false);
     });
 
-    describe("pointer transit is not a choice of row (#11919)", () => {
-      afterEach(() => {
-        vi.useRealTimers();
-      });
-
-      /** The gate only watches an open launcher, and this mock renders rows regardless. */
-      function openLauncher(): void {
-        act(() => popoverOpenChangeSpy!(true));
-      }
-
-      it("leaves the selection alone while a sweep crosses rows to reach a lower one", () => {
+    describe("the highlight tracks real pointer movement only (#11919)", () => {
+      it("follows every row the pointer moves across, with no delay", () => {
         const { container } = renderButton();
-        openLauncher();
-        const input = searchInput(container);
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-        const chosen = selectedOption(container);
-        expect(chosen).not.toBeNull();
-
-        startSweep(container);
-
-        // Every row the sweep passes announces itself; none of them was picked.
         const rows = options(container);
-        expect(rows.length).toBeGreaterThan(2);
-        rows.slice(1).forEach((row, offset) => {
-          fireRowEnter(row, { x: 0, y: 32 + offset * 32, t: 12 + offset });
-          expect(selectedOption(container)).toBe(chosen);
+        expect(rows.length).toBeGreaterThan(3);
+
+        rows.slice(0, 4).forEach((row, offset) => {
+          movePointer(row, { x: 10, y: 10 + offset * 32 });
+          expect(selectedOption(container)).toBe(row);
         });
       });
 
-      it("selects immediately on an ordinary mouse hover", () => {
-        // The two bare-pointerEnter tests above carry no pointerType, so they
-        // only prove the non-mouse bypass. This is the path a real mouse takes.
+      it("does not select on enter alone", () => {
+        // A row that slides under a resting cursor gets an enter and nothing
+        // else, so enter is not a choice.
         const { container } = renderButton();
-        openLauncher();
-        const rows = options(container);
-        const target = rows[1]!;
+        const input = searchInput(container);
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        const chosen = selectedOption(container);
+        const other = options(container).find((row) => row !== chosen)!;
 
-        fireRowEnter(target, { x: 0, y: 32, t: 0 });
-        expect(selectedOption(container)).toBe(target);
-      });
-
-      it("settles onto the row the sweep stopped on", () => {
-        const { container } = renderButton();
-        openLauncher();
-        const rows = options(container);
-        expect(rows.length).toBeGreaterThan(2);
-        const target = rows[2]!;
-
-        startSweep(container);
-        fireRowEnter(target, { x: 0, y: 30, t: 12 });
-        expect(selectedOption(container)).not.toBe(target);
-
-        // The pointer comes to rest: same position, far enough past the
-        // minimum-suppression floor for the gesture to read as finished.
-        firePointer(listbox(container), "pointermove", { x: 0, y: 30, t: 200 });
-        expect(selectedOption(container)).toBe(target);
+        fireEvent.pointerEnter(other);
+        fireEvent.pointerOver(other);
+        expect(selectedOption(container)).toBe(chosen);
       });
 
       it("keeps the keyboard's row when the list scrolls under a resting cursor", () => {
         const { container } = renderButton();
-        openLauncher();
-        const input = searchInput(container);
-        const list = listbox(container);
-
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-        const chosen = selectedOption(container);
-        expect(chosen).not.toBeNull();
-
-        vi.useFakeTimers();
-        // What scrollIntoView does to a stationary pointer: the list moves, and
-        // a row it never chose slides underneath.
-        fireEvent.scroll(list);
-        const slidUnder = options(container).find((row) => row !== chosen)!;
-        fireRowEnter(slidUnder, { x: 0, y: 0, t: 200 });
-        expect(selectedOption(container)).toBe(chosen);
-
-        // And it must still be the keyboard's row once the list stops moving —
-        // a scroll settling says nothing about where the user is pointing.
-        act(() => {
-          vi.advanceTimersByTime(500);
-        });
-        expect(selectedOption(container)).toBe(chosen);
-      });
-
-      it("drops the row it was tracking rather than settling on whatever replaced it", () => {
-        const { container } = renderButton();
-        openLauncher();
-        const rows = options(container);
-        expect(rows.length).toBeGreaterThan(2);
-        const trackedLabel = rows[2]!.textContent;
-
-        startSweep(container);
-        fireRowEnter(rows[2]!, { x: 0, y: 30, t: 12 });
-        // Without this the test passes whether or not hover is gated at all.
-        expect(selectedOption(container)).not.toBe(rows[2]!);
-
-        fireEvent.change(searchInput(container), { target: { value: "claude" } });
-        const filtered = options(container);
-        expect(filtered.length).toBeGreaterThan(0);
-        expect(filtered.map((row) => row.textContent)).not.toContain(trackedLabel);
-        const before = selectedOption(container);
-
-        firePointer(listbox(container), "pointermove", { x: 0, y: 30, t: 200 });
-        expect(selectedOption(container)).toBe(before);
-      });
-
-      it("does not settle a sweep that left the list", () => {
-        const { container } = renderButton();
-        openLauncher();
-        const input = searchInput(container);
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-        const chosen = selectedOption(container);
-        const target = options(container).find((row) => row !== chosen)!;
-
-        vi.useFakeTimers();
-        startSweep(container);
-        fireRowEnter(target, { x: 0, y: 30, t: 12 });
-        firePointer(listbox(container), "pointerleave", { x: 0, y: 400, t: 20 });
-
-        act(() => {
-          vi.advanceTimersByTime(500);
-        });
-        expect(selectedOption(container)).toBe(chosen);
-      });
-
-      it("lets a keystroke override a sweep that has not settled yet", () => {
-        const { container } = renderButton();
-        openLauncher();
         const input = searchInput(container);
         const rows = options(container);
-        const swept = rows[2]!;
+        expect(rows.length).toBeGreaterThan(3);
 
-        vi.useFakeTimers();
-        startSweep(container);
-        fireRowEnter(swept, { x: 0, y: 30, t: 12 });
-
-        // The keyboard makes a choice mid-gesture. The sweep's row is now an
-        // older opinion and must not come back when the gesture settles.
+        movePointer(rows[1]!, { x: 10, y: 40 });
+        fireEvent.keyDown(input, { key: "ArrowDown" });
         fireEvent.keyDown(input, { key: "ArrowDown" });
         const chosen = selectedOption(container);
-        expect(chosen).not.toBe(swept);
+        expect(chosen).toBe(rows[3]);
 
-        act(() => {
-          vi.advanceTimersByTime(500);
-        });
+        // What the browser does after scrollIntoView moves the list under a
+        // stationary pointer: it re-hit-tests at the same coordinates.
+        movePointer(rows[2]!, { x: 10, y: 40, movement: 0 });
         expect(selectedOption(container)).toBe(chosen);
+
+        // The next genuine movement hands the highlight straight back.
+        movePointer(rows[2]!, { x: 10, y: 41 });
+        expect(selectedOption(container)).toBe(rows[2]);
       });
 
-      it("re-arms after the list empties and comes back", () => {
+      it("ignores a first move the platform does not report as movement", () => {
         const { container } = renderButton();
-        openLauncher();
         const input = searchInput(container);
-
-        // Zero results tears the listbox out entirely, taking the gate with it.
-        fireEvent.change(input, { target: { value: "zzzznotarealrow" } });
-        expect(container.querySelector('[role="listbox"]')).toBeNull();
-        fireEvent.change(input, { target: { value: "" } });
-
         fireEvent.keyDown(input, { key: "ArrowDown" });
         const chosen = selectedOption(container);
-        expect(chosen).not.toBeNull();
+        const other = options(container).find((row) => row !== chosen)!;
 
-        startSweep(container);
-        const target = options(container).find((row) => row !== chosen)!;
-        fireRowEnter(target, { x: 0, y: 32, t: 12 });
+        movePointer(other, { x: 10, y: 40, movement: 0 });
         expect(selectedOption(container)).toBe(chosen);
       });
     });
@@ -1396,7 +1308,7 @@ describe("DockLaunchButton", () => {
   it("shows a Create a recipe cue when no recipes match the active worktree", () => {
     mockRecipes = [];
     const { getByText } = renderButton({ activeWorktreeId: "wt-1" });
-    expect(getByText("Launch recipe")).toBeTruthy();
+    expect(getByText("Recipes")).toBeTruthy();
     expect(getByText("Create a recipe")).toBeTruthy();
   });
 
@@ -1428,32 +1340,120 @@ describe("DockLaunchButton", () => {
     );
   });
 
-  it("footers the More band with both action cues under one heading", () => {
-    const { container, getAllByTestId } = renderButton();
+  it("fills the first column past a short agent list instead of leaving it empty", () => {
+    mockRecipes = [{ id: "r-1", name: "Deploy", worktreeId: undefined }];
+    const { container } = renderButton({
+      agents: [{ id: "claude", name: "Claude", availability: "ready" }],
+    });
 
-    // Walk the listbox in DOM order and file each option under the heading
-    // above it. Counting headings alone would not do: a row that drifted into
-    // another band leaves exactly one "More" behind and still renders its label
-    // somewhere on screen, which is all a `getByText` pair can see.
-    const under = new Map<string, string[]>();
-    let heading = "";
-    for (const node of listbox(container).querySelectorAll<HTMLElement>(
-      '[data-testid="dock-launcher-band"], [role="option"]'
-    )) {
-      if (node.getAttribute("data-testid") === "dock-launcher-band") {
-        heading = node.textContent ?? "";
-        continue;
-      }
-      under.set(heading, [...(under.get(heading) ?? []), node.textContent ?? ""]);
+    const start = listbox(container).querySelector('[data-launcher-column="start"]')!;
+    const end = listbox(container).querySelector('[data-launcher-column="end"]')!;
+    // Something launchable besides the one agent shares the first column, and
+    // the second still holds rows — neither column is left nearly empty.
+    expect(start.querySelectorAll('[role="option"]').length).toBeGreaterThan(1);
+    expect(end.querySelectorAll('[role="option"]').length).toBeGreaterThan(0);
+    // DOM order is navigation order: the whole first column precedes the second.
+    const rows = options(container);
+    const lastStart = rows.filter((row) => start.contains(row)).pop()!;
+    const firstEnd = rows.find((row) => end.contains(row))!;
+    expect(rows.indexOf(lastStart)).toBeLessThan(rows.indexOf(firstEnd));
+  });
+
+  it("keeps recipes with the panels when the agents are the long column", () => {
+    mockRecipes = [{ id: "r-1", name: "Deploy", worktreeId: undefined }];
+    const many = ["claude", "codex", "cursor", "goose", "kimi", "amp", "qwen"].map((id) => ({
+      id,
+      name: id,
+      availability: "ready" as const,
+    }));
+    const { container } = renderButton({ agents: many });
+
+    const agentColumn = listbox(container).querySelector('[data-launcher-column="start"]')!;
+    expect(agentColumn.contains(rowByName(container, "Deploy"))).toBe(false);
+  });
+
+  describe("a long agent list", () => {
+    const ALL = [
+      "claude",
+      "codex",
+      "cursor",
+      "goose",
+      "kimi",
+      "amp",
+      "qwen",
+      "crush",
+      "aider",
+      "copilot",
+      "grok",
+      "gemini",
+      "opencode",
+      "mistral",
+      "kiro",
+      "interpreter",
+    ].map((id) => ({ id, name: id, availability: "ready" as const }));
+
+    const column = (container: HTMLElement, name: string) =>
+      listbox(container).querySelector(`[data-launcher-column="${name}"]`)!;
+
+    it("flows its tail to the head of the second column, heading repeated", () => {
+      mockRecipes = [{ id: "r-1", name: "Deploy", worktreeId: undefined }];
+      const { container, getAllByTestId } = renderButton({ agents: ALL });
+
+      const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
+      expect(labels.filter((label) => label === "Agents")).toHaveLength(2);
+      const end = column(container, "end");
+      const agentRows = options(container).filter((row) =>
+        ALL.some((agent) => row.getAttribute("aria-label")?.startsWith(`${agent.id},`))
+      );
+      const moved = agentRows.filter((row) => end.contains(row));
+      expect(moved.length).toBeGreaterThanOrEqual(3);
+      // Only the tail moves, in order, and it opens the second column — so the
+      // keyboard reads straight on from the first column into it.
+      expect(column(container, "start").contains(agentRows[0]!)).toBe(true);
+      expect(moved).toEqual(agentRows.slice(-moved.length));
+      expect(end.querySelector('[role="option"]')).toBe(moved[0]);
+    });
+
+    it("keeps the footer outside the scrolling columns", () => {
+      const { container } = renderButton({ agents: ALL });
+      const footer = column(container, "footer");
+      const agents = column(container, "start");
+      expect(footer).not.toBeNull();
+      // Siblings rather than nested: the columns' scroller does not hold it.
+      expect(footer.contains(agents) || agents.parentElement?.contains(footer)).toBe(false);
+    });
+
+    it("leaves a short agent list whole in the first column", () => {
+      const { container, queryAllByTestId } = renderButton({ agents: ALL.slice(0, 7) });
+      const labels = queryAllByTestId("dock-launcher-band").map((el) => el.textContent);
+      expect(labels.filter((label) => label === "Agents")).toHaveLength(1);
+      expect(column(container, "end").querySelector('[aria-label^="claude,"]')).toBeNull();
+    });
+  });
+
+  it("gives action cues a spoken qualifier like every other row", () => {
+    const { container } = renderButton();
+    const footer = listbox(container).querySelector('[data-launcher-column="footer"]')!;
+    for (const row of footer.querySelectorAll('[role="option"]')) {
+      expect(row.getAttribute("aria-label")).toMatch(/^[^,]+, Action/);
     }
+  });
 
-    expect(
-      getAllByTestId("dock-launcher-band").filter((el) => el.textContent === "More")
-    ).toHaveLength(1);
-    const more = under.get("More") ?? [];
-    expect(more).toHaveLength(2);
-    expect(more[0]).toContain("Manage agents");
-    expect(more[1]).toContain(TOOLBAR_CUSTOMIZE_LABEL);
+  it("places both action cues in the footer, last in navigation order", () => {
+    const { container } = renderButton();
+
+    const footer = listbox(container).querySelector('[data-launcher-column="footer"]');
+    expect(footer).not.toBeNull();
+    const cues = Array.from(footer!.querySelectorAll('[role="option"]')).map(
+      (row) => row.textContent ?? ""
+    );
+    expect(cues).toHaveLength(2);
+    expect(cues[0]).toContain("Manage agents");
+    expect(cues[1]).toContain(TOOLBAR_CUSTOMIZE_LABEL);
+
+    // The footer is the tail of the flat navigation order, so End lands on it.
+    const rows = options(container);
+    expect(rows.slice(-2).every((row) => footer!.contains(row))).toBe(true);
   });
 
   it("draws the Customize toolbar cue with a glyph of its own", () => {
@@ -1793,10 +1793,10 @@ describe("DockLaunchButton", () => {
       { id: "cursor", name: "Cursor", availability: "ready" },
     ];
 
-    it("hides the band when the MRU is empty", () => {
+    it("marks nothing Recent when the MRU is empty", () => {
       mockMruEntries = [];
-      const { queryByText } = renderButton({ agents: MANY });
-      expect(queryByText("Recently launched")).toBeNull();
+      const { container } = renderButton({ agents: MANY });
+      expect(recentRows(container)).toHaveLength(0);
     });
 
     it("renders recent agents in frecency order, capped at 3", () => {
@@ -1809,43 +1809,37 @@ describe("DockLaunchButton", () => {
         { id: "agent.gemini", score: 1, lastAccessedAt: 1000 },
       ];
 
-      const { getByText, getAllByText, getAllByTestId, container } = renderButton({
-        agents: MANY,
-      });
+      const { getAllByText, container } = renderButton({ agents: MANY });
 
-      const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
-      expect(labels[0]).toBe("Recently launched");
-      expect(getByText("Recently launched")).toBeTruthy();
-
-      // Band entries are duplicated below in the flat agent group — the band is
-      // a shortcut, not a replacement grouping. Capped entries appear twice;
-      // the dropped 4th appears only once (in the group).
-      expect(getAllByText("Claude").length).toBe(2);
-      expect(getAllByText("Codex").length).toBe(2);
-      expect(getAllByText("Cursor").length).toBe(2);
-      expect(getAllByText("Gemini").length).toBe(1);
-
-      const text = container.textContent ?? "";
-      expect(text.indexOf("Claude")).toBeLessThan(text.indexOf("Codex"));
-      expect(text.indexOf("Codex")).toBeLessThan(text.indexOf("Cursor"));
+      // Recent agents lead the agent column and are not repeated below it; the
+      // dropped 4th keeps its ordinary place with no mark.
+      expect(recentRows(container).map((row) => row.textContent)).toEqual([
+        expect.stringContaining("Claude"),
+        expect.stringContaining("Codex"),
+        expect.stringContaining("Cursor"),
+      ]);
+      expect(options(container).slice(0, 3)).toEqual(recentRows(container));
+      for (const name of ["Claude", "Codex", "Cursor", "Gemini"]) {
+        expect(getAllByText(name)).toHaveLength(1);
+      }
     });
 
     it("excludes never-launched cold-start entries (lastAccessedAt === 0)", () => {
       mockMruEntries = [{ id: "agent.claude", score: 5, lastAccessedAt: 0 }];
-      const { queryByText } = renderButton({ agents: MANY });
-      expect(queryByText("Recently launched")).toBeNull();
+      const { container } = renderButton({ agents: MANY });
+      expect(recentRows(container)).toHaveLength(0);
     });
 
     it("ignores non-agent MRU entries", () => {
       mockMruEntries = [{ id: "recipe.editor.open", score: 5, lastAccessedAt: 5000 }];
-      const { queryByText } = renderButton({ agents: MANY });
-      expect(queryByText("Recently launched")).toBeNull();
+      const { container } = renderButton({ agents: MANY });
+      expect(recentRows(container)).toHaveLength(0);
     });
 
     it("drops stale MRU entries for agents no longer present", () => {
       mockMruEntries = [{ id: "agent.ghost", score: 5, lastAccessedAt: 5000 }];
-      const { queryByText } = renderButton({ agents: MANY });
-      expect(queryByText("Recently launched")).toBeNull();
+      const { container } = renderButton({ agents: MANY });
+      expect(recentRows(container)).toHaveLength(0);
     });
 
     it("launching a band row records MRU and invokes onLaunchAgent", () => {
@@ -1853,7 +1847,7 @@ describe("DockLaunchButton", () => {
       const onLaunchAgent = vi.fn();
       const { getAllByText } = renderButton({ agents: MANY, onLaunchAgent });
 
-      // First "Codex" is the band row.
+      // The one "Codex" row is the recent one.
       const codexElement = getAllByText("Codex")[0];
       expect(codexElement).toBeDefined();
       fireEvent.click(codexElement!);
@@ -1867,8 +1861,8 @@ describe("DockLaunchButton", () => {
       // re-render. Memoizing the band on it froze the pre-launch order — launch
       // an agent, reopen, and it was still missing.
       mockMruEntries = [];
-      const { queryByText, getByText } = renderButton({ agents: MANY });
-      expect(queryByText("Recently launched")).toBeNull();
+      const { container } = renderButton({ agents: MANY });
+      expect(recentRows(container)).toHaveLength(0);
 
       // A launch elsewhere records MRU while this component stays mounted.
       mockMruEntries = [{ id: "agent.codex", score: 1, lastAccessedAt: 7000 }];
@@ -1876,7 +1870,9 @@ describe("DockLaunchButton", () => {
       act(() => popoverOpenChangeSpy!(false));
       act(() => popoverOpenChangeSpy!(true));
 
-      expect(getByText("Recently launched")).toBeTruthy();
+      expect(recentRows(container).map((row) => row.textContent)).toEqual([
+        expect.stringContaining("Codex"),
+      ]);
     });
 
     it("anchors the reopened selection to a row the recency band inserted while closed", () => {
@@ -1900,14 +1896,14 @@ describe("DockLaunchButton", () => {
 
     it("survives an unfiltered reopen after a search is cleared", () => {
       mockMruEntries = [{ id: "agent.codex", score: 3, lastAccessedAt: 3000 }];
-      const { container, queryByText, getByText } = renderButton({ agents: MANY });
+      const { container } = renderButton({ agents: MANY });
       const input = searchInput(container);
 
       fireEvent.change(input, { target: { value: "codex" } });
-      expect(queryByText("Recently launched")).toBeNull();
+      expect(recentRows(container)).toHaveLength(0);
 
       fireEvent.change(input, { target: { value: "" } });
-      expect(getByText("Recently launched")).toBeTruthy();
+      expect(recentRows(container)).toHaveLength(1);
     });
 
     it("re-anchors the selection to the top row on reopen", () => {
@@ -2428,11 +2424,11 @@ describe("DockLaunchButton", () => {
         expect([band, signatures.size]).toEqual([band, 1]);
       }
 
-      // Every launchable row reserves both, so revealing one on hover moves
-      // nothing. The recipe band joined them in #12217 — it now carries a pin,
-      // and withholding the slot would leave that control nowhere to appear.
+      // An agent reserves the shortcut recorder's slot and the pin; a recipe
+      // (like a panel) can never record a shortcut, so it keeps only the pin
+      // rather than spending 28px of a narrow column on a control it cannot hold.
       expect(slotsOf(rowFor(container, "Claude"))).toBe("disclosure,shortcut,pin");
-      expect(slotsOf(rowFor(container, "My recipe"))).toBe("disclosure,shortcut,pin");
+      expect(slotsOf(rowFor(container, "My recipe"))).toBe("disclosure,pin");
       expect(pinControl(rowFor(container, "My recipe"))).toBeTruthy();
     });
 
@@ -2575,13 +2571,6 @@ describe("DockLaunchButton", () => {
 describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
   const READY = [{ id: "claude", name: "Claude", availability: "ready" as const }];
 
-  function rowByName(container: HTMLElement, name: string): HTMLElement {
-    const row = options(container).find((o) =>
-      o.getAttribute("aria-label")?.startsWith(`${name},`)
-    );
-    if (!row) throw new Error(`no row for ${name}`);
-    return row;
-  }
   const presetRows = (container: HTMLElement) =>
     Array.from(container.querySelectorAll<HTMLElement>('[role="option"][data-row-kind="preset"]'));
 
@@ -2591,6 +2580,44 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
         { id: "fast", name: "Fast" },
         { id: "slow", name: "Slow" },
       ];
+    });
+
+    it("speaks each preset with its name first and its agent, heading or not", () => {
+      const { container } = renderButton({ agents: READY });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      const labels = presetRows(container).map((row) => row.getAttribute("aria-label") ?? "");
+      expect(labels).toHaveLength(3);
+      for (const label of labels) {
+        expect(label).toMatch(/^[^,]+, Claude preset/);
+        expect(label).toContain("Press Left Arrow to close presets");
+      }
+    });
+
+    it("names what Enter launches when a named preset is saved", () => {
+      mockAgentSettings = { agents: { claude: { presetId: "fast" } } };
+      // Identical in both placements: a parent row launches the saved preset.
+      for (const placement of ["dock", "toolbar"] as const) {
+        const view = renderButton({ agents: READY, placement });
+        expect(qualifierTextOf(rowByName(view.container, "Claude"))).toBe("Fast");
+        expect(rowByName(view.container, "Claude").getAttribute("aria-label")).toContain(
+          "Launches Fast"
+        );
+        view.unmount();
+      }
+    });
+
+    it("keeps the launch outcome behind the category in search", () => {
+      mockAgentSettings = { agents: { claude: { presetId: "fast" } } };
+      const { container } = renderButton({ agents: READY, placement: "toolbar" });
+      fireEvent.change(searchInput(container), { target: { value: "claude" } });
+
+      expect(qualifierTextOf(rowByName(container, "Claude"))).toBe("Agent · Fast");
+    });
+
+    it("states no outcome when nothing named is saved", () => {
+      const { container } = renderButton({ agents: READY });
+      expect(qualifierTextOf(rowByName(container, "Claude"))).toBe("");
     });
 
     it("does not expand until asked, and keeps presets out of the flat list", () => {
@@ -2659,7 +2686,7 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       expect(container.querySelectorAll('[role="option"][aria-selected="true"]')).toHaveLength(1);
     });
 
-    it("launches the explicit default from a toolbar parent and the chosen id from a child", () => {
+    it("inherits the saved preset from a toolbar parent and launches the chosen id from a child", () => {
       const onLaunchAgent = vi.fn();
       const { container } = renderButton({
         agents: READY,
@@ -2667,10 +2694,10 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
         placement: "toolbar",
       });
 
-      // The toolbar's parent row means explicit Default — `null`, the sentinel
-      // that clears a saved preset — matching the split trigger it replaced.
+      // Same as the dock and as the toolbar's own agent button: a plain click
+      // launches whatever is saved, and never resets it.
       fireEvent.click(rowByName(container, "Claude"));
-      expect(onLaunchAgent).toHaveBeenCalledWith("claude", null);
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
 
       onLaunchAgent.mockReset();
       const { container: c2 } = renderButton({ agents: READY, onLaunchAgent });
@@ -2758,6 +2785,29 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       fireEvent.click(edit!);
     };
 
+    it("opens the recorder from the keyboard with F2 on the selected agent", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+      expect(selectedOption(container)?.getAttribute("aria-label")).toMatch(/^Claude,/);
+      expect(selectedOption(container)?.getAttribute("aria-label")).toContain(
+        "Press F2 to edit shortcut"
+      );
+
+      fireEvent.keyDown(input, { key: "F2" });
+      expect(container.querySelector('[data-testid="capture-widget-claude"]')).toBeTruthy();
+    });
+
+    it("does nothing on F2 for a row with no shortcut to edit", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+      fireEvent.change(input, { target: { value: "terminal" } });
+      const selected = selectedOption(container);
+      expect(selected?.getAttribute("aria-label")).not.toContain("F2");
+
+      fireEvent.keyDown(input, { key: "F2" });
+      expect(container.querySelector('[data-testid^="capture-widget-"]')).toBeNull();
+    });
+
     it("replaces the row with a recorder that is not an option", () => {
       const { container } = renderButton({ agents: READY });
       openCapture(container);
@@ -2782,15 +2832,23 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       expect(selectedOption(container)?.id).toBe(before);
     });
 
-    it("cancels in place on Escape and leaves the launcher open", () => {
+    it("cancels in place on Escape and leaves the launcher open", async () => {
       const { container } = renderButton({ agents: READY });
       openCapture(container);
       expect(container.querySelector('[data-testid="capture-widget-claude"]')).toBeTruthy();
+      // The recorder held focus; its controls are about to unmount.
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
 
       // The shell runs the consumer veto ahead of its own query-clear rule.
       const event = { preventDefault: vi.fn(), defaultPrevented: false };
-      popoverEscapeKeyDownSpy?.(event as unknown as KeyboardEvent);
+      act(() => {
+        popoverEscapeKeyDownSpy?.(event as unknown as KeyboardEvent);
+      });
       expect(event.preventDefault).toHaveBeenCalled();
+      expect(container.querySelector('[data-testid="capture-widget-claude"]')).toBeNull();
+
+      await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+      expect(document.activeElement).toBe(searchInput(container));
     });
 
     it("clears the recorder when the launcher closes", () => {
@@ -2870,20 +2928,20 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       // The launcher row is keyed by panel KIND; the binding lives on the action
       // behind that kind's toolbar button. A row resolving the wrong action
       // would render nothing, or another panel's combo.
-      mockKeybindings["agent.terminal"] = "⌘⌥T";
-      mockKeybindings["worktree.openFileBrowserPanel"] = "⌘⌥E";
+      mockKeybindings["agent.terminal"] = "Cmd+Alt+T";
+      mockKeybindings["worktree.openFileBrowserPanel"] = "Cmd+Alt+E";
       const { container } = renderButton({ agents: READY });
 
-      expect(rowByName(container, "Terminal").textContent).toContain("⌘⌥T");
-      expect(rowByName(container, "File Browser").textContent).toContain("⌘⌥E");
+      expect(rowByName(container, "Terminal").textContent).toContain("Ctrl Alt T");
+      expect(rowByName(container, "File Browser").textContent).toContain("Ctrl Alt E");
       // ...and a row with no binding renders no stray hint.
-      expect(rowByName(container, "Browser").textContent).not.toContain("⌘");
+      expect(rowByName(container, "Browser").querySelector("kbd")).toBeNull();
     });
 
     it("shows an agent row's own binding", () => {
-      mockKeybindings["agent.claude"] = "⌘1";
+      mockKeybindings["agent.claude"] = "Cmd+1";
       const { container } = renderButton({ agents: READY });
-      expect(rowByName(container, "Claude").textContent).toContain("⌘1");
+      expect(rowByName(container, "Claude").textContent).toContain("Ctrl 1");
     });
 
     it("says it is still detecting rather than showing an empty agent inventory", () => {
@@ -2937,13 +2995,14 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       mockMergedPresets = [{ id: "fast", name: "Fast" }];
     });
 
-    it("clears the saved preset when the toolbar launches explicit Default", () => {
+    it("clears the saved preset when the Default row launches, in either placement", () => {
       const { container } = renderButton({
         agents: READY,
         placement: "toolbar",
         activeWorktreeId: "wt-1",
       });
-      fireEvent.click(rowByName(container, "Claude"));
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+      fireEvent.click(presetRows(container)[0]!);
 
       // Both halves of "explicit default": the agent-level preset and the
       // worktree-scoped override.
@@ -3061,6 +3120,21 @@ describe("panel origin marker", () => {
     expect(qualifierTextOf(rowNamed(container, "Review"))).toBe("");
   });
 
+  it("tells two same-named recipes apart by scope in search", () => {
+    mockRecipes = [
+      { id: "r-global", name: "Work", worktreeId: undefined },
+      { id: "r-team", name: "Work", projectId: "p-1", scope: "inrepo", worktreeId: undefined },
+    ];
+    const { container } = renderButton();
+
+    fireEvent.change(searchInput(container), { target: { value: "work" } });
+    const qualifiers = options(container)
+      .filter((row) => row.getAttribute("aria-label")?.startsWith("Work,"))
+      .map(qualifierTextOf);
+    expect(qualifiers).toHaveLength(2);
+    expect(new Set(qualifiers).size).toBe(2);
+  });
+
   it("stacks origin behind the category in search rather than displacing it", () => {
     // Search is the one mode where the row has to say what it IS — a query can
     // return a recipe and a panel with the same name — so the category keeps
@@ -3071,16 +3145,27 @@ describe("panel origin marker", () => {
 
     fireEvent.change(searchInput(container), { target: { value: "dash" } });
 
-    expect(qualifierTextOf(rowNamed(container, "Dashboard"))).toBe("Panel · Plugin");
-    expect(qualifierTextOf(rowNamed(container, "Dashnotes"))).toBe("Panel · Project plugin");
+    // The dock can land a panel in either place, so its search names where.
+    expect(qualifierTextOf(rowNamed(container, "Dashboard"))).toBe("Panel · Grid · Plugin");
+    expect(qualifierTextOf(rowNamed(container, "Dashnotes"))).toBe("Panel · Grid · Project plugin");
   });
 
-  it("keeps a built-in row's search qualifier at the bare category", () => {
-    const { container } = renderButton();
+  it("keeps a built-in row's toolbar search qualifier at the bare category", () => {
+    // Every toolbar panel opens in the grid, so the destination would end
+    // every row with the same word.
+    const { container } = renderButton({ placement: "toolbar" });
 
     fireEvent.change(searchInput(container), { target: { value: "review" } });
 
     expect(qualifierTextOf(rowNamed(container, "Review"))).toBe("Panel");
+  });
+
+  it("names the destination in dock search, where panels land in either place", () => {
+    const { container } = renderButton();
+
+    fireEvent.change(searchInput(container), { target: { value: "review" } });
+
+    expect(qualifierTextOf(rowNamed(container, "Review"))).toMatch(/^Panel · (Dock|Grid)$/);
   });
 
   it("speaks both tiers while searching, not just in browse", () => {

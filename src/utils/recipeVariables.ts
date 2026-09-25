@@ -95,3 +95,55 @@ export function splitByRecipeVariables(text: string): Array<{ text: string; isVa
   }
   return parts;
 }
+
+export type RecipePromptSegment =
+  | { kind: "text"; text: string }
+  /** A known variable whose value is only known at launch. */
+  | { kind: "variable"; text: string; name: string }
+  /** A known variable substituted from the context. */
+  | { kind: "value"; text: string; name: string }
+  /** A known variable with no value in the context: launch sends an empty string here. */
+  | { kind: "missing"; text: string; name: string }
+  /** `{{word}}` that isn't a recipe variable: launch sends it as typed. */
+  | { kind: "unknown"; text: string; name: string };
+
+/**
+ * Splits a prompt the way launch will read it — trimmed first, then
+ * substituted — so a preview can show where every value lands. Pass `null`
+ * when the values are only known at launch.
+ */
+export function segmentRecipePrompt(
+  text: string,
+  context: RecipeContext | null
+): RecipePromptSegment[] {
+  const source = text.trim();
+  const segments: RecipePromptSegment[] = [];
+  // Wider than launch's own pattern on purpose: `{{ issue_number }}` or
+  // `{{issue-number}}` is sent as typed, so it has to show up as unknown.
+  const pattern = /\{\{([^{}\n]+?)\}\}/g;
+  const knownNames = new Set<string>(KNOWN_VARIABLE_NAMES);
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(source)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ kind: "text", text: source.slice(lastIndex, match.index) });
+    }
+    const token = match[0];
+    const name = match[1]!.toLowerCase();
+    if (!knownNames.has(name)) {
+      segments.push({ kind: "unknown", text: token, name: match[1]! });
+    } else if (context === null) {
+      segments.push({ kind: "variable", text: token, name });
+    } else {
+      const value = replaceRecipeVariables(token, context);
+      segments.push(
+        value === "" ? { kind: "missing", text: token, name } : { kind: "value", text: value, name }
+      );
+    }
+    lastIndex = pattern.lastIndex;
+  }
+  if (lastIndex < source.length) {
+    segments.push({ kind: "text", text: source.slice(lastIndex) });
+  }
+  return segments;
+}

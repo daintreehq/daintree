@@ -1,4 +1,5 @@
 import { FileEdit, MessageSquare, Forward } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { InlineStatusBanner, type BannerAction } from "./InlineStatusBanner";
 
 export interface AgentCompletionBannerProps {
@@ -76,7 +77,12 @@ export function AgentCompletionBanner({
       title={formatBannerCopy(fileCount)}
       severity="neutral"
       role="status"
-      className={className ? `border-t border-divider ${className}` : "border-t border-divider"}
+      // Seen on every finished agent, so it takes the light one-row tier: the
+      // actions and the × follow the sentence instead of waiting at the far
+      // edge of a wide pane, and drop beneath it on a narrow one. It sits above
+      // the input bar, so its divider is on top rather than underneath.
+      layout="inline"
+      className={cn("border-t border-b-0 border-divider", className)}
       actions={actions}
       onClose={onDismiss}
     />

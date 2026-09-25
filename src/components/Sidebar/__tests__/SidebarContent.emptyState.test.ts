@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import fs from "fs/promises";
+import { readFileSync } from "fs";
 import path from "path";
 
 const SIDEBAR_CONTENT_PATH = path.resolve(__dirname, "../SidebarContent.tsx");
+const LOAD_ERROR_BANNER_PATH = path.resolve(__dirname, "../WorktreeLoadErrorBanner.tsx");
 
 describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed by #6934)", () => {
   let source: string;
@@ -486,10 +488,16 @@ describe("SidebarContent workspace error banner — issue #8394", () => {
     );
   });
 
-  it("imports AlertTriangle from lucide-react for the banner icon", () => {
-    const importLine = source.match(/import \{[^}]*\} from "lucide-react"/);
-    expect(importLine).not.toBeNull();
-    expect(importLine![0]).toContain("AlertTriangle");
+  it("lets both sidebar failure banners take their glyph from the severity", () => {
+    // The glyph is the severity's non-colour channel and InlineStatusBanner
+    // picks it per severity; an override here is how the load error came to
+    // wear a different error shape from every other one.
+    const banners = [...source.matchAll(/<InlineStatusBanner\b[^>]*?title="([^"]+)"/g)];
+    expect(banners.map((m) => m[1])).toContain("Workspace service unavailable");
+    for (const banner of banners) expect(banner[0]).not.toMatch(/\bicon=/);
+    const loadBanner = readFileSync(LOAD_ERROR_BANNER_PATH, "utf-8");
+    const call = loadBanner.slice(loadBanner.indexOf("<InlineStatusBanner"));
+    expect(call.slice(0, call.indexOf("/>"))).not.toMatch(/\bicon=/);
   });
 
   it("does not have an if (error) early return that hides the worktree list", () => {
@@ -502,8 +510,11 @@ describe("SidebarContent workspace error banner — issue #8394", () => {
     expect(source).toContain('ariaLive="polite"');
   });
 
-  it("wires the error text as contextLine and a Restart Service action", () => {
-    expect(source).toMatch(/contextLine=\{error\}/);
+  it("wires the sanitized error text as a wrapping description and a Restart Service action", () => {
+    // Not `contextLine`: that clips to one line, and at sidebar width the
+    // reason was cut to its first few words with the rest behind a hover.
+    expect(source).toMatch(/description=\{boundedErrorText\(error\)\}/);
+    expect(source).not.toMatch(/contextLine=\{error\}/);
     expect(source).toContain('"Restart Service"');
     expect(source).toContain('id: "restart-workspace-service"');
   });
@@ -607,12 +618,55 @@ describe("SidebarContent disconnected project — issue #12576", () => {
 
   it("says the connection failed, with Retry, when nothing else explains the empty sidebar", () => {
     // A reported load failure wins; a workspace-service error already has its
-    // own banner and Restart action, so the fallback stays out of its way.
-    const branch = zeroWorktreeBranch();
-    expect(branch).toMatch(
-      /\{worktreeLoadErrorBanner \?\?\s*\(isProjectDisconnected && error === null \? \(\s*<WorktreeLoadErrorBanner error=\{WORKTREE_DISCONNECTED_MESSAGE\} \/>/
+    // own banner and Restart action, so the fallback stays out of its way, and
+    // a cold start that is still loading is not a failure yet.
+    expect(source).toMatch(
+      /const loadFailure =\s*worktreeLoadError \?\?\s*\(isProjectDisconnected && !isLoading && error === null \? WORKTREE_DISCONNECTED_MESSAGE : null\);/
     );
-    expect(source).toContain("\"The workspace service isn't connected, so worktrees can't load.\"");
+    expect(zeroWorktreeBranch()).toContain("{worktreeLoadErrorBanner}");
+  });
+
+  it("never shows the loading skeleton over a reported load failure", () => {
+    // A switch whose load threw leaves the store `isLoading`; a skeleton under
+    // the failure banner says the list is loading and has failed at once.
+    expect(source).toMatch(/isLoading: isStoreLoading,/);
+    const derivation = source.match(/const isLoading = isStoreLoading && ([^;]+);/);
+    expect(derivation).not.toBeNull();
+    // Both failures end the loading state: the skeleton branch mounts neither
+    // banner, so a failure it swallowed would have no recovery on screen.
+    expect(derivation![1]).toContain("worktreeLoadError === null");
+    expect(derivation![1]).toContain("error === null");
+    expect(source.match(/\bisStoreLoading\b/g)).toHaveLength(2);
+    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branch = source.slice(branchStart, source.indexOf("if (worktrees.length === 0) {"));
+    expect(branch).toContain("<Skeleton");
+    expect(branch).not.toMatch(/worktreeLoadErrorBanner|<WorktreeLoadErrorBanner|\{errorBanner\}/);
+  });
+
+  it("offers Retry only when Restart is not the fix", () => {
+    // Retry cannot bring back a crashed host, so any service error — its
+    // banner shown or dismissed — keeps Retry off screen.
+    expect(source).toMatch(
+      /const worktreeLoadErrorBanner =\s*loadFailure !== null && error === null \?/
+    );
+  });
+
+  it("puts both failure banners below the control zone in every branch", () => {
+    // A failure about the list sits with the list, under its header — never
+    // above the header, where it reads as a failure of the whole sidebar.
+    const zero = zeroWorktreeBranch();
+    const header = zero.indexOf("Worktrees\n");
+    expect(header).toBeGreaterThan(0);
+    expect(zero.indexOf("{errorBanner}")).toBeGreaterThan(header);
+    expect(zero.indexOf("{worktreeLoadErrorBanner}")).toBeGreaterThan(header);
+
+    const main = source.slice(source.indexOf("const hasNonMainWorktrees"));
+    const zone = main.indexOf("{/* Header Section */}");
+    expect(zone).toBeGreaterThan(0);
+    const bannerIdx = main.indexOf("{worktreeLoadErrorBanner}");
+    expect(bannerIdx).toBeGreaterThan(main.indexOf("<WorktreeSidebarSearchBar"));
+    expect(main.indexOf("{errorBanner}")).toBeGreaterThan(zone);
+    expect(main.slice(0, zone)).not.toContain("{worktreeLoadErrorBanner}");
   });
 
   it("keeps the service error pinned while it is all that explains an empty, disconnected sidebar", () => {

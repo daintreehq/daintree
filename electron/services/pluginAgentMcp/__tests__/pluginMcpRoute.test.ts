@@ -1,5 +1,5 @@
 import http from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -27,12 +27,8 @@ import {
   parsePluginMcpRoute,
   type PluginMcpRouteDeps,
 } from "../pluginMcpRoute.js";
-import {
-  PLUGIN_MCP_ROUTE_PREFIX,
-  pluginMcpRoutePath,
-  type AgentMcpToolDescriptor,
-  type AgentMcpToolInvoker,
-} from "../types.js";
+import { PLUGIN_MCP_ROUTE_PREFIX, pluginMcpRoutePath, type AgentMcpToolInvoker } from "../types.js";
+import { compileAgentMcpTool } from "../validateTools.js";
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
@@ -40,16 +36,16 @@ const INSTANCE = "acme.ledger";
 const OTHER_INSTANCE = "acme.crm";
 const ENDPOINT = "data";
 
-const LOOKUP: AgentMcpToolDescriptor = {
+const LOOKUP = compileAgentMcpTool({
   name: "lookup",
   description: "Look a record up.",
   inputSchema: { type: "object", properties: { id: { type: "string" } } },
-};
-const SUMMARY: AgentMcpToolDescriptor = {
+});
+const SUMMARY = compileAgentMcpTool({
   name: "summary",
   description: "Summarise the ledger.",
   inputSchema: { type: "object" },
-};
+});
 
 const INIT_BODY = {
   jsonrpc: "2.0",
@@ -64,6 +60,8 @@ const INIT_BODY = {
 
 interface Listener {
   port: number;
+  /** Requests whose route handler has not settled yet. */
+  inFlight: () => number;
   close: () => Promise<void>;
 }
 
@@ -76,10 +74,14 @@ const clients: Client[] = [];
 
 async function startListener(handler: PluginMcpRoute): Promise<Listener> {
   let port = 0;
+  let inFlight = 0;
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
     if (url.pathname.startsWith(PLUGIN_MCP_ROUTE_PREFIX)) {
-      void handler.handle(req, res, url, port);
+      inFlight += 1;
+      void handler.handle(req, res, url, port).finally(() => {
+        inFlight -= 1;
+      });
       return;
     }
     res.writeHead(404);
@@ -89,6 +91,7 @@ async function startListener(handler: PluginMcpRoute): Promise<Listener> {
   port = (server.address() as AddressInfo).port;
   return {
     port,
+    inFlight: () => inFlight,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections();
@@ -163,6 +166,55 @@ async function rawRequest(
     ...(method === "POST" ? { body: JSON.stringify(options.body ?? INIT_BODY) } : {}),
   });
   return response;
+}
+
+interface HeldRequest {
+  /** The response status, or the error that ended the connection first. */
+  outcome: Promise<number | Error>;
+  finish: () => void;
+  abort: () => void;
+}
+
+/**
+ * An `initialize` POST sent all but its last byte, so the SDK sits in its body
+ * read with the handshake admitted but not yet initialised.
+ */
+function holdInitialize(token: string): HeldRequest {
+  const body = JSON.stringify(INIT_BODY);
+  const request = http.request(routeUrl(), {
+    method: "POST",
+    agent: false,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      "Content-Length": Buffer.byteLength(body),
+    },
+  });
+  const outcome = new Promise<number | Error>((resolve) => {
+    request.on("error", resolve);
+    request.on("response", (response) => {
+      response.on("error", () => {});
+      response.resume();
+      resolve(response.statusCode ?? 0);
+    });
+  });
+  request.write(body.slice(0, -1));
+  return {
+    outcome,
+    finish: () => request.end(body.slice(-1)),
+    abort: () => request.destroy(),
+  };
+}
+
+/** Every slot of the credential is free: exactly the cap is admitted, then 429. */
+async function expectFullCapacity(token: string): Promise<void> {
+  for (let i = 0; i < MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL; i++) {
+    const response = await rawRequest({ token });
+    expect(response.status).toBe(200);
+    await response.body?.cancel();
+  }
+  expect((await rawRequest({ token })).status).toBe(429);
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -256,6 +308,20 @@ describe("PluginMcpRoute", () => {
     expect(caller).toEqual(expected);
     expect(Object.isFrozen(caller)).toBe(true);
     expect(JSON.stringify(caller)).not.toContain(token);
+  });
+
+  it("answers arguments that break the input schema with a tool error, over HTTP too", async () => {
+    const { token } = issue();
+    const { client } = await connect(token);
+    const refused = await client.callTool({ name: "lookup", arguments: { id: 7 } });
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toContain("-32602");
+    expect(JSON.stringify(refused.content)).toContain("/id must be string");
+    expect(invoke).not.toHaveBeenCalled();
+
+    const accepted = await client.callTool({ name: "lookup", arguments: { id: "r-1" } });
+    expect(accepted.isError).toBeUndefined();
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   it("answers a missing or orchestration bearer with a 401 challenge", async () => {
@@ -392,6 +458,167 @@ describe("PluginMcpRoute", () => {
     const other = await rawRequest({ token: issue({ terminalId: "term-2" }).token });
     expect(other.status).toBe(200);
     await other.body?.cancel();
+  });
+
+  it("counts handshakes admitted concurrently against the cap", async () => {
+    route.dispose();
+    await listener.close();
+    const loadCheck = deferred<boolean>();
+    route = makeRoute({ isPluginLoaded: () => loadCheck.promise });
+    listener = await startListener(route);
+
+    const { token } = issue();
+    const attempts = MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL + 4;
+    // Settled into a value up front, so a failure before the barrier cannot
+    // leave these rejecting unhandled.
+    const pending = Array.from({ length: attempts }, () =>
+      rawRequest({ token }).then(
+        async (response) => {
+          await response.body?.cancel();
+          return response.status;
+        },
+        (err: unknown) => err
+      )
+    );
+    await waitFor(() => listener.inFlight() === attempts);
+    // Every request reaches the cap check in the same turn, before any
+    // session has initialised.
+    loadCheck.resolve(true);
+
+    const statuses = await Promise.all(pending);
+    expect(statuses.filter((status) => status === 200)).toHaveLength(
+      MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL
+    );
+    expect(statuses.filter((status) => status === 429)).toHaveLength(4);
+    expect(route.sessionCount).toBe(MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL);
+  });
+
+  it("counts handshakes whose body is still arriving against the cap", async () => {
+    const { token } = issue();
+    const held = Array.from({ length: MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL }, () =>
+      holdInitialize(token)
+    );
+    // The load check resolves synchronously, so a settled poll means each
+    // handler has gone past admission into the SDK's body read.
+    await waitFor(() => listener.inFlight() === MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL);
+    expect(route.sessionCount).toBe(0);
+
+    const refused = await rawRequest({ token });
+    expect(refused.status).toBe(429);
+
+    // One initialised plus seven still arriving is still the whole cap.
+    held[0].finish();
+    expect(await held[0].outcome).toBe(200);
+    expect(route.sessionCount).toBe(1);
+    expect((await rawRequest({ token })).status).toBe(429);
+
+    for (const request of held.slice(1)) request.finish();
+    expect(await Promise.all(held.map((request) => request.outcome))).toEqual(
+      Array(MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL).fill(200)
+    );
+    expect(route.sessionCount).toBe(MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL);
+  });
+
+  it("drops a handshake that outlives the deadline and gives its slot back", async () => {
+    route.dispose();
+    await listener.close();
+    route = makeRoute({ handshakeTimeoutMs: 100 });
+    listener = await startListener(route);
+
+    const { token } = issue();
+    const held = Array.from({ length: MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL }, () =>
+      holdInitialize(token)
+    );
+    for (const outcome of await Promise.all(held.map((request) => request.outcome))) {
+      expect(outcome).toBeInstanceOf(Error);
+    }
+    await waitFor(() => listener.inFlight() === 0);
+    expect(route.sessionCount).toBe(0);
+    await expectFullCapacity(token);
+  });
+
+  it("drops pending handshakes on revocation and when the listener stops", async () => {
+    route.dispose();
+    await listener.close();
+    // Past the test timeout, so only the sweeps themselves can end these.
+    route = makeRoute({ handshakeTimeoutMs: 60_000 });
+    listener = await startListener(route);
+
+    const { token } = issue();
+    const { token: revokedToken } = issue({ terminalId: "term-2" });
+    const revoked = holdInitialize(revokedToken);
+    const unaffected = holdInitialize(token);
+    const stopped = holdInitialize(token);
+    await waitFor(() => listener.inFlight() === 3);
+
+    pluginMcpGrantRegistry.revokeTerminal("term-2");
+    expect(await revoked.outcome).toBeInstanceOf(Error);
+    unaffected.finish();
+    expect(await unaffected.outcome).toBe(200);
+
+    route.closeAllSessions();
+    expect(await stopped.outcome).toBeInstanceOf(Error);
+
+    await waitFor(() => listener.inFlight() === 0);
+    expect(route.sessionCount).toBe(0);
+    await expectFullCapacity(token);
+  });
+
+  it("gives the slot back when a handshake fails or its client walks away", async () => {
+    const { token } = issue();
+    for (let i = 0; i < MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL; i++) {
+      const rejected = await rawRequest({
+        token,
+        body: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+      });
+      expect(rejected.status).toBe(400);
+    }
+
+    const abandoned = Array.from({ length: MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL }, () =>
+      holdInitialize(token)
+    );
+    await waitFor(() => listener.inFlight() === MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL);
+    for (const request of abandoned) request.abort();
+    await Promise.all(abandoned.map((request) => request.outcome));
+    await waitFor(() => listener.inFlight() === 0);
+
+    expect(route.sessionCount).toBe(0);
+    await expectFullCapacity(token);
+  });
+
+  it("drops a pipelined handshake whose response is queued behind another", async () => {
+    route.dispose();
+    await listener.close();
+    route = makeRoute({ handshakeTimeoutMs: 100 });
+    listener = await startListener(route);
+
+    const { token } = issue();
+    const opened = await rawRequest({ token });
+    const sessionId = opened.headers.get("mcp-session-id");
+    await opened.body?.cancel();
+    expect(sessionId).toBeTruthy();
+
+    const socket = net.connect(listener.port, "127.0.0.1");
+    socket.on("error", () => {});
+    // Read what arrives: a paused socket never reports the server's close.
+    socket.resume();
+    const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    const path = pluginMcpRoutePath(INSTANCE, ENDPOINT);
+    const common = `Host: 127.0.0.1:${listener.port}\r\nAuthorization: Bearer ${token}\r\n`;
+    const body = JSON.stringify(INIT_BODY);
+    // The standalone SSE stream holds the connection's response slot, so the
+    // handshake behind it has a response with no socket of its own yet.
+    socket.write(
+      `GET ${path} HTTP/1.1\r\n${common}Accept: text/event-stream\r\n` +
+        `mcp-session-id: ${sessionId}\r\n\r\n` +
+        `POST ${path} HTTP/1.1\r\n${common}Content-Type: application/json\r\n` +
+        `Accept: application/json, text/event-stream\r\n` +
+        `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body.slice(0, -1)}`
+    );
+
+    await closed;
+    await waitFor(() => listener.inFlight() === 0);
+    expect(route.sessionCount).toBe(1);
   });
 
   it("waits for a roster that registers after activation instead of listing nothing", async () => {

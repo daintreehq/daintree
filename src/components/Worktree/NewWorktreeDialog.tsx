@@ -791,7 +791,12 @@ export function NewWorktreeDialog({
             const terminals = useRecipeStore
               .getState()
               .generateRecipeFromActiveTerminals(sourceWorktreeId);
-            await spawnPanelsFromRecipe({ terminals, worktreeId, cwd: snapWorktreePath });
+            await spawnPanelsFromRecipe({
+              terminals,
+              worktreeId,
+              cwd: snapWorktreePath,
+              source: { kind: "clone-layout" },
+            });
           } catch (cloneErr) {
             const message = formatErrorMessage(cloneErr, "Couldn't clone layout");
             notify({

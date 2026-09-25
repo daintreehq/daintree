@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { sanitizeErrorText } from "@/utils/errorText";
 
 const COPIED_RESET_MS = 2000;
@@ -13,6 +14,8 @@ export interface SpawnDiagnostics {
 
 export interface DiagnosticCopyButtonProps {
   diagnostics: SpawnDiagnostics;
+  /** The full error message, copied on its own line after the fields but never displayed. */
+  message?: string;
   className?: string;
 }
 
@@ -31,8 +34,14 @@ function formatDiagnostics(diagnostics: SpawnDiagnostics): string {
   return parts.join(" ");
 }
 
-export function DiagnosticCopyButton({ diagnostics, className }: DiagnosticCopyButtonProps) {
+export function DiagnosticCopyButton({
+  diagnostics,
+  message,
+  className,
+}: DiagnosticCopyButtonProps) {
   const payload = formatDiagnostics(diagnostics);
+  const fullMessage = message ? flattenWhitespace(message) : "";
+  const clipboardText = fullMessage ? `${payload}\n${fullMessage}` : payload;
   const [copied, setCopied] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const generationRef = useRef(0);
@@ -57,7 +66,7 @@ export function DiagnosticCopyButton({ diagnostics, className }: DiagnosticCopyB
     if (!payload) return;
     if (!navigator.clipboard?.writeText) return;
     const gen = generationRef.current;
-    void navigator.clipboard.writeText(payload).then(
+    void navigator.clipboard.writeText(clipboardText).then(
       () => {
         if (gen !== generationRef.current) return;
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -71,7 +80,7 @@ export function DiagnosticCopyButton({ diagnostics, className }: DiagnosticCopyB
         // Clipboard rejected — stay silent.
       }
     );
-  }, [payload]);
+  }, [payload, clipboardText]);
 
   if (!payload) return null;
 
@@ -84,15 +93,16 @@ export function DiagnosticCopyButton({ diagnostics, className }: DiagnosticCopyB
       >
         {payload}
       </span>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={handleClick}
         aria-label={copied ? "Diagnostics copied" : "Copy diagnostics"}
-        className="flex items-center gap-1 px-1.5 py-0.5 text-3xs font-medium text-text-secondary hover:text-text-primary hover:bg-daintree-border/40 rounded transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary shrink-0"
+        className="shrink-0"
       >
-        <Copy className="w-3 h-3" aria-hidden="true" />
+        <Copy aria-hidden="true" />
         {copied ? "Copied" : "Copy"}
-      </button>
+      </Button>
     </div>
   );
 }

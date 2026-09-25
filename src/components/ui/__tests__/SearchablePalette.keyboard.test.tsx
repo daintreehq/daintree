@@ -262,3 +262,25 @@ describe("SearchablePalette results region (#11431)", () => {
     expect(getRegion().hasAttribute("aria-activedescendant")).toBe(false);
   });
 });
+
+describe("SearchablePalette Escape clears before it closes", () => {
+  it("clears a query without the dialog's backstop closing the palette", () => {
+    const onQueryChange = vi.fn();
+    const onClose = vi.fn();
+    renderPalette({ query: "abc", onQueryChange, onClose });
+
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+
+    expect(onQueryChange).toHaveBeenCalledWith("");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("closes on Escape once the field is empty", () => {
+    const onClose = vi.fn();
+    renderPalette({ query: "", onClose });
+
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalled();
+  });
+});

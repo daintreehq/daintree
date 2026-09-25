@@ -347,6 +347,54 @@ describe("FixedDropdown overlay-claims dismiss behavior", () => {
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 
+  describe("a menu opened from inside the dropdown", () => {
+    function renderWithMenuTrigger(expanded: boolean) {
+      render(
+        <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+          <button type="button" aria-haspopup="menu" aria-expanded={expanded}>
+            More
+          </button>
+        </FixedDropdown>
+      );
+      // Where Radix portals menu content: straight onto document.body.
+      const wrapper = document.createElement("div");
+      wrapper.setAttribute("data-radix-popper-content-wrapper", "");
+      const item = document.createElement("div");
+      item.setAttribute("role", "menuitem");
+      wrapper.appendChild(item);
+      document.body.appendChild(wrapper);
+      return { item, wrapper };
+    }
+
+    afterEach(() => {
+      document.querySelectorAll("[data-radix-popper-content-wrapper]").forEach((n) => n.remove());
+    });
+
+    it("does not dismiss when one of its items is pressed", () => {
+      const { item } = renderWithMenuTrigger(true);
+      act(() => {
+        item.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      });
+      expect(onOpenChange).not.toHaveBeenCalled();
+    });
+
+    it("still dismisses for popper content no trigger of its own has open", () => {
+      const { item } = renderWithMenuTrigger(false);
+      act(() => {
+        item.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      });
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+
+    it("still dismisses for a press anywhere else while the menu is open", () => {
+      renderWithMenuTrigger(true);
+      act(() => {
+        document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      });
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+  });
+
   it("resumes Escape dismiss after child overlay closes", () => {
     setOverlayStackLength(1);
     const { rerender } = render(

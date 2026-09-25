@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpAuditRecord } from "@shared/types";
 
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
 vi.mock("@/utils/logger", () => ({ logWarn: vi.fn() }));
+
+const { dispatch } = vi.hoisted(() => ({ dispatch: vi.fn() }));
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 
 // Deterministic popover: mirrors the controlled open/onOpenChange contract so
 // tests drive the strip's own state machine without Radix's async chunk load.
@@ -33,6 +36,14 @@ vi.mock("@/components/ui/popover", async () => {
     },
   };
 });
+
+// Passthrough tooltip: the footer mounts the provider, which a unit render of
+// this component alone does not have.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: unknown }) => children,
+  TooltipTrigger: ({ children }: { children: unknown }) => children,
+  TooltipContent: () => null,
+}));
 
 import { McpActivityStrip } from "../McpActivityStrip";
 import { groupCallsByTurn } from "../RecentCallsPopover";
@@ -80,8 +91,10 @@ beforeEach(() => {
   __resetHelpSessionControllersForTests();
   getAuditRecords.mockReset();
   getAuditRecords.mockResolvedValue([]);
-  Object.defineProperty(globalThis, "window", {
-    value: { electron: { mcpServer: { getAuditRecords } } },
+  // On the real jsdom window, not a stand-in object: the popover's age ticker
+  // reaches for window timers.
+  Object.defineProperty(window, "electron", {
+    value: { mcpServer: { getAuditRecords } },
     writable: true,
     configurable: true,
   });
@@ -151,7 +164,7 @@ describe("McpActivityStrip", () => {
     render(<McpActivityStrip sessionId="session-a" activity={null} />);
     fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
     expect(await screen.findByText("no-turn-tool")).toBeTruthy();
-    expect(screen.getByText(/not tied to a turn/i)).toBeTruthy();
+    expect(screen.getByText(/outside any turn/i)).toBeTruthy();
   });
 
   it("omits the unassociated label when every call has a turn (#10067)", async () => {
@@ -161,7 +174,7 @@ describe("McpActivityStrip", () => {
     render(<McpActivityStrip sessionId="session-a" activity={null} />);
     fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
     expect(await screen.findByText("turn-tool")).toBeTruthy();
-    expect(screen.queryByText(/not tied to a turn/i)).toBeNull();
+    expect(screen.queryByText(/outside any turn/i)).toBeNull();
   });
 
   it("filters out records from other sessions", async () => {
@@ -199,7 +212,7 @@ describe("McpActivityStrip", () => {
     getAuditRecords.mockResolvedValue([]);
     render(<McpActivityStrip sessionId="session-a" activity={null} />);
     fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
-    expect(await screen.findByText(/no calls yet this session/i)).toBeTruthy();
+    expect(await screen.findByText(/to see its tool calls here/i)).toBeTruthy();
   });
 
   it("does not flash old-session records after the session changes mid-fetch", async () => {
@@ -221,7 +234,7 @@ describe("McpActivityStrip", () => {
 
     // Reopen under session-b — the stale session-a result must not appear.
     fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
-    expect(await screen.findByText(/no calls yet this session/i)).toBeTruthy();
+    expect(await screen.findByText(/to see its tool calls here/i)).toBeTruthy();
     expect(screen.queryByText("stale-tool")).toBeNull();
   });
 
@@ -301,7 +314,7 @@ describe("McpActivityStrip", () => {
     expect(screen.getByText(/no output recorded for this call/i)).toBeTruthy();
   });
 
-  it("renders a Retry-in-Ns hint on rate_limited records carrying resultMeta (#10014)", async () => {
+  it("renders the server's requested wait on rate_limited records carrying resultMeta (#10014)", async () => {
     getAuditRecords.mockResolvedValue([
       makeRecord({
         id: "1",
@@ -316,7 +329,10 @@ describe("McpActivityStrip", () => {
     const row = await screen.findByRole("button", { name: /throttled\.call/ });
     fireEvent.click(row);
     expect(screen.getByText("Rate limited")).toBeTruthy();
-    expect(screen.getByText("Retry in 5s")).toBeTruthy();
+    // Historical wording: the row can be minutes old, so a "retry in" countdown
+    // would describe a wait that has already passed.
+    expect(screen.getByText("Asked to retry after 5s")).toBeTruthy();
+    expect(screen.queryByText(/retry in \d+s/i)).toBeNull();
     // The no-output fallback must NOT appear when resultMeta carries the hint.
     expect(screen.queryByText(/no output recorded for this call/i)).toBeNull();
   });
@@ -334,10 +350,225 @@ describe("McpActivityStrip", () => {
     fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
     const row = await screen.findByRole("button", { name: /legacy\.throttled/ });
     fireEvent.click(row);
-    expect(screen.queryByText(/retry in \d+s/i)).toBeNull();
+    expect(screen.queryByText(/retry after \d+s/i)).toBeNull();
     expect(screen.getByText(/no output recorded for this call/i)).toBeTruthy();
   });
+
+  it("points every disclosure at a panel that exists, collapsed or expanded", async () => {
+    getAuditRecords.mockResolvedValue([
+      makeRecord({ id: "1", toolId: "one.call", turnId: "t1", resultSummary: "ok" }),
+      makeRecord({ id: "2", toolId: "two.call", resultSummary: "ok" }),
+    ]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    await screen.findByRole("button", { name: /one\.call/ });
+    const rows = screen.getAllByRole("button").filter((b) => b.hasAttribute("aria-expanded"));
+    expect(rows.length).toBe(2);
+    for (const expanded of [false, true]) {
+      for (const row of rows) {
+        if (expanded) fireEvent.click(row);
+        const id = row.getAttribute("aria-controls");
+        expect(id).toBeTruthy();
+        expect(document.getElementById(id!)).not.toBeNull();
+      }
+    }
+  });
+
+  it("names every group of calls with a visible heading", async () => {
+    getAuditRecords.mockResolvedValue([
+      makeRecord({ id: "1", toolId: "newest", turnId: "t2" }),
+      makeRecord({ id: "2", toolId: "older", turnId: "t1" }),
+      makeRecord({ id: "3", toolId: "loose" }),
+    ]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    await screen.findByText("newest");
+    const lists = Array.from(screen.getByTestId("popover-content").querySelectorAll("ul ul"));
+    expect(lists.length).toBe(3);
+    const names = lists.map((list) => {
+      const heading = document.getElementById(list.getAttribute("aria-labelledby") ?? "");
+      return heading?.textContent?.trim() ?? "";
+    });
+    expect(names.every((n) => n.length > 0)).toBe(true);
+    expect(new Set(names.slice(0, 2)).size).toBe(2);
+  });
+
+  it("keeps payloads inside the one list scroller rather than their own", async () => {
+    getAuditRecords.mockResolvedValue([
+      makeRecord({
+        id: "1",
+        toolId: "big.call",
+        argsSummary: '{"a":1}',
+        resultSummary: "x\n".repeat(200),
+      }),
+    ]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /big\.call/ }));
+    const scrollers = Array.from(
+      screen.getByTestId("popover-content").querySelectorAll("*")
+    ).filter((el) =>
+      /(^|\s)overflow-(y-)?(auto|scroll)(\s|$)/.test(el.getAttribute("class") ?? "")
+    );
+    expect(scrollers.length).toBe(1);
+  });
+
+  it("tells a blocked call what tier would have let it through", async () => {
+    getAuditRecords.mockResolvedValue([
+      makeRecord({ id: "1", toolId: "hinted", result: "unauthorized", tierHint: "action" }),
+      makeRecord({ id: "2", toolId: "nowhere", result: "unauthorized", tierHint: null }),
+    ]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /hinted/ }));
+    fireEvent.click(screen.getByRole("button", { name: /nowhere/ }));
+    expect(screen.getByText(/raise capability tier to action to allow/i)).toBeTruthy();
+    expect(screen.getByText(/not permitted at any tier/i)).toBeTruthy();
+  });
+
+  it("offers a retry after a failed read, and it reads again", async () => {
+    getAuditRecords.mockRejectedValueOnce(new Error("boom"));
+    getAuditRecords.mockResolvedValue([makeRecord({ id: "1", toolId: "recovered" })]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("recovered")).toBeTruthy();
+  });
+
+  it("links to the full audit log and closes on the way", async () => {
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /open full audit log/i }));
+    expect(dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      expect.objectContaining({ tab: "mcp" }),
+      { source: "user" }
+    );
+    expect(screen.queryByTestId("popover-content")).toBeNull();
+  });
+
+  it("keeps the rows it already read when a refresh fails", async () => {
+    getAuditRecords.mockResolvedValueOnce([makeRecord({ id: "1", toolId: "kept" })]);
+    const { rerender } = render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    const popover = await screen.findByTestId("popover-content");
+    await within(popover).findByText("kept");
+    getAuditRecords.mockRejectedValueOnce(new Error("boom"));
+    rerender(
+      <McpActivityStrip
+        sessionId="session-a"
+        activity={makeActivity({ status: "settled", toolId: "next", startedAt: 9 })}
+      />
+    );
+    expect(await within(popover).findByText(/couldn't refresh/i)).toBeTruthy();
+    expect(within(popover).getByText("kept")).toBeTruthy();
+  });
+
+  it("keeps Retry mounted while it works, then hands focus to the first call", async () => {
+    getAuditRecords.mockRejectedValueOnce(new Error("boom"));
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    retry.focus();
+
+    let resolveRetry: (v: McpAuditRecord[]) => void = () => {};
+    getAuditRecords.mockReturnValueOnce(
+      new Promise<McpAuditRecord[]>((res) => {
+        resolveRetry = res;
+      })
+    );
+    fireEvent.click(retry);
+    expect(screen.getByRole("button", { name: "Retry" })).toBe(retry);
+    expect(document.activeElement).toBe(retry);
+
+    await act(async () => {
+      resolveRetry([makeRecord({ id: "1", toolId: "back" })]);
+    });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /back/ }));
+  });
+
+  it("leaves focus where the user moved it while a retry was in flight", async () => {
+    getAuditRecords.mockRejectedValueOnce(new Error("boom"));
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    retry.focus();
+
+    let resolveRetry: (v: McpAuditRecord[]) => void = () => {};
+    getAuditRecords.mockReturnValueOnce(
+      new Promise<McpAuditRecord[]>((res) => {
+        resolveRetry = res;
+      })
+    );
+    fireEvent.click(retry);
+    const footer = screen.getByRole("button", { name: /open full audit log/i });
+    footer.focus();
+
+    await act(async () => {
+      resolveRetry([makeRecord({ id: "1", toolId: "back" })]);
+    });
+    expect(document.activeElement).toBe(footer);
+  });
+
+  it("marks a background-refresh error row busy while its retry is in flight", async () => {
+    getAuditRecords.mockResolvedValueOnce([makeRecord({ id: "1", toolId: "kept" })]);
+    const { rerender } = render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    const popover = await screen.findByTestId("popover-content");
+    await within(popover).findByText("kept");
+    getAuditRecords.mockRejectedValueOnce(new Error("boom"));
+    rerender(
+      <McpActivityStrip
+        sessionId="session-a"
+        activity={makeActivity({ status: "settled", toolId: "next", startedAt: 9 })}
+      />
+    );
+    const retry = await within(popover).findByRole("button", { name: "Retry" });
+    expect(within(popover).getByRole("alert").getAttribute("aria-busy")).toBeNull();
+
+    getAuditRecords.mockReturnValueOnce(new Promise<McpAuditRecord[]>(() => {}));
+    fireEvent.click(retry);
+    expect(within(popover).getByRole("alert").getAttribute("aria-busy")).toBe("true");
+  });
+
+  it("re-reads the list when a call settles while it is open", async () => {
+    getAuditRecords.mockResolvedValueOnce([makeRecord({ id: "1", toolId: "first" })]);
+    const { rerender } = render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    const popover = await screen.findByTestId("popover-content");
+    await within(popover).findByText("first");
+
+    let resolveRefresh: (v: McpAuditRecord[]) => void = () => {};
+    getAuditRecords.mockReturnValueOnce(
+      new Promise<McpAuditRecord[]>((res) => {
+        resolveRefresh = res;
+      })
+    );
+    rerender(
+      <McpActivityStrip
+        sessionId="session-a"
+        activity={makeActivity({ status: "settled", toolId: "second", startedAt: 5 })}
+      />
+    );
+    // Mid-refresh the existing rows stay put rather than blanking to a skeleton.
+    expect(getAuditRecords).toHaveBeenCalledTimes(2);
+    expect(within(popover).getByText("first")).toBeTruthy();
+    expect(within(popover).queryByRole("status")).toBeNull();
+
+    await act(async () => {
+      resolveRefresh([
+        makeRecord({ id: "2", toolId: "second" }),
+        makeRecord({ id: "1", toolId: "first" }),
+      ]);
+    });
+    expect(within(popover).getByText("second")).toBeTruthy();
+  });
 });
+
+/** The trigger's visible text: empty at rest, where only the glyph shows. */
+function liveText(): string {
+  return screen.getByRole("button", { name: /recent tool calls/i }).textContent ?? "";
+}
 
 describe("McpActivityStrip live activity", () => {
   beforeEach(() => {
@@ -350,14 +581,14 @@ describe("McpActivityStrip live activity", () => {
 
   it("withholds the in-flight row during the Doherty gate, then shows it", () => {
     render(<McpActivityStrip sessionId="session-a" activity={makeActivity({ turnId: "t1" })} />);
-    // Inside the gate the resting label holds — no spinner flash.
-    expect(screen.getByText("Recent activity")).toBeTruthy();
+    // Inside the gate the resting glyph holds — no spinner flash.
+    expect(liveText()).toBe("");
     expect(screen.queryByText("terminal.getStatus")).toBeNull();
     act(() => {
       vi.advanceTimersByTime(400);
     });
     expect(screen.getByText("terminal.getStatus")).toBeTruthy();
-    expect(screen.queryByText("Recent activity")).toBeNull();
+    expect(liveText()).not.toBe("");
   });
 
   it("labels a coalesced same-turn burst with its call count", () => {
@@ -391,7 +622,7 @@ describe("McpActivityStrip live activity", () => {
     act(() => {
       vi.advanceTimersByTime(5000);
     });
-    expect(screen.getByText("Recent activity")).toBeTruthy();
+    expect(liveText()).toBe("");
     expect(screen.queryByText("terminal.getStatus")).toBeNull();
   });
 
@@ -413,7 +644,7 @@ describe("McpActivityStrip live activity", () => {
       vi.advanceTimersByTime(60_000);
     });
     expect(screen.getByText("terminal.getStatus")).toBeTruthy();
-    expect(screen.queryByText("Recent activity")).toBeNull();
+    expect(liveText()).not.toBe("");
   });
 
   it("keeps the button's accessible name stable while the live row morphs", () => {
@@ -444,7 +675,7 @@ describe("McpActivityStrip live activity", () => {
     );
     expect(screen.getByText("terminal.getStatus")).toBeTruthy();
     // Call 2 starts in the same turn — the live row must appear immediately,
-    // not flash back to "Recent activity" for another 400ms.
+    // not flash back to the resting glyph for another 400ms.
     rerender(
       <McpActivityStrip
         sessionId="session-a"
@@ -452,6 +683,6 @@ describe("McpActivityStrip live activity", () => {
       />
     );
     expect(screen.getByText("2 calls · terminal.sendText")).toBeTruthy();
-    expect(screen.queryByText("Recent activity")).toBeNull();
+    expect(liveText()).not.toBe("");
   });
 });

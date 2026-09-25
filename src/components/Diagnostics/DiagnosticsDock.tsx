@@ -22,7 +22,6 @@ import {
   LogsActions,
   EventsActions,
   TelemetryActions,
-  PerfActions,
 } from "./DiagnosticsActions";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
@@ -50,7 +49,7 @@ function TabButton({ tab, label, isActive, onClick, badge }: TabButtonProps) {
       onClick={onClick}
       tabIndex={isActive ? 0 : -1}
       className={cn(
-        "px-3 py-1.5 text-sm font-medium transition-colors relative rounded",
+        "px-3 py-1.5 text-sm font-medium transition-colors relative rounded-[var(--radius-md)]",
         "hover:text-text-primary hover:bg-overlay-soft",
         "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-sidebar",
         isActive ? "text-text-primary" : "text-text-secondary"
@@ -61,11 +60,16 @@ function TabButton({ tab, label, isActive, onClick, badge }: TabButtonProps) {
     >
       {label}
       {badge !== undefined && badge > 0 && (
-        <span className="ml-1.5 px-1.5 py-0.5 text-xs tabular-nums bg-status-error/15 text-status-error rounded-full">
+        <span className="ml-1.5 rounded-full bg-status-error/25 px-1.5 py-0.5 text-xs tabular-nums text-text-primary">
           {badge > 99 ? "99+" : badge}
         </span>
       )}
-      {isActive && <div className="absolute bottom-0 left-0 right-0 h-px bg-daintree-text/30" />}
+      {isActive && (
+        <div
+          aria-hidden="true"
+          className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full bg-text-primary"
+        />
+      )}
     </button>
   );
 }
@@ -162,6 +166,18 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     [height, maxHeight, setHeight]
   );
 
+  // Pointer and keyboard activation share one path, so promoting errors when
+  // Problems opens can't depend on how the tab was reached.
+  const selectTab = useCallback(
+    (tab: DiagnosticsTab) => {
+      if (tab === "problems" && useDiagnosticsStore.getState().activeTab !== "problems") {
+        useErrorStore.getState().promoteErrors();
+      }
+      setActiveTab(tab);
+    },
+    [setActiveTab]
+  );
+
   const handleTablistKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       const container = tablistRef.current;
@@ -194,9 +210,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       if (!nextTab) return;
       nextTab.focus();
       const tabId = nextTab.dataset.tab as DiagnosticsTab | undefined;
-      if (tabId) setActiveTab(tabId);
+      if (tabId) selectTab(tabId);
     },
-    [setActiveTab]
+    [selectTab]
   );
 
   useEffect(() => {
@@ -319,8 +335,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       <div
         className={cn(
           "group h-3 cursor-ns-resize transition-colors flex items-center justify-center",
-          "hover:bg-overlay-soft focus-visible:outline-hidden focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-daintree-accent/50",
-          isResizing && "bg-overlay-medium"
+          "outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+          // Hover styling is off while resizing, or it outranks the drag state.
+          isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft"
         )}
         onMouseDown={handleResizeStart}
         onDoubleClick={handleResetHeight}
@@ -335,10 +352,11 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       >
         <div
           className={cn(
-            "w-10 h-px rounded-full transition-[height] duration-150 delay-100 group-hover:h-0.5",
-            "bg-daintree-text/15",
-            "group-hover:bg-daintree-text/30 group-focus-visible:bg-accent-primary",
-            isResizing && "bg-daintree-text/50"
+            "w-10 rounded-full transition-[height] duration-150 delay-100",
+            // The focus outline is the accent; the grip stays neutral.
+            isResizing
+              ? "h-0.5 bg-text-primary/50"
+              : "h-px bg-text-primary/15 group-hover:h-0.5 group-hover:bg-text-primary/30 group-focus-visible:h-0.5 group-focus-visible:bg-text-primary/50"
           )}
         />
       </div>
@@ -357,12 +375,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
               tab={tab.id}
               label={tab.label}
               isActive={activeTab === tab.id}
-              onClick={() => {
-                if (tab.id === "problems" && activeTab !== "problems") {
-                  useErrorStore.getState().promoteErrors();
-                }
-                setActiveTab(tab.id);
-              }}
+              onClick={() => selectTab(tab.id)}
               badge={tab.badge}
             />
           ))}
@@ -373,7 +386,6 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           {activeTab === "logs" && <LogsActions />}
           {activeTab === "events" && <EventsActions />}
           {activeTab === "telemetry" && <TelemetryActions />}
-          {activeTab === "perf" && <PerfActions />}
 
           <Tooltip>
             <TooltipTrigger asChild>
@@ -395,8 +407,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           <div
             id="diagnostics-problems-panel"
             role="tabpanel"
+            tabIndex={0}
             aria-labelledby="diagnostics-problems-tab"
-            className="h-full"
+            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <ProblemsContent onRetry={onRetry} onCancelRetry={onCancelRetry} />
           </div>
@@ -405,8 +418,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           <div
             id="diagnostics-logs-panel"
             role="tabpanel"
+            tabIndex={0}
             aria-labelledby="diagnostics-logs-tab"
-            className="h-full"
+            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <LogsContent />
           </div>
@@ -415,8 +429,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           <div
             id="diagnostics-events-panel"
             role="tabpanel"
+            tabIndex={0}
             aria-labelledby="diagnostics-events-tab"
-            className="h-full"
+            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <EventsContent />
           </div>
@@ -425,8 +440,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           <div
             id="diagnostics-telemetry-panel"
             role="tabpanel"
+            tabIndex={0}
             aria-labelledby="diagnostics-telemetry-tab"
-            className="h-full"
+            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <TelemetryContent />
           </div>
@@ -435,8 +451,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           <div
             id="diagnostics-perf-panel"
             role="tabpanel"
+            tabIndex={0}
             aria-labelledby="diagnostics-perf-tab"
-            className="h-full"
+            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <PerfContent />
           </div>
@@ -445,8 +462,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           <div
             id="diagnostics-whySlow-panel"
             role="tabpanel"
+            tabIndex={0}
             aria-labelledby="diagnostics-whySlow-tab"
-            className="h-full"
+            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <WhySlowContent />
           </div>

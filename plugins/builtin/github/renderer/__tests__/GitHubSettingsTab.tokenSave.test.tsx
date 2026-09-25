@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { GitHubSettingsTab } from "../components/GitHubSettingsTab";
 import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
 
@@ -32,6 +32,18 @@ const mockedNotify = vi.mocked(notify);
 
 const setCredentialMock = vi.fn();
 const clearCredentialMock = vi.fn(async () => {});
+
+// Errors render on the token field and again in a visually hidden copy inside
+// the actions live region, so the text appears twice by design. Assert the
+// visible field error and that the input is flagged invalid.
+function expectTokenFieldError(text: RegExp) {
+  const matches = screen.getAllByText(text);
+  expect(matches.length).toBeGreaterThanOrEqual(1);
+  expect(matches.some((el) => !el.classList.contains("sr-only"))).toBe(true);
+  expect(screen.getByLabelText(/github personal access token/i).getAttribute("aria-invalid")).toBe(
+    "true"
+  );
+}
 
 function installForgeMocks() {
   window.electron = {
@@ -134,7 +146,7 @@ describe("GitHubSettingsTab handleSaveToken", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save token" }));
 
     await waitFor(() => {
-      expect(screen.getByText(/invalid token/i)).toBeTruthy();
+      expectTokenFieldError(/invalid token/i);
     });
 
     expect(mockedDispatch).not.toHaveBeenCalledWith(
@@ -167,7 +179,7 @@ describe("GitHubSettingsTab handleSaveToken", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save token" }));
 
     await waitFor(() => {
-      expect(screen.getByText(/couldn't save token/i)).toBeTruthy();
+      expectTokenFieldError(/couldn't save token/i);
     });
 
     expect(mockedNotify).not.toHaveBeenCalled();
@@ -186,6 +198,11 @@ describe("GitHubSettingsTab handleSaveToken", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Clear token" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Clear the GitHub token?")).toBeTruthy();
+    expect(clearCredentialMock).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clear token" }));
 
     await waitFor(() => {
       expect(clearCredentialMock).toHaveBeenCalledWith("daintree.github.github");
@@ -212,7 +229,7 @@ describe("GitHubSettingsTab handleSaveToken", () => {
     fireEvent.click(screen.getByRole("button", { name: "Test token" }));
 
     await waitFor(() => {
-      expect(screen.getByText(/couldn't validate token/i)).toBeTruthy();
+      expectTokenFieldError(/couldn't validate token/i);
     });
 
     expect(mockedNotify).not.toHaveBeenCalled();
@@ -254,7 +271,7 @@ describe("GitHubSettingsTab handleSaveToken", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText(/token valid/i)).toBeTruthy();
+      expect(screen.getByText(/token works — not saved yet/i)).toBeTruthy();
     });
   });
 });

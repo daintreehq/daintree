@@ -1,7 +1,8 @@
-import { useState, type CSSProperties } from "react";
-import { Download, Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { useState } from "react";
+import { Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_INERT_CLASSES } from "@/components/ui/ariaDisabled";
+import { Spinner } from "@/components/ui/Spinner";
 import { usePanelStore } from "@/store/panelStore";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
 import { actionService } from "@/services/ActionService";
@@ -9,21 +10,6 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { logError } from "@/utils/logger";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { HOST_CRASH_RECOVERING_COPY, getHostCrashBannerCopy } from "./recoveryCopy";
-
-// The banner sizes and places its icon through `className`, so those classes
-// land on the rotating wrapper and the glyph fills it. Spinning the svg itself
-// would keep Chromium restyling it on the main thread every frame (#12584).
-function SpinnerIcon({ className, style }: { className?: string; style?: CSSProperties }) {
-  return (
-    <span
-      className={cn("inline-flex animate-spin motion-reduce:animate-none", className)}
-      style={style}
-      aria-hidden="true"
-    >
-      <Loader2 className="size-full" />
-    </span>
-  );
-}
 
 export function HostCrashBanner() {
   const backendStatus = usePanelStore((s) => s.backendStatus);
@@ -40,7 +26,7 @@ export function HostCrashBanner() {
 
     return (
       <InlineStatusBanner
-        icon={SpinnerIcon}
+        icon={Spinner}
         title={HOST_CRASH_RECOVERING_COPY.title}
         description={HOST_CRASH_RECOVERING_COPY.description}
         severity="warning"
@@ -87,8 +73,11 @@ export function HostCrashBanner() {
     <Button
       variant="ghost"
       size="sm"
-      onClick={handleSendDiagnostics}
-      disabled={isCollectingDiagnostics}
+      onClick={isCollectingDiagnostics ? undefined : handleSendDiagnostics}
+      // Focusable while collecting, like the banner's own actions: the label
+      // flips under the keyboard user rather than dropping them to <body>.
+      aria-disabled={isCollectingDiagnostics || undefined}
+      className={isCollectingDiagnostics ? ARIA_DISABLED_INERT_CLASSES : undefined}
       aria-label="Send diagnostics"
     >
       <Download aria-hidden="true" />

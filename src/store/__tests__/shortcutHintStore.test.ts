@@ -46,13 +46,14 @@ describe("shortcutHintStore", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({ "nav.quickSwitcher": 1 });
     s.recordPointer(100, 200);
-    const result = s.show("nav.quickSwitcher", "⌘K");
+    const result = s.show("nav.quickSwitcher", "Cmd+K");
 
     expect(result).toBe(true);
     const state = shortcutHintStore.getState();
     expect(state.activeHint).toEqual({
       actionId: "nav.quickSwitcher",
-      displayCombo: "⌘K",
+      combo: "Cmd+K",
+      origin: "dispatch",
       x: 100,
       y: 200,
     });
@@ -62,7 +63,7 @@ describe("shortcutHintStore", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({ "nav.quickSwitcher": 3 });
     s.recordPointer(100, 200);
-    const result = s.show("nav.quickSwitcher", "⌘K");
+    const result = s.show("nav.quickSwitcher", "Cmd+K");
 
     expect(result).toBe(false);
     expect(shortcutHintStore.getState().activeHint).toBeNull();
@@ -83,7 +84,7 @@ describe("shortcutHintStore", () => {
       });
       const s = shortcutHintStore.getState();
       s.recordPointer(100, 200);
-      expect(s.show("nav.quickSwitcher", "⌘K")).toBe(false);
+      expect(s.show("nav.quickSwitcher", "Cmd+K")).toBe(false);
     }
   });
 
@@ -97,7 +98,7 @@ describe("shortcutHintStore", () => {
       });
       const s = shortcutHintStore.getState();
       s.recordPointer(100, 200);
-      const result = s.show("nav.quickSwitcher", "⌘K");
+      const result = s.show("nav.quickSwitcher", "Cmd+K");
       expect(result).toBe(true);
     }
   });
@@ -113,7 +114,7 @@ describe("shortcutHintStore", () => {
       });
       const s = shortcutHintStore.getState();
       s.recordPointer(100, 200);
-      const result = s.show("nav.quickSwitcher", "⌘K");
+      const result = s.show("nav.quickSwitcher", "Cmd+K");
       expect(result).toBe(false);
     }
   });
@@ -122,7 +123,7 @@ describe("shortcutHintStore", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({ "nav.quickSwitcher": 33 });
     s.recordPointer(100, 200);
-    const result = s.show("nav.quickSwitcher", "⌘K");
+    const result = s.show("nav.quickSwitcher", "Cmd+K");
 
     expect(result).toBe(false);
   });
@@ -133,7 +134,7 @@ describe("shortcutHintStore", () => {
     shortcutHintStore.setState({
       pointer: { x: 100, y: 200, ts: Date.now() - 3000 },
     });
-    const result = s.show("nav.quickSwitcher", "⌘K");
+    const result = s.show("nav.quickSwitcher", "Cmd+K");
 
     expect(result).toBe(false);
     expect(shortcutHintStore.getState().activeHint).toBeNull();
@@ -142,7 +143,7 @@ describe("shortcutHintStore", () => {
   it("returns false when no pointer recorded", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({ "nav.quickSwitcher": 1 });
-    const result = s.show("nav.quickSwitcher", "⌘K");
+    const result = s.show("nav.quickSwitcher", "Cmd+K");
 
     expect(result).toBe(false);
     expect(shortcutHintStore.getState().activeHint).toBeNull();
@@ -152,7 +153,7 @@ describe("shortcutHintStore", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({ "nav.quickSwitcher": 1 });
     s.recordPointer(100, 200);
-    s.show("nav.quickSwitcher", "⌘K");
+    s.show("nav.quickSwitcher", "Cmd+K");
     s.hide();
 
     expect(shortcutHintStore.getState().activeHint).toBeNull();
@@ -182,7 +183,7 @@ describe("shortcutHintStore", () => {
     s.hydrateCounts({});
     s.recordPointer(100, 200);
     s.incrementCount("nav.quickSwitcher");
-    const result = s.show("nav.quickSwitcher", "⌘K");
+    const result = s.show("nav.quickSwitcher", "Cmd+K");
 
     expect(result).toBe(true);
     expect(shortcutHintStore.getState().counts["nav.quickSwitcher"]).toBe(1);
@@ -193,7 +194,7 @@ describe("shortcutHintStore", () => {
     s.hydrateCounts({ "nav.quickSwitcher": 32 });
     s.recordPointer(100, 200);
     s.incrementCount("nav.quickSwitcher");
-    const result = s.show("nav.quickSwitcher", "⌘K");
+    const result = s.show("nav.quickSwitcher", "Cmd+K");
 
     expect(result).toBe(false);
     expect(shortcutHintStore.getState().counts["nav.quickSwitcher"]).toBe(33);
@@ -205,8 +206,8 @@ describe("shortcutHintStore", () => {
     s.recordPointer(100, 200);
 
     s.incrementCount("terminal.new");
-    const resultA = s.show("terminal.new", "⌘T");
-    const resultB = s.show("nav.quickSwitcher", "⌘K");
+    const resultA = s.show("terminal.new", "Cmd+T");
+    const resultB = s.show("nav.quickSwitcher", "Cmd+K");
 
     expect(resultA).toBe(true);
     expect(resultB).toBe(false);
@@ -224,15 +225,17 @@ describe("shortcutHintStore", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({ "nav.quickSwitcher": 1 });
     // No pointer recorded — dispatch path would fail
-    const result = s.show("nav.quickSwitcher", "⌘K", { x: 300, y: 400 });
+    const result = s.show("nav.quickSwitcher", "Cmd+K", { x: 300, y: 400, origin: "hover" });
 
     expect(result).toBe(true);
     const state = shortcutHintStore.getState();
     expect(state.activeHint).toEqual({
       actionId: "nav.quickSwitcher",
-      displayCombo: "⌘K",
+      combo: "Cmd+K",
+      origin: "hover",
       x: 300,
       y: 400,
+      trigger: undefined,
     });
   });
 

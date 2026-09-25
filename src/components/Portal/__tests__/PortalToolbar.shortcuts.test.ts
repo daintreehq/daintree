@@ -13,11 +13,11 @@ describe("PortalToolbar shortcut tooltips — issue #3819", () => {
 
   describe("useKeybindingDisplay hooks", () => {
     it("uses dynamic hook for panel.togglePortal", () => {
-      expect(source).toContain('useKeybindingDisplay("panel.togglePortal")');
+      expect(source).toContain('useEffectiveCombo("panel.togglePortal")');
     });
 
     it("uses dynamic hook for portal.newTab", () => {
-      expect(source).toContain('useKeybindingDisplay("portal.newTab")');
+      expect(source).toContain('useEffectiveCombo("portal.newTab")');
     });
   });
 

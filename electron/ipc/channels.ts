@@ -388,6 +388,8 @@ export const CHANNELS = {
   SESSION_RESTORE_GET_CONFIG: "session-restore:get-config",
   SESSION_RESTORE_UPDATE_CONFIG: "session-restore:update-config",
   SESSION_RESTORE_VIEW_HYDRATED: "session-restore:view-hydrated",
+  WINDOW_OPENING_GET_CONFIG: "window-opening:get-config",
+  WINDOW_OPENING_UPDATE_CONFIG: "window-opening:update-config",
   KEEP_AWAKE_GET_STATE: "keep-awake:get-state",
   KEEP_AWAKE_UPDATE_CONFIG: "keep-awake:update-config",
   KEEP_AWAKE_STATE_CHANGED: "keep-awake:state-changed",
@@ -856,6 +858,9 @@ export const CHANNELS = {
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
   ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN: "onboarding:checklist-mark-celebration-shown",
   ONBOARDING_CHECKLIST_PUSH: "onboarding:checklist-push",
+  ONBOARDING_TOUR_DISMISS_INVITE: "onboarding:tour-dismiss-invite",
+  ONBOARDING_TOUR_SET_PROGRESS: "onboarding:tour-set-progress",
+  ONBOARDING_TOUR_SET_MUTED: "onboarding:tour-set-muted",
 
   // Milestone channels
   MILESTONES_GET: "milestones:get",
@@ -1070,6 +1075,8 @@ export const CHANNELS = {
   PLUGIN_ACTIVATE_FOR_VIEW: "plugin:activate-for-view",
   /** Renderer reports plugin panel lifecycle transitions (mounted/hidden/trashed/removed) for worker delivery. */
   PLUGIN_REPORT_PANEL_LIFECYCLE: "plugin:report-panel-lifecycle",
+  /** Renderer reports its live non-plugin panel ids, so `host.reloadPanel` can refuse them (#12610). */
+  PLUGIN_REPORT_PANEL_INVENTORY: "plugin:report-panel-inventory",
   /** Per-instance runtime health snapshot, for a renderer store hydrating after it subscribed. */
   PLUGIN_RUNTIME_STATUSES_GET: "plugin:runtime-statuses-get",
   /** Retire a plugin's backend generation and start a fresh one (panel recovery). */
@@ -1126,6 +1133,10 @@ export const CHANNELS = {
   PLUGIN_UI_PROMPT_RESPONSE: "plugin:ui-prompt-response",
   /** Bridge: main process tells the renderer to drop a plugin's pending UI prompts on unload. */
   PLUGIN_UI_PROMPT_CANCEL: "plugin:ui-prompt-cancel",
+  /** Bridge: main process asks the renderer holding a plugin panel to reload its view (#12610). */
+  PLUGIN_PANEL_RELOAD_REQUEST: "plugin:panel-reload-request",
+  /** Bridge: renderer acknowledges (or refuses) a plugin panel reload request. */
+  PLUGIN_PANEL_RELOAD_RESPONSE: "plugin:panel-reload-response",
 
   // Plugin MCP supervisor channels (#9233) — stdio MCP servers contributed by
   // plugin manifests, supervised in the main process via execa. Distinct from
@@ -1177,6 +1188,10 @@ export const CHANNELS = {
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",
   CONNECTIVITY_SERVICE_CHANGED: "connectivity:service-changed",
+
+  // Which windows hold a live view of which projects (#12597)
+  PROJECT_PRESENCE_GET_SNAPSHOT: "project-presence:get-snapshot",
+  PROJECT_PRESENCE_CHANGED: "project-presence:changed",
 
   // Scratch (throwaway one-off agent workspace) channels
   SCRATCH_GET_ALL: "scratch:get-all",

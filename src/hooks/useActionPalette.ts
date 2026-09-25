@@ -29,7 +29,15 @@ export interface ActionPaletteItem {
    * at an interactive sibling (e.g. a dialog-opener). See `PaletteBehavior`.
    */
   redirectTo?: string;
+  /** Display string for the binding (`⌘+⇧+C`), for text contexts. */
   keybinding?: string;
+  /**
+   * The canonical combo behind `keybinding` (`Cmd+Shift+C`). The row renders
+   * this through `KbdChord`, the same renderer every other palette row and
+   * header uses; the display string's `+`-joined glyphs were the one place in
+   * the family a chord drew differently.
+   */
+  shortcut?: string;
   kind: string;
   /**
    * Set for plugin-contributed actions. Their synthetic definition surfaces its
@@ -151,6 +159,7 @@ export function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteIt
     disabledReason,
     redirectTo,
     keybinding: keybindingService.getDisplayCombo(entry.id),
+    shortcut: keybindingService.getEffectiveCombo(entry.id) || undefined,
     kind: entry.kind,
     pluginId: entry.pluginId,
     titleLower: title.toLowerCase(),

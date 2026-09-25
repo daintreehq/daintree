@@ -92,8 +92,11 @@ describe("SearchablePalette empty-state chip", () => {
       emptyShortcut: "⌘N",
       emptyEntityName: "a terminal",
     });
-    expect(screen.queryByText(/Press/)).toBeNull();
+    // The create chip belongs to the zero-data state; a no-match state names
+    // the way back instead.
+    expect(screen.queryByText(/to create/)).toBeNull();
     expect(screen.queryByText("⌘N")).toBeNull();
+    expect(screen.getByText(/to clear the search/)).toBeTruthy();
   });
 
   it("does NOT render the chip when emptyShortcut is null (no keybinding bound)", () => {
@@ -119,5 +122,70 @@ describe("SearchablePalette empty-state chip", () => {
     });
     expect(screen.getByTestId("custom-empty")).toBeTruthy();
     expect(screen.queryByText("⌘N")).toBeNull();
+  });
+});
+
+describe("SearchablePalette combobox popup relationship", () => {
+  function combobox() {
+    return document.querySelector('[role="combobox"]')!;
+  }
+
+  it("never claims an expanded popup whose listbox is not in the tree", () => {
+    renderEmpty();
+    const controls = combobox().getAttribute("aria-controls");
+    const expanded = combobox().getAttribute("aria-expanded") === "true";
+    const controlled = controls ? document.getElementById(controls) : null;
+    expect(expanded ? controlled !== null : true).toBe(true);
+    expect(controls === null || controlled !== null).toBe(true);
+  });
+
+  it("controls the rendered listbox once there are rows", () => {
+    renderEmpty({ results: [{ id: "a", label: "Alpha" }] });
+    const controls = combobox().getAttribute("aria-controls");
+    expect(combobox().getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById(controls!)?.getAttribute("role")).toBe("listbox");
+  });
+});
+
+describe("SearchablePalette combobox relationship", () => {
+  it("claims an expanded popup only while its listbox exists", () => {
+    const { rerender } = renderEmpty({ query: "zzz", results: [] });
+    const input = screen.getByRole("combobox");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+    expect(input.getAttribute("aria-controls")).toBeNull();
+
+    rerender(
+      <SearchablePalette<Item>
+        isOpen
+        query="a"
+        results={[{ id: "a", label: "Alpha" }]}
+        selectedIndex={0}
+        onQueryChange={() => {}}
+        onSelectPrevious={() => {}}
+        onSelectNext={() => {}}
+        onConfirm={() => {}}
+        onClose={() => {}}
+        getItemId={(item) => item.id}
+        renderItem={(item) => <div key={item.id}>{item.label}</div>}
+        label="Test"
+        ariaLabel="Test palette"
+        tier="command"
+      />
+    );
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+    const controls = input.getAttribute("aria-controls");
+    expect(controls && document.getElementById(controls)?.getAttribute("role")).toBe("listbox");
+  });
+});
+
+describe("SearchablePalette pointer focus", () => {
+  it("keeps a press on the list's empty space from taking focus off the field", () => {
+    renderEmpty({ query: "a", results: [{ id: "a", label: "Alpha" }] });
+    const region = screen.getByRole("group", { name: "Test" });
+    const notPrevented = region.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    expect(notPrevented).toBe(false);
   });
 });

@@ -146,6 +146,18 @@ function isValidEntryName(name: string): string | null {
 }
 
 /**
+ * The identity two entry names share on disk. macOS and Windows default to
+ * case-insensitive filesystems (APFS is normalization-insensitive too), so a
+ * later `Plugin.json` would silently overwrite the `plugin.json` an update
+ * preview read — installing a manifest nobody reviewed under a matching digest
+ * (#12612). Folding here rejects the alias on every platform, not only where it
+ * would bite.
+ */
+function entryCollisionKey(name: string): string {
+  return name.normalize("NFC").toLowerCase();
+}
+
+/**
  * Guard against a zip whose compressed form fits the cap but whose plugin.json
  * declares a multi-hundred-MB uncompressed size — without this the chunk buffer
  * that reads the manifest would exhaust the main-process heap. Shared by
@@ -430,6 +442,9 @@ export async function readArchiveManifest(archivePath: string): Promise<PluginMa
  * rejected via {@link isValidEntryName} before resolution. Directory entries
  * (trailing `/`) only create the directory; file entries stream to disk and
  * the next entry is read only after the write stream closes (`lazyEntries`).
+ * Entries whose names collide once case and Unicode normalization are folded
+ * are rejected, and files are created exclusively, so no entry can overwrite
+ * another — `destDir` must start empty.
  *
  * A file entry that goes quiet for {@link PLUGIN_ARCHIVE_ENTRY_INACTIVITY_MS}
  * aborts the whole extraction with a rejection rather than hanging, so the
@@ -592,10 +607,11 @@ function runExtraction(
         return fail(new Error(`Invalid entry path "${name}": ${pathErr}`));
       }
 
-      if (seen.has(name)) {
+      const collisionKey = entryCollisionKey(name);
+      if (seen.has(collisionKey)) {
         return fail(new Error(`Duplicate entry "${name}" in archive`));
       }
-      seen.add(name);
+      seen.add(collisionKey);
 
       totalUncompressed += entry.uncompressedSize;
       if (totalUncompressed > MAX_DNTR_BYTES) {
@@ -633,7 +649,9 @@ function runExtraction(
         zipfile.openReadStream(entry, (err, stream) => {
           if (err) return fail(err);
           if (settled) return stream.destroy();
-          const out = createWriteStream(resolved, { mode: 0o644 });
+          // Exclusive create: a filesystem that aliases two names the folding
+          // above didn't catch fails here instead of overwriting.
+          const out = createWriteStream(resolved, { mode: 0o644, flags: "wx" });
 
           // Abort the transfer if the entry stalls. `pipeline` destroys both
           // streams on abort, then rejects with an AbortError carrying this
@@ -778,7 +796,8 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
         });
       }
 
-      if (seen.has(name)) {
+      const collisionKey = entryCollisionKey(name);
+      if (seen.has(collisionKey)) {
         settled = true;
         zipfile.close();
         return resolve({
@@ -786,7 +805,7 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
           error: `Duplicate entry "${name}" in archive`,
         });
       }
-      seen.add(name);
+      seen.add(collisionKey);
 
       if (entryIndex === 0 && name !== "plugin.json") {
         settled = true;

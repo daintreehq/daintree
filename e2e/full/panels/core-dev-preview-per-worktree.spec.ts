@@ -18,7 +18,7 @@
  *     panels auto-start without a page reload.
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator } from "@playwright/test";
 import { writeFileSync } from "fs";
 import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
@@ -68,6 +68,20 @@ function parseDisplayOrigin(displayUrl: string): string {
   expect(parsed.hostname).toMatch(DEV_PREVIEW_PROXY_HOST_RE);
   expect(parsed.port).toMatch(/^\d+$/);
   return parsed.origin;
+}
+
+async function waitForGuestOrigin(webview: Locator): Promise<string> {
+  let guestUrl = "";
+  await expect
+    .poll(
+      async () => {
+        guestUrl = await webview.evaluate((wv) => (wv as Electron.WebviewTag).getURL());
+        return guestUrl;
+      },
+      { timeout: T_LONG }
+    )
+    .toMatch(/^http:\/\/(?:localhost|dp-[a-z0-9-]+\.localhost):\d+/);
+  return parseDisplayOrigin(guestUrl);
 }
 
 function parseUpstreamOrigin(predictedUrl: string | null | undefined): string {
@@ -154,13 +168,11 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     const statusBadge = consoleBar.locator('[role="status"]');
     await expect(statusBadge).toContainText("Running", { timeout: T_LONG });
 
-    // Read the address bar origin and store it for later comparison.
-    // Note: the address bar displays a host-port form (for example,
-    // "dp-*.localhost:43000") — protocol is stripped via getDisplayUrl().
+    // The address bar shows the dev server's own host-port; the stable origin
+    // under comparison is the one the guest actually loaded.
     const addressBar = window.locator(SEL.browser.addressBar).first();
     await expect(addressBar).toHaveValue(DEV_PREVIEW_ADDRESS_BAR_RE, { timeout: T_MEDIUM });
-    const displayUrl = (await addressBar.inputValue()).trim();
-    urlMain = parseDisplayOrigin(displayUrl);
+    urlMain = await waitForGuestOrigin(window.locator("webview").first());
   });
 
   // ── Test 2 ─────────────────────────────────────────────────────────────────
@@ -194,8 +206,7 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     await expect(addressBar).toHaveValue(DEV_PREVIEW_ADDRESS_BAR_RE, {
       timeout: T_MEDIUM,
     });
-    const displayUrlFeature = (await addressBar.inputValue()).trim();
-    urlFeature = parseDisplayOrigin(displayUrlFeature);
+    urlFeature = await waitForGuestOrigin(featurePanel.locator("webview"));
 
     // The two panels MUST have different stable origins. They may share the
     // same reverse-proxy port, so compare the whole origin, not just the port.

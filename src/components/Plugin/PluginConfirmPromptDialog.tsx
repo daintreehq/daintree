@@ -2,6 +2,8 @@ import { useCallback, useRef } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";
+import { PluginProvenance } from "./PluginProvenance";
+import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 
 /**
  * Singleton dialog for `host.showConfirm` (#10522). Mounted once near the top of
@@ -26,6 +28,8 @@ export function PluginConfirmPromptDialog() {
       ? { promptId: current.promptId, pluginId: current.pluginId, options: current.params.options }
       : null;
   const resetKey = confirm ? confirm.promptId : "null";
+  const pluginId = confirm ? confirm.pluginId : "";
+  const attribution = usePluginAttribution(pluginId);
 
   // resolveCurrent advances the queue synchronously, so a rapid double-click
   // could land a second resolution on the freshly-promoted item. Gate each
@@ -70,15 +74,22 @@ export function PluginConfirmPromptDialog() {
       <ConfirmDialog
         isOpen={true}
         onClose={() => resolveOnce(confirm.promptId, false)}
-        title={options.title}
+        title={
+          <>
+            {options.title}
+            {/* The footer attribution is outside the dialog's name and
+                description, so assistive tech would announce the plugin's
+                question without saying whose it is. */}
+            <span className="sr-only"> {attribution.text}</span>
+          </>
+        }
         description={options.message}
         confirmLabel={options.confirmLabel || "Confirm"}
         cancelLabel={options.cancelLabel || "Cancel"}
         onConfirm={() => resolveOnce(confirm.promptId, true)}
         variant={variant}
-      >
-        <p className="text-xs text-text-secondary">Requested by the '{confirm.pluginId}' plugin</p>
-      </ConfirmDialog>
+        hint={<PluginProvenance attribution={attribution} />}
+      />
     </ErrorBoundary>
   );
 }

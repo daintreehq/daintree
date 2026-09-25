@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { describePluginInstallSource } from "@shared/utils/pluginInstallSource";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type {
   LoadedPluginInfo,
   PluginDeepLinkIntent,
   PluginInstallError,
+  PluginInstallExpectation,
   PluginInstallProgressEvent,
 } from "@shared/types/plugin";
 
@@ -45,6 +47,11 @@ function installErrorMessage(error: PluginInstallError | undefined): string {
       // The archive itself may be fine — it just never finished arriving, so
       // "check the file" would send the user down the wrong path (#11302).
       return "Unpacking the plugin took too long and was stopped. Try installing it again.";
+    case "archive_mismatch":
+      // The install no longer matches the preview the user approved — the
+      // server sent different bytes, or the plugin is gone (#12612).
+      // Re-checking shows what's actually there now.
+      return "This update no longer matches what you reviewed, so nothing was installed. Check for updates again.";
     default:
       return error?.message ?? "Installation failed. Check the file and try again.";
   }
@@ -152,6 +159,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // if the dialog fires a re-entrant close before the state flush — otherwise a
   // second cancel could re-read stale state and reopen the manual URL dialog.
   const pendingHttpUrlRef = useRef<string | null>(null);
+  // The reviewed-archive binding of a reinstall parked behind the HTTP confirm,
+  // so the install that follows is held to the preview the user approved
+  // (#12612). Null for a manual URL install. Cleared with `pendingHttpUrlRef`.
+  const pendingHttpExpectedRef = useRef<PluginInstallExpectation | null>(null);
   // "Update all" (#10893) drains available updates through the SAME per-plugin
   // capability-diff confirm as a single check: the queue holds the not-yet-shown
   // updates, `pendingUpdate` shows the head, and each confirm/skip/HTTP-gate
@@ -186,14 +197,23 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // point (`isInstalling` for file/URL/drop, `isReinstalling` for an update) and
   // are cleared unconditionally by whichever call settles first — so a
   // reinstall would show no banner at all, and a superseded install's `finally`
-  // could hide its successor's. This one is owned solely by `runInstallJob` and
-  // cleared under the same job-identity guard as the progress state.
+  // could hide its successor's. This one is set by `runInstallJob` (or by the
+  // job's first event, for a file-picker install) and cleared under the same
+  // job-identity guard as the progress state.
   const [hasActiveInstallJob, setHasActiveInstallJob] = useState(false);
   // Set the moment the user clicks Cancel, so the button stops accepting
   // clicks before main answers. Never unset here: either the install ends (and
   // `runInstallJob` clears it) or main refused because the install already
   // committed — in which case there is nothing left to cancel either way.
   const [cancelRequested, setCancelRequested] = useState(false);
+  // Main refused the cancel: the install raced past its commit point before the
+  // request landed. Cancel stays unavailable from here, even in the moment
+  // before main's next event says so itself.
+  const [cancelRefused, setCancelRefused] = useState(false);
+  // What the in-flight job is installing, as the caller knew it before main's
+  // first event. Main's events carry the authoritative label; this covers the
+  // gap before the first one.
+  const [pendingInstallSource, setPendingInstallSource] = useState<string | null>(null);
 
   // Progress subscription. Its own mount-once effect with no dependencies —
   // folding it into the `refreshKey` loading effect would resubscribe on every
@@ -203,6 +223,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     return window.electron.plugin.onInstallProgress((event) => {
       if (event.jobId !== installJobIdRef.current) return;
       setInstallProgress(event);
+      setHasActiveInstallJob(true);
     });
   }, []);
 
@@ -212,13 +233,23 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
    * rather than only after the first progress event arrives. The `finally`
    * clears state only if this job is still the current one, so a superseding
    * install can't have its banner wiped by its predecessor settling late.
+   *
+   * `source` is the path or URL when the caller already knows it. Without one,
+   * main is still asking the user for it in the native file picker — the job
+   * only begins once a path exists — so it counts as active from main's first
+   * event rather than behind a picker the user hasn't answered.
    */
-  const runInstallJob = async <T>(run: (jobId: string) => Promise<T>): Promise<T> => {
+  const runInstallJob = async <T>(
+    run: (jobId: string) => Promise<T>,
+    source?: string
+  ): Promise<T> => {
     const jobId = crypto.randomUUID();
     installJobIdRef.current = jobId;
     setInstallProgress(null);
     setCancelRequested(false);
-    setHasActiveInstallJob(true);
+    setCancelRefused(false);
+    setPendingInstallSource(source === undefined ? null : describePluginInstallSource(source));
+    setHasActiveInstallJob(source !== undefined);
     try {
       return await run(jobId);
     } finally {
@@ -226,6 +257,8 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
         installJobIdRef.current = null;
         setInstallProgress(null);
         setCancelRequested(false);
+        setCancelRefused(false);
+        setPendingInstallSource(null);
         setHasActiveInstallJob(false);
       }
     }
@@ -235,16 +268,21 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
    * Ask main to abort the in-flight install. Deliberately does NOT clear the
    * install state: the original install promise is still pending and owns the
    * teardown, and main may refuse (the install has passed its commit point) —
-   * in which case the banner should keep showing the real state rather than a
-   * cancel that didn't happen.
+   * in which case the banner goes back to the real phase, with Cancel held
+   * unavailable, rather than reporting a cancel that isn't happening.
    */
   const cancelActiveInstall = () => {
     const jobId = installJobIdRef.current;
-    if (!jobId || cancelRequested) return;
+    if (!jobId || cancelRequested || cancelRefused) return;
     setCancelRequested(true);
-    safeFireAndForget(window.electron.plugin.cancelInstall(jobId), {
-      context: "usePluginManager.cancelActiveInstall",
-    });
+    safeFireAndForget(
+      window.electron.plugin.cancelInstall(jobId).then((accepted) => {
+        if (accepted || installJobIdRef.current !== jobId) return;
+        setCancelRefused(true);
+        setCancelRequested(false);
+      }),
+      { context: "usePluginManager.cancelActiveInstall" }
+    );
   };
 
   // Clear the "Already up to date" auto-dismiss timer on unmount.
@@ -299,6 +337,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     setPendingUpdate(null);
     setPendingHttpUrl(null);
     pendingHttpUrlRef.current = null;
+    pendingHttpExpectedRef.current = null;
     // Abandon any in-flight "Update all" batch — the fresh list supersedes it.
     isBatchActiveRef.current = false;
     pendingQueueRef.current = [];
@@ -412,6 +451,33 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     }
   };
 
+  // Retry for a plugin whose load or activation failed. There is no dedicated
+  // retry IPC, but switching a plugin off unloads it and switching it on runs
+  // the full load + activate path again (`PluginService._applyEnabledToggle`,
+  // serialized per plugin in main), so this is the same retry the user could do
+  // by hand with the switch — in one action, without the intermediate "off"
+  // flashing through the row. The provenance broadcast at the end of each
+  // toggle refreshes the list, which is what clears or restates `loadError`.
+  const retryPlugin = async (plugin: LoadedPluginInfo) => {
+    const id = plugin.manifest.name;
+    if (pending.has(id) || plugin.disabled === true) return;
+    setPending((prev) => new Set(prev).add(id));
+    try {
+      setError(null);
+      await window.electron.plugin.setEnabled(id, false);
+      await window.electron.plugin.setEnabled(id, true);
+    } catch (err) {
+      setError(formatErrorMessage(err, "Failed to retry plugin"));
+      logError("Failed to retry plugin load", err);
+    } finally {
+      setPending((prev) => {
+        const copy = new Set(prev);
+        copy.delete(id);
+        return copy;
+      });
+    }
+  };
+
   const handleInstallResult = (
     result: Awaited<ReturnType<typeof window.electron.plugin.installFromFile>>
   ) => {
@@ -451,11 +517,15 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     }
   };
 
-  const performInstallFromUrl = async (url: string) => {
+  const performInstallFromUrl = async (url: string, expected?: PluginInstallExpectation) => {
     setIsInstalling(true);
     try {
-      const result = await runInstallJob((jobId) =>
-        window.electron.plugin.installFromUrl(url, jobId)
+      const result = await runInstallJob(
+        (jobId) =>
+          expected
+            ? window.electron.plugin.installFromUrl(url, jobId, expected)
+            : window.electron.plugin.installFromUrl(url, jobId),
+        url
       );
       handleInstallResult(result);
       // Keep the dialog open for URL-correctable failures so the user can edit
@@ -499,6 +569,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       // switch to https; confirming proceeds with the install.
       setShowUrlDialog(false);
       pendingHttpUrlRef.current = url;
+      pendingHttpExpectedRef.current = null;
       setPendingHttpUrl(url);
       return;
     }
@@ -510,10 +581,20 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     const url = pendingHttpUrlRef.current;
     if (!url) return;
     pendingHttpUrlRef.current = null;
+    const expected = pendingHttpExpectedRef.current ?? undefined;
+    pendingHttpExpectedRef.current = null;
     const fromReinstall = httpFromReinstallRef.current;
     httpFromReinstallRef.current = false;
     setPendingHttpUrl(null);
-    await performInstallFromUrl(url);
+    // The staleness check `confirmReinstall` makes before its own download: a
+    // plugin uninstalled (say, in another window) while this confirm was open
+    // has nothing left to update. Main refuses it anyway; this skips the
+    // download and the misleading "no longer matches" error it would surface.
+    if (expected && !plugins.some((p) => p.manifest.name === expected.pluginId)) {
+      if (fromReinstall && isBatchActiveRef.current) advanceUpdateQueue();
+      return;
+    }
+    await performInstallFromUrl(url, expected);
     // A reinstall-over-http came from the update flow, not the manual install
     // dialog — advance the "Update all" queue if one is draining (#10893).
     if (fromReinstall && isBatchActiveRef.current) advanceUpdateQueue();
@@ -524,6 +605,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     // reinstall cancel as a manual one (or double-advance the batch).
     if (!pendingHttpUrlRef.current) return;
     pendingHttpUrlRef.current = null;
+    pendingHttpExpectedRef.current = null;
     const fromReinstall = httpFromReinstallRef.current;
     httpFromReinstallRef.current = false;
     setPendingHttpUrl(null);
@@ -565,8 +647,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
           continue;
         }
         try {
-          const result = await runInstallJob((jobId) =>
-            window.electron.plugin.installFromPath(path, jobId)
+          const result = await runInstallJob(
+            (jobId) => window.electron.plugin.installFromPath(path, jobId),
+            path
           );
           // A cancel abandons the whole drop, not just this file — the user
           // stopped the batch, so silently installing the rest would ignore them.
@@ -811,6 +894,12 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       advanceUpdateQueue();
       return;
     }
+    // The confirm re-downloads the URL, so hold it to the archive this preview
+    // was read from — main refuses anything else (#12612).
+    const expected: PluginInstallExpectation = {
+      pluginId: pendingUpdate.plugin.manifest.name,
+      archiveHash: pendingUpdate.result.archiveHash,
+    };
     // Tier D2: a plugin first installed over http:// keeps an http upstream, so
     // reinstalling re-fetches it unencrypted. Route it through the same HTTP
     // warning gate as a manual install rather than downloading silently.
@@ -827,6 +916,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       // install dialog and its resolution advances the batch (#10893).
       httpFromReinstallRef.current = true;
       pendingHttpUrlRef.current = url;
+      pendingHttpExpectedRef.current = expected;
       setPendingHttpUrl(url);
       return;
     }
@@ -840,8 +930,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     setPendingUpdate(null);
     try {
       setError(null);
-      const result = await runInstallJob((jobId) =>
-        window.electron.plugin.installFromUrl(url, jobId)
+      const result = await runInstallJob(
+        (jobId) => window.electron.plugin.installFromUrl(url, jobId, expected),
+        url
       );
       handleInstallResult(result);
       advanceUpdateQueue();
@@ -884,7 +975,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     isInstalling,
     hasActiveInstallJob,
     installProgress,
+    installSource: installProgress?.source ?? pendingInstallSource,
     cancelRequested,
+    cancelRefused,
     cancelActiveInstall,
     handleInstallFromFile,
     handleInstallFromUrl,
@@ -903,6 +996,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     isCheckingAllUpdates,
     hasUpdatablePlugins: plugins.some((p) => !p.isBuiltin && !!p.originalUrl),
     handleToggle,
+    retryPlugin,
     isDragOverFiles,
     handleDragEnter,
     handleDragOver,

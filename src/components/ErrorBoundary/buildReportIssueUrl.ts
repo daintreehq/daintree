@@ -299,6 +299,18 @@ function buildNotificationStubBody(params: { incidentId: string | null; message:
   );
 }
 
+function scrubContext(
+  context: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
+  if (!context) return context;
+  return Object.fromEntries(
+    Object.entries(context).map(([key, value]) => [
+      key,
+      typeof value === "string" ? scrubReportText(value) : value,
+    ])
+  );
+}
+
 /**
  * Build the GitHub issue URL for a captured render error, applying a
  * staged truncation strategy so the encoded body always fits within the
@@ -315,18 +327,22 @@ function buildNotificationStubBody(params: { incidentId: string | null; message:
  *   7. Stub body + clipboard fallback
  */
 export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult {
-  // Redact user paths/secrets before the stack enters either the URL body or
+  // Redact user paths/secrets before anything enters either the URL body or
   // the clipboard payload — both surfaces end up pasted into a public issue.
+  // The message and context need it as much as the stack: a thrown message
+  // routinely quotes a file path, and a worktree id is one.
   const stack = scrubReportText(input.stack);
   const componentStack = scrubReportText(input.componentStack);
+  const message = scrubReportText(input.message);
+  const context = scrubContext(input.context);
 
-  const title = `Component Error: ${input.message || "Unknown"}`;
+  const title = `Component Error: ${message || "Unknown"}`;
   const now = input.now ?? Date.now();
   const base = {
     componentName: input.componentName,
     incidentId: input.incidentId,
-    message: input.message,
-    context: input.context,
+    message,
+    context,
     now,
   };
 
@@ -436,7 +452,7 @@ export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult 
   const stubBody = buildStubBody({
     componentName: input.componentName,
     incidentId: input.incidentId,
-    message: input.message,
+    message,
     pluginCount: input.pluginDiagnostics?.plugins.length ?? 0,
   });
 

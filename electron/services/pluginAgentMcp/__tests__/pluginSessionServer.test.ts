@@ -4,7 +4,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { PluginMcpCaller } from "../../../../shared/types/plugin.js";
 import { AgentMcpEndpointRegistry } from "../endpointRegistry.js";
 import { createPluginSessionServer } from "../pluginSessionServer.js";
-import type { AgentMcpToolDescriptor, AgentMcpToolInvoker } from "../types.js";
+import type { AgentMcpRegisteredTool, AgentMcpToolInvoker } from "../types.js";
+import { compileAgentMcpTool } from "../validateTools.js";
 
 const INSTANCE = "acme.ledger";
 const ENDPOINT = "data";
@@ -16,18 +17,18 @@ const CALLER: PluginMcpCaller = Object.freeze({
   launchAgentIdHint: "claude",
 });
 
-const LOOKUP: AgentMcpToolDescriptor = {
+const LOOKUP = compileAgentMcpTool({
   name: "lookup",
   description: "Look a record up.",
   inputSchema: { type: "object", properties: { id: { type: "string" } } },
-};
+});
 
-const STRUCTURED: AgentMcpToolDescriptor = {
+const STRUCTURED = compileAgentMcpTool({
   name: "structured",
   description: "Returns a record.",
   inputSchema: { type: "object" },
   outputSchema: { type: "object", properties: { total: { type: "number" } } },
-};
+});
 
 interface Harness {
   client: Client;
@@ -46,7 +47,7 @@ afterEach(async () => {
 async function connect(
   invoke: AgentMcpToolInvoker,
   options: {
-    tools?: AgentMcpToolDescriptor[];
+    tools?: AgentMcpRegisteredTool[];
     callTimeoutMs?: number;
     maxResultBytes?: number;
     register?: boolean;
@@ -197,6 +198,67 @@ describe("createPluginSessionServer", () => {
     expect(invoke.mock.calls[0][1]).toEqual({});
   });
 
+  describe("input schema enforcement", () => {
+    const RECORD = compileAgentMcpTool({
+      name: "record",
+      description: "Record an entry.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", maxLength: 8 },
+          kind: { enum: ["debit", "credit"] },
+          count: { type: "integer", default: 1 },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
+    });
+
+    it.each([
+      ["a missing required property", {}, /must have required property 'id'/],
+      ["a wrong type", { id: 7 }, /\/id must be string/],
+      ["a value outside the enum", { id: "a", kind: "refund" }, /\/kind must be equal to one/],
+      ["an over-long string", { id: "a".repeat(9) }, /\/id must NOT have more than 8/],
+      ["an undeclared property", { id: "a", extra: true }, /additional properties \("extra"\)/],
+      ["a numeric string for an integer", { id: "a", count: "2" }, /\/count must be integer/],
+    ])(
+      "refuses %s as an InvalidParams tool error without dispatching",
+      async (_label, args, why) => {
+        const invoke = vi.fn<AgentMcpToolInvoker>(async () => null);
+        const { client } = await connect(invoke, { tools: [RECORD] });
+        const result = await client.callTool({ name: "record", arguments: args });
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).toMatch(
+          /^MCP error -32602: Input validation error: .* tool record: /
+        );
+        expect(textOf(result)).toMatch(why);
+        expect(invoke).not.toHaveBeenCalled();
+      }
+    );
+
+    it("checks missing arguments, taken as an empty object, against the schema", async () => {
+      const invoke = vi.fn<AgentMcpToolInvoker>(async () => null);
+      const { client } = await connect(invoke, { tools: [RECORD] });
+      const result = await client.callTool({ name: "record" });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toMatch(/required property 'id'/);
+      expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("hands conforming arguments over as sent — nothing defaulted, coerced or stripped", async () => {
+      const invoke = vi.fn<AgentMcpToolInvoker>(async () => ({ ok: true }));
+      const { client } = await connect(invoke, { tools: [RECORD] });
+      const refused = await client.callTool({ name: "record", arguments: { id: 1 } });
+      expect(refused.isError).toBe(true);
+
+      // A refused call leaves the session serving the next one.
+      const result = await client.callTool({ name: "record", arguments: { id: "r-1" } });
+      expect(result.isError).toBeUndefined();
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke.mock.calls[0][1]).toEqual({ id: "r-1" });
+    });
+  });
+
   it("returns structured content only for a tool that declares an output schema", async () => {
     const invoke = vi.fn<AgentMcpToolInvoker>(async () => ({ total: 3 }));
     const { client } = await connect(invoke, { tools: [LOOKUP, STRUCTURED] });
@@ -219,6 +281,19 @@ describe("createPluginSessionServer", () => {
     expect(result.structuredContent).toBeUndefined();
   });
 
+  it("makes a result that breaks the output schema a tool error", async () => {
+    const invoke = vi.fn<AgentMcpToolInvoker>(async () => ({ total: "three" }));
+    const { client } = await connect(invoke, { tools: [STRUCTURED] });
+    // No listTools first: the client then has no schema of its own to check
+    // the result against, so only the host's check stands between them.
+    const result = await client.callTool({ name: "structured", arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    expect(textOf(result)).toBe(
+      "The tool returned a result that does not match its output schema: /total must be number"
+    );
+  });
+
   it("turns a thrown error into a tool error carrying the message and no stack", async () => {
     const invoke = vi.fn<AgentMcpToolInvoker>(async () => {
       throw new Error("ledger is locked");
@@ -227,6 +302,15 @@ describe("createPluginSessionServer", () => {
     const result = await client.callTool({ name: "lookup", arguments: {} });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toBe("ledger is locked");
+  });
+
+  it("clips a long thrown error message to 2,000 characters", async () => {
+    const invoke = vi.fn<AgentMcpToolInvoker>(async () => {
+      throw new Error("x".repeat(2_500));
+    });
+    const { client } = await connect(invoke);
+    const result = await client.callTool({ name: "lookup", arguments: {} });
+    expect(textOf(result)).toBe(`${"x".repeat(2_000)}…`);
   });
 
   it("turns a value JSON cannot serialize into a tool error", async () => {

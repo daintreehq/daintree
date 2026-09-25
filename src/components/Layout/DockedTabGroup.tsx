@@ -85,6 +85,7 @@ import {
   hasPanelCloseGuard,
   isPanelClosePending,
 } from "@/services/panelCloseGuard";
+import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 
 interface DockedTabGroupProps {
   group: TabGroup;
@@ -616,6 +617,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const activePlainWorking = getDockDisplayActivityState(activePanel) === "working";
   const displayTitle = activePanel.title;
   const displayAgentState = getTerminalAgentDisplayState(activeChrome, agentState);
+  // The glyph is smoothed (idle/missing shows as waiting); the words are not.
+  const observedStateLabel = agentState ? getEffectiveStateLabel(agentState) : undefined;
   const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
 
   return (
@@ -638,7 +641,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   showDockAgentHighlights &&
                   blockedState === "waiting" &&
                   "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
-                isDeprioritized && "text-daintree-text/40 border-[var(--dock-item-border)]/50"
+                isDeprioritized && "border-transparent"
               )}
               onClick={(e) => {
                 e.preventDefault();
@@ -654,10 +657,13 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               onDoubleClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                const moved = moveTerminalToGrid(activePanel.id);
-                if (moved && openDockPanelId) closeDockTerminal(openDockPanelId);
+                animatePanelMove(activePanel.id, "restore", () => {
+                  const moved = moveTerminalToGrid(activePanel.id);
+                  if (moved && openDockPanelId) closeDockTerminal(openDockPanelId);
+                  return moved;
+                });
               }}
-              aria-label={`${activePanel.title}${displayAgentState ? ` — agent ${getEffectiveStateLabel(displayAgentState)}` : groupPlainWorking ? " — command running" : ""} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
+              aria-label={`${activePanel.title}${displayAgentState ? (observedStateLabel ? ` — agent ${observedStateLabel}` : "") : groupPlainWorking ? " — command running" : ""} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
             >
               <div className="flex items-center justify-center shrink-0">
                 <TerminalIcon
@@ -696,7 +702,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 <div
                   className={cn(
                     "ml-1.5 flex items-center shrink-0",
-                    groupPlainWorking ? "text-daintree-text/50" : "text-status-success"
+                    groupPlainWorking ? "text-text-secondary" : "text-status-success"
                   )}
                   data-dock-activity-state={groupPlainWorking ? "working" : "finished"}
                   aria-hidden="true"
@@ -728,7 +734,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                       />
                     </div>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">{`Agent ${displayAgentState}`}</TooltipContent>
+                  <TooltipContent side="bottom">
+                    {observedStateLabel ? `Agent ${observedStateLabel}` : "No agent state observed"}
+                  </TooltipContent>
                 </Tooltip>
               )}
             </button>

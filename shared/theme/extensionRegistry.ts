@@ -168,10 +168,8 @@ export const EXTENSION_KEY_REGISTRY = {
   // Panel focus chrome — the focused/selected pane's border ink
   // (panel-focus-border), double-ring glow stack (panel-focus-shadow), and
   // fill (panel-selected-bg). Consumed by .terminal-selected /
-  // .terminal-selected-quiet / .assistant-focused / .terminal-focused in
-  // src/index.css with today's color-mix recipes as fallbacks. The quiet
-  // variant reads the border key only — it is anchored on an outline instead
-  // of a shadow, and carries no fill, by design.
+  // .assistant-focused / .terminal-focused in src/index.css with today's
+  // color-mix recipes as fallbacks.
   // Values are full CSS expressions, so no
   // perceptibility guard applies. Accent budget: focus IS the load-bearing
   // signal per focus region, so accent-family ink here is legitimate — but a
@@ -243,8 +241,6 @@ export const EXTENSION_KEY_REGISTRY = {
   "settings-scope-bg": OPTIONAL,
   "settings-search-bg": OPTIONAL,
   "settings-search-muted": OPTIONAL,
-  "settings-section-header-bg": OPTIONAL,
-  "settings-section-header-bg-solid": OPTIONAL,
   "settings-sidebar-bg": OPTIONAL,
   // Scroll-fade color for the settings sidebar's ScrollShadow. Only needed by
   // themes that author a custom settings-sidebar-bg; the CSS fallback in

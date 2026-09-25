@@ -24,7 +24,7 @@ The endpoint is off until you turn it on in **Project settings → Plugins → A
 
 ## What the plugin does for itself
 
-The host checks only that a tool's arguments are a JSON object; it never validates them against `inputSchema`. So every tool rejects unknown arguments and checks each value itself — real calendar dates, bounded integers, a category grammar — and every query binds its values as parameters, never as SQL text.
+The host checks every call's arguments against the tool's `inputSchema` before `execute` runs, so each schema declares `additionalProperties: false`, and `add_transaction` its `required` fields. The tools still check each value themselves — real calendar dates a pattern cannot express, bounded integers, a category grammar — because a test can call `execute` directly, and every query binds its values as parameters, never as SQL text.
 
 Results stay well under the host's 256 KiB limit. Every text column is clipped in the query itself, so no single row can be large however the file was written — a memo longer than the plugin would ever write comes back cut short with `memo_truncated: true` — and pages are trimmed by size. SQLite integers are 64-bit, so any value past JavaScript's 2^53 comes back as a decimal string rather than a silently rounded number.
 

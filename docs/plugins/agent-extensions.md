@@ -150,7 +150,7 @@ export async function activate(host: PluginHostApi) {
         additionalProperties: false,
       },
       async execute(args, caller, signal) {
-        // `args` is only guaranteed to be a JSON object; validate it yourself.
+        // `args` already matches inputSchema; `limit` is optional, so default it.
         const limit = typeof args.limit === "number" ? args.limit : 20;
         // `caller.projectId` is the project the calling terminal belongs to.
         return { entries: await readEntries(caller.projectId, limit, signal) };
@@ -166,8 +166,8 @@ What the host does with the roster:
 
 - **Lazy activation still applies.** An agent's first `tools/list` or `tools/call` on the endpoint activates the plugin if it has not run yet, and waits briefly for the roster to register.
 - **The roster is advertised verbatim.** `tools/list` returns exactly the tools you registered — name, description, `inputSchema`, optional `outputSchema` — and nothing else: no resources, no prompts, no server instructions. Registering again replaces the roster and sends `notifications/tools/list_changed`.
-- **Arguments are checked only for shape.** A call whose arguments are not a JSON object is refused by the host; everything else reaches `execute` as the agent sent it. Checking them against `inputSchema` is your job.
-- **Results are serialized JSON.** Whatever `execute` returns is `JSON.stringify`-ed (`undefined` becomes `null`) and sent as the tool's text content. With an `outputSchema` the result must also be a JSON object, which is sent as `structuredContent`. A thrown error becomes a tool error carrying its message.
+- **Arguments are checked against `inputSchema`.** Each schema is compiled when the roster registers, and a call that does not match it is answered with a tool error naming the failure before your code runs. Arguments that match reach `execute` exactly as the agent sent them — nothing coerced, defaulted or stripped. Checks a schema cannot express, such as path containment or resource ownership, are still yours.
+- **Results are serialized JSON.** Whatever `execute` returns is `JSON.stringify`-ed (`undefined` becomes `null`) and sent as the tool's text content. With an `outputSchema` the result must also be a JSON object matching it, which is sent as `structuredContent`. A thrown error becomes a tool error carrying its message.
 - **Calls are cancellable.** The `signal` aborts on the 60-second timeout, when the agent cancels, when the session closes or the credential is revoked, and when the roster changes under a running call. Pass it on to anything long-running.
 
 ### Reaching an agent

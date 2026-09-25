@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
+import { useState } from "react";
 import { act, render, fireEvent, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { BrowserToolbar } from "../BrowserToolbar";
 import { normalizeBrowserUrl } from "../browserUtils";
 import type { ViewportPresetId } from "@shared/types/panel";
+import {
+  VIEWPORT_PRESET_LIST,
+  getEffectiveViewportSize,
+  getViewportPreset,
+} from "@/panels/dev-preview/viewportPresets";
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -34,8 +40,28 @@ vi.mock("@/store/urlHistoryStore", () => ({
   useUrlHistoryStore: Object.assign(() => STABLE_ENTRIES, {
     getState: () => ({ removeUrl: mockRemoveUrl }),
   }),
-  getFrecencySuggestions: () => STABLE_ENTRIES,
+  getFrecencySuggestions: vi.fn((entries: typeof STABLE_ENTRIES) => entries),
 }));
+
+const rowWidth = vi.hoisted(() => ({
+  current: 1000,
+  resize: null as null | ((width: number) => void),
+}));
+vi.mock("@/hooks/useResizeObserverRaf", async () => {
+  const { useLayoutEffect } = await import("react");
+  return {
+    useResizeObserverRaf: (
+      element: HTMLElement | null,
+      onResize: (entry: { contentRect: { width: number } }) => void
+    ) => {
+      useLayoutEffect(() => {
+        if (!element) return;
+        rowWidth.resize = (width) => onResize({ contentRect: { width } });
+        onResize({ contentRect: { width: rowWidth.current } });
+      }, [element]);
+    },
+  };
+});
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(() => Promise.resolve({ ok: true })) },
@@ -727,16 +753,28 @@ describe("BrowserToolbar address-bar scheme icon and input", () => {
     expect(queryByTestId("browser-url-scheme-lock")).toBeFalsy();
   });
 
-  it("reload button has animate-spin when isLoading is true", () => {
-    const { getByTestId } = renderToolbar({ isLoading: true });
-    const reload = getByTestId("browser-reload");
-    expect(reload.className).toContain("animate-spin");
+  it("reload becomes Stop while loading, and stops rather than reloading", () => {
+    const onStop = vi.fn();
+    const onReload = vi.fn();
+    const { getByTestId } = renderToolbar({ isLoading: true, onStop, onReload });
+    const button = getByTestId("browser-reload");
+    expect(button.getAttribute("aria-label")).toBe("Stop loading");
+    fireEvent.click(button);
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(onReload).not.toHaveBeenCalled();
   });
 
-  it("reload button does not have animate-spin when isLoading is false", () => {
-    const { getByTestId } = renderToolbar({ isLoading: false });
-    const reload = getByTestId("browser-reload");
-    expect(reload.className).not.toContain("animate-spin");
+  it("reload stays Reload when idle, or when the host cannot stop a load", () => {
+    const onReload = vi.fn();
+    const idle = renderToolbar({ isLoading: false, onStop: vi.fn(), onReload });
+    expect(idle.getByTestId("browser-reload").getAttribute("aria-label")).toBe("Reload");
+    idle.unmount();
+
+    const noStop = renderToolbar({ isLoading: true, onReload });
+    const button = noStop.getByTestId("browser-reload");
+    expect(button.getAttribute("aria-label")).toBe("Reload");
+    fireEvent.click(button);
+    expect(onReload).toHaveBeenCalledOnce();
   });
 
   it("scheme icon is decorative and hidden from the accessibility tree", () => {
@@ -778,401 +816,126 @@ describe("BrowserToolbar viewport presets", () => {
     vi.clearAllMocks();
   });
 
-  describe("radiogroup semantics", () => {
-    it("chip container has radiogroup role and accessible name", () => {
-      renderWithViewport();
-      const group = document.querySelector('[role="radiogroup"]');
-      expect(group).toBeTruthy();
-      expect(group!.getAttribute("aria-label")).toBe("Select viewport preset");
-    });
+  function deviceTrigger() {
+    return document.querySelector('[aria-label^="Device:"]') as HTMLElement;
+  }
 
-    it("each chip is a radio with aria-checked reflecting selection", () => {
-      renderWithViewport();
-      const radios = document.querySelectorAll('[role="radio"]');
-      expect(radios.length).toBe(4);
+  async function openDeviceMenu() {
+    fireEvent.pointerDown(deviceTrigger(), { button: 0, ctrlKey: false });
+    await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeTruthy());
+    return Array.from(document.querySelectorAll('[role="menuitemradio"]')) as HTMLElement[];
+  }
 
-      const galaxyRadio = document.querySelector('[data-viewport-preset-id="galaxy"]');
-      expect(galaxyRadio!.getAttribute("aria-checked")).toBe("false");
+  describe("device bar", () => {
+    it("is absent until a preset is on, and never shares the address row", () => {
+      const { queryByTestId, rerender } = renderWithViewport({ viewportPreset: undefined });
+      expect(queryByTestId("browser-viewport-controls")).toBeNull();
 
-      const iphoneRadio = document.querySelector('[data-viewport-preset-id="iphone"]');
-      expect(iphoneRadio!.getAttribute("aria-checked")).toBe("true");
-
-      const pixelRadio = document.querySelector('[data-viewport-preset-id="pixel"]');
-      expect(pixelRadio!.getAttribute("aria-checked")).toBe("false");
-
-      const ipadRadio = document.querySelector('[data-viewport-preset-id="ipad"]');
-      expect(ipadRadio!.getAttribute("aria-checked")).toBe("false");
-    });
-
-    it("selected radio has tabIndex 0, others have -1", () => {
-      renderWithViewport();
-      const iphoneRadio = document.querySelector('[data-viewport-preset-id="iphone"]');
-      expect(iphoneRadio!.getAttribute("tabindex")).toBe("0");
-
-      const pixelRadio = document.querySelector('[data-viewport-preset-id="pixel"]');
-      expect(pixelRadio!.getAttribute("tabindex")).toBe("-1");
-    });
-
-    it("has aria-label matching preset label", () => {
-      renderWithViewport();
-      const iphoneRadio = document.querySelector('[data-viewport-preset-id="iphone"]');
-      expect(iphoneRadio!.getAttribute("aria-label")).toBe("iPhone 17");
-
-      const galaxyRadio = document.querySelector('[data-viewport-preset-id="galaxy"]');
-      expect(galaxyRadio!.getAttribute("aria-label")).toBe("Galaxy S26");
-    });
-  });
-
-  describe("armed-state styling", () => {
-    it("selected preset chip drives state via toolbar-icon-button + aria-checked, not a hardcoded fill", () => {
-      renderWithViewport();
-      const selected = document.querySelector('[data-viewport-preset-id="iphone"]')! as HTMLElement;
-      // The selected chip must participate in the theme-aware armed-state recipe
-      // (toolbar.css keys off .toolbar-icon-button[aria-checked="true"]) rather than
-      // hardcoding bg-overlay-emphasis, which reads as a dark smudge on light themes.
-      expect(selected.getAttribute("aria-checked")).toBe("true");
-      expect(selected.className).toContain("toolbar-icon-button");
-      expect(selected.className).not.toContain("bg-overlay-emphasis");
-    });
-
-    it("selected DPR chip uses the same armed-state contract", () => {
-      renderWithViewport({ onViewportDprChange: vi.fn(), viewportDpr: 2 });
-      const dprGroup = document.querySelector('[aria-label="Device pixel ratio"]')!;
-      const selected = Array.from(dprGroup.querySelectorAll('[role="radio"]')).find(
-        (r) => r.getAttribute("aria-checked") === "true"
-      ) as HTMLElement;
-      expect(selected).toBeTruthy();
-      expect(selected.getAttribute("data-dpr")).toBe("2");
-      expect(selected.className).toContain("toolbar-icon-button");
-      expect(selected.className).not.toContain("bg-overlay-emphasis");
-    });
-  });
-
-  describe("chip click behavior", () => {
-    it("selects a different preset on click", () => {
-      renderWithViewport();
-      const pixelRadio = document.querySelector('[data-viewport-preset-id="pixel"]')!;
-      fireEvent.click(pixelRadio);
-      expect(onViewportPresetChange).toHaveBeenCalledWith("pixel");
-    });
-
-    it("clicking already-selected chip is a no-op", () => {
-      renderWithViewport();
-      const iphoneRadio = document.querySelector('[data-viewport-preset-id="iphone"]')!;
-      fireEvent.click(iphoneRadio);
-      expect(onViewportPresetChange).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("toggle persistence", () => {
-    it("restores last-used preset when toggle re-enables (round-trip)", () => {
-      const onPresetChange = vi.fn();
-      const { rerender, container } = render(
-        <BrowserToolbar
-          {...defaultProps}
-          onViewportPresetChange={onPresetChange}
-          viewportPreset="iphone"
-        />
-      );
-
-      // Switch to Pixel
-      fireEvent.click(container.querySelector('[data-viewport-preset-id="pixel"]')!);
-      expect(onPresetChange).toHaveBeenCalledWith("pixel");
-      onPresetChange.mockClear();
-
-      // Parent updates viewportPreset to pixel
       rerender(
         <BrowserToolbar
           {...defaultProps}
-          onViewportPresetChange={onPresetChange}
+          onViewportPresetChange={onViewportPresetChange}
+          viewportPreset="iphone"
+        />
+      );
+      const bar = queryByTestId("browser-viewport-controls")!;
+      expect(bar).toBeTruthy();
+      // Entering device mode must not take width from the address.
+      expect(bar.contains(document.querySelector('[data-testid="browser-address-bar"]'))).toBe(
+        false
+      );
+    });
+
+    it("names the active device on its trigger", () => {
+      renderWithViewport({ viewportPreset: "pixel" });
+      const label = getViewportPreset("pixel").label;
+      expect(deviceTrigger().getAttribute("aria-label")).toBe(`Device: ${label}`);
+      expect(deviceTrigger().textContent).toContain(label);
+    });
+
+    it("shows the effective size, swapped when rotated", () => {
+      const { getByTestId, rerender } = renderWithViewport({ viewportPreset: "ipad" });
+      const portrait = getEffectiveViewportSize("ipad", false);
+      expect(getByTestId("browser-viewport-size").textContent).toBe(
+        `${portrait.width} × ${portrait.height}`
+      );
+      rerender(
+        <BrowserToolbar
+          {...defaultProps}
+          onViewportPresetChange={onViewportPresetChange}
+          viewportPreset="ipad"
+          viewportRotated
+        />
+      );
+      const landscape = getEffectiveViewportSize("ipad", true);
+      expect(getByTestId("browser-viewport-size").textContent).toBe(
+        `${landscape.width} × ${landscape.height}`
+      );
+    });
+
+    it("lists every preset once, with the active one checked", async () => {
+      renderWithViewport({ viewportPreset: "pixel" });
+      const items = await openDeviceMenu();
+      expect(items.map((i) => i.getAttribute("data-viewport-preset-id"))).toEqual(
+        VIEWPORT_PRESET_LIST.map((p) => p.id)
+      );
+      const checked = items.filter((i) => i.getAttribute("aria-checked") === "true");
+      expect(checked.map((i) => i.getAttribute("data-viewport-preset-id"))).toEqual(["pixel"]);
+    });
+
+    it("selects a different preset, and choosing the active one changes nothing", async () => {
+      renderWithViewport({ viewportPreset: "iphone" });
+      let items = await openDeviceMenu();
+      fireEvent.click(items.find((i) => i.getAttribute("data-viewport-preset-id") === "iphone")!);
+      expect(onViewportPresetChange).not.toHaveBeenCalled();
+
+      items = await openDeviceMenu();
+      fireEvent.click(items.find((i) => i.getAttribute("data-viewport-preset-id") === "ipad")!);
+      expect(onViewportPresetChange).toHaveBeenCalledWith("ipad");
+    });
+  });
+
+  describe("device mode toggle", () => {
+    function toggle() {
+      return document.querySelector('[aria-label="Device mode"]') as HTMLElement;
+    }
+
+    it("reports its state through aria-pressed", () => {
+      const { rerender } = renderWithViewport({ viewportPreset: undefined });
+      expect(toggle().getAttribute("aria-pressed")).toBe("false");
+      rerender(
+        <BrowserToolbar
+          {...defaultProps}
+          onViewportPresetChange={onViewportPresetChange}
           viewportPreset="pixel"
         />
       );
-      onPresetChange.mockClear();
+      expect(toggle().getAttribute("aria-pressed")).toBe("true");
+    });
 
-      // Toggle off
-      fireEvent.click(container.querySelector('[aria-label="Viewport preset"]')!);
-      expect(onPresetChange).toHaveBeenCalledWith(undefined);
-      onPresetChange.mockClear();
-
-      // Rerender with undefined (parent processes the callback)
-      rerender(
-        <BrowserToolbar
-          {...defaultProps}
-          onViewportPresetChange={onPresetChange}
-          viewportPreset={undefined}
-        />
-      );
-      onPresetChange.mockClear();
-
-      // Toggle re-enables — should restore "pixel", not "iphone"
-      fireEvent.click(container.querySelector('[aria-label="Viewport preset"]')!);
-      expect(onPresetChange).toHaveBeenCalledWith("pixel");
+    it("turns device mode off when on", () => {
+      renderWithViewport({ viewportPreset: "pixel" });
+      fireEvent.click(toggle());
+      expect(onViewportPresetChange).toHaveBeenCalledWith(undefined);
     });
 
     it("falls back to 'iphone' on first enable", () => {
-      renderToolbar({ onViewportPresetChange });
-      const toggle = document.querySelector('[aria-label="Viewport preset"]');
-      fireEvent.click(toggle!);
+      renderWithViewport({ viewportPreset: undefined });
+      fireEvent.click(toggle());
       expect(onViewportPresetChange).toHaveBeenCalledWith("iphone");
     });
 
-    it("chip row is absent when viewportPreset is undefined", () => {
-      renderToolbar({ onViewportPresetChange, viewportPreset: undefined });
-      expect(document.querySelector('[role="radiogroup"]')).toBeNull();
-      const toggle = document.querySelector('[aria-label="Viewport preset"]');
-      expect(toggle!.getAttribute("aria-pressed")).toBe("false");
-    });
-  });
-
-  describe("tooltip", () => {
-    it("tooltip content is static text", () => {
-      const { container } = renderWithViewport();
-      // Tooltips are mocked to render their content directly
-      expect(container.textContent).toContain("Viewport preset");
-    });
-  });
-
-  describe("keyboard navigation", () => {
-    it("ArrowRight moves focus to next radio", () => {
-      renderWithViewport();
-      const iphoneRadio = document.querySelector(
-        '[data-viewport-preset-id="iphone"]'
-      )! as HTMLElement;
-      const pixelRadio = document.querySelector(
-        '[data-viewport-preset-id="pixel"]'
-      )! as HTMLElement;
-
-      iphoneRadio.focus();
-      fireEvent.keyDown(iphoneRadio, { key: "ArrowRight" });
-
-      expect(document.activeElement).toBe(pixelRadio);
-    });
-
-    it("ArrowLeft wraps from first to last", () => {
-      renderWithViewport();
-      const galaxyRadio = document.querySelector(
-        '[data-viewport-preset-id="galaxy"]'
-      )! as HTMLElement;
-      const ipadRadio = document.querySelector('[data-viewport-preset-id="ipad"]')! as HTMLElement;
-
-      galaxyRadio.focus();
-      fireEvent.keyDown(galaxyRadio, { key: "ArrowLeft" });
-
-      expect(document.activeElement).toBe(ipadRadio);
-    });
-
-    it("ArrowRight wraps from last to first", () => {
-      renderWithViewport();
-      const galaxyRadio = document.querySelector(
-        '[data-viewport-preset-id="galaxy"]'
-      )! as HTMLElement;
-      const ipadRadio = document.querySelector('[data-viewport-preset-id="ipad"]')! as HTMLElement;
-
-      ipadRadio.focus();
-      fireEvent.keyDown(ipadRadio, { key: "ArrowRight" });
-
-      expect(document.activeElement).toBe(galaxyRadio);
-    });
-
-    it("Home moves focus to first radio", () => {
-      renderWithViewport();
-      const galaxyRadio = document.querySelector(
-        '[data-viewport-preset-id="galaxy"]'
-      )! as HTMLElement;
-      const ipadRadio = document.querySelector('[data-viewport-preset-id="ipad"]')! as HTMLElement;
-
-      ipadRadio.focus();
-      fireEvent.keyDown(ipadRadio, { key: "Home" });
-
-      expect(document.activeElement).toBe(galaxyRadio);
-    });
-
-    it("End moves focus to last radio", () => {
-      renderWithViewport();
-      const galaxyRadio = document.querySelector(
-        '[data-viewport-preset-id="galaxy"]'
-      )! as HTMLElement;
-      const ipadRadio = document.querySelector('[data-viewport-preset-id="ipad"]')! as HTMLElement;
-
-      galaxyRadio.focus();
-      fireEvent.keyDown(galaxyRadio, { key: "End" });
-
-      expect(document.activeElement).toBe(ipadRadio);
-    });
-
-    it("Space selects the focused radio", () => {
-      renderWithViewport();
-      const pixelRadio = document.querySelector(
-        '[data-viewport-preset-id="pixel"]'
-      )! as HTMLElement;
-
-      pixelRadio.focus();
-      fireEvent.keyDown(pixelRadio, { key: " " });
-
-      expect(onViewportPresetChange).toHaveBeenCalledWith("pixel");
-    });
-
-    it("Enter selects the focused radio", () => {
-      renderWithViewport();
-      const padRadio = document.querySelector('[data-viewport-preset-id="ipad"]')! as HTMLElement;
-
-      padRadio.focus();
-      fireEvent.keyDown(padRadio, { key: "Enter" });
-
-      expect(onViewportPresetChange).toHaveBeenCalledWith("ipad");
-    });
-
-    it("Space on already-selected radio is a no-op", () => {
-      renderWithViewport();
-      const iphoneRadio = document.querySelector(
-        '[data-viewport-preset-id="iphone"]'
-      )! as HTMLElement;
-
-      iphoneRadio.focus();
-      fireEvent.keyDown(iphoneRadio, { key: " " });
-
-      expect(onViewportPresetChange).not.toHaveBeenCalled();
-    });
-
-    it("ArrowDown moves focus forward like ArrowRight", () => {
-      renderWithViewport();
-      const iphoneRadio = document.querySelector(
-        '[data-viewport-preset-id="iphone"]'
-      )! as HTMLElement;
-      const pixelRadio = document.querySelector(
-        '[data-viewport-preset-id="pixel"]'
-      )! as HTMLElement;
-
-      iphoneRadio.focus();
-      fireEvent.keyDown(iphoneRadio, { key: "ArrowDown" });
-
-      expect(document.activeElement).toBe(pixelRadio);
-    });
-
-    it("ArrowUp moves focus backward like ArrowLeft", () => {
-      renderWithViewport();
-      const galaxyRadio = document.querySelector(
-        '[data-viewport-preset-id="galaxy"]'
-      )! as HTMLElement;
-      const iphoneRadio = document.querySelector(
-        '[data-viewport-preset-id="iphone"]'
-      )! as HTMLElement;
-
-      iphoneRadio.focus();
-      fireEvent.keyDown(iphoneRadio, { key: "ArrowUp" });
-
-      expect(document.activeElement).toBe(galaxyRadio);
-    });
-
-    it("maintains roving tabIndex after ArrowRight focus move", () => {
-      renderWithViewport();
-      const iphoneRadio = document.querySelector(
-        '[data-viewport-preset-id="iphone"]'
-      )! as HTMLElement;
-      const pixelRadio = document.querySelector(
-        '[data-viewport-preset-id="pixel"]'
-      )! as HTMLElement;
-
-      iphoneRadio.focus();
-      fireEvent.keyDown(iphoneRadio, { key: "ArrowRight" });
-
-      expect(pixelRadio.getAttribute("tabindex")).toBe("0");
-    });
-
-    it("keeps exactly one radio tabbable after ArrowRight (no transient dual tab stop)", () => {
-      // The roving-tabindex contract requires a single tab stop. Before the fix,
-      // the freshly focused chip AND the still-selected chip both reported
-      // tabIndex=0 until the parent rerendered with the new preset, briefly
-      // exposing two tab stops to keyboard/AT users.
-      renderWithViewport();
-      const iphoneRadio = document.querySelector(
-        '[data-viewport-preset-id="iphone"]'
-      )! as HTMLElement;
-
-      iphoneRadio.focus();
-      fireEvent.keyDown(iphoneRadio, { key: "ArrowRight" });
-
-      const tabbable = Array.from(document.querySelectorAll('[role="radio"]')).filter(
-        (r) => r.getAttribute("tabindex") === "0"
-      );
-      expect(tabbable.length).toBe(1);
-    });
-
-    it("ArrowRight on the focused radio activates the next preset immediately (APG automatic activation)", () => {
-      renderWithViewport();
-      const iphoneRadio = document.querySelector(
-        '[data-viewport-preset-id="iphone"]'
-      )! as HTMLElement;
-
-      iphoneRadio.focus();
-      fireEvent.keyDown(iphoneRadio, { key: "ArrowRight" });
-
-      expect(onViewportPresetChange).toHaveBeenCalledWith("pixel");
-    });
-
-    it("ArrowDown also fires onViewportPresetChange (automatic activation along secondary axis)", () => {
-      renderWithViewport();
-      const iphoneRadio = document.querySelector(
-        '[data-viewport-preset-id="iphone"]'
-      )! as HTMLElement;
-
-      iphoneRadio.focus();
-      fireEvent.keyDown(iphoneRadio, { key: "ArrowDown" });
-
-      expect(onViewportPresetChange).toHaveBeenCalledWith("pixel");
-    });
-
-    it("Home/End fire onViewportPresetChange for the new endpoint", () => {
-      renderWithViewport();
-      const pixelRadio = document.querySelector(
-        '[data-viewport-preset-id="pixel"]'
-      )! as HTMLElement;
-      const galaxyRadio = document.querySelector(
-        '[data-viewport-preset-id="galaxy"]'
-      )! as HTMLElement;
-
-      pixelRadio.focus();
-      fireEvent.keyDown(pixelRadio, { key: "Home" });
-      expect(onViewportPresetChange).toHaveBeenCalledWith("galaxy");
-
-      onViewportPresetChange.mockClear();
-      galaxyRadio.focus();
-      fireEvent.keyDown(galaxyRadio, { key: "End" });
-      expect(onViewportPresetChange).toHaveBeenCalledWith("ipad");
-    });
-
-    it("keyboard listener attaches after deferred chip row mount", () => {
-      const onPresetChange = vi.fn();
-      const { rerender, container } = render(
-        <BrowserToolbar
-          {...defaultProps}
-          onViewportPresetChange={onPresetChange}
-          viewportPreset={undefined}
-        />
-      );
-
-      expect(container.querySelector('[role="radiogroup"]')).toBeNull();
-
+    it("restores the last-used preset when re-enabled", () => {
+      const { rerender } = renderWithViewport({ viewportPreset: "ipad" });
       rerender(
         <BrowserToolbar
           {...defaultProps}
-          onViewportPresetChange={onPresetChange}
-          viewportPreset="iphone"
+          onViewportPresetChange={onViewportPresetChange}
+          viewportPreset={undefined}
         />
       );
-
-      const iphoneRadio = container.querySelector(
-        '[data-viewport-preset-id="iphone"]'
-      )! as HTMLElement;
-      const pixelRadio = container.querySelector(
-        '[data-viewport-preset-id="pixel"]'
-      )! as HTMLElement;
-
-      iphoneRadio.focus();
-      fireEvent.keyDown(iphoneRadio, { key: "ArrowRight" });
-
-      expect(document.activeElement).toBe(pixelRadio);
+      fireEvent.click(toggle());
+      expect(onViewportPresetChange).toHaveBeenLastCalledWith("ipad");
     });
   });
 
@@ -1225,5 +988,272 @@ describe("BrowserToolbar viewport presets", () => {
       fireEvent.keyDown(radios[0]!, { key: "End" });
       expect(document.activeElement).toBe(radios[2]);
     });
+  });
+});
+
+describe("BrowserToolbar address presentation", () => {
+  const PROXY_URL = "http://dp-proj-panel.localhost:43000/dashboard?tab=billing";
+  const toAddress = (url: string) =>
+    url.replace("http://dp-proj-panel.localhost:43000", "http://localhost:5173");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shows, edits and copies the mapped address, never the webview's own origin", async () => {
+    const { actionService } = await import("@/services/ActionService");
+    const { getByTestId, getByLabelText } = renderToolbar({ url: PROXY_URL, toAddress });
+    const input = getByTestId("browser-address-bar") as HTMLInputElement;
+    expect(input.value).not.toContain("dp-proj-panel");
+    expect(getByTestId("browser-address-display").textContent).toBe(
+      "localhost:5173/dashboard?tab=billing"
+    );
+
+    fireEvent.focus(input);
+    expect(input.value).toBe(toAddress(PROXY_URL));
+
+    fireEvent.click(getByLabelText("Copy URL"));
+    await waitFor(() =>
+      expect(actionService.dispatch).toHaveBeenCalledWith(
+        "browser.copyUrl",
+        expect.objectContaining({ url: toAddress(PROXY_URL) }),
+        expect.anything()
+      )
+    );
+  });
+
+  it("gives the route its own run so it can outlast the host when space is short", () => {
+    const { getByTestId } = renderToolbar({ url: PROXY_URL, toAddress });
+    const runs = Array.from(getByTestId("browser-address-display").children);
+    expect(runs.map((r) => r.textContent)).toEqual(["localhost:5173", "/dashboard?tab=billing"]);
+  });
+});
+
+describe("BrowserToolbar keyboard activation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("Enter/Space on back and forward navigate (keyboard clicks carry detail 0)", () => {
+    const onBack = vi.fn();
+    const onForward = vi.fn();
+    const { getByTestId } = renderToolbar({
+      canGoBack: true,
+      canGoForward: true,
+      onBack,
+      onForward,
+    });
+    fireEvent.click(getByTestId("browser-back"), { detail: 0 });
+    fireEvent.click(getByTestId("browser-forward"), { detail: 0 });
+    expect(onBack).toHaveBeenCalledOnce();
+    expect(onForward).toHaveBeenCalledOnce();
+  });
+
+  it("a pointer press navigates once, on pointer-up, not again on its click", () => {
+    const onBack = vi.fn();
+    const { getByTestId } = renderToolbar({ canGoBack: true, onBack });
+    const back = getByTestId("browser-back");
+    fireEvent.pointerDown(back, { button: 0 });
+    fireEvent.pointerUp(back, { button: 0 });
+    fireEvent.click(back, { detail: 1 });
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+});
+
+describe("BrowserToolbar address validation", () => {
+  it("ties a rejected address to its message and closes the suggestions", () => {
+    const { getByTestId, getByRole, queryByRole } = renderToolbar({
+      validateUrl: () => ({ error: "Only localhost addresses open here, not example.com" }),
+    });
+    const input = openDropdown(getByTestId("browser-address-bar"));
+    expect(queryByRole("listbox")).toBeTruthy();
+    fireEvent.change(input, { target: { value: "https://example.com" } });
+    fireEvent.submit(input.closest("form")!);
+
+    const alert = getByRole("alert");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")).toBe(alert.id);
+    expect(queryByRole("listbox")).toBeNull();
+  });
+});
+
+describe("BrowserToolbar zoom", () => {
+  it("keeps zoom out of the toolbar at 100% and surfaces it once it changes", () => {
+    const onZoomChange = vi.fn();
+    const { queryByTestId, rerender } = renderToolbar({ onZoomChange, zoomFactor: 1 });
+    expect(queryByTestId("browser-zoom-indicator")).toBeNull();
+    rerender(<BrowserToolbar {...defaultProps} onZoomChange={onZoomChange} zoomFactor={1.25} />);
+    expect(queryByTestId("browser-zoom-indicator")?.textContent).toContain("125%");
+  });
+
+  it("offers zoom, DevTools and Portal from the More menu", async () => {
+    const onZoomChange = vi.fn();
+    const onToggleDevTools = vi.fn();
+    const onPromoteToPortal = vi.fn();
+    const { getByLabelText } = renderToolbar({
+      onZoomChange,
+      onToggleDevTools,
+      onPromoteToPortal,
+      isWebviewReady: true,
+    });
+    fireEvent.pointerDown(getByLabelText("More page actions"), { button: 0, ctrlKey: false });
+    await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeTruthy());
+    const items = Array.from(document.querySelectorAll('[role="menuitem"]'));
+    const labels = items.map((i) => i.textContent?.trim());
+    expect(labels).toEqual(
+      expect.arrayContaining(["Zoom in", "Zoom out", "Toggle DevTools", "Open in Portal"])
+    );
+    fireEvent.click(items.find((i) => i.textContent?.trim() === "Zoom in")!);
+    expect(onZoomChange).toHaveBeenCalledWith(1.25);
+  });
+});
+
+describe("BrowserToolbar history on a mapped address", () => {
+  async function useRealFrecency() {
+    const store = await import("@/store/urlHistoryStore");
+    const actual =
+      await vi.importActual<typeof import("@/store/urlHistoryStore")>("@/store/urlHistoryStore");
+    vi.mocked(store.getFrecencySuggestions).mockImplementation(actual.getFrecencySuggestions);
+    return () => vi.mocked(store.getFrecencySuggestions).mockImplementation((entries) => entries);
+  }
+
+  it("matches what was typed against the shown address, and rows keep the stored URL", async () => {
+    const restore = await useRealFrecency();
+    const onNavigate = vi.fn();
+    const toAddress = (url: string) => url.replace("localhost:3000", "shown.test:1");
+    const { getByTestId, getAllByRole } = renderToolbar({ toAddress, onNavigate });
+    const input = openDropdown(getByTestId("browser-address-bar"));
+    fireEvent.change(input, { target: { value: "shown.test" } });
+
+    const rows = getAllByRole("option");
+    expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining("shown.test:1")]);
+    fireEvent.mouseDown(rows[0]!);
+    expect(onNavigate).toHaveBeenCalledWith("http://localhost:3000/");
+    restore();
+  });
+
+  it("shows one row per address when two stored URLs map to the same one", async () => {
+    const restore = await useRealFrecency();
+    const toAddress = () => "http://shown.test:1/";
+    const { getByTestId, getAllByRole } = renderToolbar({ toAddress });
+    openDropdown(getByTestId("browser-address-bar"));
+    expect(getAllByRole("option")).toHaveLength(1);
+    restore();
+  });
+});
+
+describe("BrowserToolbar at compact widths", () => {
+  beforeEach(() => {
+    rowWidth.current = 500;
+  });
+  afterEach(() => {
+    rowWidth.current = 1000;
+  });
+
+  it("confirms a copy from More on the More trigger, then settles back", async () => {
+    const { getByLabelText, getByText } = renderToolbar();
+    const glyphBefore = getByLabelText("More page actions").innerHTML;
+    fireEvent.pointerDown(getByLabelText("More page actions"), { button: 0, ctrlKey: false });
+    await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeTruthy());
+    const copyItem = Array.from(document.querySelectorAll('[role="menuitem"]')).find(
+      (i) => i.textContent?.trim() === "Copy URL"
+    )!;
+    fireEvent.click(copyItem);
+    await waitFor(() =>
+      expect(getByLabelText("More page actions").innerHTML).not.toBe(glyphBefore)
+    );
+    expect(getByText("Copied to clipboard")).toBeTruthy();
+    await waitFor(() => expect(getByLabelText("More page actions").innerHTML).toBe(glyphBefore), {
+      timeout: 3000,
+    });
+  });
+
+  it("moves controls in and out of More as a mounted toolbar is resized", () => {
+    rowWidth.current = 1000;
+    const { queryByLabelText } = renderToolbar({
+      onToggleConsole: vi.fn(),
+      canToggleConsole: true,
+    });
+    expect(queryByLabelText("Copy URL")).toBeTruthy();
+    act(() => rowWidth.resize?.(500));
+    expect(queryByLabelText("Copy URL")).toBeNull();
+    expect(queryByLabelText("Toggle console")).toBeNull();
+    act(() => rowWidth.resize?.(900));
+    expect(queryByLabelText("Copy URL")).toBeTruthy();
+    expect(queryByLabelText("Toggle console")).toBeTruthy();
+  });
+
+  it("keeps the route by moving Copy URL and the console toggle into More", async () => {
+    const onToggleConsole = vi.fn();
+    const { queryByLabelText, getByLabelText } = renderToolbar({
+      onToggleConsole,
+      canToggleConsole: true,
+    });
+    expect(queryByLabelText("Copy URL")).toBeNull();
+    expect(queryByLabelText("Toggle console")).toBeNull();
+
+    fireEvent.pointerDown(getByLabelText("More page actions"), { button: 0, ctrlKey: false });
+    await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeTruthy());
+    const consoleItem = document.querySelector('[role="menuitemcheckbox"]') as HTMLElement;
+    expect(consoleItem.textContent).toContain("Console");
+    fireEvent.click(consoleItem);
+    expect(onToggleConsole).toHaveBeenCalledOnce();
+  });
+});
+
+describe("BrowserToolbar after a commit", () => {
+  it("typing again in a still-focused field shows the text, not the resting overlay", () => {
+    const { getByTestId, queryByTestId } = renderToolbar({ url: "http://localhost:5173/a" });
+    const input = getByTestId("browser-address-bar") as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "localhost:5173/b" } });
+    fireEvent.submit(input.closest("form")!);
+    fireEvent.change(input, { target: { value: "localhost:5173/c" } });
+    expect(queryByTestId("browser-address-display")).toBeNull();
+    expect(input.className).not.toContain("text-transparent");
+    expect(input.value).toBe("localhost:5173/c");
+  });
+});
+
+describe("BrowserToolbar zoom popover focus", () => {
+  function ZoomHarness() {
+    const [zoom, setZoom] = useState(0.75);
+    return <BrowserToolbar {...defaultProps} zoomFactor={zoom} onZoomChange={setZoom} />;
+  }
+
+  it("keeps its controls through 100%, and a keyboard close lands on Copy URL", async () => {
+    const { getByTestId, getByLabelText, queryByTestId } = render(<ZoomHarness />);
+    fireEvent.click(getByTestId("browser-zoom-indicator"));
+    await waitFor(() => expect(getByLabelText("Reset zoom")).toBeTruthy());
+
+    fireEvent.click(getByLabelText("Reset zoom"));
+    // Back at 100% while open: the chip and its controls stay put.
+    expect(queryByTestId("browser-zoom-indicator")).toBeTruthy();
+    expect(getByLabelText("Zoom in")).toBeTruthy();
+
+    fireEvent.keyDown(getByLabelText("Zoom in"), { key: "Escape" });
+    await waitFor(() => expect(queryByTestId("browser-zoom-indicator")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(getByLabelText("Copy URL")));
+  });
+});
+
+describe("BrowserToolbar device picker keyboard", () => {
+  it("opens from the keyboard and selects with the arrow keys and Enter", async () => {
+    const onViewportPresetChange = vi.fn();
+    renderToolbar({ onViewportPresetChange, viewportPreset: "iphone" });
+    const trigger = document.querySelector('[aria-label^="Device:"]') as HTMLElement;
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeTruthy());
+
+    const items = Array.from(document.querySelectorAll('[role="menuitemradio"]')) as HTMLElement[];
+    const target = items.find((i) => i.getAttribute("aria-checked") !== "true")!;
+    target.focus();
+    fireEvent.keyDown(target, { key: "Enter" });
+    await waitFor(() =>
+      expect(onViewportPresetChange).toHaveBeenCalledWith(
+        target.getAttribute("data-viewport-preset-id")
+      )
+    );
   });
 });

@@ -1,3 +1,5 @@
+import { formatCompactCount, formatCountExact } from "@/lib/formatCount";
+
 /**
  * Recency arbitration for the toolbar issue/PR count badge (issue #9741).
  *
@@ -49,4 +51,23 @@ export function resolveForgeDisplayCount(
     return listApproximate ? `${listCount}+` : listCount;
   }
   return statsCount;
+}
+
+/**
+ * The badge text for a resolved display count: numbers compacted, the list's
+ * approximate `N+` form compacted on its numeric part, anything else as-is.
+ */
+export function formatForgeBadgeCount(display: number | string | null): string | null {
+  if (display === null) return null;
+  if (typeof display === "number") return formatCompactCount(display);
+  const approximate = /^(\d+)\+$/.exec(display);
+  return approximate ? `${formatCompactCount(Number(approximate[1]))}+` : display;
+}
+
+/** The exact form for accessible names and tooltips: `23,645`. */
+export function formatExactCount(display: number | string | null): string {
+  if (display === null) return "—";
+  if (typeof display === "number") return formatCountExact(display);
+  const approximate = /^(\d+)\+$/.exec(display);
+  return approximate ? `${formatCountExact(Number(approximate[1]))}+` : display;
 }

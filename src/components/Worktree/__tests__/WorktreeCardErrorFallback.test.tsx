@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { WorktreeCardErrorFallback } from "../WorktreeCardErrorFallback";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { actionService } from "@/services/ActionService";
 
 function wrap(ui: React.ReactElement) {
   return <TooltipProvider>{ui}</TooltipProvider>;
@@ -17,6 +18,11 @@ vi.mock("@/services/ActionService", () => ({
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
+}));
+
+const announceMock = vi.hoisted(() => vi.fn());
+vi.mock("@/store/accessibilityAnnouncerStore", () => ({
+  useAnnouncerStore: { getState: () => ({ announce: announceMock }) },
 }));
 
 vi.mock("@/lib/utils", () => ({
@@ -46,7 +52,7 @@ describe("WorktreeCardErrorFallback", () => {
     render(
       wrap(<WorktreeCardErrorFallback error={new Error("Card broke")} resetError={resetError} />)
     );
-    expect(screen.getByText("Card failed to render")).toBeTruthy();
+    expect(screen.getByText("Couldn't show this worktree")).toBeTruthy();
     expect(screen.queryByText("Card broke")).toBeNull();
   });
 
@@ -85,5 +91,65 @@ describe("WorktreeCardErrorFallback", () => {
     expect(screen.getByText("Try again")).toBeTruthy();
     // Should NOT show the default ErrorFallback component variant
     expect(screen.queryByText("WorktreeCard Error")).toBeNull();
+  });
+
+  it("names the worktree it could not show, on screen and to screen readers", () => {
+    vi.stubEnv("DEV", false);
+    announceMock.mockClear();
+    render(
+      wrap(
+        <WorktreeCardErrorFallback
+          error={new Error("Card broke")}
+          resetError={vi.fn()}
+          displayName="feature/login"
+        />
+      )
+    );
+    expect(screen.getByText("Couldn't show feature/login")).toBeTruthy();
+    expect(announceMock).toHaveBeenCalledTimes(1);
+    expect(announceMock.mock.calls[0]![0]).toContain("feature/login");
+  });
+
+  it("swaps Try again for a window reload once a retry has failed", () => {
+    vi.stubEnv("DEV", false);
+    const resetError = vi.fn();
+    render(
+      wrap(
+        <WorktreeCardErrorFallback
+          error={new Error("Card broke")}
+          resetError={resetError}
+          displayName="feature/login"
+          retryCount={1}
+        />
+      )
+    );
+    expect(screen.queryByText("Try again")).toBeNull();
+    fireEvent.click(screen.getByText("Reload window"));
+    expect(resetError).not.toHaveBeenCalled();
+  });
+
+  it("reloads through the bridge when the reload action can't dispatch", async () => {
+    vi.stubEnv("DEV", false);
+    const bridgeReload = vi.fn();
+    vi.stubGlobal("electron", { window: { reload: bridgeReload } });
+    vi.mocked(actionService.dispatch).mockResolvedValueOnce({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "unavailable" },
+    } as Awaited<ReturnType<typeof actionService.dispatch>>);
+    try {
+      render(
+        wrap(
+          <WorktreeCardErrorFallback
+            error={new Error("Card broke")}
+            resetError={vi.fn()}
+            retryCount={1}
+          />
+        )
+      );
+      fireEvent.click(screen.getByText("Reload window"));
+      await waitFor(() => expect(bridgeReload).toHaveBeenCalledOnce());
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

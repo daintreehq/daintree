@@ -91,6 +91,16 @@ describe("@daintreehq/plugin-sdk/react — React stays external", () => {
     expect(bundledPackages).toEqual([]);
   });
 
+  it("covers every entry in one metafile", () => {
+    // The config is a function that collapses to a single JS build under
+    // `--no-dts`; if it ever became an array again, two builds would race over
+    // this file and one of the entries would be missing here.
+    const outputs = Object.keys(metafile.outputs).map((out) => path.basename(out));
+    for (const entry of ["index.js", "react.js", "files.js", "testing.js"]) {
+      expect(outputs, `metafile is missing ${entry}`).toContain(entry);
+    }
+  });
+
   it("emits react as an external import of the react entry", () => {
     const [, reactEntry] =
       Object.entries(metafile.outputs).find(([out]) => out.endsWith("react.js")) ?? [];
@@ -107,6 +117,17 @@ describe("@daintreehq/plugin-sdk/react — React stays external", () => {
     for (const marker of REACT_IMPLEMENTATION_MARKERS) {
       expect(code).not.toContain(marker);
     }
+  });
+
+  // Read before any consumer build, which would replace `import.meta.env.*`
+  // and hide the read. A panel is a Vite library build that leaves
+  // `process.env.*` untouched and runs where `process` does not exist, and
+  // `daintree-plugin dev` builds in production mode, so a build-flag read the
+  // SDK ships either throws or never fires in a real plugin.
+  it("ships no build-environment reads in the emitted entry", async () => {
+    const code = await fs.readFile(path.join(sdkOutDir, "react.js"), "utf8");
+    expect(code).toContain("createViewScope");
+    expect(code).not.toMatch(/process\.env|import\.meta\.env/);
   });
 });
 
@@ -128,8 +149,9 @@ describe("consumer panel build — React never reaches the bundle", () => {
     await fs.writeFile(
       path.join(fixtureDir, "panel.js"),
       // Importing the hook is the whole point — it is the SDK export with a
-      // real React dependency behind it.
-      'import { useHostChannel } from "@daintreehq/plugin-sdk/react";\nexport { useHostChannel };\n'
+      // real React dependency behind it. `createViewScope` rides along so its
+      // emitted form is checked against the same real panel build.
+      'import { createViewScope, useHostChannel } from "@daintreehq/plugin-sdk/react";\nexport { createViewScope, useHostChannel };\n'
     );
 
     // A real node_modules layout rather than a `resolve.alias`. Two reasons:
@@ -202,5 +224,9 @@ describe("consumer panel build — React never reaches the bundle", () => {
     for (const marker of REACT_IMPLEMENTATION_MARKERS) {
       expect(chunk.code).not.toContain(marker);
     }
+  });
+
+  it("carries createViewScope into the panel bundle", () => {
+    expect(chunk.code).toContain("function createViewScope");
   });
 });

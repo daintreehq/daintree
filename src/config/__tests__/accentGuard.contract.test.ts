@@ -137,25 +137,17 @@ const DURABLE_ALLOWLIST = new Set([
   // another put two accents in the same focus region. The accent is the focus
   // anchor alone, and both files came off this list.
 
-  // PresetColorPicker Done CTA (primary commit action) + focus-visible ring
-  "src/components/Settings/PresetColorPicker.tsx",
-
   // Current rebase step indicator in the conflict UI (single primary anchor per active focus region)
   "src/components/Worktree/ReviewHub/ConflictPanel.tsx",
 
-  // File-browser tree-column resize handle: focus ring + grip accent mark the
-  // one keyboard-focusable separator (single focus anchor per active focus
-  // region), mirroring the PortalDock/Sidebar resize-handle convention (#11331)
-  "src/panels/file-browser/FileBrowserPane.tsx",
-
-  // Worktree overview grid: the active-descendant cursor. The grid is a single
-  // tab stop whose 2D arrow keys move `aria-activedescendant`, so the cursor is
-  // NOT DOM focus and cannot be written as a `focus-visible:` variant the way
-  // the auto-exclusion above expects. It is nonetheless the one load-bearing
-  // anchor in that arrow-key domain, which is what accent is reserved for.
-  // Membership deliberately takes a neutral tint plus inset ring instead, so
-  // the two marks cannot be confused with each other (#11989).
-  "src/components/Worktree/WorktreeOverviewModal.tsx",
+  // Worktree overview list: the active-descendant cursor row. The list is a
+  // single tab stop whose arrow keys move `aria-activedescendant`, so the
+  // cursor is NOT DOM focus and cannot be written as a `focus-visible:` variant
+  // the way the auto-exclusion above expects. It is nonetheless the one
+  // load-bearing anchor in that arrow-key domain, which is what accent is
+  // reserved for. Membership is a neutral fill plus a checked box, so the two
+  // marks cannot be confused with each other (#11989).
+  "src/components/Worktree/WorktreeOverviewRow.tsx",
 ]);
 
 // Pre-existing accent usage inherited from cleanup buckets #5978-#5986 (all
@@ -165,51 +157,22 @@ const DURABLE_ALLOWLIST = new Set([
 // file no longer contains any non-focus-ring forbidden utility.
 const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
   "#5978-5986-pre-existing": [
-    "plugins/builtin/github/renderer/components/CommitList.tsx",
     "src/components/Commands/CommandBuilder.tsx",
-    "src/components/Commands/CommandPicker.tsx",
     "src/components/DevPreview/DevPreviewEmptyStates.tsx",
-    "src/components/Diagnostics/DiagnosticsDock.tsx",
-    "src/components/Diagnostics/TelemetryContent.tsx",
-    "src/components/KeyboardShortcuts/SettingsShortcutCapture.tsx",
     "src/components/Layout/DockedNonPtyPanelItem.tsx",
     "src/components/Layout/DockedTabGroup.tsx",
     "src/components/Layout/DockedTerminalItem.tsx",
-    "src/components/Layout/Sidebar.tsx",
     "src/components/Layout/VoiceRecordingToolbarButton.tsx",
-    "src/components/Onboarding/GettingStartedChecklist.tsx",
-    "src/components/Panel/PanelTransitionOverlay.tsx",
     "src/components/Panel/TabButton.tsx",
-    "src/components/Portal/PortalDock.tsx",
-    "src/components/Portal/PortalToolbar.tsx",
-    "src/components/Project/GeneralTab.tsx",
-    "src/components/Project/ProjectNotificationsTab.tsx",
-    "src/components/Project/WelcomeScreen.tsx",
     "src/components/Recovery/CrashRecoveryDialog.tsx",
-    "src/components/Settings/AgentSelectorDropdown.tsx",
-    "src/components/Settings/EditorIntegrationTab.tsx",
-    "src/components/Settings/EnvVarEditor.tsx",
-    "src/components/Settings/ImageViewerTab.tsx",
-    "src/components/Settings/KeyboardShortcutsTab.tsx",
-    "src/components/Settings/PortalSettingsTab.tsx",
-    "src/components/Settings/PresetSelector.tsx",
-    "src/components/Settings/PrivacyDataTab.tsx",
     "src/components/Settings/SettingsDialog.tsx",
     "src/components/Settings/SettingsSubtabBar.tsx",
-    "src/components/Settings/SettingsSwitchCard.tsx",
-    "src/components/Settings/TerminalSettingsTab.tsx",
-    "src/components/Settings/WorktreeSettingsTab.tsx",
     "src/components/Terminal/ContentGridDefault.tsx",
     "src/components/Terminal/HybridInputBar.tsx",
-    "src/components/Terminal/RecipeRunner/RecipeRunnerGrid.tsx",
-    "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx",
-    "src/components/Terminal/RecipeRunner/RecipeRunnerList.tsx",
-    "src/components/Terminal/TwoPaneSplitDivider.tsx",
     "src/components/Terminal/VoiceInputButton.tsx",
     "src/components/TerminalRecipe/RecipeEditor.tsx",
     "src/components/Worktree/QuickCreatePalette.tsx",
     "src/components/Worktree/WorktreeCard/WorktreeTerminalSection.tsx",
-    "src/hooks/useUpdateListener.tsx",
   ],
 };
 

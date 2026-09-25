@@ -250,6 +250,21 @@ describe("ProjectPluginIndicator", () => {
     expect(dot?.className).not.toMatch(/status-(danger|error|warning)/);
   });
 
+  it("sits its mark in the footer's shared glyph column", () => {
+    render(<ProjectPluginIndicator />);
+    snapshot([plugin("a.b", "blocked")]);
+
+    // Run command's 12px chevron sits one row up; a mark sized by itself left
+    // this label 4px short of that one's edge (#12587).
+    const trigger = screen.getByRole("button", { name: /Project plugins/ });
+    const slots = trigger.querySelectorAll('[data-sidebar-footer-slot="glyph"]');
+    expect(slots).toHaveLength(1);
+    // The forced-colors hooks stay on the mark itself, not on its column.
+    const mark = slots[0]!.querySelector(".status-mark");
+    expect(mark?.getAttribute("data-working")).toBe("false");
+    expect(slots[0]!.nextElementSibling?.textContent).toBe("1 project plugin off");
+  });
+
   it("gives an unreadable manifest and a failed one the same chrome", async () => {
     render(<ProjectPluginIndicator />);
     snapshot([

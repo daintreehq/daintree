@@ -1,8 +1,15 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { cleanup, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { primeRadix } from "@/components/ui/radix-loader";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { CompactErrorList } from "../CompactErrorList";
+
+// The app root supplies the provider each row's message tooltip needs.
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 import type { ErrorRecord } from "@/store/errorStore";
 
 const mockDispatch = vi.fn().mockResolvedValue({ ok: true });
@@ -45,21 +52,27 @@ const openOverflow = () => fireEvent.click(screen.getByTestId("compact-error-ove
 
 describe("CompactErrorList", () => {
   it("renders every error inline when the list fits under the cap", () => {
-    render(<CompactErrorList errors={makeErrors(3)} maxInline={3} onDismiss={vi.fn()} />);
+    render(
+      <CompactErrorList variant="flush" errors={makeErrors(3)} maxInline={3} onDismiss={vi.fn()} />
+    );
     expect(screen.getByText("Failure 0")).toBeTruthy();
     expect(screen.getByText("Failure 2")).toBeTruthy();
     expect(screen.queryByTestId("compact-error-overflow")).toBeNull();
   });
 
   it("splits at the cap, leaving the tail out of the DOM until it is opened", () => {
-    render(<CompactErrorList errors={makeErrors(6)} maxInline={2} onDismiss={vi.fn()} />);
+    render(
+      <CompactErrorList variant="flush" errors={makeErrors(6)} maxInline={2} onDismiss={vi.fn()} />
+    );
     expect(screen.getByText("Failure 1")).toBeTruthy();
     expect(screen.queryByText("Failure 2")).toBeNull();
     expect(screen.getByTestId("compact-error-overflow")).toBeTruthy();
   });
 
   it("opens the tail so every hidden error is readable (#12001)", () => {
-    render(<CompactErrorList errors={makeErrors(6)} maxInline={2} onDismiss={vi.fn()} />);
+    render(
+      <CompactErrorList variant="flush" errors={makeErrors(6)} maxInline={2} onDismiss={vi.fn()} />
+    );
     openOverflow();
     for (const i of [2, 3, 4, 5]) {
       expect(screen.getByText(`Failure ${i}`)).toBeTruthy();
@@ -67,7 +80,9 @@ describe("CompactErrorList", () => {
   });
 
   it("counts only the hidden errors on the trigger, not the whole list", () => {
-    render(<CompactErrorList errors={makeErrors(6)} maxInline={2} onDismiss={vi.fn()} />);
+    render(
+      <CompactErrorList variant="flush" errors={makeErrors(6)} maxInline={2} onDismiss={vi.fn()} />
+    );
     const trigger = screen.getByTestId("compact-error-overflow");
     expect(trigger.textContent).toContain("4");
     expect(trigger.textContent).not.toContain("6");
@@ -75,11 +90,13 @@ describe("CompactErrorList", () => {
 
   it("pluralizes the trigger against the hidden count", () => {
     const { rerender } = render(
-      <CompactErrorList errors={makeErrors(3)} maxInline={2} onDismiss={vi.fn()} />
+      <CompactErrorList variant="flush" errors={makeErrors(3)} maxInline={2} onDismiss={vi.fn()} />
     );
     expect(screen.getByTestId("compact-error-overflow").textContent).toMatch(/1 more error(?!s)/);
 
-    rerender(<CompactErrorList errors={makeErrors(4)} maxInline={2} onDismiss={vi.fn()} />);
+    rerender(
+      <CompactErrorList variant="flush" errors={makeErrors(4)} maxInline={2} onDismiss={vi.fn()} />
+    );
     expect(screen.getByTestId("compact-error-overflow").textContent).toMatch(/2 more errors/);
   });
 
@@ -89,7 +106,7 @@ describe("CompactErrorList", () => {
     // trimming it to a bare digit would be the opposite failure, so the noun
     // has to survive. The popover exposes the rows themselves once opened.
     const errors = makeErrors(4).map((e) => ({ ...e, message: "x".repeat(400) }));
-    render(<CompactErrorList errors={errors} maxInline={1} onDismiss={vi.fn()} />);
+    render(<CompactErrorList variant="flush" errors={errors} maxInline={1} onDismiss={vi.fn()} />);
 
     const label = screen.getByTestId("compact-error-overflow").getAttribute("aria-label") ?? "";
     expect(label).toContain("3");
@@ -98,7 +115,9 @@ describe("CompactErrorList", () => {
   });
 
   it("puts everything behind the disclosure when nothing may render inline", () => {
-    render(<CompactErrorList errors={makeErrors(3)} maxInline={0} onDismiss={vi.fn()} />);
+    render(
+      <CompactErrorList variant="flush" errors={makeErrors(3)} maxInline={0} onDismiss={vi.fn()} />
+    );
     expect(screen.queryByText("Failure 0")).toBeNull();
 
     openOverflow();
@@ -109,7 +128,7 @@ describe("CompactErrorList", () => {
     // Counts occurrences rather than presence: an error rendered both inline
     // and in the tail would otherwise pass as "present once".
     const errors = makeErrors(9);
-    render(<CompactErrorList errors={errors} maxInline={4} onDismiss={vi.fn()} />);
+    render(<CompactErrorList variant="flush" errors={errors} maxInline={4} onDismiss={vi.fn()} />);
 
     const counts = () => errors.map((e) => screen.queryAllByText(e.message).length);
 
@@ -123,7 +142,14 @@ describe("CompactErrorList", () => {
 
   it("keeps dismiss wired for a hidden error, forwarding its own id", () => {
     const onDismiss = vi.fn();
-    render(<CompactErrorList errors={makeErrors(5)} maxInline={2} onDismiss={onDismiss} />);
+    render(
+      <CompactErrorList
+        variant="flush"
+        errors={makeErrors(5)}
+        maxInline={2}
+        onDismiss={onDismiss}
+      />
+    );
     openOverflow();
 
     const row = screen.getByText("Failure 4").closest("div")!;
@@ -140,7 +166,13 @@ describe("CompactErrorList", () => {
       retryAction: "git:status" as ErrorRecord["retryAction"],
     };
     render(
-      <CompactErrorList errors={errors} maxInline={2} onDismiss={vi.fn()} onRetry={onRetry} />
+      <CompactErrorList
+        variant="flush"
+        errors={errors}
+        maxInline={2}
+        onDismiss={vi.fn()}
+        onRetry={onRetry}
+      />
     );
     openOverflow();
 
@@ -150,19 +182,21 @@ describe("CompactErrorList", () => {
 
   it("renders nothing at all for an empty list", () => {
     const { container } = render(
-      <CompactErrorList errors={[]} maxInline={3} onDismiss={vi.fn()} />
+      <CompactErrorList variant="flush" errors={[]} maxInline={3} onDismiss={vi.fn()} />
     );
     expect(container.firstChild).toBeNull();
   });
 
   it("drops the trigger once the tail shrinks back under the cap", () => {
     const { rerender } = render(
-      <CompactErrorList errors={makeErrors(5)} maxInline={2} onDismiss={vi.fn()} />
+      <CompactErrorList variant="flush" errors={makeErrors(5)} maxInline={2} onDismiss={vi.fn()} />
     );
     openOverflow();
     expect(screen.getByText("Failure 4")).toBeTruthy();
 
-    rerender(<CompactErrorList errors={makeErrors(2)} maxInline={2} onDismiss={vi.fn()} />);
+    rerender(
+      <CompactErrorList variant="flush" errors={makeErrors(2)} maxInline={2} onDismiss={vi.fn()} />
+    );
     expect(screen.queryByTestId("compact-error-overflow")).toBeNull();
     expect(screen.queryByText("Failure 4")).toBeNull();
   });
@@ -172,13 +206,17 @@ describe("CompactErrorList", () => {
     // it, and a later error would remount the disclosure already open — taking
     // focus from whatever the user moved on to.
     const { rerender } = render(
-      <CompactErrorList errors={makeErrors(5)} maxInline={2} onDismiss={vi.fn()} />
+      <CompactErrorList variant="flush" errors={makeErrors(5)} maxInline={2} onDismiss={vi.fn()} />
     );
     openOverflow();
     expect(screen.getByText("Failure 4")).toBeTruthy();
 
-    rerender(<CompactErrorList errors={makeErrors(2)} maxInline={2} onDismiss={vi.fn()} />);
-    rerender(<CompactErrorList errors={makeErrors(5)} maxInline={2} onDismiss={vi.fn()} />);
+    rerender(
+      <CompactErrorList variant="flush" errors={makeErrors(2)} maxInline={2} onDismiss={vi.fn()} />
+    );
+    rerender(
+      <CompactErrorList variant="flush" errors={makeErrors(5)} maxInline={2} onDismiss={vi.fn()} />
+    );
 
     expect(screen.getByTestId("compact-error-overflow")).toBeTruthy();
     expect(screen.queryByText("Failure 4")).toBeNull();
@@ -191,7 +229,12 @@ describe("CompactErrorList", () => {
     const onParentClick = vi.fn();
     render(
       <div onClick={onParentClick}>
-        <CompactErrorList errors={makeErrors(5)} maxInline={2} onDismiss={vi.fn()} />
+        <CompactErrorList
+          variant="flush"
+          errors={makeErrors(5)}
+          maxInline={2}
+          onDismiss={vi.fn()}
+        />
       </div>
     );
 
@@ -207,7 +250,12 @@ describe("CompactErrorList", () => {
     const onDismiss = vi.fn();
     render(
       <div onClick={onParentClick}>
-        <CompactErrorList errors={makeErrors(5)} maxInline={2} onDismiss={onDismiss} />
+        <CompactErrorList
+          variant="flush"
+          errors={makeErrors(5)}
+          maxInline={2}
+          onDismiss={onDismiss}
+        />
       </div>
     );
 
@@ -217,5 +265,150 @@ describe("CompactErrorList", () => {
 
     expect(onDismiss).toHaveBeenCalledWith("err-4");
     expect(onParentClick).not.toHaveBeenCalled();
+  });
+
+  // A dismissed row takes its focused control with it; focus must stay in the
+  // list the user was working in rather than jumping to the top of the app.
+  describe("focus after a dismissal", () => {
+    function Harness({ initial, maxInline }: { initial: number; maxInline: number }) {
+      const [errors, setErrors] = useState(() => makeErrors(initial));
+      return (
+        <div tabIndex={-1} data-testid="host">
+          <CompactErrorList
+            variant="flush"
+            errors={errors}
+            maxInline={maxInline}
+            onDismiss={(id) => setErrors((all) => all.filter((e) => e.id !== id))}
+          />
+        </div>
+      );
+    }
+
+    const dismissFocused = () => {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement)) throw new Error("nothing is focused");
+      fireEvent.click(active);
+    };
+
+    it("moves to the next row's action when an inline row goes", () => {
+      render(<Harness initial={2} maxInline={2} />);
+      const [first] = screen.getAllByRole("button", { name: "Dismiss error" });
+      first!.focus();
+      dismissFocused();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "View errors" }));
+    });
+
+    it("moves to the previous row when the last row goes", () => {
+      render(<Harness initial={2} maxInline={2} />);
+      const dismisses = screen.getAllByRole("button", { name: "Dismiss error" });
+      dismisses[1]!.focus();
+      dismissFocused();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "View errors" }));
+    });
+
+    it("leaves the popover for the inline rows when its last row goes", () => {
+      render(<Harness initial={3} maxInline={2} />);
+      openOverflow();
+      const popover = screen.getByRole("dialog", { name: "More errors" });
+      within(popover).getByRole("button", { name: "Dismiss error" }).focus();
+      dismissFocused();
+      expect(screen.queryByTestId("compact-error-overflow")).toBeNull();
+      const inlineActions = screen.getAllByRole("button", { name: "View errors" });
+      expect(document.activeElement).toBe(inlineActions[inlineActions.length - 1]);
+    });
+
+    it("lands on the neighbour's control, not its clamped message", () => {
+      function Clamped() {
+        const [errors, setErrors] = useState(() =>
+          makeErrors(2).map((e, i) => (i === 0 ? { ...e, message: `${"y".repeat(400)} end` } : e))
+        );
+        return (
+          <CompactErrorList
+            variant="flush"
+            errors={errors}
+            maxInline={2}
+            onDismiss={(id) => setErrors((all) => all.filter((e) => e.id !== id))}
+          />
+        );
+      }
+      render(<Clamped />);
+      screen.getAllByRole("button", { name: "Dismiss error" })[1]!.focus();
+      dismissFocused();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "View errors" }));
+    });
+
+    it("falls back to the host when the only row goes", () => {
+      render(<Harness initial={1} maxInline={2} />);
+      screen.getByRole("button", { name: "Dismiss error" }).focus();
+      dismissFocused();
+      expect(document.activeElement).toBe(screen.getByTestId("host"));
+    });
+  });
+
+  // Focus opens a tooltip, so landing on a clamped message would drop its
+  // tooltip over the list the moment the disclosure opens.
+  it("opens the disclosure onto a control, never onto a message", () => {
+    const errors = makeErrors(3).map((e, i) =>
+      i === 2 ? { ...e, message: `${"x".repeat(400)} end` } : e
+    );
+    render(<CompactErrorList variant="flush" errors={errors} maxInline={2} onDismiss={vi.fn()} />);
+    openOverflow();
+    const active = document.activeElement;
+    expect(active?.tagName).toBe("BUTTON");
+    expect(screen.getByRole("dialog", { name: "More errors" }).contains(active)).toBe(true);
+  });
+
+  describe("arrival announcements", () => {
+    beforeEach(() => {
+      useAnnouncerStore.setState({ polite: null, assertive: null });
+    });
+
+    const fresh = (id: string, extra: Partial<ErrorRecord> = {}): ErrorRecord => ({
+      id,
+      timestamp: 1_700_000_000_000,
+      type: "git",
+      message: `Push failed ${id}`,
+      retryability: "none",
+      dismissed: false,
+      ...extra,
+    });
+
+    it("announces a new error once, politely, and not again on remount", () => {
+      const error = fresh("announce-once");
+      const { unmount } = render(
+        <CompactErrorList variant="flush" errors={[error]} maxInline={2} onDismiss={vi.fn()} />
+      );
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("Error: Push failed announce-once");
+      useAnnouncerStore.setState({ polite: null });
+      unmount();
+      render(
+        <CompactErrorList variant="flush" errors={[error]} maxInline={2} onDismiss={vi.fn()} />
+      );
+      expect(useAnnouncerStore.getState().polite).toBeNull();
+    });
+
+    it("keeps an error restored from the last session quiet", () => {
+      render(
+        <CompactErrorList
+          variant="flush"
+          errors={[fresh("restored", { fromPreviousSession: true })]}
+          maxInline={2}
+          onDismiss={vi.fn()}
+        />
+      );
+      expect(useAnnouncerStore.getState().polite).toBeNull();
+    });
+
+    it("keeps each row's own region silent so nothing is read twice", () => {
+      render(
+        <CompactErrorList
+          variant="flush"
+          errors={[fresh("quiet-row")]}
+          maxInline={2}
+          onDismiss={vi.fn()}
+        />
+      );
+      expect(screen.getByRole("status").getAttribute("aria-live")).toBe("off");
+    });
   });
 });

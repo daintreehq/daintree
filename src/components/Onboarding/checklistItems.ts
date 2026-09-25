@@ -1,6 +1,3 @@
-import type { ComponentType } from "react";
-import { FolderOpen } from "lucide-react";
-import { Plug, FolderGit2, Sprout } from "@/components/icons";
 import type { ActionId } from "@shared/types/actions";
 import type { ChecklistItemId } from "@shared/types/ipc/maps";
 
@@ -8,7 +5,6 @@ export interface ChecklistItemDef {
   id: ChecklistItemId;
   label: string;
   description?: string;
-  icon: ComponentType<{ className?: string }>;
   actionId: ActionId;
   actionArgs?: unknown;
   markOnClick?: boolean;
@@ -19,21 +15,18 @@ export const CHECKLIST_ITEMS: ChecklistItemDef[] = [
     id: "openedProject",
     label: "Open your project",
     description: "Connect a local folder — everything else flows from here",
-    icon: FolderOpen,
     actionId: "project.add",
   },
   {
     id: "launchedAgent",
-    label: "Ask AI to help with your code",
-    description: "Agents can write code, fix bugs, and answer questions about your codebase",
-    icon: Sprout,
+    label: "Launch your first agent",
+    description: "Then ask it to fix a bug, write a feature, or explain your code",
     actionId: "panel.palette",
   },
   {
     id: "createdWorktree",
     label: "Start a parallel task",
     description: "Work on two things at once without switching branches",
-    icon: FolderGit2,
     actionId: "worktree.createDialog.open",
   },
   {
@@ -41,7 +34,6 @@ export const CHECKLIST_ITEMS: ChecklistItemDef[] = [
     label: "Run two agents in parallel",
     description:
       "Kick off a second agent while the first keeps working — that's the Daintree superpower",
-    icon: Plug,
     actionId: "panel.palette",
   },
 ];

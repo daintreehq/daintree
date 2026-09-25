@@ -169,7 +169,7 @@ test.describe.serial("Core: Project Lifecycle", () => {
     // Add a recipe
     await window.locator(SEL.projectSettings.addRecipeButton).click();
 
-    const editor = window.getByRole("dialog").filter({ hasText: "Create Recipe" });
+    const editor = window.getByRole("dialog").filter({ hasText: "Create recipe" });
     await expect(editor).toBeVisible({ timeout: T_MEDIUM });
 
     await editor.locator(SEL.recipeEditor.nameInput).fill(RECIPE_NAME);

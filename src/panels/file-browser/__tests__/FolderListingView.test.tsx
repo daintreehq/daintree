@@ -251,3 +251,36 @@ describe("FolderListingView entry icons", () => {
     expect(iconOf("archive.zip").innerHTML).not.toBe(iconOf("real.zip").innerHTML);
   });
 });
+
+describe("FolderListingView keyboard use", () => {
+  it("activates a row from the keyboard exactly as a click does", () => {
+    const onSelect = vi.fn();
+    renderListing([row("src/a.ts"), row("src/lib", { isDirectory: true })], { onSelect });
+
+    fireEvent.keyDown(screen.getByLabelText("lib"), { key: "Enter" });
+    fireEvent.keyDown(screen.getByLabelText("a.ts"), { key: " " });
+
+    // The trailing flag marks a keyboard activation, so the host can hand
+    // focus on to whatever replaces the row.
+    expect(onSelect.mock.calls).toEqual([
+      ["src/lib", true, true],
+      ["src/a.ts", false, true],
+    ]);
+  });
+
+  it("keeps every row reachable by focus, and walks them with the arrow keys", () => {
+    renderListing([row("src/a.ts"), row("src/b.ts"), row("src/c.ts")]);
+    const rows = ["a.ts", "b.ts", "c.ts"].map((name) => screen.getByLabelText(name));
+
+    for (const element of rows) expect(element.tabIndex).toBe(0);
+
+    rows[0]!.focus();
+    fireEvent.keyDown(rows[0]!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(rows[1]);
+    fireEvent.keyDown(rows[1]!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(rows[0]);
+    // The ends hold rather than wrapping or escaping the list.
+    fireEvent.keyDown(rows[0]!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(rows[0]);
+  });
+});

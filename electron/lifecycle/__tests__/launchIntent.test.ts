@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
+  launchOpensFolder,
   resolveLaunchIntent,
+  resolveRestoreFallbackProjectId,
   shouldRestoreWindowFleet,
   stripLaunchTargets,
   type LaunchIntentSignals,
@@ -86,6 +88,47 @@ describe("resolveLaunchIntent", () => {
     );
     expect(sawCli).toBe(argv);
     expect(sawDirs).toBe(argv);
+  });
+});
+
+// A folder launch starts on the picker so the folder fills that window instead
+// of opening beside a restored last-active project (#12593).
+describe("launchOpensFolder", () => {
+  it("is true for --cli-path, a folder URI and a queued Finder drop", () => {
+    expect(launchOpensFolder(signals({ hasCliPathFlag: () => true }))).toBe(true);
+    expect(launchOpensFolder(signals({ extractDirectoryPaths: () => ["/repos/app"] }))).toBe(true);
+    expect(launchOpensFolder(signals({ pendingOpenDirPaths: ["/repos/app"] }))).toBe(true);
+  });
+
+  it("is false for a plain launch and for a .dntr-only launch", () => {
+    expect(launchOpensFolder(signals())).toBe(false);
+    expect(launchOpensFolder(signals({ pendingOpenFilePaths: ["/tmp/x.dntr"] }))).toBe(false);
+  });
+
+  it("ignores recovery — a folder still opens in safe mode", () => {
+    expect(
+      launchOpensFolder(signals({ isSafeMode: true, pendingOpenDirPaths: ["/repos/app"] }))
+    ).toBe(true);
+  });
+});
+
+describe("resolveRestoreFallbackProjectId", () => {
+  it("drops the last-active project for every kind of folder launch", () => {
+    for (const folderLaunch of [
+      signals({ hasCliPathFlag: () => true }),
+      signals({ extractDirectoryPaths: () => ["/repos/app"] }),
+      signals({ pendingOpenDirPaths: ["/repos/app"] }),
+    ]) {
+      expect(resolveRestoreFallbackProjectId(folderLaunch, "last")).toBeUndefined();
+    }
+  });
+
+  it("keeps it for a plain or .dntr-only launch", () => {
+    expect(resolveRestoreFallbackProjectId(signals(), "last")).toBe("last");
+    expect(
+      resolveRestoreFallbackProjectId(signals({ pendingOpenFilePaths: ["/tmp/x.dntr"] }), "last")
+    ).toBe("last");
+    expect(resolveRestoreFallbackProjectId(signals(), null)).toBeUndefined();
   });
 });
 

@@ -110,7 +110,10 @@ describe("SystemRequirementsSection collapsed panel inert", () => {
       <SystemRequirementsSection onFatalFailureChange={vi.fn()} onCheckingChange={vi.fn()} />
     );
     expect(getPanel().hasAttribute("inert")).toBe(false);
-    expect(getToggle(container).getAttribute("aria-expanded")).toBe("true");
+    // The panel cannot fold while a required tool is missing, so there is no
+    // disclosure to offer — a toggle here would be a control that does nothing.
+    expect(container.querySelector('button[aria-controls="system-requirements-panel"]')).toBeNull();
+    expect(container.textContent).toContain("System requirements");
   });
 
   it("restores inert when a fatal failure clears and the user never expanded", () => {
@@ -124,5 +127,37 @@ describe("SystemRequirementsSection collapsed panel inert", () => {
     );
     expect(getPanel().hasAttribute("inert")).toBe(true);
     expect(getToggle(container).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("puts the way past a missing tool beside the instruction, not below the steps", () => {
+    const saved = { ...healthCheckState };
+    Object.assign(healthCheckState, {
+      hasFatalFailure: true,
+      allDone: true,
+      visibleSpecs: [{ tool: "git", label: "Git", versionArgs: [], severity: "fatal" }],
+      checkStates: {
+        git: {
+          tool: "git",
+          label: "Git",
+          available: false,
+          version: null,
+          severity: "fatal",
+          meetsMinVersion: false,
+        },
+      },
+    });
+    try {
+      renderSection();
+      const alert = document.querySelector('[role="alert"]')!;
+      expect(alert.textContent).toContain("Install Git");
+      const checks = Array.from(document.querySelectorAll("button")).filter((b) =>
+        /check/i.test(b.textContent ?? "")
+      );
+      // One re-check, and it lives in the alert with the line it completes.
+      expect(checks).toHaveLength(1);
+      expect(alert.contains(checks[0]!)).toBe(true);
+    } finally {
+      Object.assign(healthCheckState, saved);
+    }
   });
 });

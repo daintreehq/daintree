@@ -1,42 +1,121 @@
 import { useState, useMemo, useEffect, useRef, useId } from "react";
-import Fuse, { type IFuseOptions } from "fuse.js";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
+import { Button } from "@/components/ui/button";
 import { useOverlayState } from "@/hooks";
-import { Kbd, KbdChord } from "@/components/ui/Kbd";
-import { MODIFIER_SEARCH_MAP, isChordPrefix, normalizeQuery } from "@/lib/kbdShortcut";
+import { KbdChord } from "@/components/ui/Kbd";
+import { describeChord } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import { keybindingService } from "../../services/KeybindingService";
-import type { RegisteredKeybindingConfig } from "../../services/KeybindingService";
+import {
+  buildShortcutEntries,
+  collapseNumberedSeries,
+  groupByCategory,
+  scopeLabel,
+  searchShortcuts,
+  sharedScope,
+  type ShortcutEntry,
+} from "./shortcutReferenceModel";
 
-const CATEGORY_ORDER = [
-  "Terminal",
-  "Agents",
-  "Worktrees",
-  "Panels",
-  "Navigation",
-  "Help",
-  "System",
-  "Other",
-] as const;
+// The notation legend's example. Any two-step chord would do; this one opens
+// the dialog the legend sits in.
+const CHORD_EXAMPLE = "Cmd+K Cmd+S";
 
 interface ShortcutReferenceDialogProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-interface ShortcutSearchItem extends RegisteredKeybindingConfig {
-  effectiveCombo: string;
-  displayCombo: string;
-  normalizedCombo: string;
-  keywords?: string[];
+function headingIdFor(prefix: string, category: string): string {
+  return `${prefix}-${category
+    .replace(/[^a-zA-Z0-9]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")}`;
+}
+
+function spokenBinding(entry: ShortcutEntry, mac: boolean, groupScope: string | null): string {
+  const keys =
+    entry.alternatives.length === 0
+      ? "no shortcut set"
+      : entry.alternatives
+          .map((alt) => {
+            const scope = alt.scope === groupScope ? null : scopeLabel(alt.scope);
+            const spoken = describeChord(alt.combo, mac);
+            return scope ? `${spoken} (${scope.toLowerCase()})` : spoken;
+          })
+          .join(", or ");
+  return entry.isCustom ? `: ${keys}, customized` : `: ${keys}`;
+}
+
+interface ShortcutRowProps {
+  entry: ShortcutEntry;
+  mac: boolean;
+  /** Scope already stated by the group heading, so the row need not repeat it. */
+  groupScope: string | null;
+  /** Shown beside the name in the ranked search list, where rows lose their heading. */
+  categoryLabel?: string;
+}
+
+function ShortcutRow({ entry, mac, groupScope, categoryLabel }: ShortcutRowProps) {
+  return (
+    <div
+      role="listitem"
+      className="flex flex-wrap items-center justify-between gap-x-4 gap-y-0.5 py-1.5"
+    >
+      <span className="min-w-0 text-sm leading-5 text-text-primary">
+        {entry.description}
+        {categoryLabel && <span className="ml-2 text-xs text-text-secondary">{categoryLabel}</span>}
+      </span>
+      {/* One spoken string for the whole cluster: read chip by chip, "Custom",
+          the scope and each "or" would arrive as disconnected fragments. */}
+      <span className="sr-only">{spokenBinding(entry, mac, groupScope)}</span>
+      <span
+        aria-hidden="true"
+        className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-0.5 text-xs leading-5 text-text-secondary"
+      >
+        {entry.isCustom && <span>Custom</span>}
+        {entry.alternatives.length === 0 ? (
+          <span>Not set</span>
+        ) : (
+          entry.alternatives.map((alt, index) => {
+            const scope = alt.scope === groupScope ? null : scopeLabel(alt.scope);
+            return (
+              <span key={alt.combo} className="inline-flex flex-wrap items-center gap-x-2">
+                {index > 0 && <span>or</span>}
+                <KbdChord
+                  shortcut={alt.combo}
+                  isMac={mac}
+                  density="bare"
+                  className="text-text-primary"
+                  aria-label=""
+                />
+                {scope && <span>{scope.toLowerCase()}</span>}
+              </span>
+            );
+          })
+        )}
+      </span>
+    </div>
+  );
 }
 
 export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDialogProps) {
   useOverlayState(isOpen);
   const [searchQuery, setSearchQuery] = useState("");
   const [bindingsVersion, setBindingsVersion] = useState(0);
+  const [wasOpen, setWasOpen] = useState(isOpen);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const resultsId = useId();
   const headingPrefix = useId();
+  const mac = isMac();
+
+  // Every opening is a fresh lookup. The dialog stays mounted between
+  // openings, so without this a reopen lands on the last query — including a
+  // no-results one, which makes the reference look empty.
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen);
+    if (isOpen) setSearchQuery("");
+  }
 
   useEffect(() => {
     const unsubscribe = keybindingService.subscribe(() => {
@@ -45,186 +124,159 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
     return unsubscribe;
   }, []);
 
-  const allBindings = useMemo(() => {
+  const entries = useMemo(() => {
     void bindingsVersion;
-    return keybindingService.getAllBindingsWithEffectiveCombos();
+    return buildShortcutEntries(keybindingService.getAllBindingsWithEffectiveCombos(), (id) =>
+      keybindingService.hasOverride(id)
+    );
   }, [bindingsVersion]);
 
-  const searchItems = useMemo<ShortcutSearchItem[]>(() => {
-    return allBindings.map((binding) => {
-      const displayCombo = keybindingService.getDisplayCombo(binding.actionId);
-      let normalizedCombo = displayCombo.toLowerCase().replace(/[\s+]+/g, "");
-      for (const [symbol, text] of Object.entries(MODIFIER_SEARCH_MAP)) {
-        normalizedCombo = normalizedCombo.replace(new RegExp(symbol, "g"), text);
-      }
-      return {
-        ...binding,
-        effectiveCombo: binding.effectiveCombo,
-        displayCombo,
-        normalizedCombo,
-        keywords: binding.effectiveCombo ? [] : ["unbound"],
-      };
-    });
-  }, [allBindings]);
+  const groups = useMemo(() => groupByCategory(entries), [entries]);
 
-  const fuseOptions: IFuseOptions<ShortcutSearchItem> = useMemo(
-    () => ({
-      keys: [
-        { name: "description", weight: 2.0 },
-        { name: "keywords", weight: 1.5 },
-        { name: "actionId", weight: 1.0 },
-        { name: "category", weight: 0.5 },
-        { name: "normalizedCombo", weight: 0.3 },
-      ],
-      threshold: 0.4,
-      includeScore: true,
-      ignoreLocation: true,
-    }),
-    []
-  );
+  const results = useMemo(() => {
+    const ranked = searchShortcuts(entries, searchQuery, mac);
+    return ranked ? collapseNumberedSeries(ranked) : null;
+  }, [entries, searchQuery, mac]);
 
-  const fuse = useMemo(() => new Fuse(searchItems, fuseOptions), [searchItems, fuseOptions]);
+  const rowCount = results
+    ? results.length
+    : groups.reduce((sum, group) => sum + group.entries.length, 0);
+  const trimmedQuery = searchQuery.trim();
 
-  const filteredBindings = useMemo(() => {
-    if (!searchQuery.trim()) {
-      return searchItems;
-    }
-
-    const normalizedQuery = normalizeQuery(searchQuery);
-
-    if (isChordPrefix(searchQuery)) {
-      const queryPrefix = normalizedQuery.replace(/\+/g, "");
-      return searchItems.filter((item) => {
-        return item.normalizedCombo.startsWith(queryPrefix);
-      });
-    }
-
-    const results = fuse.search(normalizedQuery);
-    return results.map((result) => result.item);
-  }, [searchItems, fuse, searchQuery]);
-
-  const groupedBindings = useMemo(() => {
-    const groups: Record<string, ShortcutSearchItem[]> = {};
-
-    filteredBindings.forEach((binding) => {
-      const category = binding.category || "Other";
-      if (!groups[category]) {
-        groups[category] = [];
-      }
-      groups[category].push(binding);
-    });
-
-    return groups;
-  }, [filteredBindings]);
-
-  const sortedCategories = useMemo(() => {
-    const categories = Object.keys(groupedBindings);
-    return categories.sort((a, b) => {
-      const aIndex = CATEGORY_ORDER.indexOf(a as (typeof CATEGORY_ORDER)[number]);
-      const bIndex = CATEGORY_ORDER.indexOf(b as (typeof CATEGORY_ORDER)[number]);
-      if (aIndex === -1 && bIndex === -1) return a.localeCompare(b);
-      if (aIndex === -1) return 1;
-      if (bIndex === -1) return -1;
-      return aIndex - bIndex;
-    });
-  }, [groupedBindings]);
-
+  // AppDialog is told not to place focus (`initialFocus="none"`), so the search
+  // field is the one place focus lands: its own default is the first tabbable,
+  // which here is the close button.
   useEffect(() => {
-    if (isOpen) {
-      searchInputRef.current?.focus();
-    }
+    if (!isOpen) return;
+    searchInputRef.current?.focus();
+    // The card mounts through AppDialog's presence gate, which can land a frame
+    // after this effect; the second attempt covers that frame.
+    const frame = requestAnimationFrame(() => searchInputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
   }, [isOpen]);
 
+  const clearSearch = () => {
+    setSearchQuery("");
+    searchInputRef.current?.focus();
+  };
+
+  const openKeyboardSettings = () => {
+    onClose();
+    window.dispatchEvent(
+      new CustomEvent("daintree:open-settings-tab", { detail: { tab: "keyboard" } })
+    );
+  };
+
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="lg">
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="lg"
+      initialFocus="none"
+      // A fixed height, so the card doesn't jump as the result count changes
+      // under the user's typing.
+      className="h-[80vh]"
+    >
       <AppDialog.Header className="flex-col items-stretch gap-4">
         <div className="flex items-center justify-between">
           <AppDialog.Title>Keyboard shortcuts</AppDialog.Title>
           <AppDialog.CloseButton />
         </div>
-        <input
-          ref={searchInputRef}
-          type="text"
-          placeholder="Search shortcuts..."
+        <AppPaletteDialog.Input
+          inputRef={searchInputRef}
+          placeholder="Search by action or key"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           aria-label="Search shortcuts"
           aria-controls={resultsId}
-          className="w-full px-4 py-2 bg-surface-canvas border border-border-default rounded-[var(--radius-md)] text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
         />
       </AppDialog.Header>
 
-      <AppDialog.Body>
+      {/* A new query is a new list: keep the best match in view rather than
+          holding the offset the user had scrolled to in the old one. */}
+      <AppDialog.Body resetScrollKey={trimmedQuery}>
         <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
-          {searchQuery.trim()
-            ? `${filteredBindings.length} shortcut${filteredBindings.length !== 1 ? "s" : ""} found for "${searchQuery.trim()}"`
-            : `${filteredBindings.length} shortcut${filteredBindings.length !== 1 ? "s" : ""}`}
+          {trimmedQuery
+            ? rowCount === 0
+              ? `No shortcuts match "${trimmedQuery}"`
+              : `${rowCount} shortcut${rowCount !== 1 ? "s" : ""} found for "${trimmedQuery}"`
+            : `${rowCount} shortcut${rowCount !== 1 ? "s" : ""}`}
         </div>
 
-        {sortedCategories.length === 0 ? (
-          <div
-            id={resultsId}
-            role="status"
-            aria-live="polite"
-            className="text-center text-text-secondary py-8"
-          >
-            No shortcuts found matching "{searchQuery}"
+        {results && results.length === 0 ? (
+          <div id={resultsId} className="flex flex-col items-center gap-3 py-10 text-center">
+            <div className="space-y-1">
+              <p className="text-sm text-text-primary">
+                No shortcuts match &quot;{trimmedQuery}&quot;
+              </p>
+              <p className="text-xs text-text-secondary">
+                Try another action name, or keys like{" "}
+                <KbdChord shortcut="Cmd+K" isMac={mac} density="bare" />
+              </p>
+            </div>
+            <Button variant="ghost" size="sm" onClick={clearSearch}>
+              Clear search
+            </Button>
+          </div>
+        ) : results ? (
+          <div id={resultsId} role="list" aria-label="Matching shortcuts">
+            {results.map((entry) => (
+              <ShortcutRow
+                key={entry.id}
+                entry={entry}
+                mac={mac}
+                groupScope={null}
+                categoryLabel={entry.category}
+              />
+            ))}
           </div>
         ) : (
-          <div id={resultsId} className="space-y-8">
-            {sortedCategories.map((category) => {
-              const headingId = `${headingPrefix}-${category
-                .replace(/[^a-zA-Z0-9]/g, "-")
-                .replace(/-+/g, "-")
-                .replace(/^-|-$/g, "")}`;
+          <div id={resultsId} className="space-y-6">
+            {groups.map(({ category, entries: groupEntries }) => {
+              const headingId = headingIdFor(headingPrefix, category);
+              const groupScope = sharedScope(groupEntries);
+              const groupScopeLabel = groupScope ? scopeLabel(groupScope) : null;
               return (
-                <div key={category}>
+                <section key={category} aria-labelledby={headingId}>
                   <h3
                     id={headingId}
-                    className="text-lg font-semibold text-text-primary mb-3 pb-2 border-b border-border-default"
+                    // Sticky offsets are measured inside the body's padding, so
+                    // at `top-0` rows scroll through the band above a stuck
+                    // heading. Pinning it into that band and filling it
+                    // (-top-6 + pt-6, with -mt-6 to keep the resting layout)
+                    // closes the gap.
+                    className="sticky -top-6 z-10 -mt-6 flex items-baseline gap-2 border-b border-border-subtle bg-surface-dialog pt-6 pb-1.5 text-sm font-semibold text-text-primary"
                   >
                     {category}
+                    {groupScopeLabel && (
+                      <span className="text-xs font-normal text-text-secondary">
+                        {groupScopeLabel}
+                      </span>
+                    )}
                   </h3>
-                  <div role="list" aria-labelledby={headingId} className="space-y-2">
-                    {groupedBindings[category]!.map((binding) => (
-                      <div
-                        key={binding.actionId}
-                        role="listitem"
-                        className="flex items-center justify-between py-2 px-3 rounded hover:bg-daintree-border/50"
-                      >
-                        <div className="flex-1">
-                          <div className="text-text-primary font-medium">{binding.description}</div>
-                          {binding.scope !== "global" && (
-                            <div className="text-xs text-text-secondary mt-1">
-                              Scope: {binding.scope}
-                            </div>
-                          )}
-                        </div>
-                        <div className="ml-4">
-                          {binding.effectiveCombo ? (
-                            <KbdChord
-                              shortcut={binding.effectiveCombo}
-                              aria-label={binding.displayCombo}
-                            />
-                          ) : (
-                            <span className="text-xs text-text-secondary italic">unbound</span>
-                          )}
-                        </div>
-                      </div>
+                  <div role="list" aria-labelledby={headingId} className="pt-1">
+                    {groupEntries.map((entry) => (
+                      <ShortcutRow key={entry.id} entry={entry} mac={mac} groupScope={groupScope} />
                     ))}
                   </div>
-                </div>
+                </section>
               );
             })}
           </div>
         )}
       </AppDialog.Body>
 
-      <AppDialog.Footer className="justify-center">
-        <div className="text-sm text-text-secondary">
-          Press <Kbd>Esc</Kbd> to close
-        </div>
-      </AppDialog.Footer>
+      <AppDialog.Footer
+        hint={
+          // One inline run so it wraps like a sentence at narrow widths
+          // instead of the hint slot truncating it.
+          <span className="min-w-0">
+            <KbdChord shortcut={CHORD_EXAMPLE} isMac={mac} density="bare" /> means press one, then
+            the other
+          </span>
+        }
+        secondaryAction={{ label: "Edit shortcuts", onClick: openKeyboardSettings }}
+      />
     </AppDialog>
   );
 }

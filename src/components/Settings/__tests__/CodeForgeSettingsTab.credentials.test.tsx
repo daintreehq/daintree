@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { CodeForgeSettingsTab } from "../CodeForgeSettingsTab";
 import type { ForgeProviderEntry } from "@shared/types";
 import type { AuthValidation } from "@shared/types/forge";
@@ -120,7 +120,7 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
     const input = screen.getByLabelText("API token") as HTMLInputElement;
     expect(input.type).toBe("password");
     expect(screen.getByText("Personal access token")).toBeTruthy();
-    expect(screen.queryByText("No configuration needed")).toBeNull();
+    expect(screen.queryByText(/needs no credentials/)).toBeNull();
   });
 
   it("validates and persists via forge.setCredential keyed by the canonical provider id", async () => {
@@ -147,8 +147,9 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
       expect(setCredential).toHaveBeenCalledWith("acme.gitea", { token: "secret-token" });
     });
     await waitFor(() => {
-      expect(screen.getByText("Credentials saved")).toBeTruthy();
+      expect(screen.getByText("Checked and saved")).toBeTruthy();
     });
+    expect(screen.getByText("Credentials saved")).toBeTruthy();
   });
 
   it("surfaces the validation error and does not clear the field on invalid credentials", async () => {
@@ -173,7 +174,7 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
 
     await waitFor(() => {
       expect(setCredential).toHaveBeenCalled();
-      expect(screen.getByText("Bad token")).toBeTruthy();
+      expect(screen.getByRole("alert").textContent).toBe("Bad token");
     });
     expect((screen.getByLabelText("API token") as HTMLInputElement).value).toBe("nope");
   });
@@ -193,12 +194,17 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
     const clearButton = await screen.findByRole("button", { name: /clear credentials/i });
     fireEvent.click(clearButton);
 
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Clear Gitea credentials?")).toBeTruthy();
+    expect(clearCredential).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clear credentials" }));
+
     await waitFor(() => {
       expect(clearCredential).toHaveBeenCalledWith("acme.gitea");
     });
   });
 
-  it("shows 'No configuration needed' for a provider with no credentialFields", async () => {
+  it("says a provider with no credentialFields needs none", async () => {
     installForgeMocks({
       providers: [makeProvider("acme", "plain", "Plain Forge")],
     });
@@ -206,12 +212,12 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
     render(<CodeForgeSettingsTab activeSubtab="acme.plain" onSubtabChange={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByText("No configuration needed")).toBeTruthy();
+      expect(screen.getByText("Plain Forge needs no credentials")).toBeTruthy();
     });
     expect(screen.queryByTestId("forge-credential-form")).toBeNull();
   });
 
-  it("labels a local authless provider instead of 'No configuration needed' (#10563)", async () => {
+  it("labels a local authless provider differently from a remote one (#10563)", async () => {
     const localProvider: ForgeProviderEntry = {
       pluginId: "acme",
       contribution: { id: "mock", name: "Mock Forge", matches: ["mock.local"], kind: "local" },
@@ -221,9 +227,11 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
     render(<CodeForgeSettingsTab activeSubtab="acme.mock" onSubtabChange={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Local provider — no authentication needed")).toBeTruthy();
+      expect(
+        screen.getByText("Mock Forge works locally, so there's nothing to sign in to")
+      ).toBeTruthy();
     });
-    expect(screen.queryByText("No configuration needed")).toBeNull();
+    expect(screen.queryByText("Mock Forge needs no credentials")).toBeNull();
     expect(screen.queryByTestId("forge-credential-form")).toBeNull();
   });
 
@@ -275,14 +283,18 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
     await waitFor(() => {
       expect(getCredentialStatus).toHaveBeenCalledWith("acme.forge");
     });
-    expect(screen.getByText("Acme Forge settings")).toBeTruthy();
+    expect(
+      screen.getByText("Credentials are validated against Acme Forge before they're saved")
+    ).toBeTruthy();
 
     rerender(<CodeForgeSettingsTab activeSubtab="globex.forge" onSubtabChange={vi.fn()} />);
 
     await waitFor(() => {
       expect(getCredentialStatus).toHaveBeenCalledWith("globex.forge");
     });
-    expect(screen.getByText("Globex Forge settings")).toBeTruthy();
+    expect(
+      screen.getByText("Credentials are validated against Globex Forge before they're saved")
+    ).toBeTruthy();
   });
 
   it("does not route a third-party 'github' contribution to the built-in GitHub card", async () => {

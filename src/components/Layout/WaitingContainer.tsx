@@ -1,9 +1,8 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
-import { ChevronDown, ChevronRight, Layers, OctagonX } from "lucide-react";
+import { useState, useMemo, useCallback, useEffect, useId } from "react";
+import { ChevronDown, ChevronRight, OctagonX } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
-import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { useExitLaggedCount } from "@/hooks/useExitLaggedCount";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -22,6 +21,7 @@ import {
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import type { TabGroup } from "@/types";
@@ -30,6 +30,15 @@ import {
   KILL_TERMINAL_CONFIRM_LABEL,
   killTerminalDescription,
 } from "./killTerminalStrings";
+import {
+  DOCK_STATUS_PILL_CLASS,
+  DOCK_STATUS_PILL_OPEN_CLASS,
+  DOCK_POPOVER_SECTIONS,
+  DockPopoverSection,
+  DockStatusPillLabel,
+  dockStatusScopeDescription,
+  useDockPopoverFocusHandoff,
+} from "./dockStatusPill";
 
 interface WaitingContainerProps {
   compact?: boolean;
@@ -70,6 +79,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
     }))
   );
   const { worktreeMap } = useWorktrees();
+  const focusHandoff = useDockPopoverFocusHandoff();
 
   const displayItems = useMemo((): WaitingDisplayItem[] => {
     // Triage order, not insertion order: approvals first, then error-blocked,
@@ -138,6 +148,30 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
     return items;
   }, [terminals, tabGroups]);
 
+  // The pill counts the whole project; the popover says which of it is here.
+  // Urgency order holds within each section.
+  const { hereItems, elsewhereItems } = useMemo(() => {
+    const here: WaitingDisplayItem[] = [];
+    const elsewhere: WaitingDisplayItem[] = [];
+    for (const item of displayItems) {
+      const worktreeId =
+        item.type === "group"
+          ? (item.group.worktreeId ?? item.waitingTerminals[0]?.worktreeId)
+          : item.terminal.worktreeId;
+      ((worktreeId ?? null) === (activeWorktreeId ?? null) ? here : elsewhere).push(item);
+    }
+    return { hereItems: here, elsewhereItems: elsewhere };
+  }, [displayItems, activeWorktreeId]);
+
+  const hereCount = useMemo(
+    () => terminals.filter((t) => (t.worktreeId ?? null) === (activeWorktreeId ?? null)).length,
+    [terminals, activeWorktreeId]
+  );
+  const worktreeCount = useMemo(
+    () => new Set(terminals.map((t) => t.worktreeId ?? null)).size,
+    [terminals]
+  );
+
   const handleActivate = useCallback(
     (terminal: PtyPanelData, groupId: string | null) => {
       const worktreeId = terminal.worktreeId?.trim();
@@ -150,9 +184,11 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
       }
       activateTerminal(terminal.id);
       pingTerminal(terminal.id);
+      focusHandoff.markHandoff();
       setIsOpen(false);
     },
     [
+      focusHandoff,
       activeWorktreeId,
       trackTerminalFocus,
       selectWorktree,
@@ -196,36 +232,37 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
   return (
     <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"}>
       <Popover open={isOpen} onOpenChange={setIsOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="pill"
-            size="sm"
-            className={cn(
-              compact ? "px-1.5 min-w-0" : "px-3",
-              isOpen && "bg-overlay-emphasis border-border-default"
-            )}
-            aria-haspopup="dialog"
-            aria-expanded={isOpen}
-            aria-controls="waiting-container-popover"
-            aria-label={`Waiting (${displayCount})`}
-          >
-            <span className="relative">
-              <WaitingIcon className="w-3.5 h-3.5 text-state-waiting" aria-hidden="true" />
-              {compact && displayCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-3xs font-bold tabular-nums shadow-sm bg-state-waiting text-surface-canvas">
-                  <AnimatedLabel label={displayCount > 9 ? "9+" : String(displayCount)} />
-                </span>
-              )}
-            </span>
-            {!compact && (
-              <span className="font-medium tabular-nums">
-                Waiting (
-                <AnimatedLabel label={String(displayCount)} textClassName="text-state-waiting" />)
-              </span>
-            )}
-          </Button>
-        </PopoverTrigger>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="pill"
+                size="sm"
+                className={cn(
+                  DOCK_STATUS_PILL_CLASS,
+                  compact ? "px-2 min-w-0" : "px-3",
+                  isOpen && DOCK_STATUS_PILL_OPEN_CLASS
+                )}
+                aria-haspopup="dialog"
+                aria-expanded={isOpen}
+                aria-controls="waiting-container-popover"
+                aria-label={`Waiting: ${displayCount} ${displayCount === 1 ? "agent" : "agents"} ${dockStatusScopeDescription(displayCount, hereCount)}`}
+              >
+                <DockStatusPillLabel
+                  icon={<WaitingIcon className="text-state-waiting" aria-hidden="true" />}
+                  label="Waiting"
+                  count={displayCount}
+                  hasLocal={hereCount > 0}
+                  compact={compact}
+                />
+              </Button>
+            </PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {`Agents waiting ${dockStatusScopeDescription(displayCount, hereCount)}`}
+          </TooltipContent>
+        </Tooltip>
 
         <PopoverContent
           id="waiting-container-popover"
@@ -236,7 +273,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
           align="end"
           sideOffset={8}
           onOpenAutoFocus={(e) => e.preventDefault()}
-          onCloseAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
           onPointerDownOutside={(e) => {
             if (killConfirmId !== null) e.preventDefault();
           }}
@@ -250,37 +287,50 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
           <div className="flex flex-col">
             <div className="px-3 py-2 border-b border-divider bg-surface-canvas/50 flex justify-between items-center">
               <span className="text-xs font-medium text-text-secondary">Waiting for input</span>
-              <span className="text-3xs font-medium text-state-waiting tabular-nums">
+              <span className="text-3xs font-medium text-text-secondary tabular-nums">
                 {count} {count === 1 ? "agent" : "agents"}
+                {worktreeCount > 1 && ` across ${worktreeCount} worktrees`}
               </span>
             </div>
 
-            <div className="flex flex-col max-h-[360px] overflow-y-auto">
-              {displayItems.map((item) => {
-                if (item.type === "group") {
-                  return (
-                    <WaitingGroupItem
-                      key={item.group.id}
-                      group={item.group}
-                      waitingTerminals={item.waitingTerminals}
-                      worktreeMap={worktreeMap}
-                      onActivate={handleActivate}
-                      onKill={(id) => setKillConfirmId(id)}
-                    />
-                  );
-                }
-                const worktreeName = item.terminal.worktreeId
-                  ? worktreeMap.get(item.terminal.worktreeId)?.name
-                  : undefined;
+            <div className="p-1 flex flex-col gap-1 max-h-[360px] overflow-y-auto">
+              {DOCK_POPOVER_SECTIONS.map((section) => {
+                const items = section.key === "here" ? hereItems : elsewhereItems;
+                if (items.length === 0) return null;
+                // A row in "This worktree" doesn't repeat the worktree it's in.
+                const showWorktree = section.key === "elsewhere";
                 return (
-                  <WaitingSingleItem
-                    key={item.terminal.id}
-                    terminal={item.terminal}
-                    groupId={item.groupId}
-                    worktreeName={worktreeName}
-                    onActivate={handleActivate}
-                    onKill={(id) => setKillConfirmId(id)}
-                  />
+                  <DockPopoverSection key={section.key} label={section.label}>
+                    {items.map((item) => {
+                      if (item.type === "group") {
+                        return (
+                          <WaitingGroupItem
+                            key={item.group.id}
+                            group={item.group}
+                            waitingTerminals={item.waitingTerminals}
+                            worktreeMap={worktreeMap}
+                            showWorktree={showWorktree}
+                            onActivate={handleActivate}
+                            onKill={(id) => setKillConfirmId(id)}
+                          />
+                        );
+                      }
+                      const worktreeName =
+                        showWorktree && item.terminal.worktreeId
+                          ? worktreeMap.get(item.terminal.worktreeId)?.name
+                          : undefined;
+                      return (
+                        <WaitingSingleItem
+                          key={item.terminal.id}
+                          terminal={item.terminal}
+                          groupId={item.groupId}
+                          worktreeName={worktreeName}
+                          onActivate={handleActivate}
+                          onKill={(id) => setKillConfirmId(id)}
+                        />
+                      );
+                    })}
+                  </DockPopoverSection>
                 );
               })}
             </div>
@@ -305,118 +355,111 @@ interface WaitingSingleItemProps {
   terminal: PtyPanelData;
   groupId: string | null;
   worktreeName: string | undefined;
+  /** False inside a group whose header already shows the worktree; it stays in the accessible name. */
+  showWorktreeInline?: boolean;
   onActivate: (terminal: PtyPanelData, groupId: string | null) => void;
   onKill: (terminalId: string) => void;
-  compact?: boolean;
 }
+
+const ROW_SURFACE_CLASS =
+  "rounded-[var(--radius-sm)] transition-colors duration-150 ease-out hover:bg-tint/5";
+
+const ROW_TARGET_CLASS =
+  "flex w-full min-w-0 items-center gap-2 h-7 px-2 text-left rounded-[var(--radius-sm)] outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 cursor-pointer select-none";
 
 function WaitingSingleItem({
   terminal,
   groupId,
   worktreeName,
+  showWorktreeInline = true,
   onActivate,
   onKill,
-  compact = false,
 }: WaitingSingleItemProps) {
   const agentState = terminal.agentState;
   const title = terminal.title || "Terminal";
+  // The observed task is what tells three "Claude" rows apart; it goes through
+  // the shared title rules so an identity echo never renders as a task here.
+  const task = getTerminalTaskTitle(terminal);
   // Only classifier-backed reasons earn a chip — the `prompt` fallback stays
   // an unlabeled row so the list doesn't overclaim.
   const reason = actionableWaitingReason(terminal.waitingReason);
+  const context = [showWorktreeInline ? worktreeName : undefined, task].filter(Boolean).join(" · ");
+  const ageId = useId();
 
   return (
-    // The row is a div + role="button" rather than a native <button>
-    // because the kill icon-button is a sibling target inside this row;
-    // nesting <button> inside <button> is invalid HTML and breaks
-    // keyboard / screen-reader semantics.
-    <div
-      data-testid="waiting-single-item"
-      data-agent-state={agentState ?? "unknown"}
-      data-waiting-reason={terminal.waitingReason ?? "unknown"}
-      role="button"
-      tabIndex={0}
-      onClick={() => onActivate(terminal, groupId)}
-      onKeyDown={(e) => {
-        // Ignore Enter / Space bubbled from the inner kill button.
-        if (e.target !== e.currentTarget) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onActivate(terminal, groupId);
-        }
-      }}
-      className={cn(
-        "flex items-center gap-2 px-3 py-2.5 hover:bg-muted/50 focus:bg-muted/50 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary outline-hidden transition-colors group/row cursor-pointer w-full select-none",
-        compact && "py-1.5 pl-1.5"
-      )}
-      aria-label={
-        reason ? `Focus ${title} — ${waitingHeadline(reason).toLowerCase()}` : `Focus ${title}`
-      }
-    >
-      <div className="shrink-0 opacity-70 group-hover/row:opacity-100 transition-opacity">
+    // The activation target and the kill button are siblings, never nested:
+    // the wrapper only owns the shared hover surface and the reveal group.
+    <div className={cn("group/row relative", ROW_SURFACE_CLASS)}>
+      <button
+        type="button"
+        data-testid="waiting-single-item"
+        data-agent-state={agentState ?? "unknown"}
+        data-waiting-reason={terminal.waitingReason ?? "unknown"}
+        onClick={() => onActivate(terminal, groupId)}
+        className={ROW_TARGET_CLASS}
+        aria-label={`Focus ${title}${task ? `: ${task}` : ""}${worktreeName ? ` in ${worktreeName}` : ""}${reason ? ` — ${waitingHeadline(reason).toLowerCase()}` : ""}${terminal.activityHeadline ? ` — ${terminal.activityHeadline}` : ""}`}
+        aria-describedby={terminal.lastStateChange != null ? ageId : undefined}
+      >
         <TerminalIcon
           kind={terminal.kind}
           chrome={deriveTerminalChrome(terminal)}
-          className={compact ? "h-2.5 w-2.5" : "h-3 w-3"}
+          className="h-3 w-3 shrink-0"
         />
-      </div>
 
-      <div className="flex-1 flex items-center gap-1.5 min-w-0">
-        <span
-          className={cn(
-            "min-w-0 truncate font-medium text-daintree-text/80 group-hover/row:text-text-primary transition-colors",
-            compact ? "text-2xs" : "text-xs"
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span className="min-w-0 max-w-[65%] shrink-0 truncate text-xs font-medium text-text-primary">
+            {title}
+          </span>
+          {(context || terminal.activityHeadline) && (
+            <span className="min-w-0 truncate text-2xs text-text-secondary">
+              {context}
+              {context && terminal.activityHeadline && " · "}
+              {terminal.activityHeadline && (
+                <span className="italic">{terminal.activityHeadline}</span>
+              )}
+            </span>
           )}
-        >
-          {title}
         </span>
-        {(worktreeName || terminal.activityHeadline) && (
-          <span className="flex items-center gap-1 min-w-0 truncate text-3xs text-text-secondary">
-            {worktreeName && <span className="truncate">{worktreeName}</span>}
-            {worktreeName && terminal.activityHeadline && (
-              <span className="text-daintree-text/30">·</span>
+
+        {reason && (
+          <span
+            className={cn(
+              "shrink-0 rounded-[var(--radius-sm)] px-1.5 py-px text-3xs font-medium",
+              reason === "error"
+                ? "bg-status-error/15 text-text-primary"
+                : "bg-state-waiting/15 text-text-primary"
             )}
-            {terminal.activityHeadline && (
-              <span className="truncate italic text-text-secondary">
-                {terminal.activityHeadline}
-              </span>
-            )}
+            data-testid={`waiting-reason-badge-${terminal.id}`}
+          >
+            {WAITING_REASON_BADGE_LABEL[reason]}
           </span>
         )}
-      </div>
 
-      {reason && (
+        {/* The age holds the trailing slot at rest and yields it to the kill
+            button on hover/focus, so no row reserves an empty action column. */}
         <span
-          className={cn(
-            "shrink-0 rounded px-1.5 py-0.5 text-3xs font-medium",
-            reason === "error"
-              ? "bg-status-error/10 text-status-error"
-              : "bg-state-waiting/15 text-state-waiting"
-          )}
-          data-testid={`waiting-reason-badge-${terminal.id}`}
+          id={ageId}
+          className="min-w-6 shrink-0 text-right text-3xs leading-none transition-opacity duration-150 ease-out motion-reduce:transition-none group-hover/row:opacity-0 group-focus-within/row:opacity-0"
         >
-          {WAITING_REASON_BADGE_LABEL[reason]}
+          {terminal.lastStateChange != null && (
+            <LiveTimeAgo
+              timestamp={terminal.lastStateChange}
+              noTooltip
+              className="text-3xs text-text-secondary tabular-nums"
+            />
+          )}
         </span>
-      )}
+      </button>
 
-      {terminal.lastStateChange != null && (
-        <LiveTimeAgo
-          timestamp={terminal.lastStateChange}
-          noTooltip
-          className="text-3xs text-text-secondary shrink-0"
-        />
-      )}
-
-      <div className="flex gap-0.5 shrink-0 invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 motion-reduce:transition-none group-hover/row:visible group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:visible group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto">
+      <div className="absolute inset-y-0 right-0.5 flex items-center pointer-events-none invisible opacity-0 transition-[opacity,visibility] duration-150 ease-out motion-reduce:transition-none group-hover/row:visible group-hover/row:opacity-100 group-focus-within/row:visible group-focus-within/row:opacity-100">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
               variant="ghost-danger"
-              size="icon-sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                onKill(terminal.id);
-              }}
-              aria-label={`Kill ${title}`}
+              size="icon-xs"
+              className="pointer-events-auto transition-colors"
+              onClick={() => onKill(terminal.id)}
+              aria-label={`Kill ${title}${task ? `: ${task}` : ""}`}
               data-testid="waiting-kill-button"
             >
               <OctagonX aria-hidden="true" />
@@ -433,6 +476,7 @@ interface WaitingGroupItemProps {
   group: TabGroup;
   waitingTerminals: PtyPanelData[];
   worktreeMap: ReturnType<typeof useWorktrees>["worktreeMap"];
+  showWorktree: boolean;
   onActivate: (terminal: PtyPanelData, groupId: string | null) => void;
   onKill: (terminalId: string) => void;
 }
@@ -441,69 +485,68 @@ function WaitingGroupItem({
   group,
   waitingTerminals,
   worktreeMap,
+  showWorktree,
   onActivate,
   onKill,
 }: WaitingGroupItemProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const tabCount = waitingTerminals.length;
-  const groupName = `Tab group (${tabCount} waiting)`;
+  const groupWorktreeId = group.worktreeId ?? waitingTerminals[0]?.worktreeId;
+  const groupWorktreeName =
+    showWorktree && groupWorktreeId ? worktreeMap.get(groupWorktreeId)?.name : undefined;
+  const Chevron = isExpanded ? ChevronDown : ChevronRight;
+  const headerId = useId();
 
   return (
-    <div className="bg-transparent transition-colors">
-      <div className="flex items-center gap-2 px-3 py-2.5 hover:bg-muted/50 transition-colors group">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="shrink-0 h-4 w-4 p-0 hover:bg-transparent"
+    <div className="flex flex-col gap-px">
+      <div className={ROW_SURFACE_CLASS}>
+        <button
+          id={headerId}
+          type="button"
+          className={ROW_TARGET_CLASS}
           onClick={() => setIsExpanded(!isExpanded)}
-          aria-label={isExpanded ? "Collapse group" : "Expand group"}
           aria-expanded={isExpanded}
           aria-controls={`waiting-group-${group.id}`}
         >
-          {isExpanded ? (
-            <ChevronDown className="w-3 h-3 text-daintree-text/60" />
-          ) : (
-            <ChevronRight className="w-3 h-3 text-daintree-text/60" />
-          )}
-        </Button>
-
-        <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-          <Layers className="w-3 h-3 text-daintree-text/70" />
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors">
-            {groupName}
-          </div>
-        </div>
+          <Chevron className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
+          <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+            <span className="shrink-0 text-xs font-medium text-text-secondary">
+              {`Tab group (${tabCount} waiting)`}
+            </span>
+            {groupWorktreeName && (
+              <span className="min-w-0 truncate text-2xs text-text-secondary">
+                {groupWorktreeName}
+              </span>
+            )}
+          </span>
+        </button>
       </div>
 
       {isExpanded && (
         <div
           id={`waiting-group-${group.id}`}
           role="region"
-          aria-label="Group panels"
-          className="pl-5 pb-1"
+          aria-labelledby={headerId}
+          className="ml-3.5 flex flex-col gap-px border-l border-divider pl-1"
         >
           {/* Members arrive attention-sorted from displayItems — rendering
               them as-is keeps the expanded group consistent with the triage
               order that promoted the group in the first place. */}
-          {waitingTerminals.map((terminal) => {
-            const worktreeName = terminal.worktreeId
-              ? worktreeMap.get(terminal.worktreeId)?.name
-              : undefined;
-            return (
-              <WaitingSingleItem
-                key={terminal.id}
-                terminal={terminal}
-                groupId={group.id}
-                worktreeName={worktreeName}
-                onActivate={onActivate}
-                onKill={onKill}
-                compact
-              />
-            );
-          })}
+          {waitingTerminals.map((terminal) => (
+            <WaitingSingleItem
+              key={terminal.id}
+              terminal={terminal}
+              groupId={group.id}
+              worktreeName={
+                showWorktree && terminal.worktreeId
+                  ? worktreeMap.get(terminal.worktreeId)?.name
+                  : undefined
+              }
+              showWorktreeInline={false}
+              onActivate={onActivate}
+              onKill={onKill}
+            />
+          ))}
         </div>
       )}
     </div>

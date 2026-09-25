@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { ChevronDown, X, Eye, RotateCw } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { useShallow } from "zustand/react/shallow";
@@ -11,7 +11,6 @@ import { logError } from "@/utils/logger";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 
 const MAX_VISIBLE = 5;
-const AUTO_CLEAR_DELAY = 3000;
 
 type TaskStatus = "running" | "success" | "failed" | "restarting";
 
@@ -30,11 +29,25 @@ function formatElapsed(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-interface RunningTaskListProps {
-  worktreeId: string;
+/**
+ * Dismissed task ids for this renderer's session. Each project has its own view
+ * and V8 context, so this is already per project; ids are pruned as their
+ * panels go away.
+ */
+let sessionDismissedIds: ReadonlySet<string> = new Set();
+
+/** Tests seed the same panel ids in every case; real ids are never reused. */
+export function resetDismissedTasks(): void {
+  sessionDismissedIds = new Set();
 }
 
-export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
+interface RunningTaskListProps {
+  worktreeId: string;
+  /** Where focus goes when a dismissal leaves no task to land on. */
+  onFocusFallback?: (options: FocusOptions) => void;
+}
+
+export function RunningTaskList({ worktreeId, onFocusFallback }: RunningTaskListProps) {
   const quickRunTerminals = usePanelStore(
     useShallow((state) => {
       const result: PtyPanelData[] = [];
@@ -58,8 +71,12 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
   const restartTerminal = usePanelStore((s) => s.restartTerminal);
 
   const [now, setNow] = useState(Date.now());
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set());
-  const autoClearTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const [dismissedIds, setDismissedIds] = useState<ReadonlySet<string>>(() => sessionDismissedIds);
+  // The list unmounts whenever Quick Run is collapsed; a dismissal has to
+  // outlive that or collapsing and reopening brings every dismissed row back.
+  useEffect(() => {
+    sessionDismissedIds = dismissedIds;
+  }, [dismissedIds]);
 
   // Tick for elapsed time — only active when there are running tasks
   const hasRunning = quickRunTerminals.some(
@@ -70,50 +87,31 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
   // pauses while the document is hidden.
   useVisibilityAwareInterval(() => setNow(Date.now()), 1000, hasRunning);
 
-  // Auto-clear successful tasks after delay, and clear dismiss/timers on restart
+  // A dismissed task that is restarted is live again, so it comes back.
+  //
+  // Finished tasks used to clear themselves after three seconds, which took
+  // the one-step route to a quick command's output away before the user had
+  // looked back. They stay now, quietly, until dismissed or pushed into
+  // "earlier" by newer launches.
   useEffect(() => {
-    const timers = autoClearTimers.current;
-    for (const t of quickRunTerminals) {
+    const revived = quickRunTerminals.filter((t) => {
       const status = deriveTaskStatus(t);
-
-      // If a terminal is running/restarting again (was restarted), clear its dismiss state and timer
-      if (status === "running" || status === "restarting") {
-        if (dismissedIds.has(t.id)) {
-          setDismissedIds((prev) => {
-            const next = new Set(prev);
-            next.delete(t.id);
-            return next;
-          });
-        }
-        const existingTimer = timers.get(t.id);
-        if (existingTimer) {
-          clearTimeout(existingTimer);
-          timers.delete(t.id);
-        }
-        continue;
-      }
-
-      if (status === "success" && !dismissedIds.has(t.id) && !timers.has(t.id)) {
-        const timer = setTimeout(() => {
-          setDismissedIds((prev) => new Set(prev).add(t.id));
-          timers.delete(t.id);
-        }, AUTO_CLEAR_DELAY);
-        timers.set(t.id, timer);
-      }
-    }
-
-    return () => {
-      // On unmount or dependency change, clear all timers
-      for (const [, timer] of timers) {
-        clearTimeout(timer);
-      }
-      timers.clear();
-    };
+      return (status === "running" || status === "restarting") && dismissedIds.has(t.id);
+    });
+    if (revived.length === 0) return;
+    setDismissedIds((prev) => {
+      const next = new Set(prev);
+      for (const t of revived) next.delete(t.id);
+      return next;
+    });
   }, [quickRunTerminals, dismissedIds]);
 
-  // Clean dismissed IDs when terminals disappear from store
+  // Forget dismissals only for panels that are gone from the renderer
+  // altogether. Pruning against this worktree's tasks dropped every other
+  // worktree's dismissals the moment the user switched away.
+  const allPanelIds = usePanelStore((s) => s.panelIds);
   useEffect(() => {
-    const currentIds = new Set(quickRunTerminals.map((t) => t.id));
+    const currentIds = new Set(allPanelIds);
     setDismissedIds((prev) => {
       const next = new Set<string>();
       for (const id of prev) {
@@ -121,7 +119,7 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
       }
       return next.size !== prev.size ? next : prev;
     });
-  }, [quickRunTerminals]);
+  }, [allPanelIds]);
 
   const handleStop = useCallback((id: string) => {
     terminalClient.kill(id).catch((err) => logError("Failed to kill terminal", err));
@@ -145,15 +143,47 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
     setDismissedIds((prev) => new Set(prev).add(id));
   }, []);
 
+  // Dismissing unmounts the button that held focus, which dropped it on the
+  // page. Hand it to the neighbouring task — or back to the field — first.
+  const handleDismissFrom = (id: string, from: HTMLElement, keyboard: boolean) => {
+    if (document.activeElement === from) {
+      const row = from.closest("[data-task-row]");
+      const rows = Array.from(
+        row?.closest("[data-task-list]")?.querySelectorAll<HTMLElement>("[data-task-row]") ?? []
+      );
+      const at = rows.findIndex((r) => r === row);
+      const next = rows[at + 1] ?? rows[at - 1];
+      const options = { preventScroll: true, focusVisible: keyboard };
+      const target = next?.querySelector<HTMLElement>("[data-task-focus]");
+      if (target) target.focus(options);
+      else onFocusFallback?.(options);
+    }
+    handleDismiss(id);
+  };
+
   const visibleTasks = quickRunTerminals.filter((t) => !dismissedIds.has(t.id));
 
   if (visibleTasks.length === 0) return null;
 
-  const displayTasks = visibleTasks.slice(0, MAX_VISIBLE);
-  const overflowTasks = visibleTasks.slice(MAX_VISIBLE);
+  // The newest launches keep the visible slots and the oldest spill into the
+  // overflow. Taking the first five in panel order put the task a user had
+  // just started behind "N more" — the one row they had come to find. Launch
+  // order stays top to bottom, so the newest sits nearest the field it came from.
+  const overflowTasks = visibleTasks.slice(0, Math.max(0, visibleTasks.length - MAX_VISIBLE));
+  const displayTasks = visibleTasks.slice(overflowTasks.length);
 
   return (
-    <div className="mb-2 space-y-0.5">
+    <div data-task-list="" className="-mx-2 mb-2 space-y-0.5">
+      {overflowTasks.length > 0 && (
+        <TaskOverflow
+          tasks={overflowTasks}
+          now={now}
+          onStop={handleStop}
+          onFocus={handleFocus}
+          onRestart={handleRestart}
+          onDismiss={handleDismissFrom}
+        />
+      )}
       {displayTasks.map((t) => {
         const status = deriveTaskStatus(t);
         return (
@@ -165,26 +195,16 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
             onStop={handleStop}
             onFocus={handleFocus}
             onRestart={handleRestart}
-            onDismiss={handleDismiss}
+            onDismiss={handleDismissFrom}
           />
         );
       })}
-      {overflowTasks.length > 0 && (
-        <TaskOverflow
-          tasks={overflowTasks}
-          now={now}
-          onStop={handleStop}
-          onFocus={handleFocus}
-          onRestart={handleRestart}
-          onDismiss={handleDismiss}
-        />
-      )}
     </div>
   );
 }
 
 /**
- * The tasks past the visible cap.
+ * The older tasks past the visible cap, above the rows they preceded.
  *
  * This used to be "+N more" as static text, which named running processes the
  * user could then neither watch, stop, nor restart — every handler the rows
@@ -205,7 +225,7 @@ function TaskOverflow({
   onStop: (id: string) => void;
   onFocus: (id: string) => void;
   onRestart: (id: string) => void;
-  onDismiss: (id: string) => void;
+  onDismiss: (id: string, from: HTMLElement, keyboard: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -218,23 +238,23 @@ function TaskOverflow({
         // command is an arbitrary-length string, and concatenating several
         // makes focusing this button read a paragraph before its state. The
         // popover is labelled and exposes the rows themselves once opened.
-        aria-label={`Show ${tasks.length} more running ${tasks.length === 1 ? "task" : "tasks"}`}
+        aria-label={`Show ${tasks.length} earlier ${tasks.length === 1 ? "task" : "tasks"}`}
         className={cn(
-          "flex w-full items-center gap-0.5 px-2 py-0.5 rounded-[var(--radius-sm)] text-3xs font-sans transition-colors",
+          "flex w-full min-h-6 items-center gap-0.5 px-2 rounded-[var(--radius-sm)] text-3xs font-sans transition-colors",
           "text-text-secondary hover:text-text-primary hover:bg-tint/[0.04]",
           "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         )}
       >
-        {tasks.length} more
+        {tasks.length} earlier
         <ChevronDown className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
       </PopoverTrigger>
       <PopoverContent
         align="start"
         sideOffset={6}
-        aria-label="More running tasks"
+        aria-label="Earlier tasks"
         className="p-1 min-w-64 max-w-sm max-h-[var(--radix-popover-content-available-height)] overflow-y-auto"
       >
-        <ul className="flex flex-col gap-0.5">
+        <ul data-task-list="" className="flex flex-col gap-0.5">
           {tasks.map((t) => (
             <li key={t.id}>
               <TaskRow
@@ -267,14 +287,13 @@ interface TaskRowProps {
   onStop: (id: string) => void;
   onFocus: (id: string) => void;
   onRestart: (id: string) => void;
-  onDismiss: (id: string) => void;
+  onDismiss: (id: string, from: HTMLElement, keyboard: boolean) => void;
 }
 
 function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss }: TaskRowProps) {
   const elapsed = terminal.startedAt ? now - terminal.startedAt : 0;
   const isActive = status === "running" || status === "restarting";
   const command = terminal.command || terminal.title;
-  const truncatedCommand = command.length > 28 ? command.slice(0, 28) + "…" : command;
 
   return (
     // The row used to be a `role="button"` wrapping these action buttons, which
@@ -286,10 +305,8 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
     <div
       data-task-row={terminal.id}
       className={cn(
-        "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-sm)] text-2xs font-mono group",
-        "hover:bg-tint/[0.04] transition-colors",
-        status === "failed" && "border-l-2 border-status-error",
-        status === "success" && "opacity-60"
+        "flex items-center gap-1.5 px-2 rounded-[var(--radius-sm)] text-2xs font-mono group",
+        "hover:bg-tint/[0.04] transition-colors"
       )}
     >
       {/* Status indicator */}
@@ -298,22 +315,39 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       {/* Command */}
       <button
         type="button"
+        data-task-focus=""
         onClick={() => onFocus(terminal.id)}
-        className="flex-1 truncate text-left text-text-secondary hover:text-text-primary transition-colors cursor-pointer min-w-0"
+        className="flex-1 min-h-6 truncate text-left text-text-secondary hover:text-text-primary transition-colors cursor-pointer min-w-0"
         title={command}
       >
-        {truncatedCommand}
+        {command}
       </button>
 
       {/* Elapsed time */}
-      {isActive && (
-        <span className="text-3xs text-text-placeholder tabular-nums shrink-0">
+      {/* Elapsed time and the failure word trade places with the actions on
+          hover or focus. The actions used to sit at opacity 0 and keep their
+          width, which pushed the time into the middle of the row and cut the
+          command to a letter at the 200px floor. */}
+      {status === "running" && (
+        <span className="text-3xs text-text-secondary tabular-nums shrink-0 group-hover:hidden group-focus-within:hidden">
           {formatElapsed(elapsed)}
+        </span>
+      )}
+      {/* Failure in words, where the elapsed time sat while it ran. A red dot
+          alone leaves it to colour, and the left border that used to mark the
+          row curved with the row's radius into a stray "(". */}
+      {/* Restarting and finished say so in words too. Restarting used to show
+          only an elapsed time beside an amber dot, reading as one more running
+          row, and a finished row faded as a whole, taking its command below the
+          text contrast floor. */}
+      {(status === "failed" || status === "success" || status === "restarting") && (
+        <span className="text-3xs text-text-secondary shrink-0 group-hover:hidden group-focus-within:hidden">
+          {TASK_STATUS_LABEL[status]}
         </span>
       )}
 
       {/* Actions */}
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0">
+      <div className="hidden items-center gap-0.5 shrink-0 group-hover:flex group-focus-within:flex">
         {isActive && (
           <button
             onClick={(e) => {
@@ -326,31 +360,29 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
             <X className="h-3 w-3" />
           </button>
         )}
-        {status === "failed" && (
-          <>
-            {terminal.exitBehavior !== "restart" && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRestart(terminal.id);
-                }}
-                className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
-                aria-label="Restart task"
-              >
-                <RotateCw className="h-3 w-3" />
-              </button>
-            )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDismiss(terminal.id);
-              }}
-              className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
-              aria-label="Dismiss"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </>
+        {status === "failed" && terminal.exitBehavior !== "restart" && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onRestart(terminal.id);
+            }}
+            className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
+            aria-label="Restart task"
+          >
+            <RotateCw className="h-3 w-3" />
+          </button>
+        )}
+        {(status === "failed" || status === "success") && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDismiss(terminal.id, e.currentTarget, e.detail === 0);
+            }}
+            className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
+            aria-label="Dismiss"
+          >
+            <X className="h-3 w-3" />
+          </button>
         )}
         <button
           onClick={(e) => {

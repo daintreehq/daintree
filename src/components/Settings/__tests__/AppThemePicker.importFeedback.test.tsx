@@ -50,6 +50,7 @@ vi.mock("@shared/theme", () => ({
 }));
 
 vi.mock("@/config/appColorSchemes", () => ({
+  DEFAULT_APP_SCHEME_ID: "theme-a",
   BUILT_IN_APP_SCHEMES: [
     {
       id: "theme-a",
@@ -78,7 +79,7 @@ function importResultWith(warnings: AppThemeValidationWarning[]) {
 }
 
 function clickImport() {
-  fireEvent.click(screen.getByText("Import app theme..."));
+  fireEvent.click(screen.getByRole("button", { name: "Import…" }));
 }
 
 beforeEach(() => {

@@ -69,92 +69,44 @@ beforeEach(() => {
   dispatch.mockClear();
 });
 
-describe("useWorktreeActions — confirmed call-site dispatch (#11345)", () => {
-  it("dispatches endAll with confirmed:true only after the local dialog is confirmed", () => {
+describe("useWorktreeActions — session-wide destructive items defer to the action's confirm", () => {
+  const ITEMS = [
+    ["handleCloseAll", "worktree.sessions.trashAll"],
+    ["handleTerminateAll", "worktree.sessions.endAll"],
+    ["handleClearHistory", "worktree.sessions.clearHistory"],
+  ] as const;
+
+  it.each(ITEMS)("%s never confirms on the user's behalf", (handler, actionId) => {
     const { result } = renderActions();
 
     act(() => {
-      result.current.handleTerminateAll();
-    });
-    // The dialog is open but nothing has been dispatched yet.
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(result.current.confirmDialog.isOpen).toBe(true);
-
-    act(() => {
-      if (result.current.confirmDialog.isOpen) result.current.confirmDialog.onConfirm();
+      result.current[handler]();
     });
 
-    expect(dispatch).toHaveBeenCalledWith(
-      "worktree.sessions.endAll",
-      { worktreeId: "wt-1", confirmed: true },
-      { source: "user" }
-    );
-  });
-
-  it("dispatches trashAll with confirmed:true only after the local dialog is confirmed", () => {
-    // The reversible half of the destructive pair. Its own confirm gate lives
-    // in the action body too, so a call site that forgot `confirmed` would
-    // route through the app-level pending dialog and prompt a second time.
-    const { result } = renderActions();
-
-    act(() => {
-      result.current.handleCloseAll();
-    });
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(result.current.confirmDialog.isOpen).toBe(true);
-
-    act(() => {
-      if (result.current.confirmDialog.isOpen) result.current.confirmDialog.onConfirm();
-    });
-
-    expect(dispatch).toHaveBeenCalledWith(
-      "worktree.sessions.trashAll",
-      { worktreeId: "wt-1", confirmed: true },
-      { source: "user" }
-    );
+    // One unconfirmed dispatch: the action's own gate stages the app-level
+    // confirm, so the menu can't skip it or show a second dialog of its own.
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    const [id, args] = dispatch.mock.calls[0]!;
+    expect(id).toBe(actionId);
+    expect(args).toEqual({ worktreeId: "wt-1" });
+    expect(result.current.confirmDialog.isOpen).toBe(false);
   });
 
   it("keeps trashing and terminating on separate actions, so the reversible one stays reversible", () => {
-    // Swapping the two callbacks would leave every label and every count
-    // correct while turning "Trash all sessions" into permanent termination.
+    // Swapping the two callbacks would leave every label correct while turning
+    // "Trash all sessions" into permanent termination.
     const { result } = renderActions();
 
     act(() => {
       result.current.handleCloseAll();
     });
     act(() => {
-      if (result.current.confirmDialog.isOpen) result.current.confirmDialog.onConfirm();
-    });
-    act(() => {
       result.current.handleTerminateAll();
-    });
-    act(() => {
-      if (result.current.confirmDialog.isOpen) result.current.confirmDialog.onConfirm();
     });
 
     expect(dispatch.mock.calls.map((call) => call[0])).toEqual([
       "worktree.sessions.trashAll",
       "worktree.sessions.endAll",
     ]);
-  });
-
-  it("dispatches clearHistory with confirmed:true only after the local dialog is confirmed", () => {
-    const { result } = renderActions();
-
-    act(() => {
-      result.current.handleClearHistory();
-    });
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(result.current.confirmDialog.isOpen).toBe(true);
-
-    act(() => {
-      if (result.current.confirmDialog.isOpen) result.current.confirmDialog.onConfirm();
-    });
-
-    expect(dispatch).toHaveBeenCalledWith(
-      "worktree.sessions.clearHistory",
-      { worktreeId: "wt-1", confirmed: true },
-      { source: "user" }
-    );
   });
 });

@@ -22,6 +22,7 @@ export {
 export { globalEnvClient, invalidateGlobalEnvCache } from "./globalEnvClient";
 export { scratchClient } from "./scratchClient";
 export { sessionRestoreClient } from "./sessionRestoreClient";
+export { windowOpeningClient } from "./windowOpeningClient";
 export { keepAwakeClient } from "./keepAwakeClient";
 export { slashCommandsClient } from "./slashCommandsClient";
 export { systemClient } from "./systemClient";
@@ -39,4 +40,5 @@ export { pluginClient } from "./pluginClient";
 export { pluginRecipesClient } from "./pluginRecipesClient";
 export { telemetryPreviewClient } from "./telemetryPreviewClient";
 export { connectivityClient } from "./connectivityClient";
+export { projectPresenceClient } from "./projectPresenceClient";
 export { watchdogClient } from "./watchdogClient";

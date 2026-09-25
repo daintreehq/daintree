@@ -8,6 +8,7 @@ const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
 const INDEX_CSS = path.join(REPO_ROOT, "src/index.css");
 const TOOLBAR_CSS = path.join(REPO_ROOT, "src/styles/components/toolbar.css");
 const SIDEBAR_CSS = path.join(REPO_ROOT, "src/styles/components/sidebar.css");
+const TOOLBAR_TSX = path.join(REPO_ROOT, "src/components/Layout/Toolbar.tsx");
 
 // Issue #8936: status indicators (toolbar pips, ActivityLight) and the
 // SettingsSwitch toggle lose all state in forced-colors / Windows High Contrast
@@ -51,6 +52,17 @@ function readForcedColorsBlocks(file: string): string {
 }
 
 describe("forced-colors status-indicator contract (#8936)", () => {
+  it("index.css repaints severity glyphs coloured on the SVG itself", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    // Chromium forces an inherited currentColor but not a colour set on the
+    // SVG, so both the marker and a status utility on the svg must be caught,
+    // and !important must beat the banner glyph's inline colour.
+    const rule = block.match(/([^{}]*)\{[^}]*color:\s*CanvasText\s*!important[^}]*\}/g) ?? [];
+    const selectors = rule.join("\n");
+    expect(selectors).toContain("[data-severity-glyph]");
+    expect(selectors).toMatch(/svg\[class\*="-status-"\]/);
+  });
+
   it("index.css repaints the ActivityLight active dot with CanvasText !important", () => {
     const block = readForcedColorsBlocks(INDEX_CSS);
     expect(block).toContain('[data-activity-active="true"]');
@@ -117,6 +129,19 @@ describe("forced-colors status-indicator contract (#8936)", () => {
       /\.toolbar-badge\b[\s\S]*\.toolbar-badge-chip\b[\s\S]*\.toolbar-overflow-badge\b[\s\S]*\.toolbar-problems-badge\b\s*\{[^}]*background-color:\s*CanvasText/
     );
   });
+
+  // Forced colors strips the ring (box-shadow) that keeps a corner pip off the
+  // glyph beneath it; without the outline the CanvasText dot fuses with the
+  // icon stroke. The overflow menu's agent pip needs the same moat.
+  it("toolbar.css gives every corner pip, the overflow menu's included, a Canvas outline", () => {
+    const block = readForcedColorsBlocks(TOOLBAR_CSS);
+    const rule = block.match(/([^{}]*)\{\s*outline:\s*2px solid Canvas;?\s*\}/);
+    expect(rule).not.toBeNull();
+    for (const selector of [".toolbar-badge", ".toolbar-problems-badge", ".toolbar-menu-pip"]) {
+      expect(rule![1]).toContain(selector);
+    }
+    expect(fs.readFileSync(TOOLBAR_TSX, "utf8")).toContain("toolbar-menu-pip");
+  });
 });
 
 // #12000: forty-odd status marks across the app were an empty span whose only
@@ -178,6 +203,36 @@ describe("forced-colors shared status-mark contract (#12000)", () => {
   });
 });
 
+// A 2px ButtonText border is the forced-colours marker for "this is the one
+// that matters" (destructive, a notification's primary action). The block also
+// pins every other button back to 1px with a selector at (0,1,1), which outranks
+// a bare attribute hook at (0,1,0) — so any hook the pin-back does not exempt is
+// silently flattened to match its neighbours.
+describe("forced-colors heavier-border hooks survive the 1px pin-back", () => {
+  // The hooks that land on buttons. Hooks on non-button elements (the segmented
+  // thumb is a span) are out of the pin-back's reach and need no exemption.
+  const BUTTON_HOOKS = ['[data-variant="destructive"]', '[data-notification-action="primary"]'];
+
+  it("exempts every button hook that asserts a 2px ButtonText border", () => {
+    // Comments quote these selectors, so match live rules only.
+    const blocks = readForcedColorsBlocks(INDEX_CSS)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/'/g, '"');
+    const pin = blocks.match(
+      /html\s*:where\([^)]*\):not\(([^)]*)\)\s*\{\s*border-width:\s*1px;\s*\}/
+    );
+    expect(pin).not.toBeNull();
+    const exempt = pin![1]!.split(",").map((arg) => arg.trim());
+    for (const hook of BUTTON_HOOKS) {
+      const escaped = hook.replace(/[[\]"]/g, "\\$&");
+      expect(blocks).toMatch(
+        new RegExp(`${escaped}\\s*\\{[^}]*border:\\s*2px\\s+solid\\s+ButtonText`)
+      );
+      expect(exempt).toContain(hook);
+    }
+  });
+});
+
 // #11981: a destructive button is distinguished from Cancel only by its fill,
 // and forced-colors replaces every fill with a system colour — so the two
 // render as identical pills and nothing marks which one destroys. The fallback
@@ -211,5 +266,52 @@ describe("forced-colors destructive button distinction (#11981)", () => {
   it("does not paint the destructive focus ring in the button's own fill colour", () => {
     const button = fs.readFileSync(path.join(REPO_ROOT, "src/components/ui/button.tsx"), "utf8");
     expect(button).not.toMatch(/focus-visible:outline-destructive/);
+  });
+});
+
+describe("forced-colors stroked agent-state glyphs", () => {
+  // Inherit, not a named system colour: the parent's forced ink is the pair
+  // the UA already matched to that surface, which a role cannot tell us.
+  it("hands the stroked state circles their parent's forced ink, not their state hue", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    expect(block).toMatch(/\[data-agent-state-glyph\]\s*\{[^}]*color:\s*inherit/);
+    expect(block).not.toMatch(/\[data-agent-state-glyph\][^{]*\{[^}]*(CanvasText|ButtonText)/);
+  });
+
+  it("is actually emitted by every stroked circle", () => {
+    const source = fs.readFileSync(
+      path.join(REPO_ROOT, "src/components/icons/AgentStateCircles.tsx"),
+      "utf8"
+    );
+    const svgs = source.match(/<svg\s[\s\S]*?>/g) ?? [];
+    expect(svgs.length).toBeGreaterThan(0);
+    for (const svg of svgs) expect(svg).toContain("data-agent-state-glyph");
+  });
+});
+
+describe("forced-colors resource glyphs", () => {
+  // The CPU line and the amber/red band marks carry their hue on the svg
+  // itself, so without the hook the hue survives onto the forced canvas.
+  it("hands resource glyphs their parent's forced ink, not their band hue", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    expect(block).toMatch(/\[data-resource-glyph\]\s*\{[^}]*color:\s*inherit/);
+  });
+
+  it("is actually emitted wherever a resource readout tints a glyph", () => {
+    for (const file of [
+      "src/components/Terminal/TerminalResourceSparkline.tsx",
+      "src/components/Terminal/TerminalHeaderContent.tsx",
+      "src/components/Project/ProjectResourceBadge.tsx",
+    ]) {
+      const source = fs.readFileSync(path.join(REPO_ROOT, file), "utf8");
+      const tinted = source.match(
+        /<(svg|Icon|TriangleAlert|OctagonAlert)\s[^>]*text-status-[^>]*>/g
+      );
+      const hooked = source.match(
+        /<(svg|Icon|TriangleAlert|OctagonAlert)\s[^>]*data-resource-glyph[^>]*>/g
+      );
+      expect(hooked?.length ?? 0, file).toBeGreaterThan(0);
+      for (const tag of tinted ?? []) expect(tag, file).toContain("data-resource-glyph");
+    }
   });
 });

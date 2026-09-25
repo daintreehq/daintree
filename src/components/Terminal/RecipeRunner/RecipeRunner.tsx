@@ -122,6 +122,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
           onUnpin={runner.handleUnpin}
           onDelete={runner.handleDelete}
           onCreate={runner.handleCreate}
+          onManage={runner.handleManage}
         />
       ) : (
         <RecipeRunnerGrid
@@ -137,6 +138,20 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
           onCreate={runner.handleCreate}
           setFocusedIndex={runner.setFocusedIndex}
         />
+      )}
+      {/* The canvas launches; the manager is where every recipe's other
+          actions live. Right-click reaches a few of them here, but a context
+          menu is not a visible path, so the band names the one that is. */}
+      {!runner.showSearch && (
+        <div className="mt-1 flex justify-center">
+          <button
+            type="button"
+            onClick={runner.handleManage}
+            className="rounded-[var(--radius-sm)] px-2 py-1 text-xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+          >
+            Manage recipes
+          </button>
+        </div>
       )}
       {deleteDialog}
     </div>

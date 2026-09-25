@@ -1,34 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle } from "lucide-react";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import type { ColorVisionMode } from "@shared/types";
 import { logError } from "@/utils/logger";
+import { SettingsRow } from "./SettingsGroup";
 
-const COLOR_VISION_OPTIONS: Array<{ id: ColorVisionMode; label: string; description: string }> = [
-  { id: "default", label: "Default", description: "No color adjustments" },
-  {
-    id: "red-green",
-    label: "Red-Green",
-    description: "Deuteranopia & Protanopia",
-  },
-  {
-    id: "blue-yellow",
-    label: "Blue-Yellow",
-    description: "Tritanopia",
-  },
+const COLOR_VISION_OPTIONS: Array<{ value: ColorVisionMode; label: string }> = [
+  { value: "default", label: "Default" },
+  { value: "red-green", label: "Red-green" },
+  { value: "blue-yellow", label: "Blue-yellow" },
 ];
 
-const isColorVisionMode = (value: string): value is ColorVisionMode =>
-  COLOR_VISION_OPTIONS.some((option) => option.id === value);
+const DEFAULT_COLOR_VISION_MODE: ColorVisionMode = "default";
 
 const SWATCH_TOKENS = [
   { label: "Success", var: "--theme-status-success" },
@@ -57,15 +42,15 @@ function SwatchPreview() {
   if (colors.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-1.5 mt-2">
+    <div className="flex flex-wrap items-start gap-x-2 gap-y-1.5" aria-hidden="true">
       {SWATCH_TOKENS.map((token, i) => (
-        <div key={token.var} className="flex flex-col items-center gap-0.5">
+        <div key={token.var} className="flex w-12 flex-col items-center gap-1">
           <div
-            className="w-6 h-6 rounded-sm border border-daintree-border/30"
+            className="w-6 h-6 rounded-sm border border-border-subtle"
             style={{ backgroundColor: colors[i] }}
             title={token.label}
           />
-          <span className="text-4xs text-text-secondary">{token.label}</span>
+          <span className="text-2xs text-text-secondary">{token.label}</span>
         </div>
       ))}
     </div>
@@ -107,38 +92,48 @@ export function ColorVisionPicker() {
     }
   };
 
+  // Three rows in the group: the setting, a preview of what it does, and — only after a
+  // failed save — the error with its retry. The swatches used to hang under the row's
+  // description in the left column while the select sat on the rail, so the row read as
+  // two things at once.
   return (
-    <div>
-      <Select
-        value={colorVisionMode}
-        onValueChange={(value) => {
-          if (isColorVisionMode(value)) void handleChange(value);
-        }}
-      >
-        <SelectTrigger aria-label="Color vision mode">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {COLOR_VISION_OPTIONS.map((option) => (
-            <SelectItem key={option.id} value={option.id} description={option.description}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+    <>
+      <SettingsRow
+        id="appearance-color-vision"
+        label="Color vision"
+        description="Adjusts status and terminal colors. Red-green covers deuteranopia and protanopia; blue-yellow covers tritanopia."
+        isModified={colorVisionMode !== DEFAULT_COLOR_VISION_MODE}
+        onReset={() => void handleChange(DEFAULT_COLOR_VISION_MODE)}
+        control={({ descriptionId, disabled }) => (
+          <SegmentedRadioGroup
+            aria-label="Color vision"
+            aria-describedby={descriptionId}
+            options={COLOR_VISION_OPTIONS}
+            value={colorVisionMode}
+            onChange={(mode) => void handleChange(mode)}
+            disabled={disabled}
+          />
+        )}
+      />
+      <SettingsRow
+        label="Preview"
+        description="Status and syntax colors as the current mode draws them"
+        layout="stacked"
+        control={<SwatchPreview />}
+      />
       {failedMode && (
-        <InlineStatusBanner
-          className="mt-2 rounded-[var(--radius-md)]"
-          severity="error"
-          icon={AlertCircle}
-          title="Couldn't save color vision mode"
-          description="The mode was restored to the last saved one, so it won't be lost on restart."
-          action={{ id: "retry", label: "Retry", onClick: () => void handleChange(failedMode) }}
-          onClose={() => setFailedMode(null)}
-          closeAriaLabel="Dismiss color vision error"
-        />
+        <div className="px-4 py-3">
+          <InlineStatusBanner
+            className="rounded-[var(--radius-md)]"
+            severity="error"
+            title="Couldn't save color vision mode"
+            description="The mode was restored to the last saved one, so it won't be lost on restart."
+            action={{ id: "retry", label: "Retry", onClick: () => void handleChange(failedMode) }}
+            onClose={() => setFailedMode(null)}
+            closeAriaLabel="Dismiss color vision error"
+          />
+        </div>
       )}
-      <SwatchPreview />
-    </div>
+    </>
   );
 }

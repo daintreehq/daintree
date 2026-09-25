@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Lock, CheckCircle2, Moon } from "lucide-react";
+import { OctagonAlert, TriangleAlert } from "@/components/icons";
 import type { AgentState, PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -44,13 +45,48 @@ function formatMemory(kb: number): string {
 
 type ResourceSeverity = "muted" | "amber" | "red";
 
-function getResourceSeverity(cpuPercent: number, memoryKb: number): ResourceSeverity {
-  if (cpuPercent >= 80 || memoryKb >= 2097152) return "red";
-  if (cpuPercent >= 50 || memoryKb >= 1048576) return "amber";
+// CPU is the sum of ps %cpu across the pane's process tree, so a multi-core
+// build reads above 100%; the bands are about one core.
+function getCpuSeverity(cpuPercent: number): ResourceSeverity {
+  if (cpuPercent >= 80) return "red";
+  if (cpuPercent >= 50) return "amber";
+  return "muted";
+}
+
+function getMemorySeverity(memoryKb: number): ResourceSeverity {
+  if (memoryKb >= 2097152) return "red";
+  if (memoryKb >= 1048576) return "amber";
   return "muted";
 }
 
 const SEVERITY_ORDER: Record<ResourceSeverity, number> = { muted: 0, amber: 1, red: 2 };
+
+const SEVERITY_TONE: Record<ResourceSeverity, string> = {
+  muted: "text-text-secondary",
+  amber: "text-status-warning",
+  red: "text-status-error",
+};
+
+/** A mark's footprint: `w-3` plus its `mr-1`, reserved alongside the digits. */
+const SEVERITY_MARK_WIDTH = "1rem";
+
+/**
+ * The band in shape, set immediately before the reading it is about. The
+ * reading itself stays `text-text-secondary`: status hues on 10px numerals fall
+ * under 4.5:1 on light headers, and forced colours flatten them anyway.
+ */
+function SeverityMark({ severity }: { severity: ResourceSeverity }) {
+  if (severity === "muted") return null;
+  const Icon = severity === "red" ? OctagonAlert : TriangleAlert;
+  return (
+    <Icon
+      className={cn("w-3 h-3 shrink-0 mr-1", SEVERITY_TONE[severity])}
+      data-severity-mark={severity}
+      data-resource-glyph=""
+      aria-hidden="true"
+    />
+  );
+}
 
 // Asymmetric same-direction poll hysteresis before the displayed band changes —
 // prevents flicker at threshold boundaries (CPU 50/80, mem 1G/2G). Escalating to
@@ -60,6 +96,87 @@ const SEVERITY_ORDER: Record<ResourceSeverity, number> = { muted: 0, amber: 1, r
 // than a slightly stale calm reading.
 const ESCALATION_HYSTERESIS_POLLS = 3;
 const DE_ESCALATION_HYSTERESIS_POLLS = 5;
+
+/**
+ * The displayed band for one metric. `poll` changes identity once per sample,
+ * so each effect run counts one poll; `raw == null` means no sample and resets
+ * to muted.
+ *
+ * Runs count readings at or above a band, not readings of exactly that band: a
+ * pane swinging 60% / 90% / 60% is above amber on every poll and must earn it,
+ * where matching the exact band would reset on every swing and stay muted.
+ * Coming down, the run counts readings below the shown band and lands on the
+ * hottest band seen during it, so a quiet spell with a spike in it steps down
+ * rather than falling straight through.
+ */
+function useStickySeverity(raw: ResourceSeverity | null, poll: unknown): ResourceSeverity {
+  const [sticky, setSticky] = useState<ResourceSeverity>("muted");
+  // The bookkeeping lives in refs and is keyed to the poll it last counted, so
+  // StrictMode's doubled mount effect cannot count one sample twice.
+  const shownRef = useRef<ResourceSeverity>("muted");
+  const countedPollRef = useRef<unknown>(undefined);
+  const aboveRef = useRef<Record<"amber" | "red", number>>({ amber: 0, red: 0 });
+  const belowRef = useRef<{ count: number; peak: ResourceSeverity }>({ count: 0, peak: "muted" });
+
+  useEffect(() => {
+    const above = aboveRef.current;
+    const below = belowRef.current;
+    const show = (next: ResourceSeverity) => {
+      shownRef.current = next;
+      setSticky(next);
+    };
+
+    if (raw == null) {
+      countedPollRef.current = undefined;
+      above.amber = 0;
+      above.red = 0;
+      below.count = 0;
+      show("muted");
+      return;
+    }
+    if (countedPollRef.current === poll) return;
+    countedPollRef.current = poll;
+
+    const level = SEVERITY_ORDER[raw];
+    const shown = SEVERITY_ORDER[shownRef.current];
+    above.amber = level >= SEVERITY_ORDER.amber ? above.amber + 1 : 0;
+    above.red = level >= SEVERITY_ORDER.red ? above.red + 1 : 0;
+
+    if (shown < SEVERITY_ORDER.red && above.red >= ESCALATION_HYSTERESIS_POLLS) {
+      below.count = 0;
+      show("red");
+      return;
+    }
+    if (shown < SEVERITY_ORDER.amber && above.amber >= ESCALATION_HYSTERESIS_POLLS) {
+      below.count = 0;
+      show("amber");
+      return;
+    }
+    if (level >= shown) {
+      below.count = 0;
+      return;
+    }
+    if (below.count === 0 || level > SEVERITY_ORDER[below.peak]) below.peak = raw;
+    below.count += 1;
+    if (below.count >= DE_ESCALATION_HYSTERESIS_POLLS) {
+      below.count = 0;
+      show(below.peak);
+    }
+  }, [raw, poll]);
+
+  return sticky;
+}
+
+function describeResources(
+  cpuPercent: number,
+  memoryKb: number,
+  cpu: ResourceSeverity,
+  memory: ResourceSeverity
+): string {
+  const high = [cpu !== "muted" && "CPU", memory !== "muted" && "memory"].filter(Boolean);
+  const reading = `CPU ${Math.round(cpuPercent)}%, memory ${formatMemory(memoryKb)}`;
+  return high.length > 0 ? `${reading}; high ${high.join(" and ")}` : reading;
+}
 
 export function TerminalHeaderContent({
   id,
@@ -78,46 +195,22 @@ export function TerminalHeaderContent({
   const hasPtyKind = kind == null || panelKindHasPty(kind);
   const showResource = resourceEnabled && hasPtyKind && resourceState != null;
 
-  const [stickySeverity, setStickySeverity] = useState<ResourceSeverity>("muted");
-  const pendingCandidateRef = useRef<ResourceSeverity | null>(null);
-  const pendingCountRef = useRef(0);
+  const cpuSeverity = useStickySeverity(
+    showResource ? getCpuSeverity(resourceState.cpuPercent) : null,
+    showResource ? resourceState : null
+  );
+  const memorySeverity = useStickySeverity(
+    showResource ? getMemorySeverity(resourceState.memoryKb) : null,
+    showResource ? resourceState : null
+  );
+  const resourceSeverity =
+    SEVERITY_ORDER[cpuSeverity] >= SEVERITY_ORDER[memorySeverity] ? cpuSeverity : memorySeverity;
 
-  useEffect(() => {
-    if (!showResource || resourceState == null) {
-      pendingCandidateRef.current = null;
-      pendingCountRef.current = 0;
-      setStickySeverity((current) => (current === "muted" ? current : "muted"));
-      return;
-    }
-
-    const rawSeverity = getResourceSeverity(resourceState.cpuPercent, resourceState.memoryKb);
-    setStickySeverity((current) => {
-      if (rawSeverity === current) {
-        pendingCandidateRef.current = null;
-        pendingCountRef.current = 0;
-        return current;
-      }
-
-      if (rawSeverity === pendingCandidateRef.current) {
-        pendingCountRef.current += 1;
-      } else {
-        pendingCandidateRef.current = rawSeverity;
-        pendingCountRef.current = 1;
-      }
-
-      const threshold =
-        SEVERITY_ORDER[rawSeverity] > SEVERITY_ORDER[current]
-          ? ESCALATION_HYSTERESIS_POLLS
-          : DE_ESCALATION_HYSTERESIS_POLLS;
-      if (pendingCountRef.current < threshold) {
-        return current;
-      }
-
-      pendingCandidateRef.current = null;
-      pendingCountRef.current = 0;
-      return rawSeverity;
-    });
-  }, [resourceState, showResource]);
+  // When memory is the worse band, the row that explains it leads.
+  const breakdownRows =
+    showResource && SEVERITY_ORDER[memorySeverity] > SEVERITY_ORDER[cpuSeverity]
+      ? [...resourceState.breakdown].sort((a, b) => b.memoryKb - a.memoryKb)
+      : (resourceState?.breakdown ?? []);
 
   const { isInputLocked, sessionCost, sessionTokens } = usePanelStore(
     useShallow((state) => {
@@ -284,57 +377,101 @@ export function TerminalHeaderContent({
         </Tooltip>
       )}
 
-      {/* Resource monitoring badge — ambient telemetry, last. The severity
-          hysteresis (escalation 3 polls / de-escalation 5 polls) encodes a
-          semantic timing and is intentionally NOT normalized to a motion tier. */}
+      {/* Resource monitoring badge — ambient telemetry, last. CPU and memory
+          each carry their own band, marked in shape beside the reading it is
+          about, so a hot badge says which one is high and survives forced
+          colours; the CPU line takes the CPU band's hue. Focusable so the
+          breakdown reaches keyboard users; aria-live="off" because it changes
+          every poll and must not compete with the fleet announcer (#9204). The severity hysteresis encodes a semantic
+          timing and is intentionally NOT normalized to a motion tier. */}
       {showResource && (
-        <Tooltip autoDismiss={false}>
+        <Tooltip autoDismiss={false} disableHoverableContent={false}>
           <TooltipTrigger asChild>
             <div
-              className={cn(
-                "inline-flex items-center gap-1 text-2xs font-mono shrink-0 transition-colors duration-150",
-                {
-                  "text-text-secondary": stickySeverity === "muted",
-                  "text-status-warning": stickySeverity === "amber",
-                  "text-status-error": stickySeverity === "red",
-                }
-              )}
-              style={{ fontVariantNumeric: "tabular-nums" }}
+              className="inline-flex items-center gap-1.5 px-1 text-2xs font-mono shrink-0 rounded-sm tabular-nums"
               role="status"
+              aria-live="off"
+              tabIndex={0}
+              aria-label={describeResources(
+                resourceState.cpuPercent,
+                resourceState.memoryKb,
+                cpuSeverity,
+                memorySeverity
+              )}
+              data-testid="terminal-resource-badge"
+              data-severity={resourceSeverity}
+              data-cpu-severity={cpuSeverity}
+              data-memory-severity={memorySeverity}
             >
-              <TerminalResourceSparkline history={resourceState.cpuHistory} />
-              <span>
-                {Math.round(resourceState.cpuPercent)}% · {formatMemory(resourceState.memoryKb)}
+              <TerminalResourceSparkline
+                history={resourceState.cpuHistory}
+                className={cn(
+                  "shrink-0 transition-colors duration-150",
+                  SEVERITY_TONE[cpuSeverity]
+                )}
+              />
+              {/* One block reserved at the width of "1000% · 10.0G" plus any marks
+                  showing, slack at its trailing end: the line holds still as
+                  digits come and go, and the reading stays tight against the
+                  line's end dot. */}
+              <span
+                className="flex items-center text-text-secondary"
+                style={{
+                  minWidth: `calc(11ch + 0.5rem + ${
+                    [cpuSeverity, memorySeverity].filter((b) => b !== "muted").length
+                  } * ${SEVERITY_MARK_WIDTH})`,
+                }}
+                aria-hidden="true"
+              >
+                <SeverityMark severity={cpuSeverity} />
+                <span>{Math.round(resourceState.cpuPercent)}%</span>
+                <span className="px-1">·</span>
+                <SeverityMark severity={memorySeverity} />
+                <span>{formatMemory(resourceState.memoryKb)}</span>
               </span>
             </div>
           </TooltipTrigger>
           <TooltipContent side="bottom" className="max-w-xs">
             <div className="flex flex-col gap-1">
-              <div className="font-medium" style={{ fontVariantNumeric: "tabular-nums" }}>
-                CPU: {resourceState.cpuPercent.toFixed(1)}% · Memory:{" "}
+              <div className="font-medium tabular-nums">
+                CPU {resourceState.cpuPercent.toFixed(1)}% · Memory{" "}
                 {formatMemory(resourceState.memoryKb)}
               </div>
               {resourceState.breakdown.length > 0 && (
-                <table className="text-xs" style={{ fontVariantNumeric: "tabular-nums" }}>
+                <table className="text-xs tabular-nums">
                   <thead>
                     <tr className="text-text-secondary">
                       <th className="text-left pr-2">PID</th>
-                      <th className="text-left pr-2">Name</th>
+                      <th className="text-left pr-3">Name</th>
                       <th className="text-right pr-2">CPU</th>
                       <th className="text-right">Mem</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {resourceState.breakdown.map((p) => (
+                    {breakdownRows.map((p) => (
                       <tr key={p.pid}>
                         <td className="pr-2 text-text-secondary">{p.pid}</td>
-                        <td className="pr-2 truncate max-w-[8rem]">{p.comm}</td>
+                        <td className="pr-3 truncate max-w-[8rem]">{p.comm}</td>
                         <td className="text-right pr-2">{p.cpuPercent.toFixed(1)}%</td>
                         <td className="text-right">{formatMemory(p.memoryKb)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              )}
+              {(resourceState.cpuPercent > 100 ||
+                (resourceState.processCount ?? 0) > resourceState.breakdown.length) && (
+                <div className="flex flex-col text-text-secondary">
+                  {(resourceState.processCount ?? 0) > resourceState.breakdown.length && (
+                    <span className="tabular-nums">
+                      Showing {resourceState.breakdown.length} of {resourceState.processCount}{" "}
+                      processes
+                    </span>
+                  )}
+                  {resourceState.cpuPercent > 100 && (
+                    <span>CPU is summed across cores; 100% is one full core</span>
+                  )}
+                </div>
               )}
             </div>
           </TooltipContent>

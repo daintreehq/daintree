@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { AlertTriangle, CheckCircle2, FileEdit, Info, XCircle } from "lucide-react";
 import { InlineStatusBanner, type InlineStatusBannerSeverity } from "../InlineStatusBanner";
 import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
@@ -286,6 +286,27 @@ describe("InlineStatusBanner", () => {
     expect(slot.compareDocumentPosition(dismiss) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("puts every control before the dismiss in DOM order, in every layout", () => {
+    for (const layout of ["stacked", "strip", "pane", "inline"] as const) {
+      render(
+        <InlineStatusBanner
+          title="Push failed"
+          description="The remote has new commits."
+          descriptionExtras={<button type="button">Server output</button>}
+          severity="error"
+          animated={false}
+          layout={layout}
+          action={{ id: "fix", label: "Pull and rebase", onClick: () => {} }}
+          trailingSlot={<button type="button">Force push…</button>}
+          onClose={() => {}}
+        />
+      );
+      const buttons = screen.getAllByRole("button");
+      expect(buttons.at(-1)?.getAttribute("aria-label"), layout).toBe("Dismiss");
+      cleanup();
+    }
+  });
+
   it("renders descriptionExtras as a sibling, never inside the description paragraph", () => {
     const { container } = render(
       <InlineStatusBanner
@@ -455,13 +476,11 @@ describe("InlineStatusBanner", () => {
           onClose={onClose}
         />
       );
-      const title = screen.getByText("25 panels open");
       const dismiss = screen.getByRole("button", { name: "Dismiss" });
-      // Dismiss lives inside the title's row (the justify-between wrapper),
-      // not in the controls row beneath the description.
-      const titleRow = title.parentElement;
-      expect(titleRow?.className).toContain("justify-between");
-      expect(titleRow?.contains(dismiss)).toBe(true);
+      // Dismiss sits in the title row's corner, not in a controls row beneath
+      // the description — and there is no controls row to hold it.
+      expect(dismiss.closest("[data-banner-controls]")).toBeNull();
+      expect(document.querySelector("[data-banner-controls]")).toBeNull();
     });
 
     it("fires onClose when the title-row dismiss is clicked", () => {
@@ -542,6 +561,7 @@ describe("InlineStatusBanner", () => {
     });
 
     it("keeps a disabled dismiss in the row rather than unmounting it", () => {
+      const onClose = vi.fn();
       render(
         <InlineStatusBanner
           icon={Info}
@@ -551,12 +571,40 @@ describe("InlineStatusBanner", () => {
           severity="neutral"
           animated={false}
           actions={[]}
-          onClose={() => {}}
+          onClose={onClose}
           closeDisabled
         />
       );
       const dismiss = screen.getByRole("button", { name: "Dismiss" });
-      expect(dismiss.hasAttribute("disabled")).toBe(true);
+      expect(dismiss.getAttribute("aria-disabled")).toBe("true");
+      expect(dismiss.matches(":disabled")).toBe(false);
+      fireEvent.click(dismiss);
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("keeps an action focusable and inert when it turns unavailable under the keyboard", () => {
+      const onClick = vi.fn();
+      const banner = (disabled: boolean) => (
+        <InlineStatusBanner
+          icon={Info}
+          title="Service stopped"
+          severity="warning"
+          animated={false}
+          actions={[{ id: "restart", label: "Restart", onClick, disabled }]}
+        />
+      );
+      const { rerender } = render(banner(false));
+      const restart = screen.getByRole("button", { name: "Restart" });
+      restart.focus();
+
+      // Restart → Restarting… is the usual shape: the action goes unavailable
+      // while the banner, and the user's focus on it, stay put.
+      rerender(banner(true));
+      expect(restart.matches(":disabled")).toBe(false);
+      expect(restart.getAttribute("aria-disabled")).toBe("true");
+      expect(document.activeElement).toBe(restart);
+      fireEvent.click(restart);
+      expect(onClick).not.toHaveBeenCalled();
     });
 
     it("renders dismiss in title row with descriptionExtras and no description prop", () => {
@@ -572,11 +620,13 @@ describe("InlineStatusBanner", () => {
           onClose={onClose}
         />
       );
-      const title = screen.getByText("25 panels open");
       const dismiss = screen.getByRole("button", { name: "Dismiss" });
-      const titleParent = title.closest('[class*="justify-between"]');
-      expect(titleParent).toBeTruthy();
-      expect(titleParent!.contains(dismiss)).toBe(true);
+      const extras = screen.getByRole("button", { name: "Close completed" });
+      expect(dismiss.closest("[data-banner-controls]")).toBeNull();
+      // The corner dismiss still comes after the banner's own content.
+      expect(
+        extras.compareDocumentPosition(dismiss) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
     });
 
     it("does not render an empty controls row when hasDescription, no actions, and onClose is present", () => {
@@ -1249,5 +1299,81 @@ describe("InlineStatusBanner as the window title-bar surface", () => {
     );
     expect(onSeverityChange).not.toHaveBeenCalled();
     expect(screen.getByRole("alert").className).not.toContain("app-drag-region");
+  });
+});
+
+describe("InlineStatusBanner pane layout", () => {
+  const renderSingleLine = (layout?: "pane") =>
+    render(
+      <InlineStatusBanner
+        icon={FileEdit}
+        title="3 files changed, review when ready"
+        severity="neutral"
+        animated={false}
+        layout={layout}
+        actions={[{ id: "review", label: "Review", onClick: () => {} }]}
+        onClose={() => {}}
+      />
+    );
+
+  it("lets a single-line pane banner drop its controls beneath the text in a narrow pane", () => {
+    const { container } = renderSingleLine("pane");
+    const root = container.querySelector<HTMLElement>(":scope > div")!;
+    const controls = container.querySelector<HTMLElement>("[data-banner-controls]")!;
+    // The container query is what reads the pane's width, not the window's.
+    expect(root.className).toContain("@container/banner");
+    expect(root.className).toContain("flex-wrap");
+    expect(controls.className).toContain("basis-full");
+    // Dropped controls line up with the text, past the glyph, and × keeps the right edge.
+    expect(controls.className).toContain("pl-6");
+    const dismiss = screen.getByRole("button", { name: "Dismiss" });
+    expect(dismiss.className).toContain("ml-auto");
+    expect(controls.lastElementChild).toBe(dismiss);
+  });
+
+  it("leaves the default single-line layout unwrapped for every other consumer", () => {
+    const { container } = renderSingleLine();
+    const root = container.querySelector<HTMLElement>(":scope > div")!;
+    const controls = container.querySelector<HTMLElement>("[data-banner-controls]")!;
+    expect(root.className).not.toContain("@container/banner");
+    expect(root.className).not.toContain("flex-wrap");
+    expect(controls.className).not.toContain("basis-full");
+  });
+});
+
+describe("InlineStatusBanner context line truncation", () => {
+  const renderContext = (contextLine: string, truncate?: "middle") =>
+    render(
+      <InlineStatusBanner
+        title="Terminal restart failed"
+        description="Working directory no longer exists"
+        contextLine={contextLine}
+        contextLineTruncate={truncate}
+        severity="error"
+        animated={false}
+      />
+    );
+
+  it("splits a middle-truncated path so its final segment survives", () => {
+    renderContext("Directory: /a/b/c/project", "middle");
+    const line = screen.getByTitle("Directory: /a/b/c/project");
+    expect(line.children).toHaveLength(2);
+    expect(line.children[0]!.className).toContain("truncate");
+    expect(line.children[1]!.textContent).toBe("/project");
+    expect(line.textContent).toBe("Directory: /a/b/c/project");
+  });
+
+  it("keeps a trailing separator with the final segment rather than splitting on it", () => {
+    renderContext("Directory: /a/b/project/", "middle");
+    expect(screen.getByTitle("Directory: /a/b/project/").children[1]!.textContent).toBe(
+      "/project/"
+    );
+  });
+
+  it("clips the end by default, as a single run of text", () => {
+    renderContext("Directory: /a/b/c/project");
+    const line = screen.getByTitle("Directory: /a/b/c/project");
+    expect(line.children).toHaveLength(0);
+    expect(line.className).toContain("truncate");
   });
 });

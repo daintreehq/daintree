@@ -479,32 +479,39 @@ export async function openSettings(page: Page, timeout = 10000): Promise<void> {
   await page.keyboard.press(`${mod}+,`);
   try {
     await heading.waitFor({ state: "visible", timeout: Math.min(timeout, shortcutTimeout) });
-    return;
   } catch {
-    // Shortcut may not have registered — try clicking the toolbar button
+    // Shortcut may not have registered — try clicking the toolbar button.
+    if (!(await heading.isVisible({ timeout: 1000 }).catch(() => false))) {
+      await clickToolbarButton(page, SEL.toolbar.openSettings);
+      await heading.waitFor({ state: "visible", timeout });
+    }
   }
 
-  if (await heading.isVisible({ timeout: 1000 }).catch(() => false)) {
-    return;
+  // Untargeted opens reset to Global scope in a React transition. The dialog
+  // can first paint its previous Project scope, then swap after this heading
+  // becomes visible; wait for that state before callers select a new scope.
+  const scopeTrigger = page.locator(SEL.settings.scopeControl);
+  if (await scopeTrigger.count()) {
+    await expect(scopeTrigger).toHaveText("Global settings", { timeout });
   }
-
-  // Fall back to clicking the settings button (handles overflow via menu)
-  await clickToolbarButton(page, SEL.toolbar.openSettings);
-  await heading.waitFor({ state: "visible", timeout });
 }
 
 /**
  * Switch the settings dialog between global and project scope.
  *
- * The control is a segmented radiogroup, not a dropdown — there is no popup and no
- * `role="option"` to click. Waits for the segment to report itself checked so callers
- * do not race the scope swap.
+ * The control is the sidebar heading ("Global settings ⌄"), a menu button whose menu
+ * holds one `menuitemradio` per scope. Waits for the heading to name the new scope so
+ * callers do not race the swap.
  */
 export async function selectSettingsScope(page: Page, label: "Global" | "Project"): Promise<void> {
+  const trigger = page.locator(SEL.settings.scopeControl);
+  await trigger.waitFor({ state: "visible", timeout: 10000 });
+  if ((await trigger.innerText()).trim() === `${label} settings`) return;
+  await trigger.click();
   const option = page.locator(SEL.settings.scopeOption(label));
   await option.waitFor({ state: "visible", timeout: 10000 });
   await option.click();
-  await expect(option).toHaveAttribute("aria-checked", "true", { timeout: 5000 });
+  await expect(trigger).toHaveText(`${label} settings`, { timeout: 5000 });
 }
 
 /**

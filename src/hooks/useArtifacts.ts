@@ -130,6 +130,11 @@ export function __test_subscribeArtifactStore(
   };
 }
 
+export type SaveArtifactOutcome =
+  | { status: "saved"; filePath: string }
+  | { status: "cancelled" }
+  | { status: "failed"; error: string };
+
 interface BulkProgress {
   action: "copy" | "save" | "apply";
   current: number;
@@ -159,6 +164,11 @@ function sortArtifacts(artifacts: Artifact[], mode: "filename" | "extraction"): 
     if (nameCmp !== 0) return nameCmp;
     return a.id.localeCompare(b.id);
   });
+}
+
+/** The order a bulk apply runs in — the order the agent wrote the patches. */
+export function orderPatchesForApply(patches: Artifact[]): Artifact[] {
+  return sortArtifacts(patches, "extraction");
 }
 
 export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: string) {
@@ -237,8 +247,10 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
   );
 
   const saveToFile = useCallback(
-    async (artifact: Artifact) => {
-      if (!isElectronAvailable()) return null;
+    async (artifact: Artifact): Promise<SaveArtifactOutcome> => {
+      if (!isElectronAvailable()) {
+        return { status: "failed", error: "Saving needs the desktop app" };
+      }
 
       try {
         setActionInProgress(artifact.id);
@@ -259,7 +271,8 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
         }
         const result = actionResult.result;
 
-        return result;
+        // The save dialog resolves null when the user backs out of it.
+        return result ? { status: "saved", filePath: result.filePath } : { status: "cancelled" };
       } catch (error) {
         logErrorWithContext(error, {
           operation: "save_artifact_to_file",
@@ -272,7 +285,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
             worktreeId,
           },
         });
-        return null;
+        return { status: "failed", error: formatErrorMessage(error, "Failed to save artifact") };
       } finally {
         setActionInProgress(null);
       }
@@ -460,7 +473,8 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
   }, [artifacts, cwd, terminalId]);
 
   // `patchesToApply` lets the caller pass the exact snapshot its confirm dialog
-  // previewed, so patches detected while the dialog was open are not applied unseen.
+  // previewed, so patches detected while the dialog was open are not applied
+  // unseen. It is applied in the order given: that order is the one previewed.
   const applyAllPatches = useCallback(
     async (patchesToApply?: Artifact[]): Promise<BulkResult> => {
       if (!isElectronAvailable() || !worktreeId || !cwd) {
@@ -476,7 +490,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
         return { succeeded: 0, failed: 0, failures: [] };
       }
 
-      const sorted = sortArtifacts(patches, "extraction");
+      const sorted = patchesToApply ? patches : orderPatchesForApply(patches);
       const result: BulkResult = { succeeded: 0, failed: 0, failures: [], modifiedFiles: [] };
       const modifiedFilesSet = new Set<string>();
 

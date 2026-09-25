@@ -80,16 +80,17 @@ describe("runDoctor", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("rejects a caret engine range the manifest schema accepts", async () => {
+  it("warns on a caret engine range without failing, matching the host's advisory load", async () => {
     await initRepo();
     await writePlugin("acme.demo", { ...VALID_MANIFEST, engines: { daintree: "^0.11.0" } });
     await commitAll();
 
     const result = await runDoctor(projectRoot, { offline: true });
-    const caret = result.plugins[0].errors.find((e) => e.includes("caret"));
+    const caret = result.plugins[0].warnings.find((e) => e.includes("caret"));
     expect(caret).toBeDefined();
     expect(caret).toContain(">=0.11.0");
-    expect(result.ok).toBe(false);
+    expect(result.plugins[0].errors.some((e) => e.includes("caret"))).toBe(false);
+    expect(result.ok).toBe(true);
   });
 
   it("catches build output that is present but untracked", async () => {

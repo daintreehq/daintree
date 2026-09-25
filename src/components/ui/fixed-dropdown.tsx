@@ -181,6 +181,18 @@ export function FixedDropdown({
       if (persistThroughChildOverlays && overlayStackLength > 0) return;
       const target = event.target as Node | null;
       if (contentRef.current?.contains(target) || anchorRef.current?.contains(target)) return;
+      // A menu opened from inside this dropdown portals to `document.body`, so
+      // choosing one of its items read as a click outside and took the whole
+      // dropdown down with it: group the inbox, and the inbox closed. Menus
+      // don't join the overlay stack, so the guard above never saw them. The
+      // expanded trigger inside `contentRef` is what says the menu is ours.
+      if (
+        target instanceof Element &&
+        target.closest("[data-radix-popper-content-wrapper]") &&
+        contentRef.current?.querySelector('[aria-haspopup="menu"][aria-expanded="true"]')
+      ) {
+        return;
+      }
       onOpenChange(false);
     };
 

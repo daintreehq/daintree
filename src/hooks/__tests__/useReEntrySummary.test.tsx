@@ -413,7 +413,7 @@ describe("useReEntrySummary", () => {
     expect(result.current.rows[0]!.worktreeName).toBe("feature-xyz");
   });
 
-  it("falls back to truncated worktreeId when worktree not in store", () => {
+  it("names an unresolved worktree by the last segment of its path, not a prefix of it", () => {
     const { result } = renderHook(() => useReEntrySummary());
 
     act(() => {
@@ -422,7 +422,7 @@ describe("useReEntrySummary", () => {
     addEntry({
       type: "success",
       message: "Done",
-      context: { worktreeId: "abcdef1234567890" },
+      context: { worktreeId: "/Users/dev/Projects/atlas-api-worktrees/feature-rate-limits" },
     });
 
     const realNow = Date.now;
@@ -434,18 +434,26 @@ describe("useReEntrySummary", () => {
 
     Date.now = realNow;
 
-    expect(result.current.rows[0]!.worktreeName).toBe("abcdef123456");
+    // A worktree id is its path: its first twelve characters are the user's
+    // home directory, the same for every worktree; its last segment is which.
+    expect(result.current.rows[0]!.worktreeName).toBe("feature-rate-limits");
   });
 
-  it("falls back to truncated ID when worktree name is empty string", async () => {
+  it("falls back to the path's last segment when the worktree name is empty", async () => {
     const { getCurrentViewStoreOrNull } = await import("@/store/createWorktreeStore");
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     vi.mocked(getCurrentViewStoreOrNull).mockReturnValue({
       getState: () => ({
         worktrees: new Map([
           [
-            "wt-1",
-            { id: "wt-1", path: "/tmp/wt-1", name: "", isCurrent: false, worktreeId: "wt-1" },
+            "/tmp/work/wt-one",
+            {
+              id: "/tmp/work/wt-one",
+              path: "/tmp/work/wt-one",
+              name: "",
+              isCurrent: false,
+              worktreeId: "/tmp/work/wt-one",
+            },
           ],
         ]),
       }),
@@ -456,7 +464,7 @@ describe("useReEntrySummary", () => {
     act(() => {
       window.dispatchEvent(new Event("blur"));
     });
-    addEntry({ type: "success", message: "Done", context: { worktreeId: "wt-1" } });
+    addEntry({ type: "success", message: "Done", context: { worktreeId: "/tmp/work/wt-one" } });
 
     const realNow = Date.now;
     Date.now = () => realNow() + 5000;
@@ -467,7 +475,7 @@ describe("useReEntrySummary", () => {
 
     Date.now = realNow;
 
-    expect(result.current.rows[0]!.worktreeName).toBe("wt-1");
+    expect(result.current.rows[0]!.worktreeName).toBe("wt-one");
   });
 
   it("sorts by name as tiebreaker when severity and count are equal", () => {

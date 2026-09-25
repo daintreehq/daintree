@@ -3,6 +3,10 @@ import fs from "fs/promises";
 import path from "path";
 
 const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
+// The pill's markup lives in its own component; the toolbar and the pill are read as one surface.
+const PILL_PATH = path.resolve(__dirname, "../ToolbarProjectPill.tsx");
+const readToolbarSource = async () =>
+  (await fs.readFile(TOOLBAR_PATH, "utf-8")) + (await fs.readFile(PILL_PATH, "utf-8"));
 const TOOLBAR_CSS_PATH = path.resolve(__dirname, "../../../styles/components/toolbar.css");
 const BUTTON_PATH = path.resolve(__dirname, "../../ui/button.tsx");
 
@@ -17,7 +21,7 @@ describe("Toolbar strip — composition invariants", () => {
 
   beforeEach(async () => {
     [source, css, button] = await Promise.all([
-      fs.readFile(TOOLBAR_PATH, "utf-8"),
+      readToolbarSource(),
       fs.readFile(TOOLBAR_CSS_PATH, "utf-8"),
       fs.readFile(BUTTON_PATH, "utf-8"),
     ]);
@@ -108,17 +112,23 @@ describe("Toolbar strip — composition invariants", () => {
     });
 
     it("the grid keeps a gutter between the side groups and the pill", () => {
-      const root = source.match(/role="toolbar"[\s\S]*?className="([^"]+)"/);
+      const root = source.match(/role="toolbar"[\s\S]*?className=\{cn\(\s*"([^"]+)"/);
       expect(root).not.toBeNull();
       expect(root![1]).toMatch(/\bgap-x-[1-9]\d*\b/);
     });
 
-    it("the strip's content is centred in its height — no top padding pushing it low", () => {
-      const root = source.match(/role="toolbar"[\s\S]*?className="([^"]+)"/);
+    it("the strip's content is centred in the surface the eye sees", () => {
+      // Unconditional top padding sat every control 2px low for months. The
+      // only offset allowed is one pixel for the macOS window-rim highlight,
+      // which covers the strip's top row everywhere but fullscreen.
+      const root = source.match(
+        /role="toolbar"[\s\S]*?className=\{cn\(\s*"([^"]+)",([\s\S]*?)\)\}/
+      );
       expect(root).not.toBeNull();
       expect(root![1]).toMatch(/\bh-12\b/);
       expect(root![1]).toMatch(/\bitems-center\b/);
-      expect(root![1]).not.toMatch(/\bp[tby]-\d/);
+      expect(root![1]).not.toMatch(/\bp[tby]-/);
+      expect(root![2]).toMatch(/isMac\(\) && !isFullscreen && "pt-px"/);
     });
 
     it("dividers never shrink to nothing under width pressure", () => {

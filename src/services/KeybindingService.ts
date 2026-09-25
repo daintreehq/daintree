@@ -52,6 +52,7 @@ class KeybindingService {
   private listeners = new Set<() => void>();
   private whenContext: WhenClauseContext = {};
   private whenContextProvider: ((event: KeyboardEvent) => WhenClauseContext) | null = null;
+  private shortcutCaptures = 0;
 
   constructor() {
     DEFAULT_KEYBINDINGS.forEach((binding) => {
@@ -160,6 +161,14 @@ class KeybindingService {
     return this.getBinding(actionId)?.combo;
   }
 
+  /** Every combo that triggers the action: all of an override's, else its default. */
+  getEffectiveCombos(actionId: string): string[] {
+    const override = this.overrides.get(actionId);
+    if (override) return override.filter(Boolean);
+    const combo = this.getBinding(actionId)?.combo;
+    return combo ? [combo] : [];
+  }
+
   // Detects clashes for a candidate `combo` against currently registered bindings.
   // Two clash kinds:
   //   "conflict" — same combo string in an overlapping scope.
@@ -187,6 +196,9 @@ class KeybindingService {
         const effectiveCombos = hasOverride ? overrideCombos : binding.combo ? [binding.combo] : [];
 
         let matched: "conflict" | "shadowed" | null = null;
+        // The combo that clashed, which is not the registration's default when an
+        // override is in force — the editor shows it beside the conflicting action.
+        let matchedCombo: string | undefined;
         for (const existingCombo of effectiveCombos) {
           const existingParts = existingCombo.trim().split(/\s+/).filter(Boolean);
           if (existingParts.length === 0) continue;
@@ -195,6 +207,7 @@ class KeybindingService {
             existingParts.every((p, i) => combosFieldsEqual(p, candidateParts[i]!))
           ) {
             matched = "conflict";
+            matchedCombo = existingCombo;
             break;
           }
 
@@ -206,13 +219,14 @@ class KeybindingService {
             existingParts.every((p, i) => combosFieldsEqual(p, candidateParts[i]!));
           if (candidateIsPrefix || existingIsPrefix) {
             matched = "shadowed";
+            matchedCombo = existingCombo;
             // Don't break: a later combo on the same binding might be an exact
             // conflict, which outranks "shadowed".
           }
         }
 
         if (matched) {
-          conflicts.push({ ...binding, kind: matched });
+          conflicts.push({ ...binding, combo: matchedCombo ?? binding.combo, kind: matched });
         }
       }
     }
@@ -399,6 +413,28 @@ class KeybindingService {
     this.clearPendingChord();
   }
 
+  /**
+   * Hand the keyboard to a shortcut recorder. While any recorder holds it, the
+   * app-wide shortcut listeners stand down: they sit on the same window capture
+   * phase and were registered first, so the recorder's own `stopPropagation`
+   * cannot keep a keystroke it is recording from also firing the action it is
+   * currently bound to. Returns the release; calling it twice is harmless.
+   */
+  beginShortcutCapture(): () => void {
+    this.shortcutCaptures++;
+    this.clearPendingChord();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.shortcutCaptures--;
+    };
+  }
+
+  isCapturingShortcut(): boolean {
+    return this.shortcutCaptures > 0;
+  }
+
   getLastInvalidKey(): string | null {
     return this.lastInvalidKey;
   }
@@ -418,6 +454,9 @@ class KeybindingService {
     const mac = isMac();
 
     if (mac && event.metaKey) parts.push("Cmd");
+    // Control is its own modifier on macOS, so a recorded "Ctrl+K Ctrl+R" chord
+    // can complete; elsewhere it is the primary modifier.
+    if (mac && event.ctrlKey) parts.push("Ctrl");
     if (!mac && event.ctrlKey) parts.push("Cmd");
     if (event.shiftKey) parts.push("Shift");
     if (event.altKey) parts.push("Alt");
@@ -454,45 +493,48 @@ class KeybindingService {
         if (!this.scopeAllows(binding.scope)) continue;
         if (binding.when && !evaluateWhenClause(binding.when, resolveWhenCtx())) continue;
 
-        const hasOverride = this.overrides.has(binding.actionId);
-        const effectiveCombo = hasOverride
-          ? this.overrides.get(binding.actionId)?.[0]
-          : binding.combo;
-        if (!effectiveCombo) continue;
+        // Every combo an override holds triggers the action, matching what the
+        // settings list shows and what conflict detection checks.
+        const combos = this.overrides.has(binding.actionId)
+          ? (this.overrides.get(binding.actionId) ?? [])
+          : [binding.combo];
+        for (const effectiveCombo of combos) {
+          if (!effectiveCombo) continue;
 
-        // Check if this is a chord binding
-        const chordParts = effectiveCombo.split(" ");
-        const isChord = chordParts.length > 1;
+          // Check if this is a chord binding
+          const chordParts = effectiveCombo.split(" ");
+          const isChord = chordParts.length > 1;
 
-        if (isChord) {
-          // Match chord parts via parseCombo field equality so user-stored overrides
-          // with non-canonical modifier order (e.g. "Alt+Cmd+T") match the canonical
-          // order produced by eventToCombo. matchesEvent uses parseCombo internally.
-          if (this.pendingChord) {
-            if (
-              combosFieldsEqual(this.pendingChord, chordParts[0]!, mac) &&
-              this.matchesEventInternal(event, chordParts[1]!, mac, eventKey)
-            ) {
-              if (binding.priority > chordCompletionPriority) {
-                chordCompletionMatch = binding;
-                chordCompletionPriority = binding.priority;
+          if (isChord) {
+            // Match chord parts via parseCombo field equality so user-stored overrides
+            // with non-canonical modifier order (e.g. "Alt+Cmd+T") match the canonical
+            // order produced by eventToCombo. matchesEvent uses parseCombo internally.
+            if (this.pendingChord) {
+              if (
+                combosFieldsEqual(this.pendingChord, chordParts[0]!, mac) &&
+                this.matchesEventInternal(event, chordParts[1]!, mac, eventKey)
+              ) {
+                if (binding.priority > chordCompletionPriority) {
+                  chordCompletionMatch = binding;
+                  chordCompletionPriority = binding.priority;
+                }
+              }
+            } else {
+              // Check if this is the start of a chord
+              if (this.matchesEventInternal(event, chordParts[0]!, mac, eventKey)) {
+                foundChordPrefix = true;
               }
             }
           } else {
-            // Check if this is the start of a chord
-            if (this.matchesEventInternal(event, chordParts[0]!, mac, eventKey)) {
-              foundChordPrefix = true;
-            }
-          }
-        } else {
-          // Regular non-chord binding - only consider if no chord is pending
-          if (
-            !this.pendingChord &&
-            this.matchesEventInternal(event, effectiveCombo, mac, eventKey)
-          ) {
-            if (binding.priority > bestPriority) {
-              bestMatch = binding;
-              bestPriority = binding.priority;
+            // Regular non-chord binding - only consider if no chord is pending
+            if (
+              !this.pendingChord &&
+              this.matchesEventInternal(event, effectiveCombo, mac, eventKey)
+            ) {
+              if (binding.priority > bestPriority) {
+                bestMatch = binding;
+                bestPriority = binding.priority;
+              }
             }
           }
         }
@@ -642,16 +684,28 @@ class KeybindingService {
     return display;
   }
 
+  /**
+   * Every registration with the keys that actually trigger it. Resolved per
+   * registration, not per action: an action registered under two scopes with
+   * different defaults keeps each default on its own row, and an override (which
+   * applies to the whole action) reports every combo it holds, not just the first.
+   */
   getAllBindingsWithEffectiveCombos(): Array<
-    RegisteredKeybindingConfig & { effectiveCombo: string }
+    RegisteredKeybindingConfig & { effectiveCombo: string; effectiveCombos: string[] }
   > {
     return Array.from(this.bindings.values())
       .flat()
       .map((binding) => {
-        const effectiveCombo = this.getEffectiveCombo(binding.actionId);
+        const override = this.overrides.get(binding.actionId);
+        const effectiveCombos = override
+          ? override.filter(Boolean)
+          : binding.combo
+            ? [binding.combo]
+            : [];
         return {
           ...binding,
-          effectiveCombo: effectiveCombo ?? "",
+          effectiveCombo: effectiveCombos[0] ?? "",
+          effectiveCombos,
         };
       });
   }
@@ -690,7 +744,12 @@ class KeybindingService {
       isPrefix: boolean;
     }> = [];
 
-    const allBindings = this.getAllBindingsWithEffectiveCombos();
+    // Only bindings live in the current scope: an action's second binding in
+    // another scope (a portal-only chord) would otherwise be offered where it
+    // can't fire.
+    const allBindings = this.getAllBindingsWithEffectiveCombos().filter((binding) =>
+      this.scopeAllows(binding.scope)
+    );
 
     // Track which second keys lead to deeper chords (3+ part combos)
     const deeperPrefixes = new Map<string, { key: string; category: string }>();
@@ -699,6 +758,9 @@ class KeybindingService {
     // First pass: detect deeper chord prefixes (scope-filtered)
     for (const binding of allBindings) {
       if (!this.canExecute(binding.actionId)) continue;
+      // Per-registration keys now reach this list, so a registration for a scope
+      // that isn't active must not be advertised as a completion.
+      if (!this.scopeAllows(binding.scope)) continue;
       if (!binding.effectiveCombo) continue;
       const parts = binding.effectiveCombo.trim().split(" ");
       if (parts.length < 3) continue;
@@ -718,6 +780,9 @@ class KeybindingService {
     // Second pass: build results for 2-part chords matching prefix
     for (const binding of allBindings) {
       if (!this.canExecute(binding.actionId)) continue;
+      // Per-registration keys now reach this list, so a registration for a scope
+      // that isn't active must not be advertised as a completion.
+      if (!this.scopeAllows(binding.scope)) continue;
 
       const combo = binding.effectiveCombo.trim();
       const parts = combo.split(" ");

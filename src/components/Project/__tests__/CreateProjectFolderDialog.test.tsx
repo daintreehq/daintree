@@ -12,6 +12,12 @@ const { createProjectFolderMock, openDialogMock, getHomeDirMock } = vi.hoisted((
   getHomeDirMock: vi.fn(),
 }));
 
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+
 vi.mock("@/clients", () => ({
   projectClient: { openDialog: openDialogMock },
 }));
@@ -46,7 +52,12 @@ vi.mock("@/components/ui/AppDialog", () => {
   AppDialog.Title = ({ children }: SectionProps) => <h2>{children}</h2>;
   AppDialog.CloseButton = () => <button type="button">close</button>;
   AppDialog.Body = ({ children }: SectionProps) => <div>{children}</div>;
-  AppDialog.Footer = ({ children }: SectionProps) => <div>{children}</div>;
+  AppDialog.Footer = ({ children, hint }: SectionProps & { hint?: ReactNode }) => (
+    <div>
+      {hint}
+      {children}
+    </div>
+  );
 
   return { AppDialog };
 });
@@ -73,7 +84,7 @@ function emojiTrigger() {
 }
 
 function folderInput() {
-  return screen.getByLabelText<HTMLInputElement>(/folder name/i);
+  return screen.getByLabelText<HTMLInputElement>(/^name$/i);
 }
 
 async function renderDialog() {
@@ -82,10 +93,37 @@ async function renderDialog() {
   // The dialog resolves the home directory on open; wait for it to land, or the
   // Create button stays disabled on a missing parent path.
   await waitFor(() =>
-    expect(screen.getByLabelText<HTMLInputElement>(/parent directory/i).value).toBe("/Users/test")
+    expect(screen.getByLabelText<HTMLInputElement>(/^location$/i).value).toBe("/Users/test")
   );
   return { onClose, ...result };
 }
+
+describe("CreateProjectFolderDialog validation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getHomeDirMock.mockResolvedValue("/Users/test");
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { system: { getHomeDir: getHomeDirMock } },
+    });
+  });
+
+  it("flags an invalid name as it is typed and never offers it as the destination", async () => {
+    await renderDialog();
+    fireEvent.change(folderInput(), { target: { value: "helios:dashboard" } });
+
+    expect(folderInput().getAttribute("aria-invalid")).toBe("true");
+    const describedBy = folderInput().getAttribute("aria-describedby");
+    expect(describedBy && document.getElementById(describedBy)?.textContent).toBeTruthy();
+    // Typing never interrupts: the live check is announced through the field.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByTitle("/Users/test/helios:dashboard")).toBeNull();
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Create folder" }).disabled).toBe(
+      true
+    );
+  });
+});
 
 describe("CreateProjectFolderDialog identity", () => {
   beforeEach(() => {
@@ -146,7 +184,9 @@ describe("CreateProjectFolderDialog identity", () => {
       fireEvent.click(screen.getByRole("button", { name: /^create folder$/i }));
     });
 
-    expect(createProjectFolderMock).toHaveBeenCalledWith("/Users/test", "my-api", "🦄");
+    expect(createProjectFolderMock).toHaveBeenCalledWith("/Users/test", "my-api", "🦄", {
+      disposition: "current",
+    });
   });
 
   it("submits the suggested emoji when the user leaves it alone", async () => {
@@ -161,7 +201,65 @@ describe("CreateProjectFolderDialog identity", () => {
     expect(createProjectFolderMock).toHaveBeenCalledWith(
       "/Users/test",
       "my-api",
-      suggestProjectEmoji("my-api")
+      suggestProjectEmoji("my-api"),
+      { disposition: "current" }
+    );
+  });
+});
+
+describe("CreateProjectFolderDialog destination (#12594)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getHomeDirMock.mockResolvedValue("/Users/test");
+    createProjectFolderMock.mockResolvedValue(undefined);
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { system: { getHomeDir: getHomeDirMock } },
+    });
+  });
+
+  it("asks where the project opens before creating it, defaulting to this window", async () => {
+    await renderDialog();
+
+    const group = screen.getByRole("radiogroup", { name: "Open in" });
+    const thisWindow = screen.getByRole("radio", { name: "This window" });
+    expect(group.contains(thisWindow)).toBe(true);
+    expect(thisWindow.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("radio", { name: "New window" }).getAttribute("aria-checked")).toBe(
+      "false"
+    );
+  });
+
+  it("carries a New window choice into the create call", async () => {
+    await renderDialog();
+
+    fireEvent.change(folderInput(), { target: { value: "my-api" } });
+    fireEvent.click(screen.getByRole("radio", { name: "New window" }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^create folder$/i }));
+    });
+
+    expect(createProjectFolderMock).toHaveBeenCalledWith(
+      "/Users/test",
+      "my-api",
+      suggestProjectEmoji("my-api"),
+      { disposition: "new" }
+    );
+  });
+
+  it("starts the next open back on this window", async () => {
+    const { rerender } = await renderDialog();
+    fireEvent.click(screen.getByRole("radio", { name: "New window" }));
+
+    rerender(<CreateProjectFolderDialog isOpen={false} onClose={vi.fn()} />);
+    rerender(<CreateProjectFolderDialog isOpen={true} onClose={vi.fn()} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: "This window" }).getAttribute("aria-checked")).toBe(
+        "true"
+      )
     );
   });
 });

@@ -101,6 +101,19 @@ describe("filterSettings", () => {
     expect(modifiedOnly.map((r) => r.id)).toEqual(["g"]);
   });
 
+  it.each(["folder", "project", "window", "Dock", "Finder", "Explorer", "file manager"])(
+    "finds the window opening setting by %s, with or without a project open",
+    (query) => {
+      for (const hasProject of [true, false]) {
+        const hit = filterSettings(SETTINGS_SEARCH_INDEX, query, { hasProject }).find(
+          (entry) => entry.id === "general-window-opening"
+        );
+        expect(hit?.tab).toBe("general");
+        expect(hit?.subtab).toBe("overview");
+      }
+    }
+  );
+
   it("still answers a misspelling, where fuzzy matching is the whole point", () => {
     // The gate only fires when a literal match exists, so typo tolerance has
     // to survive it untouched.
@@ -451,33 +464,34 @@ describe("SETTINGS_SEARCH_INDEX", () => {
     const tabTitles: Record<string, string> = {
       general: "General",
       keyboard: "Keyboard",
-      terminal: "Panel Grid",
+      terminal: "Panel grid",
       terminalAppearance: "Appearance",
       worktree: "Worktree",
       agents: "CLI agents",
-      "code-forge": "Code Forge",
+      "code-forge": "Code forge",
       portal: "Portal",
       toolbar: "Toolbar",
       notifications: "Notifications",
       integrations: "Integrations",
-      voice: "Voice Input",
+      voice: "Voice input",
       assistant: "Daintree Assistant",
 
-      mcp: "MCP Server",
+      mcp: "MCP server",
       plugins: "Plugins",
       "plugin-actions": "Plugin actions",
       "run-history": "Run history",
       environment: "Environment",
-      privacy: "Privacy & Data",
+      privacy: "Privacy & data",
+      "import-export": "Import & export",
       troubleshooting: "Troubleshooting",
       "project:general": "General",
       "project:context": "Context",
       "project:variables": "Variables",
-      "project:automation": "Worktree Setup",
+      "project:automation": "Worktree setup",
       "project:recipes": "Recipes",
       "project:commands": "Commands",
       "project:notifications": "Notifications",
-      "project:code-forge": "Code Forge",
+      "project:code-forge": "Code forge",
       "project:plugins": "Plugins",
     };
     for (const entry of SETTINGS_SEARCH_INDEX) {
@@ -491,34 +505,35 @@ describe("SETTINGS_SEARCH_INDEX", () => {
   it("has a tab-nav entry for every tab", () => {
     const tabTitles: Record<string, string> = {
       general: "General",
-      keyboard: "Keyboard Shortcuts",
-      terminal: "Panel Grid",
+      keyboard: "Keyboard shortcuts",
+      terminal: "Panel grid",
       terminalAppearance: "Appearance",
-      worktree: "Worktree Paths",
+      worktree: "Worktree paths",
       agents: "CLI agents",
-      "code-forge": "Code Forge",
-      portal: "Portal Links",
-      toolbar: "Toolbar Customization",
+      "code-forge": "Code forge",
+      portal: "Portal links",
+      toolbar: "Toolbar customization",
       notifications: "Notifications",
       integrations: "Integrations",
-      voice: "Voice Input",
+      voice: "Voice input",
       assistant: "Daintree Assistant",
 
-      mcp: "MCP Server",
+      mcp: "MCP server",
       plugins: "Plugins",
       "plugin-actions": "Plugin actions",
       "run-history": "Run history",
-      environment: "Environment Variables",
-      privacy: "Privacy & Data",
+      environment: "Environment variables",
+      privacy: "Privacy & data",
+      "import-export": "Import & export",
       troubleshooting: "Troubleshooting",
       "project:general": "General",
       "project:context": "Context",
       "project:variables": "Variables",
-      "project:automation": "Worktree Setup",
+      "project:automation": "Worktree setup",
       "project:recipes": "Recipes",
       "project:commands": "Commands",
       "project:notifications": "Notifications",
-      "project:code-forge": "Code Forge",
+      "project:code-forge": "Code forge",
       "project:plugins": "Plugins",
     };
     for (const tabKey of Object.keys(tabTitles)) {
@@ -557,7 +572,7 @@ describe("voice tab coverage", () => {
 
 describe("tab-name ranking", () => {
   it("tab-nav entry ranks first for exact tab name queries", () => {
-    const queries = ["Panel Grid", "Keyboard", "Code Forge"];
+    const queries = ["Panel grid", "Keyboard", "Code forge"];
     for (const query of queries) {
       const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
       expect(
@@ -1007,7 +1022,7 @@ describe("Resources section ranking (#10044)", () => {
     tab: "project:automation" as const,
     scope: "project" as const,
     kind: "section" as const,
-    tabLabel: "Worktree Setup",
+    tabLabel: "Worktree setup",
     section: "Resource Environments",
     title: "Resource Environments",
     description: "Remote resource definitions and default worktree mode",
@@ -1019,7 +1034,7 @@ describe("Resources section ranking (#10044)", () => {
     tab: "project:automation" as const,
     scope: "project" as const,
     kind: "tab-nav" as const,
-    tabLabel: "Worktree Setup",
+    tabLabel: "Worktree setup",
     section: "Resource Environments",
     title: "Resource Environments",
     description: "Remote resource definitions and default worktree mode",

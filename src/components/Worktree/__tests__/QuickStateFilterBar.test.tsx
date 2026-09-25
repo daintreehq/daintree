@@ -2,6 +2,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { QuickStateFilterBar } from "../QuickStateFilterBar";
+import { EMPTY_BUCKET_GLYPH_CLASS } from "../quickStateGlyph";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { glyphBox, GLYPH_SELECTOR } from "@/components/icons/__tests__/glyphBox";
 
@@ -10,6 +11,17 @@ import { glyphBox, GLYPH_SELECTOR } from "@/components/icons/__tests__/glyphBox"
 function renderBar(ui: Parameters<typeof render>[0]) {
   return render(ui, { wrapper: TooltipProvider });
 }
+
+// A faded glyph keeps its own hue and is dimmed on top of it — the empty bucket
+// must still be recognisably the same state, never a different colour.
+function classes(glyphClass: string): string[] {
+  return glyphClass.split(/\s+/);
+}
+function isFadedHue(glyphClass: string, hue: string): boolean {
+  const list = classes(glyphClass);
+  return list.includes(hue) && list.includes(EMPTY_BUCKET_GLYPH_CLASS);
+}
+const FADED = new RegExp(`(^|\\s)${EMPTY_BUCKET_GLYPH_CLASS}(\\s|$)`);
 
 describe("QuickStateFilterBar", () => {
   it("renders all four segments addressable by accessible name when counts are omitted", () => {
@@ -281,15 +293,15 @@ describe("QuickStateFilterBar", () => {
         counts={{ all: 9, working: 0, waiting: 0, finished: 0 }}
       />
     );
-    const fadedBySegment: [RegExp, string][] = [
-      [/Working/, "text-state-working/40"],
-      [/Attention/, "text-state-waiting/40"],
-      [/Finished/, "text-category-blue/40"],
+    const hueBySegment: [RegExp, string][] = [
+      [/Working/, "text-state-working"],
+      [/Attention/, "text-state-waiting"],
+      [/Finished/, "text-category-blue"],
     ];
-    for (const [name, fadedClass] of fadedBySegment) {
+    for (const [name, hue] of hueBySegment) {
       const svg = glyphBox(screen.getByRole("button", { name }));
       expect(svg).not.toBeNull();
-      expect(svg?.getAttribute("class") ?? "").toContain(fadedClass);
+      expect(isFadedHue(svg?.getAttribute("class") ?? "", hue)).toBe(true);
     }
   });
 
@@ -311,7 +323,7 @@ describe("QuickStateFilterBar", () => {
       expect(svg).not.toBeNull();
       const svgClass = svg?.getAttribute("class") ?? "";
       expect(svgClass).toContain(colorClass);
-      expect(svgClass).not.toContain("/40");
+      expect(svgClass).not.toMatch(FADED);
     }
   });
 
@@ -338,10 +350,10 @@ describe("QuickStateFilterBar", () => {
         .getByRole("button", { name: /Finished/ })
         .querySelector(GLYPH_SELECTOR)
         ?.getAttribute("class") ?? "";
-    expect(workingClass).toContain("text-state-working/40");
-    expect(finishedClass).toContain("text-category-blue/40");
+    expect(isFadedHue(workingClass, "text-state-working")).toBe(true);
+    expect(isFadedHue(finishedClass, "text-category-blue")).toBe(true);
     expect(waitingClass).toContain("text-state-waiting");
-    expect(waitingClass).not.toContain("/40");
+    expect(waitingClass).not.toMatch(FADED);
   });
 
   it("does not fade icons when the counts prop is omitted", () => {
@@ -349,7 +361,7 @@ describe("QuickStateFilterBar", () => {
     for (const name of ["Working", "Attention", "Finished"]) {
       const svg = glyphBox(screen.getByRole("button", { name }));
       expect(svg).not.toBeNull();
-      expect(svg?.getAttribute("class") ?? "").not.toContain("/40");
+      expect(svg?.getAttribute("class") ?? "").not.toMatch(FADED);
     }
   });
 
@@ -365,16 +377,19 @@ describe("QuickStateFilterBar", () => {
     );
     const waiting = screen.getByRole("button", { name: /Attention/ });
     expect(waiting.getAttribute("aria-pressed")).toBe("true");
-    expect(waiting.querySelector(GLYPH_SELECTOR)?.getAttribute("class") ?? "").toContain(
-      "text-state-waiting/40"
-    );
+    expect(
+      isFadedHue(
+        waiting.querySelector(GLYPH_SELECTOR)?.getAttribute("class") ?? "",
+        "text-state-waiting"
+      )
+    ).toBe(true);
     const workingClass =
       screen
         .getByRole("button", { name: /Working/ })
         .querySelector(GLYPH_SELECTOR)
         ?.getAttribute("class") ?? "";
     expect(workingClass).toContain("animate-spin-slow");
-    expect(workingClass).not.toContain("/40");
+    expect(workingClass).not.toMatch(FADED);
   });
 
   it("renders the zero-count working icon faded and not spinning", () => {
@@ -390,7 +405,7 @@ describe("QuickStateFilterBar", () => {
         .getByRole("button", { name: /Working/ })
         .querySelector(GLYPH_SELECTOR)
         ?.getAttribute("class") ?? "";
-    expect(svgClass).toContain("text-state-working/40");
+    expect(isFadedHue(svgClass, "text-state-working")).toBe(true);
     expect(svgClass).not.toContain("animate-spin-slow");
   });
 

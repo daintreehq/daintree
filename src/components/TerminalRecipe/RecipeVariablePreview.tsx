@@ -1,16 +1,24 @@
 import { useMemo } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { segmentRecipePrompt, type RecipeContext } from "@/utils/recipeVariables";
 import {
-  replaceRecipeVariables,
-  detectUnresolvedVariables,
-  splitByRecipeVariables,
-  type RecipeContext,
-} from "@/utils/recipeVariables";
+  RECIPE_VARIABLE_EMPTY_TOKEN,
+  RECIPE_VARIABLE_TOKEN,
+} from "@/components/TerminalRecipe/recipeVariableTokens";
 
 interface RecipeVariablePreviewProps {
   initialPrompt: string;
   worktreeId?: string;
+}
+
+function formatList(items: string[]): string {
+  if (items.length === 1) return items[0]!;
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+function unique(names: string[]): string[] {
+  return Array.from(new Set(names));
 }
 
 export function RecipeVariablePreview({ initialPrompt, worktreeId }: RecipeVariablePreviewProps) {
@@ -18,10 +26,8 @@ export function RecipeVariablePreview({ initialPrompt, worktreeId }: RecipeVaria
     worktreeId ? state.worktrees.get(worktreeId) : undefined
   );
 
-  const context: RecipeContext = useMemo(() => {
-    if (!worktreeSnap) {
-      return {};
-    }
+  const context: RecipeContext | null = useMemo(() => {
+    if (!worktreeSnap) return null;
     return {
       issueNumber: worktreeSnap.issueNumber,
       prNumber: worktreeSnap.linked?.pr?.ref.number,
@@ -30,45 +36,76 @@ export function RecipeVariablePreview({ initialPrompt, worktreeId }: RecipeVaria
     };
   }, [worktreeSnap]);
 
-  const hasContext = worktreeSnap !== undefined;
+  const segments = segmentRecipePrompt(initialPrompt, context);
+  // Nothing to preview when the prompt has no {{…}} at all: it would only
+  // repeat the field above it.
+  if (!segments.some((s) => s.kind !== "text")) return null;
 
-  if (!initialPrompt) return null;
-
-  const unresolvedVars = detectUnresolvedVariables(initialPrompt, context);
-  const resolvedText = hasContext ? replaceRecipeVariables(initialPrompt, context) : null;
+  const missing = unique(segments.flatMap((s) => (s.kind === "missing" ? [s.name] : [])));
+  const unknown = unique(segments.flatMap((s) => (s.kind === "unknown" ? [s.text] : [])));
+  const source = worktreeSnap ? (worktreeSnap.branch ?? worktreeSnap.name) : null;
+  const substitutes = segments.some((s) => s.kind !== "text" && s.kind !== "unknown");
 
   return (
-    <div className="mt-2 border-l-2 border-border-subtle pl-2.5 transition-colors">
-      <div className="text-xs font-medium text-text-primary mb-1">Resolved prompt</div>
-      <div className="text-xs leading-relaxed text-text-primary break-all whitespace-pre-wrap font-mono">
-        {hasContext && resolvedText !== null
-          ? resolvedText
-          : splitByRecipeVariables(initialPrompt).map((part, i) =>
-              part.isVar ? (
+    <div
+      className="mt-2 border-l-2 border-border-subtle pl-2.5"
+      data-testid="recipe-prompt-preview"
+    >
+      <div className="mb-1 flex flex-wrap items-baseline gap-x-2 text-xs">
+        <span className="font-medium text-text-primary">Prompt preview</span>
+        {substitutes && (
+          <span className="min-w-0 text-text-secondary wrap-anywhere">
+            {source ? `Values from ${source}` : "Values fill in from the worktree at launch"}
+          </span>
+        )}
+      </div>
+      <div className="font-mono text-xs leading-relaxed text-text-primary whitespace-pre-wrap wrap-anywhere">
+        {segments.map((segment, i) => {
+          switch (segment.kind) {
+            case "variable":
+            case "value":
+              return (
+                <span key={i} className={RECIPE_VARIABLE_TOKEN} data-segment={segment.kind}>
+                  {segment.text}
+                </span>
+              );
+            case "missing":
+              return (
+                <span key={i} className={RECIPE_VARIABLE_EMPTY_TOKEN} data-segment="missing">
+                  {segment.text}
+                  <span className="sr-only"> (empty)</span>
+                </span>
+              );
+            case "unknown":
+              return (
                 <span
                   key={i}
-                  className="inline rounded-sm bg-category-amber-subtle px-0.5 text-category-amber-text"
+                  className="underline decoration-dotted decoration-text-secondary underline-offset-2"
+                  data-segment="unknown"
                 >
-                  {part.text}
+                  {segment.text}
                 </span>
-              ) : (
-                <span key={i}>{part.text}</span>
-              )
-            )}
+              );
+            default:
+              return <span key={i}>{segment.text}</span>;
+          }
+        })}
       </div>
-      {!hasContext && <p className="text-3xs text-text-muted mt-1">Resolving at run time</p>}
-      {hasContext && unresolvedVars.length > 0 && (
-        <div className="mt-1 flex flex-wrap gap-1">
-          {unresolvedVars.map((name) => (
-            <span
-              key={name}
-              className="inline-flex items-center gap-1 rounded-full px-1.5 py-px text-4xs bg-category-rose-subtle text-category-rose-text"
-            >
-              <AlertTriangle className="h-2.5 w-2.5" aria-hidden="true" />
-              {`{{${name}}}`} unresolved
-            </span>
-          ))}
-        </div>
+      {missing.length > 0 && (
+        <p className="mt-1.5 flex items-start gap-1.5 text-xs text-category-rose-text">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 wrap-anywhere">
+            {formatList(missing.map((n) => `{{${n}}}`))} {missing.length === 1 ? "has" : "have"} no
+            value in this worktree and {missing.length === 1 ? "launches" : "launch"} empty
+          </span>
+        </p>
+      )}
+      {unknown.length > 0 && (
+        <p className="mt-1.5 text-xs text-text-secondary wrap-anywhere">
+          {formatList(unknown)}{" "}
+          {unknown.length === 1 ? "isn't a recipe variable" : "aren't recipe variables"} and{" "}
+          {unknown.length === 1 ? "is" : "are"} sent as typed
+        </p>
       )}
     </div>
   );

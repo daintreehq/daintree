@@ -47,6 +47,7 @@ export type PluginHostCallMethod =
   | "sendToActiveAgent"
   | "showToast"
   | "dispatch"
+  | "reloadPanel"
   | "actions.list"
   | "actions.get"
   | "settings.get"
@@ -456,6 +457,11 @@ export interface ShowToastParams {
   durationMs?: number;
 }
 
+/** Params for `reloadPanel` (`host-call`, #12610). */
+export interface ReloadPanelParams {
+  panelId: string;
+}
+
 /** Params for `dispatch` (`host-call`). */
 export interface DispatchParams {
   actionId: string;
@@ -508,7 +514,7 @@ export interface FsPathParams {
 export interface FsWriteFileParams {
   path: string;
   contents: string;
-  /** Present only for the checked write (#12323); its absence is the plain write. */
+  /** Absent is the same write as `{}` (#12618); forwarded exactly as sent. */
   options?: PluginFsWriteOptions;
 }
 

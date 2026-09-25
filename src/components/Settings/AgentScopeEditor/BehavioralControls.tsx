@@ -1,6 +1,11 @@
 import { useMemo } from "react";
-import { RotateCcw } from "lucide-react";
-import { SettingsChoicebox, type ChoiceboxOption } from "../SettingsChoicebox";
+import { ShieldOff } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
+import { SettingsRow } from "../SettingsGroup";
 import type { ScopeKind } from "./scopeUtils";
 import type { DangerousMode, InlineMode } from "@shared/types";
 
@@ -54,14 +59,11 @@ export function BehavioralControls({
   onCustomFlagsChange,
   onCustomFlagsOverrideReset,
 }: BehavioralControlsProps) {
-  const dangerousModeOptions = useMemo<ReadonlyArray<ChoiceboxOption<DangerousMode>>>(
+  // The inherit segment carries what it resolves to, so the rail alone says what the
+  // agent will actually get without reading the description.
+  const dangerousModeOptions = useMemo<SegmentedRadioOption<DangerousMode>[]>(
     () => [
-      {
-        value: "inherit",
-        label: "Default",
-        resolvedLabel: `(${inheritResolvesToOn ? "On" : "Off"})`,
-        muted: true,
-      },
+      { value: "inherit", label: `Default (${inheritResolvesToOn ? "On" : "Off"})` },
       { value: "on", label: "On" },
       { value: "off", label: "Off" },
     ],
@@ -71,13 +73,11 @@ export function BehavioralControls({
   // Alt-screen tri-state. Labels describe the effect ("Inline" / "Alt screen")
   // and are decoupled from the stored `inlineMode` value polarity ("on" = inline,
   // "off" = alt screen) so the field name and its values stay self-consistent.
-  const inlineModeOptions = useMemo<ReadonlyArray<ChoiceboxOption<InlineMode>>>(
+  const inlineModeOptions = useMemo<SegmentedRadioOption<InlineMode>[]>(
     () => [
       {
         value: "inherit",
-        label: "Default",
-        resolvedLabel: `(${inlineInheritResolvesToInline ? "Inline" : "Alt screen"})`,
-        muted: true,
+        label: `Default (${inlineInheritResolvesToInline ? "Inline" : "Alt screen"})`,
       },
       { value: "on", label: "Inline" },
       { value: "off", label: "Alt screen" },
@@ -87,75 +87,93 @@ export function BehavioralControls({
 
   return (
     <>
-      <div id="agents-custom-args" className="group/args space-y-1.5">
-        <div className="flex items-center gap-2">
-          <label className="text-sm font-medium text-text-primary">Custom arguments</label>
-          {scopeKind === "custom" && customFlagsOverride !== undefined && (
-            <>
-              <span
-                className="status-mark w-1.5 h-1.5 rounded-full bg-state-modified"
-                aria-hidden="true"
-              />
-              <button
-                type="button"
-                aria-label={`Reset custom arguments override for ${scopeLabel}`}
-                className="p-0.5 rounded-sm text-daintree-text/40 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary transition-colors"
-                onClick={onCustomFlagsOverrideReset}
-                data-testid="preset-custom-flags-reset"
-              >
-                <RotateCcw className="w-3 h-3" />
-              </button>
-            </>
-          )}
-        </div>
-        <input
-          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-2 text-sm font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-placeholder"
-          value={customArgsValue}
-          onChange={(e) => onCustomFlagsChange(e.target.value)}
-          placeholder={customArgsPlaceholder}
-          data-testid={scopeKind === "custom" ? "preset-custom-flags-input" : undefined}
-        />
-        <p className="text-xs text-text-secondary select-text">{customArgsDescription}</p>
-      </div>
+      <SettingsRow
+        id="agents-custom-args"
+        label="Custom arguments"
+        description={customArgsDescription}
+        layout="stacked"
+        isModified={
+          scopeKind === "custom" ? customFlagsOverride !== undefined : customArgsValue !== ""
+        }
+        onReset={
+          scopeKind === "custom" ? onCustomFlagsOverrideReset : () => onCustomFlagsChange("")
+        }
+        resetAriaLabel={`Reset custom arguments override for ${scopeLabel}`}
+        control={({ labelId, descriptionId }) => (
+          <Input
+            className="font-mono"
+            value={customArgsValue}
+            onChange={(e) => onCustomFlagsChange(e.target.value)}
+            placeholder={customArgsPlaceholder}
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            data-testid={scopeKind === "custom" ? "preset-custom-flags-input" : undefined}
+          />
+        )}
+      />
 
-      <div id="agents-skip-permissions" className="space-y-1.5">
-        <SettingsChoicebox<DangerousMode>
-          label="Skip permissions"
-          description="Auto-approve all file, command, and network actions. Off vetoes the global setting for this scope."
-          columns={3}
-          value={dangerousMode}
-          onChange={onDangerousModeChange}
-          options={dangerousModeOptions}
-        />
-        {dangerousMode === "inherit" && (
-          <p className="text-xs text-text-secondary select-text">
-            Inherited from {inheritOriginLabel}
-          </p>
+      <SettingsRow
+        id="agents-skip-permissions"
+        label="Skip permissions"
+        description={
+          <>
+            Auto-approve all file, command and network actions. Off overrides the global setting for
+            this scope.
+            {dangerousMode === "inherit" && (
+              <span className="block mt-1">Inherited from {inheritOriginLabel}</span>
+            )}
+            {effectiveSkipPerms && defaultDangerousArg && (
+              <span className="flex items-center gap-1.5 mt-1.5">
+                <ShieldOff className="h-3.5 w-3.5 shrink-0 text-status-error" aria-hidden="true" />
+                <code className="font-mono text-xs text-text-primary">{defaultDangerousArg}</code>
+                <span>added to the command</span>
+              </span>
+            )}
+          </>
+        }
+        isModified={dangerousMode !== "inherit"}
+        onReset={() => onDangerousModeChange("inherit")}
+        resetAriaLabel={`Reset skip permissions for ${scopeLabel} to default`}
+        control={({ descriptionId, disabled }) => (
+          <SegmentedRadioGroup<DangerousMode>
+            aria-label="Skip permissions"
+            aria-describedby={descriptionId}
+            value={dangerousMode}
+            onChange={onDangerousModeChange}
+            options={dangerousModeOptions}
+            disabled={disabled}
+          />
         )}
-        {effectiveSkipPerms && defaultDangerousArg && (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
-            <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
-            <span className="text-xs text-text-secondary">added to command</span>
-          </div>
-        )}
-      </div>
+      />
 
       {supportsInlineMode && (
-        <div id="agents-inline-mode" className="space-y-1.5">
-          <SettingsChoicebox<InlineMode>
-            label="Alt-screen mode"
-            description="Alt screen uses the CLI's full-screen TUI; inline keeps output in Daintree's scrollback with cleaner resizing. Choosing Inline or Alt screen overrides the inherited setting for this scope."
-            columns={3}
-            value={inlineMode}
-            onChange={onInlineModeChange}
-            options={inlineModeOptions}
-          />
-          {inlineMode === "inherit" && (
-            <p className="text-xs text-text-secondary select-text">
-              Inherited from {inlineInheritOriginLabel}
-            </p>
+        <SettingsRow
+          id="agents-inline-mode"
+          label="Alt-screen mode"
+          description={
+            <>
+              Alt screen uses the CLI&apos;s full-screen TUI; inline keeps output in Daintree&apos;s
+              scrollback with cleaner resizing. Choosing Inline or Alt screen overrides the
+              inherited setting for this scope.
+              {inlineMode === "inherit" && (
+                <span className="block mt-1">Inherited from {inlineInheritOriginLabel}</span>
+              )}
+            </>
+          }
+          isModified={inlineMode !== "inherit"}
+          onReset={() => onInlineModeChange("inherit")}
+          resetAriaLabel={`Reset alt-screen mode for ${scopeLabel} to default`}
+          control={({ descriptionId, disabled }) => (
+            <SegmentedRadioGroup<InlineMode>
+              aria-label="Alt-screen mode"
+              aria-describedby={descriptionId}
+              value={inlineMode}
+              onChange={onInlineModeChange}
+              options={inlineModeOptions}
+              disabled={disabled}
+            />
           )}
-        </div>
+        />
       )}
     </>
   );

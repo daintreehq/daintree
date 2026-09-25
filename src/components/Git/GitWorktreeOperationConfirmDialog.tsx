@@ -1,18 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { Button } from "@/components/ui/button";
-import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { Skeleton } from "@/components/ui/Skeleton";
-import { AlertTriangle, RefreshCw } from "lucide-react";
-import { cn } from "@/lib/utils";
+import {
+  Bone,
+  CommitRows,
+  MissingValue,
+  PreviewFrame,
+  PreviewNote,
+  PreviewNotice,
+  PreviewSectionHeading,
+  PreviewSkeleton,
+  PreviewSummary,
+  RefChip,
+  SummaryRow,
+} from "@/components/Git/GitOperationPreview";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isClientGitError } from "@/utils/clientGitError";
 import { useGitWorktreeOperationConfirmStore } from "@/store/gitWorktreeOperationConfirmStore";
-import type { GitBaseIntegrationCommitPreview } from "@shared/types/git";
+import {
+  GIT_REMOTE_COMMIT_PREVIEW_MAX,
+  type GitBaseIntegrationCommitPreview,
+} from "@shared/types/git";
 import type { StagingStatus } from "@shared/types";
 import {
   OPERATION_LABEL,
@@ -20,13 +31,8 @@ import {
   toRepoOperationState,
 } from "@/components/Git/repoOperationCopy";
 
-const SHORT_HASH_LEN = 7;
-
-/** Max commits fetched and shown before the tail is collapsed. */
-const PREVIEW_COMMIT_LIMIT = 12;
-
-/** Rows the skeleton draws. Enough to hold the panel's height without claiming a count. */
-const SKELETON_ROWS = 3;
+/** Everything the handler will serve, so the tail is a rare cap rather than a routine count. */
+const PREVIEW_COMMIT_LIMIT = GIT_REMOTE_COMMIT_PREVIEW_MAX;
 
 /**
  * The wording that differs between the two base operations.
@@ -279,7 +285,6 @@ function GitWorktreeOperationConfirmDialogInner() {
   const isLoaded = isSettled && preview !== null;
   const total = preview?.total ?? 0;
   const behind = preview?.behind ?? 0;
-  const hiddenCount = commits ? Math.max(0, total - commits.length) : 0;
   const compareRef = preview?.compareRef ?? null;
   const branch = preview?.branch ?? null;
 
@@ -340,141 +345,72 @@ function GitWorktreeOperationConfirmDialogInner() {
         })
       }
     >
-      <div className="rounded border border-tint/[0.08] bg-tint/[0.04] text-xs">
+      <PreviewFrame>
+        {loadError && (
+          <PreviewNotice
+            tone="error"
+            title={copy.readFailure}
+            onRetry={loadPreview}
+            retryTestId="git-base-integration-retry"
+          >
+            {loadError}
+          </PreviewNotice>
+        )}
         {/* Subject first, then target: the pair reads in the order the
             operation happens. Same local-then-base order for both kinds, with
             the labels carrying the direction — Rewrites/Onto for a replay,
             Into/From for an integration. */}
-        <dl className="px-3 py-2 space-y-1.5" data-testid="git-base-integration-summary">
+        <PreviewSummary testId="git-base-integration-summary">
           <SummaryRow label={copy.subjectLabel}>
             {branch && isSettled ? (
-              <RefChip value={branch} emphasis />
+              <RefChip value={branch} />
             ) : !isSettled && !loadError ? (
               <Bone className="w-40" />
             ) : (
-              <Unknown />
+              <MissingValue />
             )}
           </SummaryRow>
           <SummaryRow label={copy.targetLabel}>
             {compareRef && isSettled ? (
-              <RefChip value={compareRef} emphasis />
+              <RefChip value={compareRef} />
             ) : !isSettled && !loadError ? (
               <Bone className="w-48" />
             ) : (
-              <Unknown />
+              <MissingValue />
             )}
           </SummaryRow>
-        </dl>
-
-        <div className="px-3 py-2 border-y border-tint/[0.08] flex items-center justify-between gap-2">
-          <span
-            role="heading"
-            aria-level={3}
-            className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
-          >
-            {copy.commitsHeading}
-            {isSettled && total > 0 && (
-              <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
-                {total}
-              </span>
-            )}
-          </span>
-        </div>
+        </PreviewSummary>
 
         {!isSettled && !loadError && (
-          // `Skeleton` is what makes this reach a screen reader: the bones alone
-          // are decorative, so a blocked primary with no announced busy state
-          // leaves an AT user with a dead button and no explanation.
-          <Skeleton label={copy.loadingLabel} data-testid="git-base-integration-loading">
-            <ul className="px-3 py-2 space-y-1.5">
-              {Array.from({ length: SKELETON_ROWS }).map((_, i) => (
-                <li key={i} className="flex items-baseline gap-2">
-                  <Bone className="w-[3.5rem]" />
-                  <Bone className={i === 1 ? "w-40" : "w-52"} />
-                  <Bone className="w-16 ml-auto" />
-                </li>
-              ))}
-            </ul>
-          </Skeleton>
-        )}
-
-        {!isLoading && loadError && (
-          <div className="px-3 py-3 text-status-error flex items-start gap-2" role="alert">
-            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="font-medium">{copy.readFailure}</div>
-              <div className="mt-0.5 text-text-secondary break-words">{loadError}</div>
-              <Button
-                variant="ghost-danger"
-                size="sm"
-                onClick={loadPreview}
-                data-testid="git-base-integration-retry"
-                className="mt-1.5 h-6 px-2 text-2xs"
-              >
-                <RefreshCw className="w-3 h-3" />
-                Retry
-              </Button>
-            </div>
-          </div>
+          <PreviewSkeleton label={copy.loadingLabel} testId="git-base-integration-loading" />
         )}
 
         {isNothingToDo && (
-          <div className="px-3 py-3 text-text-secondary" data-testid="git-base-integration-in-sync">
+          <PreviewNote testId="git-base-integration-in-sync">
             Nothing to do &mdash; {branch} already has everything on {compareRef}.
-          </div>
+          </PreviewNote>
+        )}
+
+        {isLoaded && !isNothingToDo && (
+          <PreviewSectionHeading label={copy.commitsHeading} count={total} />
         )}
 
         {isBehindWithNothingToReplay && (
-          <div
-            className="px-3 py-3 text-text-secondary"
-            data-testid="git-base-integration-nothing-to-replay"
-          >
+          <PreviewNote testId="git-base-integration-nothing-to-replay">
             {branch} is {behind} behind {compareRef} and has no commit the rebase would replay on
             top of it &mdash; the branch moves, nothing is rewritten.
-          </div>
+          </PreviewNote>
         )}
 
-        {isLoaded && commits !== null && commits.length > 0 && (
-          // A scrollable region with no focusable children of its own has to be
-          // reachable by keyboard in its own right (WCAG 2.1.1), and the fades
-          // are what say "there is more".
-          <ScrollShadow
-            className="max-h-[180px]"
-            scrollClassName="scroll-py-8"
-            tabIndex={0}
-            role="region"
-            aria-label={`${copy.commitsHeading}${compareRef ? ` — ${compareRef}` : ""}`}
-          >
-            <ul className="px-3 py-2 space-y-1.5">
-              {commits.map((commit) => (
-                <li
-                  key={commit.hash}
-                  className="flex items-baseline gap-2"
-                  data-testid="git-base-integration-commit-row"
-                >
-                  <span className="font-mono text-2xs text-text-secondary shrink-0 tabular-nums">
-                    {commit.hash.slice(0, SHORT_HASH_LEN)}
-                  </span>
-                  <span className="flex-1 min-w-0 truncate text-text-primary">
-                    {commit.message}
-                  </span>
-                  {/* Bounded, unlike the rest of the row: an author is the least
-                      important column here, and left unbounded a long name takes
-                      45% of the width and truncates the subject. */}
-                  <span className="text-2xs text-text-secondary shrink-0 max-w-[7rem] truncate">
-                    {commit.author}
-                  </span>
-                </li>
-              ))}
-              {hiddenCount > 0 && (
-                <li className="text-2xs text-text-secondary italic pt-0.5">
-                  &hellip;and {hiddenCount} more
-                </li>
-              )}
-            </ul>
-          </ScrollShadow>
+        {isLoaded && !isNothingToDo && commits !== null && commits.length > 0 && (
+          <CommitRows
+            commits={commits}
+            total={total}
+            label={`${copy.commitsHeading}${compareRef ? ` — ${compareRef}` : ""}`}
+            rowTestId="git-base-integration-commit-row"
+          />
         )}
-      </div>
+      </PreviewFrame>
       {/* Gated on there actually being something to integrate: a caution about
           conflicts under a panel that has just said nothing would move is the
           same contradiction it exists to avoid. */}
@@ -482,56 +418,6 @@ function GitWorktreeOperationConfirmDialogInner() {
         <p className="text-2xs text-text-secondary">{copy.footnote}</p>
       )}
     </ConfirmDialog>
-  );
-}
-
-function SummaryRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline gap-2">
-      <dt className="text-3xs uppercase tracking-wider text-text-secondary shrink-0 w-14">
-        {label}
-      </dt>
-      <dd className="flex-1 min-w-0">{children}</dd>
-    </div>
-  );
-}
-
-/**
- * A ref as a value rather than a word in a sentence.
- *
- * `break-words` rather than truncation: the base ref is the one fact on this
- * surface that must never be shortened, and a long fork ref wrapping across
- * lines is a better outcome than an ellipsis in the middle of the name whose
- * history is about to be integrated.
- */
-function RefChip({ value, emphasis }: { value: string; emphasis?: boolean }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-baseline px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs font-mono break-words",
-        emphasis ? "text-text-primary" : "text-text-secondary"
-      )}
-    >
-      {value}
-    </span>
-  );
-}
-
-/** Git did not answer at all. The failure is stated once, below, not per row. */
-function Unknown() {
-  return <span className="text-text-secondary text-2xs">&mdash;</span>;
-}
-
-/**
- * Skeleton bone. `animate-pulse-delayed` carries the 400ms Doherty gate in its
- * own `animation-delay`, so a read that returns quickly paints nothing at all.
- */
-function Bone({ className }: { className?: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn("inline-block h-3.5 rounded bg-tint/[0.08] animate-pulse-delayed", className)}
-    />
   );
 }
 

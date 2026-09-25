@@ -139,7 +139,7 @@ describe("preflightSpawnBatchLimit", () => {
   it("returns 0 allowed when no requested panels", async () => {
     const confirm = vi.fn().mockResolvedValue(true);
     usePanelLimitStore.setState({ requestConfirmation: confirm });
-    expect(await preflightSpawnBatchLimit(0, 0)).toEqual({ allowed: 0 });
+    expect(await preflightSpawnBatchLimit(0, 0)).toEqual({ allowed: 0, declined: false });
     expect(confirm).not.toHaveBeenCalled();
   });
 
@@ -152,7 +152,7 @@ describe("preflightSpawnBatchLimit", () => {
       requestConfirmation: confirm,
     });
     // 10 + 5 = 15, below the 20 confirm threshold.
-    expect(await preflightSpawnBatchLimit(10, 5)).toEqual({ allowed: 5 });
+    expect(await preflightSpawnBatchLimit(10, 5)).toEqual({ allowed: 5, declined: false });
     expect(confirm).not.toHaveBeenCalled();
   });
 
@@ -165,8 +165,14 @@ describe("preflightSpawnBatchLimit", () => {
       requestConfirmation: confirm,
     });
     // 18 + 5 = 23, crosses the 20 confirm threshold.
-    expect(await preflightSpawnBatchLimit(18, 5)).toEqual({ allowed: 5 });
-    expect(confirm).toHaveBeenCalledWith(23, null);
+    expect(await preflightSpawnBatchLimit(18, 5)).toEqual({ allowed: 5, declined: false });
+    expect(confirm).toHaveBeenCalledWith({
+      currentCount: 18,
+      requestedCount: 5,
+      allowedCount: 5,
+      confirmationLimit: 20,
+      hardLimit: 32,
+    });
   });
 
   it("allows nothing when the user declines the confirm", async () => {
@@ -177,8 +183,9 @@ describe("preflightSpawnBatchLimit", () => {
       warningsDisabled: false,
       requestConfirmation: confirm,
     });
-    expect(await preflightSpawnBatchLimit(18, 5)).toEqual({ allowed: 0 });
-    expect(confirm).toHaveBeenCalledWith(23, null);
+    // A decline is the user's answer, not the limit refusing — callers report it differently.
+    expect(await preflightSpawnBatchLimit(18, 5)).toEqual({ allowed: 0, declined: true });
+    expect(confirm).toHaveBeenCalledTimes(1);
   });
 
   it("skips the confirm entirely when warnings are disabled", async () => {
@@ -189,7 +196,7 @@ describe("preflightSpawnBatchLimit", () => {
       warningsDisabled: true,
       requestConfirmation: confirm,
     });
-    expect(await preflightSpawnBatchLimit(18, 5)).toEqual({ allowed: 5 });
+    expect(await preflightSpawnBatchLimit(18, 5)).toEqual({ allowed: 5, declined: false });
     expect(confirm).not.toHaveBeenCalled();
   });
 
@@ -202,8 +209,11 @@ describe("preflightSpawnBatchLimit", () => {
       requestConfirmation: confirm,
     });
     // 30 open, 10 requested, only 2 slots before the hard limit of 32.
-    expect(await preflightSpawnBatchLimit(30, 10)).toEqual({ allowed: 2 });
-    expect(confirm).toHaveBeenCalledWith(32, null);
+    expect(await preflightSpawnBatchLimit(30, 10)).toEqual({ allowed: 2, declined: false });
+    // The confirm is told the batch was trimmed, so it can say so.
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ currentCount: 30, requestedCount: 10, allowedCount: 2 })
+    );
   });
 
   it("does not confirm when the projected total lands exactly on the confirm limit", async () => {
@@ -215,7 +225,7 @@ describe("preflightSpawnBatchLimit", () => {
       requestConfirmation: confirm,
     });
     // 18 + 2 = 20 == confirmationLimit; the gate is strictly `> confirmationLimit`.
-    expect(await preflightSpawnBatchLimit(18, 2)).toEqual({ allowed: 2 });
+    expect(await preflightSpawnBatchLimit(18, 2)).toEqual({ allowed: 2, declined: false });
     expect(confirm).not.toHaveBeenCalled();
   });
 
@@ -228,7 +238,7 @@ describe("preflightSpawnBatchLimit", () => {
       requestConfirmation: confirm,
     });
     // Already at the hard limit: no slots, short-circuits before any confirm.
-    expect(await preflightSpawnBatchLimit(32, 4)).toEqual({ allowed: 0 });
+    expect(await preflightSpawnBatchLimit(32, 4)).toEqual({ allowed: 0, declined: false });
     expect(confirm).not.toHaveBeenCalled();
   });
 });
@@ -339,15 +349,23 @@ describe("panelLimitStore persist migration", () => {
   });
 
   describe("requestSeq (ErrorBoundary reset signal, #9918)", () => {
+    const REQUEST = {
+      currentCount: 18,
+      requestedCount: 4,
+      allowedCount: 4,
+      confirmationLimit: 20,
+      hardLimit: 32,
+    };
+
     it("strictly increases on each request, including back-to-back supersede", async () => {
       const store = await loadStore();
       const before = store.getState().requestSeq;
 
-      store.getState().requestConfirmation(21, null);
+      store.getState().requestConfirmation(REQUEST);
       const afterFirst = store.getState().requestSeq;
       expect(afterFirst).toBeGreaterThan(before);
 
-      store.getState().requestConfirmation(22, null);
+      store.getState().requestConfirmation({ ...REQUEST, currentCount: 19 });
       const afterSecond = store.getState().requestSeq;
       expect(afterSecond).toBeGreaterThan(afterFirst);
 
@@ -356,7 +374,7 @@ describe("panelLimitStore persist migration", () => {
 
     it("is transient runtime state — never persisted via partialize", async () => {
       const store = await loadStore();
-      store.getState().requestConfirmation(21, null);
+      store.getState().requestConfirmation(REQUEST);
       expect(store.getState().requestSeq).toBeGreaterThan(0);
 
       const persisted = JSON.parse(storageMock.getItem(STORAGE_KEY) ?? "{}");

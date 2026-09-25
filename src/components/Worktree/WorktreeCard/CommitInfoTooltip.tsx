@@ -1,22 +1,38 @@
 import { ActivityLight } from "../ActivityLight";
 import { isValidPastTimestamp } from "@/utils/timestamps";
+import { parseCommitBody } from "@/utils/commitMessage";
+import { useWallClock } from "@/hooks/useWallClock";
 import { CommitAuthorAvatar, type CommitAuthor } from "./CommitAuthorAvatar";
 
 export interface CommitInfoTooltipProps {
   /** Timestamp of the last commit. */
   lastCommitTimestampMs?: number | null;
-  /** Commit author. When absent the header shows the time only. */
+  /** Commit author. When absent the byline shows the time only. */
   author?: CommitAuthor | null;
-  /** Commit subject/body, shown beneath the header. */
+  /** Commit subject, the card's headline. */
   commitMessage?: string;
+  /** Commit body, trailers included; the trailers are lifted into the byline. */
+  commitBody?: string;
+  /** Full HEAD object id; shown abbreviated. */
+  commitSha?: string;
   /** Forge profile picture, tried before Gravatar. */
   forgeAvatarUrl?: string;
   /** Drives the "Last active" footer line and its decay dot. */
   lastActivityTimestamp?: number | null;
 }
 
-/** Long-form relative phrase — "just now", "2 minutes ago", "3 days ago". */
-export function relativeTimePhrase(diffMs: number): string {
+const DAY_MS = 86_400_000;
+// Same cut-over as `LiveTimeAgo`, so the card never says "156 weeks ago"
+// beside a chip that already reads "24 Sept 2023".
+const ABSOLUTE_AFTER_MS = 30 * DAY_MS;
+
+let absoluteDateFormatter: Intl.DateTimeFormat | undefined;
+
+/**
+ * When something happened, as a phrase that reads after a verb: "just now",
+ * "2 minutes ago", "3 weeks ago", then "on 24 Sept 2023" past 30 days.
+ */
+export function relativeTimePhrase(diffMs: number, timestampMs?: number): string {
   const s = Math.floor(Math.max(0, diffMs) / 1000);
   const m = Math.floor(s / 60);
   const h = Math.floor(m / 60);
@@ -25,64 +41,192 @@ export function relativeTimePhrase(diffMs: number): string {
   if (m < 60) return `${m} minute${m !== 1 ? "s" : ""} ago`;
   if (h < 24) return `${h} hour${h !== 1 ? "s" : ""} ago`;
   if (d < 7) return `${d} day${d !== 1 ? "s" : ""} ago`;
-  const w = Math.floor(d / 7);
-  return `${w} week${w !== 1 ? "s" : ""} ago`;
+  if (diffMs < ABSOLUTE_AFTER_MS || timestampMs === undefined) {
+    const w = Math.floor(d / 7);
+    return `${w} week${w !== 1 ? "s" : ""} ago`;
+  }
+  absoluteDateFormatter ??= new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+  return `on ${absoluteDateFormatter.format(new Date(timestampMs))}`;
+}
+
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names.join("");
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names[0]} and ${names.length - 1} others`;
+}
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+
+/**
+ * Milliseconds until any line of the card could read differently: the next
+ * relative-phrase boundary of either timestamp, or local midnight when that
+ * changes an exact time: a time of "today" gains its date, and at the new
+ * year every date gains its year.
+ */
+export function msUntilCardChanges(timestamps: number[], now: number): number {
+  const midnight = new Date(now);
+  midnight.setHours(24, 0, 0, 0);
+  const today = new Date(now).toDateString();
+  const newYear = midnight.getFullYear() !== new Date(now).getFullYear();
+  const midnightMatters = newYear || timestamps.some((ts) => new Date(ts).toDateString() === today);
+  let next = midnightMatters ? midnight.getTime() - now : Infinity;
+  for (const ts of timestamps) {
+    const age = now - ts;
+    const unit = age < HOUR_MS ? MINUTE_MS : age < DAY_MS ? HOUR_MS : DAY_MS;
+    next = Math.min(next, unit - (age % unit));
+  }
+  return next;
+}
+
+let timeOnlyFormatter: Intl.DateTimeFormat | undefined;
+let sameYearFormatter: Intl.DateTimeFormat | undefined;
+let fullFormatter: Intl.DateTimeFormat | undefined;
+
+/**
+ * The exact moment, as short as it can be while staying unambiguous: the time
+ * alone for today, no year for this year, everything otherwise. The user's own
+ * clock, so no zone.
+ */
+export function exactTimePhrase(timestamp: number, now: number): string {
+  const date = new Date(timestamp);
+  const today = new Date(now);
+  if (date.toDateString() === today.toDateString()) {
+    return (timeOnlyFormatter ??= new Intl.DateTimeFormat(undefined, {
+      timeStyle: "short",
+    })).format(date);
+  }
+  if (date.getFullYear() === today.getFullYear()) {
+    return (sameYearFormatter ??= new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    })).format(date);
+  }
+  return (fullFormatter ??= new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  })).format(date);
 }
 
 /**
  * Detailed commit card shown on hover of a worktree row's activity chip and
- * inside the expanded details. Replaces the per-row avatar — the row itself
- * stays a quiet dot, and the face only appears here where there is room to
- * review it.
+ * the Details footer. Leads with what the commit did; who and when follow in
+ * a byline. The row itself stays a quiet dot, and faces only appear here.
+ *
+ * Read-only by construction: it renders inside a `role="tooltip"`, which may
+ * not hold anything focusable, so the SHA is text rather than a copy button.
  */
 export function CommitInfoTooltip({
   lastCommitTimestampMs,
   author,
   commitMessage,
+  commitBody,
+  commitSha,
   forgeAvatarUrl,
   lastActivityTimestamp,
 }: CommitInfoTooltipProps) {
-  const now = Date.now();
+  // The card can stay open for as long as it is hovered or focused, so its
+  // phrases keep time rather than freezing at the moment it opened.
+  const now = useWallClock(`${lastCommitTimestampMs}:${lastActivityTimestamp}`, (at) => {
+    const valid = [lastCommitTimestampMs, lastActivityTimestamp].filter((ts): ts is number =>
+      isValidPastTimestamp(ts, at)
+    );
+    return valid.length === 0 ? null : msUntilCardChanges(valid, at);
+  });
   const hasCommit = isValidPastTimestamp(lastCommitTimestampMs, now);
   const hasActivity = isValidPastTimestamp(lastActivityTimestamp, now);
   if (!hasCommit && !hasActivity) return null;
 
-  const committed = hasCommit ? relativeTimePhrase(now - lastCommitTimestampMs) : null;
-  const committedAbsolute = hasCommit ? new Date(lastCommitTimestampMs).toLocaleString() : null;
-  const activityPhrase = hasActivity ? relativeTimePhrase(now - lastActivityTimestamp) : null;
-  const activityAbsolute = hasActivity ? new Date(lastActivityTimestamp).toLocaleString() : null;
-  const activityMatchesCommit =
-    hasCommit && hasActivity && lastActivityTimestamp === lastCommitTimestampMs;
+  const committed = hasCommit
+    ? relativeTimePhrase(now - lastCommitTimestampMs, lastCommitTimestampMs)
+    : null;
+  const committedExact = hasCommit ? exactTimePhrase(lastCommitTimestampMs, now) : null;
+  const activityPhrase = hasActivity
+    ? relativeTimePhrase(now - lastActivityTimestamp, lastActivityTimestamp)
+    : null;
+  const activityExact = hasActivity ? exactTimePhrase(lastActivityTimestamp, now) : null;
+  // Only activity *after* the commit is news; an older activity stamp would
+  // read as the branch going quiet before its own latest commit.
+  const showActivity = hasActivity && (!hasCommit || lastActivityTimestamp > lastCommitTimestampMs);
+
+  const subject = commitMessage?.trim();
+  const { text: body, coAuthors } = parseCommitBody(commitBody);
+  const shortSha = commitSha?.slice(0, 7);
+  const coAuthorLine =
+    coAuthors.length > 0 ? `with ${joinNames(coAuthors.map((p) => p.name))}` : null;
 
   return (
-    <div className="flex w-[252px] flex-col">
+    <div className="flex w-72 flex-col">
+      {hasCommit && (subject || body) && (
+        <div className="mb-2.5 flex flex-col gap-1.5 border-b border-border-divider pb-2.5">
+          {subject && (
+            <p className="line-clamp-3 break-words text-xs font-semibold leading-snug text-text-primary">
+              {subject}
+            </p>
+          )}
+          {body && (
+            <p className="line-clamp-4 whitespace-pre-line break-words text-xs leading-relaxed text-text-secondary">
+              {body}
+            </p>
+          )}
+        </div>
+      )}
+
       {hasCommit && (
         <div className="flex items-center gap-2.5">
           {author && (
-            <CommitAuthorAvatar author={author} forgeAvatarUrl={forgeAvatarUrl} size={32} />
+            <CommitAuthorAvatar author={author} forgeAvatarUrl={forgeAvatarUrl} size={24} />
           )}
-          <div className="flex min-w-0 flex-col">
-            <span className="truncate text-xs font-semibold text-text-primary">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            {/* Wraps rather than truncates: this card is where the full name
+                is supposed to be readable. */}
+            <span className="break-words text-xs font-medium text-text-primary">
               {author ? author.name : "Last commit"}
             </span>
-            <span className="text-2xs text-text-muted" title={committedAbsolute!}>
-              Committed {committed}
+            {coAuthorLine && (
+              <span
+                className="truncate text-2xs text-text-secondary"
+                title={coAuthors.map((p) => p.name).join(", ")}
+              >
+                {coAuthorLine}
+              </span>
+            )}
+            <span className="flex min-w-0 items-center gap-1.5 text-2xs text-text-secondary">
+              <span className="shrink-0">Committed {committed}</span>
+              {shortSha && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono tabular-nums" title={commitSha}>
+                    {shortSha}
+                  </span>
+                </>
+              )}
             </span>
+            <time
+              dateTime={new Date(lastCommitTimestampMs).toISOString()}
+              className="text-2xs tabular-nums text-text-secondary"
+            >
+              {committedExact}
+            </time>
           </div>
         </div>
       )}
 
-      {hasCommit && commitMessage && (
-        <p className="mt-2.5 line-clamp-4 whitespace-pre-line border-t border-border-divider pt-2.5 text-xs leading-relaxed text-text-secondary">
-          {commitMessage}
-        </p>
-      )}
-
-      {hasActivity && !activityMatchesCommit && (
+      {showActivity && (
         <div className={hasCommit ? "mt-2.5 border-t border-border-divider pt-2.5" : undefined}>
-          <div className="flex items-center gap-1.5 text-2xs text-text-muted">
-            <ActivityLight lastActivityTimestamp={lastActivityTimestamp} className="h-1.5 w-1.5" />
-            <span title={activityAbsolute!}>Last active {activityPhrase}</span>
+          <div className="flex items-center gap-1.5 text-2xs text-text-secondary">
+            <ActivityLight lastActivityTimestamp={lastActivityTimestamp} />
+            <span>
+              Last active {activityPhrase} ·{" "}
+              <time
+                dateTime={new Date(lastActivityTimestamp).toISOString()}
+                className="tabular-nums"
+              >
+                {activityExact}
+              </time>
+            </span>
           </div>
         </div>
       )}

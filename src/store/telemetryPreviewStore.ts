@@ -1,12 +1,21 @@
 import { create, type StateCreator } from "zustand";
 import type { SanitizedTelemetryEvent } from "@shared/types";
 
+/**
+ * Whether `active` reflects main's real setting. Until the first read (or a
+ * pushed state change) lands, `active: false` is only a default — and after a
+ * failed read it's a guess — so surfaces that show or flip it check this first.
+ */
+export type TelemetryPreviewStateRead = "pending" | "known" | "failed";
+
 interface TelemetryPreviewStoreState {
   active: boolean;
+  stateRead: TelemetryPreviewStateRead;
   events: SanitizedTelemetryEvent[];
   selectedEventId: string | null;
 
   setActive: (active: boolean) => void;
+  setStateRead: (stateRead: TelemetryPreviewStateRead) => void;
   appendEvents: (events: SanitizedTelemetryEvent[]) => void;
   clearEvents: () => void;
   setSelectedEvent: (id: string | null) => void;
@@ -17,13 +26,19 @@ export const TELEMETRY_PREVIEW_MAX_EVENTS = 200;
 
 const createStore: StateCreator<TelemetryPreviewStoreState> = (set) => ({
   active: false,
+  stateRead: "pending",
   events: [],
   selectedEventId: null,
 
+  setStateRead: (stateRead) =>
+    set((state) => (state.stateRead === stateRead ? state : { stateRead })),
+
+  // Every caller passes main's answer (a read, a push, or the toggle's
+  // result), so a value arriving here also settles whether it's known.
   setActive: (active) =>
     set((state) => {
-      if (state.active === active) return state;
-      return { active };
+      if (state.active === active && state.stateRead === "known") return state;
+      return { active, stateRead: "known" };
     }),
 
   appendEvents: (incoming) =>
@@ -55,7 +70,7 @@ const createStore: StateCreator<TelemetryPreviewStoreState> = (set) => ({
 
   setSelectedEvent: (id) => set({ selectedEventId: id }),
 
-  reset: () => set({ active: false, events: [], selectedEventId: null }),
+  reset: () => set({ active: false, stateRead: "pending", events: [], selectedEventId: null }),
 });
 
 export const useTelemetryPreviewStore = create<TelemetryPreviewStoreState>(createStore);

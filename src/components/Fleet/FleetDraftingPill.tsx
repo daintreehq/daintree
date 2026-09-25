@@ -12,6 +12,7 @@ import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewSt
 import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { detectUnresolvedVariables, splitByRecipeVariables } from "@/utils/recipeVariables";
+import { RECIPE_VARIABLE_TOKEN } from "@/components/TerminalRecipe/recipeVariableTokens";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import type { FleetTargetPreview } from "./fleetExecution";
 
@@ -68,7 +69,7 @@ export function FleetDraftingPill(): ReactElement | null {
   };
 
   return (
-    <div data-testid="fleet-drafting-pill" className="flex items-center">
+    <div data-testid="fleet-drafting-pill" className="flex min-w-0 items-center">
       <Popover open={open} onOpenChange={handleOpenChange}>
         <PopoverTrigger asChild>
           <button
@@ -76,19 +77,24 @@ export function FleetDraftingPill(): ReactElement | null {
             aria-label={reachLabel}
             data-testid="fleet-drafting-pill-trigger"
             className={cn(
-              "inline-flex items-center gap-1 px-2 py-0.5 rounded-full",
+              "inline-flex min-w-0 max-w-full items-center gap-1 px-2 py-0.5 rounded-full",
               "bg-category-amber-subtle border border-category-amber-border text-category-amber-text shadow-[var(--theme-shadow-floating)]",
               "text-xs font-medium transition-colors",
               hasVariables && "cursor-pointer hover:bg-category-amber-subtle/80"
             )}
           >
-            <RadioTower className="h-3 w-3" aria-hidden="true" />
-            <span>{reachLabel}</span>
+            <RadioTower className="h-3 w-3 shrink-0" aria-hidden="true" />
+            {/* Only the lead-in gives way on a narrow pane: the peer count is the
+                part of the chip that says something. */}
+            <span className="min-w-0 truncate">Mirroring to </span>
+            <span className="shrink-0">
+              {peerCount} {peerNoun}
+            </span>
             {hasDivergence && (
               <span
                 data-testid="fleet-drafting-pill-divergence-dot"
                 aria-label={`${overridesCount + skippedCount} per-target edit${overridesCount + skippedCount === 1 ? "" : "s"} pending`}
-                className="tabular-nums"
+                className="min-w-0 truncate tabular-nums"
               >
                 {[
                   overridesCount > 0 ? `${overridesCount} edited` : null,
@@ -101,7 +107,10 @@ export function FleetDraftingPill(): ReactElement | null {
             )}
             {hasVariables && (
               <ChevronDown
-                className={cn("h-3 w-3 transition-transform duration-150", open && "rotate-180")}
+                className={cn(
+                  "h-3 w-3 shrink-0 transition-transform duration-150",
+                  open && "rotate-180"
+                )}
                 aria-hidden="true"
               />
             )}
@@ -260,16 +269,13 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
       </div>
       <div
         className={cn(
-          "mt-0.5 text-2xs leading-relaxed text-text-secondary break-all",
+          "mt-0.5 text-2xs leading-relaxed text-text-secondary wrap-anywhere",
           isSkipped && "opacity-50"
         )}
       >
         {parts.map((part, i) =>
           part.isVar ? (
-            <span
-              key={i}
-              className="inline rounded-sm bg-category-amber-subtle px-0.5 text-category-amber-text"
-            >
+            <span key={i} className={RECIPE_VARIABLE_TOKEN}>
               {part.text}
             </span>
           ) : (
@@ -303,7 +309,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
             // Grows with its content up to a cap so the payload is readable
             // in full rather than clipped at one row.
             className={cn(
-              "field-sizing-content max-h-24 text-2xs leading-relaxed break-all",
+              "field-sizing-content max-h-24 text-2xs leading-relaxed wrap-anywhere",
               isSkipped && "line-through",
               resolvedPayload === "" && !isOverridden && "text-text-placeholder"
             )}

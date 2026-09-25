@@ -1,28 +1,43 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+
+// The app root supplies the TooltipProvider; render tooltips inline here.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 const { dispatchMock } = vi.hoisted(() => ({
   dispatchMock: vi.fn(() => Promise.resolve()),
 }));
 
-const { addProjectMock, openCreateFolderDialogMock, openCloneRepoDialogMock, switchProjectMock } =
-  vi.hoisted(() => ({
-    addProjectMock: vi.fn(() => Promise.resolve()),
-    openCreateFolderDialogMock: vi.fn(),
-    openCloneRepoDialogMock: vi.fn(),
-    switchProjectMock: vi.fn(() => Promise.resolve()),
-  }));
+const {
+  addProjectMock,
+  addProjectByPathMock,
+  openCreateFolderDialogMock,
+  openCloneRepoDialogMock,
+  switchProjectMock,
+} = vi.hoisted(() => ({
+  addProjectMock: vi.fn(() => Promise.resolve()),
+  addProjectByPathMock: vi.fn((_path: string, _options?: unknown) => Promise.resolve()),
+  openCreateFolderDialogMock: vi.fn(),
+  openCloneRepoDialogMock: vi.fn(),
+  switchProjectMock: vi.fn(() => Promise.resolve()),
+}));
 
 const { getDisplayComboMock } = vi.hoisted(() => ({
   getDisplayComboMock: vi.fn((actionId: string) => {
     const map: Record<string, string> = {
-      "panel.palette": "⌘N",
-      "nav.quickSwitcher": "⌘P",
-      "terminal.new": "⌘⌥T",
-      "action.palette.open": "⌘K",
-      "help.shortcuts": "⌘/",
-      "app.settings": "⌘,",
+      "panel.palette": "Cmd+N",
+      "nav.quickSwitcher": "Cmd+P",
+      "terminal.new": "Cmd+Alt+T",
+      "action.palette.open": "Cmd+K",
+      "help.shortcuts": "Cmd+/",
+      "app.settings": "Cmd+,",
     };
     return map[actionId] ?? "";
   }),
@@ -37,7 +52,10 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/services/KeybindingService", () => ({
-  keybindingService: { getDisplayCombo: getDisplayComboMock },
+  keybindingService: {
+    getDisplayCombo: getDisplayComboMock,
+    getEffectiveCombo: getDisplayComboMock,
+  },
 }));
 
 vi.mock("@/lib/utils", () => ({
@@ -185,6 +203,7 @@ let storeState = {
   projects: mockProjects,
   isLoading: false,
   addProject: addProjectMock,
+  addProjectByPath: addProjectByPathMock,
   openCreateFolderDialog: openCreateFolderDialogMock,
   openCloneRepoDialog: openCloneRepoDialogMock,
   switchProject: switchProjectMock,
@@ -273,12 +292,12 @@ describe("WelcomeScreen", () => {
     vi.clearAllMocks();
     getDisplayComboMock.mockImplementation((actionId: string) => {
       const map: Record<string, string> = {
-        "panel.palette": "⌘N",
-        "nav.quickSwitcher": "⌘P",
-        "terminal.new": "⌘⌥T",
-        "action.palette.open": "⌘K",
-        "help.shortcuts": "⌘/",
-        "app.settings": "⌘,",
+        "panel.palette": "Cmd+N",
+        "nav.quickSwitcher": "Cmd+P",
+        "terminal.new": "Cmd+Alt+T",
+        "action.palette.open": "Cmd+K",
+        "help.shortcuts": "Cmd+/",
+        "app.settings": "Cmd+,",
       };
       return map[actionId] ?? "";
     });
@@ -286,6 +305,7 @@ describe("WelcomeScreen", () => {
       projects: mockProjects,
       isLoading: false,
       addProject: addProjectMock,
+      addProjectByPath: addProjectByPathMock,
       openCreateFolderDialog: openCreateFolderDialogMock,
       openCloneRepoDialog: openCloneRepoDialogMock,
       switchProject: switchProjectMock,
@@ -500,49 +520,47 @@ describe("WelcomeScreen", () => {
     expect(screen.getByText("2/5")).toBeTruthy();
   });
 
-  it("renders incomplete items as clickable buttons", () => {
+  it("reports progress without offering its own actions — the cards own them", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
-    const buttons = screen.getAllByRole("button", {
-      name: /open your project|ask ai to help with your code|start a parallel task/i,
-    });
-    expect(buttons).toHaveLength(3);
+    // No project is open on this screen, so a row that acted would act on
+    // nothing; the one row that could is the Open project card's job.
+    expect(
+      screen.queryAllByRole("button", {
+        name: /open your project|launch your first agent|start a parallel task|run two agents/i,
+      })
+    ).toHaveLength(0);
+    expect(screen.getByText("Open your project")).toBeTruthy();
+    expect(screen.getByText("Run two agents in parallel")).toBeTruthy();
   });
 
-  it("dispatches project.add when Open your project is clicked", () => {
-    render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /open your project/i }));
-    expect(dispatchMock).toHaveBeenCalledWith("project.add", undefined, {
-      source: "user",
-    });
-  });
-
-  it("dispatches panel.palette when Ask AI to help with your code is clicked", () => {
-    render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /ask ai to help with your code/i }));
-    expect(dispatchMock).toHaveBeenCalledWith("panel.palette", undefined, {
-      source: "user",
-    });
-  });
-
-  it("dispatches worktree.createDialog.open when Start a parallel task is clicked", () => {
-    render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /start a parallel task/i }));
-    expect(dispatchMock).toHaveBeenCalledWith("worktree.createDialog.open", undefined, {
-      source: "user",
-    });
-  });
-
-  it("renders completed items as non-interactive", () => {
+  it("describes only the next step and marks it current", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(oneComplete)} />);
 
-    // openedProject is complete — should not be a button
-    const openProjectButton = screen.queryByRole("button", { name: /open your project/i });
-    expect(openProjectButton).toBeNull();
-    expect(screen.getByText("Open your project")).toBeTruthy();
+    const current = document.querySelectorAll('[aria-current="step"]');
+    expect(current).toHaveLength(1);
+    expect(current[0]!.textContent).toContain("Launch your first agent");
+    // The next step says what it involves; the rest wait their turn.
+    expect(current[0]!.textContent).toContain("Then ask it");
+    expect(screen.queryByText("Work on two things at once without switching branches")).toBeNull();
+    expect(screen.queryByText(/Connect a local folder/)).toBeNull();
+  });
+
+  it("announces completed items as done", () => {
+    render(<WelcomeScreen gettingStarted={makeGettingStarted(oneComplete)} />);
+
+    const done = Array.from(document.querySelectorAll("li"))
+      .filter((li) => li.textContent?.startsWith("Done: "))
+      .map((li) => li.textContent);
+    expect(done).toEqual(["Done: Install Daintree", "Done: Open your project"]);
+  });
+
+  it("hides from the checklist's own header through the persisted dismissal", () => {
+    const gettingStarted = makeGettingStarted(allIncomplete);
+    render(<WelcomeScreen gettingStarted={gettingStarted} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide getting started" }));
+    expect(gettingStarted.dismiss).toHaveBeenCalledTimes(1);
   });
 
   it("hides checklist when dismissed", () => {
@@ -617,32 +635,13 @@ describe("WelcomeScreen", () => {
     ];
     for (const { state, expected } of scenarios) {
       const { unmount } = render(<WelcomeScreen gettingStarted={makeGettingStarted(state)} />);
-      const bar = document.querySelector(".bg-accent-primary.rounded-full") as HTMLElement;
+      const bar = screen.getByRole("progressbar").firstElementChild as HTMLElement;
       expect(bar?.style.width).toBe(expected);
       unmount();
     }
   });
 
-  it("renders fourth checklist item 'Run two agents in parallel' as a button", () => {
-    agentDiscoveryState.loaded = true;
-    agentDiscoveryState.setupBannerDismissed = true;
-    agentDiscoveryState.welcomeCardDismissed = true;
-    cliAvailabilityState.hasRealData = false;
-
-    render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
-
-    const btn = screen.getByRole("button", { name: /run two agents in parallel/i });
-    expect(btn).toBeTruthy();
-    fireEvent.click(btn);
-    expect(dispatchMock).toHaveBeenCalledWith("panel.palette", undefined, { source: "user" });
-  });
-
-  it("assigns aria-current=step to the only remaining incomplete item", () => {
-    agentDiscoveryState.loaded = true;
-    agentDiscoveryState.setupBannerDismissed = true;
-    agentDiscoveryState.welcomeCardDismissed = true;
-    cliAvailabilityState.hasRealData = false;
-
+  it("marks the only remaining incomplete item as the current step", () => {
     const onlyLastIncomplete: ChecklistState = {
       dismissed: false,
       celebrationShown: false,
@@ -655,8 +654,8 @@ describe("WelcomeScreen", () => {
     };
     render(<WelcomeScreen gettingStarted={makeGettingStarted(onlyLastIncomplete)} />);
 
-    const btn = screen.getByRole("button", { name: /run two agents in parallel/i });
-    expect(btn.getAttribute("aria-current")).toBe("step");
+    const current = document.querySelector('[aria-current="step"]');
+    expect(current?.textContent).toContain("Run two agents in parallel");
   });
 
   // --- Cold-start flash (agentSettings hydration) ---
@@ -695,61 +694,9 @@ describe("WelcomeScreen", () => {
     cliAvailabilityState.availability = { claude: "ready" };
     agentSettingsState.settings = { agents: {} };
 
-    render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+    render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
 
     expect(screen.getByText(/Installed agents found/)).toBeTruthy();
-  });
-
-  // --- aria-current ---
-
-  it("adds aria-current=step to the first incomplete checklist button", () => {
-    agentDiscoveryState.loaded = true;
-    agentDiscoveryState.setupBannerDismissed = true;
-    agentDiscoveryState.welcomeCardDismissed = true;
-    cliAvailabilityState.hasRealData = false;
-
-    render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
-
-    const buttons = screen.getAllByRole("button", {
-      name: /open your project|ask ai to help with your code|start a parallel task/i,
-    });
-    // First incomplete item ("Open your project") gets aria-current
-    expect(buttons[0]!.getAttribute("aria-current")).toBe("step");
-    // Second incomplete item does not
-    expect(buttons[1]!.getAttribute("aria-current")).toBeNull();
-    // Third incomplete item does not
-    expect(buttons[2]!.getAttribute("aria-current")).toBeNull();
-  });
-
-  it("skips completed items when assigning aria-current=step", () => {
-    agentDiscoveryState.loaded = true;
-    agentDiscoveryState.setupBannerDismissed = true;
-    agentDiscoveryState.welcomeCardDismissed = true;
-    cliAvailabilityState.hasRealData = false;
-
-    render(<WelcomeScreen gettingStarted={makeGettingStarted(oneComplete)} />);
-
-    // openedProject is done — next incomplete is "Ask AI to help with your code"
-    const buttons = screen.getAllByRole("button", {
-      name: /ask ai to help with your code|start a parallel task/i,
-    });
-    expect(buttons[0]!.getAttribute("aria-current")).toBe("step");
-    expect(buttons[1]!.getAttribute("aria-current")).toBeNull();
-  });
-
-  // --- line-through ---
-
-  it("applies line-through to completed checklist label spans", () => {
-    agentDiscoveryState.loaded = true;
-    agentDiscoveryState.setupBannerDismissed = true;
-    agentDiscoveryState.welcomeCardDismissed = true;
-    cliAvailabilityState.hasRealData = false;
-
-    render(<WelcomeScreen gettingStarted={makeGettingStarted(oneComplete)} />);
-
-    // openedProject is done — its label should have line-through
-    const completedLabel = screen.getByText("Open your project");
-    expect(completedLabel.className).toContain("line-through");
   });
 
   // --- Keyboard Shortcuts empty state ---
@@ -757,23 +704,23 @@ describe("WelcomeScreen", () => {
   it("suppresses Keyboard Shortcuts section when all combos are empty", () => {
     getDisplayComboMock.mockReturnValue("");
 
-    render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+    render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
 
     expect(screen.queryByText("Keyboard shortcuts")).toBeNull();
   });
 
   it("renders Keyboard Shortcuts section when only one combo is available", () => {
     getDisplayComboMock.mockImplementation((actionId: string) => {
-      if (actionId === "panel.palette") return "⌘N";
+      if (actionId === "panel.palette") return "Cmd+N";
       return "";
     });
 
-    render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+    render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
 
     expect(screen.getByText("Keyboard shortcuts")).toBeTruthy();
-    const kbdElements = document.querySelectorAll("kbd");
-    expect(kbdElements.length).toBe(1);
-    expect(kbdElements[0]!.textContent).toBe("⌘N");
+    // The visible chips, as this (non-mac) test platform prints them.
+    expect(screen.getByText("New panel").parentElement?.textContent).toContain("Ctrl+N");
+    expect(screen.queryByText("Quick switcher")).toBeNull();
   });
 
   // --- Quick Actions ---
@@ -784,13 +731,13 @@ describe("WelcomeScreen", () => {
     expect(screen.getByText("Open project")).toBeTruthy();
     expect(screen.getByText("Create project")).toBeTruthy();
     expect(screen.getByText("Clone repository")).toBeTruthy();
-    expect(screen.getByText("Launch agent")).toBeTruthy();
+    // No projectless agent launch: it would start the agent in the home folder.
+    expect(screen.queryByText("Launch agent")).toBeNull();
 
     // Each secondary action carries a short description to tell them apart.
     expect(screen.getByText("Open an existing project on your machine")).toBeTruthy();
     expect(screen.getByText("Start fresh in a new folder")).toBeTruthy();
     expect(screen.getByText("Pull a repo from a Git URL")).toBeTruthy();
-    expect(screen.getByText("Open the panel palette to start an agent")).toBeTruthy();
   });
 
   it("groups quick actions in an accessible region with described cards", () => {
@@ -814,6 +761,20 @@ describe("WelcomeScreen", () => {
     expect(addProjectMock).toHaveBeenCalledTimes(1);
   });
 
+  it("offers Open project in a new window as a secondary action (#12594)", () => {
+    render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+    const secondary = screen.getByRole("button", { name: "Open in new window…" });
+    // A sibling of the card, never nested inside its button.
+    expect(secondary.parentElement?.closest("button")).toBeNull();
+    expect(screen.getByText("Open project").closest("button")!.contains(secondary)).toBe(false);
+
+    fireEvent.click(secondary);
+
+    expect(addProjectByPathMock).toHaveBeenCalledExactlyOnceWith("", { disposition: "new" });
+    expect(addProjectMock).not.toHaveBeenCalled();
+  });
+
   it("calls openCreateFolderDialog when Create project is clicked", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
@@ -835,19 +796,10 @@ describe("WelcomeScreen", () => {
     const openFolder = screen.getByText("Open project").closest("button")!;
     const createProject = screen.getByText("Create project").closest("button")!;
     const cloneRepository = screen.getByText("Clone repository").closest("button")!;
-    const launchAgent = screen.getByText("Launch agent").closest("button")!;
 
     expect(openFolder.disabled).toBe(false);
     expect(createProject.disabled).toBe(false);
     expect(cloneRepository.disabled).toBe(false);
-    expect(launchAgent.disabled).toBe(false);
-  });
-
-  it("dispatches panel.palette when Launch agent is clicked", () => {
-    render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
-
-    fireEvent.click(screen.getByText("Launch agent"));
-    expect(dispatchMock).toHaveBeenCalledWith("panel.palette", undefined, { source: "user" });
   });
 
   it("lifts the Open project card and hides the heading for first-time users", () => {
@@ -863,8 +815,8 @@ describe("WelcomeScreen", () => {
     const openFolder = screen.getByText("Open project").closest("button")!;
     expect(openFolder.className).toContain("bg-surface-panel-elevated/95");
 
-    // Only the primary card is lifted — the three secondary cards are not.
-    for (const label of ["Create project", "Clone repository", "Launch agent"]) {
+    // Only the primary card is lifted — the secondary cards are not.
+    for (const label of ["Create project", "Clone repository"]) {
       const card = screen.getByText(label).closest("button")!;
       expect(card.className).not.toContain("bg-surface-panel-elevated/95");
     }
@@ -885,18 +837,19 @@ describe("WelcomeScreen", () => {
 
   // --- Keyboard Shortcuts ---
 
-  it("renders keyboard shortcuts inside kbd elements", () => {
-    const { container } = render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+  it("renders keyboard shortcuts as key chips beside sentence-case labels", () => {
+    const { container } = render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
 
     expect(screen.getAllByText("Keyboard shortcuts").length).toBeGreaterThanOrEqual(1);
+    expect(container.querySelectorAll("kbd").length).toBeGreaterThanOrEqual(6);
+    expect(screen.getByText("Command palette").parentElement?.textContent).toContain("Ctrl+K");
+  });
 
-    const kbdElements = container.querySelectorAll("kbd");
-    expect(kbdElements.length).toBeGreaterThanOrEqual(6);
+  it("keeps the shortcut list off the screen while the checklist is teaching", () => {
+    render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
-    const kbdTexts = Array.from(kbdElements).map((el) => el.textContent);
-    expect(kbdTexts).toContain("⌘N");
-    expect(kbdTexts).toContain("⌘P");
-    expect(kbdTexts).toContain("⌘K");
+    expect(screen.getByText("Getting started")).toBeTruthy();
+    expect(screen.queryByText("Keyboard shortcuts")).toBeNull();
   });
 
   // --- Footer ---
@@ -909,6 +862,28 @@ describe("WelcomeScreen", () => {
 
     fireEvent.click(newsletterButton);
     expect(openExternalMock).toHaveBeenCalledWith("https://daintree.org/newsletter");
+  });
+
+  it("offers a way back into agent setup once the banner is gone", () => {
+    const events: CustomEvent[] = [];
+    const listener = (e: Event) => events.push(e as CustomEvent);
+    window.addEventListener("daintree:open-agent-setup-wizard", listener);
+    try {
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      fireEvent.click(screen.getByRole("button", { name: "Set up agents" }));
+      expect(events).toHaveLength(1);
+      expect(events[0]!.detail).toEqual({ isFirstRun: false });
+    } finally {
+      window.removeEventListener("daintree:open-agent-setup-wizard", listener);
+    }
+  });
+
+  it("keeps the footer entry out of the way while the setup banner is still up", () => {
+    agentDiscoveryState.setupBannerDismissed = false;
+    render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+    // The banner's own button is the only setup entry on screen.
+    expect(screen.getAllByRole("button", { name: /set up agents/i })).toHaveLength(1);
   });
 
   // --- Adaptive Layout ---
@@ -1010,14 +985,14 @@ describe("WelcomeScreen", () => {
     it("does not render while availability has no real data", () => {
       cliAvailabilityState.hasRealData = false;
       cliAvailabilityState.availability = { claude: "ready" };
-      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
       expect(screen.queryByText(/Installed agents found/)).toBeNull();
     });
 
     it("does not render when no agents are ready", () => {
       cliAvailabilityState.hasRealData = true;
       cliAvailabilityState.availability = { claude: "missing", codex: "missing" };
-      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
       expect(screen.queryByText(/Installed agents found/)).toBeNull();
     });
 
@@ -1025,7 +1000,7 @@ describe("WelcomeScreen", () => {
       cliAvailabilityState.hasRealData = true;
       cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
       agentSettingsState.settings = { agents: { claude: { pinned: true } } };
-      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
       expect(screen.queryByText(/Installed agents found/)).toBeNull();
     });
 
@@ -1034,7 +1009,7 @@ describe("WelcomeScreen", () => {
       cliAvailabilityState.availability = { claude: "ready" };
       agentSettingsState.settings = { agents: {} };
       agentDiscoveryState.welcomeCardDismissed = true;
-      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
       expect(screen.queryByText(/Installed agents found/)).toBeNull();
     });
 
@@ -1046,7 +1021,7 @@ describe("WelcomeScreen", () => {
         gemini: "missing",
       };
       agentSettingsState.settings = { agents: {} };
-      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
       expect(screen.getByText(/Installed agents found/)).toBeTruthy();
       expect(screen.getByText("Claude")).toBeTruthy();
       expect(screen.getByText("Codex")).toBeTruthy();
@@ -1057,7 +1032,7 @@ describe("WelcomeScreen", () => {
       cliAvailabilityState.hasRealData = true;
       cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
       agentSettingsState.settings = { agents: {} };
-      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
 
       const btn = screen.getByTestId("welcome-card-pin-all");
       await act(async () => {
@@ -1074,7 +1049,7 @@ describe("WelcomeScreen", () => {
       cliAvailabilityState.hasRealData = true;
       cliAvailabilityState.availability = { claude: "ready" };
       agentSettingsState.settings = { agents: {} };
-      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
 
       await act(async () => {
         fireEvent.click(screen.getByText("Not now"));
@@ -1090,7 +1065,7 @@ describe("WelcomeScreen", () => {
       agentSettingsState.settings = { agents: {} };
       setAgentPinnedMock.mockImplementationOnce(() => Promise.reject(new Error("IPC down")));
 
-      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
       await act(async () => {
         fireEvent.click(screen.getByTestId("welcome-card-pin-all"));
       });
@@ -1193,7 +1168,7 @@ describe("WelcomeScreen", () => {
       expect(screen.queryByText("Getting started")).toBeNull();
     });
 
-    it("shows the welcome card and suppresses the checklist once the setup banner is dismissed", () => {
+    it("shows progress before asking another setup question once the banner is dismissed", () => {
       agentDiscoveryState.loaded = true;
       agentDiscoveryState.setupBannerDismissed = true;
       agentDiscoveryState.welcomeCardDismissed = false;
@@ -1203,8 +1178,21 @@ describe("WelcomeScreen", () => {
 
       render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
+      expect(screen.getByText("Getting started")).toBeTruthy();
+      expect(screen.queryByText(/Installed agents found/)).toBeNull();
+    });
+
+    it("offers pinning once the checklist is out of the way", () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = true;
+      agentDiscoveryState.welcomeCardDismissed = false;
+      cliAvailabilityState.hasRealData = true;
+      cliAvailabilityState.availability = { claude: "ready" };
+      agentSettingsState.settings = { agents: {} };
+
+      render(<WelcomeScreen gettingStarted={makeGettingStarted(dismissed)} />);
+
       expect(screen.getByText(/Installed agents found/)).toBeTruthy();
-      expect(screen.queryByText("Getting started")).toBeNull();
     });
 
     it("falls through to the checklist when no agents are installed and the banner is dismissed", () => {

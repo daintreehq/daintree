@@ -100,7 +100,16 @@ const DropdownMenuTrigger = React.forwardRef<
   DropdownMenuTriggerProps
 >(
   (
-    { asChild, children, onPointerEnter, onPointerDown, onFocusCapture, onClick, ...props },
+    {
+      asChild,
+      children,
+      onPointerEnter,
+      onPointerDown,
+      onFocusCapture,
+      onClick,
+      onKeyDown,
+      ...props
+    },
     ref
   ) => {
     const radix = useRadixPrimitives();
@@ -127,6 +136,19 @@ const DropdownMenuTrigger = React.forwardRef<
         requestOpen?.(true);
         onClick?.(event);
       };
+      // Enter and Space reach intentClick as a native button click; ArrowDown is the
+      // menu-button key a button does not map, so the stand-in queues it the same way.
+      // Radix mounts open once it arrives and puts focus in the menu.
+      const intentKeyDown: React.KeyboardEventHandler<HTMLButtonElement> = (event) => {
+        onKeyDown?.(event);
+        if (event.defaultPrevented || event.key !== "ArrowDown") return;
+        event.preventDefault();
+        primeOnEvent();
+        requestOpen?.(true);
+      };
+      // Radix sets these once it owns the trigger; the stand-in has to announce the
+      // same menu button in the meantime.
+      const standInAria = { "aria-haspopup": "menu", "aria-expanded": false } as const;
       if (asChild) {
         return (
           <Slot
@@ -135,6 +157,8 @@ const DropdownMenuTrigger = React.forwardRef<
             onPointerDown={handlePointerDown}
             onFocusCapture={handleFocusCapture}
             onClick={intentClick}
+            onKeyDown={intentKeyDown}
+            {...standInAria}
             {...props}
           >
             {children}
@@ -149,6 +173,8 @@ const DropdownMenuTrigger = React.forwardRef<
           onPointerDown={handlePointerDown}
           onFocusCapture={handleFocusCapture}
           onClick={intentClick}
+          onKeyDown={intentKeyDown}
+          {...standInAria}
           {...(props as React.ButtonHTMLAttributes<HTMLButtonElement>)}
         >
           {children}
@@ -165,6 +191,7 @@ const DropdownMenuTrigger = React.forwardRef<
         onPointerDown={handlePointerDown}
         onFocusCapture={handleFocusCapture}
         onClick={onClick}
+        onKeyDown={onKeyDown}
         {...props}
       >
         {children}

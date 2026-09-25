@@ -6,7 +6,11 @@ import { nextFrame } from "@/services/terminal/revealUntilStable";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
-import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
+import {
+  buildDestructivePreview,
+  collectRunningAgentTerminals,
+  resolveWorktreeDisplayName,
+} from "@/utils/destructiveSessionConfirm";
 import { isForegroundDispatch } from "./dispatchSource";
 
 // Shared by argsSchema + run() so the worktree id is extracted via a validated
@@ -107,9 +111,12 @@ export function registerWorktreeSessionActions(
       if (confirmed !== true && runningAgents.length > 0) {
         useTerminalPendingDestructiveActionStore.getState().request({
           kind: "worktreeRestartAll",
+          dispatchSource: ctx.dispatchSource,
           targetCount: targets.length,
           runningAgentCount: runningAgents.length,
           worktreeId: targetWorktreeId,
+          worktreeTitle: resolveWorktreeDisplayName(targetWorktreeId),
+          preview: buildDestructivePreview(targets),
         });
         return;
       }
@@ -221,15 +228,17 @@ export function registerWorktreeSessionActions(
         );
       if (targets.length === 0) return;
       if (confirmed !== true) {
-        // Classification leads wiring (CLAUDE.md hard rule 2): the action
-        // body must gate even though `useWorktreeActions.handleCloseAll`
-        // already wires a call-site dialog. Without this guard, action-palette
-        // and keybinding dispatches would silently fire `bulkTrashByWorktree`.
+        // Classification leads wiring (CLAUDE.md hard rule 2): this gate is
+        // the confirm for every entry point, the worktree card menu included —
+        // it dispatches unconfirmed and relies on this to stage the dialog.
         useTerminalPendingDestructiveActionStore.getState().request({
           kind: "worktreeTrashAll",
+          dispatchSource: ctx.dispatchSource,
           targetCount: targets.length,
           runningAgentCount: collectRunningAgentTerminals(targets).length,
           worktreeId: targetWorktreeId,
+          worktreeTitle: resolveWorktreeDisplayName(targetWorktreeId),
+          preview: buildDestructivePreview(targets),
         });
         return;
       }
@@ -287,9 +296,12 @@ export function registerWorktreeSessionActions(
       if (confirmed !== true && ctx.dispatchSource !== "agent") {
         useTerminalPendingDestructiveActionStore.getState().request({
           kind: "worktreeEndAll",
+          dispatchSource: ctx.dispatchSource,
           targetCount: targets.length,
           runningAgentCount: collectRunningAgentTerminals(targets).length,
           worktreeId: targetWorktreeId,
+          worktreeTitle: resolveWorktreeDisplayName(targetWorktreeId),
+          preview: buildDestructivePreview(targets),
         });
         return;
       }
@@ -335,9 +347,11 @@ export function registerWorktreeSessionActions(
       if (confirmed !== true && ctx.dispatchSource !== "agent") {
         useTerminalPendingDestructiveActionStore.getState().request({
           kind: "worktreeClearHistory",
+          dispatchSource: ctx.dispatchSource,
           targetCount: 0,
           runningAgentCount: 0,
           worktreeId: targetWorktreeId,
+          worktreeTitle: resolveWorktreeDisplayName(targetWorktreeId),
         });
         return;
       }

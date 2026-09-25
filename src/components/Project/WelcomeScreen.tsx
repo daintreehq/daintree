@@ -2,9 +2,7 @@ import { useMemo, useState } from "react";
 import {
   FolderOpen,
   FolderPlus,
-  Rocket,
   Check,
-  Download,
   Newspaper,
   ExternalLink,
   GitBranch,
@@ -12,22 +10,25 @@ import {
   Plug,
   Pin,
   Sparkles,
+  type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { BrandMark, DaintreeIcon } from "@/components/icons";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { KbdChord } from "@/components/ui/Kbd";
+import { AppWindow, BrandMark, DaintreeIcon } from "@/components/icons";
 import { useProjectStore } from "@/store/projectStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { compareProjectsByMode } from "@/lib/projectSort";
 import { cn } from "@/lib/utils";
-import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { getProjectGradient, getBrandColorHex } from "@/lib/colorUtils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { middleTruncate } from "@/utils/textParsing";
 import { CHECKLIST_ITEMS } from "@/components/Onboarding/checklistItems";
 import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
+import { TourWelcomeLink } from "@/components/Tour/TourInviteCard";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig } from "@/config/agents";
 import { LAUNCHABLE_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
@@ -41,17 +42,39 @@ interface WelcomeScreenProps {
   gettingStarted: GettingStartedChecklistState;
 }
 
+interface QuickAction {
+  id: string;
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  onClick: () => void;
+  /** A second way in, beside the card rather than inside it. */
+  secondary?: { label: string; onClick: () => void };
+  primary: boolean;
+}
+
 const SHORTCUT_TIPS: { label: string; actionId: string }[] = [
-  { label: "New Panel", actionId: "panel.palette" },
-  { label: "Quick Switcher", actionId: "nav.quickSwitcher" },
-  { label: "New Terminal", actionId: "terminal.new" },
-  { label: "Command Palette", actionId: "action.palette.open" },
-  { label: "Keyboard Shortcuts", actionId: "help.shortcuts" },
+  { label: "New panel", actionId: "panel.palette" },
+  { label: "Quick switcher", actionId: "nav.quickSwitcher" },
+  { label: "New terminal", actionId: "terminal.new" },
+  { label: "Command palette", actionId: "action.palette.open" },
+  { label: "Keyboard shortcuts", actionId: "help.shortcuts" },
   { label: "Settings", actionId: "app.settings" },
 ];
 
+/**
+ * Opens the agent setup wizard. `isFirstRun` keeps the theme and crash
+ * reporting steps for a user who has not been through setup yet.
+ */
+function openAgentSetup(isFirstRun: boolean): void {
+  window.dispatchEvent(
+    new CustomEvent("daintree:open-agent-setup-wizard", { detail: { isFirstRun } })
+  );
+}
+
 export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const addProject = useProjectStore((state) => state.addProject);
+  const addProjectByPath = useProjectStore((state) => state.addProjectByPath);
   const openCreateFolderDialog = useProjectStore((state) => state.openCreateFolderDialog);
   const openCloneRepoDialog = useProjectStore((state) => state.openCloneRepoDialog);
 
@@ -89,6 +112,10 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
 
   const hasProjects = topProjects.length > 0;
   const { checklist } = gettingStarted;
+  const { loaded: onboardingLoaded, setupBannerDismissed } = useAgentDiscoveryOnboarding();
+  // The tour link waits until agent setup has been answered, so a first launch
+  // never has it competing with Open project and the setup banner.
+  const tourLinkEnabled = onboardingLoaded && setupBannerDismissed;
 
   const visibleShortcutTips = useMemo(
     () => SHORTCUT_TIPS.filter(({ actionId }) => keybindingService.getDisplayCombo(actionId)),
@@ -96,13 +123,19 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   );
 
   const quickActions = useMemo(
-    () => [
+    (): QuickAction[] => [
       {
         id: "open-folder",
         icon: FolderOpen,
         title: "Open project",
         description: "Open an existing project on your machine",
         onClick: () => void addProject(),
+        // Same picker, but the folder lands in an empty or new window and this
+        // one stays on the welcome screen (#12594).
+        secondary: {
+          label: "Open in new window…",
+          onClick: () => void addProjectByPath("", { disposition: "new" }),
+        },
         primary: true,
       },
       {
@@ -121,16 +154,8 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
         onClick: openCloneRepoDialog,
         primary: false,
       },
-      {
-        id: "launch-agent",
-        icon: Rocket,
-        title: "Launch agent",
-        description: "Open the panel palette to start an agent",
-        onClick: () => void actionService.dispatch("panel.palette", undefined, { source: "user" }),
-        primary: false,
-      },
     ],
-    [addProject, openCreateFolderDialog, openCloneRepoDialog]
+    [addProject, addProjectByPath, openCreateFolderDialog, openCloneRepoDialog]
   );
 
   const completedCount = checklist ? Object.values(checklist.items).filter(Boolean).length : 0;
@@ -171,19 +196,16 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
               <p className="text-sm text-text-secondary leading-relaxed font-medium @min-[1920px]/welcome:text-base">
                 A habitat for your AI agents.
               </p>
+              <div className="mt-3">
+                <TourWelcomeLink enabled={tourLinkEnabled} />
+              </div>
             </div>
           )}
 
           {hasProjects && <TopProjects projects={topProjects} onSelect={switchProject} />}
 
-          <NudgeSequencer
-            showChecklist={!!showChecklist}
-            checklist={checklist}
-            progressDone={progressDone}
-            progressTotal={progressTotal}
-          />
-
-          {/* Quick Actions */}
+          {/* Quick Actions — the screen's actions live here and nowhere else; the
+              nudge below reports progress and offers optional setup. */}
           <div className="w-full">
             {hasProjects && (
               <h3
@@ -198,72 +220,108 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
               aria-label={hasProjects ? undefined : "Quick actions"}
               aria-labelledby={hasProjects ? "quick-actions-heading" : undefined}
               data-testid="quick-actions"
-              className="grid grid-cols-2 gap-3 @min-[1800px]/welcome:gap-4"
+              className="grid grid-cols-3 gap-3 @min-[1800px]/welcome:gap-4"
             >
-              {quickActions.map(({ id, icon: Icon, title, description, onClick, primary }) => {
-                // Subtle surface lift marks the recommended first step for new
-                // users only; once recents exist the list owns the primary path,
-                // so every card drops to equal, demoted weight. Not the accent
-                // color — that load-bearing signal is owned by the checklist.
-                const lifted = primary && !hasProjects;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={onClick}
-                    // Title is the accessible name; the description is announced
-                    // once via aria-describedby. aria-label keeps the name clean
-                    // so the in-button description text isn't double-announced.
-                    aria-label={title}
-                    aria-describedby={`qa-desc-${id}`}
-                    className={cn(
-                      "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left @min-[1800px]/welcome:p-4",
-                      "transition-colors duration-150",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                      lifted
-                        ? // Correct elevate-to-select inversion (ring-border-strong
-                          // + elevated fill). Dark keeps its /95 wash; on light the
-                          // alpha makes the elevated lift translucency-inert (RC-9),
-                          // so .light forces the fully opaque elevated surface to
-                          // preserve the real ~0.03-0.04 dL lift over the panel.
-                          "ring-1 ring-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated hover:bg-surface-panel-elevated"
-                        : // Idle hover: overlay-soft already clears the JND on dark
-                          // but composites sub-JND over the light panel, so .light
-                          // steps it up to overlay-medium.
-                          "ring-1 ring-border-strong/40 hover:bg-overlay-soft [.light_&]:hover:bg-overlay-medium"
-                    )}
-                  >
-                    <span className="flex items-center gap-2 text-sm font-medium text-text-primary @min-[1920px]/welcome:text-base">
-                      <Icon className="h-4 w-4 shrink-0 text-daintree-text/70 @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5" />
-                      {title}
-                    </span>
-                    <span
-                      id={`qa-desc-${id}`}
-                      className="text-xs text-text-secondary leading-relaxed @min-[1920px]/welcome:text-sm"
+              {quickActions.map(
+                ({ id, icon: Icon, title, description, onClick, primary, secondary }) => {
+                  // Subtle surface lift marks the recommended first step for new
+                  // users only; once recents exist the list owns the primary path,
+                  // so every card drops to equal, demoted weight. Not the accent
+                  // color — that load-bearing signal is owned by the checklist.
+                  const lifted = primary && !hasProjects;
+                  const card = (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={onClick}
+                      // Title is the accessible name; the description is announced
+                      // once via aria-describedby. aria-label keeps the name clean
+                      // so the in-button description text isn't double-announced.
+                      aria-label={title}
+                      aria-describedby={`qa-desc-${id}`}
+                      className={cn(
+                        "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left @min-[1800px]/welcome:p-4",
+                        // Room for the secondary action pinned in the corner.
+                        secondary && "h-full w-full pr-10 @min-[1800px]/welcome:pr-11",
+                        "transition-colors duration-150",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                        lifted
+                          ? // Correct elevate-to-select inversion (ring-border-strong
+                            // + elevated fill). Dark keeps its /95 wash; on light the
+                            // alpha makes the elevated lift translucency-inert (RC-9),
+                            // so .light forces the fully opaque elevated surface to
+                            // preserve the real ~0.03-0.04 dL lift over the panel.
+                            "ring-1 ring-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated hover:bg-surface-panel-elevated"
+                          : // Idle hover: overlay-soft already clears the JND on dark
+                            // but composites sub-JND over the light panel, so .light
+                            // steps it up to overlay-medium.
+                            "ring-1 ring-border-strong/40 hover:bg-overlay-soft [.light_&]:hover:bg-overlay-medium"
+                      )}
                     >
-                      {description}
-                    </span>
-                  </button>
-                );
-              })}
+                      <span className="flex items-center gap-2 text-sm font-medium text-text-primary @min-[1920px]/welcome:text-base">
+                        <Icon className="h-4 w-4 shrink-0 text-text-secondary @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5" />
+                        {title}
+                      </span>
+                      <span
+                        id={`qa-desc-${id}`}
+                        className="text-xs text-text-secondary leading-relaxed @min-[1920px]/welcome:text-sm"
+                      >
+                        {description}
+                      </span>
+                    </button>
+                  );
+                  if (!secondary) return card;
+                  // A sibling of the card rather than a child: a button can't
+                  // nest inside another.
+                  return (
+                    <div key={id} className="relative">
+                      {card}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={secondary.onClick}
+                            aria-label={secondary.label}
+                            className={cn(
+                              "absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary",
+                              "transition-colors duration-150 hover:bg-overlay-medium hover:text-text-primary",
+                              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                            )}
+                          >
+                            <AppWindow className="h-4 w-4" aria-hidden="true" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">{secondary.label}</TooltipContent>
+                      </Tooltip>
+                    </div>
+                  );
+                }
+              )}
             </div>
           </div>
 
-          {/* Keyboard Shortcuts */}
-          {visibleShortcutTips.length > 0 && (
+          <NudgeSequencer
+            showChecklist={!!showChecklist}
+            checklist={checklist}
+            progressDone={progressDone}
+            progressTotal={progressTotal}
+            onDismissChecklist={gettingStarted.dismiss}
+          />
+
+          {/* Keyboard Shortcuts — the checklist is the teaching surface while it
+              is up, so the two never compete for the same screen. */}
+          {visibleShortcutTips.length > 0 && !showChecklist && (
             <div className="w-full">
               <h3 className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3">
                 Keyboard shortcuts
               </h3>
               <div className="grid grid-cols-2 gap-x-8 gap-y-2 @min-[1800px]/welcome:gap-x-10">
                 {visibleShortcutTips.map(({ label, actionId }) => {
-                  const combo = keybindingService.getDisplayCombo(actionId);
+                  const combo = keybindingService.getEffectiveCombo(actionId);
                   return (
                     <div key={actionId} className="flex items-center justify-between gap-3">
                       <span className="text-sm text-text-secondary">{label}</span>
-                      <kbd className="shrink-0 bg-surface-canvas border border-border-default rounded px-1.5 py-0.5 text-xs font-mono text-text-primary shadow-sm">
-                        {combo}
-                      </kbd>
+                      {combo && <KbdChord shortcut={combo} className="shrink-0" />}
                     </div>
                   );
                 })}
@@ -272,7 +330,19 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
           )}
 
           {/* Footer */}
-          <div className="flex items-center gap-4 text-xs text-daintree-text/40 pt-2">
+          <div className="flex items-center gap-4 text-xs text-text-secondary pt-2">
+            {/* The way back into setup once the banner is gone — declined or
+                finished, a user can always reach it again from here. */}
+            {onboardingLoaded && setupBannerDismissed && (
+              <button
+                type="button"
+                onClick={() => openAgentSetup(false)}
+                className="flex items-center gap-1.5 rounded-[var(--radius-xs)] hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              >
+                <Sparkles className="h-3 w-3" aria-hidden="true" />
+                Set up agents
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -283,9 +353,9 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                   safeFireAndForget(promise, { context: "Opening newsletter link" });
                 }
               }}
-              className="flex items-center gap-1.5 hover:text-text-secondary transition-colors"
+              className="flex items-center gap-1.5 rounded-[var(--radius-xs)] hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
-              <Newspaper className="h-3 w-3" />
+              <Newspaper className="h-3 w-3" aria-hidden="true" />
               Newsletter
               <ExternalLink className="h-2.5 w-2.5" />
             </button>
@@ -324,11 +394,13 @@ function NudgeSequencer({
   checklist,
   progressDone,
   progressTotal,
+  onDismissChecklist,
 }: {
   showChecklist: boolean;
   checklist: GettingStartedChecklistState["checklist"];
   progressDone: number;
   progressTotal: number;
+  onDismissChecklist: () => void;
 }) {
   const { loaded, setupBannerDismissed, welcomeCardDismissed } = useAgentDiscoveryOnboarding();
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
@@ -353,17 +425,20 @@ function NudgeSequencer({
 
   if (!setupBannerDismissed) return <AgentSetupBannerCard />;
 
-  if (welcomeCardEligible) return <AgentWelcomeCard />;
-
+  // Progress before pinning: a user who has just declined setup should see
+  // where they are, not be asked another setup question straight away.
   if (showChecklist && checklist) {
     return (
       <InlineChecklist
         checklist={checklist}
         progressDone={progressDone}
         progressTotal={progressTotal}
+        onDismiss={onDismissChecklist}
       />
     );
   }
+
+  if (welcomeCardEligible) return <AgentWelcomeCard />;
 
   return null;
 }
@@ -439,13 +514,7 @@ function AgentSetupBannerCard() {
   if (!loaded) return null;
   if (setupBannerDismissed) return null;
 
-  const handleStartSetup = () => {
-    window.dispatchEvent(
-      new CustomEvent("daintree:open-agent-setup-wizard", {
-        detail: { isFirstRun: true },
-      })
-    );
-  };
+  const handleStartSetup = () => openAgentSetup(true);
 
   const handleDismiss = () => {
     void dismissSetupBanner();
@@ -453,19 +522,19 @@ function AgentSetupBannerCard() {
 
   return (
     <div className="w-full" data-testid="agent-setup-banner">
-      <div className="relative w-full rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-sidebar/40 px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
+      <div className="relative w-full rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
         <button
           type="button"
           onClick={handleDismiss}
           aria-label="Dismiss agent setup banner"
           data-testid="agent-setup-banner-dismiss"
-          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-daintree-text/40 transition-colors hover:bg-overlay-emphasis hover:text-daintree-text/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-text-secondary transition-colors hover:bg-overlay-emphasis hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         >
           <X className="h-3.5 w-3.5" />
         </button>
         <div className="flex items-start gap-3 pr-6">
           <Sparkles
-            className="h-4 w-4 text-daintree-text/50 mt-0.5 shrink-0 @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5"
+            className="h-4 w-4 text-text-secondary mt-0.5 shrink-0 @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5"
             aria-hidden="true"
           />
           <div className="flex-1 min-w-0">
@@ -473,12 +542,15 @@ function AgentSetupBannerCard() {
               Set up your AI agents
             </h3>
             <p className="text-xs text-text-secondary mt-1 leading-relaxed @min-[1920px]/welcome:text-sm">
-              Pick a theme, opt into telemetry, and choose which agents to install. You can skip
-              this and come back anytime.
+              Choose the agent CLIs you use and install any you're missing. Optional — you can come
+              back to it from the footer anytime.
             </p>
             <div className="mt-4 flex items-center gap-2">
+              {/* Outline, not a fill: this is optional, and the Open project card
+                  above is the screen's one lead action. */}
               <Button
                 size="sm"
+                variant="outline"
                 onClick={handleStartSetup}
                 className="@min-[1920px]/welcome:h-8 @min-[1920px]/welcome:text-sm"
                 data-testid="agent-setup-banner-cta"
@@ -555,18 +627,18 @@ function AgentWelcomeCard() {
 
   return (
     <div className="w-full">
-      <div className="relative w-full rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-sidebar/40 px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
+      <div className="relative w-full rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
         <button
           type="button"
           onClick={handleDismiss}
           aria-label="Dismiss welcome card"
-          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-daintree-text/40 transition-colors hover:bg-overlay-emphasis hover:text-daintree-text/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-text-secondary transition-colors hover:bg-overlay-emphasis hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         >
           <X className="h-3.5 w-3.5" />
         </button>
         <div className="flex items-start gap-3 pr-6">
           <Plug
-            className="h-4 w-4 text-daintree-text/50 mt-0.5 shrink-0 @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5"
+            className="h-4 w-4 text-text-secondary mt-0.5 shrink-0 @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5"
             aria-hidden="true"
           />
           <div className="flex-1 min-w-0">
@@ -584,7 +656,7 @@ function AgentWelcomeCard() {
                 return (
                   <li
                     key={id}
-                    className="inline-flex items-center gap-1.5 rounded-[var(--radius-xs)] border border-daintree-border/60 bg-daintree-bg/40 px-2 py-1 text-xs text-text-primary"
+                    className="inline-flex items-center gap-1.5 rounded-[var(--radius-xs)] border border-border-default bg-surface-canvas px-2 py-1 text-xs text-text-primary"
                   >
                     <span className="inline-flex h-3.5 w-3.5 items-center justify-center">
                       <BrandMark brandColor={getBrandColorHex(id)} className="h-3.5 w-3.5">
@@ -599,6 +671,7 @@ function AgentWelcomeCard() {
             <div className="mt-4 flex items-center gap-2">
               <Button
                 size="sm"
+                variant="outline"
                 onClick={() => void handlePinAll()}
                 disabled={busy}
                 className="@min-[1920px]/welcome:h-8 @min-[1920px]/welcome:text-sm"
@@ -635,129 +708,126 @@ function InlineChecklist({
   checklist,
   progressDone,
   progressTotal,
+  onDismiss,
 }: {
   checklist: NonNullable<GettingStartedChecklistState["checklist"]>;
   progressDone: number;
   progressTotal: number;
+  onDismiss: () => void;
 }) {
+  // A report, not a second set of buttons: on the welcome screen there is no
+  // project, so every item but the first would act on nothing, and the first
+  // is the Open project card above. The next step is named; the rest wait.
+  const nextIndex = CHECKLIST_ITEMS.findIndex(({ id }) => !checklist.items[id]);
+
   return (
-    <div className="w-full">
+    <section className="w-full" aria-labelledby="welcome-getting-started-heading">
       <div className="flex items-center gap-3 mb-3">
-        <h3 className="text-xs font-medium text-text-secondary uppercase tracking-wider">
+        <h3
+          id="welcome-getting-started-heading"
+          className="text-xs font-medium text-text-secondary uppercase tracking-wider"
+        >
           Getting started
         </h3>
-        <span className="text-3xs text-text-secondary font-mono @min-[1920px]/welcome:text-xs">
+        <span className="text-3xs text-text-secondary font-mono tabular-nums @min-[1920px]/welcome:text-xs">
           {progressDone}/{progressTotal}
         </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onDismiss}
+              aria-label="Hide getting started"
+              className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-[var(--radius-xs)] text-text-secondary transition-colors hover:bg-overlay-medium hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Hide — reopen from Help → Getting Started</TooltipContent>
+        </Tooltip>
       </div>
 
-      {/* Progress bar */}
-      <div className="w-full h-1 bg-daintree-border/50 rounded-full mb-4 overflow-hidden">
+      <div
+        role="progressbar"
+        aria-label="Getting started progress"
+        aria-valuemin={0}
+        aria-valuemax={progressTotal}
+        aria-valuenow={progressDone}
+        className="w-full h-1 bg-overlay-medium rounded-full mb-4 overflow-hidden"
+      >
         <div
-          className="h-full bg-accent-primary rounded-full transition-[width] duration-500"
+          className="h-full bg-text-secondary rounded-full transition-[width] duration-500"
           style={{ width: `${(progressDone / progressTotal) * 100}%` }}
         />
       </div>
 
-      <div className="space-y-1">
-        {/* Endowed progress: Install Daintree (always complete) */}
-        {(() => {
-          const firstIncompleteIndex = CHECKLIST_ITEMS.findIndex(({ id }) => !checklist.items[id]);
+      <ol className="space-y-1">
+        <ChecklistReportRow done label="Install Daintree" />
+        {CHECKLIST_ITEMS.map(({ id, label, description }, index) => (
+          <ChecklistReportRow
+            key={id}
+            done={checklist.items[id]}
+            label={label}
+            description={index === nextIndex ? description : undefined}
+            isNext={index === nextIndex}
+          />
+        ))}
+      </ol>
+    </section>
+  );
+}
 
-          return (
-            <>
-              <div className="flex items-start gap-2.5 px-2 py-1.5 opacity-60 @min-[1800px]/welcome:gap-3 @min-[1800px]/welcome:px-3 @min-[1800px]/welcome:py-2">
-                <div className="h-4 w-4 rounded-full bg-accent-primary border border-accent-primary flex items-center justify-center shrink-0 @min-[1920px]/welcome:mt-0.5">
-                  <Check className="h-2.5 w-2.5 text-accent-primary-foreground" />
-                </div>
-                <Download className="h-3.5 w-3.5 text-daintree-text/40 shrink-0 @min-[1920px]/welcome:mt-0.5 @min-[1920px]/welcome:h-4 @min-[1920px]/welcome:w-4" />
-                <span className="text-xs leading-snug text-daintree-text/40 @min-[1920px]/welcome:text-sm">
-                  Install Daintree
-                </span>
-              </div>
-
-              {/* Real checklist items */}
-              {CHECKLIST_ITEMS.map(({ id, label, description, icon: Icon, actionId }, index) => {
-                const done = checklist.items[id];
-
-                const content = (
-                  <>
-                    <div
-                      className={cn(
-                        "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition-colors duration-150 @min-[1920px]/welcome:mt-0.5",
-                        done ? "bg-accent-primary border-accent-primary" : "border-daintree-text/30"
-                      )}
-                    >
-                      {done && <Check className="h-2.5 w-2.5 text-accent-primary-foreground" />}
-                    </div>
-                    <Icon
-                      className={cn(
-                        "h-3.5 w-3.5 shrink-0 @min-[1920px]/welcome:mt-0.5 @min-[1920px]/welcome:h-4 @min-[1920px]/welcome:w-4",
-                        done ? "text-daintree-text/40" : "text-daintree-text/70"
-                      )}
-                    />
-                    <div className="flex flex-col min-w-0 flex-1">
-                      <span
-                        className={cn(
-                          "text-xs leading-snug @min-[1920px]/welcome:text-sm",
-                          done ? "line-through text-daintree-text/40" : "text-text-primary"
-                        )}
-                      >
-                        {label}
-                      </span>
-                      {description && (
-                        <span
-                          className={cn(
-                            "text-3xs leading-snug @min-[1920px]/welcome:text-xs",
-                            done ? "text-text-placeholder" : "text-text-secondary"
-                          )}
-                        >
-                          {description}
-                        </span>
-                      )}
-                    </div>
-                  </>
-                );
-
-                const sharedClasses = cn(
-                  "flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5 @min-[1800px]/welcome:gap-3 @min-[1800px]/welcome:px-3 @min-[1800px]/welcome:py-2",
-                  "transition-colors duration-150",
-                  done ? "opacity-60" : "opacity-100"
-                );
-
-                if (done) {
-                  return (
-                    <div key={id} className={sharedClasses}>
-                      {content}
-                    </div>
-                  );
-                }
-
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    aria-current={index === firstIncompleteIndex ? "step" : undefined}
-                    onClick={() =>
-                      void actionService.dispatch(actionId, undefined, {
-                        source: "user",
-                      })
-                    }
-                    className={cn(
-                      sharedClasses,
-                      "w-full text-left cursor-pointer",
-                      "hover:bg-tint/10",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                    )}
-                  >
-                    {content}
-                  </button>
-                );
-              })}
-            </>
-          );
-        })()}
+function ChecklistReportRow({
+  done,
+  label,
+  description,
+  isNext = false,
+}: {
+  done: boolean;
+  label: string;
+  description?: string;
+  isNext?: boolean;
+}) {
+  return (
+    <li
+      aria-current={isNext ? "step" : undefined}
+      className={cn(
+        "flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5 @min-[1800px]/welcome:gap-3 @min-[1800px]/welcome:px-3 @min-[1800px]/welcome:py-2",
+        isNext && "bg-overlay-subtle"
+      )}
+    >
+      <ChecklistMark done={done} />
+      <div className="flex flex-col min-w-0 flex-1">
+        <span
+          className={cn(
+            "text-xs leading-snug @min-[1920px]/welcome:text-sm",
+            isNext ? "font-medium text-text-primary" : "text-text-secondary"
+          )}
+        >
+          {done && <span className="sr-only">Done: </span>}
+          {label}
+        </span>
+        {description && (
+          <span className="text-3xs leading-snug text-text-secondary @min-[1920px]/welcome:text-xs">
+            {description}
+          </span>
+        )}
       </div>
-    </div>
+    </li>
+  );
+}
+
+/** Neutral completion mark — membership, not the accent's one signal. */
+function ChecklistMark({ done }: { done: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 @min-[1920px]/welcome:mt-0.5",
+        done ? "bg-text-secondary border-text-secondary" : "border-text-secondary"
+      )}
+    >
+      {done && <Check className="h-2.5 w-2.5 text-text-inverse" />}
+    </span>
   );
 }

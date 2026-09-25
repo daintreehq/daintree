@@ -1,6 +1,8 @@
-import React, { useRef } from "react";
-import { Search, Plus } from "lucide-react";
+import React, { useEffect, useRef } from "react";
+import { Plus } from "lucide-react";
 import { RecipeRunnerItem } from "./RecipeRunnerItem";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { SearchField } from "@/components/ui/SearchField";
 import type { RecipeSections, RankedRecipe } from "./recipeRunnerUtils";
 import type { TerminalRecipe } from "@/types";
 
@@ -21,6 +23,7 @@ interface RecipeRunnerListProps {
   onUnpin: (id: string) => void;
   onDelete: (id: string) => void;
   onCreate: () => void;
+  onManage?: () => void;
 }
 
 export function RecipeRunnerList({
@@ -40,6 +43,7 @@ export function RecipeRunnerList({
   onUnpin,
   onDelete,
   onCreate,
+  onManage,
 }: RecipeRunnerListProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const isSearchActive = searchQuery.trim().length > 0;
@@ -52,6 +56,15 @@ export function RecipeRunnerList({
   // surface nobody had navigated to. `ProjectPulseStrip` states the same rule
   // for the same reason: "the empty grid must not steal focus just by
   // rendering". Tab and the arrow keys still reach the field normally.
+
+  // The active option is named by `aria-activedescendant`, so DOM focus never
+  // moves and nothing scrolls it into view on its own — arrowing down a long
+  // band would leave Enter pointed at a row below the fold. Only while the
+  // filter owns focus: a list that merely re-rendered must not scroll the canvas.
+  useEffect(() => {
+    if (!focusedItemId || document.activeElement !== inputRef.current) return;
+    document.getElementById(focusedItemId)?.scrollIntoView({ block: "nearest" });
+  }, [focusedItemId]);
 
   // Build flat list for index computation
   let flatRecipes: TerminalRecipe[];
@@ -98,7 +111,7 @@ export function RecipeRunnerList({
     // group/recipes scopes the roving aria-selected ring to keyboard use: in
     // list mode focus lives in the combobox input (not the listbox), so the
     // group must wrap both. At rest no ring shows — see RecipeRunnerItem.
-    <div className="group/recipes" onKeyDown={onKeyDown}>
+    <div className="group/recipes">
       {showSearch && (
         // A labelled header row, not a second full-width search field. Once
         // every band shared one measure this input became the same width and
@@ -106,29 +119,42 @@ export function RecipeRunnerList({
         // showed two equal search anchors and the lower one looked like
         // another way to launch anything. Naming the band and shrinking the
         // input to a filter says what its scope actually is.
-        <div className="mb-2 flex items-baseline gap-3 px-1">
+        <div className="mb-2 flex items-center gap-3 px-1">
           <span
             id="recipe-band-label"
             className="shrink-0 text-2xs font-medium uppercase tracking-wide text-text-secondary"
           >
             Recipes
           </span>
-          <div className="relative min-w-0 flex-1">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-text-secondary pointer-events-none" />
-            <input
-              ref={inputRef}
-              type="text"
-              role="combobox"
-              aria-expanded={true}
-              aria-controls="recipe-listbox"
-              aria-activedescendant={focusedItemId}
-              aria-label="Filter recipes"
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Filter recipes…"
-              className="w-full rounded-[var(--radius-md)] border border-border-subtle bg-transparent py-1 pl-7 pr-2 text-xs text-text-primary placeholder:text-text-placeholder focus:border-daintree-accent/40 focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/40"
-            />
-          </div>
+          <SearchField
+            size="compact"
+            fieldClassName="flex-1"
+            inputRef={inputRef}
+            role="combobox"
+            aria-expanded={true}
+            aria-controls="recipe-listbox"
+            aria-activedescendant={focusedItemId}
+            aria-label="Filter recipes"
+            // On the input, not the band: the combobox owns the arrow/Enter
+            // contract, and a handler on the wrapper also caught Enter on the
+            // Manage button beside it and launched the active recipe.
+            onKeyDown={onKeyDown}
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            onClear={() => onSearchChange("")}
+            placeholder="Filter recipes…"
+          />
+          {/* In list mode the inventory is long enough that a link under it
+              is a scroll away; the header is where management is findable. */}
+          {onManage && (
+            <button
+              type="button"
+              onClick={onManage}
+              className="shrink-0 rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+            >
+              Manage
+            </button>
+          )}
         </div>
       )}
 
@@ -147,9 +173,11 @@ export function RecipeRunnerList({
             {flatRecipes.length > 0 ? (
               flatRecipes.map(renderItem)
             ) : (
-              <div className="px-3 py-2 text-sm text-text-muted">
-                No recipes match &ldquo;{searchQuery}&rdquo;
-              </div>
+              <EmptyState
+                variant="filtered-empty"
+                scale="sidebar"
+                title={`No recipes match \u201c${searchQuery}\u201d`}
+              />
             )}
           </>
         ) : (
@@ -163,7 +191,7 @@ export function RecipeRunnerList({
                 >
                   Pinned
                 </div>
-                <div role="group" aria-labelledby="section-pinned">
+                <div role="group" aria-labelledby="section-pinned" className="flex flex-col gap-1">
                   {sections.pinned.map(renderItem)}
                 </div>
               </>
@@ -177,7 +205,7 @@ export function RecipeRunnerList({
                 >
                   Recent
                 </div>
-                <div role="group" aria-labelledby="section-recent">
+                <div role="group" aria-labelledby="section-recent" className="flex flex-col gap-1">
                   {sections.recent.map(renderItem)}
                 </div>
               </>
@@ -191,7 +219,7 @@ export function RecipeRunnerList({
                 >
                   All
                 </div>
-                <div role="group" aria-labelledby="section-all">
+                <div role="group" aria-labelledby="section-all" className="flex flex-col gap-1">
                   {sections.all.map(renderItem)}
                 </div>
               </>
@@ -206,16 +234,20 @@ export function RecipeRunnerList({
           type="button"
           tabIndex={-1}
           onClick={onCreate}
-          className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60"
+          // `border-transparent` at rest reserves the box so the active boundary
+          // below never shifts the row. Same `overlay-raised` + `selection-outline`
+          // pair the recipe rows and the palettes use: with focus parked in the
+          // filter input, this button's own focus ring can never paint, so the
+          // fill alone (~1.1:1) would be the only cue that Enter creates rather
+          // than runs.
+          className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] border border-transparent hover:bg-overlay-medium transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary group-focus-within/recipes:aria-selected:bg-overlay-raised group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
         >
           <Plus
             className="h-3.5 w-3.5 text-text-secondary group-hover:text-text-primary transition-colors shrink-0"
             aria-hidden
           />
           <span className="flex-1 text-sm text-text-secondary group-hover:text-text-primary transition-colors">
-            {isSearchActive && flatRecipes.length === 0
-              ? `Create recipe: "${searchQuery}"`
-              : "Create new recipe…"}
+            Create new recipe…
           </span>
         </button>
       </div>

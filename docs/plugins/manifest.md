@@ -172,9 +172,9 @@ Semver range expressing which Daintree versions the plugin supports. The scaffol
 - `">=0.11.0 <0.13.0"` — explicit range
 - `"0.11.x"` — any 0.11 release
 
-**Never use a caret on a 0.x range.** `"^0.11.0"` resolves to `>=0.11.0 <0.12.0` under semver's 0.x rule, so it stops matching at the very next minor and the plugin is rejected on every release after the one you wrote it against.
+**Never use a caret on a 0.x range.** `"^0.11.0"` resolves to `>=0.11.0 <0.12.0` under semver's 0.x rule, so it stops matching at the very next minor and the plugin draws a compatibility warning on every release after the one you wrote it against.
 
-If the running Daintree version doesn't satisfy the range, the plugin is rejected at load with a user-visible warning toast. If `engines.daintree` is omitted entirely, Daintree warns in the console but loads the plugin anyway.
+If the running Daintree version doesn't satisfy the range, the plugin still installs and loads, and Daintree shows a warning toast (once per session for each plugin version and range) that it may not work on this version. A local dev build such as `0.37.0-dev.<stamp>` is also checked against the release it precedes, so it satisfies `>=0.37.0`. If `engines.daintree` is omitted entirely, Daintree warns in the console but loads the plugin anyway.
 
 Daintree is pre-1.0. Pin to a current minor during this phase — a plugin that works on Daintree 0.11 may not work on 0.12 without changes.
 
@@ -234,11 +234,11 @@ Plugins are lazy by default. Omitting `activationEvents` (or passing an empty ar
 
 ### `contributes`
 
-Object containing an array per contribution type — sixteen of them (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`) — plus the non-array `surfaces` object. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests.
+Object containing an array per contribution type — nineteen of them (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`, and the built-in-only `fileEditors`, `previewTools`, `guestAdapters`) — plus the non-array `surfaces` object. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests.
 
 Validation is structural as well as per-field: duplicate ids within one array are rejected (`duplicate_contribution_id`), and cross-references have to resolve — a `views[].id` must name a declared panel, a forge provider's `settingsScopeRef` / `viewRefs` must name declared settings / views, a `surfaces` slot's `viewId` must name a declared view, and a `${settings:…}` token in an MCP server's `command` / `args` / `env` must name a declared setting.
 
-A few notes on individual points; the [Contribution points reference](./contribution-points.md) has the full shape and per-point status for all seventeen.
+A few notes on individual points; the [Contribution points reference](./contribution-points.md) has the full shape and per-point status for all twenty, and marks the three only a built-in plugin may declare.
 
 - `views` — `location: "panel"` is wired today (the renderer host mounts the contributed component in a grid panel). `location: "sidebar"` is rejected at manifest validation — the sidebar host does not exist yet, so accepting it would validate a view the runtime cannot render.
 - `mcpServers` — the declared `command` is lazily spawned as a real subprocess the first time its tools are enumerated, and is supervised (killed on Daintree exit; on crash it transitions to `crashed` and tool calls reject until an explicit manual restart — there is no automatic retry or backoff). Treat a contributed MCP server as trust-gated, not inert. Daintree is the server's client: its tools reach Daintree's own UI and the in-app Assistant, not agents running in terminals.

@@ -42,10 +42,11 @@ Produces `{pluginId}-{version}.dntr` in the project root. Runs through:
 
 1. Validates the manifest via the same Zod schema Daintree uses at load.
 2. Builds the plugin with Vite (unless `--skip-build` is passed).
-3. Copies the build output + referenced assets + manifest into a zip.
-4. Excludes `node_modules/`, `.git/`, source files (`*.ts`/`*.tsx`), source maps (unless `--sourcemaps`), root-level dev metadata (`package.json`, lockfiles, `tsconfig*.json`, `*.config.*`), and anything in `.gitignore`.
+3. Collects the file list. The candidates are every file `.gitignore` does not exclude, **plus** everything under the build-output directories even when they are gitignored — `dist/` always, and the top-level directory of `main` and of every view `componentPath` — because build output is ignored by convention and is exactly what ships. `.dntrignore` (root only, `.gitignore` syntax) then prunes that union, protected directories included, so `dist/docs/**` can be kept out of the archive; it is strictly subtractive and cannot re-include something `.gitignore` dropped. `plugin.json` is always added. Dotfiles never ship.
+4. Applies the normative exclusion list on top: `node_modules/`, `.git/`, source files (`*.ts`/`*.tsx`), source maps (unless `--sourcemaps`), root-level dev metadata (`package.json`, lockfiles, `tsconfig*.json`, `*.config.*`, `.dntrignore` itself) and any `*.dntr`. Then it checks that `main`, every view `componentPath` and every skill `path` survived, and fails naming the missing file rather than writing an archive the installer would reject.
+5. Writes the zip.
 
-The output is deterministic — the same source tree + `daintree-plugin` version produces a byte-identical `.dntr` file on the same OS. This matters if you're signing releases or publishing reproducible artifacts.
+The output is deterministic — the same source tree + `daintree-plugin` version produces a byte-identical `.dntr` file on the same OS. This matters if you're signing releases or publishing reproducible artifacts. The archive writer (entry order, `plugin.json` first, fixed timestamps) and the normative exclusion list in step 4 are shared with Daintree's own packer, so the host produces the identical archive when it packs the same file set; the selection rules in step 3 — `.gitignore`, the protected build directories, `.dntrignore`, the dotfile skip, and dropping `*.dntr` — are CLI-side policy that the host's `readdir`-based collector does not apply.
 
 Use `--verbose` to see what's included. Use `--dry-run` to preview without writing the archive.
 
@@ -100,12 +101,12 @@ The following are never included in a `.dntr` archive:
 
 - `node_modules/` — dependency trees
 - `.git/` — repository metadata
-- `.gitignore`'d entries — matched at pack time by the CLI packager
+- `.gitignore`'d entries — matched at pack time by the CLI packager, except for the build-output directories it preserves (`dist/` and whatever directory `main` or a view `componentPath` points into), which ship even when gitignored; `.dntrignore` prunes after that and is the way to drop a file from inside one of them
 - Source files (`*.ts`, `*.tsx`) — the archive ships compiled output
 - Source maps (`*.js.map`, `*.mjs.map`) — excluded by default, included only when `--sourcemaps` is passed to the packager
 - Root-level dev metadata — `package.json`, lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`), `tsconfig*.json`, and any root `*.config.*` (e.g. `vite.config.ts`, `tsup.config.mjs`). Scoped to the archive root only — a runtime asset like `dist/app.config.json` is kept. `package.json` is excluded because it carries the author's full dependency layout and, in a monorepo/`file:` setup, leaks the author's absolute home path into every distributed copy.
 
-The reference implementation in `PluginArchive.ts` applies the explicit exclusion list (`REQUIRED_EXCLUSIONS`, `SOURCE_EXTS`, `ROOT_DEV_FILE_NAMES`, `ROOT_CONFIG_FILE`) at both pack and verify time. Full `.gitignore` matching is the CLI packager's responsibility (F32) since it requires a git working tree.
+The reference implementation in `PluginArchive.ts` applies the explicit exclusion list (`REQUIRED_EXCLUSIONS`, `SOURCE_EXTS`, `ROOT_DEV_FILE_NAMES`, `ROOT_CONFIG_FILE`) at both pack and verify time. `.gitignore` matching, the preserved build-output directories, and `.dntrignore` are the CLI packager's responsibility (`packages/daintree-plugin/src/commands/package.ts`), in that order; the host's own packer sees none of them.
 
 ### SHA-256 archive hash
 
@@ -165,7 +166,7 @@ A user with a `.dntr` file can install it by:
 Daintree:
 
 1. Computes a SHA-256 hash of the archive.
-2. Validates the manifest (Zod schema + `engines.daintree` semver compatibility against the running app version).
+2. Validates the manifest against the Zod schema. An unmet `engines.daintree` range doesn't fail the install; the plugin loads with a compatibility warning.
 3. Extracts into a temp dir and atomically swaps into `~/.daintree/plugins/{publisher}.{name}/`.
 4. Loads the plugin.
 
@@ -226,9 +227,9 @@ Daintree:
 4. Deletes `~/.daintree/plugins/{publisher}.{name}/`.
 5. By default, **keeps** the plugin's user-scope settings file (`~/.daintree/plugin-settings/{publisher}.{name}.json`) so an API token survives a reinstall. The CLI's `--delete-settings` flag (or the UI's "also remove stored settings" checkbox) deletes that file instead.
 
-Secrets are not stored in a separate file — `type: "secret"` values live in the same user-scope settings file, but encrypted at rest through the OS keychain (Electron `safeStorage`: macOS Keychain / Windows DPAPI / Linux libsecret-kwallet) when one is available, persisted as a tagged ciphertext envelope. On a host with no keychain backend (typically headless Linux) they fall back to plaintext JSON under `chmod 0o600`, and the settings UI discloses which tier is in use. Either way they share the settings file's lifecycle: "keep settings" keeps the secrets too, and `--delete-settings` removes them.
+Secrets are not stored in a separate file — user-scope `type: "secret"` values live in the same user-scope settings file, encrypted at rest through the OS keychain (Electron `safeStorage`: macOS Keychain / Windows DPAPI / Linux libsecret-kwallet) and persisted as a tagged ciphertext envelope. On a host with no keychain backend (typically headless Linux) a secret can't be saved at all, and the settings UI says so. User-scope secrets share the settings file's lifecycle: "keep settings" keeps them too, and `--delete-settings` removes them.
 
-Project-scope settings (`<projectRoot>/.daintree/plugin-settings/{publisher}.{name}.json`) are **never** touched by uninstall — they're tracked per-repo and removing them is the project's concern.
+Project-scope settings (`<projectRoot>/.daintree/plugin-settings/{publisher}.{name}.json`) are **never** touched by uninstall — they're tracked per-repo and removing them is the project's concern. Project-scope secrets are not in that file: they live in this machine's per-project local settings (`~/.daintree/plugin-settings/local/{projectId}/`), which uninstall also leaves in place.
 
 Uninstall is reversible only from a backup — Daintree doesn't maintain a trash bin for plugins.
 
@@ -239,7 +240,7 @@ For authors who want to share plugins publicly:
 - **GitHub Releases** is the default recommendation. `.dntr` files are small; releases are free; versioning maps cleanly to git tags.
 - **README with install instructions.** Include the literal URL to paste into Daintree.
 - **Semver your releases.** Daintree uses `semver` only for the `engines.daintree` host-compatibility gate — not for update detection. "Check for update" re-fetches the original URL and compares the SHA-256 archive hash against the installed one, so a new build is detected by content change regardless of its version string.
-- **Set `engines.daintree` honestly** — an open-ended lower bound at the version you tested against (`">=0.34.0"`), never a caret. Under semver's 0.x rule `"^0.34.0"` means `>=0.34.0 <0.35.0`, so a caret rejects the plugin on the very next Daintree minor. Don't set `*` either — you'll get bug reports from users on versions you never supported. See [Manifest → `engines.daintree`](./manifest.md#enginesdaintree).
+- **Set `engines.daintree` honestly** — an open-ended lower bound at the version you tested against (`">=0.34.0"`), never a caret. Under semver's 0.x rule `"^0.34.0"` means `>=0.34.0 <0.35.0`, so a caret flags the plugin as possibly incompatible from the very next Daintree minor. Don't set `*` either — you'll get bug reports from users on versions you never supported. See [Manifest → `engines.daintree`](./manifest.md#enginesdaintree).
 - **Don't commit `.dntr` files to the source repo.** Build them in CI on release-tag.
 - **Pin `@daintreehq/plugin-sdk` tightly.** Pre-1.0, minor versions can break APIs.
 

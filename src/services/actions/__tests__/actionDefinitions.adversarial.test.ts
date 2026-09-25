@@ -582,6 +582,24 @@ describe("terminal action hardening", () => {
       }
     );
 
+    it("toggleMaximize records the grid's shape, so a restore brings it back (#12606)", async () => {
+      // The header's maximize button hands this over itself; both menus reach
+      // maximize through this action and must leave the same snapshot.
+      const { setGridLayoutSnapshot } = await import("@/components/Terminal/gridLayoutSnapshot");
+      const actions = buildRegistry(registerTerminalActions);
+      const toggleMaximize = actions.get("terminal.toggleMaximize")!();
+      seedGridPair();
+      usePanelStore.setState({ maximizeTarget: null, preMaximizeLayout: null });
+      setGridLayoutSnapshot({ gridCols: 3, gridItemCount: 5, fleetGridCols: 1 });
+
+      await toggleMaximize.run({ terminalId: "named" }, {});
+      const recorded = usePanelStore.getState().preMaximizeLayout;
+      setGridLayoutSnapshot({ gridCols: 1, gridItemCount: 0, fleetGridCols: 1 });
+
+      expect(usePanelStore.getState().maximizedId).toBe("named");
+      expect(recorded).toMatchObject({ gridCols: 3, gridItemCount: 5 });
+    });
+
     // moveToWorktree is reachable from the assistant's action tier (#11877), and
     // its side effect is a worktreeId change rather than a location change, so
     // the table above could not prove it stayed put — these assert the mutation

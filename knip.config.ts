@@ -66,14 +66,64 @@ const config: KnipConfig = {
     // so declare the TypeScript roots directly and retain analysis of their
     // imported shims and fixtures.
     "src/components/Fleet/__preview__/preview.tsx",
+    "src/components/Commands/__preview__/commandPicker.tsx",
+    "src/components/DevPreview/__preview__/preview.tsx",
+    "src/components/DevPreview/__preview__/blockedNavPreview.tsx",
+    "src/components/DevPreview/__preview__/consolePreview.tsx",
+    "src/components/DevPreview/__preview__/destructiveConfirmPreview.tsx",
+    "src/components/Diagnostics/__preview__/preview.tsx",
+    "src/components/ErrorBoundary/__preview__/preview.tsx",
+    "src/components/Errors/__preview__/preview.tsx",
     "src/components/FileViewer/__preview__/preview.tsx",
     "src/components/HelpPanel/__preview__/preview.tsx",
+    "src/components/HelpPanel/__preview__/footerPreview.tsx",
+    "src/components/HelpPanel/__preview__/figureRailPreview.tsx",
+    "src/components/HelpPanel/__preview__/launchingPreview.tsx",
+    "src/components/HelpPanel/__preview__/recentCallsPreview.tsx",
     "src/components/Layout/__preview__/preview.tsx",
+    "src/components/Layout/__preview__/dockPreview.tsx",
+    "src/components/Layout/__preview__/forgeStats.tsx",
+    "src/components/Layout/__preview__/launcher.tsx",
+    "src/components/Layout/__preview__/projectPill.tsx",
+    "src/components/Layout/__preview__/toolbar.tsx",
     "src/components/Layout/__preview__/sidebarFooter.tsx",
+    "src/components/Layout/__preview__/commandHud.tsx",
+    "src/components/Layout/__preview__/rateLimitDetails.tsx",
+    "src/components/Onboarding/__preview__/preview.tsx",
+    "src/components/Portal/__preview__/preview.tsx",
     "src/components/Plugin/__preview__/preview.tsx",
+    "src/components/Plugin/__preview__/promptPreview.tsx",
+    "src/components/Plugin/__preview__/installProgressPreview.tsx",
+    "src/components/Panel/__preview__/transitionPreview.tsx",
+    "src/components/Sidebar/__preview__/worktreeLoadError.tsx",
     "src/components/Terminal/__preview__/preview.tsx",
     "src/components/Terminal/__preview__/hybridInput.tsx",
+    "src/components/Terminal/__preview__/artifactOverlay.tsx",
+    "src/components/Terminal/__preview__/banners.tsx",
+    "src/components/Terminal/__preview__/panelLimitPreview.tsx",
+    "src/components/Terminal/__preview__/promptHistory.tsx",
+    "src/components/Terminal/__preview__/scrollPill.tsx",
+    "src/components/Terminal/__preview__/gridScrollbar.tsx",
+    "src/components/Terminal/__preview__/resourceBadge.tsx",
+    "src/components/Terminal/__preview__/typingLocator.tsx",
+    "src/components/Terminal/__preview__/updateCwdPreview.tsx",
+    "src/components/ui/__preview__/avatarPreview.tsx",
+    "src/components/ui/__preview__/shortcutHintPreview.tsx",
+    "src/components/ui/__preview__/skeletons.tsx",
     "src/components/Worktree/__preview__/preview.tsx",
+    "src/components/Worktree/__preview__/quickStateFilter.tsx",
+    "src/components/Worktree/__preview__/sessions.tsx",
+    "src/components/Worktree/__preview__/alarmPill.tsx",
+    "src/components/Worktree/__preview__/forgeBadges.tsx",
+    "src/components/Worktree/__preview__/activityLight.tsx",
+    "src/components/Worktree/__preview__/overview.tsx",
+    "src/components/Worktree/__preview__/statusTick.tsx",
+    "src/components/Worktree/__preview__/worktreeFilterPopover.tsx",
+    "src/components/Project/__preview__/preview.tsx",
+    "src/components/Project/__preview__/projectIdentityEditor.tsx",
+    "src/components/Settings/__preview__/toolbarSettings.tsx",
+    "src/components/TerminalRecipe/__preview__/recipes.tsx",
+    "src/components/Tour/__preview__/preview.tsx",
     "src/components/Panel/__preview__/preview.tsx",
     "src/components/DragDrop/__preview__/preview.tsx",
     "src/components/Recovery/__preview__/preview.tsx",
@@ -161,6 +211,15 @@ const config: KnipConfig = {
   ],
 
   ignoreBinaries: [
+    // The release workflow invokes CLI binaries from local npm workspaces.
+    // Screenshot and tour tooling require ffmpeg, ffprobe, and wrangler from
+    // the host OS rather than npm dependencies in this package.
+    "create-daintree-plugin",
+    "daintree-plugin",
+    "ffmpeg",
+    "ffprobe",
+    "sqlite3",
+    "wrangler",
     // why: Host OS commands invoked directly by platform-specific runtime,
     // installer, and E2E paths. They are not npm-provided binaries and must
     // not be declared as package dependencies.
@@ -181,6 +240,8 @@ const config: KnipConfig = {
     // The macOS Focus probe invokes an absolute system executable. On Linux,
     // Knip cannot resolve that platform-only path and reports it as an import.
     "electron/services/OsDndService.ts": ["unresolved"],
+    // Vite resolves this browser-only absolute module URL in the screenshot harness.
+    "e2e/screenshots/host-pause-indicator-review.spec.ts": ["unresolved"],
   },
 
   // why: these packages are consumed via mechanisms Knip can't trace:
@@ -203,7 +264,6 @@ const config: KnipConfig = {
     // The samples are not npm workspaces and therefore cannot declare these
     // host-repository development dependencies themselves.
     "@daintreehq/plugin-sdk",
-    "@daintreehq/plugin-testing",
     "@daintreehq/plugin-vite",
     // scripts/ci/electron-builder-config.test.mjs reads the installed
     // electron-builder schema from node_modules/app-builder-lib/scheme.json.

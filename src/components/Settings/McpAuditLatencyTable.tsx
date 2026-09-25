@@ -1,6 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, { useId, useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SeverityMark } from "@/lib/statusSeverity";
+import { SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { type McpLogRecord, isAuditRecord } from "@shared/types";
 
 interface McpAuditLatencyTableProps {
@@ -21,12 +23,11 @@ interface ToolLatencyBlock {
 interface ToolLatencyStats {
   toolId: string;
   success: ToolLatencyBlock;
-  failed: ToolLatencyBlock;
-}
-
-interface SloBand {
-  label: string;
-  className: string;
+  /**
+   * Everything that didn't succeed — errors, but also dedup hits, pending
+   * confirmations and rate limits, whose timings measure the gate, not the tool.
+   */
+  other: ToolLatencyBlock;
 }
 
 /**
@@ -53,59 +54,81 @@ function computeBlock(durations: number[]): ToolLatencyBlock {
   };
 }
 
-function sloBand(p95: number): SloBand {
-  if (p95 <= 0) return { label: "", className: "" };
-  if (p95 < 200) return { label: "Instant", className: "text-text-secondary" };
-  if (p95 < 1000) return { label: "Fast", className: "text-text-secondary" };
-  if (p95 <= 5000) return { label: "Standard", className: "text-status-warning" };
-  return { label: "Slow", className: "text-status-danger" };
+/** Speed band for a p95. Only "Slow" carries a mark; the rest is plain text. */
+function sloBand(p95: number): { label: string; slow: boolean } | null {
+  if (p95 <= 0) return null;
+  if (p95 < 200) return { label: "Instant", slow: false };
+  if (p95 < 1000) return { label: "Fast", slow: false };
+  if (p95 <= 5000) return { label: "Standard", slow: false };
+  return { label: "Slow", slow: true };
 }
+
+const TH = "py-1.5 font-medium text-text-secondary";
+const TD_NUM = "py-1.5 text-right tabular-nums";
 
 export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatencyTableProps) {
   const [isOpen, setIsOpen] = useState(true);
+  const panelId = useId();
+  const tableId = useId();
 
   const stats = useMemo<ToolLatencyStats[]>(() => {
     const successBuckets = new Map<string, number[]>();
-    const failedBuckets = new Map<string, number[]>();
+    const otherBuckets = new Map<string, number[]>();
     for (const record of records) {
       // Grant-lifecycle records have no `result`/`durationMs`; skip them
       // — the latency table is a dispatch-only surface.
       if (!isAuditRecord(record)) continue;
       if (includeRecord && !includeRecord(record)) continue;
-      const map = record.result === "success" ? successBuckets : failedBuckets;
+      const map = record.result === "success" ? successBuckets : otherBuckets;
       const list = map.get(record.toolId);
       if (list) list.push(record.durationMs);
       else map.set(record.toolId, [record.durationMs]);
     }
-    const allToolIds = new Set([...successBuckets.keys(), ...failedBuckets.keys()]);
+    const allToolIds = new Set([...successBuckets.keys(), ...otherBuckets.keys()]);
     const out: ToolLatencyStats[] = [];
     for (const toolId of allToolIds) {
       out.push({
         toolId,
         success: computeBlock(successBuckets.get(toolId) ?? []),
-        failed: computeBlock(failedBuckets.get(toolId) ?? []),
+        other: computeBlock(otherBuckets.get(toolId) ?? []),
       });
     }
-    out.sort(
-      (a, b) => Math.max(b.success.p95, b.failed.p95) - Math.max(a.success.p95, a.failed.p95)
-    );
+    out.sort((a, b) => Math.max(b.success.p95, b.other.p95) - Math.max(a.success.p95, a.other.p95));
     return out;
   }, [records, includeRecord]);
 
   const hasRecords = stats.length > 0;
 
-  const renderBlock = (block: ToolLatencyBlock, blockLabel: string) => {
+  // Result rows sit under their tool's row, so each cell names both headers
+  // explicitly: a screen reader reads "git.getDiff, Success, p95 (ms), 6120".
+  const renderBlock = (block: ToolLatencyBlock, blockLabel: string, toolIndex: number) => {
     if (block.count === 0) return null;
     const band = sloBand(block.p95);
+    const rowId = `${tableId}-t${toolIndex}-${blockLabel === "Success" ? "ok" : "other"}`;
+    const toolId = `${tableId}-t${toolIndex}`;
+    const cellHeaders = (col: string) => `${toolId} ${rowId} ${tableId}-${col}`;
     return (
       <tr className="text-text-secondary">
-        <td className="py-1 pl-6 pr-2 text-3xs text-text-secondary truncate">{blockLabel}</td>
-        <td className="py-1 px-2 text-right text-text-secondary tabular-nums">{block.count}</td>
-        <td className="py-1 px-2 text-right tabular-nums">{block.p50}ms</td>
-        <td className="py-1 pl-2 text-right tabular-nums">
-          {block.p95}ms
-          {band.label && (
-            <span className={cn("ml-1.5 text-3xs", band.className)}>{band.label}</span>
+        <th id={rowId} headers={toolId} className="py-1.5 pl-4 pr-2 text-left font-normal">
+          {blockLabel}
+        </th>
+        <td headers={cellHeaders("calls")} className={cn(TD_NUM, "px-2")}>
+          {block.count}
+        </td>
+        <td headers={cellHeaders("p50")} className={cn(TD_NUM, "px-2")}>
+          {block.p50}
+        </td>
+        <td headers={cellHeaders("p95")} className={cn(TD_NUM, "px-2 text-text-primary")}>
+          {block.p95}
+        </td>
+        <td headers={cellHeaders("speed")} className="py-1.5 pl-2">
+          {band && (
+            <span className="inline-flex items-center gap-1">
+              {band.slow && (
+                <SeverityMark severity="warning" label="Slow" className="h-3 w-3" decorative />
+              )}
+              {band.label}
+            </span>
           )}
         </td>
       </tr>
@@ -113,63 +136,87 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
   };
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle/40">
-      <button
-        type="button"
-        onClick={() => setIsOpen((v) => !v)}
-        aria-expanded={isOpen}
-        className={cn(
-          "w-full flex items-center justify-between gap-3 px-3 py-2 text-xs",
-          "text-daintree-text/80 hover:text-text-primary transition-colors"
-        )}
-      >
-        <span className="flex items-center gap-2">
+    <SettingsGroup>
+      <div>
+        <button
+          type="button"
+          onClick={() => setIsOpen((v) => !v)}
+          aria-expanded={isOpen}
+          aria-controls={panelId}
+          className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+        >
           <ChevronRight
+            data-animated-chevron
+            aria-hidden="true"
             className={cn(
-              "w-3.5 h-3.5 transition-transform duration-150",
-              isOpen ? "rotate-90" : "rotate-0"
+              "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150",
+              isOpen && "rotate-90"
             )}
           />
-          <span>
-            Latency by tool
-            {hasRecords && <span className="text-text-secondary"> ({stats.length} tools)</span>}
-          </span>
-        </span>
-      </button>
-      {isOpen && (
-        <div className="px-3 pb-3 pt-1">
-          {!hasRecords ? (
-            <p className="text-xs text-text-secondary">No dispatches recorded yet.</p>
-          ) : (
-            <table className="w-full table-fixed text-xs font-mono tabular-nums">
+          <span className="flex-1">Latency by tool</span>
+          {hasRecords && (
+            <span className="text-xs font-normal text-text-secondary">
+              {stats.length === 1 ? "1 tool" : `${stats.length} tools`}
+            </span>
+          )}
+        </button>
+        {isOpen && hasRecords && (
+          <div id={panelId} className="px-4 pb-3 pl-9">
+            <table className="w-full table-fixed text-xs">
+              <caption className="sr-only">Latency by tool, in milliseconds</caption>
               <thead>
-                <tr className="text-text-secondary">
-                  <th className="text-left font-medium py-1 pr-2 truncate">Tool</th>
-                  <th className="text-right font-medium py-1 px-2 w-12">n</th>
-                  <th className="text-right font-medium py-1 px-2 w-18">p50</th>
-                  <th className="text-right font-medium py-1 pl-2 w-30">p95</th>
+                <tr className="border-b border-border-subtle">
+                  <th scope="col" className={cn(TH, "text-left pr-2")}>
+                    Tool
+                  </th>
+                  <th
+                    id={`${tableId}-calls`}
+                    scope="col"
+                    className={cn(TH, "text-right px-2 w-16")}
+                  >
+                    Calls
+                  </th>
+                  <th id={`${tableId}-p50`} scope="col" className={cn(TH, "text-right px-2 w-20")}>
+                    p50 (ms)
+                  </th>
+                  <th id={`${tableId}-p95`} scope="col" className={cn(TH, "text-right px-2 w-20")}>
+                    p95 (ms)
+                  </th>
+                  <th id={`${tableId}-speed`} scope="col" className={cn(TH, "text-left pl-2 w-24")}>
+                    <span className="sr-only">Speed</span>
+                  </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-daintree-border/50">
-                {stats.map((row) => (
+              <tbody className="divide-y divide-border-subtle">
+                {stats.map((row, i) => (
                   <React.Fragment key={row.toolId}>
-                    <tr className="text-text-primary">
-                      <td className="py-1 pr-2 truncate font-medium">{row.toolId}</td>
-                      <td className="py-1 px-2 text-right text-text-secondary tabular-nums">
-                        {row.success.count + row.failed.count}
+                    <tr>
+                      <th
+                        id={`${tableId}-t${i}`}
+                        scope="row"
+                        className="py-1.5 pr-2 text-left font-mono font-normal text-text-primary truncate"
+                      >
+                        {row.toolId}
+                      </th>
+                      <td className={cn(TD_NUM, "px-2 text-text-primary")}>
+                        {row.success.count + row.other.count}
                       </td>
                       <td />
                       <td />
+                      <td />
                     </tr>
-                    {renderBlock(row.success, "success")}
-                    {renderBlock(row.failed, "failed")}
+                    {renderBlock(row.success, "Success", i)}
+                    {renderBlock(row.other, "Other results", i)}
                   </React.Fragment>
                 ))}
               </tbody>
             </table>
-          )}
-        </div>
+          </div>
+        )}
+      </div>
+      {isOpen && !hasRecords && (
+        <SettingsEmptyRow>Timings show up here once the assistant calls a tool</SettingsEmptyRow>
       )}
-    </div>
+    </SettingsGroup>
   );
 }

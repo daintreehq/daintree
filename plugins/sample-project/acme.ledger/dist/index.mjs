@@ -7,9 +7,9 @@
  * The plugin serves one `contributes.agentMcp` endpoint. Everything about
  * reaching an agent — the route, the per-terminal credential, the project
  * binding, enablement and revocation — is the host's. What is left here is the
- * part only the plugin can do: validate arguments (the host checks only that
- * they are a JSON object, never against `inputSchema`), run parameterised SQL,
- * and keep results inside the host's size budget.
+ * part only the plugin can do: check what a schema cannot express (the host
+ * already enforces each `inputSchema`), run parameterised SQL, and keep
+ * results inside the host's size budget.
  */
 
 import { lstatSync, mkdirSync, realpathSync } from "node:fs";
@@ -60,7 +60,10 @@ const ROW_COLUMNS = `id, substr(date, 1, 32) AS date, amount_cents, substr(categ
   substr(recorded_agent_hint, 1, 64) AS recorded_agent_hint`;
 
 const DATE_PROPERTY = { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" };
-const CATEGORY_PROPERTY = { type: "string", pattern: "^[a-z][a-z0-9 _-]{0,31}$" };
+// Wider than CATEGORY_PATTERN by exactly what optionalCategory normalizes away
+// (surrounding whitespace, upper case): the host enforces this schema before a
+// tool runs, so the stored grammar here would refuse input the tools accept.
+const CATEGORY_PROPERTY = { type: "string", pattern: "^\\s*[A-Za-z][A-Za-z0-9 _-]{0,31}\\s*$" };
 
 async function loadSqlite() {
   let sqlite;

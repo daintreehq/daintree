@@ -248,17 +248,14 @@ test.describe.serial("Presets: Custom Edit (25–34)", () => {
     await expect(input).toBeVisible({ timeout: T_SHORT });
     const priorName = await input.inputValue();
     expect(priorName.trim().length).toBeGreaterThan(0);
-    // The `&` is in the dangerous-character set, so the rename is rejected and
-    // the preset keeps its prior name.
-    await input.fill("Test & Special");
+    // Markup delimiters are rejected while ordinary punctuation remains valid.
+    await input.fill("Test < Special");
     await input.press("Enter");
+    await expect(input).toHaveAttribute("aria-invalid", "true");
     const section = ctx.window.locator(SEL.preset.section);
-    await expect(section.locator("span", { hasText: "Test & Special" })).toHaveCount(0, {
-      timeout: T_MEDIUM,
-    });
-    await expect(section.locator("span", { hasText: priorName }).first()).toBeVisible({
-      timeout: T_MEDIUM,
-    });
+    await expect(section.getByRole("alert")).toContainText("Names can't contain < or >");
+    await input.press("Escape");
+    await expect(section.getByRole("button", { name: `Edit ${priorName}` })).toBeVisible();
   });
 
   test("33. Name with emoji works", async () => {

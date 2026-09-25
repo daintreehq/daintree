@@ -34,6 +34,7 @@ vi.mock("@/lib/notify", () => ({
 vi.mock("@/services/KeybindingService", () => ({
   keybindingService: {
     getDisplayCombo: getDisplayComboMock,
+    getEffectiveCombo: () => undefined,
   },
 }));
 

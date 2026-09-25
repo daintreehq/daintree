@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { AgentState, WorktreeState } from "@/types";
 import type { WorktreeMenuActions } from "../WorktreeMenuItems";
 import type { GitStateIndicator } from "./hooks/useWorktreeStatus";
 import { cn } from "@/lib/utils";
-import { STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
+import { summarizeSessionStates } from "../terminalStateConfig";
 import { BranchLabel } from "../BranchLabel";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { Sprout, Pin, BellOff, RefreshCw } from "lucide-react";
+import { Sprout, Pin, BellOff } from "lucide-react";
 import { FolderOutput } from "@/components/icons";
 import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 import { IssueBadge } from "./IssueBadge";
@@ -14,16 +14,17 @@ import { PRBadge } from "./PRBadge";
 import { EnvironmentPopover } from "./EnvironmentPopover";
 import { DevServerIndicator } from "./DevServerIndicator";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
-import { CollapsedAlarmPill } from "./CollapsedAlarmPill";
+import { CollapsedAlarmPill, collapsedAlarmDescriptionId } from "./CollapsedAlarmPill";
+import { worktreeRowDescriptionId } from "./rowDescriptions";
 import { isExternalWorktree, isLiveDevServerStatus } from "@/lib/worktreeFilters";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import { WorktreeActionsToolbar } from "./WorktreeActionsToolbar";
 import { MainWorktreeSecondaryRow } from "./MainWorktreeSecondaryRow";
 import { NonMainSecondaryRow } from "./NonMainSecondaryRow";
-import { scheduleFlip } from "@/utils/flipScheduler";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { computeAlarmTier, formatAlarmDetail } from "@/lib/worktreeAlarmTier";
+import { PathSegments } from "@/components/ui/PathSegments";
 
 export interface WorktreeHeaderProps {
   worktree: WorktreeState;
@@ -35,6 +36,8 @@ export interface WorktreeHeaderProps {
   isMainOnStandardBranch?: boolean;
   isPinned: boolean;
   isCollapsed?: boolean;
+  /** The card's select button has `:focus-visible`; opens the collapsed alarm's tooltip. */
+  isKeyboardFocused?: boolean;
   canCollapse?: boolean;
   onToggleCollapse?: (e: React.MouseEvent) => void;
   contentId?: string;
@@ -50,9 +53,7 @@ export interface WorktreeHeaderProps {
   resourceEndpoint?: string;
   resourceLastCheckedAt?: number;
   devServerSession?: DevPreviewSessionState;
-  lastGitStatusCheckedAt?: number;
-  onRevalidateGitStatus?: () => void;
-  onCheckResourceStatus?: () => void;
+  onCheckResourceStatus?: () => void | Promise<unknown>;
   onCleanupWorktree?: () => void;
   badges: {
     onOpenIssue?: () => void;
@@ -65,98 +66,6 @@ export interface WorktreeHeaderProps {
   menu: WorktreeMenuActions;
 }
 
-function formatGitAge(ageMs: number): string {
-  const seconds = Math.floor(ageMs / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  return `${Math.floor(minutes / 60)}h`;
-}
-
-function formatGitAgeLong(ageMs: number): string {
-  const seconds = Math.floor(ageMs / 1000);
-  if (seconds < 60) return `${seconds} seconds ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} minute${minutes !== 1 ? "s" : ""} ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} hour${hours !== 1 ? "s" : ""} ago`;
-  return `${Math.floor(hours / 24)} day${hours >= 48 ? "s" : ""} ago`;
-}
-
-function msUntilAgeBoundary(ageMs: number): number {
-  if (ageMs < 30_000) return 30_000 - ageMs;
-  if (ageMs < 60_000) return 60_000 - ageMs;
-  if (ageMs < 5 * 60_000) return 60_000 - (ageMs % 60_000);
-  return 3_600_000;
-}
-
-function GitStatusFreshnessPill({
-  lastGitStatusCheckedAt,
-  onRefresh,
-}: {
-  lastGitStatusCheckedAt?: number;
-  onRefresh?: () => void;
-}) {
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    if (
-      lastGitStatusCheckedAt == null ||
-      !Number.isFinite(lastGitStatusCheckedAt) ||
-      lastGitStatusCheckedAt === 0
-    )
-      return;
-    const age = Date.now() - lastGitStatusCheckedAt;
-    const delay = msUntilAgeBoundary(age);
-    return scheduleFlip(delay, () => setTick((n) => n + 1));
-  }, [lastGitStatusCheckedAt, tick]);
-
-  if (
-    lastGitStatusCheckedAt == null ||
-    !Number.isFinite(lastGitStatusCheckedAt) ||
-    lastGitStatusCheckedAt === 0
-  )
-    return null;
-
-  void tick;
-  const age = Date.now() - lastGitStatusCheckedAt;
-  if (age < 30_000) return null;
-
-  if (age >= 5 * 60_000) {
-    return (
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onRefresh?.();
-        }}
-        className="flex items-center gap-1 text-xs text-text-muted hover:text-text-secondary transition-colors duration-150 shrink-0"
-      >
-        <RefreshCw className="w-3 h-3" />
-        <span>Refresh</span>
-      </button>
-    );
-  }
-
-  const isWarning = age >= 60_000;
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className={cn(
-            "text-xs tabular-nums shrink-0 transition-colors duration-150",
-            isWarning ? "text-text-secondary" : "text-text-muted"
-          )}
-        >
-          {formatGitAge(age)}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">Git status checked {formatGitAgeLong(age)}</TooltipContent>
-    </Tooltip>
-  );
-}
-
 export function WorktreeHeader({
   worktree,
   isActive,
@@ -167,6 +76,7 @@ export function WorktreeHeader({
   isMainOnStandardBranch,
   isPinned,
   isCollapsed,
+  isKeyboardFocused,
   canCollapse,
   onToggleCollapse,
   contentId,
@@ -182,8 +92,6 @@ export function WorktreeHeader({
   resourceEndpoint,
   resourceLastCheckedAt,
   devServerSession,
-  lastGitStatusCheckedAt,
-  onRevalidateGitStatus,
   onCheckResourceStatus,
   onCleanupWorktree,
   badges,
@@ -201,7 +109,6 @@ export function WorktreeHeader({
   const displayTitle =
     headline.kind === "pr" || headline.kind === "issue" ? headline.title : undefined;
   const hasPlanFile = Boolean(worktree.hasPlanFile);
-  const hasFreshnessPill = !!(lastGitStatusCheckedAt && lastGitStatusCheckedAt > 0);
   const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
   const underlineOnHover = variant !== "sidebar" || isActive;
   // `hasBaseName` is the whole mount rule for the base line: the workspace-host
@@ -224,6 +131,13 @@ export function WorktreeHeader({
   // about a branch, so it does not mount without one; the drift row still does,
   // via `hasUpstreamDelta`.
   const hasBaseRelationship = hasBaseName && !worktree.isDetached;
+  // The sync line has something to say beyond counts and a base — a failed
+  // fetch, a missing upstream — once a fetch or
+  // a status pass has run. Whether it actually says anything is the badge's
+  // call; the row collapses when nothing in it renders.
+  const hasSyncFacts =
+    Boolean(worktree.fetchAuthFailed || worktree.fetchNetworkFailed) ||
+    (!worktree.isDetached && (worktree.lastFetchedAt != null || worktree.worktreeChanges != null));
   const hasUpstreamDelta =
     (worktree.aheadCount ?? 0) > 0 ||
     (worktree.behindCount ?? 0) > 0 ||
@@ -283,18 +197,13 @@ export function WorktreeHeader({
     worktree.baseMatchesUpstream,
   ]);
 
-  const { visibleStates, sessionAriaLabel } = useMemo(() => {
-    if (!sessionStates || !sessionTotal || sessionTotal === 0) {
-      return { visibleStates: [] as { state: AgentState; count: number }[], sessionAriaLabel: "" };
-    }
-    const visible = STATE_PRIORITY.filter((s) => s !== "idle" && sessionStates[s] > 0).map((s) => ({
-      state: s,
-      count: sessionStates[s],
-    }));
-    const parts = visible.map((v) => `${v.count} ${STATE_LABELS[v.state]}`);
-    const label = `${sessionTotal} session${sessionTotal !== 1 ? "s" : ""}: ${parts.join(", ")}`;
-    return { visibleStates: visible, sessionAriaLabel: label };
-  }, [sessionStates, sessionTotal]);
+  const { visibleStates, label: sessionAriaLabel } = useMemo(
+    () =>
+      sessionStates && sessionTotal
+        ? summarizeSessionStates(sessionStates, sessionTotal)
+        : { visibleStates: [], label: "" },
+    [sessionStates, sessionTotal]
+  );
 
   return (
     <div>
@@ -372,7 +281,12 @@ export function WorktreeHeader({
             </span>
           )}
           {isCollapsed && (
-            <CollapsedAlarmPill alarm={collapsedAlarm} detail={collapsedAlarmDetail} />
+            <CollapsedAlarmPill
+              alarm={collapsedAlarm}
+              detail={collapsedAlarmDetail}
+              descriptionId={collapsedAlarmDescriptionId(worktree.id)}
+              revealed={isKeyboardFocused}
+            />
           )}
         </div>
 
@@ -382,8 +296,8 @@ export function WorktreeHeader({
           (worktree.worktreeMode && worktree.worktreeMode !== "local") ||
           resourceStatusLabel ||
           isLifecycleRunning ||
-          hasDevServerSignal ||
-          hasFreshnessPill) && (
+          onCheckResourceStatus ||
+          hasDevServerSignal) && (
           <div className="flex items-center gap-2 shrink-0">
             {isPinned && !isMainWorktree && (
               <Pin
@@ -402,11 +316,27 @@ export function WorktreeHeader({
                     <FolderOutput className="w-3.5 h-3.5 text-text-muted" aria-hidden="true" />
                   </span>
                 </TooltipTrigger>
-                <TooltipContent side="bottom" className="max-w-xs">
+                {/* Plain-text label: the path renders one box per folder, and
+                    Chromium puts a space between such boxes when it computes
+                    the tooltip's accessible text ("/ repo/ my project"). */}
+                <TooltipContent
+                  side="bottom"
+                  className="max-w-xs"
+                  aria-label={`Outside the project directory ${worktree.path}`}
+                >
                   <span className="block">Outside the project directory</span>
-                  <span className="mt-0.5 block font-mono text-2xs break-all">{worktree.path}</span>
+                  <span className="mt-0.5 block font-mono text-2xs">
+                    <PathSegments path={worktree.path} />
+                  </span>
                 </TooltipContent>
               </Tooltip>
+            )}
+            {isExternal && variant === "sidebar" && (
+              // For the card's select button to be described by, which only the
+              // sidebar card has; see rowDescriptions.
+              <span id={worktreeRowDescriptionId(worktree.id, "external")} hidden>
+                {`External worktree at ${worktree.path}`}
+              </span>
             )}
             {isProjectNotificationsMuted && (
               <BellOff
@@ -414,24 +344,22 @@ export function WorktreeHeader({
                 aria-label="Notifications muted for this project"
               />
             )}
-            <GitStatusFreshnessPill
-              lastGitStatusCheckedAt={lastGitStatusCheckedAt}
-              onRefresh={onRevalidateGitStatus}
-            />
             {((worktree.worktreeMode && worktree.worktreeMode !== "local") ||
               resourceStatusLabel ||
-              isLifecycleRunning) && (
+              isLifecycleRunning ||
+              onCheckResourceStatus) && (
               <EnvironmentPopover
                 worktreeMode={worktree.worktreeMode}
                 environmentIcon={environmentIcon}
                 isLifecycleRunning={isLifecycleRunning}
+                lifecycle={worktree.lifecycleStatus}
                 resourceStatusLabel={resourceStatusLabel}
                 resourceStatusColor={resourceStatusColor}
+                reportedStatus={worktree.resourceStatus?.lastStatus}
                 resourceLastOutput={resourceLastOutput}
                 resourceEndpoint={resourceEndpoint}
                 resourceLastCheckedAt={resourceLastCheckedAt}
                 onCheckResourceStatus={onCheckResourceStatus}
-                className="w-3.5 h-3.5 text-text-muted"
               />
             )}
             <DevServerIndicator session={devServerSession} />
@@ -463,7 +391,6 @@ export function WorktreeHeader({
           branchLabel={branchLabel}
           isActive={isActive}
           isMuted={isMuted}
-          hasUpstreamDelta={hasUpstreamDelta}
           hasAuthFailedSignIn={hasAuthFailedSignIn}
           authProviderId={worktree.matchedForgeProviderId ?? worktree.linked?.providerId ?? null}
           aheadCount={worktree.aheadCount}
@@ -486,6 +413,7 @@ export function WorktreeHeader({
           hasUpstreamDelta ||
           hasBaseRelationship ||
           hasAuthFailedSignIn ||
+          hasSyncFacts ||
           hasPlanFile) && (
           <NonMainSecondaryRow
             worktree={worktree}

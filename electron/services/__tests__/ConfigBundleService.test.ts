@@ -400,7 +400,8 @@ describe("ConfigBundleService.apply", () => {
 
     expect(report.outcome).toBe("rolled-back");
     expect(report.rolledBack).toBe(false);
-    expect(report.errors[0]).toContain("worktreeConfig");
+    expect(report.restoreFailed).toBe(true);
+    expect(report.errors[0]).toContain("so worktree path pattern may be partly changed");
   });
 
   it("restores a recipe exactly, dropping fields the import added", async () => {
@@ -441,6 +442,8 @@ describe("ConfigBundleService.apply", () => {
 
     expect(report.outcome).toBe("rolled-back");
     expect(report.rolledBack).toBe(true);
+    // A restore that worked leaves nothing in an unknown state.
+    expect(report.restoreFailed).toBe(false);
     expect(report.errors[0]).toContain("No changes were kept");
     // The write that landed before the throw must be gone, or the report above
     // is a claim the service never made good on.
@@ -500,6 +503,95 @@ describe("ConfigBundleService.preview", () => {
 
     const keys = preview.find((p) => p.section === "keybindingOverrides");
     expect(keys).toMatchObject({ add: 0, update: 0, unchanged: 1 });
+  });
+
+  it("names every leaf it counts, replacements first, in words rather than store keys", async () => {
+    mockStore.set("userAgentRegistry", { shared: agent("shared", { name: "Local" }) });
+    mockStore.set("keybindingOverrides.overrides", { "terminal.new": ["Cmd+T"] });
+    mockStore.set("appTheme", { colorSchemeId: "daintree" });
+    mockStore.set("notificationSettings", {
+      soundEnabled: true,
+      quietHoursStartMin: 1320,
+      waitingEscalationDelayMs: 30000,
+    });
+    mockStore.set("worktreeConfig", { pathPattern: "old/{branch-slug}" });
+    const longPattern = `${"deeply/nested/".repeat(6)}{branch-slug}`;
+    mockProjectStore.recipes = [{ id: "r1", name: "Old fleet", terminals: [], createdAt: 1 }];
+    const { service } = makeService();
+
+    const preview = await service.preview({
+      userAgentRegistry: {
+        shared: agent("shared", { name: "Imported" }),
+        brandNew: agent("brandNew", { name: "Brand New Agent" }),
+      },
+      agentSettings: { claude: { customFlags: "--verbose" } },
+      keybindingOverrides: { "terminal.new": ["Cmd+Shift+T"], "not.a.real.action": ["Cmd+J"] },
+      appTheme: { colorSchemeId: "bondi" },
+      notificationSettings: {
+        soundEnabled: false,
+        quietHoursStartMin: 60,
+        waitingEscalationDelayMs: 120000,
+      },
+      worktreeConfig: { pathPattern: longPattern },
+      globalRecipes: [
+        { id: "r1", name: "Renamed fleet", terminals: [] },
+        { id: "r2", name: "Nightly triage", terminals: [] },
+      ],
+    });
+
+    expect(preview).toHaveLength(7);
+    for (const section of preview) {
+      // The list the dialog renders and the counts it prints can never disagree.
+      expect(section.changes).toHaveLength(section.add + section.update);
+      const kinds = section.changes.map((c) => c.kind);
+      expect(kinds).toEqual([
+        ...Array(section.update).fill("update"),
+        ...Array(section.add).fill("add"),
+      ]);
+      for (const change of section.changes) expect(change.label.trim()).not.toBe("");
+    }
+
+    const byKey = new Map(
+      preview.flatMap((s) => s.changes.map((c) => [`${s.section}/${c.key}`, c] as const))
+    );
+    // Wherever the bundle or the app has a name, the store key never reaches the user.
+    for (const [key, change] of byKey) {
+      if (key === "keybindingOverrides/not.a.real.action") continue;
+      expect(change.label).not.toBe(key.split("/")[1]);
+    }
+    // A key nothing can name still appears, as itself, rather than vanishing.
+    expect(byKey.get("keybindingOverrides/not.a.real.action")?.label).toBe("not.a.real.action");
+    // Scalars say what they move between; structured entries don't pretend to.
+    const scheme = byKey.get("appTheme/colorSchemeId");
+    expect(scheme?.from).toBeDefined();
+    expect(scheme?.to).toBeDefined();
+    expect(scheme?.from).not.toBe(scheme?.to);
+    // A path is shown whole however long it is; the row is built to wrap it.
+    expect(byKey.get("worktreeConfig/pathPattern")).toMatchObject({
+      from: "old/{branch-slug}",
+      to: longPattern,
+    });
+    // Stored minutes and milliseconds read as a time of day and a duration.
+    expect(byKey.get("notificationSettings/quietHoursStartMin")).toMatchObject({
+      from: "22:00",
+      to: "01:00",
+    });
+    expect(byKey.get("notificationSettings/waitingEscalationDelayMs")).toMatchObject({
+      from: "30s",
+      to: "2 min",
+    });
+    expect(byKey.get("agentSettings/claude")?.from).toBeUndefined();
+    // A replacement renamed by the bundle is named by what the user has now —
+    // that's what they lose — with the incoming name alongside.
+    expect(byKey.get("globalRecipes/r1")).toMatchObject({
+      label: "Old fleet",
+      renamedTo: "Renamed fleet",
+    });
+    expect(byKey.get("userAgentRegistry/shared")).toMatchObject({
+      label: "Local",
+      renamedTo: "Imported",
+    });
+    expect(byKey.get("globalRecipes/r2")?.renamedTo).toBeUndefined();
   });
 
   it("omits sections the bundle doesn't carry", async () => {

@@ -43,6 +43,7 @@ const HOST_CALL_METHODS = {
   sendToActiveAgent: true,
   showToast: true,
   dispatch: true,
+  reloadPanel: true,
   "actions.list": true,
   "actions.get": true,
   "settings.get": true,

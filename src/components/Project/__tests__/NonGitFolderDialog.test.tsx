@@ -46,6 +46,7 @@ vi.mock("@/components/ui/AppDialog", () => {
   AppDialog.Title = ({ children }: SectionProps) => <h2>{children}</h2>;
   AppDialog.CloseButton = () => <button type="button">close</button>;
   AppDialog.Body = ({ children }: SectionProps) => <div>{children}</div>;
+  AppDialog.Description = ({ children }: SectionProps) => <p>{children}</p>;
   AppDialog.Footer = ({ children }: SectionProps) => <div>{children}</div>;
 
   return { AppDialog };
@@ -82,8 +83,8 @@ describe("NonGitFolderDialog (#11405)", () => {
   it("offers both paths without initializing anything yet", () => {
     renderDialog();
 
-    expect(screen.getByText("Open without git")).toBeTruthy();
-    expect(screen.getByText("Initialize repository")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open without git" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Initialize repository" })).toBeTruthy();
     // Mounting git setup early would start its progress subscription and
     // auto-close timer while the user is still deciding.
     expect(gitInitDialogSpy).not.toHaveBeenCalled();
@@ -92,7 +93,7 @@ describe("NonGitFolderDialog (#11405)", () => {
   it("adopts the folder when the user opens it without git", () => {
     const { props } = renderDialog();
 
-    fireEvent.click(screen.getByText("Open without git"));
+    fireEvent.click(screen.getByRole("button", { name: "Open without git" }));
 
     expect(props.onOpenWithoutGit).toHaveBeenCalledTimes(1);
     expect(props.onInitSuccess).not.toHaveBeenCalled();
@@ -101,7 +102,7 @@ describe("NonGitFolderDialog (#11405)", () => {
   it("hands the same folder to git setup when that is chosen", () => {
     renderDialog();
 
-    fireEvent.click(screen.getByText("Initialize repository"));
+    fireEvent.click(screen.getByRole("button", { name: "Initialize repository" }));
 
     expect(screen.getByTestId("git-init-dialog")).toBeTruthy();
     expect(gitInitDialogSpy).toHaveBeenCalledWith(
@@ -113,18 +114,18 @@ describe("NonGitFolderDialog (#11405)", () => {
     renderDialog({ initialStep: "initialize" });
 
     expect(screen.getByTestId("git-init-dialog")).toBeTruthy();
-    expect(screen.queryByText("Open without git")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open without git" })).toBeNull();
   });
 
   it("keeps the chosen step until the dialog has closed", () => {
     const { rerender, props } = renderDialog();
-    fireEvent.click(screen.getByText("Initialize repository"));
+    fireEvent.click(screen.getByRole("button", { name: "Initialize repository" }));
 
     // Closing animates out while still mounted; swapping the body back to the
     // choice screen mid-exit would flash the wrong content.
     rerender(<NonGitFolderDialog {...props} isOpen={false} />);
     rerender(<NonGitFolderDialog {...props} isOpen={true} />);
 
-    expect(screen.getByText("Open without git")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open without git" })).toBeTruthy();
   });
 });

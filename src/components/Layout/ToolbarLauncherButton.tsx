@@ -4,7 +4,7 @@ import { SquareTerminal, Globe } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 
 type LauncherType = "terminal" | "browser";
@@ -46,7 +46,7 @@ export function ToolbarLauncherButton({
   "data-toolbar-item": dataToolbarItem,
 }: ToolbarLauncherButtonProps) {
   const config = LAUNCHER_CONFIG[type];
-  const shortcut = useKeybindingDisplay(config.keybindingAction);
+  const shortcut = useEffectiveCombo(config.keybindingAction);
   const ariaShortcut = useAriaKeyshortcuts(config.keybindingAction);
   const launcherHover = useShortcutHintHover(config.keybindingAction);
 
@@ -59,25 +59,27 @@ export function ToolbarLauncherButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              {...launcherHover}
-              variant="ghost"
-              size="icon"
-              data-toolbar-item={dataToolbarItem}
-              onClick={handleClick}
-              className={toolbarIconButtonClass}
-              aria-label={config.label}
-              aria-keyshortcuts={ariaShortcut}
-            >
-              <Icon />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {createTooltipContent(config.tooltipLabel, shortcut)}
-          </TooltipContent>
-        </Tooltip>
+        <span className="inline-flex">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                {...launcherHover}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item={dataToolbarItem}
+                onClick={handleClick}
+                className={toolbarIconButtonClass}
+                aria-label={config.label}
+                aria-keyshortcuts={ariaShortcut}
+              >
+                <Icon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {createTooltipContent(config.tooltipLabel, shortcut)}
+            </TooltipContent>
+          </Tooltip>
+        </span>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
         <ToolbarContextMenuItems buttonId={type} side="left" />

@@ -50,15 +50,20 @@ import { isE2EFaultMode, isFreezeHarness, isIdleHarness } from "../setup/runtime
 import {
   extractCliPath,
   hasCliPathFlag,
-  getPendingCliPath,
-  setPendingCliPath,
   extractDntrPaths,
   extractDirectoryPaths,
   queueDntrPaths,
 } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { getWindowRegistry } from "./windowRef.js";
-import { installOpenDirConsumer, drainPendingOpenDirs } from "./openDirHandler.js";
+import { findOtherProjectOwner, redirectToProjectOwner } from "./projectOwnership.js";
+import {
+  installOpenDirConsumer,
+  drainPendingOpenDirs,
+  type OpenDirHandlerDeps,
+} from "./openDirHandler.js";
+import { holdWindowForOpen, isWindowBound } from "./windowOpenState.js";
+import { readOpenFoldersInNewWindow } from "./windowOpeningConfig.js";
 import { resetDeferredQueue } from "./deferredInitQueue.js";
 import { initGlobalServices } from "./globalServicesInit.js";
 import { initPerWindowServices, wireWatchdogDisabledBroadcast } from "./perWindowInit.js";
@@ -111,14 +116,42 @@ export {
 
 const DEFAULT_TERMINAL_ID = "default";
 
-// Folder-drop open dependencies for macOS `open-file` directories (#10976).
-// Stable singletons, so the deps object is module-level; the install-once guard
+// A closed project keeps its view — and the window's binding to it — alive to
+// paint the picker, so its id is only "in front" while its row isn't closed.
+const isProjectClosed = (projectId: string): boolean =>
+  projectStore.getProjectById(projectId)?.status === "closed";
+
+// Dependencies for folders opened from outside the app (#10976, #12593). Only
+// window creation comes from main.ts, which owns it; the install-once guard
 // lives in openDirHandler.ts.
-const openDirDeps = {
-  openDirectory: (dirPath: string, win: BrowserWindow) =>
-    handleDirectoryOpen(dirPath, win, getCliAvailabilityServiceRef() ?? undefined),
-  resolvePrimaryWindow: () => getWindowRegistry()?.getPrimary()?.browserWindow,
-};
+function createOpenDirDeps(
+  createWindowForPath: (dirPath: string) => Promise<number>
+): OpenDirHandlerDeps {
+  return {
+    resolveProject: (dirPath) => projectStore.addProject(dirPath),
+    openDirectory: (dirPath, win) =>
+      handleDirectoryOpen(dirPath, win, getCliAvailabilityServiceRef() ?? undefined),
+    createWindowForPath,
+    getWindowRegistry,
+    // Read per open so a change in Settings applies to the next folder opened.
+    getPreference: readOpenFoldersInNewWindow,
+    isProjectClosed,
+    redirectToOwner: (project, windowId) => {
+      // A closed project's view is still live behind its picker; reopening it
+      // is handleDirectoryOpen's job, not a focus.
+      if (isProjectClosed(project.id)) return false;
+      const row = projectStore.getProjectById(project.id);
+      const owner = findOtherProjectOwner(getWindowRegistry() ?? undefined, project.id, {});
+      if (!row || !owner || owner.context.windowId !== windowId) return false;
+      // Mid cold switch away from this very project, the redirect would ask the
+      // outgoing renderer to switch to what it already shows — a no-op, and the
+      // switch in flight would win. The main-side open queues behind it instead.
+      if (owner.projectViewManager.getOutgoingBridgeProjectId() === project.id) return false;
+      redirectToProjectOwner(owner, row);
+      return true;
+    },
+  };
+}
 
 function createAndDistributePorts(win: BrowserWindow, ctx: WindowContext): void {
   const wc = getAppWebContents(win);
@@ -142,6 +175,8 @@ export interface SetupWindowServicesOptions {
    * policy of its own to apply.
    */
   backgroundProjectIds?: readonly string[];
+  /** Create a window bound to a folder, for opens from outside the app that need one. */
+  createWindowForPath: (dirPath: string) => Promise<number>;
 }
 
 /**
@@ -655,7 +690,6 @@ export async function setupWindowServices(
       isIdleHarness ||
       opts.initialProjectPath ||
       processArgvCli ||
-      getPendingCliPath() ||
       restoreWorkspace ||
       getPendingOpenDirPaths().length > 0;
     if (skipDefaultSpawn) {
@@ -745,6 +779,11 @@ export async function setupWindowServices(
         // user can still open the project by hand once the folder is back.
         return workspacePath !== null && fs.existsSync(workspacePath) ? workspacePath : null;
       },
+      isOwnedElsewhere: (projectId) =>
+        findOtherProjectOwner(windowRegistry, projectId, {
+          windowId: win.id,
+          projectViewManager: opts.projectViewManager,
+        }) !== null,
     });
   }
 
@@ -929,27 +968,37 @@ export async function setupWindowServices(
     // when it resolved: an unresolvable `--cli-path` is still consumed, so it
     // isn't re-parsed (and re-reported) by every window created afterwards.
     if (firstLaunchCliPath || hasCliPathFlag(process.argv)) setProcessArgvCliHandled(true);
-    const cliPath = firstLaunchCliPath ?? getPendingCliPath();
-    if (cliPath) {
-      setPendingCliPath(null);
-      console.log("[MAIN] Opening CLI path from launch args:", cliPath);
-      handleDirectoryOpen(cliPath, win, cliAvailabilityService ?? undefined).catch((err) =>
-        console.error("[MAIN] Failed to open CLI path:", err)
-      );
+    // Joins the pre-window folder queue the drain below routes, so a cold CLI
+    // launch picks its window by the same rule as every other external open.
+    if (firstLaunchCliPath) {
+      console.log("[MAIN] Opening CLI path from launch args:", firstLaunchCliPath);
+      queuePendingOpenDirPath(firstLaunchCliPath);
     }
   } else {
-    console.log("[MAIN] Window opened with initial project path:", opts.initialProjectPath);
-    handleDirectoryOpen(opts.initialProjectPath, win, cliAvailabilityService ?? undefined).catch(
-      (err) => console.error("[MAIN] Failed to open initial project path:", err)
+    const initialProjectPath = opts.initialProjectPath;
+    console.log("[MAIN] Window opened with initial project path:", initialProjectPath);
+    // Until this open lands the window's view manager reads as the picker, so
+    // it is claimed for its own folder — otherwise the next queued external
+    // open would take it for an empty window and replace the folder it was
+    // created for.
+    void holdWindowForOpen(
+      ctx.windowId,
+      { projectId: null, projectPath: initialProjectPath },
+      () =>
+        handleDirectoryOpen(initialProjectPath, win, cliAvailabilityService ?? undefined).catch(
+          (err) => console.error("[MAIN] Failed to open initial project path:", err)
+        ),
+      () => isWindowBound(windowRegistry, ctx.windowId, isProjectClosed)
     );
   }
 
-  // Folder drops on the Dock icon / "Open With" arrive via macOS `open-file`
-  // (#10976). Cold-launch / zero-window drops queue in `environment.ts` before
-  // any window exists; the first window drains them here (mirroring the CLI-
-  // path drain above), and a one-shot consumer routes subsequent warm drops to
-  // the primary window. The queue/consumer lifecycle lives in openDirHandler.ts
-  // so it is unit-testable independent of this module's heavy setup.
+  // Folders opened from outside the app — Dock drops and "Open With" (macOS
+  // `open-file`), the CLI and `file://` folder arguments — arrive through the
+  // `environment.ts` directory consumer, or its queue while no window has
+  // finished setting up. The first window installs the consumer; every window
+  // drains the queue once it is ready, which is also what makes it eligible to
+  // be reused as an empty window. Routing lives in openDirHandler.ts (#12593).
+  const openDirDeps = createOpenDirDeps(opts.createWindowForPath);
   installOpenDirConsumer(openDirDeps);
   drainPendingOpenDirs(win, openDirDeps);
 
@@ -961,13 +1010,18 @@ export async function setupWindowServices(
   // sequentially so the prompts keep argv order.
   // A folder named `foo.dntr` opened from the OS is a project, not an archive —
   // the stat-backed directory scan above wins, mirroring `second-instance`.
-  const firstLaunchDntrPaths = !getProcessArgvDntrHandled()
-    ? extractDntrPaths(process.argv, process.cwd()).filter(
-        (dntrPath) => !coldDirectoryPaths.includes(dntrPath)
-      )
-    : [];
-  if (firstLaunchDntrPaths.length > 0) {
+  let firstLaunchDntrPaths: string[] = [];
+  if (!getProcessArgvDntrHandled()) {
+    // Retired on the first scan even when it finds nothing: only this window
+    // holds the directory list that tells a folder named `foo.dntr` from an
+    // archive, and a folder launch now opens more windows, whose rescan of argv
+    // would queue that folder for install.
     setProcessArgvDntrHandled(true);
+    firstLaunchDntrPaths = extractDntrPaths(process.argv, process.cwd()).filter(
+      (dntrPath) => !coldDirectoryPaths.includes(dntrPath)
+    );
+  }
+  if (firstLaunchDntrPaths.length > 0) {
     void queueDntrPaths(firstLaunchDntrPaths).catch((err) =>
       console.error("[MAIN] Failed to queue .dntr plugin(s):", err)
     );

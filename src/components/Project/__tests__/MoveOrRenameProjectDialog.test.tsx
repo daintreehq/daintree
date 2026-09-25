@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
 import type { RelocationPreview } from "@shared/types/projectRelocation";
+
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 // ConfirmDialog's scroll-shadow hook observes its scroll container, which jsdom
 // does not implement.
@@ -251,7 +259,7 @@ describe("MoveOrRenameProjectDialog", () => {
     render(<MoveOrRenameProjectDialog />);
 
     expect(screen.getByText("Locate moved project")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("relocate-browse-existing"));
+    fireEvent.click(screen.getByRole("button", { name: "Browse for the project folder" }));
 
     await waitFor(() => expect(previewRelocation).toHaveBeenCalled());
     await waitFor(() => {
@@ -278,7 +286,7 @@ describe("MoveOrRenameProjectDialog", () => {
       .open({ projectId: "p1", mode: "reattach", oldPath: OLD_PATH, name: "Proj" });
     render(<MoveOrRenameProjectDialog />);
 
-    fireEvent.click(screen.getByTestId("relocate-browse-existing"));
+    fireEvent.click(screen.getByRole("button", { name: "Browse for the project folder" }));
     await waitFor(() => expect(previewRelocation).toHaveBeenCalled());
     await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
 
@@ -330,5 +338,265 @@ describe("MoveOrRenameProjectDialog", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(document.querySelector('[data-testid="relocate-preview"]')).toBeNull();
     expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("never lets an invalid or emptied folder name ride along as a name-only rename", async () => {
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+
+    fireEvent.change(screen.getByTestId("relocate-name-input"), { target: { value: "Renamed" } });
+    for (const folder of ["proj:2", "   "]) {
+      fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: folder } });
+      expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(confirmButton());
+    }
+    await new Promise((r) => setTimeout(r, 0));
+    expect(updateProject).not.toHaveBeenCalled();
+    expect(applyRelocation).not.toHaveBeenCalled();
+  });
+
+  it("explains an unavailable primary in the footer status line", async () => {
+    const status = () => screen.getByTestId("relocate-status").textContent?.trim() ?? "";
+    previewRelocation.mockResolvedValue(
+      cleanPreview({ blockers: [{ reason: "destination-exists", message: "Already there" }] })
+    );
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+
+    // At rest, invalid, and blocked: each disabled state says why.
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
+    const atRest = status();
+    expect(atRest).not.toBe("");
+
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj:2" } });
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
+    const invalid = status();
+    expect(invalid).not.toBe("");
+    expect(invalid).not.toBe(atRest);
+
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
+    await waitFor(() => expect(screen.getByText("Already there")).toBeTruthy());
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
+    expect(status()).not.toBe("");
+    expect(status()).not.toBe(invalid);
+  });
+
+  it("names the destination beside the primary once the move is ready", async () => {
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
+    await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
+    expect(screen.getByTestId("relocate-status").textContent).toContain("/repos/proj2");
+  });
+
+  it("freezes every field while the commit is in flight", async () => {
+    applyRelocation.mockReturnValue(new Promise(() => {}));
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
+    await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
+    fireEvent.click(confirmButton());
+
+    await waitFor(() => expect(applyRelocation).toHaveBeenCalled());
+    const fields = document.querySelectorAll<HTMLInputElement>(
+      '[data-testid="move-or-rename-project-dialog"] input'
+    );
+    expect(fields.length).toBeGreaterThan(0);
+    for (const field of fields) expect(field.disabled).toBe(true);
+    expect(confirmButton().getAttribute("aria-busy")).toBe("true");
+  });
+
+  it("retries a failed preview for the same destination", async () => {
+    previewRelocation.mockRejectedValueOnce(new Error("EACCES"));
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
+    await waitFor(() => expect(screen.getByTestId("relocate-preview-error")).toBeTruthy());
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(previewRelocation).toHaveBeenCalledTimes(2));
+    const [first, second] = previewRelocation.mock.calls;
+    expect(second?.[0]).toEqual(first?.[0]);
+    await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
+  });
+
+  it("clears a failed commit's error once the user changes what they asked for", async () => {
+    applyRelocation.mockRejectedValueOnce(new Error("Nothing was moved"));
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
+    await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(screen.getByTestId("relocate-apply-error")).toBeTruthy());
+
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj3" } });
+    expect(screen.queryByTestId("relocate-apply-error")).toBeNull();
+  });
+
+  it("opens with focus in the name field, not on the close button", async () => {
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByTestId("relocate-name-input"))
+    );
+  });
+
+  it("wraps preview paths only between folders, never inside a folder name", async () => {
+    const longPath = "/Users/you/Library/Mobile Documents/helios-dashboard-realtime-console";
+    previewRelocation.mockResolvedValue(cleanPreview({ newPath: longPath }));
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
+    const to = await screen.findByTestId("relocate-preview");
+    expect(to.textContent).toBe(longPath);
+    // One atomic box per folder: a line can only end between two of them, so
+    // no hyphen or space inside a name is ever a break point.
+    const segments = Array.from(to.children);
+    expect(segments.length).toBe(longPath.split("/").length);
+    segments.forEach((segment, i) => {
+      expect(segment.classList.contains("inline-block")).toBe(true);
+      const text = segment.textContent ?? "";
+      const last = i === segments.length - 1;
+      expect(text.slice(0, -1).includes("/")).toBe(false);
+      expect(text.endsWith("/")).toBe(!last);
+    });
+  });
+
+  it("swaps the focus ring to the error colour while the folder name is invalid", () => {
+    // Not an assertion about which colours are used. The rule is that a field
+    // whose focus outline is the accent must say what that outline becomes when
+    // the field is invalid — or an invalid focused field draws an accent ring
+    // around its red border, and the louder signal says nothing is wrong.
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+    const field = screen.getByTestId("relocate-folder-input");
+    fireEvent.change(field, { target: { value: "proj:2" } });
+
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    const describedBy = field.getAttribute("aria-describedby");
+    expect(describedBy && document.getElementById(describedBy)?.textContent).toBeTruthy();
+    const classes = field.className.split(/\s+/);
+    const accentOutline = classes.some((c) => /^focus-visible:outline-accent/.test(c));
+    const errorOutline = classes.some((c) => /^focus-visible:outline-status-error/.test(c));
+    const errorBorder = classes.some((c) => /^border-status-error/.test(c));
+    expect(accentOutline && !errorOutline).toBe(false);
+    expect(errorBorder).toBe(true);
+  });
+
+  it("asks for the folder in reattach mode even after the name is edited", () => {
+    useProjectRelocationStore
+      .getState()
+      .open({ projectId: "p1", mode: "reattach", oldPath: OLD_PATH, name: "Proj" });
+    render(<MoveOrRenameProjectDialog />);
+    const status = () => screen.getByTestId("relocate-status").textContent ?? "";
+    const before = status();
+
+    fireEvent.change(screen.getByTestId("relocate-name-input"), { target: { value: "Renamed" } });
+    expect(status()).toBe(before);
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("keeps a failed commit in the footer status until the request changes", async () => {
+    applyRelocation.mockRejectedValueOnce(new Error("Nothing was moved"));
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
+    await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
+    const ready = screen.getByTestId("relocate-status").textContent;
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(screen.getByTestId("relocate-apply-error")).toBeTruthy());
+    expect(screen.getByTestId("relocate-status").textContent).not.toBe(ready);
+  });
+
+  it("commits on Enter from a field only when the button could", async () => {
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+    const folder = screen.getByTestId("relocate-folder-input");
+
+    // Nothing changed yet: Enter is inert.
+    fireEvent.keyDown(folder, { key: "Enter" });
+    fireEvent.change(folder, { target: { value: "proj2" } });
+    // Preview still pending: Enter is inert.
+    fireEvent.keyDown(folder, { key: "Enter" });
+    await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
+    expect(applyRelocation).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(folder, { key: "Enter" });
+    await waitFor(() => expect(applyRelocation).toHaveBeenCalledTimes(1));
+  });
+
+  it("turns a permission failure into something the user can act on, keeping the raw cause", async () => {
+    previewRelocation.mockRejectedValueOnce(new Error("EACCES: permission denied, access '/x'"));
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
+    const raw = "EACCES: permission denied, access '/x'";
+    const banner = await screen.findByTestId("relocate-preview-error");
+    const text = banner.textContent ?? "";
+    expect(text).toContain(raw);
+    // Something beyond the title, the raw cause and the button has to tell the
+    // user what to change before retrying.
+    const guidance = text
+      .replace(raw, "")
+      .replace("Couldn't check what will change", "")
+      .replace(/retry/i, "")
+      .trim();
+    expect(guidance.length).toBeGreaterThan(0);
+  });
+
+  it("keeps focus inside the dialog when Enter commits from a field it then freezes", async () => {
+    applyRelocation.mockReturnValue(new Promise(() => {}));
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+    const folder = screen.getByTestId("relocate-folder-input");
+    fireEvent.change(folder, { target: { value: "proj2" } });
+    await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
+
+    folder.focus();
+    fireEvent.keyDown(folder, { key: "Enter" });
+    await waitFor(() => expect(applyRelocation).toHaveBeenCalled());
+    const dialog = document.querySelector('[aria-modal="true"]');
+    expect(dialog?.contains(document.activeElement)).toBe(true);
+    const active = document.activeElement;
+    expect(active instanceof HTMLInputElement && active.disabled).toBe(false);
+  });
+
+  it("hands focus to the destination control when Retry removes its banner", async () => {
+    previewRelocation.mockRejectedValueOnce(new Error("boom"));
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    retry.focus();
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByTestId("relocate-folder-input"));
+  });
+
+  it("commits on Enter from a picker field that already holds a folder", async () => {
+    openDialog.mockResolvedValue("/moved/proj");
+    previewRelocation.mockResolvedValue(cleanPreview({ mode: "reattach", newPath: "/moved/proj" }));
+    useProjectRelocationStore
+      .getState()
+      .open({ projectId: "p1", mode: "reattach", oldPath: OLD_PATH, name: "Proj" });
+    render(<MoveOrRenameProjectDialog />);
+    fireEvent.click(screen.getByRole("button", { name: "Browse for the project folder" }));
+    await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
+
+    const picker = document.getElementById("relocate-existing");
+    if (!(picker instanceof HTMLInputElement)) throw new Error("picker input missing");
+    expect(picker.value).toBe("/moved/proj");
+    openDialog.mockClear();
+    fireEvent.keyDown(picker, { key: "Enter" });
+    await waitFor(() => expect(applyRelocation).toHaveBeenCalledTimes(1));
+    expect(openDialog).not.toHaveBeenCalled();
   });
 });

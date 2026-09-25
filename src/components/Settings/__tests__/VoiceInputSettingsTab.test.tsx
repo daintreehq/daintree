@@ -29,16 +29,20 @@ vi.mock("../SettingsSwitchCard", () => ({
 vi.mock("../SettingsSelect", () => ({
   SettingsSelect: ({
     label,
+    description,
     value,
     onValueChange,
     options,
   }: {
     label: string;
+    description?: React.ReactNode;
     value: string;
     onValueChange: (v: string) => void;
     options: Array<{ value: string; label: string }>;
   }) => (
     <div data-testid={`settings-select-${label}`}>
+      {/* The provider row carries the data-flow disclosure as its description. */}
+      {description && <p>{description}</p>}
       <span data-testid={`settings-select-value-${label}`}>{value}</span>
       {options.map((opt) => (
         <button
@@ -202,9 +206,9 @@ describe("VoiceInputSettingsTab", () => {
     render(<VoiceInputSettingsTab />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("settings-select-value-Recording mode").textContent).toBe(
-        "push-to-talk"
-      );
+      const group = screen.getByRole("radiogroup", { name: "Recording mode" });
+      const checked = group.querySelector('[aria-checked="true"]');
+      expect(checked?.textContent).toBe("Push to talk");
     });
   });
 
@@ -232,10 +236,11 @@ describe("VoiceInputSettingsTab", () => {
 
     render(<VoiceInputSettingsTab />);
 
-    const pttButton = await screen.findByTestId(
-      "settings-select-option-Recording mode-push-to-talk"
+    const group = await screen.findByRole("radiogroup", { name: "Recording mode" });
+    const pttButton = Array.from(group.querySelectorAll<HTMLElement>('[role="radio"]')).find(
+      (el) => el.textContent === "Push to talk"
     );
-    pttButton.click();
+    pttButton?.click();
 
     await waitFor(() => {
       expect(setSettings).toHaveBeenCalledWith({ recordingMode: "push-to-talk" });
@@ -267,7 +272,8 @@ describe("VoiceInputSettingsTab", () => {
       expect(screen.getByText(/encrypted connection to OpenAI/)).toBeTruthy();
       expect(screen.getByText(/not used for model training/)).toBeTruthy();
       expect(screen.getByText(/abuse-monitoring logs for up to 30 days/)).toBeTruthy();
-      expect(screen.queryByText(/stored locally in plain text/)).toBeNull();
+      // Where the key will live is said before it's saved, not only after.
+      expect(screen.getByText(/stored locally in plain text/)).toBeTruthy();
     });
   });
 

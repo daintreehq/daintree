@@ -86,7 +86,7 @@ The token paints a **leading rail**, drawn as `.palette-row::before` in `src/ind
 
 Not four sides. The token has to hold 3:1 against both its neighbours, which lands it on a mid-grey stroke; drawn all the way round a row that is _not_ the DOM focus target, that reads as an empty form field. No shipping palette does it — VS Code leaves `list.focusOutline` unset in Quick Open, and Linear, Raycast, Spotlight, Arc and Slack are all fill-led. Making the fill carry 3:1 instead and dropping the mark entirely is not the escape: it needs ~33% white on these surfaces, far heavier than the stroke it replaces. WCAG 1.4.11 sets a ratio, not an area, so spending the same token on a rail is the cheaper way to buy the same guarantee. The reserved transparent border stays — it holds the row's content box on the palette's shared column, and the forced-colors fallback still draws an outline there.
 
-The accent border and the 2px **accent** rail this recipe used to prescribe were removed in #11686: they put accent on the row, its rail and the focused input at once, breaking the one-load-bearing-signal rule. The rail is back, but neutral — accent stays on the focused input alone. The palette input's focus lift draws the same `selection-outline` (ring at half strength), so the field and the selected row stay one treatment — change them together.
+The accent border and the 2px **accent** rail this recipe used to prescribe were removed in #11686: they put accent on the row, its rail and the focused input at once, breaking the one-load-bearing-signal rule. The rail is back, but neutral, and the palette input is neutral too: its focus edge is the same `selection-outline`, so the field and the selected row stay one treatment — change them together. See Search Field below.
 
 `palette-row` is a forced-colors hook, not styling. Under `forced-colors: active` both the fill and the rail are stripped, so `src/index.css` falls back to a 2px `SelectedItem` outline. Deliberately an outline rather than a `SelectedItem` fill: these rows carry independently surfaced children (theme "Active" badges, action category chips, panel-kind icons with inline colour) that the engine maps to the forced palette on their own, and a fill would leave them painting `CanvasText` on `SelectedItem` — a pair with no contrast guarantee. The marker scopes the rule to palette rows, since `[role="option"]` is also used by the file pane, the settings selectors and the agent/forge dropdowns.
 
@@ -143,6 +143,20 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 
 ---
 
+### Search Field
+
+**Role:** Every place the app offers a query box — the Worktrees rail, the settings nav search, settings-page filters, palette header inputs, find bars, log and audit filters. One control in two sizes.
+
+```tsx
+<SearchField size="compact" value={q} onChange={...} onClear={...} aria-label="Search worktrees" />
+```
+
+**Usage:** Use `SearchField` (`src/components/ui/SearchField.tsx`); never hand-roll a wrapper, magnifier and input. Styling lives in `src/styles/components/search-field.css`, inside `@layer components` so a caller's utilities (a width, a denser height in a crowded toolbar) win. `compact` is 28px `text-xs` for rails, nav columns and toolbars; `palette` is 38px `text-sm` for palette and dialog headers (`AppPaletteDialog.Input` renders it).
+
+Rest is a recessed well (`surface-canvas`, or the site's theme hook through `--search-field-bg`) with a `border-default` hairline: the magnifier (`text-secondary`) identifies the field, so it does not need `border-input`'s 3:1 edge (WCAG 1.4.11 asks for a boundary only when nothing else identifies the control). Focus is neutral: the edge steps to `selection-outline` and a wash layer fades in on the 150ms tier (a white-ink `overlay-hover` on dark; on light, a lift toward `surface-panel-elevated`, since ink over a pale well reads as grime). **No accent** — palette inputs are focused whenever their palette is open, and the owner ruled against an accent ring on search fields. The placeholder takes `text-secondary`, not the form placeholder tier: it is the field's visible label. `invalid` swaps the edge to `status-danger`. Forced-colors and increased-contrast handling are in the family CSS (separate blocks, forced-colors last); sites need none of their own. `PopoverSearchField` is the edge-to-edge strip variant at the top of a filtering popover and shares the same neutral focus.
+
+---
+
 ### Input Focus (Outline)
 
 **Role:** Text inputs, textareas. Pre-allocate border width; only change color to avoid layout shifts.
@@ -176,6 +190,8 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 ```
 
 **Usage:** Combine with `transition-colors` for smooth toggle transitions. The active segment gets a neutral background fill and text emphasis; the border distinguishes it from inactive peers. Accent must NOT appear on any toggle segment. The canonical target is `overlay-medium` for the active fill.
+
+The sliding thumb of `SegmentedRadioGroup` sits on an inset track, where `border-strong` measured only 1.5–1.7:1 and the fill barely moves. It uses `border-text-secondary` for the boundary instead, which clears SC 1.4.11's 3:1 in both polarities.
 
 ---
 
@@ -253,6 +269,7 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 | --- | --- | --- |
 | Quick Switcher Item | `QuickSwitcherItem.tsx` | Selected state with neutral rail via `PALETTE_ROW_CLASS` |
 | Text Input | `ui/input.tsx` (`inputVariants`) | Input focus with outline ring |
+| Search Field | `ui/SearchField.tsx` + `styles/components/search-field.css` | Search field (neutral focus, no accent) |
 | Textarea | `ui/textarea.tsx` (`textareaVariants`) | Input focus with outline ring |
 | Button Ghost | `button.tsx` (`ghost` variant) | Ghost button hover with overlay-soft |
 | Dock Launch Button | `DockLaunchButton.tsx` (`pill` variant) | Neutral lift, no accent active state |
@@ -270,7 +287,7 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 
 Accent color is a scarce resource, not a default. These are the only contexts where accent is permitted:
 
-- **Focus rings** — Every interactive element. `focus-visible:outline-accent-primary` on buttons, inputs, list items, tree nodes.
+- **Focus rings** — Every interactive element. `focus-visible:outline-accent-primary` on buttons, inputs, list items, tree nodes. Search fields are the exception: they take the neutral `selection-outline` edge (see Search Field).
 - **Primary view anchor** — The single load-bearing signal per active focus region: armed terminal, focused worktree card, primary CTA button.
 - **Editor caret** — The terminal cursor is a singleton position anchor. (`--color-terminal-cursor-accent` in `src/index.css`.)
 - **Theme mockup chrome** — Swatches and preview strips that display a theme's accent color are data, not interactive chrome (e.g., `PaletteStrip.tsx`, `AppThemePicker.tsx`).

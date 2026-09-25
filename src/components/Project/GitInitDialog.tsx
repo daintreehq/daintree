@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Check, AlertCircle, AlertTriangle } from "lucide-react";
+import { Check, AlertTriangle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { FolderGit2 } from "@/components/icons";
@@ -13,13 +13,10 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { basename } from "@shared/utils/path";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import { ProjectEmojiButton } from "./ProjectEmojiButton";
-import {
-  FIELD_LABEL_CLASS,
-  FIELD_INPUT_CLASS,
-  FIELD_CHECKBOX_CLASS,
-  FIELD_EMOJI_ROW_INDENT,
-  PathCaption,
-} from "./projectDialogFields";
+import { Checkbox } from "@/components/ui/checkbox";
+import { cn } from "@/lib/utils";
+import { FormGrid, FormRow, FIELD_INPUT } from "@/components/Worktree/views/WorktreeFormLayout";
+import { EMOJI_SLOT_CLASS, SlottedInputField, PathCaption } from "./projectDialogFields";
 import {
   GITIGNORE_TEMPLATE_OPTIONS,
   DEFAULT_GITIGNORE_TEMPLATE_ID,
@@ -193,7 +190,6 @@ export function GitInitDialog({
   const previousModeRef = useRef<"configure" | "running" | "failed" | "complete">("configure");
   const nameErrorId = useId();
   const commitMessageErrorId = useId();
-  const commitOptionsId = useId();
 
   const trimmedProjectName = projectName.trim();
   // The name is seeded from the folder, so this only ever fires after the user
@@ -435,10 +431,10 @@ export function GitInitDialog({
       initialFocus="none"
       data-testid="git-init-dialog"
     >
-      <AppDialog.Header>
+      <AppDialog.Header className="py-3">
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. */}
-        <AppDialog.Title icon={<FolderGit2 className="h-5 w-5 text-text-secondary" />}>
+        <AppDialog.Title icon={<FolderGit2 className="h-4 w-4 text-text-secondary" />}>
           Set up repository
         </AppDialog.Title>
         {!isInitializing && !isComplete && <AppDialog.CloseButton />}
@@ -591,7 +587,6 @@ export function GitInitDialog({
               <div data-testid="git-init-error">
                 {isIdentityFailure ? (
                   <InlineStatusBanner
-                    icon={AlertCircle}
                     severity="error"
                     title="Initial commit skipped"
                     description="The repository was created, but Git needs a name and email before it can commit. Set them, then retry."
@@ -608,7 +603,6 @@ export function GitInitDialog({
                   />
                 ) : (
                   <InlineStatusBanner
-                    icon={AlertCircle}
                     severity="error"
                     title="Initialization failed"
                     description={error}
@@ -618,91 +612,99 @@ export function GitInitDialog({
               </div>
             )}
 
-            <div className="space-y-1.5">
-              <label htmlFor="git-init-project-name" className={FIELD_LABEL_CLASS}>
-                Project name
-              </label>
-              <div className="flex items-center gap-2">
-                <ProjectEmojiButton
-                  emoji={emoji}
-                  onEmojiChange={setEmoji}
-                  disabled={configDisabled}
-                  ariaLabel="Choose project emoji"
-                />
-                <input
+            <FormGrid>
+              <FormRow
+                label="Name"
+                htmlFor="git-init-project-name"
+                hint={
+                  isNameMissing && (
+                    <p
+                      id={nameErrorId}
+                      data-testid="git-init-name-error"
+                      className="text-xs text-status-error"
+                    >
+                      Enter a project name
+                    </p>
+                  )
+                }
+              >
+                <SlottedInputField
                   id="git-init-project-name"
                   ref={nameInputRef}
-                  type="text"
                   value={projectName}
                   onChange={(e) => setProjectName(e.target.value)}
                   disabled={configDisabled}
-                  aria-invalid={isNameMissing}
+                  invalid={isNameMissing}
                   aria-describedby={isNameMissing ? nameErrorId : undefined}
-                  className={FIELD_INPUT_CLASS}
+                  autoComplete="off"
                   placeholder="My project"
+                  leading={
+                    <ProjectEmojiButton
+                      emoji={emoji}
+                      onEmojiChange={setEmoji}
+                      disabled={configDisabled}
+                      ariaLabel="Choose project emoji"
+                      className={EMOJI_SLOT_CLASS}
+                    />
+                  }
                 />
-              </div>
-              {isNameMissing && (
-                <p
-                  id={nameErrorId}
-                  role="alert"
-                  data-testid="git-init-name-error"
-                  className={`${FIELD_EMOJI_ROW_INDENT} text-xs text-status-error`}
-                >
-                  Enter a project name
-                </p>
-              )}
-              <PathCaption path={directoryPath} className={FIELD_EMOJI_ROW_INDENT} />
-            </div>
+              </FormRow>
 
-            <div className="space-y-1.5">
-              <label htmlFor="git-init-template" className={FIELD_LABEL_CLASS}>
-                Gitignore template
-              </label>
-              <select
-                id="git-init-template"
-                value={gitignoreTemplate}
-                onChange={(e) => {
-                  if (isGitignoreTemplateId(e.target.value)) setGitignoreTemplate(e.target.value);
-                }}
-                disabled={configDisabled}
-                className={FIELD_INPUT_CLASS}
-              >
-                {GITIGNORE_TEMPLATE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label} — {opt.description}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-3">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={createInitialCommit}
-                  onChange={(e) => setCreateInitialCommit(e.target.checked)}
+              <FormRow label="Gitignore" htmlFor="git-init-template">
+                <select
+                  id="git-init-template"
+                  value={gitignoreTemplate}
+                  onChange={(e) => {
+                    if (isGitignoreTemplateId(e.target.value)) setGitignoreTemplate(e.target.value);
+                  }}
                   disabled={configDisabled}
-                  aria-expanded={createInitialCommit}
-                  aria-controls={commitOptionsId}
-                  className={FIELD_CHECKBOX_CLASS}
-                />
-                <span className="text-sm text-text-primary">Create initial commit</span>
-              </label>
-
-              {/* Indented behind a rule, the way every other dependent field in
-                  Settings is presented. Left flat it sat at the same indent,
-                  width and label weight as the gitignore select above it, so
-                  the one field that only exists because a box is ticked read as
-                  another permanent setting. */}
-              {createInitialCommit && (
-                <div
-                  id={commitOptionsId}
-                  className="ml-6 space-y-1.5 border-l border-border-default pl-4"
+                  className={FIELD_INPUT}
                 >
-                  <label htmlFor="git-init-commit-message" className={FIELD_LABEL_CLASS}>
-                    Initial commit message
+                  {GITIGNORE_TEMPLATE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label} — {opt.description}
+                    </option>
+                  ))}
+                </select>
+              </FormRow>
+
+              <FormRow label="Commit">
+                <div className="flex h-8 items-center gap-2">
+                  <Checkbox
+                    id="git-init-create-commit"
+                    checked={createInitialCommit}
+                    onCheckedChange={(checked) => setCreateInitialCommit(checked === true)}
+                    disabled={configDisabled}
+                    aria-expanded={createInitialCommit}
+                    aria-controls="git-init-commit-message"
+                  />
+                  <label
+                    htmlFor="git-init-create-commit"
+                    className="cursor-pointer text-sm text-text-primary"
+                  >
+                    Create initial commit
                   </label>
+                </div>
+              </FormRow>
+
+              {/* Its own row on the rail, directly under the box that owns it:
+                  the one field that only exists because a box is ticked. */}
+              {createInitialCommit && (
+                <FormRow
+                  label="Message"
+                  htmlFor="git-init-commit-message"
+                  hint={
+                    isCommitMessageMissing && (
+                      <p
+                        id={commitMessageErrorId}
+                        data-testid="git-init-commit-message-error"
+                        className="text-xs text-status-error"
+                      >
+                        Enter a commit message
+                      </p>
+                    )
+                  }
+                >
                   <input
                     id="git-init-commit-message"
                     type="text"
@@ -712,21 +714,15 @@ export function GitInitDialog({
                     aria-invalid={isCommitMessageMissing}
                     aria-describedby={isCommitMessageMissing ? commitMessageErrorId : undefined}
                     placeholder="Initial commit"
-                    className={FIELD_INPUT_CLASS}
+                    className={cn(
+                      FIELD_INPUT,
+                      isCommitMessageMissing &&
+                        "border-status-error focus-visible:outline-status-error"
+                    )}
                   />
-                  {isCommitMessageMissing && (
-                    <p
-                      id={commitMessageErrorId}
-                      role="alert"
-                      data-testid="git-init-commit-message-error"
-                      className="text-xs text-status-error"
-                    >
-                      Enter a commit message
-                    </p>
-                  )}
-                </div>
+                </FormRow>
               )}
-            </div>
+            </FormGrid>
 
             {/* The one thing the path alone does not say: this writes into a
                 folder the app does not own yet, and exactly what it writes
@@ -738,7 +734,16 @@ export function GitInitDialog({
         )}
       </AppDialog.Body>
 
-      <AppDialog.Footer>
+      <AppDialog.Footer
+        hint={
+          mode === "complete" || mode === "running" ? undefined : (
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="shrink-0">In</span>
+              <PathCaption path={directoryPath} className="min-w-0 text-text-primary" />
+            </span>
+          )
+        }
+      >
         {mode === "complete" ? (
           <Button
             ref={footerActionRef}
@@ -755,38 +760,40 @@ export function GitInitDialog({
           // part-way, so the only honest footer is the escape hatch, visibly
           // unavailable — rather than a primary button wearing a spinner over
           // its own label.
-          <Button variant="outline" data-testid="git-init-cancel" disabled>
+          <Button variant="ghost" size="sm" data-testid="git-init-cancel" disabled>
             Cancel
           </Button>
         ) : error ? (
-          <>
-            <Button variant="outline" onClick={onCancel}>
+          <div className="flex shrink-0 items-center gap-3">
+            <Button variant="ghost" size="sm" onClick={onCancel}>
               Cancel
             </Button>
             <Button
               ref={footerActionRef}
               variant="contrast"
+              size="sm"
               data-testid="git-init-retry"
               onClick={() => void startInitialization()}
               disabled={isInitializing || !canStart}
             >
               Retry
             </Button>
-          </>
+          </div>
         ) : (
-          <>
-            <Button variant="outline" onClick={onCancel} disabled={isInitializing}>
+          <div className="flex shrink-0 items-center gap-3">
+            <Button variant="ghost" size="sm" onClick={onCancel} disabled={isInitializing}>
               Cancel
             </Button>
             <Button
               variant="contrast"
+              size="sm"
               data-testid="git-init-start"
               onClick={() => void startInitialization()}
               disabled={isInitializing || !canStart}
             >
               Initialize repository
             </Button>
-          </>
+          </div>
         )}
       </AppDialog.Footer>
     </AppDialog>

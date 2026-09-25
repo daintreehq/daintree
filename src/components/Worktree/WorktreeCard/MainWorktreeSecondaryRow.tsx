@@ -4,14 +4,12 @@ import { BranchLabel } from "../BranchLabel";
 import { UpstreamSyncBadge } from "./UpstreamSyncBadge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { GitBranch } from "lucide-react";
-import { useResourceProfileStore } from "@/store/resourceProfileStore";
 import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 
 interface MainWorktreeSecondaryRowProps {
   branchLabel: string;
   isActive: boolean;
   isMuted?: boolean;
-  hasUpstreamDelta: boolean;
   hasAuthFailedSignIn: boolean;
   authProviderId?: string | null;
   aheadCount: number | undefined;
@@ -27,7 +25,6 @@ export function MainWorktreeSecondaryRow({
   branchLabel,
   isActive,
   isMuted,
-  hasUpstreamDelta,
   hasAuthFailedSignIn,
   authProviderId,
   aheadCount,
@@ -38,10 +35,6 @@ export function MainWorktreeSecondaryRow({
   fetchNetworkFailed,
   aggregateCounts,
 }: MainWorktreeSecondaryRowProps) {
-  const fetchIntervalActiveMs = useResourceProfileStore((s) => s.fetchIntervalActiveMs);
-  const fetchIntervalBackgroundMs = useResourceProfileStore((s) => s.fetchIntervalBackgroundMs);
-  const fetchIntervalMs = isActive ? fetchIntervalActiveMs : fetchIntervalBackgroundMs;
-
   return (
     // px-1 for the same reason as NonMainSecondaryRow — the main card's meta
     // line is the same tier and has to sit on the same x.
@@ -52,23 +45,23 @@ export function MainWorktreeSecondaryRow({
         isMuted={isMuted}
         isMainWorktree={false}
       />
-      {(hasUpstreamDelta || hasAuthFailedSignIn) && (
-        <UpstreamSyncBadge
-          aheadCount={aheadCount}
-          behindCount={behindCount}
-          isFetchInFlight={isFetchInFlight}
-          lastFetchedAt={lastFetchedAt}
-          fetchAuthFailed={fetchAuthFailed}
-          fetchNetworkFailed={fetchNetworkFailed}
-          hasAuthFailedSignIn={hasAuthFailedSignIn}
-          authProviderId={authProviderId}
-          containerGapClass="gap-1"
-          fetchIntervalMs={fetchIntervalMs}
-        />
-      )}
+      {/* Always mounted: the badge decides whether it has anything to say, and
+          a failed fetch is worth saying even with no counts — an
+          empty line beside the branch otherwise reads as "in sync". */}
+      <UpstreamSyncBadge
+        aheadCount={aheadCount}
+        behindCount={behindCount}
+        isFetchInFlight={isFetchInFlight}
+        lastFetchedAt={lastFetchedAt}
+        fetchAuthFailed={fetchAuthFailed}
+        fetchNetworkFailed={fetchNetworkFailed}
+        hasAuthFailedSignIn={hasAuthFailedSignIn}
+        authProviderId={authProviderId}
+        containerGapClass="gap-1"
+      />
       {aggregateCounts && aggregateCounts.worktrees > 0 && (
         <>
-          <span className="text-text-muted/40 text-3xs" aria-hidden="true">
+          <span className="text-text-muted text-3xs" aria-hidden="true">
             ·
           </span>
           <Tooltip>

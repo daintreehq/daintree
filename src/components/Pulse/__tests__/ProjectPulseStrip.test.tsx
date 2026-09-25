@@ -59,7 +59,7 @@ beforeEach(() => {
 describe("ProjectPulseStrip", () => {
   it("populates on mount by fetching when nothing is cached, staying collapsed", () => {
     render(<ProjectPulseStrip worktreeId="wt1" />);
-    expect(screen.getByRole("button", { name: /show project activity/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^project pulse/i })).toBeTruthy();
     // Populate-on-load: the cold strip kicks a fetch on mount so the peek fills
     // without needing a first expand — but stays collapsed until clicked.
     expect(state.fetchPulse).toHaveBeenCalledWith("wt1");
@@ -103,34 +103,37 @@ describe("ProjectPulseStrip", () => {
   it("peeks cached stats — active days (not a raw commit count), streak, and a mini ribbon", () => {
     state.getPulse = () => makePulse();
     render(<ProjectPulseStrip worktreeId="wt1" />);
-    expect(screen.getByText(/5 active days/i)).toBeTruthy();
+    // Scoped to the window it counts, matching the card summary's "5/60".
+    expect(screen.getByText("5/60 active days")).toBeTruthy();
+    expect(screen.getByText("2 day streak")).toBeTruthy();
     // The busyness-flavored commit count is no longer the headline (#11194).
     expect(screen.queryByText(/13 commits/i)).toBeNull();
     expect(screen.getByTestId("streak-flame")).toBeTruthy();
     expect(screen.getByTestId("pulse-mini-ribbon")).toBeTruthy();
   });
 
-  it("renders a singular 'active day' for a one-day-active pulse", () => {
-    state.getPulse = () => makePulse({ activeDays: 1, currentStreakDays: 1 });
+  it("scopes the active-day count to the snapshot's own window, not a fixed one", () => {
+    state.getPulse = () => makePulse({ activeDays: 3, projectAgeDays: 4, currentStreakDays: 1 });
     render(<ProjectPulseStrip worktreeId="wt1" />);
-    expect(screen.getByText(/1 active day\b/i)).toBeTruthy();
-    expect(screen.queryByText(/active days/i)).toBeNull();
+    expect(screen.getByText("3/4 active days")).toBeTruthy();
   });
 
   it("folds the peeked stats into the button's accessible name for screen readers", () => {
     state.getPulse = () => makePulse({ activeDays: 5, currentStreakDays: 2 });
     render(<ProjectPulseStrip worktreeId="wt1" />);
     expect(
-      screen.getByRole("button", { name: /show project activity — 5 active days, 2 day streak/i })
+      screen.getByRole("button", {
+        name: /^project pulse — 5 of 60 active days, 2 day streak, show activity$/i,
+      })
     ).toBeTruthy();
   });
 
-  it("uses a singular 'active day' in the accessible name and omits a 1-day streak", () => {
+  it("scopes the accessible name the same way and omits a 1-day streak", () => {
     state.getPulse = () => makePulse({ activeDays: 1, currentStreakDays: 1 });
     render(<ProjectPulseStrip worktreeId="wt1" />);
-    // Anchored so "1 active days" (plural bug) or a spurious streak suffix fails.
+    // Anchored so a spurious streak suffix fails.
     expect(
-      screen.getByRole("button", { name: /^show project activity — 1 active day$/i })
+      screen.getByRole("button", { name: /^project pulse — 1 of 60 active days, show activity$/i })
     ).toBeTruthy();
   });
 
@@ -145,7 +148,7 @@ describe("ProjectPulseStrip", () => {
     // The cold-cache mount fetch already fired; clear it so we assert only the
     // click-triggered fetch (a bare vi.fn() doesn't model the store's dedupe).
     state.fetchPulse.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: /show project activity/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^project pulse/i }));
     expect(screen.getByTestId("pulse-card")).toBeTruthy();
     // Expanding kicks a (deduped) fetch so the peek is fresh + the card opens on
     // a skeleton rather than a blank frame.
@@ -154,7 +157,7 @@ describe("ProjectPulseStrip", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /collapse/i }));
     expect(screen.queryByTestId("pulse-card")).toBeNull();
-    expect(screen.getByRole("button", { name: /show project activity/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^project pulse/i })).toBeTruthy();
   });
 
   it("mini ribbon drops invalid-date and before-project cells and never triggers a fetch", () => {

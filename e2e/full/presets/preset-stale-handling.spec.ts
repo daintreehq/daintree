@@ -7,6 +7,7 @@ import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
 import {
   navigateToAgentSettings,
   addCustomPreset,
+  confirmPresetDelete,
   writeCcrConfig,
   removeCcrConfig,
   waitForCcrPresets,
@@ -81,6 +82,7 @@ test.describe.serial("Presets: Stale Preset Handling (71–76)", () => {
     const delBtn = ctx.window.locator(SEL.preset.section).locator(SEL.preset.deleteButton).first();
     await expect(delBtn).toBeVisible({ timeout: T_SHORT });
     await delBtn.click();
+    await confirmPresetDelete(ctx.window);
     await expect.poll(() => getPersistedCustomCount(), { timeout: T_MEDIUM }).toBe(countBefore - 1);
   };
 

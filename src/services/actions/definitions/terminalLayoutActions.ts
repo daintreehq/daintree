@@ -6,6 +6,8 @@ import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
+import { getGridLayoutSnapshot } from "@/components/Terminal/gridLayoutSnapshot";
+import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 export function registerTerminalLayoutActions(
   actions: ActionRegistry,
@@ -40,7 +42,7 @@ export function registerTerminalLayoutActions(
 
         useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-        state.moveTerminalToDock(targetId);
+        animatePanelMove(targetId, "minimize", () => state.moveTerminalToDock(targetId));
 
         const moved = usePanelStore.getState().panelsById[targetId];
         if (moved?.location === "dock") {
@@ -71,7 +73,7 @@ export function registerTerminalLayoutActions(
           return;
         }
         useLayoutUndoStore.getState().pushLayoutSnapshot();
-        state.moveTerminalToGrid(targetId);
+        animatePanelMove(targetId, "restore", () => state.moveTerminalToGrid(targetId));
       }
     },
   }));
@@ -91,8 +93,11 @@ export function registerTerminalLayoutActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        // Pass getPanelGroup to enable group-aware maximize
-        state.toggleMaximize(targetId, undefined, undefined, state.getPanelGroup);
+        // Pass getPanelGroup to enable group-aware maximize, and the grid's
+        // current shape so restoring brings back the layout it left — what the
+        // header's maximize button hands over too.
+        const { gridCols, gridItemCount } = getGridLayoutSnapshot();
+        state.toggleMaximize(targetId, gridCols, gridItemCount, state.getPanelGroup);
       }
     },
   }));
@@ -284,9 +289,9 @@ export function registerTerminalLayoutActions(
       // wipe the user's redo history and then change nothing.
       useLayoutUndoStore.getState().pushLayoutSnapshot();
       if (toGrid) {
-        state.moveTerminalToGrid(targetId);
+        animatePanelMove(targetId, "restore", () => state.moveTerminalToGrid(targetId));
       } else {
-        state.moveTerminalToDock(targetId);
+        animatePanelMove(targetId, "minimize", () => state.moveTerminalToDock(targetId));
         state.openDockTerminal(targetId);
       }
     },

@@ -50,8 +50,7 @@ export function AnimatedLabel({ label, animateKey, className, textClassName }: A
 
   // Safety cleanup — under reduced-motion the keyframe animation is replaced
   // with a static state so `animationend` never fires from the outgoing span.
-  // The 250ms timeout matches the canonical pattern in AgentStatusIndicator
-  // and prevents the outgoing label from latching in the DOM.
+  // The 250ms timeout prevents the outgoing label from latching in the DOM.
   useEffect(() => {
     if (outgoing === null) return;
     const timer = setTimeout(() => setOutgoing(null), 250);

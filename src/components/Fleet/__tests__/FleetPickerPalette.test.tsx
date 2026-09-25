@@ -41,6 +41,8 @@ import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore } from "@/store/createWorktreeStore";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { WorktreeSnapshot } from "@shared/types";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
 
 function makeTerminal(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -812,6 +814,34 @@ describe("FleetPickerPalette", () => {
       // Both rows should still be rendered — t1 (already armed) and t2.
       expect(screen.getByTestId("fleet-picker-cold-start-row-t1")).toBeTruthy();
       expect(screen.getByTestId("fleet-picker-cold-start-row-t2")).toBeTruthy();
+    });
+  });
+
+  describe("saved fleets hand-off", () => {
+    afterEach(() => {
+      useProjectSettingsStore.setState({ settings: null });
+      consumePaletteFocusRestoreSuppression();
+    });
+
+    it("closes the palette without restoring its focus when Manage opens the dialog", async () => {
+      useProjectSettingsStore.setState({
+        settings: {
+          runCommands: [],
+          fleetSavedScopes: [
+            { kind: "snapshot", id: "s", name: "Old", terminalIds: ["gone"], createdAt: 1 },
+          ],
+        },
+      });
+      const onClose = vi.fn();
+      renderPalette([], true, onClose);
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-saved-manage"));
+      });
+      expect(onClose).toHaveBeenCalledTimes(1);
+      // Otherwise the palette's exit-animation restore pulls focus back out of
+      // the dialog that just opened.
+      expect(consumePaletteFocusRestoreSuppression()).toBe(true);
+      expect(screen.getByTestId("fleet-saved-manage-dialog")).toBeTruthy();
     });
   });
 });

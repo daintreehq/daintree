@@ -89,6 +89,14 @@ function approveButton(label = /approve/i): HTMLButtonElement {
   return screen.getByRole("button", { name: label }) as HTMLButtonElement;
 }
 
+/**
+ * The source path renders one box per folder so it wraps only between them,
+ * which splits its text across elements — match the element holding it whole.
+ */
+function findSourcePath(path: string) {
+  return screen.findByText((_, el) => el?.tagName === "P" && el.textContent === path);
+}
+
 describe("LifecycleCommandApprovalDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -116,7 +124,7 @@ describe("LifecycleCommandApprovalDialog", () => {
 
     renderDialog();
 
-    expect(await screen.findByText("/repo/.daintree/config.json")).toBeDefined();
+    expect(await findSourcePath("/repo/.daintree/config.json")).toBeDefined();
     const blocks = [...document.querySelectorAll("pre")].map((pre) => pre.textContent);
     expect(blocks).toEqual(["npm install\n./scripts/bootstrap.sh", "docker compose down"]);
   });
@@ -127,7 +135,7 @@ describe("LifecycleCommandApprovalDialog", () => {
     const onClose = vi.fn();
 
     renderDialog({ setupAwaitingApproval: true, onClose });
-    await screen.findByText("/repo/.daintree/config.json");
+    await findSourcePath("/repo/.daintree/config.json");
 
     fireEvent.click(approveButton(/approve and run setup/i));
 
@@ -146,7 +154,7 @@ describe("LifecycleCommandApprovalDialog", () => {
     worktreeClientMock.approveLifecycleCommands.mockRejectedValue(new Error("changed"));
 
     renderDialog();
-    await screen.findByText("/repo/.daintree/config.json");
+    await findSourcePath("/repo/.daintree/config.json");
     expect(dialogProps.latest?.confirmCooldownMs).toBeGreaterThan(0);
     expect(dialogProps.latest?.cooldownKey).toBe(REVIEW.fingerprint);
 
@@ -161,7 +169,7 @@ describe("LifecycleCommandApprovalDialog", () => {
     const onClose = vi.fn();
 
     renderDialog({ onClose });
-    await screen.findByText("/repo/.daintree/config.json");
+    await findSourcePath("/repo/.daintree/config.json");
     fireEvent.click(approveButton());
 
     const cancel = screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
@@ -182,7 +190,7 @@ describe("LifecycleCommandApprovalDialog", () => {
     const onClose = vi.fn();
 
     renderDialog({ onClose });
-    await screen.findByText("/repo/.daintree/config.json");
+    await findSourcePath("/repo/.daintree/config.json");
     fireEvent.click(approveButton());
 
     expect((await screen.findByRole("alert")).textContent).toMatch(/changed/);

@@ -18,6 +18,7 @@ import type { AgentPreset } from "@shared/config/agentRegistry";
 import type {
   ProjectSwitchOutgoingState,
   ProjectSwitchPayload,
+  ProjectSwitchResult,
   ProjectSwitchTrace,
 } from "@shared/types/ipc/project";
 import { PERF_MARKS } from "@shared/perf/marks";
@@ -149,7 +150,7 @@ export const projectClient = {
       focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent;
       trace?: ProjectSwitchTrace;
     }
-  ): Promise<Project> => {
+  ): Promise<ProjectSwitchResult> => {
     invalidateCurrentCache();
     return window.electron.project.switch(projectId, outgoingState, options);
   },
@@ -253,7 +254,7 @@ export const projectClient = {
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState,
     options?: { trace?: ProjectSwitchTrace }
-  ): Promise<Project> => {
+  ): Promise<ProjectSwitchResult> => {
     invalidateCurrentCache();
     return window.electron.project.reopen(projectId, outgoingState, options);
   },

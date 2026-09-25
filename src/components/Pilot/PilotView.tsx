@@ -34,10 +34,11 @@ import {
 } from "./pilotRows";
 import { BAND_GLYPH, BAND_GLYPH_TONE, PilotRunState } from "./PilotRunState";
 import { PilotFilterBar } from "./PilotFilterBar";
+import { PilotFooterHint } from "./PilotFooterHint";
 import { PilotParkEditor, type PilotGateCandidate, type PilotParkTarget } from "./PilotParkEditor";
 import { isMac } from "@/lib/platform";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
+import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import {
   usePaletteTreeNavigation,
@@ -575,49 +576,6 @@ function RunRow({
 }
 
 /**
- * The footer's key hints, which are also its buttons.
- *
- * They were `<span>`s carrying a keycap, which made Park and Worktrees
- * keyboard-only in practice: a user driving the palette with the mouse could
- * open a run by clicking it and had no way at all to park one, and the drill
- * gesture's only pointer form was an undiscoverable click on a heading that
- * gives no sign of being a control. A `<button>` costs nothing visually — the
- * keycap and the verb are unchanged — and it makes the hint the thing it was
- * already describing.
- *
- * The keycap stays inside the button rather than beside it, so the accessible
- * name is "⌥↵ Park" and voice control's "click Park" still matches on the
- * visible word.
- */
-function FooterHint({
-  keys,
-  label,
-  onClick,
-  testId,
-}: {
-  keys: string;
-  label: string;
-  onClick: () => void;
-  testId: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      data-testid={testId}
-      className={cn(
-        "flex shrink-0 items-center rounded-[var(--radius-sm)] px-1 py-0.5 transition-colors",
-        "hover:bg-overlay-subtle hover:text-text-primary",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-      )}
-    >
-      <kbd className={KBD_CLASS}>{keys}</kbd>
-      <span className="ml-1.5">{label}</span>
-    </button>
-  );
-}
-
-/**
  * `actionLabel` is null when nothing is listed, and the hint goes with it — a
  * footer offering "↵ Open" over a loading or empty list is chrome promising a
  * key that visibly does nothing.
@@ -664,10 +622,10 @@ function PilotFooter({
     <div className="flex w-full items-center justify-between gap-3">
       <div className="-ml-1 flex items-center gap-2">
         {actionLabel !== null && (
-          <FooterHint keys="↵" label={actionLabel} onClick={onOpen} testId="pilot-open-hint" />
+          <PilotFooterHint keys="↵" label={actionLabel} onClick={onOpen} testId="pilot-open-hint" />
         )}
         {parkLabel !== null && (
-          <FooterHint
+          <PilotFooterHint
             keys={isMac() ? "⌥↵" : "Alt+↵"}
             label={parkLabel}
             onClick={onPark}
@@ -675,7 +633,7 @@ function PilotFooter({
           />
         )}
         {drillLabel !== null && (
-          <FooterHint
+          <PilotFooterHint
             keys={isMac() ? "⌘↵" : "Ctrl+↵"}
             label={drillLabel}
             onClick={onDrill}
@@ -720,6 +678,10 @@ function PilotFooter({
  * so one hand-written cache was costing the entire component its automatic
  * ones. Called bare, the compiler caches the result itself.
  */
+function parkModeLabel(target: PilotParkTarget): string {
+  return target.existingPark !== undefined ? "Edit park" : "Park agent";
+}
+
 function findParkTarget(
   liveGroups: PilotProjectGroup[],
   parkTargetId: string | null
@@ -1175,6 +1137,8 @@ export function PilotView() {
   }, [scope]);
 
   const parkEditing = parkTarget !== null;
+  /** The footer node the park editor portals its action bar into. */
+  const [parkFooterSlot, setParkFooterSlot] = useState<HTMLDivElement | null>(null);
 
   const closeParkEditor = useCallback((_changed: boolean) => {
     setParkTargetId(null);
@@ -1702,11 +1666,27 @@ export function PilotView() {
       // The scoped view renders the breadcrumb above the search box, so the
       // dialog's default — first tabbable — put the keyboard on "All agents".
       initialFocusRef={searchRef}
-      ariaLabel={scopedName === null ? "All agents" : `Agents in ${scopedName}`}
+      // Follows the visible header, so a screen reader hears the mode it is in
+      // rather than the name of a list no longer on screen.
+      ariaLabel={
+        parkTarget !== null
+          ? parkModeLabel(parkTarget)
+          : scopedName === null
+            ? "All agents"
+            : `Agents in ${scopedName}`
+      }
       tier="overview"
     >
       <AppPaletteDialog.Header
-        label={scopedName === null ? "All agents" : "Agents by worktree"}
+        // The editor names its own mode: with the list gone, "All agents" was
+        // a title for a surface no longer on screen.
+        label={
+          parkTarget !== null
+            ? parkModeLabel(parkTarget)
+            : scopedName === null
+              ? "All agents"
+              : "Agents by worktree"
+        }
         shortcut={scopedName === null ? pilotShortcut : scopedShortcut}
       >
         {/*
@@ -1841,6 +1821,7 @@ export function PilotView() {
             target={parkTarget}
             candidates={gateCandidates}
             onClose={closeParkEditor}
+            footerSlot={parkFooterSlot}
           />
         )}
 
@@ -2025,6 +2006,11 @@ export function PilotView() {
         strip under the empty state. Drop the whole footer instead of shipping a
         divider with nothing beneath it.
       */}
+      {parkEditing && (
+        <AppPaletteDialog.Footer>
+          <div ref={setParkFooterSlot} className="flex w-full items-center" />
+        </AppPaletteDialog.Footer>
+      )}
       {!parkEditing && (actionLabel !== null || summary !== "") && (
         <AppPaletteDialog.Footer>
           <PilotFooter

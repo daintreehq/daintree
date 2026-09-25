@@ -53,6 +53,8 @@ function enqueue(
     argsSummary?: string;
     subject?: string;
     typedNameTarget?: string;
+    offerSessionApproval?: boolean;
+    approvalReason?: "above-tier";
     selectableTargets?: {
       id: string;
       name: string;
@@ -77,6 +79,8 @@ function enqueue(
     ...(overrides.previewTitle ? { previewTitle: overrides.previewTitle } : {}),
     ...(overrides.previewPending ? { previewPending: overrides.previewPending } : {}),
     ...(overrides.typedNameTarget ? { typedNameTarget: overrides.typedNameTarget } : {}),
+    ...(overrides.offerSessionApproval ? { offerSessionApproval: true } : {}),
+    ...(overrides.approvalReason ? { approvalReason: overrides.approvalReason } : {}),
     ...(overrides.selectableTargets
       ? {
           selectableTargets: overrides.selectableTargets,
@@ -419,6 +423,72 @@ describe("McpConfirmDialog", () => {
     render(<McpConfirmDialog />);
 
     expect(screen.queryByLabelText(/to confirm$/)).toBeNull();
+  });
+
+  // #12692: an agent pane is asked, not refused, above its tier — and may keep
+  // allowing the tool for the rest of the session.
+  describe("agent-pane approval (#12692)", () => {
+    it("offers the session scope only when main said so, unchecked", () => {
+      void enqueue({ offerSessionApproval: true, danger: "safe", actionTitle: "Push" });
+      render(<McpConfirmDialog />);
+
+      const box = screen.getByRole("checkbox", { name: "Allow for the rest of this session" });
+      expect(box.getAttribute("aria-checked")).toBe("false");
+      expect(screen.getByText("Agent in a terminal pane")).toBeTruthy();
+    });
+
+    it("renders no session option for any other requester", () => {
+      void enqueue({ danger: "safe" });
+      render(<McpConfirmDialog />);
+
+      expect(
+        screen.queryByRole("checkbox", { name: "Allow for the rest of this session" })
+      ).toBeNull();
+    });
+
+    it("approves for the session when the box is ticked, and once when it is not", async () => {
+      const session = enqueue({
+        requestId: "a",
+        offerSessionApproval: true,
+        danger: "safe",
+        actionTitle: "Push",
+      });
+      const once = enqueue({
+        requestId: "b",
+        offerSessionApproval: true,
+        danger: "safe",
+        actionTitle: "Push",
+      });
+      render(<McpConfirmDialog />);
+
+      act(() => {
+        fireEvent.click(
+          screen.getByRole("checkbox", { name: "Allow for the rest of this session" })
+        );
+      });
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Push" }));
+      });
+      await expect(session).resolves.toEqual({ decision: "approved", scope: "session" });
+
+      // The promoted request must not inherit the tick.
+      expect(
+        screen
+          .getByRole("checkbox", { name: "Allow for the rest of this session" })
+          .getAttribute("aria-checked")
+      ).toBe("false");
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Push" }));
+      });
+      await expect(once).resolves.toEqual({ decision: "approved" });
+    });
+
+    it("says an above-tier request is about reach, not danger", () => {
+      void enqueue({ approvalReason: "above-tier", danger: "safe" });
+      render(<McpConfirmDialog />);
+
+      expect(screen.getByText(/needs your approval to run/)).toBeTruthy();
+    });
   });
 
   it("labels the confirm button with the action title, not a generic verb", () => {

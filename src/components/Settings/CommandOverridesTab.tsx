@@ -1,14 +1,22 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { ChevronRight, RotateCcw, Power, PowerOff, AlertCircle, Search } from "lucide-react";
+import { useState, useEffect, useMemo, useCallback, useId, useRef } from "react";
+import { ChevronRight } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { Textarea } from "@/components/ui/textarea";
+import { SettingsSection } from "./SettingsSection";
+import { SettingsDependents, SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { SettingsSearchField } from "./SettingsSearchField";
+import { SettingsSwitch } from "./SettingsSwitch";
+import { OverrideField } from "./OverrideField";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { commandsClient } from "@/clients/commandsClient";
 import type { CommandManifestEntry, CommandOverride } from "@shared/types/commands";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { extractTemplateVariables, validatePromptTemplate } from "@shared/utils/promptTemplate";
+import { validatePromptTemplate } from "@shared/utils/promptTemplate";
 import { logError } from "@/utils/logger";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 
 interface CommandOverridesTabProps {
   projectId: string;
@@ -16,16 +24,42 @@ interface CommandOverridesTabProps {
   onChange: (overrides: CommandOverride[]) => void;
 }
 
-type OverrideMode = "defaults" | "prompt";
-type FilterMode = "all" | "overridden" | "disabled";
+type FilterMode = "all" | "modified" | "disabled";
+
+const FILTER_MODES: { value: FilterMode; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "modified", label: "Modified" },
+  { value: "disabled", label: "Disabled" },
+];
+
+type CommandArg = NonNullable<CommandManifestEntry["args"]>[number];
+
+function hasDefaults(override: CommandOverride | undefined): boolean {
+  return !!override?.defaults && Object.keys(override.defaults).length > 0;
+}
+
+/** Anything that makes this command behave differently in this project. */
+function isModified(override: CommandOverride | undefined): boolean {
+  return !!override && (override.disabled === true || hasDefaults(override) || !!override.prompt);
+}
+
+/**
+ * Drops an override that no longer changes anything, so "Modified" and the reset
+ * affordance only ever describe a real difference.
+ */
+function prune(override: CommandOverride): CommandOverride | null {
+  return isModified(override) ? override : null;
+}
 
 export function CommandOverridesTab({ projectId, overrides, onChange }: CommandOverridesTabProps) {
   const [commands, setCommands] = useState<CommandManifestEntry[]>([]);
   const [expandedCommands, setExpandedCommands] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
-  const [overrideModes, setOverrideModes] = useState<Record<string, OverrideMode>>({});
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -33,12 +67,14 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
     const loadCommands = async () => {
       try {
         setIsLoading(true);
+        setLoadFailed(false);
         const result = await commandsClient.list({ projectId });
         if (mounted) {
           setCommands(result);
         }
       } catch (error) {
         logError("Failed to load commands", error);
+        if (mounted) setLoadFailed(true);
       } finally {
         if (mounted) {
           setIsLoading(false);
@@ -51,20 +87,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
     return () => {
       mounted = false;
     };
-  }, [projectId]);
-
-  // Initialize override modes based on existing overrides
-  useEffect(() => {
-    const newModes: Record<string, OverrideMode> = {};
-    for (const override of overrides) {
-      if (override.prompt) {
-        newModes[override.commandId] = "prompt";
-      } else if (override.defaults && Object.keys(override.defaults).length > 0) {
-        newModes[override.commandId] = "defaults";
-      }
-    }
-    setOverrideModes(newModes);
-  }, [overrides]);
+  }, [projectId, loadAttempt]);
 
   const getOverride = useCallback(
     (commandId: string): CommandOverride | undefined => {
@@ -73,34 +96,53 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
     [overrides]
   );
 
-  const updateOverride = (commandId: string, updates: Partial<CommandOverride>) => {
-    const existing = getOverride(commandId);
-    if (existing) {
-      onChange(overrides.map((o) => (o.commandId === commandId ? { ...o, ...updates } : o)));
+  const writeOverride = (
+    commandId: string,
+    update: (current: CommandOverride) => CommandOverride
+  ) => {
+    const current = getOverride(commandId) ?? { commandId };
+    const next = prune(update(current));
+    const others = overrides.filter((o) => o.commandId !== commandId);
+    if (!next) {
+      onChange(others);
+    } else if (getOverride(commandId)) {
+      onChange(overrides.map((o) => (o.commandId === commandId ? next : o)));
     } else {
-      onChange([...overrides, { commandId, ...updates }]);
+      onChange([...others, next]);
     }
   };
 
-  const removeOverride = (commandId: string) => {
+  const setEnabled = (commandId: string, enabled: boolean) => {
+    writeOverride(commandId, ({ disabled: _, ...rest }) =>
+      enabled ? rest : { ...rest, disabled: true }
+    );
+    // Turning a command back on under the Disabled filter takes its row, and the
+    // focused switch, out of the list.
+    if (enabled && filterMode === "disabled") searchRef.current?.focus();
+  };
+
+  const setDefault = (commandId: string, argName: string, value: string | undefined) => {
+    writeOverride(commandId, (current) => {
+      const defaults = { ...current.defaults };
+      if (value === undefined) delete defaults[argName];
+      else defaults[argName] = value;
+      const { defaults: _, ...rest } = current;
+      return Object.keys(defaults).length > 0 ? { ...rest, defaults } : rest;
+    });
+  };
+
+  const setPrompt = (commandId: string, prompt: string) => {
+    writeOverride(commandId, ({ prompt: _, ...rest }) =>
+      prompt.trim() === "" ? rest : { ...rest, prompt }
+    );
+  };
+
+  /** Returns whether the command's row survives the reset under the current filter. */
+  const resetCommand = (commandId: string): boolean => {
     onChange(overrides.filter((o) => o.commandId !== commandId));
-  };
-
-  const toggleDisabled = (commandId: string) => {
-    const override = getOverride(commandId);
-    const newDisabled = !override?.disabled;
-
-    if (newDisabled) {
-      updateOverride(commandId, { disabled: true });
-    } else {
-      const hasOtherOverrides =
-        (override?.defaults && Object.keys(override.defaults).length > 0) || override?.prompt;
-      if (hasOtherOverrides) {
-        updateOverride(commandId, { disabled: false });
-      } else {
-        removeOverride(commandId);
-      }
-    }
+    if (filterMode === "all") return true;
+    searchRef.current?.focus();
+    return false;
   };
 
   const toggleExpanded = (commandId: string) => {
@@ -115,505 +157,398 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
     });
   };
 
-  const updateDefault = (commandId: string, argName: string, value: string) => {
-    const override = getOverride(commandId);
-    const currentDefaults = override?.defaults || {};
+  const query = searchQuery.trim().toLowerCase();
 
-    const newDefaults = {
-      ...currentDefaults,
-      [argName]: value,
-    };
-
-    updateOverride(commandId, { defaults: newDefaults });
-  };
-
-  const updatePrompt = (commandId: string, prompt: string) => {
-    if (prompt.trim() === "") {
-      // Clear prompt if empty
-      const override = getOverride(commandId);
-      if (override) {
-        const { prompt: _, ...rest } = override;
-        if (
-          Object.keys(rest).length === 1 &&
-          !rest.disabled &&
-          (!rest.defaults || Object.keys(rest.defaults).length === 0)
-        ) {
-          removeOverride(commandId);
-        } else {
-          updateOverride(commandId, { prompt: undefined });
-        }
-      }
-    } else {
-      updateOverride(commandId, { prompt });
-    }
-  };
-
-  const setOverrideMode = (commandId: string, mode: OverrideMode) => {
-    setOverrideModes((prev) => ({ ...prev, [commandId]: mode }));
-    // Note: We preserve both defaults and prompt data when switching modes
-    // The backend supports using defaults for template variable substitution in prompts
-  };
-
-  const resetToDefaults = (commandId: string) => {
-    removeOverride(commandId);
-    setExpandedCommands((prev) => {
-      const next = new Set(prev);
-      next.delete(commandId);
-      return next;
-    });
-    setOverrideModes((prev) => {
-      const next = { ...prev };
-      delete next[commandId];
-      return next;
-    });
-  };
-
-  const hasOverride = useCallback(
-    (commandId: string): boolean => {
-      const override = getOverride(commandId);
-      return !!(
-        override &&
-        (override.disabled ||
-          (override.defaults && Object.keys(override.defaults).length > 0) ||
-          override.prompt)
-      );
-    },
-    [getOverride]
-  );
-
-  const getOverrideMode = (commandId: string, hasArgs: boolean): OverrideMode => {
-    const mode = overrideModes[commandId];
-    if (mode) return mode;
-    return hasArgs ? "defaults" : "prompt";
-  };
-
-  const isDisabledCommand = useCallback(
-    (commandId: string): boolean => {
-      return getOverride(commandId)?.disabled === true;
-    },
-    [getOverride]
-  );
-
-  // Compute summary counts
-  const overriddenCount = useMemo(() => {
+  const filteredCommands = useMemo(() => {
     return commands.filter((cmd) => {
       const override = getOverride(cmd.id);
+      if (filterMode === "modified" && !isModified(override)) return false;
+      if (filterMode === "disabled" && override?.disabled !== true) return false;
+      if (!query) return true;
       return (
-        override &&
-        ((override.defaults && Object.keys(override.defaults).length > 0) || override.prompt)
+        cmd.id.toLowerCase().includes(query) ||
+        (cmd.label?.toLowerCase().includes(query) ?? false) ||
+        (cmd.description?.toLowerCase().includes(query) ?? false)
       );
-    }).length;
-  }, [commands, getOverride]);
-
-  const disabledCount = useMemo(() => {
-    return commands.filter((cmd) => isDisabledCommand(cmd.id)).length;
-  }, [commands, isDisabledCommand]);
-
-  // Filter and sort commands
-  const filteredCommands = useMemo(() => {
-    let filtered = commands;
-
-    // Apply search filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.trim().toLowerCase();
-      filtered = filtered.filter(
-        (cmd) =>
-          cmd.id.toLowerCase().includes(query) ||
-          (cmd.label?.toLowerCase().includes(query) ?? false) ||
-          (cmd.description?.toLowerCase().includes(query) ?? false)
-      );
-    }
-
-    // Apply filter mode
-    if (filterMode === "overridden") {
-      filtered = filtered.filter((cmd) => hasOverride(cmd.id));
-    } else if (filterMode === "disabled") {
-      filtered = filtered.filter((cmd) => isDisabledCommand(cmd.id));
-    }
-
-    // Sort: overridden commands first
-    return [...filtered].sort((a, b) => {
-      const aOverridden = hasOverride(a.id);
-      const bOverridden = hasOverride(b.id);
-      if (aOverridden && !bOverridden) return -1;
-      if (!aOverridden && bOverridden) return 1;
-      return 0;
     });
-  }, [commands, searchQuery, filterMode, hasOverride, isDisabledCommand]);
+  }, [commands, query, filterMode, getOverride]);
 
-  const filteredEmptyTitle = searchQuery.trim()
+  const isFiltered = query !== "" || filterMode !== "all";
+
+  const clearFilters = () => {
+    setSearchQuery("");
+    setFilterMode("all");
+    searchRef.current?.focus();
+  };
+
+  const filteredEmptyText = query
     ? `No commands match "${searchQuery.trim()}"`
-    : filterMode === "overridden"
-      ? "No overridden commands yet"
-      : "No disabled commands";
+    : filterMode === "modified"
+      ? "No command is changed for this project yet. Expand one to set its overrides"
+      : "No command is turned off for this project";
 
   return (
-    <div className="space-y-2">
-      <div className="mb-4">
-        <h3 className="text-sm font-medium text-text-primary mb-2">Command Overrides</h3>
-        <p className="text-xs text-text-secondary select-text">
-          Customize command behavior for this project. Set default argument values, define custom
-          prompts, or disable commands entirely.
-        </p>
+    <SettingsSection
+      title="Command overrides"
+      description="Pre-fill a command's arguments, swap it for your own prompt, or turn it off in this project"
+    >
+      <div className="flex items-center gap-3">
+        <SettingsSearchField
+          ref={searchRef}
+          value={searchQuery}
+          onChange={setSearchQuery}
+          label="Search commands"
+          placeholder="Search commands"
+          disabled={isLoading}
+        />
+        <SegmentedRadioGroup
+          aria-label="Filter commands"
+          options={FILTER_MODES}
+          value={filterMode}
+          onChange={setFilterMode}
+          disabled={isLoading}
+        />
       </div>
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {isLoading
+          ? ""
+          : `${filteredCommands.length} ${filteredCommands.length === 1 ? "command" : "commands"}${isFiltered ? "" : " in total"}`}
+      </p>
 
-      {/* Summary */}
-      <div className="text-xs text-text-secondary mb-2">
-        {overriddenCount} overridden, {disabledCount} disabled
-      </div>
-
-      {/* Search and Filters */}
-      <div className="flex items-center gap-3 mb-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-daintree-text/40" />
-          <input
-            type="text"
-            placeholder="Search commands..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            disabled={isLoading}
-            className="w-full pl-9 pr-3 py-2 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 disabled:opacity-60 disabled:cursor-not-allowed"
-            aria-label="Search commands"
-          />
-        </div>
-        <div className="flex gap-1">
-          {(["all", "overridden", "disabled"] as const).map((mode) => (
-            <button
-              key={mode}
-              onClick={() => setFilterMode(mode)}
-              disabled={isLoading}
-              className={cn(
-                "px-3 py-1.5 text-xs font-medium rounded transition-colors capitalize border",
-                filterMode === mode
-                  ? "border-border-strong bg-overlay-medium text-text-primary"
-                  : "border-transparent bg-surface-sidebar text-text-secondary hover:bg-border-default",
-                "disabled:opacity-60 disabled:cursor-not-allowed"
-              )}
-            >
-              {mode}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="space-y-1">
+      <SettingsGroup>
         {isLoading ? (
-          <Skeleton label="Loading commands" className="space-y-1">
-            <SkeletonBone className="h-12 w-full" />
+          <Skeleton label="Loading commands" className="space-y-1 p-3">
             <SkeletonBone className="h-12 w-full" />
             <SkeletonBone className="h-12 w-full" />
           </Skeleton>
+        ) : loadFailed ? (
+          <div className="p-3">
+            <InlineStatusBanner
+              className="rounded-[var(--radius-md)]"
+              severity="error"
+              title="Couldn't load commands"
+              description="Your overrides are safe. Retry to load the command list."
+              action={{ id: "retry", label: "Retry", onClick: () => setLoadAttempt((n) => n + 1) }}
+            />
+          </div>
         ) : commands.length === 0 ? (
-          <EmptyState variant="zero-data" scale="sidebar" title="No commands available" />
+          <SettingsEmptyRow>
+            No commands are available in this project. Built-in and plugin commands appear here
+          </SettingsEmptyRow>
         ) : filteredCommands.length === 0 ? (
-          <EmptyState variant="filtered-empty" scale="sidebar" title={filteredEmptyTitle} />
+          <SettingsEmptyRow
+            action={
+              <Button type="button" variant="outline" size="sm" onClick={clearFilters}>
+                {query ? "Clear search" : "Show all"}
+              </Button>
+            }
+          >
+            {filteredEmptyText}
+          </SettingsEmptyRow>
         ) : (
-          filteredCommands.map((command) => {
-            const override = getOverride(command.id);
-            const isDisabled = override?.disabled === true;
-            const isExpanded = expandedCommands.has(command.id);
-            const hasArgs = !!(command.args && command.args.length > 0);
-            const canExpand = !isDisabled;
-            const currentMode = getOverrideMode(command.id, hasArgs);
+          filteredCommands.map((command) => (
+            <CommandRow
+              key={command.id}
+              command={command}
+              override={getOverride(command.id)}
+              isExpanded={expandedCommands.has(command.id)}
+              onToggleExpanded={() => toggleExpanded(command.id)}
+              onEnabledChange={(enabled) => setEnabled(command.id, enabled)}
+              onDefaultChange={(argName, value) => setDefault(command.id, argName, value)}
+              onPromptChange={(prompt) => setPrompt(command.id, prompt)}
+              onReset={() => resetCommand(command.id)}
+            />
+          ))
+        )}
+      </SettingsGroup>
+    </SettingsSection>
+  );
+}
 
-            return (
-              <div
-                key={command.id}
-                className={cn(
-                  "rounded-[var(--radius-md)] border transition-colors",
-                  hasOverride(command.id)
-                    ? "border-border-strong bg-overlay-subtle"
-                    : "border-border-default bg-surface-canvas"
-                )}
-              >
-                <div className="flex items-center gap-2 p-3">
-                  {canExpand && (
-                    <button
-                      onClick={() => toggleExpanded(command.id)}
-                      className="p-0.5 rounded hover:bg-daintree-border/50 transition-colors"
-                      aria-label={isExpanded ? "Collapse" : "Expand"}
-                    >
-                      <ChevronRight
-                        data-animated-chevron
-                        className={cn(
-                          "w-3.5 h-3.5 text-daintree-text/60 transition-transform duration-150",
-                          isExpanded && "rotate-90"
-                        )}
-                      />
-                    </button>
-                  )}
-                  {!canExpand && <div className="w-5" />}
+interface CommandRowProps {
+  command: CommandManifestEntry;
+  override: CommandOverride | undefined;
+  isExpanded: boolean;
+  onToggleExpanded: () => void;
+  onEnabledChange: (enabled: boolean) => void;
+  onDefaultChange: (argName: string, value: string | undefined) => void;
+  onPromptChange: (prompt: string) => void;
+  /** Resets the command; returns whether its row is still listed afterwards. */
+  onReset: () => boolean;
+}
 
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={cn(
-                          "text-sm font-medium font-mono",
-                          isDisabled ? "text-daintree-text/40 line-through" : "text-text-primary"
-                        )}
-                      >
-                        {command.id}
-                      </span>
-                      {hasOverride(command.id) && (
-                        <span className="text-2xs text-text-secondary bg-overlay-medium px-1.5 py-0.5 rounded font-medium">
-                          {override?.prompt ? "Custom Prompt" : "Modified"}
-                        </span>
-                      )}
-                    </div>
-                    <p
-                      className={cn(
-                        "text-xs mt-0.5 select-text",
-                        isDisabled ? "text-text-placeholder" : "text-text-secondary"
-                      )}
-                    >
-                      {command.description}
-                    </p>
-                  </div>
+function CommandRow({
+  command,
+  override,
+  isExpanded,
+  onToggleExpanded,
+  onEnabledChange,
+  onDefaultChange,
+  onPromptChange,
+  onReset,
+}: CommandRowProps) {
+  const panelId = useId();
+  const disclosureRef = useRef<HTMLButtonElement>(null);
+  // Bumped on reset so the prompt editor drops an unsaved (invalid) draft too;
+  // the saved prompt may already be empty, leaving nothing else to resync it.
+  const [resetRevision, setResetRevision] = useState(0);
+  const isDisabled = override?.disabled === true;
 
-                  <div className="flex items-center gap-1 shrink-0">
-                    {hasOverride(command.id) && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => resetToDefaults(command.id)}
-                            className="h-7 px-2"
-                            aria-label="Reset to defaults"
-                          >
-                            <RotateCcw />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">Reset to defaults</TooltipContent>
-                      </Tooltip>
-                    )}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          onClick={() => toggleDisabled(command.id)}
-                          className={cn(
-                            "p-1.5 rounded transition-colors",
-                            isDisabled
-                              ? "text-status-error hover:bg-status-error/10"
-                              : "text-daintree-text/60 hover:bg-overlay-hover"
-                          )}
-                          aria-label={
-                            isDisabled ? "Command disabled for this project" : "Command enabled"
-                          }
-                        >
-                          {isDisabled ? (
-                            <PowerOff className="h-4 w-4" />
-                          ) : (
-                            <Power className="h-4 w-4" />
-                          )}
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        {isDisabled ? "Command disabled for this project" : "Command enabled"}
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                </div>
+  const handleReset = () => {
+    const stillListed = onReset();
+    setResetRevision((n) => n + 1);
+    // The reset button goes away with the override; keep focus on this command
+    // while its row is still listed (the parent moves focus to search otherwise).
+    if (stillListed) disclosureRef.current?.focus();
+  };
+  const args = command.args ?? [];
 
-                {isExpanded && !isDisabled && (
-                  <div className="px-3 pb-3 pt-0 border-t border-daintree-border/50 mt-2">
-                    <div className="space-y-3 mt-3">
-                      {/* Mode selector */}
-                      <div className="flex gap-2">
-                        {hasArgs && (
-                          <button
-                            onClick={() => setOverrideMode(command.id, "defaults")}
-                            className={cn(
-                              "px-3 py-1.5 text-xs font-medium rounded-md transition-colors border",
-                              currentMode === "defaults"
-                                ? "border-border-strong bg-overlay-medium text-text-primary"
-                                : "border-transparent bg-surface-sidebar text-text-secondary hover:bg-border-default"
-                            )}
-                          >
-                            Default Values
-                          </button>
-                        )}
-                        <button
-                          onClick={() => setOverrideMode(command.id, "prompt")}
-                          className={cn(
-                            "px-3 py-1.5 text-xs font-medium rounded-md transition-colors border",
-                            currentMode === "prompt"
-                              ? "border-border-strong bg-overlay-medium text-text-primary"
-                              : "border-transparent bg-surface-sidebar text-text-secondary hover:bg-border-default"
-                          )}
-                        >
-                          Custom Prompt
-                        </button>
-                      </div>
+  // What running the command does now, when that differs from its default. An
+  // off command says so through its switch; its other overrides are dormant.
+  const status = isDisabled
+    ? null
+    : override?.prompt
+      ? "Custom prompt"
+      : hasDefaults(override)
+        ? "Defaults set"
+        : null;
 
-                      {/* Default Values Mode */}
-                      {currentMode === "defaults" && hasArgs && (
-                        <div className="space-y-3">
-                          <p className="text-xs text-text-secondary select-text">
-                            Set default values for command arguments. These values will be used when
-                            the argument is not provided.
-                          </p>
-                          {command.args?.map((arg) => {
-                            const currentValue = (override?.defaults?.[arg.name] as string) ?? "";
-                            const hasDefaultValue =
-                              override?.defaults && arg.name in override.defaults;
+  return (
+    <div data-testid="command-row">
+      <SettingsRow
+        label={
+          <button
+            ref={disclosureRef}
+            type="button"
+            onClick={onToggleExpanded}
+            aria-expanded={isExpanded}
+            aria-controls={panelId}
+            className="inline-flex items-center gap-1.5 -ml-1 pl-1 pr-1.5 rounded-[var(--radius-sm)] font-mono hover:bg-overlay-soft transition-colors duration-150 ease-out"
+          >
+            <ChevronRight
+              data-animated-chevron
+              className={cn(
+                "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150",
+                isExpanded && "rotate-90"
+              )}
+              aria-hidden="true"
+            />
+            {command.id}
+          </button>
+        }
+        labelText={command.id}
+        accessory={status && <Badge size="xs">{status}</Badge>}
+        description={command.description}
+        isModified={isModified(override)}
+        onReset={handleReset}
+        resetAriaLabel={`Reset ${command.id} to default`}
+        onRowClick={onToggleExpanded}
+        control={({ labelId }) => (
+          <SettingsSwitch
+            checked={!isDisabled}
+            onCheckedChange={onEnabledChange}
+            aria-labelledby={labelId}
+          />
+        )}
+      />
 
-                            return (
-                              <div key={arg.name} className="space-y-1.5">
-                                <div className="flex items-center gap-2">
-                                  <label
-                                    htmlFor={`${command.id}-${arg.name}`}
-                                    className="text-xs font-medium text-text-primary"
-                                  >
-                                    {arg.name}
-                                    {arg.required && (
-                                      <span className="text-status-error ml-1">*</span>
-                                    )}
-                                  </label>
-                                  {hasDefaultValue && (
-                                    <span className="text-3xs text-text-secondary bg-overlay-medium px-1.5 py-0.5 rounded">
-                                      Custom
-                                    </span>
-                                  )}
-                                </div>
-                                <input
-                                  id={`${command.id}-${arg.name}`}
-                                  type="text"
-                                  value={currentValue}
-                                  onChange={(e) =>
-                                    updateDefault(command.id, arg.name, e.target.value)
-                                  }
-                                  className="w-full bg-surface-sidebar border border-border-strong rounded px-2 py-1.5 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
-                                  placeholder={
-                                    arg.default ? `Default: ${arg.default}` : `Enter ${arg.name}`
-                                  }
-                                />
-                                {arg.description && (
-                                  <p className="text-xs text-text-secondary select-text">
-                                    {arg.description}
-                                  </p>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-
-                      {/* Custom Prompt Mode */}
-                      {currentMode === "prompt" && (
-                        <PromptEditor
-                          commandId={command.id}
-                          args={command.args || []}
-                          value={override?.prompt || ""}
-                          onChange={(prompt) => updatePrompt(command.id, prompt)}
-                        />
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })
+      {/* Always in the tree so the disclosure's aria-controls has a target. */}
+      <div id={panelId} hidden={!isExpanded} className="border-t border-border-subtle">
+        {isExpanded && (
+          <SettingsDependents
+            disabled={isDisabled}
+            reason="This command is off in this project. Turn it on to change its overrides"
+          >
+            {args.map((arg) => (
+              <ArgumentDefaultRow
+                key={arg.name}
+                arg={arg}
+                value={override?.defaults?.[arg.name]}
+                onChange={(value) => onDefaultChange(arg.name, value)}
+              />
+            ))}
+            <PromptRow
+              key={resetRevision}
+              commandId={command.id}
+              args={args}
+              value={override?.prompt ?? ""}
+              onChange={onPromptChange}
+            />
+          </SettingsDependents>
         )}
       </div>
     </div>
   );
 }
 
-interface PromptEditorProps {
+function ArgumentDefaultRow({
+  arg,
+  value,
+  onChange,
+}: {
+  arg: CommandArg;
+  value: unknown;
+  onChange: (value: string | undefined) => void;
+}) {
+  const shipped =
+    arg.default !== undefined && arg.default !== "" ? `Default: ${String(arg.default)}` : null;
+  const description = [arg.description, shipped].filter(Boolean).join(" · ");
+
+  return (
+    <OverrideField
+      label={<code className="font-mono">{arg.name}</code>}
+      labelText={arg.name}
+      accessory={arg.required ? <Badge size="xs">Required</Badge> : undefined}
+      value={value === undefined ? undefined : String(value)}
+      onChange={onChange}
+      onReset={() => onChange(undefined)}
+      inheritDescription={description}
+      placeholder={shipped ? String(arg.default) : "Not set"}
+    />
+  );
+}
+
+interface PromptRowProps {
   commandId: string;
-  args: NonNullable<CommandManifestEntry["args"]>;
+  args: CommandArg[];
   value: string;
   onChange: (prompt: string) => void;
 }
 
-function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
+/**
+ * The prompt that replaces the command. Argument defaults still apply: they fill
+ * the prompt's `{variables}`, which is why this is a row beside them rather than a
+ * mode that hides them.
+ *
+ * Edits autosave only while the template is valid. An invalid draft stays in the
+ * field with the reason, and the last valid prompt keeps running — autosaving a
+ * template that references an unknown variable would make the command fail the
+ * next time it runs.
+ */
+function PromptRow({ commandId, args, value, onChange }: PromptRowProps) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [draft, setDraft] = useState(value);
+  const [syncedValue, setSyncedValue] = useState(value);
+  if (value !== syncedValue) {
+    setSyncedValue(value);
+    setDraft(value);
+  }
+
   const argNames = useMemo(() => args.map((a) => a.name), [args]);
 
   const validation = useMemo(() => {
-    if (!value.trim()) return null;
-    return validatePromptTemplate(value, argNames);
-  }, [value, argNames]);
+    if (!draft.trim()) return null;
+    return validatePromptTemplate(draft, argNames);
+  }, [draft, argNames]);
+  const invalid = validation !== null && !validation.valid;
 
-  const usedVariables = useMemo(() => {
-    if (!value.trim()) return [];
-    return extractTemplateVariables(value);
-  }, [value]);
+  // Announced only when saving stops or resumes, not on every keystroke while
+  // the draft stays invalid; the error itself stays wired to the field.
+  const [announcement, setAnnouncement] = useState("");
+
+  const update = (next: string) => {
+    setDraft(next);
+    const result = next.trim() ? validatePromptTemplate(next, argNames) : null;
+    const nowInvalid = !!result && !result.valid;
+    if (nowInvalid && !invalid) {
+      setAnnouncement("Custom prompt not saved");
+      // The error renders under a tall field and can land below the fold; bring
+      // it into view without moving the caret.
+      requestAnimationFrame(() =>
+        textareaRef.current?.closest("[data-settings-row]")?.scrollIntoView?.({
+          block: "nearest",
+          behavior: prefersReducedMotion() ? "auto" : "smooth",
+        })
+      );
+    }
+    if (!nowInvalid && invalid) setAnnouncement("Custom prompt saved");
+    if (!nowInvalid) {
+      setSyncedValue(next);
+      onChange(next);
+    }
+  };
+
+  const insertVariable = (name: string) => {
+    const el = textareaRef.current;
+    const token = `{${name}}`;
+    const start = el?.selectionStart ?? draft.length;
+    const end = el?.selectionEnd ?? draft.length;
+    update(draft.slice(0, start) + token + draft.slice(end));
+    requestAnimationFrame(() => {
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(start + token.length, start + token.length);
+    });
+  };
+
+  const example = argNames[0]
+    ? `Example: Draft an issue about {${argNames[0]}} and wait for my review`
+    : "Example: Summarize today's changes and suggest a commit message";
 
   return (
-    <div className="space-y-3">
-      <div>
-        <p className="text-xs text-text-secondary mb-2 select-text">
-          Define a custom prompt to send to the agent instead of executing the default command
-          behavior. Use template variables like{" "}
-          <code className="text-text-secondary">
-            {"{"}variableName{"}"}
-          </code>{" "}
-          to include argument values.
-        </p>
-
-        {args.length > 0 && (
-          <div className="mb-3">
-            <p className="text-xs font-medium text-text-secondary mb-1.5">Available variables:</p>
-            <div className="flex flex-wrap gap-1.5">
+    <SettingsRow
+      label="Custom prompt"
+      description={
+        args.length > 0
+          ? "Sent to the agent instead of running the command. Leave empty to run it normally. Argument values fill the variables"
+          : "Sent to the agent instead of running the command. Leave empty to run it normally"
+      }
+      layout="stacked"
+      isModified={value.trim() !== ""}
+      onReset={() => {
+        update("");
+        textareaRef.current?.focus();
+      }}
+      resetAriaLabel={`Reset ${commandId} custom prompt`}
+      error={
+        invalid
+          ? `Not saved: ${validation.error}. ${
+              value.trim()
+                ? "Your saved prompt stays in use until this is fixed."
+                : "The command still runs normally until this is fixed."
+            }`
+          : undefined
+      }
+      control={({ labelId, descriptionId, disabled }) => (
+        <div className="grid gap-2">
+          <p className="sr-only" role="status" aria-live="polite">
+            {announcement}
+          </p>
+          {args.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-text-secondary">Insert</span>
               {args.map((arg) => (
-                <Tooltip key={arg.name}>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={() => onChange(value + `{${arg.name}}`)}
-                      className={cn(
-                        "text-2xs px-2 py-0.5 rounded font-mono transition-colors",
-                        usedVariables.includes(arg.name)
-                          ? "bg-overlay-medium text-text-secondary border border-border-strong"
-                          : "bg-surface-sidebar text-text-secondary hover:bg-border-default border border-border-default"
-                      )}
-                    >
-                      {"{"}
-                      {arg.name}
-                      {"}"}
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {arg.description || `Insert {${arg.name}}`}
-                  </TooltipContent>
-                </Tooltip>
+                <Button
+                  key={arg.name}
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  className="font-mono"
+                  disabled={disabled}
+                  // Keep the caret where the user left it in the prompt.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => insertVariable(arg.name)}
+                  aria-label={`Insert {${arg.name}}`}
+                >
+                  {`{${arg.name}}`}
+                </Button>
               ))}
             </div>
-          </div>
-        )}
-      </div>
-
-      <div className="space-y-1.5">
-        <label htmlFor={`${commandId}-prompt`} className="text-xs font-medium text-text-primary">
-          Custom Prompt
-        </label>
-        <textarea
-          id={`${commandId}-prompt`}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className={cn(
-            "w-full bg-surface-sidebar border rounded px-2 py-1.5 text-sm text-text-primary font-mono focus:outline-hidden focus:ring-1 min-h-[120px] resize-y",
-            validation && !validation.valid
-              ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
-              : "border-border-strong focus:border-daintree-accent/40 focus:ring-daintree-accent/30"
           )}
-          placeholder={`Example: Work on issue {issueNumber}...\n\nUse {variableName} to include argument values.`}
-        />
-      </div>
-
-      {validation && !validation.valid && (
-        <div className="flex items-start gap-2 text-status-error bg-status-error/10 rounded-md px-3 py-2">
-          <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-          <p className="text-xs">{validation.error}</p>
+          <Textarea
+            ref={textareaRef}
+            variant="code"
+            value={draft}
+            onChange={(e) => update(e.target.value)}
+            disabled={disabled}
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            aria-invalid={invalid ? true : undefined}
+            className="min-h-[120px]"
+            placeholder={example}
+          />
         </div>
       )}
-
-      {value.trim() && (
-        <p className="text-xs text-text-secondary select-text">
-          When this command is executed, the custom prompt will be sent to the agent instead of
-          running the default command logic.
-        </p>
-      )}
-    </div>
+    />
   );
 }

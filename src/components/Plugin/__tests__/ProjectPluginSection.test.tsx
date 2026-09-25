@@ -237,7 +237,7 @@ describe("ProjectPluginDetailPane", () => {
     render(<ProjectPluginDetailPane plugin={plugin({ state: "blocked" })} />);
 
     await act(async () => {
-      button("Enable for this project").click();
+      button("Enable project plugins").click();
     });
     expect(setProjectPluginTrust).toHaveBeenCalledWith("enabled");
   });

@@ -130,6 +130,7 @@ import type {
   ProjectStatusMap,
   BulkProjectStats,
   ProjectSwitchOutgoingState,
+  ProjectSwitchResult,
 } from "./project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { CloneRepoOptions, CloneRepoResult, CloneRepoProgressEvent } from "./gitClone.js";
@@ -194,7 +195,7 @@ export interface NotificationSettings {
   workingPulseEnabled: boolean;
   workingPulseSoundFile: string;
   uiFeedbackSoundEnabled: boolean;
-  /** When true, the screen flashes once every agent goes idle (the "all-clear"). */
+  /** When true, the project window flashes once no agent is still working (the "all-clear"). */
   flashEnabled: boolean;
   /** When true, non-urgent notifications are suppressed during the scheduled window. */
   quietHoursEnabled: boolean;
@@ -649,7 +650,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         focusIntent?: import("./project.js").ProjectFocusOnActivateIntent;
         trace?: import("./project.js").ProjectSwitchTrace;
       }
-    ): Promise<Project>;
+    ): Promise<ProjectSwitchResult>;
     /**
      * Hover-prefetch trigger for the project switcher palette. Fire-and-forget:
      * the main process builds the `HydrateResult` for the given project and
@@ -704,7 +705,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
       options?: { trace?: import("./project.js").ProjectSwitchTrace }
-    ): Promise<Project>;
+    ): Promise<ProjectSwitchResult>;
     getStats(projectId: string): Promise<ProjectStats>;
     getBulkStats(projectIds: string[]): Promise<BulkProjectStats>;
     getNotificationOverrides(
@@ -950,6 +951,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onServiceChanged(
       callback: (payload: import("./connectivity.js").ServiceConnectivityPayload) => void
     ): () => void;
+  };
+  // getSnapshot comes from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  projectPresence: GeneratedElectronAPI["projectPresence"] & {
+    onChanged(callback: () => void): () => void;
   };
   // ensure / restart / stop / getState etc. come from GeneratedElectronAPI;
   // onStateChanged is a renderer-only subscription.
@@ -2103,6 +2108,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * than trusting the declaration. That fallback is the real guarantee.
          */
         sessionOrigin?: import("./mcpServer.js").McpSessionOrigin;
+        /**
+         * Offer "Allow for this session" in any dialog this dispatch raises
+         * (#12692). Set by main only for an agent pane.
+         */
+        offerSessionApproval?: boolean;
+        /**
+         * Ask the user about this call and report the decision without
+         * dispatching it (#12692): an agent pane calling above its tier.
+         */
+        approvalOnly?: boolean;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */
@@ -2110,6 +2125,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       requestId: string;
       result: import("../actions.js").ActionDispatchResult;
       confirmationDecision?: import("./mcpServer.js").McpConfirmationDecision;
+      /** Present only when the approver chose to keep allowing the tool (#12692). */
+      approvalScope?: import("./mcpServer.js").McpApprovalScope;
     }): void;
   };
   pluginBridge: {
@@ -2168,6 +2185,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onUiPromptCancel(
       callback: (payload: import("../pluginUiPrompt.js").PluginUiPromptCancel) => void
     ): () => void;
+    /**
+     * Listen for plugin backend requests to reload one of its panels' views
+     * (`host.reloadPanel`, #12610). Reply with {@link sendPanelReloadResponse},
+     * correlated by `requestId`.
+     */
+    onPanelReloadRequest(
+      callback: (payload: import("../pluginPanelReload.js").PluginPanelReloadRequest) => void
+    ): () => void;
+    /** Acknowledge (or refuse) a plugin panel reload request. */
+    sendPanelReloadResponse(
+      payload: import("../pluginPanelReload.js").PluginPanelReloadResponse
+    ): void;
   };
   // list / toolbarButtons / validateActionIds / get|register|
   // unregisterAction / getPanelKinds / getForgeProviders / getDecorations
@@ -2547,6 +2576,13 @@ export interface HelpAssistantSettings {
    * `~/.daintree/logs`); it is a no-op for other assistant agents. Defaults to false.
    */
   debugLogging: boolean;
+  /**
+   * Load `mcp.json` (MCP servers) and `hooks.json` (Claude hooks) from
+   * `~/.daintree/assistant` into new assistant sessions. Both run programs, so
+   * they are opt-in and never read from a project's `.daintree/assistant`.
+   * Defaults to false.
+   */
+  loadGlobalHooksAndServers: boolean;
 }
 
 /**

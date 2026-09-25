@@ -192,10 +192,7 @@ test.describe.serial("Core: Command Palette Accessibility", () => {
     await expect(trigger).toBeFocused({ timeout: T_SHORT });
 
     await window.keyboard.press(`${mod}+K`);
-    await window.waitForTimeout(120);
-    await trigger.focus();
-    await expect(trigger).toBeFocused({ timeout: T_MEDIUM });
-    await window.keyboard.press(`${mod}+t`);
+    await window.keyboard.press(`${mod}+T`);
     await expect(window.locator(SEL.themePalette.dialog)).toBeVisible({ timeout: T_MEDIUM });
     await expect(window.locator('[role="tooltip"][data-state="open"]')).toHaveCount(0, {
       timeout: T_MEDIUM,

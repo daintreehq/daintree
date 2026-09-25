@@ -197,6 +197,35 @@ async function closeSettings(page: Page): Promise<void> {
  * Open (or re-target) the dialog through the deep-link event. `scopeForTab` derives the
  * scope from the tab id, so this drives scope without touching the scope control.
  */
+/**
+ * Rest the pointer on `selector` and prove the browser agrees it is hovered before the
+ * shot is taken. Hovering can itself re-render the target (the scope trigger swaps its
+ * pre-Radix stand-in for the Radix trigger on pointer-enter), and a freshly mounted node
+ * under a still pointer is not `:hover` until the pointer moves again, so the harness
+ * nudges it and checks rather than writing a rest-state PNG under a hover name.
+ */
+async function hoverVerified(page: Page, selector: string): Promise<void> {
+  const target = page.locator(selector).first();
+  await target.hover();
+  await page.waitForTimeout(300);
+  const box = await target.boundingBox();
+  if (!box) throw new Error(`hover target ${selector} has no box`);
+  await page.mouse.move(box.x + box.width / 2 + 1, box.y + box.height / 2);
+  await expect
+    .poll(
+      () =>
+        page
+          .locator(selector)
+          .first()
+          .evaluate((el) => el.matches(":hover")),
+      {
+        timeout: 3000,
+        message: `${selector} never reported :hover`,
+      }
+    )
+    .toBe(true);
+}
+
 async function openSettingsAt(
   page: Page,
   target: { tab: string; subtab?: string; sectionId?: string }
@@ -433,7 +462,7 @@ const STATES: ScopeState[] = [
         const landed = await page.evaluate(() => {
           const el = document.activeElement as HTMLElement | null;
           if (!el) return null;
-          const inScopeControl = !!el.closest('[aria-label="Settings scope"]');
+          const inScopeControl = !!el.closest("[data-settings-scope-trigger]");
           return inScopeControl ? { visible: el.matches(":focus-visible") } : null;
         });
         if (landed) {
@@ -443,6 +472,32 @@ const STATES: ScopeState[] = [
         await page.keyboard.press("Shift+Tab");
       }
       throw new Error("could not reach the scope control by keyboard from the search input");
+    },
+  },
+  {
+    // The scope menu open from the keyboard, in the project scope: both scopes listed,
+    // the checked one marked, the project named under its entry.
+    slug: "31-scope-menu-open",
+    target: { tab: "project:general" },
+    sweep: true,
+    arrange: async (page) => {
+      await page.locator(SEARCH).click();
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Enter");
+      await page.locator('[role="menuitemradio"]').first().waitFor({ state: "visible" });
+    },
+    restore: async (page) => {
+      await page.keyboard.press("Escape");
+    },
+  },
+  {
+    // Pointer on the scope heading: the only thing telling a mouse user the heading
+    // is a control besides its chevron.
+    slug: "32-scope-hover",
+    target: { tab: "general" },
+    extraCrop: "sidebar",
+    arrange: async (page) => {
+      await hoverVerified(page, "[data-settings-scope-trigger]");
     },
   },
   {
@@ -472,6 +527,161 @@ const STATES: ScopeState[] = [
     },
     restore: async (page) => {
       await page.emulateMedia({ contrast: "no-preference" });
+    },
+  },
+  {
+    // Pointer resting on an unselected nav item: hover has to read as distinct from
+    // the selected item without borrowing its accent marker.
+    slug: "20-nav-hover",
+    target: { tab: "general" },
+    extraCrop: "sidebar",
+    sweep: true,
+    arrange: async (page) => {
+      await hoverVerified(page, navItem("notifications"));
+    },
+  },
+  {
+    // Keyboard in the sidebar tablist: focus moved off the selected tab with the arrow
+    // keys (manual activation), so focus and selection sit on two different items.
+    slug: "21-nav-keyboard-focus",
+    target: { tab: "general" },
+    extraCrop: "sidebar",
+    sweep: true,
+    arrange: async (page) => {
+      await page.locator(SEARCH).click();
+      await page.keyboard.press("Tab");
+      const onTab = await page.evaluate(
+        () => document.activeElement?.getAttribute("data-tab") ?? null
+      );
+      if (onTab !== "general") throw new Error(`Tab from search landed on ${onTab}`);
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowDown");
+    },
+  },
+  {
+    // Arrow keys driving the search results: the virtual cursor on the second row.
+    slug: "22-search-keyboard",
+    target: { tab: "general" },
+    sweep: true,
+    arrange: async (page) => {
+      await page.locator(SEARCH).fill("terminal");
+      await page.waitForTimeout(500);
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowDown");
+    },
+    expectText: ["result"],
+    restore: async (page) => {
+      await page.locator(SEARCH).fill("");
+    },
+  },
+  {
+    slug: "23-search-no-results",
+    target: { tab: "general" },
+    arrange: async (page) => {
+      await page.locator(SEARCH).fill("zzqxv");
+      await page.waitForTimeout(500);
+    },
+    expectText: ["No results"],
+    restore: async (page) => {
+      await page.locator(SEARCH).fill("");
+    },
+  },
+  {
+    // The `@modified` filter over two changed global tabs.
+    slug: "24-search-modified",
+    target: { tab: "general" },
+    arrange: async (page) => {
+      await dispatchAction(page, "preferences.showDeveloperTools.set", { show: true });
+      await dispatchAction(page, "terminalConfig.setPerformanceMode", { performanceMode: true });
+      await page.waitForTimeout(300);
+      await page.locator(SEARCH).fill("@modified");
+      await page.waitForTimeout(500);
+    },
+    expectText: ["result"],
+    restore: async (page) => {
+      await page.locator(SEARCH).fill("");
+      await dispatchAction(page, "preferences.showDeveloperTools.set", { show: false }).catch(
+        () => {}
+      );
+      await dispatchAction(page, "terminalConfig.setPerformanceMode", {
+        performanceMode: false,
+      }).catch(() => {});
+    },
+  },
+  {
+    // Results for settings that only render while a parent is on carry a "Requires"
+    // chip; opening one lands on the page with the hidden-setting banner.
+    slug: "25-search-requires-enabled",
+    target: { tab: "general" },
+    arrange: async (page) => {
+      await page.locator(SEARCH).fill("transcription");
+      await page.waitForTimeout(500);
+    },
+    expectText: ["Only when"],
+    restore: async (page) => {
+      await page.locator(SEARCH).fill("");
+    },
+  },
+  {
+    slug: "26-hidden-setting-banner",
+    target: { tab: "general" },
+    arrange: async (page) => {
+      await page.locator(SEARCH).fill("transcription");
+      await page.waitForTimeout(500);
+      await page
+        .locator(`${DIALOG} [role="option"]`)
+        .filter({ hasText: /only when/i })
+        .first()
+        .click();
+      await page.waitForTimeout(600);
+    },
+    expectText: ["only appears when"],
+  },
+  {
+    // Filed under Global, writes per project: the header has to say which.
+    slug: "28-integrations-scope",
+    target: { tab: "integrations" },
+    expectSelected: "integrations",
+    sweep: true,
+  },
+  {
+    // The same tab's settings in search: the chip names the scope they write to.
+    slug: "29-search-integrations",
+    target: { tab: "general" },
+    arrange: async (page) => {
+      await page.locator(SEARCH).fill("image viewer");
+      await page.waitForTimeout(500);
+    },
+    expectText: ["result"],
+    restore: async (page) => {
+      await page.locator(SEARCH).fill("");
+    },
+  },
+  {
+    // Tab out of the sidebar list lands on the page it selects, not the close button.
+    slug: "30-tab-into-panel",
+    target: { tab: "notifications" },
+    arrange: async (page) => {
+      await page.locator(SEARCH).click();
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Tab");
+      const landed = await page.evaluate(() => document.activeElement?.id ?? null);
+      if (landed !== "settings-panel-notifications") {
+        throw new Error(`Tab from the nav landed on ${landed}`);
+      }
+    },
+  },
+  {
+    // Keyboard on the page-level subtab bar, nested inside the sidebar's tabpanel.
+    slug: "27-subtab-focus",
+    target: { tab: "general" },
+    arrange: async (page) => {
+      const active = page.locator(
+        `${DIALOG} #settings-panel-general [role="tablist"] [role="tab"][aria-selected="true"]`
+      );
+      await active.focus();
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("ArrowLeft");
     },
   },
 ];
@@ -556,12 +766,18 @@ test("settings dialog scope review — global, project, search, deep link and tr
         await openSettingsAt(welcome, { tab: "general" });
         await settle(welcome, 600);
         await expect(
-          welcome.locator(`${SIDEBAR} [aria-label="Settings scope"]`),
+          welcome.locator(`${SIDEBAR} [data-settings-scope-trigger]`),
           "01-no-project: a scope control rendered with no project open"
         ).toHaveCount(0, { timeout: 5000 });
         await snap(welcome, "01-no-project--dialog", CARD);
         captured++;
         await snap(welcome, "01-no-project--sidebar", SIDEBAR);
+        captured++;
+        // Search with no project open: project-scope entries must not appear, since
+        // there is no project for them to write to.
+        await welcome.locator(SEARCH).fill("notifications");
+        await welcome.waitForTimeout(500);
+        await snap(welcome, "01-no-project-search--dialog", CARD);
         captured++;
       } catch (error) {
         failures.push(`01-no-project: ${String(error).slice(0, 400)}`);
@@ -595,6 +811,10 @@ test("settings dialog scope review — global, project, search, deep link and tr
           await openSettingsAt(page, state.target);
         } else {
           await openSettingsAt(page, state.target);
+          // closeSettings clicked the close button, so the pointer is still resting
+          // where the next dialog's close button renders — park it off the card or
+          // every shot shows that button in its hover state.
+          await page.mouse.move(2, 2);
           await settle(page, 700);
           if (state.arrange) await state.arrange(page, app);
         }
@@ -638,7 +858,7 @@ test("settings dialog scope review — global, project, search, deep link and tr
   // The exit code is only meaningful if it accounts for what actually landed on disk.
   const expected =
     planned.reduce((n, s) => n + (s.extraCrop === "sidebar" ? 2 : 1), 0) +
-    (wantsNoProject && !SWEEP_ONLY ? 2 : 0);
+    (wantsNoProject && !SWEEP_ONLY ? 3 : 0);
   console.log(`[settings-scope-shots] ${captured}/${expected} PNGs → ${OUTPUT_DIR}`);
   if (failures.length > 0) {
     throw new Error(`settings-scope capture failed:\n  ${failures.join("\n  ")}`);

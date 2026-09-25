@@ -1,7 +1,6 @@
-import { useState, useEffect, type ComponentType, type ReactNode } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Key, Check, AlertCircle, FlaskConical, ExternalLink, Import } from "lucide-react";
-import { GitHubIcon } from "@/components/icons/brands";
+import { Check, FlaskConical, ExternalLink, Import } from "lucide-react";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import { actionService } from "@/services/ActionService";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
@@ -14,41 +13,12 @@ import {
 } from "./GitHubCliImport";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SettingsActions, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import { SettingsInput } from "@/components/Settings/SettingsInput";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
 import { logError } from "@/utils/logger";
-
-interface ForgeSettingBlockProps {
-  id?: string;
-  icon: ComponentType<{ className?: string }>;
-  title: string;
-  description: string;
-  children: ReactNode;
-}
-
-function ForgeSettingBlock({
-  id,
-  icon: Icon,
-  title,
-  description,
-  children,
-}: ForgeSettingBlockProps) {
-  return (
-    <div
-      id={id}
-      className="rounded-[var(--radius-lg)] border border-border-default bg-daintree-bg/30 p-4 space-y-3 scroll-mt-12"
-    >
-      <div>
-        <h5 className="text-sm font-medium text-text-primary flex items-center gap-2">
-          <Icon className="w-4 h-4 text-daintree-text/70" aria-hidden="true" />
-          {title}
-        </h5>
-        <p className="text-xs text-text-secondary mt-0.5 select-text">{description}</p>
-      </div>
-      {children}
-    </div>
-  );
-}
 
 type ValidationResult = "success" | "error" | "test-success" | "test-error" | null;
 
@@ -64,8 +34,8 @@ interface CliImportPreview {
 type CliImportPhase = "idle" | "previewing" | "confirming" | "committing";
 
 const SCOPE_DESCRIPTIONS: Record<(typeof GITHUB_REQUIRED_SCOPES)[number], string> = {
-  repo: "Access repository data",
-  "read:org": "Read organization membership (for private repos)",
+  repo: "read repository data",
+  "read:org": "see private repos in your organizations",
 };
 
 export function GitHubSettingsTab() {
@@ -83,6 +53,7 @@ export function GitHubSettingsTab() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const isGhAvailable = useGitHubCliAvailable();
   const [isClearing, setIsClearing] = useState(false);
+  const [confirmingClear, setConfirmingClear] = useState(false);
   const [cliImportPhase, setCliImportPhase] = useState<CliImportPhase>("idle");
   // Kept after the dialog closes so its exit animation still shows what was
   // confirmed; replaced by the next preview.
@@ -104,14 +75,21 @@ export function GitHubSettingsTab() {
   });
   const loadError = timeoutError ?? storeError;
 
+  // Only a success fades. An error carries the fix, so it stays until the token changes.
   useEffect(() => {
-    if (!validationResult) return;
-    const timer = setTimeout(() => {
-      setValidationResult(null);
-      setErrorMessage(null);
-    }, 5000);
+    if (validationResult !== "success" && validationResult !== "test-success") return;
+    const timer = setTimeout(() => setValidationResult(null), 5000);
     return () => clearTimeout(timer);
   }, [validationResult]);
+
+  const handleTokenChange = (next: string) => {
+    setGithubToken(next);
+    // A result belongs to the token it was produced for.
+    if (validationResult !== null) {
+      setValidationResult(null);
+      setErrorMessage(null);
+    }
+  };
 
   const handleSaveToken = async () => {
     if (!githubToken.trim()) return;
@@ -150,6 +128,7 @@ export function GitHubSettingsTab() {
   };
 
   const handleClearToken = async () => {
+    setConfirmingClear(false);
     setIsClearing(true);
     try {
       await window.electron.forge.clearCredential(BUILTIN_GITHUB_PROVIDER_ID);
@@ -271,154 +250,175 @@ export function GitHubSettingsTab() {
 
   useSettingsTabValidation("code-forge", Boolean(loadError));
 
+  const tokenError =
+    validationResult === "error" || validationResult === "test-error"
+      ? errorMessage || "Invalid token"
+      : undefined;
+
+  const tokenStatus =
+    validationResult === "success" ? (
+      <span className="flex items-center gap-1">
+        <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
+        Checked and saved
+      </span>
+    ) : validationResult === "test-success" ? (
+      <span className="flex items-center gap-1">
+        <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
+        Token works — not saved yet
+      </span>
+    ) : tokenError ? (
+      // Shown on the field; repeated here only so the live region announces it.
+      <span className="sr-only">{tokenError}</span>
+    ) : null;
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-8">
       {loadError && <SettingsLoadErrorBanner message={loadError} onRetry={retryAction} />}
 
-      <ForgeSettingBlock
+      <SettingsSection
         id="github-token"
-        icon={Key}
-        title="Personal access token"
-        description="Used for repository statistics, issue/PR detection, and linking worktrees to GitHub. Daintree keeps its own copy, so forge features don't depend on the gh CLI."
+        title="Authentication"
+        description="Used for repository statistics, issue and PR detection, and linking worktrees to GitHub. Daintree keeps its own copy, so forge features don't depend on the gh CLI."
       >
-        {githubConfig?.hasToken && (
-          <div className="flex items-center gap-1 text-xs text-text-secondary">
-            <Check className="w-3 h-3" />
-            {githubConfig.username
-              ? `GitHub connected as @${githubConfig.username}`
-              : "GitHub connected"}
-          </div>
-        )}
-
-        <div className="flex gap-2">
-          <input
+        <SettingsGroup>
+          {githubConfig && (
+            <SettingsRow
+              label="Status"
+              control={
+                <span className="flex items-center gap-1 text-xs text-text-secondary">
+                  {githubConfig.hasToken && <Check className="w-3 h-3" aria-hidden="true" />}
+                  {!githubConfig.hasToken
+                    ? "No token saved"
+                    : githubConfig.username
+                      ? `Token saved for @${githubConfig.username}`
+                      : "Token saved"}
+                </span>
+              }
+            />
+          )}
+          <SettingsInput
+            label="Personal access token"
             type="password"
             value={githubToken}
-            onChange={(e) => setGithubToken(e.target.value)}
+            onChange={(e) => handleTokenChange(e.target.value)}
+            error={tokenError}
+            description="Test checks a token without saving it; Save checks it, then stores it"
             placeholder={
               githubConfig?.hasToken ? "Enter new token to replace" : "ghp_... or github_pat_..."
             }
             aria-label="GitHub personal access token"
             autoComplete="new-password"
-            className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
             disabled={isValidating || isTesting || isImporting}
           />
-          <Button
-            onClick={handleTestToken}
-            disabled={isValidating || isClearing || isImporting || !githubToken.trim()}
-            loading={isTesting}
-            variant="outline"
-            size="sm"
-            aria-label="Test token"
-            className="min-w-[70px] text-text-primary border-border-default hover:bg-border-default"
-          >
-            <FlaskConical aria-hidden="true" />
-            Test
-          </Button>
-          <Button
-            onClick={handleSaveToken}
-            disabled={isTesting || isClearing || isImporting || !githubToken.trim()}
-            loading={isValidating}
-            size="sm"
-            aria-label="Save token"
-            className="min-w-[70px]"
-          >
-            Save
-          </Button>
-          {githubConfig?.hasToken && (
+          <SettingsActions status={tokenStatus}>
             <Button
-              onClick={handleClearToken}
-              disabled={isValidating || isTesting || isImporting}
-              loading={isClearing}
+              onClick={handleTestToken}
+              disabled={isValidating || isClearing || isImporting || !githubToken.trim()}
+              loading={isTesting}
               variant="outline"
               size="sm"
-              aria-label="Clear token"
-              className="text-status-error border-border-default hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+              aria-label="Test token"
             >
-              Clear token
+              <FlaskConical aria-hidden="true" />
+              Test
             </Button>
-          )}
-        </div>
-
-        {validationResult === "success" && (
-          <p className="text-xs text-status-success flex items-center gap-1">
-            <Check className="w-3 h-3" />
-            Token saved
-          </p>
-        )}
-        {validationResult === "test-success" && (
-          <p className="text-xs text-status-success flex items-center gap-1">
-            <Check className="w-3 h-3" />
-            Token valid — click Save to store it
-          </p>
-        )}
-        {validationResult === "error" && (
-          <p className="text-xs text-status-error flex items-center gap-1">
-            <AlertCircle className="w-3 h-3" />
-            {errorMessage || "Invalid token"}
-          </p>
-        )}
-        {validationResult === "test-error" && (
-          <p className="text-xs text-status-error flex items-center gap-1">
-            <AlertCircle className="w-3 h-3" />
-            {errorMessage || "Invalid token"}
-          </p>
-        )}
-      </ForgeSettingBlock>
-
-      <ForgeSettingBlock
-        icon={GitHubIcon}
-        title={isGhAvailable ? "Get a token" : "Create a new token"}
-        description={
-          isGhAvailable
-            ? "Import the token the GitHub CLI already holds, or create one with the required scopes on GitHub."
-            : "To create a personal access token with the required scopes, click the button below. This will open GitHub in your browser."
-        }
-      >
-        <div className="flex flex-wrap gap-2">
-          <Button
-            onClick={openGitHubTokenPage}
-            variant="outline"
-            size="sm"
-            className="text-text-primary border-border-default hover:bg-border-default"
-          >
-            <ExternalLink />
-            Create token on GitHub
-          </Button>
-          {isGhAvailable && (
             <Button
-              onClick={handlePreviewCliImport}
-              disabled={isValidating || isTesting || isClearing || cliImportPhase === "committing"}
-              loading={cliImportPhase === "previewing"}
-              variant="outline"
+              onClick={handleSaveToken}
+              disabled={isTesting || isClearing || isImporting || !githubToken.trim()}
+              loading={isValidating}
+              variant="contrast"
               size="sm"
-              className="text-text-primary border-border-default hover:bg-border-default"
+              aria-label="Save token"
             >
-              <Import aria-hidden="true" />
-              Import from GitHub CLI
+              Save
             </Button>
-          )}
-        </div>
-        {cliImportError && (
-          <p className="text-xs text-status-error flex items-start gap-1 select-text" role="alert">
-            <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
-            {cliImportError}
-          </p>
+          </SettingsActions>
+        </SettingsGroup>
+
+        <SettingsGroup>
+          <SettingsRow
+            label="Get a token"
+            description={
+              <>
+                {isGhAvailable
+                  ? "Import the token the GitHub CLI already holds, or create one on GitHub with the scopes preselected. "
+                  : "Opens GitHub in your browser with the required scopes preselected. "}
+                Needs{" "}
+                {GITHUB_REQUIRED_SCOPES.map((scope, index) => (
+                  <span key={scope}>
+                    {index > 0 && " and "}
+                    <code className="font-mono text-text-primary">{scope}</code> to{" "}
+                    {SCOPE_DESCRIPTIONS[scope]}
+                  </span>
+                ))}
+                .
+              </>
+            }
+            error={
+              cliImportError ? (
+                <span role="alert" className="select-text">
+                  {cliImportError}
+                </span>
+              ) : undefined
+            }
+            layout="stacked"
+            control={
+              <div className="flex flex-wrap gap-2">
+                {isGhAvailable && (
+                  <Button
+                    onClick={handlePreviewCliImport}
+                    disabled={
+                      isValidating || isTesting || isClearing || cliImportPhase === "committing"
+                    }
+                    loading={cliImportPhase === "previewing"}
+                    variant="outline"
+                    size="sm"
+                  >
+                    <Import aria-hidden="true" />
+                    Import from GitHub CLI
+                  </Button>
+                )}
+                <Button onClick={openGitHubTokenPage} variant="outline" size="sm">
+                  <ExternalLink aria-hidden="true" />
+                  Create token on GitHub
+                </Button>
+              </div>
+            }
+          />
+        </SettingsGroup>
+
+        {githubConfig?.hasToken && (
+          <SettingsGroup>
+            <SettingsRow
+              label="Stored token"
+              description="Clearing removes Daintree's copy; forge features stop until you add another token"
+              control={
+                <Button
+                  onClick={() => setConfirmingClear(true)}
+                  disabled={isValidating || isTesting || isImporting}
+                  loading={isClearing}
+                  variant="ghost-danger"
+                  size="sm"
+                  aria-label="Clear token"
+                >
+                  Clear token
+                </Button>
+              }
+            />
+          </SettingsGroup>
         )}
-        <div className="space-y-1">
-          <p className="text-xs text-text-secondary">Required scopes:</p>
-          <ul className="text-xs text-text-secondary list-disc list-inside space-y-0.5">
-            {GITHUB_REQUIRED_SCOPES.map((scope) => (
-              <li key={scope}>
-                <code className="text-text-secondary bg-surface-canvas px-1 rounded-[var(--radius-sm)]">
-                  {scope}
-                </code>{" "}
-                — {SCOPE_DESCRIPTIONS[scope]}
-              </li>
-            ))}
-          </ul>
-        </div>
-      </ForgeSettingBlock>
+      </SettingsSection>
+
+      <ConfirmDialog
+        isOpen={confirmingClear}
+        variant="destructive"
+        onConfirm={() => void handleClearToken()}
+        onClose={() => setConfirmingClear(false)}
+        title="Clear the GitHub token?"
+        description="Daintree's copy is deleted. Issues, pull requests and repository stats stop until you add a token again."
+        confirmLabel="Clear token"
+        zIndex="nested"
+      />
 
       <ConfirmDialog
         isOpen={cliImportPhase === "confirming" || cliImportPhase === "committing"}

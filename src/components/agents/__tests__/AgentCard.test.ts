@@ -50,18 +50,6 @@ describe("AgentCard type discrimination", () => {
     expect(onboardingProps.isChecked).toBe(true);
   });
 
-  it("management mode props shape is correct", () => {
-    const managementProps = {
-      mode: "management" as const,
-      agentId: "claude",
-      actions: null,
-      children: null,
-    };
-
-    expect(managementProps.mode).toBe("management");
-    expect(managementProps.agentId).toBe("claude");
-  });
-
   it("onboarding mode has no children prop", () => {
     const onboardingProps = {
       mode: "onboarding" as const,
@@ -73,17 +61,5 @@ describe("AgentCard type discrimination", () => {
     };
 
     expect("children" in onboardingProps).toBe(false);
-  });
-
-  it("management mode has no checkbox-related props", () => {
-    const managementProps = {
-      mode: "management" as const,
-      agentId: "claude",
-      children: null,
-    };
-
-    expect("isChecked" in managementProps).toBe(false);
-    expect("isSaving" in managementProps).toBe(false);
-    expect("onToggle" in managementProps).toBe(false);
   });
 });

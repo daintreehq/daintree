@@ -389,7 +389,9 @@ describe("WorktreeTerminalSection arming click handlers", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("armed tile gets aria-selected=true", () => {
+  it("an armable row exposes its fleet membership as a pressed state", () => {
+    // A row's button toggles membership, which is `aria-pressed` on a button.
+    // `aria-selected` is not a button attribute, so it was never announced.
     const term = makeTerminal({
       id: "a1",
       detectedAgentId: "claude",
@@ -401,15 +403,95 @@ describe("WorktreeTerminalSection arming click handlers", () => {
       terminals: [term],
       counts: { ...baseCounts, total: 1 },
     });
+
+    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
+    expect(button.getAttribute("aria-pressed")).toBe("false");
     act(() => {
       useFleetArmingStore.getState().armId("a1");
     });
-
-    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
-    expect(button.getAttribute("aria-selected")).toBe("true");
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.hasAttribute("aria-selected")).toBe(false);
   });
 
-  it("scroll container has aria-multiselectable", () => {
+  it("a row that opens rather than toggles claims no pressed state", () => {
+    const docked = makeTerminal({ id: "d1", kind: "terminal", hasPty: true, location: "dock" });
+    renderSection({
+      isExpanded: true,
+      terminals: [docked],
+      counts: { ...baseCounts, total: 1 },
+    });
+
+    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
+    expect(button.hasAttribute("aria-pressed")).toBe(false);
+  });
+
+  it("a row's button is described by where its session lives", () => {
+    // The placement mark is a glyph with a hover tooltip; without a
+    // description the keyboard and a screen reader never learn it, and two
+    // sessions with the same name differ only by it.
+    const docked = makeTerminal({ id: "d1", kind: "terminal", hasPty: true, location: "dock" });
+    const onGrid = makeTerminal({ id: "g1", kind: "terminal", hasPty: true, location: "grid" });
+    renderSection({
+      isExpanded: true,
+      terminals: [docked, onGrid],
+      counts: { ...baseCounts, total: 2 },
+    });
+
+    const descriptions = screen.getAllByRole("button", { name: /Test Terminal/i }).map((button) => {
+      const id = button.getAttribute("aria-describedby");
+      return id ? document.getElementById(id)?.textContent : null;
+    });
+    expect(descriptions).toEqual(["Docked", "On grid"]);
+  });
+
+  it("a running command joins the row's description beside its placement", () => {
+    const running = makeTerminal({
+      id: "r1",
+      kind: "terminal",
+      hasPty: true,
+      location: "dock",
+      activityStatus: "working",
+      lastCommand: "npm run test -- --watch",
+    });
+    renderSection({
+      isExpanded: true,
+      terminals: [running],
+      counts: { ...baseCounts, total: 1 },
+    });
+
+    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
+    const ids = (button.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean);
+    const described = ids.map((id) => document.getElementById(id)?.textContent);
+    expect(described).not.toContain(undefined);
+    expect(described).toEqual(expect.arrayContaining(["npm run test -- --watch", "Docked"]));
+  });
+
+  it("names a row by its title alone, with placement kept to the description", () => {
+    const docked = makeTerminal({ id: "d1", kind: "terminal", hasPty: true, location: "dock" });
+    renderSection({
+      isExpanded: true,
+      terminals: [docked],
+      counts: { ...baseCounts, total: 1 },
+    });
+
+    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
+    const labelIds = (button.getAttribute("aria-labelledby") ?? "").split(/\s+/).filter(Boolean);
+    expect(labelIds.map((id) => document.getElementById(id)?.textContent)).toEqual([docked.title]);
+  });
+
+  it("keeps description ids unique when the same session renders twice", () => {
+    // The sidebar card and the overview grid can both show one session.
+    const term = makeTerminal({ id: "same", kind: "terminal", hasPty: true, location: "dock" });
+    renderSection({ isExpanded: true, terminals: [term], counts: { ...baseCounts, total: 1 } });
+    renderSection({ isExpanded: true, terminals: [term], counts: { ...baseCounts, total: 1 } });
+
+    const buttons = screen.getAllByRole("button", { name: /Test Terminal/i });
+    expect(buttons.length).toBe(2);
+    const refs = buttons.map((b) => b.getAttribute("aria-describedby"));
+    expect(new Set(refs).size).toBe(2);
+  });
+
+  it("only claims multi-selection on a role that supports it", () => {
     const term = makeTerminal({
       id: "a1",
       detectedAgentId: "claude",
@@ -422,8 +504,9 @@ describe("WorktreeTerminalSection arming click handlers", () => {
       counts: { ...baseCounts, total: 1 },
     });
 
-    const scrollContainer = container.querySelector('[aria-multiselectable="true"]');
-    expect(scrollContainer).toBeTruthy();
+    for (const el of container.querySelectorAll("[aria-multiselectable]")) {
+      expect(["listbox", "grid", "tree", "treegrid", "tablist"]).toContain(el.getAttribute("role"));
+    }
   });
 });
 
@@ -657,23 +740,48 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
   });
 });
 
-describe("WorktreeTerminalSection drag handle visibility (issue #8099)", () => {
-  it("stays visible-but-dimmed at rest and brightens on group-hover/termrow", () => {
+describe("WorktreeTerminalSection drag handle reveal", () => {
+  it("leaves the grip's visibility to the shared reveal rule in sidebar.css", () => {
+    // A Tailwind opacity on the grip itself would fight the CSS reveal (which
+    // is what hides it at rest and shows it on hover and keyboard focus).
     renderSection({ isExpanded: true });
     const handles = screen.getAllByRole("button", { name: "Drag to move terminal" });
     expect(handles.length).toBeGreaterThanOrEqual(1);
     for (const handle of handles) {
-      expect(handle.className).not.toContain("opacity-0");
-      expect(handle.className).not.toContain("transition-opacity");
+      expect(handle.hasAttribute("data-session-grip")).toBe(true);
+      expect(handle.className).not.toMatch(/(^|\s)([\w-]+:)*opacity-/);
     }
   });
+});
 
-  it("brightens to text-text-secondary on focus-visible for keyboard users", () => {
-    renderSection({ isExpanded: true });
-    const handles = screen.getAllByRole("button", { name: "Drag to move terminal" });
-    expect(handles.length).toBeGreaterThanOrEqual(1);
-    for (const handle of handles) {
-      expect(handle.className).not.toContain("focus-visible:opacity-100");
-    }
+describe("WorktreeTerminalSection collapsed trigger name", () => {
+  it("names itself once, starting with the visible summary, and repeats no count", () => {
+    // Left to name-from-content the button read its visible "N active" and then
+    // the nested cluster's own name, which restates the total. It also has to
+    // start with what is on screen, so speech input can target it.
+    const terminals = [
+      makeTerminal({ detectedAgentId: "claude" }),
+      makeTerminal({ detectedAgentId: "claude" }),
+      makeTerminal({ detectedAgentId: "claude" }),
+    ];
+    renderSection({
+      isExpanded: false,
+      terminals,
+      counts: {
+        total: 3,
+        byState: { idle: 0, working: 2, waiting: 1, directing: 0, completed: 0, exited: 0 },
+      },
+    });
+    const button = document.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+    const name = button.getAttribute("aria-label") ?? "";
+    // The visible words sit in separate flex items, so compare without spaces.
+    const squash = (text: string) => text.replace(/\s+/g, "");
+    const visible = squash(button.querySelector("span")!.textContent ?? "");
+    expect(visible.length).toBeGreaterThan(0);
+    expect(squash(name).startsWith(visible)).toBe(true);
+    expect(name.match(/\b3\b/g) ?? []).toHaveLength(1);
+    expect(name).toContain("2 working");
+    expect(name).toContain("1 waiting");
+    expect(button.querySelector("div")).toBeNull();
   });
 });

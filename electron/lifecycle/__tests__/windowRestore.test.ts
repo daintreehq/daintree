@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  normalizeWindowRecords,
   resolvePrimaryRestoreProjectId,
   restoreWindowFleet,
   type CreateWindowResult,
@@ -89,6 +90,64 @@ describe("resolvePrimaryRestoreProjectId", () => {
   });
 });
 
+describe("normalizeWindowRecords (#12596)", () => {
+  const withBackground = (projectId: string | null, ids: string[]): OpenWindowRecord => ({
+    projectId,
+    backgroundProjectIds: ids,
+  });
+
+  it("returns a manifest with no collisions untouched", () => {
+    const records = [withBackground("a", ["x"]), record("b"), record(null)];
+    const normalized = normalizeWindowRecords(records);
+    expect(normalized).toEqual(records);
+    expect(normalized[0]).toBe(records[0]);
+  });
+
+  it("drops a later window showing a project an earlier window already shows", () => {
+    expect(normalizeWindowRecords([record("a"), record("b"), record("a")])).toEqual([
+      record("a"),
+      record("b"),
+    ]);
+  });
+
+  it("never collapses picker windows into each other", () => {
+    expect(normalizeWindowRecords([record(null), record(null)])).toEqual([
+      record(null),
+      record(null),
+    ]);
+  });
+
+  it("lets a project one window shows outrank another window's warm copy of it", () => {
+    expect(normalizeWindowRecords([withBackground("a", ["b", "x"]), record("b")])).toEqual([
+      withBackground("a", ["x"]),
+      record("b"),
+    ]);
+  });
+
+  it("keeps a background project in only the first window that had it", () => {
+    expect(
+      normalizeWindowRecords([withBackground("a", ["x"]), withBackground("b", ["x", "y"])])
+    ).toEqual([withBackground("a", ["x"]), withBackground("b", ["y"])]);
+  });
+
+  it("folds a dropped window's background projects into the window that kept its project", () => {
+    expect(
+      normalizeWindowRecords([
+        withBackground("a", ["x"]),
+        record("b"),
+        withBackground("a", ["x", "y", "b"]),
+      ])
+    ).toEqual([withBackground("a", ["x", "y"]), record("b")]);
+  });
+
+  it("drops the background list entirely when nothing survives the filter", () => {
+    expect(normalizeWindowRecords([record("a"), withBackground("b", ["a"])])).toEqual([
+      record("a"),
+      record("b"),
+    ]);
+  });
+});
+
 describe("restoreWindowFleet", () => {
   let h: Harness;
 
@@ -172,10 +231,35 @@ describe("restoreWindowFleet", () => {
     });
   });
 
-  it("restores two windows onto the same project rather than collapsing them", async () => {
-    h = harness({ records: [record("same"), record("same")], hadManifest: true });
+  describe("a manifest naming one project in two windows (#12596)", () => {
+    beforeEach(async () => {
+      h = harness({
+        records: [record("same"), record("other"), record("same")],
+        hadManifest: true,
+      });
+      await restoreWindowFleet(h.deps);
+    });
+
+    it("restores the project once, in the window that was focused most recently", () => {
+      expect(h.openedProjects()).toEqual(["same", "other"]);
+    });
+
+    it("still persists, because the duplicate was dropped on purpose rather than failing", () => {
+      expect(h.persisted()).toBe(true);
+    });
+  });
+
+  it("skips a saved window whose project was opened elsewhere before the fan-out began", async () => {
+    // The primary window is usable before the rest are created; a saved
+    // project the user opened there in the meantime must not get a second view.
+    h = harness({
+      records: [record("a"), record("b"), record(null), record("c")],
+      hadManifest: true,
+      isProjectOwned: (projectId) => projectId === "b",
+    });
     await restoreWindowFleet(h.deps);
-    expect(h.openedProjects()).toEqual(["same", "same"]);
+    expect(h.openedProjects()).toEqual(["a", undefined, "c"]);
+    expect(h.persisted()).toBe(true);
   });
 
   it("opens one picker window when every saved project was deleted", async () => {

@@ -1536,9 +1536,9 @@ type AgentKeyAction = `agent.${BuiltInAgentId}`;
  */
 type WorktreeSwitchIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 type WorktreeSwitchAction = `worktree.switch${WorktreeSwitchIndex}`;
-type BuiltInKeyAction = "nav.up" | "nav.down" | "nav.left" | "nav.right" | "nav.pageUp" | "nav.pageDown" | "nav.home" | "nav.end" | "nav.expand" | "nav.collapse" | "nav.primary" | "nav.toggleSidebar" | "nav.toggleFocusMode" | "nav.quickSwitcher" | "nav.focusRegion.next" | "nav.focusRegion.prev" | "file.open" | "file.copyPath" | "file.copyTree" | "ui.refresh" | "ui.escape" | "git.commit" | "git.push" | "git.stageAll" | "git.toggle" | "worktree.next" | "worktree.previous" | "worktree.panel" | WorktreeSwitchAction | "worktree.up" | "worktree.down" | "worktree.upVim" | "worktree.downVim" | "worktree.home" | "worktree.end" | "worktree.select" | "worktree.selectSpace" | "worktree.copyTree" | "worktree.openChanges" | "worktree.openEditor" | "worktree.openFileBrowser" | "worktree.openFileBrowserPanel" | "worktree.openPalette" | "worktree.createDialog.open" | "worktree.overview" | "worktree.sessions.minimizeAll" | "worktree.sessions.maximizeAll" | "worktree.sessions.restartAll" | "worktree.sessions.endAll" | "worktree.sessions.closeCompleted" | "worktree.sessions.trashAll" | "worktree.sessions.resetRenderers" | "tab.next" | "tab.previous" | "terminal.close" | "terminal.closeAll" | "terminal.killAll" | "terminal.restartAll" | "terminal.toggleDock" | "terminal.toggleDockAll" | "terminal.new" | "terminal.reopenLast" | "terminal.resumeSessions" | "terminal.maximize" | "terminal.inject" | "terminal.focusNext" | "terminal.focusPrevious" | "terminal.focusAlternate" | "terminal.focusUp" | "terminal.focusDown" | "terminal.focusLeft" | "terminal.focusRight" | "terminal.focusDock" | "terminal.focusIndex1" | "terminal.focusIndex2" | "terminal.focusIndex3" | "terminal.focusIndex4" | "terminal.focusIndex5" | "terminal.focusIndex6" | "terminal.focusIndex7" | "terminal.focusIndex8" | "terminal.focusIndex9" | "terminal.moveLeft" | "terminal.moveRight" | "terminal.moveUp" | "terminal.moveDown" | "terminal.moveToDock" | "terminal.moveToGrid" | "terminal.watch" | "terminal.duplicate" | "terminal.background" | "terminal.contextMenu" | "terminal.stashInput" | "terminal.popStash" | "terminal.scrollToLastActivity" | "terminal.sendToAgent" | "terminal.bulkCommand" | "terminal.armDefault" | "terminal.disarmAll" | "terminal.kill" | "terminal.restart" | "terminal.forceResume" | "terminal.redraw" | "terminal.rename" | "fleet.accept" | "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash" | "fleet.armFocused" | "fleet.armAll" | "agent.palette" | AgentKeyAction | "agent.terminal" | "agent.browser" | "agent.focusNextWaiting" | "agent.focusNextWaitingGlobal" | "agent.focusNextWorking" | "agent.focusNextAgent" | "agent.focusPreviousAgent" | "dock.focusNextWaiting" | "find.inFocusedPanel" | "window.zoomIn" | "window.zoomOut" | "window.zoomReset" | "panel.palette" | "panel.toggleDiagnostics" | "panel.togglePortal" | "panel.diagnosticsLogs" | "panel.diagnosticsEvents" | "panel.diagnosticsMessages" | "notifications.toggle" | "portal.newTab" | "portal.closeTab" | "portal.nextTab" | "portal.prevTab" | "devPreview.reloadPreview" | "action.palette" | "action.palette.open" | "action.repeatLast" | "pilot.toggle" | "pilot.openProject" | "project.switcherPalette" | "project.mruCycleOlder" | "help.shortcuts" | "help.shortcutsAlt" | "help.launchAgent" | "help.togglePanel" | "app.settings" | "app.theme.toggle" | "app.theme.pick" | "voiceInput.toggle" | "voiceInput.toggleAssistant" | "voiceInput.togglePause" | "voiceInput.lockTarget" | "voiceInput.unlockTarget" | "voiceInput.recallRecentTarget" | "layout.undo" | "layout.redo" | "app.newWindow" | "app.quit" | "app.forceQuit" | "modal.close";
+type BuiltInKeyAction = "nav.up" | "nav.down" | "nav.left" | "nav.right" | "nav.pageUp" | "nav.pageDown" | "nav.home" | "nav.end" | "nav.expand" | "nav.collapse" | "nav.primary" | "nav.toggleSidebar" | "nav.toggleFocusMode" | "nav.quickSwitcher" | "nav.focusRegion.next" | "nav.focusRegion.prev" | "file.open" | "file.copyPath" | "file.copyTree" | "ui.refresh" | "ui.escape" | "git.commit" | "git.push" | "git.stageAll" | "git.toggle" | "worktree.next" | "worktree.previous" | "worktree.panel" | WorktreeSwitchAction | "worktree.up" | "worktree.down" | "worktree.upVim" | "worktree.downVim" | "worktree.home" | "worktree.end" | "worktree.select" | "worktree.selectSpace" | "worktree.copyTree" | "worktree.openChanges" | "worktree.openEditor" | "worktree.openFileBrowser" | "worktree.openFileBrowserPanel" | "worktree.openPalette" | "worktree.createDialog.open" | "worktree.overview" | "worktree.sessions.minimizeAll" | "worktree.sessions.maximizeAll" | "worktree.sessions.restartAll" | "worktree.sessions.endAll" | "worktree.sessions.closeCompleted" | "worktree.sessions.trashAll" | "worktree.sessions.resetRenderers" | "tab.next" | "tab.previous" | "terminal.close" | "terminal.closeAll" | "terminal.killAll" | "terminal.restartAll" | "terminal.toggleDock" | "terminal.toggleDockAll" | "terminal.new" | "terminal.reopenLast" | "terminal.resumeSessions" | "terminal.maximize" | "terminal.inject" | "terminal.focusNext" | "terminal.focusPrevious" | "terminal.focusAlternate" | "terminal.focusUp" | "terminal.focusDown" | "terminal.focusLeft" | "terminal.focusRight" | "terminal.focusDock" | "terminal.focusIndex1" | "terminal.focusIndex2" | "terminal.focusIndex3" | "terminal.focusIndex4" | "terminal.focusIndex5" | "terminal.focusIndex6" | "terminal.focusIndex7" | "terminal.focusIndex8" | "terminal.focusIndex9" | "terminal.moveLeft" | "terminal.moveRight" | "terminal.moveUp" | "terminal.moveDown" | "terminal.moveToDock" | "terminal.moveToGrid" | "terminal.watch" | "terminal.duplicate" | "terminal.background" | "terminal.contextMenu" | "terminal.stashInput" | "terminal.popStash" | "terminal.scrollToLastActivity" | "terminal.sendToAgent" | "terminal.bulkCommand" | "terminal.armDefault" | "terminal.disarmAll" | "terminal.kill" | "terminal.restart" | "terminal.forceResume" | "terminal.redraw" | "terminal.rename" | "fleet.accept" | "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash" | "fleet.armFocused" | "fleet.armAll" | "agent.palette" | AgentKeyAction | "agent.terminal" | "agent.browser" | "agent.focusNextWaiting" | "agent.focusNextWaitingGlobal" | "agent.focusNextWorking" | "agent.focusNextAgent" | "agent.focusPreviousAgent" | "dock.focusNextWaiting" | "find.inFocusedPanel" | "window.zoomIn" | "window.zoomOut" | "window.zoomReset" | "panel.palette" | "panel.toggleDiagnostics" | "panel.togglePortal" | "panel.diagnosticsLogs" | "panel.diagnosticsEvents" | "panel.diagnosticsMessages" | "notifications.toggle" | "portal.newTab" | "portal.closeTab" | "portal.nextTab" | "portal.prevTab" | "devPreview.reloadPreview" | "action.palette" | "action.palette.open" | "action.repeatLast" | "pilot.toggle" | "pilot.openProject" | "project.switcherPalette" | "project.mruCycleOlder" | "project.openInNewWindow" | "help.shortcuts" | "help.shortcutsAlt" | "help.launchAgent" | "help.togglePanel" | "app.settings" | "app.theme.toggle" | "app.theme.pick" | "voiceInput.toggle" | "voiceInput.toggleAssistant" | "voiceInput.togglePause" | "voiceInput.lockTarget" | "voiceInput.unlockTarget" | "voiceInput.recallRecentTarget" | "layout.undo" | "layout.redo" | "app.newWindow" | "app.quit" | "app.forceQuit" | "modal.close";
 
-declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.sendCommandOwned", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.readLastMessageOwned", "terminal.resumeSessions", "terminal.registerWatch", "terminal.listWatches", "terminal.getWatchEvents", "terminal.cancelWatch", "terminal.setClientMetadata", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.deleteOwned", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.waitUntilReady", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.openFileBrowser", "worktree.openFileBrowserPanel", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "sessionRestore.getConfig", "sessionRestore.updateConfig", "hibernation.getConfig", "hibernation.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.fetch", "git.rebaseOntoBase", "git.mergeBaseIntoBranch", "git.abortRepositoryOperation", "git.continueRepositoryOperation", "git.forcePushWithLease", "git.markSafeDirectory", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openRepo", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.listIssueComments", "forge.getChecks", "forge.getPR", "forge.getPRs", "forge.getCIStatus", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "pilot.toggle", "pilot.openProject", "pilot.openRun", "project.getAll", "project.getCurrent", "project.add", "project.switch", "project.update", "project.remove", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.runCheck", "workspace.list", "plugin.validate", "plugin.diagnostics", "plugin.reloadProject", "plugin.reloadWindow", "project.getStats", "project.settings.open", "project.cloneRepo", "app.pluginManager", "app.reloadConfig", "app.exportConfig", "app.importConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "agent.launch", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agent.listPresets", "agentSessionHistory.list", "agentSessionHistory.resume", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "mcp.surface", "terminal.restart", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.closeOwned", "terminal.revealOwned", "terminal.trash", "terminal.kill", "terminal.killBatch", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.injectOwned", "terminal.bulkCommand", "terminal.interrupt", "terminal.interruptOwned", "terminal.stashInput", "terminal.popStash", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.displayImage", "help.openCommandsFolder", "ui.sidebar.resetWidth", "devServer.start", "devPreview.stop", "devPreview.toggleTool", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
+declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.sendCommandOwned", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.readLastMessageOwned", "terminal.resumeSessions", "terminal.registerWatch", "terminal.listWatches", "terminal.getWatchEvents", "terminal.cancelWatch", "terminal.setClientMetadata", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.deleteOwned", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.waitUntilReady", "worktree.waitForPullRequest", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.openFileBrowser", "worktree.openFileBrowserPanel", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "sessionRestore.getConfig", "sessionRestore.updateConfig", "windowOpening.getConfig", "windowOpening.updateConfig", "hibernation.getConfig", "hibernation.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.fetch", "git.rebaseOntoBase", "git.mergeBaseIntoBranch", "git.abortRepositoryOperation", "git.continueRepositoryOperation", "git.forcePushWithLease", "git.markSafeDirectory", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openRepo", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.listIssueComments", "forge.getChecks", "forge.getPR", "forge.getPRs", "forge.getCIStatus", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "pilot.toggle", "pilot.openProject", "pilot.openRun", "project.getAll", "project.getCurrent", "project.add", "project.openInNewWindow", "project.switch", "project.update", "project.remove", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.runCheck", "workspace.list", "plugin.validate", "plugin.diagnostics", "plugin.reloadProject", "plugin.reloadPanel", "plugin.reloadWindow", "project.getStats", "project.settings.open", "project.cloneRepo", "app.pluginManager", "app.reloadConfig", "app.exportConfig", "app.importConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "agent.launch", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agent.listPresets", "agentSessionHistory.list", "agentSessionHistory.resume", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "mcp.surface", "terminal.restart", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.closeOwned", "terminal.revealOwned", "terminal.trash", "terminal.kill", "terminal.killBatch", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.injectOwned", "terminal.bulkCommand", "terminal.interrupt", "terminal.interruptOwned", "terminal.stashInput", "terminal.popStash", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.tour.show", "help.displayImage", "help.openCommandsFolder", "ui.sidebar.resetWidth", "devServer.start", "devPreview.stop", "devPreview.toggleTool", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
 type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
 
 type ActionKind = "command" | "query";
@@ -1816,6 +1816,8 @@ interface PanelContribution {
      * `false` to opt out (for a kind with no meaningful compact chip-row form).
      */
     dockable?: boolean;
+    /** Schema version stamped on every persisted panel-state write; bump only for an incompatible shape change. */
+    stateVersion?: number;
 }
 interface ToolbarButtonContribution {
     id: string;
@@ -1941,12 +1943,14 @@ interface PanelViewProps {
     /**
      * Lifetime of THIS mounted view attempt — not of the panel (#11301).
      *
-     * Aborts on React unmount, on "Try again", and when a
-     * `plugin:panel-kinds-changed` push drops this kind. Crucially, a temporary
-     * unmount aborts it too: maximizing a sibling pane, switching away from a
-     * dock tab, or caching a background project view all tear the subtree down
-     * while the panel itself lives on. Tie only view-scoped work to it — in-flight
-     * `fetch`es, DOM observers, `postToPanel` subscriptions.
+     * Aborts on React unmount, on "Try again", on an accepted
+     * {@link requestReload}, and when a `plugin:panel-kinds-changed` push drops
+     * this kind. Crucially, a temporary unmount aborts it too: maximizing a
+     * sibling pane, switching away from a dock tab, or caching a background
+     * project view all tear the subtree down while the panel itself lives on.
+     * Tie only view-scoped work to it — in-flight `fetch`es, DOM observers,
+     * `postToPanel` subscriptions. On unmount it aborts just after React has run
+     * your effect cleanups, so a cleanup may still see it open.
      *
      * NEVER tie a durable resource (a spawned process, a long-lived session) to
      * this signal: it will be killed the first time the user maximizes another
@@ -2037,6 +2041,48 @@ interface PanelViewProps {
      */
     readonly persistState?: (patch: Record<string, unknown>) => boolean;
     /**
+     * Ask the host to discard this view attempt and mount a fresh one for the
+     * same panel (#12609) — for a view that has built up more than it can shed
+     * and wants to start over without restarting the plugin's backend.
+     *
+     * A reload is a new React attempt using the module that is already loaded.
+     * This attempt's {@link disposeSignal} aborts and its React cleanup runs;
+     * the next attempt gets a new `disposeSignal`, the latest state accepted
+     * through {@link persistState} as {@link initialArgs}, and the same
+     * `panelId`, {@link panelRemovedSignal} and backend. Module-scope state,
+     * document-wide registrations and anything attached to `window` survive it,
+     * so a reload frees only what your cleanup releases. It does not promise to
+     * reclaim memory, and it cannot rescue a view that is blocking the renderer.
+     *
+     * A request, not a command: the host may refuse it, and nothing reports
+     * whether or when the next attempt mounted. Calls in the same tick coalesce
+     * into one reload. The callback belongs to the attempt that received it, so
+     * one held past this attempt's teardown does nothing. A fourth reload within
+     * 30 seconds of three accepted ones stops the view instead, and the panel
+     * stays stopped until the user reloads it.
+     *
+     * Absent where the host offers no reload (a project surface, for one), so
+     * call it optionally.
+     */
+    readonly requestReload?: () => void;
+    /**
+     * Tell the host whether this view holds work that a reload would lose
+     * (#12611).
+     *
+     * The user can reload a plugin panel from its menus, and an agent can do the
+     * same through the host's tools. Neither asks first by default, because what
+     * you accepted through {@link persistState} comes back. While this is set to
+     * `true`, both ask the user to confirm before discarding the view. Set it
+     * back to `false` once the work is saved or dropped.
+     *
+     * Your own {@link requestReload} is never held up by it. The setter belongs to
+     * the attempt that received it: one held past this attempt's teardown does
+     * nothing, and a new attempt starts with no unsaved work until it says so.
+     *
+     * Absent where the host offers no reload, so call it optionally.
+     */
+    readonly setHasUnsavedChanges?: (hasUnsavedChanges: boolean) => void;
+    /**
      * The worktree the panel instance belongs to, as recorded on the panel at
      * spawn time. Lets a view reconstruct its own context without dispatching
      * `worktree.getCurrent` — which resolves the *visible* worktree, not the
@@ -2077,9 +2123,11 @@ interface PanelViewProps {
  * of trash (a transition, never a resting state), and `removed` is the terminal
  * event — the panel is gone and will never come back under this id.
  *
- * `render-failed` means the current view attempt reached the host's error
- * boundary. It is cleared by a successful retry. The failure detail stays in the
- * renderer's diagnostics pane; only the fact of failure crosses to the worker.
+ * `render-failed` means the panel has no working view: the current attempt
+ * reached the host's error boundary, or the host stopped a view that kept
+ * asking to reload (#12609). It clears when a retry starts or the user reloads
+ * the panel, so the next phase is the new attempt's own. The failure detail
+ * stays in the renderer; only the fact of failure crosses to the worker.
  */
 type PluginPanelLifecyclePhase = "mounted" | "hidden" | "backgrounded" | "trashed" | "restored" | "removed" | "render-failed";
 /**
@@ -2092,10 +2140,31 @@ interface PluginPanelLifecycleEvent {
     readonly panelId: string;
     /** Namespaced panel kind, i.e. `${pluginId}.${panel.id}`. */
     readonly panelKindId: string;
-    /** Owning plugin's manifest `name`. Always this plugin's own id. */
+    /**
+     * Owning plugin's runtime id — the manifest `name` for an installed or
+     * builtin plugin, the project-qualified instance key for a project plugin.
+     * Always this plugin's own id.
+     */
     readonly pluginId: string;
     readonly phase: PluginPanelLifecyclePhase;
 }
+/**
+ * What the host did with a `host.reloadPanel()` request (#12610). An
+ * acknowledgment of scheduling only — never proof that the fresh view
+ * rendered, and never a statement about memory.
+ *
+ * - `"scheduled"` — the panel's view was mounted and a fresh attempt is queued.
+ * - `"not-mounted"` — the panel exists but has no mounted view (hidden,
+ *   backgrounded, trashed), or the host knows no such panel. Nothing is opened
+ *   or focused; the panel's next ordinary mount is already fresh.
+ * - `"rate-limited"` — the panel's reload budget is spent or its view is
+ *   already stopped for reloading too often. Shared with the view's own
+ *   `requestReload`.
+ * - `"unavailable"` — the host could not act right now: the panel's window is
+ *   cached, closed, or unresponsive, its view is showing an error, or its
+ *   backend is restarting.
+ */
+type PanelReloadResult = "scheduled" | "not-mounted" | "rate-limited" | "unavailable";
 /**
  * One machine wake observation delivered to a plugin (#12175). Frozen before
  * delivery, and carries only timing — never what the machine was doing while
@@ -2180,11 +2249,13 @@ type PluginMcpJsonSchema = {
     type: "object";
 } & Record<string, unknown>;
 /**
- * One tool on an `agentMcp` endpoint. `execute` receives the arguments the
- * agent sent (validated only as a JSON object — checking them against
- * `inputSchema` is the plugin's job), the caller's provenance, and a signal
- * aborted when the call is cancelled, times out, or the plugin unloads. The
- * return value must be JSON-serializable; it reaches the agent as the tool
+ * One tool on an `agentMcp` endpoint. Both schemas are compiled at
+ * registration. `execute` receives the arguments the agent sent, already
+ * checked against `inputSchema` and never coerced, defaulted or stripped; a
+ * call that does not match never reaches it. It also receives the caller's
+ * provenance, and a signal aborted when the call is cancelled, times out, or
+ * the plugin unloads. The return value must be JSON-serializable, and match
+ * `outputSchema` when one is declared; it reaches the agent as the tool
  * result. A thrown error becomes a tool error carrying its message.
  */
 interface PluginMcpToolDefinition {
@@ -2438,6 +2509,8 @@ interface PluginAuthor {
     role?: string;
 }
 interface PluginManifest {
+    /** JSON Schema URL for editor completion; accepted by the validator, never read by the host. */
+    $schema?: string;
     name: string;
     version: string;
     displayName?: string;
@@ -2638,9 +2711,9 @@ interface SettingDefinition {
     /**
      * Legacy secret hint (F19). The manifest schema normalizes `secret: true` to
      * `type: "secret"`; new manifests should use the type. Once normalized, the
-     * value follows the same at-rest tier as any `type: "secret"` setting —
-     * keychain-backed via Electron `safeStorage` when available, plaintext JSON
-     * only as a fallback (see {@link PluginSecretStorageTier}, #9167).
+     * value is stored like any `type: "secret"` setting — encrypted through the
+     * OS keychain via Electron `safeStorage`, and refused rather than written in
+     * plaintext when no keychain is available (see {@link PluginSecretStorageTier}).
      */
     secret?: boolean;
 }
@@ -2654,6 +2727,12 @@ interface SettingDefinition {
  * machine's per-project plugin state, never in the repo. An interpreter path is
  * the canonical example — committing it publishes one machine's layout, and
  * putting it in user scope applies it to unrelated projects.
+ *
+ * Secret settings are the exception to where `"project"` writes: a secret is
+ * never stored under the project root, whatever its scope. A `"project"`-scoped
+ * secret is still read, written, and subscribed to under `"project"` and shown
+ * in the settings form's project section, but its value is stored in the
+ * `"local"` file on this machine — so it is per project, and never committed.
  */
 type PluginSettingsScope = "user" | "project" | "local";
 /**
@@ -2672,10 +2751,12 @@ type PluginStorageScope = "user" | "project" | "worktree";
  * `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or
  * `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` (project scope),
  * with `chmod 0o600` applied on POSIX. Settings declared `type: "secret"` are
- * encrypted at rest through the OS keychain (Electron `safeStorage`) when one is
- * available, falling back to the same plaintext-0600 path when it is not (#9167);
- * the `get`/`set` API shape is identical either way. Non-secret values are always
- * plaintext JSON — do not store credentials in non-secret keys.
+ * encrypted at rest through the OS keychain (Electron `safeStorage`), and are
+ * never stored under the project root: a project-scoped secret lives in this
+ * machine's per-project local file instead (see {@link PluginSettingsScope}).
+ * With no keychain available a secret write is refused rather than stored in
+ * plaintext. Non-secret values are always plaintext JSON — do not store
+ * credentials in non-secret keys.
  *
  * `scope` defaults to `"user"`. Project scope resolves the active project at
  * call time, so it tracks project switches: `get` returns `undefined` and `set`
@@ -2720,7 +2801,8 @@ interface SettingsApi {
     /**
      * Persist a setting. Rejects `undefined` and non-JSON-serializable values.
      * For `"project"` scope with no active project, throws. When the manifest
-     * declares `contributes.settings`, an undeclared key is rejected.
+     * declares `contributes.settings`, an undeclared key is rejected. A declared
+     * secret is rejected when no OS keychain is available to encrypt it.
      */
     set<T = unknown>(key: string, value: T, scope?: PluginSettingsScope): Promise<void>;
     /**
@@ -3421,8 +3503,8 @@ interface PluginFsStat {
     mtimeMs: number;
 }
 /**
- * Options for the checked write path of {@link PluginFsApi.writeFile}
- * (#12323). Passing any options object selects the checked path.
+ * Options for {@link PluginFsApi.writeFile} (#12323). Omitting them is the
+ * same write as passing `{}`.
  */
 interface PluginFsWriteOptions {
     /**
@@ -3469,6 +3551,13 @@ interface PluginFsApi {
      * Read a file as UTF-8 text. Resolves the contained absolute path; rejects on
      * a missing read capability, an out-of-scope path, or a non-file target. Pass
      * `options.signal` to cancel a read that is no longer needed.
+     *
+     * A symlink the caller names is followed when it resolves inside a root.
+     * Once open, the descriptor must be the entry standing at the contained path
+     * (#12618): a leaf swapped for a symlink after containment rejects with
+     * `TARGET_IS_SYMLINK`, and a descriptor that is not the file now at the path
+     * with `TARGET_UNAVAILABLE`. A read that races a legitimate replace can see
+     * the latter and is safe to retry.
      */
     readFile(filePath: string, options?: PluginHostCallOptions): Promise<string>;
     /**
@@ -3489,18 +3578,22 @@ interface PluginFsApi {
      * out-of-scope path. Recorded in the audit trail. No cancellation signal —
      * partial-write semantics are deliberately out of scope.
      *
-     * Without `options` this is the plain write it has always been. Passing an
-     * `options` object — even an empty one — selects the checked write
-     * (#12323): the host serialises writes per resolved path, refuses a symlink
-     * target, replaces the file atomically (sibling temp file, flush, rename,
-     * original mode preserved), and compares the file's current bytes against
-     * {@link PluginFsWriteOptions.expectedRevision} before touching it. Either
-     * path resolves the revision of the bytes actually written, so the next
-     * `expectedRevision` needs no re-read.
+     * Every write is checked (#12323, #12618), with or without `options`: the
+     * host serialises writes per resolved path, re-proves containment once the
+     * consent prompt and the queue wait are over, refuses a symlink target
+     * (`TARGET_IS_SYMLINK`), and — when
+     * {@link PluginFsWriteOptions.expectedRevision} is a revision — compares the
+     * file's current bytes against it before touching it. The file is then
+     * replaced atomically (sibling temp file, flush, rename, original mode
+     * preserved), so a file watcher sees the old inode go and a new one arrive.
+     * A create-new write (`expectedRevision: null`) is an exclusive create at
+     * the target instead, with no temp file. The write resolves the revision of
+     * the bytes actually written, so the next `expectedRevision` needs no
+     * re-read.
      *
-     * What the checked write promises: it never clobbers a change the caller has
-     * not seen, never leaves a partial file, and serialises every host-mediated
-     * writer. What it does not promise: a lock against an uncooperative external
+     * What the write promises: a replace never leaves a partial file, every
+     * host-mediated writer is serialised, and — given an `expectedRevision` — no
+     * change the caller has not seen is clobbered. What it does not promise: a lock against an uncooperative external
      * process — a write that lands between the hash check and the rename is
      * overwritten. The window is small, and callers that care keep their own
      * copy of what they asked to write.
@@ -4177,6 +4270,31 @@ interface PluginHostApi extends PluginActivationApi {
      */
     setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
     /**
+     * Ask the host to discard one of this plugin's own panel views and mount a
+     * fresh one (#12610) — the backend-side twin of the view's
+     * `PanelViewProps.requestReload`. Use it when the worker has finished work
+     * whose view should start clean, without restarting the worker and rebinding
+     * every panel it owns. Panel ids come from {@link onDidChangePanelLifecycle}.
+     *
+     * No capability is required: only panels of kinds this plugin instance
+     * contributed can be targeted, and the caller's identity comes from this
+     * host, never from an argument. A project plugin reaches only its own
+     * project's panels.
+     *
+     * Resolves with a {@link PanelReloadResult} — a scheduling acknowledgment,
+     * never confirmation of a render. Reloads draw on the same per-panel budget
+     * as `requestReload` (three per rolling 30 seconds, after which the view is
+     * stopped until the user reloads it). A panel that is not mounted resolves
+     * `"not-mounted"` and is not opened or focused.
+     *
+     * Like {@link setPanelBadge} this is NOT revoke-guarded, and resolves
+     * `"unavailable"` once the plugin is unloaded.
+     *
+     * @throws {Error} (as a rejection) if `panelId` is not a non-empty string,
+     *   names another plugin's panel, or names a panel that belongs to no plugin.
+     */
+    reloadPanel(panelId: string): Promise<PanelReloadResult>;
+    /**
      * Surface a toast notification. The host namespaces the message as
      * `{pluginId}: {message}` for provenance — a plugin cannot spoof another
      * plugin's id since `pluginId` is bound to the host at activation. Routes
@@ -4262,8 +4380,9 @@ interface PluginHostApi extends PluginActivationApi {
      */
     showConfirm(options: PluginConfirmOptions, callOptions?: PluginHostCallOptions): Promise<boolean>;
     /**
-     * Persistent, plugin-scoped key/value settings. Plaintext JSON storage with
-     * `chmod 0o600` on POSIX — no OS keychain (#9167). See {@link SettingsApi}.
+     * Persistent, plugin-scoped key/value settings. JSON storage with `chmod 0o600`
+     * on POSIX; declared secrets are encrypted through the OS keychain. See
+     * {@link SettingsApi}.
      */
     readonly settings: SettingsApi;
     /**
@@ -4484,4 +4603,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };

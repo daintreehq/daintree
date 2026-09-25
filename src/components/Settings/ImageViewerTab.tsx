@@ -1,22 +1,32 @@
 import { useState, useEffect, useRef, useId } from "react";
-import {
-  RadioChoiceGroup,
-  RadioChoiceRow,
-  CHOICE_SHELL,
-  CHOICE_PAD,
-  CHOICE_SELECTED,
-  CHOICE_UNSELECTED,
-  CHOICE_LABEL_INSET,
-} from "@/components/ui/RadioChoice";
+import { RadioChoiceGroup, RadioChoiceRow, CHOICE_LABEL_INSET } from "@/components/ui/RadioChoice";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { Image } from "lucide-react";
+
 import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SettingsActions, SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { useProjectStore, patchCachedProjectSettings } from "@/store";
 import { projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 
 type ImageViewerMode = "os" | "custom";
+
+interface PersistedImageViewer {
+  mode: ImageViewerMode;
+  customCommand: string;
+}
+
+/** Options are rows of the group: the focus ring sits inside the row, the selection is a neutral lift. */
+const ROW_CLASSES =
+  "px-4 py-3 transition-colors has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary";
+const ROW_SELECTED = "bg-overlay-selected";
+const ROW_UNSELECTED = "hover:bg-overlay-soft";
+
+function describeViewer(viewer: PersistedImageViewer): string {
+  return viewer.mode === "os" ? "OS default" : `Custom (${viewer.customCommand})`;
+}
 
 export function ImageViewerTab() {
   const commandFieldId = useId();
@@ -26,7 +36,12 @@ export function ImageViewerTab() {
   const [isSaving, setIsSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [commandError, setCommandError] = useState<string | null>(null);
+  // What is on disk, so Save means "write this change". Null while the project has
+  // no preference yet: the OS default shown then is a suggestion, and saving it is
+  // still a real first write.
+  const [persisted, setPersisted] = useState<PersistedImageViewer | null>(null);
   const isMountedRef = useRef(true);
 
   const activeProject = useProjectStore((s) => s.currentProject);
@@ -45,7 +60,7 @@ export function ImageViewerTab() {
     if (!activeProjectId) return;
     setMode("os");
     setCustomCommand("");
-    setSaved(false);
+    setPersisted(null);
     setSaveError(null);
     setLoadError(null);
     setIsLoading(true);
@@ -54,7 +69,7 @@ export function ImageViewerTab() {
     const timer = setTimeout(() => {
       timedOut = true;
       if (!cancelled && isMountedRef.current) {
-        setLoadError("Settings took too long to load. Reopen the tab to retry.");
+        setLoadError("The saved image viewer took too long to load");
         setIsLoading(false);
       }
     }, 10_000);
@@ -66,6 +81,7 @@ export function ImageViewerTab() {
         if (pref) {
           setMode(pref.mode);
           setCustomCommand(pref.customCommand ?? "");
+          setPersisted({ mode: pref.mode, customCommand: pref.customCommand ?? "" });
         }
       })
       .catch((err) => {
@@ -81,27 +97,25 @@ export function ImageViewerTab() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [activeProjectId]);
+  }, [activeProjectId, loadAttempt]);
 
   const handleModeChange = (newMode: ImageViewerMode) => {
     setMode(newMode);
-    setSaved(false);
   };
 
   const handleCommandChange = (value: string) => {
     setCustomCommand(value);
-    setSaved(false);
+    setCommandError(null);
   };
 
   const handleSave = async () => {
     if (!activeProjectId || isSaving || isLoading || loadError) return;
     if (mode === "custom" && !customCommand.trim()) {
-      setSaveError("Custom command cannot be empty");
+      setCommandError("Enter the command that opens images");
       return;
     }
     setIsSaving(true);
     setSaveError(null);
-    setSaved(false);
     try {
       // Routed through projectClient so the per-projectId getSettings cache
       // is invalidated on save. Bypassing it left other readers reading
@@ -117,7 +131,7 @@ export function ImageViewerTab() {
       // stale cache here is what reverts this save on dialog close (#12326).
       patchCachedProjectSettings(activeProjectId, { preferredImageViewer });
       if (!isMountedRef.current) return;
-      setSaved(true);
+      setPersisted({ mode, customCommand: preferredImageViewer.customCommand ?? "" });
     } catch (err) {
       if (!isMountedRef.current) return;
       setSaveError(formatErrorMessage(err, "Failed to save image viewer preference"));
@@ -125,6 +139,11 @@ export function ImageViewerTab() {
       if (isMountedRef.current) setIsSaving(false);
     }
   };
+
+  const isDirty =
+    !persisted ||
+    persisted.mode !== mode ||
+    (mode === "custom" && persisted.customCommand !== customCommand.trim());
 
   if (!activeProjectId) {
     return (
@@ -135,84 +154,117 @@ export function ImageViewerTab() {
   }
 
   return (
-    <div className="space-y-6">
-      <SettingsSection
-        icon={Image}
-        title="Image viewer"
-        description="Choose the application that opens when you click 'Open in Image Viewer' in the file viewer."
-      >
-        <div className="space-y-4">
-          <RadioChoiceGroup legend="Image viewer mode" legendHidden>
+    <SettingsSection
+      id="image-viewer"
+      title="Image viewer"
+      description={`For ${activeProject?.name ?? "this project"} only. The app "Open in image viewer" launches from the file viewer.`}
+    >
+      <SettingsGroup className="overflow-hidden">
+        <RadioChoiceGroup
+          legend="Image viewer mode"
+          legendHidden
+          className="space-y-0 divide-y divide-border-subtle"
+        >
+          <RadioChoiceRow
+            bare
+            name="imageViewerMode"
+            value="os"
+            checked={mode === "os"}
+            onChange={() => handleModeChange("os")}
+            disabled={controlsDisabled}
+            label="Use OS default"
+            description="Opens images with your system default viewer — Preview on macOS, Photos on Windows"
+            className={cn(ROW_CLASSES, mode === "os" ? ROW_SELECTED : ROW_UNSELECTED)}
+          />
+
+          {/* The command field belongs to this option, so it renders inside
+              the option's row and outside the label: nesting is what carries
+              the dependency once forced-colors has flattened every fill. */}
+          <div
+            className={cn(
+              mode === "custom" ? ROW_SELECTED : ROW_UNSELECTED,
+              controlsDisabled && "opacity-50"
+            )}
+          >
             <RadioChoiceRow
+              bare
               name="imageViewerMode"
-              value="os"
-              checked={mode === "os"}
-              onChange={() => handleModeChange("os")}
+              value="custom"
+              checked={mode === "custom"}
+              onChange={() => handleModeChange("custom")}
               disabled={controlsDisabled}
-              label="Use OS default"
-              description="Opens images with your system default viewer — Preview on macOS, Photos on Windows"
+              label="Custom command"
+              description="Opens images with a command you provide"
+              className={ROW_CLASSES}
             />
-
-            {/* The command field belongs to this option, so it renders inside
-                the card and outside the label: nesting is what carries the
-                dependency once forced-colors has flattened every fill. */}
-            <div
-              className={cn(
-                CHOICE_SHELL,
-                mode === "custom" ? CHOICE_SELECTED : CHOICE_UNSELECTED,
-                controlsDisabled && "opacity-50"
-              )}
-            >
-              <RadioChoiceRow
-                name="imageViewerMode"
-                value="custom"
-                checked={mode === "custom"}
-                onChange={() => handleModeChange("custom")}
-                disabled={controlsDisabled}
-                label="Custom command"
-                description="Opens images with a command you provide"
-                bare
-              />
-              {mode === "custom" && (
-                <div className={cn(CHOICE_PAD, "pt-0 space-y-1.5", CHOICE_LABEL_INSET)}>
-                  <label
-                    htmlFor={commandFieldId}
-                    className="block text-xs font-medium text-text-secondary"
-                  >
-                    Command
-                  </label>
-                  <input
-                    id={commandFieldId}
-                    type="text"
-                    value={customCommand}
-                    onChange={(e) => handleCommandChange(e.target.value)}
-                    disabled={controlsDisabled}
-                    placeholder="e.g. open -a Photoshop, gimp"
-                    className="w-full bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary font-mono transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  />
-                  <p className="text-xs text-text-secondary select-text">
-                    The file path is appended as the last argument
+            {mode === "custom" && (
+              <div className={cn("px-4 pb-3 space-y-1.5", CHOICE_LABEL_INSET)}>
+                <label
+                  htmlFor={commandFieldId}
+                  className="block text-xs font-medium text-text-secondary"
+                >
+                  Command
+                </label>
+                <Input
+                  id={commandFieldId}
+                  type="text"
+                  value={customCommand}
+                  onChange={(e) => handleCommandChange(e.target.value)}
+                  disabled={controlsDisabled}
+                  placeholder="open -a Photoshop, gimp"
+                  aria-describedby={`${commandFieldId}-help${commandError ? ` ${commandFieldId}-error` : ""}`}
+                  aria-invalid={commandError ? true : undefined}
+                  className="font-mono"
+                />
+                {commandError && (
+                  <p id={`${commandFieldId}-error`} className="text-xs text-status-error">
+                    {commandError}
                   </p>
-                </div>
-              )}
-            </div>
-          </RadioChoiceGroup>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleSave}
-              disabled={isSaving || isLoading || Boolean(loadError)}
-              className="px-4 py-2 rounded-[var(--radius-md)] bg-accent-primary text-accent-primary-foreground text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
-            >
-              {isSaving ? "Saving…" : "Save"}
-            </button>
-            {saved && <span className="text-xs text-status-success">Saved</span>}
+                )}
+                <p
+                  id={`${commandFieldId}-help`}
+                  className="text-xs text-text-secondary select-text"
+                >
+                  The file path is appended as the last argument
+                </p>
+              </div>
+            )}
           </div>
+        </RadioChoiceGroup>
 
-          {loadError && <p className="text-xs text-status-error">{loadError}</p>}
-          {saveError && <p className="text-xs text-status-error">{saveError}</p>}
-        </div>
-      </SettingsSection>
-    </div>
+        <SettingsActions
+          status={
+            loadError ? (
+              <span className="text-status-error">{loadError}</span>
+            ) : saveError ? (
+              <span className="text-status-error">{saveError}</span>
+            ) : !persisted ? (
+              isLoading ? null : (
+                "Not saved yet — images open with the OS default"
+              )
+            ) : (
+              <span>
+                Saved: <span className="font-medium">{describeViewer(persisted)}</span>
+                {isDirty && " · Unsaved changes"}
+              </span>
+            )
+          }
+        >
+          {loadError && (
+            <Button variant="outline" size="sm" onClick={() => setLoadAttempt((n) => n + 1)}>
+              Retry
+            </Button>
+          )}
+          <Button
+            variant="contrast"
+            size="sm"
+            onClick={handleSave}
+            disabled={isSaving || isLoading || Boolean(loadError) || !isDirty}
+          >
+            {isSaving ? "Saving…" : "Save"}
+          </Button>
+        </SettingsActions>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

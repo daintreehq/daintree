@@ -28,6 +28,29 @@ const ABORT_RESTORE_SUFFIX: Record<RepoOperationState, string> = {
   REVERTING: "restores the working tree to the state before the operation started.",
 };
 
+/**
+ * Why a remote operation can't start while another one is halfway through.
+ *
+ * A rebase detaches HEAD while it runs, so without this the confirm surfaces
+ * read the same status as "no branch checked out" and told the user to check
+ * one out — which is the wrong diagnosis and, mid-rebase, the wrong fix.
+ */
+export function buildInProgressDescription(
+  operationState: RepoOperationState,
+  rebaseStep: number | null,
+  rebaseTotalSteps: number | null
+): string {
+  const label = OPERATION_LABEL[operationState].toLowerCase();
+  const progress =
+    operationState === "REBASING" &&
+    rebaseStep != null &&
+    rebaseTotalSteps != null &&
+    rebaseTotalSteps > 0
+      ? ` at commit ${Math.min(rebaseStep, rebaseTotalSteps)} of ${rebaseTotalSteps}`
+      : "";
+  return `This worktree stopped partway through a ${label}${progress}. Continue or abort it from Review Hub, then try again.`;
+}
+
 /** `"CLEAN"`/`"DIRTY"` narrowed away, so callers can branch on a real operation. */
 export function toRepoOperationState(state: RepoState | undefined): RepoOperationState | null {
   if (!state || state === "CLEAN" || state === "DIRTY") return null;

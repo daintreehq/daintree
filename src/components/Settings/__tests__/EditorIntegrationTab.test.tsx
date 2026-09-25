@@ -14,6 +14,7 @@
  * `useProjectStore` and `patchCachedProjectSettings` from the same `@/store`
  * barrel, and a wholesale module mock would have to restate both halves of it.
  */
+import type React from "react";
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorIntegrationTab } from "../EditorIntegrationTab";
@@ -36,6 +37,30 @@ vi.mock("@/clients/editorClient", () => ({
     setConfig: setConfigMock,
     discover: discoverMock,
   },
+}));
+
+// The real Select lazy-loads Radix; a native stand-in keeps "choose an editor" a
+// plain change event while the component still owns the value and the handler.
+vi.mock("@/components/ui/select", () => ({
+  Select: ({
+    value,
+    onValueChange,
+    children,
+  }: {
+    value: string;
+    onValueChange: (value: string) => void;
+    children: React.ReactNode;
+  }) => (
+    <select aria-label="Editor" value={value} onChange={(e) => onValueChange(e.target.value)}>
+      {children}
+    </select>
+  ),
+  SelectTrigger: () => null,
+  SelectValue: () => null,
+  SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => (
+    <option value={value}>{children}</option>
+  ),
 }));
 
 vi.mock("@/utils/logger", () => ({
@@ -117,7 +142,7 @@ async function renderLoadedTab() {
 /** Same render, but hands back the Test button. */
 async function renderTabForTestButton() {
   await renderLoadedTab();
-  return screen.getByRole("button", { name: "Test" });
+  return screen.getByRole("button", { name: "Test saved editor" });
 }
 
 function selectEditor(id: string) {
@@ -136,6 +161,21 @@ describe("EditorIntegrationTab", () => {
     expect(getConfigMock).not.toHaveBeenCalled();
   });
 
+  it("refuses to save a custom editor with no command, and says so on the field", async () => {
+    const saveButton = await renderLoadedTab();
+    selectEditor("custom");
+    fireEvent.click(saveButton);
+
+    const command = screen.getByRole("textbox", { name: "Command" }) as HTMLInputElement;
+    expect(await screen.findByText("Enter the command that opens your editor")).toBeTruthy();
+    expect(command.getAttribute("aria-invalid")).toBe("true");
+    expect(setConfigMock).not.toHaveBeenCalled();
+
+    // The error belongs to the empty value; typing clears it.
+    fireEvent.change(command, { target: { value: "nvim" } });
+    expect(screen.queryByText("Enter the command that opens your editor")).toBeNull();
+  });
+
   it("saves the selected editor through the editor IPC", async () => {
     const saveButton = await renderLoadedTab();
     selectEditor("zed");
@@ -150,9 +190,117 @@ describe("EditorIntegrationTab", () => {
     });
   });
 
+  it("keeps Save disabled until the draft differs from the saved preference", async () => {
+    const saveButton = await renderLoadedTab();
+    expect(saveButton.disabled).toBe(true);
+
+    selectEditor("zed");
+    expect(saveButton.disabled).toBe(false);
+
+    selectEditor("vscode");
+    expect(saveButton.disabled).toBe(true);
+  });
+
+  it("treats a project with no saved preference as unsaved", async () => {
+    getConfigMock.mockResolvedValue({
+      preferredEditor: null,
+      discoveredEditors: [{ id: "zed", available: true, executablePath: "/usr/bin/zed" }],
+    });
+    useProjectStore.setState({ currentProject: TEST_PROJECT });
+    render(
+      <TooltipProvider>
+        <EditorIntegrationTab />
+      </TooltipProvider>
+    );
+    await screen.findByText(/Not saved yet/i);
+    const saveButton = screen.getByRole("button", { name: /^save$/i }) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(false);
+    const testButton = screen.getByRole("button", {
+      name: "Test saved editor",
+    }) as HTMLButtonElement;
+    expect(testButton.disabled).toBe(true);
+  });
+
+  // An inventory keeps the current choice and anything needing attention in view,
+  // and discloses the healthy remainder with its paths.
+  describe("detected editors inventory", () => {
+    beforeEach(() => {
+      getConfigMock.mockResolvedValue({
+        preferredEditor: { id: "vscode" },
+        discoveredEditors: [
+          { id: "vscode", available: true, executablePath: "/usr/bin/code" },
+          { id: "cursor", available: false },
+          { id: "zed", available: true, executablePath: "/usr/bin/zed" },
+          { id: "neovim", available: true, executablePath: "/usr/bin/nvim" },
+          { id: "sublime", available: false },
+        ],
+      });
+    });
+
+    const entryIds = (root: ParentNode) =>
+      Array.from(root.querySelectorAll("[data-editor-entry]")).map((el) =>
+        el.getAttribute("data-editor-entry")
+      );
+
+    it("shows the summary, the selection and missing editors, and collapses the rest", async () => {
+      await renderLoadedTab();
+
+      expect(screen.getByText("3 of 5 found on this machine")).toBeTruthy();
+      expect(entryIds(document)).toEqual(["vscode"]);
+      expect(screen.getByText("/usr/bin/code")).toBeTruthy();
+      expect(screen.queryByText("/usr/bin/zed")).toBeNull();
+      expect(screen.getByText("Not found: Cursor, Sublime Text")).toBeTruthy();
+
+      const toggle = screen.getByRole("button", { name: "Show 2 other found editors" });
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      const region = document.getElementById(toggle.getAttribute("aria-controls")!);
+      expect(region).toBeTruthy();
+      expect(entryIds(region!)).toEqual([]);
+
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(toggle.textContent).toBe("Hide other found editors");
+      expect(entryIds(region!)).toEqual(["zed", "neovim"]);
+      expect(screen.getByText("/usr/bin/zed")).toBeTruthy();
+
+      fireEvent.click(toggle);
+      expect(entryIds(region!)).toEqual([]);
+    });
+
+    it("keeps an unavailable selection in view rather than folding it into the missing line", async () => {
+      await renderLoadedTab();
+      selectEditor("cursor");
+
+      expect(entryIds(document)).toEqual(["cursor"]);
+      expect(screen.getByText("Not found: Sublime Text")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Show 3 other found editors" })).toBeTruthy();
+    });
+
+    it("omits the disclosure when the selection is the only editor found", async () => {
+      getConfigMock.mockResolvedValue({
+        preferredEditor: { id: "vscode" },
+        discoveredEditors: [
+          { id: "vscode", available: true, executablePath: "/usr/bin/code" },
+          { id: "zed", available: false },
+        ],
+      });
+      await renderLoadedTab();
+
+      expect(screen.getByText("/usr/bin/code")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /other found editor/ })).toBeNull();
+    });
+  });
+
   // The Test button has to launch the editor the preference names, which the
   // main process only resolves when it is told which project to look at (#12327).
   describe("Test button", () => {
+    it("is disabled while the draft differs, since it opens the saved preference", async () => {
+      const testButton = await renderTabForTestButton();
+      expect(testButton.hasAttribute("disabled")).toBe(false);
+      selectEditor("zed");
+      expect(testButton.hasAttribute("disabled")).toBe(true);
+    });
+
     it("sends the active project id so the saved preference is the thing under test", async () => {
       const testButton = await renderTabForTestButton();
 

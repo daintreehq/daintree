@@ -1,11 +1,15 @@
-import { useId, useState } from "react";
-import { Plus, Trash2, Globe, Check, X, Search, PanelRight, Link } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { Plus, Globe, Search } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePortalStore } from "@/store/portalStore";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { DEFAULT_SYSTEM_LINKS } from "@shared/types";
+import { SettingsActions, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitch } from "./SettingsSwitch";
@@ -53,6 +57,29 @@ function FaviconIcon({ url }: { url: string }) {
   }
 }
 
+function validateUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol)) return "URL must use http:// or https://";
+    return null;
+  } catch {
+    return "Enter a full URL, starting with https://";
+  }
+}
+
+/** A problem pinned to the field that has to change, or to the form when neither does. */
+interface LinkError {
+  field: "name" | "url" | "form";
+  message: string;
+}
+
+function validateLink(name: string, url: string): LinkError | null {
+  if (!name.trim()) return { field: "name", message: "Enter a name for the link" };
+  if (!url.trim()) return { field: "url", message: "Enter the link's URL" };
+  const problem = validateUrl(url);
+  return problem ? { field: "url", message: problem } : null;
+}
+
 export function PortalSettingsTab() {
   const links = usePortalStore((s) => s.links);
   const defaultNewTabUrl = usePortalStore((s) => s.defaultNewTabUrl);
@@ -61,39 +88,78 @@ export function PortalSettingsTab() {
   const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editUrl, setEditUrl] = useState("");
-  const [urlError, setUrlError] = useState("");
+  const [addError, setAddError] = useState<LinkError | null>(null);
+  const [editError, setEditError] = useState<LinkError | null>(null);
+  // One write at a time. While it runs the form it came from is read-only, so
+  // its completion can never clear or close something typed after submitting.
+  const [pending, setPendingState] = useState<"add" | "edit" | "custom" | null>(null);
+  // State drives the read-only rendering; the ref is the guard, because two
+  // submits in one batch would both read the stale state.
+  const pendingRef = useRef<typeof pending>(null);
+  const setPending = (next: typeof pending) => {
+    pendingRef.current = next;
+    setPendingState(next);
+  };
+  const [focusNewTabSelect, setFocusNewTabSelect] = useState(false);
+  const addNameRef = useRef<HTMLInputElement>(null);
+  const addUrlRef = useRef<HTMLInputElement>(null);
+  const editNameRef = useRef<HTMLInputElement>(null);
+  const editUrlRef = useRef<HTMLInputElement>(null);
+  // The link whose Edit button gets focus back once its editor closes — the
+  // editor replaced that button, so without this focus falls to the page.
+  const [returnFocusTo, setReturnFocusTo] = useState<string | null>(null);
   const [showCustomUrlInput, setShowCustomUrlInput] = useState(false);
   const [customDefaultUrl, setCustomDefaultUrl] = useState("");
-  const [customUrlError, setCustomUrlError] = useState("");
+  const [customUrlError, setCustomUrlError] = useState<LinkError | null>(null);
+  // Every submission that fails bumps this, and it keys the rendered message:
+  // a fresh `role="alert"` node is announced even when the text repeats.
+  const [errorSeq, setErrorSeq] = useState(0);
+  const customUrlRef = useRef<HTMLInputElement>(null);
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
   const customUrlErrorId = useId();
   const addLinkErrorId = useId();
+  const editErrorId = useId();
+
+  useEffect(() => {
+    if (returnFocusTo === null) return;
+    document
+      .querySelector<HTMLButtonElement>(`[data-portal-edit="${CSS.escape(returnFocusTo)}"]`)
+      ?.focus();
+    setReturnFocusTo(null);
+  }, [returnFocusTo]);
+
+  // Closing the custom-URL editor hands focus to what opened it: its own Edit
+  // button while a custom URL is in effect, otherwise the select.
+  useEffect(() => {
+    if (!focusNewTabSelect) return;
+    (
+      document.querySelector<HTMLElement>("[data-portal-edit-custom-url]") ??
+      document.querySelector<HTMLElement>('#portal-default-agent [role="combobox"]')
+    )?.focus();
+    setFocusNewTabSelect(false);
+  }, [focusNewTabSelect]);
 
   // Report validation state to sidebar
-  const hasError = Boolean(urlError || customUrlError);
+  const hasError = Boolean(addError || customUrlError || editError);
   useSettingsTabValidation("portal", hasError);
 
   const systemLinks = links.filter((l) => l.type === "system");
   const userLinks = links.filter((l) => l.type === "user");
 
-  const handleAddLink = () => {
-    if (!newLinkName.trim() || !newLinkUrl.trim()) {
-      setUrlError("Name and URL are required");
+  const handleAddLink = async () => {
+    if (pendingRef.current) return;
+    const problem = validateLink(newLinkName, newLinkUrl);
+    if (problem) {
+      setAddError(problem);
+      setErrorSeq((n) => n + 1);
+      (problem.field === "name" ? addNameRef : addUrlRef).current?.focus();
       return;
     }
 
-    try {
-      const url = new URL(newLinkUrl);
-      if (!["http:", "https:"].includes(url.protocol)) {
-        setUrlError("URL must use http:// or https://");
-        return;
-      }
-    } catch {
-      setUrlError("Invalid URL format");
-      return;
-    }
-
-    void actionService.dispatch(
+    // The draft clears only once the link exists, so a failed add keeps what
+    // was typed for the retry.
+    setPending("add");
+    const result = await actionService.dispatch(
       "portal.links.add",
       {
         title: newLinkName,
@@ -104,51 +170,58 @@ export function PortalSettingsTab() {
       },
       { source: "user" }
     );
+    setPending(null);
+    if (!result.ok) {
+      setAddError({ field: "form", message: "Couldn't add the link. Try again." });
+      setErrorSeq((n) => n + 1);
+      return;
+    }
 
     setNewLinkName("");
     setNewLinkUrl("");
-    setUrlError("");
+    setAddError(null);
   };
 
   const handleStartEdit = (id: string, title: string, url: string) => {
+    if (pendingRef.current) return;
     setEditingLinkId(id);
     setEditName(title);
     setEditUrl(url);
+    setEditError(null);
   };
 
-  const handleSaveEdit = () => {
-    if (!editingLinkId || !editName.trim() || !editUrl.trim()) {
-      setUrlError("Name and URL are required");
+  const closeEditor = () => {
+    if (pendingRef.current) return;
+    setReturnFocusTo(editingLinkId);
+    setEditingLinkId(null);
+    setEditName("");
+    setEditUrl("");
+    setEditError(null);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingLinkId || pendingRef.current) return;
+    const problem = validateLink(editName, editUrl);
+    if (problem) {
+      setEditError(problem);
+      setErrorSeq((n) => n + 1);
+      (problem.field === "name" ? editNameRef : editUrlRef).current?.focus();
       return;
     }
 
-    try {
-      const url = new URL(editUrl);
-      if (!["http:", "https:"].includes(url.protocol)) {
-        setUrlError("URL must use http:// or https://");
-        return;
-      }
-    } catch {
-      setUrlError("Invalid URL format");
-      return;
-    }
-
-    void actionService.dispatch(
+    setPending("edit");
+    const result = await actionService.dispatch(
       "portal.links.update",
       { id: editingLinkId, updates: { title: editName, url: editUrl } },
       { source: "user" }
     );
-    setEditingLinkId(null);
-    setEditName("");
-    setEditUrl("");
-    setUrlError("");
-  };
-
-  const handleCancelEdit = () => {
-    setEditingLinkId(null);
-    setEditName("");
-    setEditUrl("");
-    setUrlError("");
+    setPending(null);
+    if (!result.ok) {
+      setEditError({ field: "form", message: "Couldn't save the link. Try again." });
+      setErrorSeq((n) => n + 1);
+      return;
+    }
+    closeEditor();
   };
 
   const enabledLinks = links.filter((l) => l.enabled).sort((a, b) => a.order - b.order);
@@ -157,11 +230,12 @@ export function PortalSettingsTab() {
     defaultNewTabUrl !== null && !enabledLinks.some((l) => l.url === defaultNewTabUrl);
 
   const handleDefaultAgentChange = (value: string) => {
+    if (pendingRef.current) return;
     if (value === "none") {
       void actionService.dispatch("portal.setDefaultNewTab", { url: null }, { source: "user" });
       setShowCustomUrlInput(false);
       setCustomDefaultUrl("");
-      setCustomUrlError("");
+      setCustomUrlError(null);
     } else if (value === "custom") {
       setShowCustomUrlInput(true);
       if (isCustomUrl && defaultNewTabUrl) {
@@ -171,140 +245,256 @@ export function PortalSettingsTab() {
       void actionService.dispatch("portal.setDefaultNewTab", { url: value }, { source: "user" });
       setShowCustomUrlInput(false);
       setCustomDefaultUrl("");
-      setCustomUrlError("");
+      setCustomUrlError(null);
     }
   };
 
-  const handleCustomUrlSave = () => {
+  const customUrlUnchanged =
+    customDefaultUrl.trim() === "" || customDefaultUrl === defaultNewTabUrl;
+
+  const handleCustomUrlSave = async () => {
+    if (pendingRef.current || customDefaultUrl === defaultNewTabUrl) return;
     if (!customDefaultUrl.trim()) {
-      setCustomUrlError("URL is required");
+      setCustomUrlError({ field: "url", message: "Enter a URL" });
+      setErrorSeq((n) => n + 1);
+      customUrlRef.current?.focus();
       return;
     }
-    try {
-      const url = new URL(customDefaultUrl);
-      if (!["http:", "https:"].includes(url.protocol)) {
-        setCustomUrlError("URL must use http:// or https://");
-        return;
-      }
-      void actionService.dispatch(
-        "portal.setDefaultNewTab",
-        { url: customDefaultUrl },
-        { source: "user" }
-      );
-      setShowCustomUrlInput(false);
-      setCustomDefaultUrl("");
-      setCustomUrlError("");
-    } catch {
-      setCustomUrlError("Invalid URL format");
+    const problem = validateUrl(customDefaultUrl);
+    if (problem) {
+      setCustomUrlError({ field: "url", message: problem });
+      setErrorSeq((n) => n + 1);
+      customUrlRef.current?.focus();
+      return;
     }
+    setPending("custom");
+    const result = await actionService.dispatch(
+      "portal.setDefaultNewTab",
+      { url: customDefaultUrl },
+      { source: "user" }
+    );
+    setPending(null);
+    if (!result.ok) {
+      setCustomUrlError({ field: "form", message: "Couldn't save the URL. Try again." });
+      setErrorSeq((n) => n + 1);
+      return;
+    }
+    setShowCustomUrlInput(false);
+    setCustomDefaultUrl("");
+    setCustomUrlError(null);
+    setFocusNewTabSelect(true);
+  };
+
+  const handleEditCustomUrl = () => {
+    if (pendingRef.current || !defaultNewTabUrl) return;
+    setCustomDefaultUrl(defaultNewTabUrl);
+    setCustomUrlError(null);
+    setShowCustomUrlInput(true);
   };
 
   const handleCustomUrlCancel = () => {
+    if (pendingRef.current) return;
     setShowCustomUrlInput(false);
     setCustomDefaultUrl("");
-    setCustomUrlError("");
+    setCustomUrlError(null);
+    setFocusNewTabSelect(true);
   };
 
   const renderLinkRow = (link: (typeof links)[0], allowDelete: boolean) => {
     if (editingLinkId === link.id) {
+      // Remove lives in the editor rather than on every row: at rest each row
+      // keeps the same Edit + switch rail as the built-in links above it.
       return (
-        <div
-          key={link.id}
-          className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
-        >
-          <input
-            type="text"
-            value={editName}
-            onChange={(e) => setEditName(e.target.value)}
-            className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary w-32 focus:border-daintree-accent/40 focus:outline-hidden"
-            placeholder="e.g. My portal"
-            aria-label="Edit link name"
+        <div key={link.id} className="divide-y divide-border-subtle">
+          <SettingsRow
+            layout="stacked"
+            label={`Edit ${link.title || "link"}`}
+            error={
+              editError ? (
+                <span key={errorSeq} id={editErrorId} role="alert">
+                  {editError.message}
+                </span>
+              ) : undefined
+            }
+            control={
+              <div className="flex items-center gap-2">
+                <Input
+                  type="text"
+                  ref={editNameRef}
+                  value={editName}
+                  readOnly={pending === "edit"}
+                  onChange={(e) => {
+                    setEditName(e.target.value);
+                    setEditError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleSaveEdit();
+                    if (e.key === "Escape") closeEditor();
+                  }}
+                  className="w-40"
+                  placeholder="Name"
+                  aria-label="Link name"
+                  invalid={editError?.field === "name"}
+                  aria-invalid={editError?.field === "name" || undefined}
+                  aria-describedby={editError ? editErrorId : undefined}
+                  autoFocus
+                />
+                <Input
+                  type="text"
+                  ref={editUrlRef}
+                  value={editUrl}
+                  readOnly={pending === "edit"}
+                  onChange={(e) => {
+                    setEditUrl(e.target.value);
+                    setEditError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleSaveEdit();
+                    if (e.key === "Escape") closeEditor();
+                  }}
+                  className="flex-1 min-w-0 font-mono"
+                  placeholder="https://…"
+                  aria-label="Link URL"
+                  invalid={editError?.field === "url"}
+                  aria-invalid={editError?.field === "url" || undefined}
+                  aria-describedby={editError ? editErrorId : undefined}
+                />
+              </div>
+            }
           />
-          <input
-            type="text"
-            value={editUrl}
-            onChange={(e) => setEditUrl(e.target.value)}
-            className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary flex-1 focus:border-daintree-accent/40 focus:outline-hidden"
-            placeholder="e.g. https://github.com/owner/repo"
-            aria-label="Edit link URL"
-          />
-          <button
-            onClick={handleSaveEdit}
-            aria-label="Save edit"
-            className="p-1.5 rounded hover:bg-daintree-border/50 text-status-success"
+          <SettingsActions
+            status={
+              allowDelete && (
+                <Button
+                  type="button"
+                  variant="ghost-danger"
+                  size="sm"
+                  onClick={() => setPendingRemoveId(link.id)}
+                  disabled={link.alwaysEnabled || pending !== null}
+                >
+                  Remove link
+                </Button>
+              )
+            }
           >
-            <Check className="w-4 h-4" />
-          </button>
-          <button
-            onClick={handleCancelEdit}
-            aria-label="Cancel edit"
-            className="p-1.5 rounded hover:bg-daintree-border/50 text-daintree-text/50"
-          >
-            <X className="w-4 h-4" />
-          </button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={closeEditor}
+              disabled={pending === "edit"}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="contrast"
+              size="sm"
+              onClick={() => void handleSaveEdit()}
+              disabled={pending !== null || (editName === link.title && editUrl === link.url)}
+            >
+              Save
+            </Button>
+          </SettingsActions>
         </div>
       );
     }
 
-    return (
-      <div
-        key={link.id}
-        className="flex items-center justify-between p-3 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
-      >
-        <div className="flex items-center gap-3">
-          {allowDelete ? <FaviconIcon url={link.url} /> : <ServiceIcon name={link.icon} />}
-          <div className="flex flex-col">
-            <span className="text-sm text-text-primary">{link.title}</span>
-            {!allowDelete && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="text-2xs font-mono text-text-secondary truncate min-w-0">
-                    {link.url}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{link.url}</TooltipContent>
-              </Tooltip>
-            )}
-          </div>
-        </div>
+    // A built-in link the user renamed, re-pointed or turned off is a departure
+    // from what shipped, and gets the same bar and reset as any other setting.
+    const shipped = allowDelete ? undefined : DEFAULT_SYSTEM_LINKS.find((d) => d.id === link.id);
+    const isModified =
+      !!shipped &&
+      (shipped.title !== link.title ||
+        shipped.url !== link.url ||
+        shipped.enabled !== link.enabled);
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => handleStartEdit(link.id, link.title, link.url)}
-            className="text-xs text-text-secondary hover:text-text-primary px-2 py-1 rounded hover:bg-daintree-border/50"
-          >
-            Edit
-          </button>
-          <SettingsSwitch
-            checked={link.enabled}
-            onCheckedChange={() =>
-              void actionService.dispatch(
-                "portal.links.toggle",
-                { id: link.id },
-                { source: "user" }
-              )
-            }
-            disabled={link.alwaysEnabled}
-            aria-label={`Toggle ${link.title || "portal link"}`}
-          />
-          {allowDelete && (
-            <button
-              onClick={() => setPendingRemoveId(link.id)}
-              disabled={link.alwaysEnabled}
-              className="p-1.5 rounded hover:bg-daintree-border/50 text-daintree-text/50 hover:text-status-error disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
+    return (
+      <SettingsRow
+        key={link.id}
+        isModified={isModified}
+        onReset={
+          shipped
+            ? () =>
+                void actionService.dispatch(
+                  "portal.links.update",
+                  {
+                    id: link.id,
+                    updates: { title: shipped.title, url: shipped.url, enabled: shipped.enabled },
+                  },
+                  { source: "user" }
+                )
+            : undefined
+        }
+        resetAriaLabel={`Reset ${shipped?.title ?? link.title} to its default`}
+        label={
+          <span className="flex items-center gap-2">
+            <span className="flex shrink-0">
+              {allowDelete ? <FaviconIcon url={link.url} /> : <ServiceIcon name={link.icon} />}
+            </span>
+            {link.title}
+          </span>
+        }
+        labelText={link.title}
+        description={
+          <Tooltip>
+            <TooltipTrigger asChild>
+              {/* Indented past the icon, so the URL reads under the title it belongs to. */}
+              <span className="block pl-6 font-mono truncate">{link.url}</span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{link.url}</TooltipContent>
+          </Tooltip>
+        }
+        control={({ labelId, descriptionId }) => (
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => handleStartEdit(link.id, link.title, link.url)}
+              disabled={pending !== null}
+              aria-describedby={labelId}
+              data-portal-edit={link.id}
             >
-              <Trash2 className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-      </div>
+              Edit
+            </Button>
+            <SettingsSwitch
+              checked={link.enabled}
+              onCheckedChange={() =>
+                void actionService.dispatch(
+                  "portal.links.toggle",
+                  { id: link.id },
+                  { source: "user" }
+                )
+              }
+              disabled={link.alwaysEnabled}
+              aria-labelledby={labelId}
+              aria-describedby={descriptionId}
+            />
+          </>
+        )}
+      />
     );
   };
 
   const pendingRemoveLink = links.find((l) => l.id === pendingRemoveId) ?? null;
 
+  const defaultAgentValue = showCustomUrlInput
+    ? "custom"
+    : defaultNewTabUrl === null
+      ? "none"
+      : isCustomUrl
+        ? "custom"
+        : defaultNewTabUrl;
+
+  const defaultAgentOptions = [
+    { value: "none", label: "Launchpad (default)" },
+    ...enabledLinks.map((link) => ({ value: link.url, label: link.title })),
+    { value: "custom", label: "Custom URL…" },
+  ];
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <ConfirmDialog
         isOpen={pendingRemoveId !== null}
         variant="destructive"
@@ -313,6 +503,10 @@ export function PortalSettingsTab() {
         confirmLabel="Remove link"
         onConfirm={() => {
           if (pendingRemoveId !== null) {
+            if (editingLinkId === pendingRemoveId) {
+              setEditingLinkId(null);
+              setEditError(null);
+            }
             void actionService.dispatch(
               "portal.links.remove",
               { id: pendingRemoveId },
@@ -324,144 +518,183 @@ export function PortalSettingsTab() {
         onClose={() => setPendingRemoveId(null)}
       />
 
-      <SettingsSection
-        icon={PanelRight}
-        title="Default new tab agent"
-        description='Choose which agent opens when you click the + button. Select "None" to show the Launchpad.'
-      >
-        <div className="flex flex-col gap-3">
+      <SettingsSection title="New tab">
+        <SettingsGroup>
           <SettingsSelect
-            label="Default Agent"
-            value={
-              showCustomUrlInput
-                ? "custom"
-                : defaultNewTabUrl === null
-                  ? "none"
-                  : isCustomUrl
-                    ? "custom"
-                    : defaultNewTabUrl
-            }
+            id="portal-default-agent"
+            label="New tabs open"
+            description="What the + button in the Portal panel opens"
+            isModified={defaultNewTabUrl !== null && !showCustomUrlInput}
+            onReset={() => handleDefaultAgentChange("none")}
+            resetAriaLabel="Reset new tabs to the Launchpad"
+            controlWidth="wide"
+            value={defaultAgentValue}
             onValueChange={(v) => handleDefaultAgentChange(v)}
-            options={[
-              { value: "none", label: "None (show Launchpad)" },
-              ...enabledLinks.map((link) => ({ value: link.url, label: link.title })),
-              { value: "custom", label: "Custom URL..." },
-            ]}
+            options={defaultAgentOptions}
           />
 
-          {showCustomUrlInput && (
-            <div className="flex gap-2">
-              <input
-                type="text"
-                placeholder="https://..."
-                value={customDefaultUrl}
-                onChange={(e) => {
-                  setCustomDefaultUrl(e.target.value);
-                  setCustomUrlError("");
-                }}
-                className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleCustomUrlSave();
-                  if (e.key === "Escape") handleCustomUrlCancel();
-                }}
-                aria-label="Custom URL"
-                aria-invalid={!!customUrlError || undefined}
-                aria-describedby={customUrlError ? customUrlErrorId : undefined}
-                autoFocus
-              />
-              <button
-                type="button"
-                onClick={handleCustomUrlSave}
-                aria-label="Save custom URL"
-                className="px-3 py-1.5 rounded-[var(--radius-md)] bg-accent-primary text-accent-primary-foreground text-sm hover:bg-daintree-accent/90 transition-colors"
-              >
-                <Check className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onClick={handleCustomUrlCancel}
-                aria-label="Cancel custom URL"
-                className="px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default text-daintree-text/70 text-sm hover:bg-daintree-border/50 transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          {customUrlError && (
-            <p id={customUrlErrorId} className="text-xs text-status-error">
-              {customUrlError}
-            </p>
-          )}
-
+          {/* A saved custom URL keeps its own Edit: re-choosing "Custom URL…" in
+              the select is not a change, so it can't reopen the editor. */}
           {isCustomUrl && !showCustomUrlInput && defaultNewTabUrl && (
-            <div className="text-xs text-text-secondary flex items-center gap-2">
-              <Globe className="w-3 h-3" />
-              <span className="truncate">{defaultNewTabUrl}</span>
-            </div>
+            <SettingsRow
+              label="Custom URL"
+              description={<span className="block font-mono truncate">{defaultNewTabUrl}</span>}
+              control={({ labelId }) => (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleEditCustomUrl}
+                  disabled={pending !== null}
+                  aria-describedby={labelId}
+                  data-portal-edit-custom-url=""
+                >
+                  Edit
+                </Button>
+              )}
+            />
           )}
-        </div>
+
+          {showCustomUrlInput && (
+            <>
+              <SettingsRow
+                layout="stacked"
+                label="Custom URL"
+                error={
+                  customUrlError ? (
+                    <span key={errorSeq} id={customUrlErrorId} role="alert">
+                      {customUrlError.message}
+                    </span>
+                  ) : undefined
+                }
+                control={({ labelId }) => (
+                  <Input
+                    type="text"
+                    placeholder="https://…"
+                    ref={customUrlRef}
+                    value={customDefaultUrl}
+                    readOnly={pending === "custom"}
+                    onChange={(e) => {
+                      setCustomDefaultUrl(e.target.value);
+                      setCustomUrlError(null);
+                    }}
+                    className="min-w-0 font-mono"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleCustomUrlSave();
+                      if (e.key === "Escape") handleCustomUrlCancel();
+                    }}
+                    aria-labelledby={labelId}
+                    invalid={customUrlError?.field === "url"}
+                    aria-invalid={customUrlError?.field === "url" || undefined}
+                    aria-describedby={customUrlError ? customUrlErrorId : undefined}
+                    autoFocus
+                  />
+                )}
+              />
+              <SettingsActions>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCustomUrlCancel}
+                  disabled={pending === "custom"}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="contrast"
+                  size="sm"
+                  onClick={() => void handleCustomUrlSave()}
+                  disabled={pending !== null || customUrlUnchanged}
+                >
+                  Save
+                </Button>
+              </SettingsActions>
+            </>
+          )}
+        </SettingsGroup>
       </SettingsSection>
 
       <SettingsSection
-        icon={Link}
+        id="portal-default-links"
         title="Default links"
-        description="Built-in agent and service links. Toggle visibility in the portal tab bar."
+        description="Built-in agent and service links. Turn one off to hide it from the portal tab bar."
       >
-        <div className="space-y-2">{systemLinks.map((link) => renderLinkRow(link, false))}</div>
+        <SettingsGroup>{systemLinks.map((link) => renderLinkRow(link, false))}</SettingsGroup>
       </SettingsSection>
 
       <SettingsSection
-        icon={Globe}
+        id="portal-custom-links"
         title="Custom links"
-        description="Add your own links to AI services or documentation."
+        description="Add your own links to AI services or documentation"
       >
-        <div className="space-y-2">{userLinks.map((link) => renderLinkRow(link, true))}</div>
-
-        <div className="space-y-2">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              placeholder="e.g. My portal"
-              value={newLinkName}
-              onChange={(e) => {
-                setNewLinkName(e.target.value);
-                setUrlError("");
-              }}
-              className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary w-32 focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
-              aria-label="New link name"
-            />
-            <input
-              type="text"
-              placeholder="e.g. https://github.com/owner/repo"
-              value={newLinkUrl}
-              onChange={(e) => {
-                setNewLinkUrl(e.target.value);
-                setUrlError("");
-              }}
-              className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary flex-1 focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleAddLink();
-              }}
-              aria-label="New link URL"
-              aria-invalid={!!urlError || undefined}
-              aria-describedby={urlError ? addLinkErrorId : undefined}
-            />
-            <button
-              onClick={handleAddLink}
-              disabled={!newLinkName.trim() || !newLinkUrl.trim()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] bg-accent-primary text-accent-primary-foreground text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none hover:bg-daintree-accent/90 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              Add
-            </button>
-          </div>
-          {urlError && (
-            <p id={addLinkErrorId} className="text-xs text-status-error">
-              {urlError}
-            </p>
-          )}
-        </div>
+        <SettingsGroup>
+          {userLinks.map((link) => renderLinkRow(link, true))}
+          <SettingsRow
+            layout="stacked"
+            label="Add a link"
+            error={
+              addError ? (
+                <span key={errorSeq} id={addLinkErrorId} role="alert">
+                  {addError.message}
+                </span>
+              ) : undefined
+            }
+            control={
+              <div className="flex items-center gap-2">
+                <Input
+                  ref={addNameRef}
+                  type="text"
+                  placeholder="Name"
+                  value={newLinkName}
+                  readOnly={pending === "add"}
+                  onChange={(e) => {
+                    setNewLinkName(e.target.value);
+                    setAddError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleAddLink();
+                  }}
+                  className="w-40"
+                  aria-label="New link name"
+                  invalid={addError?.field === "name"}
+                  aria-invalid={addError?.field === "name" || undefined}
+                  aria-describedby={addError ? addLinkErrorId : undefined}
+                />
+                <Input
+                  type="text"
+                  placeholder="https://…"
+                  ref={addUrlRef}
+                  value={newLinkUrl}
+                  readOnly={pending === "add"}
+                  onChange={(e) => {
+                    setNewLinkUrl(e.target.value);
+                    setAddError(null);
+                  }}
+                  className="flex-1 min-w-0 font-mono"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleAddLink();
+                  }}
+                  aria-label="New link URL"
+                  invalid={addError?.field === "url"}
+                  aria-invalid={addError?.field === "url" || undefined}
+                  aria-describedby={addError ? addLinkErrorId : undefined}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleAddLink()}
+                  disabled={pending !== null || !newLinkName.trim() || !newLinkUrl.trim()}
+                >
+                  <Plus aria-hidden="true" />
+                  Add
+                </Button>
+              </div>
+            }
+          />
+        </SettingsGroup>
       </SettingsSection>
     </div>
   );

@@ -134,15 +134,18 @@ describe("agent.launch emits a manifest outputSchema (#11547)", () => {
     const declined = await runLaunch(null);
     const props = outputSchema(registerAll(), "agent.launch")!.properties as Record<
       string,
-      { anyOf?: Array<{ type?: string }>; type?: string }
+      { anyOf?: Array<{ type?: string }>; type?: string | string[] }
     >;
 
     // Derived from an actual all-null result, so a newly nullable field is
     // covered without editing a hardcoded list.
     for (const [key, value] of Object.entries(declined)) {
       if (value !== null) continue;
-      const variants = props[key]?.anyOf ?? [];
-      expect(variants.some((v) => v.type === "null")).toBe(true);
+      // Zod spells a nullable primitive as a `type` array and anything richer
+      // as an `anyOf`; both say the same thing to a JSON Schema client.
+      const prop = props[key];
+      const types = [prop?.type, ...(prop?.anyOf ?? []).map((v) => v.type)].flat();
+      expect(types).toContain("null");
     }
     // `launched` is the discriminant — the one key that is never null.
     expect(declined.launched).toBe(false);

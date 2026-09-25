@@ -1,11 +1,11 @@
 import { safeStorage } from "electron";
 
 /**
- * At-rest tier a secret value is stored under. Surfaced honestly to the user so
- * the plugin settings UI can disclose whether a token is in the OS keychain or
- * only `chmod 0o600` plaintext (#9167).
+ * The at-rest tier a secret write would use right now, disclosed honestly in the
+ * plugin settings UI. `"unavailable"` means there is no OS keychain to encrypt
+ * with, and a secret write is refused rather than stored in plaintext (#12613).
  */
-export type SecretStorageTier = "keychain" | "plaintext";
+export type SecretStorageTier = "keychain" | "unavailable";
 
 /**
  * Encrypts/decrypts secret setting values for at-rest storage. The store holds
@@ -17,36 +17,56 @@ export interface SecretCipher {
   tier(): SecretStorageTier;
   /**
    * Encrypt a plaintext secret to a base64 ciphertext string, or `null` when no
-   * OS keychain is available (caller then falls back to plaintext at-rest).
+   * OS keychain is available (the caller then refuses the write).
    */
   encrypt(plaintext: string): string | null;
   /** Decrypt a base64 ciphertext produced by {@link encrypt}. */
   decrypt(ciphertextBase64: string): string;
 }
 
+type LinuxStorageBackend = ReturnType<typeof safeStorage.getSelectedStorageBackend>;
+
 /**
- * Default cipher backed by Electron `safeStorage` (macOS Keychain, Windows DPAPI,
- * Linux libsecret/kwallet). When `isEncryptionAvailable()` is false — typically a
- * headless Linux box with no backing store — {@link encrypt} returns `null` and
- * the store persists plaintext under `chmod 0o600` as before.
+ * On Linux `isEncryptionAvailable()` doesn't say what backs the encryption:
+ * `basic_text` uses Chromium's hardcoded key and `unknown` is what Electron
+ * reports before `ready` (#12614). Exhaustive over Electron's backend union so a
+ * new backend fails typecheck until it is classified; a string outside the union
+ * at runtime is treated as not a keychain.
  */
+const LINUX_BACKEND_IS_KEYCHAIN: Record<LinuxStorageBackend, boolean> = {
+  gnome_libsecret: true,
+  kwallet: true,
+  kwallet5: true,
+  kwallet6: true,
+  basic_text: false,
+  unknown: false,
+};
+
 /**
  * `safeStorage.isEncryptionAvailable()` can throw on Linux when called before
  * the app `ready` event, and `safeStorage` is absent entirely outside an Electron
- * runtime. Treat any such failure as "no keychain" so secret writes degrade to
- * the plaintext-0600 fallback rather than crashing a settings read.
+ * runtime. Treat any such failure as "no keychain" so a secret write is refused
+ * rather than crashing a settings read. A Linux backend that isn't a real
+ * keychain is treated the same way, so the UI never labels it as one.
  */
 function keychainAvailable(): boolean {
   try {
-    return safeStorage?.isEncryptionAvailable() === true;
+    if (safeStorage?.isEncryptionAvailable() !== true) return false;
+    if (process.platform !== "linux") return true;
+    return LINUX_BACKEND_IS_KEYCHAIN[safeStorage.getSelectedStorageBackend()] === true;
   } catch {
     return false;
   }
 }
 
+/**
+ * Default cipher backed by Electron `safeStorage` (macOS Keychain, Windows DPAPI,
+ * Linux libsecret/kwallet). When `isEncryptionAvailable()` is false — typically a
+ * headless Linux box with no backing store — {@link encrypt} returns `null`.
+ */
 export const safeStorageCipher: SecretCipher = {
   tier() {
-    return keychainAvailable() ? "keychain" : "plaintext";
+    return keychainAvailable() ? "keychain" : "unavailable";
   },
   encrypt(plaintext) {
     if (!keychainAvailable()) return null;

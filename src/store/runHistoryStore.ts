@@ -15,8 +15,8 @@ interface RunHistoryState {
   loading: boolean;
   /** Idempotent: pulls the current snapshot and subscribes to live updates. */
   init: () => void;
-  /** Clear the durable log (and optimistically the local mirror). */
-  clear: () => Promise<void>;
+  /** Clear the durable log. Resolves false when the clear failed, so the caller can say so. */
+  clear: () => Promise<boolean>;
 }
 
 let initialized = false;
@@ -59,8 +59,10 @@ export const useRunHistoryStore = create<RunHistoryState>((set) => ({
       // snapshot arrives via the push path. An optimistic clear here could
       // instead clobber a concurrent append broadcast from another window.
       await window.electron.runHistory.clear();
+      return true;
     } catch (err) {
       logError("Failed to clear run history", err);
+      return false;
     }
   },
 }));

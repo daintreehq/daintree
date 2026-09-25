@@ -17,6 +17,16 @@ describe("ActivityLight", () => {
     document.body.removeAttribute("data-performance-mode");
   });
 
+  // One act() per slice, so the effect re-arms the next flip between timers
+  // the way it does in the app. A single jump runs only the first flip.
+  function advanceInSteps(totalMs: number, stepMs = 5_000): void {
+    for (let elapsed = 0; elapsed < totalMs; elapsed += stepMs) {
+      act(() => {
+        vi.advanceTimersByTime(Math.min(stepMs, totalMs - elapsed));
+      });
+    }
+  }
+
   function getDot(container: HTMLElement): HTMLElement {
     const dot = container.querySelector('div[aria-hidden="true"]');
     if (!dot) throw new Error("ActivityLight dot not found");
@@ -92,10 +102,9 @@ describe("ActivityLight", () => {
 
   it("applies the className prop", () => {
     const { container } = render(
-      <ActivityLight lastActivityTimestamp={Date.now()} className="w-1.5 h-1.5" />
+      <ActivityLight lastActivityTimestamp={Date.now()} className="ml-1" />
     );
-    expect(getDot(container).className).toContain("w-1.5");
-    expect(getDot(container).className).toContain("h-1.5");
+    expect(getDot(container).className).toContain("ml-1");
   });
 
   it.each([
@@ -124,9 +133,7 @@ describe("ActivityLight", () => {
     expect(getDot(container).className).not.toMatch(/\bborder\b/);
     expect(getDot(container).getAttribute("data-activity-active")).toBe("true");
 
-    act(() => {
-      vi.advanceTimersByTime(DECAY_DURATION);
-    });
+    advanceInSteps(DECAY_DURATION);
 
     expect(getDot(container).className).toMatch(/\bborder\b/);
     expect(getDot(container).className).toMatch(/bg-transparent/);
@@ -148,9 +155,7 @@ describe("ActivityLight", () => {
     // Active: a flip is armed.
     expect(vi.getTimerCount()).toBeGreaterThan(0);
 
-    act(() => {
-      vi.advanceTimersByTime(DECAY_DURATION);
-    });
+    advanceInSteps(DECAY_DURATION);
 
     // Past decay: the effect bails out and does not re-arm.
     expect(vi.getTimerCount()).toBe(0);

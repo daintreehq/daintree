@@ -1,8 +1,27 @@
-import { useCallback, useEffect, useState } from "react";
-import { Eye, EyeOff, FolderOpen, RotateCcw } from "lucide-react";
+import { useCallback, useEffect, useId, useState } from "react";
+import { Eye, EyeOff, FolderOpen } from "lucide-react";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
+import {
+  SETTINGS_CONTROL_WIDTH,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
+import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useProjectStore } from "@/store/projectStore";
+import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import type {
@@ -23,12 +42,16 @@ interface SecretTierInfo {
   plaintext: Set<string>;
 }
 
-const EMPTY_SECRET_INFO: SecretTierInfo = { tier: "plaintext", plaintext: new Set() };
+const EMPTY_SECRET_INFO: SecretTierInfo = { tier: "unavailable", plaintext: new Set() };
 
+/**
+ * Named for what a change reaches, not for the file it lands in: "User" read as
+ * "just me" on a project page, when it means every project on this machine.
+ */
 const SCOPE_BADGE_LABEL: Record<PluginSettingsScope, string> = {
-  user: "User",
-  project: "Project",
-  local: "Local",
+  user: "All projects",
+  project: "This project",
+  local: "This project, this machine",
 };
 
 /**
@@ -37,9 +60,6 @@ const SCOPE_BADGE_LABEL: Record<PluginSettingsScope, string> = {
  * only scope that is not one of these.
  */
 const PROJECT_BOUND_SCOPES: readonly PluginSettingsScope[] = ["project", "local"];
-
-const INPUT_CLASS =
-  "w-full px-2.5 py-1.5 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-default text-text-primary placeholder:text-text-placeholder focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary disabled:opacity-50 disabled:cursor-not-allowed";
 
 function settingScope(def: SettingDefinition): PluginSettingsScope {
   return def.scope ?? "user";
@@ -67,11 +87,31 @@ function toDraft(value: unknown, type: SettingFieldType): string {
   return String(value);
 }
 
-/** One scope's loaded values. `values === null` means "not loaded yet". */
+/**
+ * An enum this small, with labels this short, is a segmented control on the rail
+ * rather than a select — the same control-choice rule every other settings page follows.
+ */
+const SEGMENTED_MAX_OPTIONS = 5;
+const SEGMENTED_MAX_LABEL = 12;
+
+function fitsSegmented(options: readonly string[]): boolean {
+  return (
+    options.length >= 2 &&
+    options.length <= SEGMENTED_MAX_OPTIONS &&
+    options.every((opt) => opt.length <= SEGMENTED_MAX_LABEL)
+  );
+}
+
+/**
+ * One scope's loaded values. `values === null` means "not loaded": still loading, or
+ * `failed` when the read errored — never an empty object, which would present stored
+ * values (and stored secrets) as unset and let a write overwrite what was never read.
+ */
 interface ScopeValues {
   values: Record<string, unknown> | null;
   secrets: Set<string>;
   secretInfo: SecretTierInfo;
+  failed?: boolean;
 }
 
 const UNLOADED_SCOPE: ScopeValues = {
@@ -79,6 +119,7 @@ const UNLOADED_SCOPE: ScopeValues = {
   secrets: new Set(),
   secretInfo: EMPTY_SECRET_INFO,
 };
+const FAILED_SCOPE: ScopeValues = { ...UNLOADED_SCOPE, failed: true };
 const EMPTY_SCOPE: ScopeValues = { values: {}, secrets: new Set(), secretInfo: EMPTY_SECRET_INFO };
 
 /**
@@ -113,7 +154,7 @@ function loadScopeValues(
     })
     .catch((err) => {
       if (cancelled) return;
-      setState(EMPTY_SCOPE);
+      setState(FAILED_SCOPE);
       logError(`Failed to load ${scope} plugin settings for ${pluginId}`, err);
     });
   return () => {
@@ -131,10 +172,12 @@ interface SettingFieldProps {
   secretIsSet: boolean;
   /** At-rest tier new secret writes use right now, for honest disclosure (#9167). */
   secretTier: PluginSecretStorageTier;
-  /** Whether the stored secret value is still plaintext (pre-migration / no keychain at write). */
+  /** Whether the stored secret value is still legacy plaintext, awaiting migration. */
   secretIsPlaintext: boolean;
   /** Whether this field's scope values have finished loading. */
   loaded: boolean;
+  /** Whether this field's scope failed to load, so it has nothing safe to edit. */
+  failed: boolean;
 }
 
 /**
@@ -151,6 +194,7 @@ function SettingField({
   secretTier,
   secretIsPlaintext,
   loaded,
+  failed,
 }: SettingFieldProps) {
   const type = effectiveType(def);
   const scope = settingScope(def);
@@ -163,25 +207,45 @@ function SettingField({
   // Last value committed to storage, to skip no-op writes on blur.
   const [committed, setCommitted] = useState("");
   const [boolValue, setBoolValue] = useState(false);
+  // Whether this scope holds a stored override, so the row can show it is modified.
+  // Tracked here rather than read from `storedValue`, which is the load-time value and
+  // would go stale after the first write or reset.
+  const [overridden, setOverridden] = useState(false);
+  const tierId = useId();
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Secret-specific state.
   const [hasStored, setHasStored] = useState(secretIsSet);
   const [revealed, setRevealed] = useState(false);
-  // Set true once a secret is (re)saved while a keychain is available, so the
-  // tier disclosure clears its "still plaintext" nudge without a form reload.
+  // Whether the secret field holds something the user typed rather than the stored
+  // value fetched by Reveal. Reveal and Hide only change the masking of typed text;
+  // they fetch or drop the stored value only when nothing has been typed.
+  const [secretEdited, setSecretEdited] = useState(false);
+  // Set true once a secret is (re)saved — a secret only saves into the keychain
+  // — so the tier disclosure clears its "still plaintext" nudge without a form
+  // reload.
   const [migratedToKeychain, setMigratedToKeychain] = useState(false);
   // Path-specific: tracks a `mustExist` path that no longer resolves on disk.
   const [pathMissing, setPathMissing] = useState(false);
+  // Enum-specific: the Select's open state, held here so an open list can sit
+  // on the escape stack. This form also renders inside the plugin manager,
+  // which is a non-modal view: there the global keybinding layer takes Escape
+  // at window capture and pops the stack before Radix sees the key, so without
+  // an entry of its own the list's Escape closed the whole manager.
+  const [enumOpen, setEnumOpen] = useState(false);
+  // Resetting a stored secret deletes a credential, so it asks first (D1).
+  const [confirmingSecretClear, setConfirmingSecretClear] = useState(false);
 
   // Initialize from stored value (falling back to the declared default) once the
   // scope's values resolve. Runs once per (re)mount when `loaded` flips true.
   useEffect(() => {
     if (!loaded) return;
+    setOverridden(storedValue !== undefined);
     if (isSecret) {
       setHasStored(secretIsSet);
       setRevealed(false);
       setDraft("");
+      setSecretEdited(false);
       setMigratedToKeychain(false);
       return;
     }
@@ -232,6 +296,7 @@ function SettingField({
       try {
         await window.electron.plugin.setSettingValue(pluginId, def.id, value, scope, projectId);
         setError(null);
+        setOverridden(true);
         return true;
       } catch (err) {
         setError(formatErrorMessage(err, "Couldn't save setting"));
@@ -249,10 +314,12 @@ function SettingField({
     try {
       await window.electron.plugin.deleteSettingValue(pluginId, def.id, scope, projectId);
       setError(null);
+      setOverridden(false);
       if (isSecret) {
         setHasStored(false);
         setRevealed(false);
         setDraft("");
+        setSecretEdited(false);
       } else if (type === "boolean") {
         setBoolValue(def.default === true);
       } else {
@@ -268,9 +335,38 @@ function SettingField({
     }
   }, [pluginId, def.id, def.default, scope, projectId, isSecret, type]);
 
-  const controlsDisabled = !loaded || !scopeReady || saving;
+  // The row greys out only while there is nothing to edit yet; a write in flight
+  // disables just the control, so the label doesn't flicker on every save.
+  const rowDisabled = !loaded || !scopeReady;
+  // The list is only open while there is an enabled enum control to hold it.
+  // A save or reset disabling the field mid-open, or a reload turning the
+  // setting into another type, would otherwise leave the Select forced open on
+  // a disabled control, or leave an invisible escape entry swallowing the next
+  // Escape.
+  const enumListOpen = enumOpen && type === "enum" && !rowDisabled && !saving;
+  useEscapeStack(enumListOpen, () => setEnumOpen(false));
+  useEffect(() => {
+    if (enumOpen && !enumListOpen) setEnumOpen(false);
+  }, [enumOpen, enumListOpen]);
   const fieldId = `plugin-setting-${pluginId}-${def.id}`;
-  const describedBy = error ? `${fieldId}-error` : def.description ? `${fieldId}-desc` : undefined;
+
+  // Optimistic, but a failed write puts the switch back: a control that still shows
+  // the value it couldn't save reads as applied.
+  const toggleBool = (next: boolean) => {
+    setBoolValue(next);
+    void writeValue(next).then((ok) => {
+      if (!ok) setBoolValue(!next);
+    });
+  };
+
+  const chooseEnum = (next: string) => {
+    const previous = committed;
+    setDraft(next);
+    void writeValue(next).then((ok) => {
+      if (ok) setCommitted(next);
+      else setDraft(previous);
+    });
+  };
 
   const commitText = async () => {
     if (draft === committed) return;
@@ -326,6 +422,7 @@ function SettingField({
         projectId
       );
       setDraft(value ?? "");
+      setSecretEdited(false);
       setRevealed(true);
       setError(null);
     } catch (err) {
@@ -345,10 +442,11 @@ function SettingField({
     // write succeeds, so a failed save leaves the typed value recoverable next
     // to the inline error instead of silently discarding it.
     if (await writeValue(value)) {
+      setSecretEdited(false);
       setHasStored(true);
       setRevealed(false);
       setDraft("");
-      if (secretTier === "keychain") setMigratedToKeychain(true);
+      setMigratedToKeychain(true);
     }
   };
 
@@ -372,218 +470,294 @@ function SettingField({
     }
   };
 
-  const renderControl = () => {
-    if (isPath) {
-      return (
-        <div className="flex items-center gap-1.5">
-          <input
-            id={fieldId}
-            type="text"
-            value={draft}
-            readOnly
-            disabled={controlsDisabled}
-            aria-describedby={describedBy}
-            placeholder={type === "file" ? "No file selected" : "No folder selected"}
-            className={INPUT_CLASS}
+  const label = fieldLabel(def);
+  const scopeBadge = <Badge size="xs">{SCOPE_BADGE_LABEL[scope]}</Badge>;
+  const isModified = (isSecret ? hasStored : overridden) && loaded && scopeReady;
+  const shownError =
+    error ??
+    (pathMissing
+      ? `This ${type === "file" ? "file" : "folder"} no longer exists — pick a new one`
+      : null);
+  const rowProps = {
+    id: fieldId,
+    label,
+    description: def.description,
+    accessory: scopeBadge,
+    isModified,
+    // Hidden mid-write so a reset can't race the save it would undo.
+    onReset: saving
+      ? undefined
+      : isSecret
+        ? () => setConfirmingSecretClear(true)
+        : () => void handleReset(),
+    resetAriaLabel: isSecret ? `Clear ${label}` : `Reset ${label} to default`,
+    disabled: rowDisabled,
+    disabledReason: !scopeReady
+      ? "Open a project to edit this setting"
+      : failed
+        ? "Saved value couldn't be read"
+        : undefined,
+    // A failed write is announced where it happened; a missing path is a standing state.
+    error: error ? <span role="alert">{error}</span> : (shownError ?? undefined),
+  };
+
+  if (type === "boolean") {
+    return (
+      <SettingsRow
+        {...rowProps}
+        onRowClick={saving ? undefined : () => toggleBool(!boolValue)}
+        control={({ labelId, descriptionId, disabled }) => (
+          <SettingsSwitch
+            checked={boolValue}
+            disabled={disabled || saving}
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            onCheckedChange={toggleBool}
           />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={controlsDisabled}
-            className="shrink-0 gap-1.5"
-            onClick={() => void handleBrowse()}
-          >
-            <FolderOpen />
-            Browse
-          </Button>
-        </div>
-      );
-    }
-    if (type === "boolean") {
+        )}
+      />
+    );
+  }
+
+  if (type === "enum") {
+    const options = def.options ?? [];
+    const wide = options.some((opt) => opt.length > 24);
+    if (fitsSegmented(options)) {
       return (
-        <SettingsSwitch
-          id={fieldId}
-          checked={boolValue}
-          disabled={controlsDisabled}
-          aria-describedby={describedBy}
-          aria-label={fieldLabel(def)}
-          onCheckedChange={(next) => {
-            setBoolValue(next);
-            void writeValue(next);
-          }}
+        <SettingsRow
+          {...rowProps}
+          control={({ descriptionId, disabled }) => (
+            <SegmentedRadioGroup
+              aria-label={label}
+              aria-describedby={descriptionId}
+              options={options.map((opt) => ({ value: opt, label: opt }))}
+              value={draft}
+              onChange={chooseEnum}
+              disabled={disabled || saving}
+            />
+          )}
         />
       );
     }
-    if (type === "enum") {
-      const options = def.options ?? [];
-      return (
-        <select
-          id={fieldId}
+    return (
+      <SettingsRow
+        {...rowProps}
+        control={({ labelId, descriptionId, disabled }) => (
+          <Select
+            open={enumListOpen}
+            onOpenChange={setEnumOpen}
+            value={draft}
+            disabled={disabled || saving}
+            onValueChange={chooseEnum}
+          >
+            <SelectTrigger
+              aria-labelledby={labelId}
+              aria-describedby={descriptionId}
+              aria-invalid={shownError ? true : undefined}
+              className={SETTINGS_CONTROL_WIDTH[wide ? "wide" : "select"]}
+            >
+              {/* An unset enum shows the placeholder rather than silently adopting the first option. */}
+              <SelectValue placeholder="Select…" />
+            </SelectTrigger>
+            <SelectContent>
+              {options.map((opt) => (
+                <SelectItem key={opt} value={opt}>
+                  {opt}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      />
+    );
+  }
+
+  if (type === "number") {
+    return (
+      <SettingsRow
+        {...rowProps}
+        control={({ labelId, descriptionId, disabled }) => (
+          // Text, not type=number: the draft is validated on commit, and a number input
+          // reports anything it can't parse as "" — which would read as "clear to default".
+          <Input
+            type="text"
+            inputMode="decimal"
+            value={draft}
+            disabled={disabled || saving}
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            aria-invalid={shownError ? true : undefined}
+            className={SETTINGS_CONTROL_WIDTH.number}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => void commitText()}
+          />
+        )}
+      />
+    );
+  }
+
+  if (type === "json") {
+    return (
+      <SettingsRow
+        {...rowProps}
+        layout="stacked"
+        control={({ labelId, descriptionId, disabled }) => (
+          <Textarea
+            variant="code"
+            value={draft}
+            disabled={disabled || saving}
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            aria-invalid={shownError ? true : undefined}
+            rows={4}
+            spellCheck={false}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => void commitText()}
+          />
+        )}
+      />
+    );
+  }
+
+  if (isPath) {
+    return (
+      <SettingsRow
+        {...rowProps}
+        layout="stacked"
+        control={({ labelId, descriptionId, disabled }) => (
+          <div className="flex items-center gap-2">
+            <Input
+              type="text"
+              value={draft}
+              readOnly
+              disabled={disabled || saving}
+              aria-labelledby={labelId}
+              aria-describedby={descriptionId}
+              aria-invalid={shownError ? true : undefined}
+              placeholder={type === "file" ? "No file selected" : "No folder selected"}
+              className="min-w-0 flex-1 font-mono text-xs"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={disabled || saving}
+              className="shrink-0"
+              onClick={() => void handleBrowse()}
+            >
+              <FolderOpen />
+              Browse
+            </Button>
+          </div>
+        )}
+      />
+    );
+  }
+
+  if (isSecret) {
+    const clearConfirm = (
+      <ConfirmDialog
+        isOpen={confirmingSecretClear}
+        variant="destructive"
+        onConfirm={() => {
+          setConfirmingSecretClear(false);
+          void handleReset();
+        }}
+        onClose={() => setConfirmingSecretClear(false)}
+        title={`Clear ${label}?`}
+        description="The saved value is deleted. The plugin can't use it until you enter it again."
+        confirmLabel={`Clear ${label}`}
+        zIndex="nested"
+      />
+    );
+    const tierText =
+      secretTier === "unavailable"
+        ? "Secure storage unavailable — secrets can't be saved on this device"
+        : hasStored && secretIsPlaintext && !migratedToKeychain
+          ? "Stored as plaintext — re-save to move it into the OS keychain"
+          : "Stored in OS keychain";
+    return (
+      <>
+        <SettingsRow
+          {...rowProps}
+          layout="stacked"
+          control={({ labelId, descriptionId, disabled }) => (
+            <div className="grid gap-1.5">
+              <div className="flex items-center gap-2">
+                <Input
+                  type={revealed ? "text" : "password"}
+                  value={draft}
+                  disabled={disabled || saving}
+                  aria-labelledby={labelId}
+                  aria-describedby={
+                    [descriptionId, scopeReady ? tierId : null].filter(Boolean).join(" ") ||
+                    undefined
+                  }
+                  aria-invalid={shownError ? true : undefined}
+                  placeholder={hasStored ? "••••••••" : "Not set"}
+                  autoComplete="off"
+                  className="min-w-0 flex-1"
+                  onChange={(e) => {
+                    setDraft(e.target.value);
+                    setSecretEdited(true);
+                  }}
+                  onBlur={() => void commitSecret()}
+                />
+                {hasStored && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={disabled || saving}
+                    aria-label={revealed ? `Hide ${label}` : `Reveal ${label}`}
+                    // Toggle reveal without firing the input's blur-commit.
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      if (secretEdited) {
+                        setRevealed((v) => !v);
+                      } else if (revealed) {
+                        setRevealed(false);
+                        setDraft("");
+                      } else {
+                        void handleReveal();
+                      }
+                    }}
+                  >
+                    {revealed ? <EyeOff /> : <Eye />}
+                  </Button>
+                )}
+              </div>
+              {scopeReady && (
+                <p id={tierId} className="text-xs text-text-secondary">
+                  {tierText}
+                </p>
+              )}
+            </div>
+          )}
+        />
+        {clearConfirm}
+      </>
+    );
+  }
+
+  // string
+  return (
+    <SettingsRow
+      {...rowProps}
+      layout="stacked"
+      control={({ labelId, descriptionId, disabled }) => (
+        <Input
+          type="text"
           value={draft}
-          disabled={controlsDisabled}
-          aria-describedby={describedBy}
-          className={INPUT_CLASS}
-          onChange={(e) => {
-            const next = e.target.value;
-            setDraft(next);
-            setCommitted(next);
-            void writeValue(next);
-          }}
-        >
-          {/* Empty placeholder so an unset enum doesn't silently adopt the first option. */}
-          {draft === "" && <option value="">Select…</option>}
-          {options.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
-      );
-    }
-    if (type === "json") {
-      return (
-        <textarea
-          id={fieldId}
-          value={draft}
-          disabled={controlsDisabled}
-          aria-describedby={describedBy}
-          rows={4}
-          spellCheck={false}
-          className={`${INPUT_CLASS} font-mono text-xs resize-y`}
+          disabled={disabled || saving}
+          aria-labelledby={labelId}
+          aria-describedby={descriptionId}
+          aria-invalid={shownError ? true : undefined}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => void commitText()}
         />
-      );
-    }
-    if (type === "secret") {
-      return (
-        <div className="flex items-center gap-1.5">
-          <input
-            id={fieldId}
-            type={revealed ? "text" : "password"}
-            value={draft}
-            disabled={controlsDisabled}
-            aria-describedby={describedBy}
-            placeholder={hasStored ? "••••••••" : "Not set"}
-            autoComplete="off"
-            className={INPUT_CLASS}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => void commitSecret()}
-          />
-          {hasStored && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={controlsDisabled}
-              aria-label={revealed ? `Hide ${fieldLabel(def)}` : `Reveal ${fieldLabel(def)}`}
-              // Toggle reveal without firing the input's blur-commit.
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                if (revealed) {
-                  setRevealed(false);
-                  setDraft("");
-                } else {
-                  void handleReveal();
-                }
-              }}
-            >
-              {revealed ? <EyeOff /> : <Eye />}
-            </Button>
-          )}
-        </div>
-      );
-    }
-    // string
-    return (
-      <input
-        id={fieldId}
-        type="text"
-        value={draft}
-        disabled={controlsDisabled}
-        aria-describedby={describedBy}
-        className={INPUT_CLASS}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => void commitText()}
-      />
-    );
-  };
-
-  const canReset =
-    (isSecret ? hasStored : storedValue !== undefined) && loaded && scopeReady && !saving;
-
-  return (
-    <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <label htmlFor={fieldId} className="text-xs font-medium text-text-primary">
-          {fieldLabel(def)}
-        </label>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-3xs uppercase tracking-wide text-text-secondary">
-            {SCOPE_BADGE_LABEL[scope]}
-          </span>
-          {canReset && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Reset ${fieldLabel(def)} to default`}
-              className="text-daintree-text/40 hover:text-daintree-text/70"
-              onClick={() => void handleReset()}
-            >
-              <RotateCcw />
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {/* boolean lays the switch beside the description; others stack. */}
-      {type === "boolean" ? (
-        <div className="flex items-center justify-between gap-3">
-          {def.description ? (
-            <p id={`${fieldId}-desc`} className="text-2xs text-text-secondary">
-              {def.description}
-            </p>
-          ) : (
-            <span />
-          )}
-          {renderControl()}
-        </div>
-      ) : (
-        <>
-          {renderControl()}
-          {isSecret && scopeReady && (
-            <p className="text-2xs text-text-secondary">
-              {secretTier === "plaintext"
-                ? "Stored as plaintext — keychain unavailable"
-                : hasStored && secretIsPlaintext && !migratedToKeychain
-                  ? "Stored as plaintext — re-save to move it into the OS keychain"
-                  : "Stored in OS keychain"}
-            </p>
-          )}
-          {def.description && (
-            <p id={`${fieldId}-desc`} className="text-2xs text-text-secondary">
-              {def.description}
-            </p>
-          )}
-        </>
       )}
-
-      {!scopeReady && (
-        <p className="text-2xs text-text-secondary">Open a project to edit this setting.</p>
-      )}
-      {pathMissing && !error && (
-        <p className="text-2xs text-status-warning">
-          This {type === "file" ? "file" : "folder"} no longer exists — pick a new one.
-        </p>
-      )}
-      {error && (
-        <p id={`${fieldId}-error`} className="text-2xs text-status-danger">
-          {error}
-        </p>
-      )}
-    </div>
+    />
   );
 }
 
@@ -606,6 +780,7 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
   const settings = plugin.manifest.contributes.settings ?? [];
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
 
+  const [reloadKey, setReloadKey] = useState(0);
   const [userScope, setUserScope] = useState<ScopeValues>(UNLOADED_SCOPE);
   const [projectScope, setProjectScope] = useState<ScopeValues>(UNLOADED_SCOPE);
   const [localScope, setLocalScope] = useState<ScopeValues>(UNLOADED_SCOPE);
@@ -624,48 +799,61 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
   useEffect(() => {
     if (!hasUserScope) return;
     return loadScopeValues(pluginId, "user", null, setUserScope);
-  }, [pluginId, hasUserScope]);
+  }, [pluginId, hasUserScope, reloadKey]);
 
   // Project-scoped values: reload on project switch (#9301 re-render requirement).
   useEffect(() => {
     if (!hasProjectScope) return;
     return loadScopeValues(pluginId, "project", projectId, setProjectScope);
-  }, [pluginId, hasProjectScope, projectId]);
+  }, [pluginId, hasProjectScope, projectId, reloadKey]);
 
   // Local scope resolves from the same project id as `project`, so it reloads on
   // exactly the same switches — the file it reaches just isn't in the repo.
   useEffect(() => {
     if (!hasLocalScope) return;
     return loadScopeValues(pluginId, "local", projectId, setLocalScope);
-  }, [pluginId, hasLocalScope, projectId]);
+  }, [pluginId, hasLocalScope, projectId, reloadKey]);
 
   if (settings.length === 0) return null;
 
+  const anyFailed = userScope.failed || projectScope.failed || localScope.failed;
+
+  // One group; the caller owns the heading (a section, or the tab that already names it).
   return (
-    <div className="mt-4 pt-4 border-t border-border-default space-y-4">
-      <h4 className="text-xs font-medium text-text-secondary">Settings</h4>
-      {settings.map((def) => {
-        const scope = settingScope(def);
-        const state = byScope[scope];
-        const loaded = state.values !== null;
-        const values = state.values;
-        const secrets = state.secrets;
-        const secretInfo = state.secretInfo;
-        return (
-          <SettingField
-            // Remount project-bound fields on project switch so drafts reset.
-            key={PROJECT_BOUND_SCOPES.includes(scope) ? `${def.id}:${projectId ?? "none"}` : def.id}
-            def={def}
-            pluginId={pluginId}
-            projectId={projectId}
-            storedValue={values?.[def.id]}
-            secretIsSet={secrets.has(def.id)}
-            secretTier={secretInfo.tier}
-            secretIsPlaintext={secretInfo.plaintext.has(def.id)}
-            loaded={loaded}
-          />
-        );
-      })}
+    <div className="grid gap-3">
+      {anyFailed && (
+        <SettingsLoadErrorBanner
+          message="Couldn't read this plugin's saved settings, so they can't be edited yet"
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
+      )}
+      <SettingsGroup>
+        {settings.map((def) => {
+          const scope = settingScope(def);
+          const state = byScope[scope];
+          const loaded = state.values !== null;
+          const values = state.values;
+          const secrets = state.secrets;
+          const secretInfo = state.secretInfo;
+          return (
+            <SettingField
+              // Remount project-bound fields on project switch so drafts reset.
+              key={
+                PROJECT_BOUND_SCOPES.includes(scope) ? `${def.id}:${projectId ?? "none"}` : def.id
+              }
+              def={def}
+              pluginId={pluginId}
+              projectId={projectId}
+              storedValue={values?.[def.id]}
+              secretIsSet={secrets.has(def.id)}
+              secretTier={secretInfo.tier}
+              secretIsPlaintext={secretInfo.plaintext.has(def.id)}
+              loaded={loaded}
+              failed={state.failed === true}
+            />
+          );
+        })}
+      </SettingsGroup>
     </div>
   );
 }

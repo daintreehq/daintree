@@ -1797,6 +1797,10 @@ export class HttpLifecycle {
       ? {
           contextOverride: paneBinding.actionContext,
           preferredWebContentsId: paneBinding.launchWebContentsId,
+          // A pane is the one session whose tier is an auto-approval line
+          // rather than a ceiling (#12692), so its dialogs may offer to keep
+          // allowing the tool for the rest of the session.
+          offerSessionApproval: true,
         }
       : undefined;
     const preferredWebContentsId = paneBinding?.launchWebContentsId;
@@ -1919,6 +1923,24 @@ export class HttpLifecycle {
       const callerInfo = this.getBearerInfoForSession(sessionId) ?? undefined;
       return this.deps.dispatchAction(actionId, args, confirmed, callerInfo, sessionOrigin);
     };
+
+    /**
+     * Ask the user about a pane call above its tier, without running it
+     * (#12692). Pane-only: every other session's tier is a ceiling, so there is
+     * nothing to ask. Routed exactly as the pane's dispatches are, so the dialog
+     * appears in the view the call would land in — and fails the same way when
+     * that view is gone.
+     */
+    const requestApproval: import("./sessionServer.js").SessionServerDeps["requestApproval"] =
+      paneDispatchOptions !== undefined && boundWorkspaceId !== null
+        ? (actionId, args) =>
+            workspaceDispatch
+              ? workspaceDispatch(boundWorkspaceId, actionId, args, false, sessionOrigin, {
+                  ...paneDispatchOptions,
+                  approvalOnly: true,
+                })
+              : Promise.reject(missingWorkspaceRoute())
+        : undefined;
 
     const getCachedManifest: import("./sessionServer.js").SessionServerDeps["getCachedManifest"] =
       () => {
@@ -2113,6 +2135,7 @@ export class HttpLifecycle {
       requestManifest,
       dispatchAction,
       revealOwnedRun,
+      ...(requestApproval !== undefined ? { requestApproval } : {}),
       handleWaitUntilIdle: this.deps.handleWaitUntilIdle,
       handleWaitUntilIdleBatch: this.deps.handleWaitUntilIdleBatch,
       handleSkillsSearch: this.deps.handleSkillsSearch,

@@ -137,27 +137,43 @@ export const PREBUILT_REDACTIONS: PrebuiltRedaction[] = [
     id: "filepath",
     label: "Strip absolute file paths",
     rules: [
-      // POSIX absolute path with 2+ segments (avoids mangling every lone `/`).
-      regexRule(/\/(?:[^\s/"\\]+\/)+[^\s/"\\]+/),
-      // Windows drive-letter path.
-      regexRule(/[A-Za-z]:\\(?:[^\\/\s"]+\\)*[^\\/\s"]*/),
+      // POSIX absolute path with 2+ segments (a lone `/` is left alone). Folder
+      // segments — anything followed by another `/` — may contain spaces
+      // ("/Users/Alice Smith/Private Client/"), so no fragment of a spaced name
+      // survives; the final segment stops at whitespace so trailing prose does.
+      regexRule(/\/(?:[^/"\\\n]+\/)+[^\s/"\\]*/),
+      // Windows drive-letter path, raw (`C:\Users\x`) or JSON-escaped
+      // (`C:\\Users\\x`). Each separator is one backslash optionally doubled,
+      // consumed whole so the replacement never leaves a dangling escape; folder
+      // segments may contain spaces like POSIX ones.
+      regexRule(/[A-Za-z]:(?:\\\\?|\/)(?:[^\\/"\n]+(?:\\\\?|\/))*[^\\/\s"]*/),
     ],
   },
 ];
 
 /** Human-readable labels for diagnostic sections; unlisted keys render as-is. */
 export const SECTION_LABELS: Record<string, string> = {
-  metadata: "Metadata",
-  runtime: "Runtime",
-  os: "Operating System",
-  display: "Display",
+  metadata: "Report metadata",
+  runtime: "App runtime",
+  os: "Operating system",
+  display: "Displays",
   gpu: "GPU",
-  process: "Process",
-  tools: "Tools",
+  process: "Processes",
+  tools: "Installed tools",
   git: "Git",
   config: "Configuration",
   terminals: "Terminals",
-  mcpAudit: "MCP Audit",
+  flowControl: "Terminal flow control",
+  lifecycleLedger: "Terminal lifecycle events",
+  mcpAudit: "MCP audit summary",
+  projectViews: "Project views",
+  rendererMemory: "Window memory",
+  memoryTrends: "Memory trends",
+  memoryAttribution: "Memory by project",
+  resourceState: "Resource limits",
+  workerGovernance: "Background workers",
+  whySlow: "Slowness snapshot",
+  counts: "Open projects and views",
   logs: "Logs",
   events: "Events",
 };

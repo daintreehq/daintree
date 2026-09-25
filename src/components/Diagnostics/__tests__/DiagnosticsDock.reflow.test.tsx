@@ -35,7 +35,6 @@ vi.mock("../DiagnosticsActions", () => ({
   LogsActions: () => null,
   EventsActions: () => null,
   TelemetryActions: () => null,
-  PerfActions: () => null,
 }));
 
 vi.mock("@/store/perfMetricsStore", () => {

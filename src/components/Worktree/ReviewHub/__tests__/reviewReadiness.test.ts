@@ -110,6 +110,29 @@ describe("deriveReviewReadiness", () => {
       expect(summary.pushReady).toBe(false);
     });
 
+    it("gives every blocker that names conflicted files the way to them", () => {
+      const conflicted = {
+        conflicted: ["src/a.ts"],
+        conflictedFiles: [{ path: "src/a.ts", xy: "UU" as const, label: "both modified" }],
+      };
+      for (const repoState of [
+        "CLEAN",
+        "DIRTY",
+        "REBASING",
+        "MERGING",
+        "CHERRY_PICKING",
+      ] as const) {
+        const summary = derive({ status: makeStatus({ repoState, ...conflicted }) });
+        const naming = summary.blockers.filter((b) =>
+          /conflicted file/.test(`${b.label} ${b.detail ?? ""}`)
+        );
+        expect(naming.length, repoState).toBeGreaterThan(0);
+        for (const blocker of naming) {
+          expect(blocker.action?.kind, `${repoState}: ${blocker.id}`).toBe("focus-conflicts");
+        }
+      }
+    });
+
     it("labels merge, cherry-pick, and revert operations", () => {
       for (const [repoState, label] of [
         ["MERGING", "Merge in progress"],

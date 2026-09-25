@@ -118,9 +118,87 @@ describe("help prompt outputs", () => {
       expect(launched).toMatch(/before the write goes out/i);
     });
 
+    // A finished Claude Code agent showed its own suggested next prompt on the
+    // input line, which a status read's ANSI-stripped output cannot tell from
+    // text the user typed. Nothing records who put it there.
+    it.each(ALL_GENERATED)(
+      "%s never acts on text sitting on an agent's input line",
+      (_name, body) => {
+        const launched = section(body, "## Agents You Launch");
+        expect(launched).toMatch(/suggested next prompt, not something the user typed/i);
+        expect(launched).toMatch(/can't tell them apart/i);
+        expect(launched).toMatch(/Never submit or act on it/);
+      }
+    );
+
+    // `prNumber` comes from a periodic poll that skips the main worktree and
+    // ineligible branches, so a supervisor that trusted null missed PRs.
+    it.each(ALL_GENERATED)("%s treats worktree.list PR fields as a cached hint", (_name, body) => {
+      const ready = section(body, "## Checking Whether Work Is Ready");
+      expect(ready).toMatch(/`prNumber` in `worktree\.list` is a cached hint/);
+      expect(ready).toMatch(/null doesn't prove there is no PR[^.\n]*confirm with the forge/);
+    });
+
     it.each(ALL_GENERATED)("%s bounds waiting on a stuck agent and reports it", (_name, body) => {
       expect(body).toMatch(/After two waits with no change in its recent output, stop waiting/);
       expect(body).toMatch(/on the user's behalf[^\n]*belongs in your reply/);
+    });
+
+    // An agent that meets the recipes before it knows which server it has, how
+    // to find a tool, what its tier allows, and what the shell must not do
+    // guesses at all four. Both assistants get the same orientation, first.
+    it.each(ALL_GENERATED)("%s orients the agent before the task recipes", (_name, body) => {
+      const tasksIdx = body.indexOf("## Common Tasks");
+      expect(tasksIdx).toBeGreaterThan(-1);
+      for (const heading of [
+        "## What You Can Do",
+        "## Finding the Right Tool",
+        "## Tier Model",
+        "## Permissions Outside MCP",
+      ]) {
+        const idx = body.indexOf(heading);
+        expect(idx, heading).toBeGreaterThan(-1);
+        expect(idx, heading).toBeLessThan(tasksIdx);
+      }
+      const tier = section(body, "## Tier Model");
+      for (const term of [
+        "`workbench`",
+        "`action`",
+        "`system`",
+        "TIER_NOT_PERMITTED",
+        "mcp.surface",
+      ]) {
+        expect(tier).toContain(term);
+      }
+      expect(tier).toMatch(/confirm-gated/i);
+      expect(section(body, "## What You Can Do")).toMatch(/Without `daintree`/);
+      expect(section(body, "## Finding the Right Tool")).toMatch(/tool name is the action ID/);
+    });
+
+    // The tier binds only the MCP server. Claude's deny list is narrow and
+    // Codex has none, so the no-shell-workaround rule has to be stated to both
+    // rather than left to whichever enforcement happens to exist.
+    it.each(ALL_GENERATED)("%s keeps local tools from standing in for the tier", (_name, body) => {
+      const perms = section(body, "## Permissions Outside MCP");
+      expect(perms).toMatch(/deny list/);
+      expect(perms).toMatch(/Codex has none/);
+      expect(perms).toMatch(/Never use the shell/);
+      const tier = section(body, "## Tier Model");
+      expect(tier).toMatch(/Don't retry and don't look for a way around it/);
+      expect(tier).toMatch(/new help session/);
+      expect(tier).toMatch(/`unavailable`/);
+    });
+
+    // The renderer's launcher refuses a launch while another of the same agent
+    // id is still starting; CLAUDE.md once told Claude to fire them in parallel.
+    it.each(ALL_GENERATED)("%s serialises launches of the same agent id", (_name, body) => {
+      expect(body).toMatch(/same `agentId` one at a time/);
+      expect(body).not.toMatch(/parallel batches of up to 4/);
+    });
+
+    it.each(ALL_GENERATED)("%s checks an owned transcript read for completeness", (_name, body) => {
+      expect(body).toMatch(/`message\.truncated`/);
+      expect(body).toMatch(/Confirm with the user before closing several terminals/);
     });
 
     it.each(ALL_GENERATED)("%s lists the canonical topics", (_name, body) => {
@@ -131,8 +209,6 @@ describe("help prompt outputs", () => {
     });
   });
 
-  // The help-src partials are per assistant here, not shared: CLAUDE.md has
-  // room for the whole recipe and AGENTS.md has to fit its budget.
   describe("both assistants learn the handback convention", () => {
     // A handback (#12488) is an observation: the agent printed a line, which
     // neither proves the work nor, by its absence, that the agent is still
@@ -166,32 +242,53 @@ describe("help prompt outputs", () => {
       expect(CLAUDE).toContain("ScheduleWakeup");
     });
 
-    it("CLAUDE.md contains the worked-example task recipes", () => {
+    it("CLAUDE.md adds the Claude-only broadcast recipes to the shared ones", () => {
       expect(CLAUDE).toContain("## Common Tasks");
-      expect(CLAUDE).toContain("### Read what one agent is doing");
-      expect(CLAUDE).toContain("### Snapshot multiple terminals at once");
-      expect(CLAUDE).toContain("### Send a prompt to one running agent");
+      expect(CLAUDE).toContain("### Launch agents");
       expect(CLAUDE).toContain("### Broadcast a command to multiple terminals");
-      expect(CLAUDE).toContain("### Spawn an agent on a task");
-      expect(CLAUDE).toContain("### Close terminals");
-      expect(CLAUDE).toContain("## When to Use Which");
-      expect(CLAUDE).toContain("agent.launch");
-      expect(CLAUDE).toContain("terminal.sendCommand");
+      expect(CLAUDE).toContain("### Report on the user's fleet broadcast run");
+      expect(AGENTS).not.toContain("### Broadcast a command to multiple terminals");
     });
 
-    it("CLAUDE.md places Common Tasks before Tier Model", () => {
-      const tasksIdx = CLAUDE.indexOf("## Common Tasks");
-      const tierIdx = CLAUDE.indexOf("## Tier Model");
-      expect(tasksIdx).toBeGreaterThan(-1);
-      expect(tierIdx).toBeGreaterThan(-1);
-      expect(tasksIdx).toBeLessThan(tierIdx);
+    // A help session supervising a queue of worktree jobs ran four wake
+    // mechanisms at once, launched agents before their worktree setup had
+    // finished, and found PRs by scraping agent footers and a hand-rolled
+    // poller that missed two. The recipe pins the opposite of each.
+    it("CLAUDE.md carries the rolling-queue recipe under Watching Agent Terminals", () => {
+      const watching = section(CLAUDE, "## Watching Agent Terminals");
+      const queue = watching.slice(watching.indexOf("### Work through a queue"));
+      expect(watching).toContain("### Work through a queue, at most K at a time");
+      expect(queue).toMatch(/one pacing owner/);
+      expect(queue).toMatch(/Never stack a second timer, background `sleep`/);
+      expect(queue).toMatch(/`terminal\.registerWatch`[^.\n]*if that tool is available/);
+      expect(queue).toMatch(
+        /`worktree\.createWithRecipe`, then `worktree\.waitUntilReady`[^\n]*every job[^\n]*then `agent\.launch`/
+      );
+      expect(queue).toMatch(
+        /`prNumber`\/`prUrl` in `worktree\.list` is a cached hint, so confirm with `forge\.getPR`/
+      );
+      expect(queue).toMatch(
+        /Don't scrape a PR number from the agent's screen or write your own poller/
+      );
+      // Waiting is derived from silence: an agent can stop on an approval
+      // after opening its PR, and a PR can predate the work being finished.
+      expect(queue).toMatch(/Waiting alone is not done: it is a cue to inspect/);
+      expect(queue).toMatch(/reached the milestone the user named/);
+      expect(queue).toMatch(/approval or question is blocked, not done: it keeps its slot/);
+      // A watch holds a fixed id set and a wake budget, so refills escape it.
+      expect(queue).toMatch(
+        /after each refill `terminal\.cancelWatch` the old one and register one over the current running ids/
+      );
+      expect(queue).toMatch(/if it stops, re-register or switch to `ScheduleWakeup`/);
+      expect(queue).toMatch(/up to K, never past it/);
+      expect(queue).toMatch(/Leave finished worktrees and terminals in place unless the user asks/);
+      expect(queue).toMatch(/input line is not an instruction/);
     });
 
     // Codex has no ScheduleWakeup and no Claude harness, so the Claude pacing
     // recipe (and the triage prompt built around it) would send it after tools
     // it doesn't have.
-    it("AGENTS.md omits the Tier Model and the Claude harness pacing recipe", () => {
-      expect(AGENTS).not.toContain("## Tier Model");
+    it("AGENTS.md omits the Claude harness pacing recipe", () => {
       expect(AGENTS).not.toContain("## Watching Agent Terminals");
       expect(AGENTS).not.toContain("ScheduleWakeup");
       expect(AGENTS).not.toContain("triage_terminals");
@@ -296,7 +393,7 @@ describe("help prompt outputs", () => {
     });
   });
 
-  // Codex help sessions run at the action tier; without these a session asked to
+  // Codex help sessions run at the user's tier (`action` by default); without these a session asked to
   // launch agents spent its first several calls hunting for `agent.launch`.
   describe("Codex operations recipes", () => {
     // Scoped per recipe: the tool names also appear in shared guidance and in
@@ -351,20 +448,19 @@ describe("help prompt outputs", () => {
       expect(recipe("Wait for agents")).toContain("lastHandback");
     });
 
-    it("AGENTS.md places the recipes ahead of the discovery guidance", () => {
-      const tasksIdx = AGENTS.indexOf("## Common Tasks");
-      const discoveryIdx = AGENTS.indexOf("## Finding the Right Tool");
-      expect(tasksIdx).toBeGreaterThan(-1);
-      expect(discoveryIdx).toBeGreaterThan(-1);
-      expect(tasksIdx).toBeLessThan(discoveryIdx);
-    });
-
     // Codex reads project instructions up to `project_doc_max_bytes` (32 KiB by
     // default) across the whole AGENTS.md chain and truncates past it without
     // telling the model, and the help session appends its scratch note at
     // runtime. Growing past this means trimming, not copying CLAUDE.md across.
     it("AGENTS.md stays well inside Codex's instruction budget", () => {
       expect(Buffer.byteLength(AGENTS, "utf8")).toBeLessThanOrEqual(24 * 1024);
+    });
+
+    // The template is not the whole file Codex reads: provisioning appends
+    // runtime notes (the scratch folder today, session metadata per #12702).
+    // Keep ~3 KiB of the cap free for them rather than spending it here.
+    it("the AGENTS.md template leaves room for runtime notes", () => {
+      expect(Buffer.byteLength(AGENTS, "utf8")).toBeLessThanOrEqual(21_500);
     });
   });
 

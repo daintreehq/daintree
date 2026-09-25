@@ -101,7 +101,7 @@ test.describe.serial("Terminal divider resize coordination", () => {
     const panelIds = await getGridPanelIds(window);
     expect(panelIds).toHaveLength(2);
 
-    const divider = window.getByRole("separator", { name: "Resize panels" });
+    const divider = window.getByRole("separator", { name: "Resize left pane" });
     await expect(divider).toBeVisible({ timeout: T_LONG });
 
     const baseline = await waitForConvergence(window, panelIds);

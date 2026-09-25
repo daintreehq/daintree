@@ -1,5 +1,4 @@
 import { type ReactElement } from "react";
-import { AlertCircle } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { actionService } from "@/services/ActionService";
@@ -51,7 +50,6 @@ export function FleetFailureBanner(): ReactElement | null {
 
   return (
     <InlineStatusBanner
-      icon={AlertCircle}
       severity="error"
       title="Broadcast failed"
       description={description}

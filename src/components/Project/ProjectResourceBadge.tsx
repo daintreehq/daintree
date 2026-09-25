@@ -1,14 +1,14 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, Coffee, TriangleAlert } from "lucide-react";
 import { projectClient, systemClient } from "@/clients";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { SidebarFooterGlyph } from "@/components/Layout/SidebarFooterGlyph";
 import { logError } from "@/utils/logger";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { actionService } from "@/services/ActionService";
 import type { ProcessMetricEntry, HeapStats, DiagnosticsInfo } from "@shared/types/ipc/system";
-import type { BulkProjectStatsEntry } from "@shared/types/ipc/project";
 import type {
   CompositeMemorySnapshot,
   TerminalWorkloadSlice,
@@ -31,6 +31,10 @@ const POPOVER_POLL_MS = 4_000;
 const SAMPLES_PER_MIN = 60_000 / BADGE_POLL_MS;
 // Cadence for advancing the "updated Ns ago" freshness label while the popover is open.
 const FRESHNESS_TICK_MS = 1_000;
+/** Popover data older than this gets an age line; below it the reading is simply current. */
+const STALE_AFTER_SEC = 10;
+/** Three badge polls: past this, the fallback app-memory reading has stalled. */
+const APP_MEMORY_FRESH_MS = BADGE_POLL_MS * 3;
 
 function formatUptime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -56,74 +60,61 @@ const IDLE_DOT_CLASS = "border border-text-secondary bg-transparent";
 
 interface AggregateStats {
   runningProjects: number;
-  totalMemoryMB: number;
+  /** Last measured app memory, or null before the first successful read. */
+  totalMemoryMB: number | null;
+  /**
+   * Whether `totalMemoryMB` is recent enough to act on. A failed read keeps the
+   * last figure but, once it is older than a few polls, the figure stops
+   * counting: no warning, and "Unavailable" in the popover.
+   */
+  memoryFresh: boolean;
+  memorySampledAt: number | null;
   projects: Array<{ id: string; name: string }>;
 }
 
+/** Each read settles on its own; a null is that read failing, not the popover. */
 interface PopoverData {
-  processMetrics: ProcessMetricEntry[];
-  heapStats: HeapStats;
-  diagnosticsInfo: DiagnosticsInfo;
-  projectStats: Record<string, BulkProjectStatsEntry>;
+  processMetrics: ProcessMetricEntry[] | null;
+  heapStats: HeapStats | null;
+  diagnosticsInfo: DiagnosticsInfo | null;
 }
 
-function HeapBar({ heapStats }: { heapStats: HeapStats }) {
-  const barColor =
-    heapStats.percent > 85
-      ? "bg-status-error/80"
-      : heapStats.percent > 70
-        ? "bg-status-warning/80"
-        : "bg-daintree-text/40";
+function settled<T>(result: PromiseSettledResult<T>, what: string): T | null {
+  if (result.status === "fulfilled") return result.value;
+  logError(`[ProjectResourceBadge] Failed to fetch ${what}`, result.reason);
+  return null;
+}
 
+/** One label/value line. Values are tabular so a column of them lines up. */
+function MemoryRow({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between text-3xs">
-        <span className="text-text-secondary">V8 Heap</span>
-        <span className="font-mono text-text-secondary">
-          {heapStats.usedMB.toFixed(0)} / {heapStats.limitMB}MB ({heapStats.percent.toFixed(0)}%)
-        </span>
-      </div>
-      <div className="h-1.5 rounded-full bg-daintree-text/5 overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-[width] ${barColor}`}
-          style={{ width: `${Math.min(heapStats.percent, 100)}%` }}
-        />
-      </div>
-      {heapStats.externalMB > 50 && (
-        <div className="text-4xs text-text-placeholder font-mono">
-          External: {heapStats.externalMB.toFixed(0)}MB
-        </div>
-      )}
+    <div className="flex items-baseline justify-between gap-3 text-xs">
+      <span className="truncate text-text-secondary" title={title}>
+        {label}
+      </span>
+      <span className="shrink-0 tabular-nums text-text-primary">{value}</span>
     </div>
   );
 }
 
-function MemoryRow({ label, value }: { label: string; value: string }) {
+function SectionLabel({ children, id }: { children: ReactNode; id?: string }) {
   return (
-    <div className="flex items-center justify-between gap-2 text-3xs">
-      <span className="text-text-secondary leading-tight">{label}</span>
-      <span className="font-mono tabular-nums text-text-secondary shrink-0">{value}</span>
+    <div id={id} className="text-2xs font-medium text-text-secondary">
+      {children}
     </div>
   );
 }
 
-function MemorySummary({
-  appMemoryMB,
-  workloads,
-  lastGoodWorkloads,
-  systemAvailableMB,
-}: {
-  appMemoryMB: number;
-  /** Current terminal-workload slice, or null when no snapshot has arrived. */
-  workloads: TerminalWorkloadSlice | null;
-  /** Most recent slice that was actually measured, kept across unavailable reads. */
-  lastGoodWorkloads: TerminalWorkloadSlice | null;
-  systemAvailableMB: number | null;
-}) {
-  // Prefer the live measurement. On an unavailable read fall back to the
-  // retained values the pty-host kept from its last successful sweep (present
-  // even on the first open after a ps failure), then to the last slice this
-  // renderer saw measured — never a fake 0, never a silently-dropped row.
+/**
+ * Which terminal slice to show: the live reading, then the values the pty-host
+ * retained from its last successful sweep (present even on the first open after
+ * a ps failure), then the last slice this renderer saw measured. Never a fake 0,
+ * never a silently-dropped row.
+ */
+function pickWorkloads(
+  workloads: TerminalWorkloadSlice | null,
+  lastGood: TerminalWorkloadSlice | null
+): { shown: TerminalWorkloadSlice | null; note: string | null } {
   const measured = workloads?.available ? workloads : null;
   const retained =
     measured === null &&
@@ -132,37 +123,137 @@ function MemorySummary({
     (workloads.totalMemoryMb > 0 || workloads.processCount > 0)
       ? workloads
       : null;
-  const shown = measured ?? retained ?? lastGoodWorkloads;
-  const workloadNote = measured?.stale
+  const shown = measured ?? retained ?? lastGood;
+  const note = measured?.stale
     ? `Last sampled ${Math.max(1, Math.round((measured.ageMs ?? 0) / 1000))}s ago`
     : measured === null && shown !== null
       ? "Process table unavailable — showing last reading"
       : workloads !== null && !workloads.available
         ? "Process table unavailable"
         : null;
+  return { shown, note };
+}
 
+function MemorySummary({
+  appMemoryMB,
+  workloads,
+  workloadNote,
+  systemAvailableMB,
+}: {
+  appMemoryMB: number | null;
+  workloads: TerminalWorkloadSlice | null;
+  workloadNote: string | null;
+  systemAvailableMB: number | null;
+}) {
   return (
     <div className="space-y-1">
       <MemoryRow
-        label="Working set (sums shared pages per process)"
-        value={formatMemory(appMemoryMB)}
+        label="Daintree app"
+        value={appMemoryMB !== null ? formatMemory(appMemoryMB) : "Unavailable"}
       />
-      {(workloads !== null || shown !== null) && (
-        <MemoryRow
-          label="Terminal workloads"
-          value={shown !== null ? formatMemory(shown.totalMemoryMb) : "Unavailable"}
-        />
-      )}
+      {/* Always a row once the first read settles: a snapshot that fails from
+          the start reads "Unavailable" here rather than dropping the line. */}
+      <MemoryRow
+        label="Terminal programs"
+        title="Dev servers, agents and tools your terminals started"
+        value={workloads !== null ? formatMemory(workloads.totalMemoryMb) : "Unavailable"}
+      />
       {workloadNote !== null && (
-        <div className="text-4xs text-status-warning leading-tight">{workloadNote}</div>
+        <div className="flex items-center gap-1 text-2xs text-text-secondary">
+          <TriangleAlert
+            className="h-3 w-3 shrink-0 text-status-warning"
+            data-resource-glyph=""
+            aria-hidden="true"
+          />
+          {workloadNote}
+        </div>
       )}
       {systemAvailableMB !== null && (
-        <MemoryRow label="System available" value={formatMemory(systemAvailableMB)} />
+        <MemoryRow label="Available on this machine" value={formatMemory(systemAvailableMB)} />
       )}
-      {shown !== null && (
-        <div className="text-4xs text-text-placeholder leading-tight">
-          Workloads = dev servers, agents, and tools your terminals launched
-        </div>
+    </div>
+  );
+}
+
+/** Rows shown before the list folds; the heaviest consumers are what a glance is for. */
+const PROJECT_ROWS_FOLDED = 5;
+
+/**
+ * Terminal memory per project, heaviest first, from the same snapshot as the
+ * "Terminal programs" total so the two can never disagree about what they
+ * measured or when.
+ *
+ * It used to list every registered project from a second, separate read —
+ * thirteen "0 terms ~0MB" rows in a real twenty-project session — and suffix
+ * each with its top process, which on macOS is a full executable path because
+ * `ps -o comm` reports one. Idle projects now have no row, and the process
+ * detail lives nowhere in the summary.
+ */
+function ProjectBreakdown({
+  workloads,
+  projectNames,
+}: {
+  workloads: TerminalWorkloadSlice;
+  projectNames: ReadonlyMap<string, string>;
+}) {
+  const [showAll, setShowAll] = useState(false);
+
+  const rows = workloads.byProject
+    .filter((entry) => entry.terminalCount > 0 || entry.memoryMb > 0)
+    .map((entry) => ({
+      key: entry.projectId ?? "__unassigned__",
+      name:
+        entry.projectId === null
+          ? "Other terminals"
+          : (projectNames.get(entry.projectId) ?? "Unknown project"),
+      memoryMb: entry.memoryMb,
+      // Unassigned terminals sort last whatever their size: they are the
+      // remainder, not a project competing for the top of the list.
+      unassigned: entry.projectId === null,
+    }))
+    .sort(
+      (a, b) =>
+        Number(a.unassigned) - Number(b.unassigned) ||
+        b.memoryMb - a.memoryMb ||
+        a.name.localeCompare(b.name)
+    );
+
+  if (rows.length === 0) return null;
+
+  const folded = rows.length > PROJECT_ROWS_FOLDED + 1;
+  const visible = folded && !showAll ? rows.slice(0, PROJECT_ROWS_FOLDED) : rows;
+
+  return (
+    <div className="space-y-1">
+      <SectionLabel>Terminal memory by project</SectionLabel>
+      <div id="resource-project-rows" className="space-y-1">
+        {visible.map((row) => (
+          <MemoryRow
+            key={row.key}
+            label={row.name}
+            title={row.name}
+            value={formatMemory(row.memoryMb)}
+          />
+        ))}
+      </div>
+      {folded && (
+        <button
+          type="button"
+          onClick={() => setShowAll((prev) => !prev)}
+          aria-expanded={showAll}
+          aria-controls="resource-project-rows"
+          className="-mx-1 flex min-h-6 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-2xs text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors"
+        >
+          {showAll ? (
+            <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
+          ) : (
+            <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+          )}
+          {/* Stable, as toggle labels are: the chevron and aria-expanded carry
+              the state. No count, because the list can hold an unassigned-
+              terminals row that the footer's "N projects active" never counts. */}
+          Show all
+        </button>
       )}
     </div>
   );
@@ -171,92 +262,54 @@ function MemorySummary({
 function ProcessTable({ metrics }: { metrics: ProcessMetricEntry[] }) {
   return (
     <div className="space-y-1">
-      <div className="text-3xs text-text-secondary font-medium">Daintree processes</div>
+      <div className="flex items-baseline justify-between gap-2 text-2xs text-text-secondary">
+        <span>Daintree processes</span>
+        <span className="flex shrink-0 gap-2">
+          <span>Memory</span>
+          <span className="w-10 text-right">CPU</span>
+        </span>
+      </div>
       <div className="space-y-px">
         {metrics.map((proc) => {
           const label = formatProcessLabel(proc);
           return (
             <div
               key={proc.pid}
-              className="flex items-center justify-between text-3xs font-mono py-0.5"
+              className="flex items-baseline justify-between gap-2 text-2xs tabular-nums"
             >
               <span
-                className="text-text-secondary truncate max-w-[140px]"
+                className="min-w-0 truncate text-text-secondary"
                 title={`${label} (${proc.pid})`}
               >
-                {label} <span className="text-text-placeholder">({proc.pid})</span>
+                {label}
               </span>
-              <div className="flex gap-2 text-text-secondary shrink-0">
-                <span>{proc.memoryMB}MB</span>
+              <span className="flex shrink-0 gap-2 text-text-secondary">
+                <span>{formatMemory(proc.memoryMB)}</span>
                 <span className="w-10 text-right">{proc.cpuPercent}%</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function ProjectBreakdown({
-  projects,
-  projectStats,
-}: {
-  projects: Array<{ id: string; name: string }>;
-  projectStats: Record<string, BulkProjectStatsEntry>;
-}) {
-  const entries = projects.map((p) => ({ ...p, stats: projectStats[p.id] })).filter((p) => p.stats);
-
-  if (entries.length === 0) return null;
-
-  const hasEstimates = entries.some((entry) => entry.stats!.terminalMemoryMB === undefined);
-
-  return (
-    <div className="space-y-1">
-      <div className="text-3xs text-text-secondary font-medium">Projects</div>
-      <div className="space-y-px">
-        {entries.map((entry) => {
-          const s = entry.stats!;
-          // Prefer measured terminal-tree memory; the `~` prefix marks the
-          // terminalCount*50 estimate used when the OS table couldn't be read.
-          const memLabel =
-            s.terminalMemoryMB !== undefined
-              ? formatMemory(s.terminalMemoryMB)
-              : `~${formatMemory(s.estimatedMemoryMB)}`;
-          return (
-            <div
-              key={entry.id}
-              className="flex items-center justify-between text-3xs font-mono py-0.5 gap-2"
-            >
-              <span className="text-text-secondary truncate min-w-0">
-                {entry.name}
-                {s.topProcess && (
-                  <span className="text-text-placeholder"> · {s.topProcess.name}</span>
-                )}
               </span>
-              <div className="flex gap-2 text-text-secondary shrink-0">
-                <span>{s.terminalCount} terms</span>
-                <span className="tabular-nums">{memLabel}</span>
-              </div>
             </div>
           );
         })}
       </div>
-      {hasEstimates && (
-        <div className="text-4xs text-text-placeholder leading-tight">
-          ~ estimated from terminal count, not measured
-        </div>
-      )}
     </div>
   );
 }
 
+/**
+ * Everything a developer chasing a leak wants and nobody glancing at the
+ * footer does: per-process memory and CPU, the main process's JS heap, uptime,
+ * the memory trend and event-loop lag. Folded by default.
+ */
 function DiagnosticsSection({
   diagnosticsInfo,
+  processMetrics,
+  heapStats,
   trend,
   trendSamples,
 }: {
-  diagnosticsInfo: DiagnosticsInfo;
+  diagnosticsInfo: DiagnosticsInfo | null;
+  processMetrics: ProcessMetricEntry[] | null;
+  heapStats: HeapStats | null;
   trend: TrendDirection;
   trendSamples: number[];
 }) {
@@ -264,18 +317,26 @@ function DiagnosticsSection({
 
   const trendDeltaMB =
     trendSamples.length >= 2 ? trendSamples[trendSamples.length - 1]! - trendSamples[0]! : 0;
+  // The window is the span the samples actually cover — one poll interval
+  // between each — not a fixed two minutes: a freshly opened popover has
+  // seconds of history, not minutes.
+  const windowSec = Math.max(0, trendSamples.length - 1) * (BADGE_POLL_MS / 1000);
+  const windowLabel = windowSec < 90 ? `${windowSec}s` : `${Math.round(windowSec / 60)} min`;
   const trendText =
     trend === "up"
-      ? `Memory grew ${Math.abs(Math.round(trendDeltaMB))}MB in last 2 min`
+      ? `Grew ${formatMemory(Math.abs(trendDeltaMB))} in ${windowLabel}`
       : trend === "down"
-        ? `Memory decreased ${Math.abs(Math.round(trendDeltaMB))}MB in last 2 min`
-        : "Memory stable";
+        ? `Fell ${formatMemory(Math.abs(trendDeltaMB))} in ${windowLabel}`
+        : "Stable";
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
       <button
-        className="text-3xs text-text-secondary font-medium hover:text-text-primary transition-colors flex items-center gap-1"
-        onClick={() => setExpanded(!expanded)}
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        aria-expanded={expanded}
+        aria-controls="resource-diagnostics"
+        className="-mx-1 flex min-h-6 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-2xs font-medium text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors"
       >
         {expanded ? (
           <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -285,13 +346,32 @@ function DiagnosticsSection({
         Diagnostics
       </button>
       {expanded && (
-        <div className="space-y-1 text-3xs font-mono text-text-secondary pl-2">
-          <div>{trendText}</div>
-          <div>Uptime: {formatUptime(diagnosticsInfo.uptimeSeconds)}</div>
-          {diagnosticsInfo.eventLoopP99Ms > 50 && (
-            <div className="text-status-warning">
-              Event loop P99: {diagnosticsInfo.eventLoopP99Ms}ms
-            </div>
+        <div id="resource-diagnostics" className="space-y-3">
+          <div className="space-y-1">
+            <MemoryRow label="App memory trend" value={trendText} />
+            <MemoryRow
+              label="Main process JS heap"
+              value={
+                heapStats
+                  ? `${formatMemory(heapStats.usedMB)} of ${formatMemory(heapStats.limitMB)}`
+                  : "Unavailable"
+              }
+            />
+            <MemoryRow
+              label="Uptime"
+              value={diagnosticsInfo ? formatUptime(diagnosticsInfo.uptimeSeconds) : "Unavailable"}
+            />
+            {diagnosticsInfo && diagnosticsInfo.eventLoopP99Ms > 50 && (
+              <MemoryRow
+                label="Event loop delay (p99)"
+                value={`${diagnosticsInfo.eventLoopP99Ms} ms`}
+              />
+            )}
+          </div>
+          {processMetrics ? (
+            <ProcessTable metrics={processMetrics} />
+          ) : (
+            <div className="text-2xs text-text-secondary">Process list unavailable</div>
           )}
         </div>
       )}
@@ -313,12 +393,19 @@ interface ProjectResourceBadgeProps {
    * wants the verdict alone.
    */
   holdingWakeLock?: boolean;
+  /** Pinned to the right of the row — the footer puts Run command here. */
+  trailing?: ReactNode;
 }
 
-export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourceBadgeProps = {}) {
+export function ProjectResourceBadge({
+  holdingWakeLock = false,
+  trailing,
+}: ProjectResourceBadgeProps = {}) {
   const [stats, setStats] = useState<AggregateStats>({
     runningProjects: 0,
-    totalMemoryMB: 0,
+    totalMemoryMB: null,
+    memoryFresh: false,
+    memorySampledAt: null,
     projects: [],
   });
   const [isLoading, setIsLoading] = useState(true);
@@ -333,6 +420,7 @@ export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourc
   const [nowTs, setNowTs] = useState(() => Date.now());
   const [thresholds, setThresholds] = useState<MemoryThresholds>(FALLBACK_THRESHOLDS);
   const samplesRef = useRef<number[]>([]);
+  const popoverContentRef = useRef<HTMLDivElement>(null);
   // Mirror into state so JSX doesn't read the ref during render (React Compiler).
   const [samples, setSamples] = useState<number[]>([]);
 
@@ -354,26 +442,41 @@ export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourc
     return total;
   });
 
-  const memoryState = getMemoryState(stats.totalMemoryMB, thresholds);
+  // The warning reads the same fresh-or-nothing figure the popover shows, so a
+  // stalled read can neither raise it nor hold it up.
+  const memoryState =
+    stats.memoryFresh && stats.totalMemoryMB !== null
+      ? getMemoryState(stats.totalMemoryMB, thresholds)
+      : "normal";
   const trend = getTrendDirection(samples, SAMPLES_PER_MIN);
-  const projectIdsKey = useMemo(() => stats.projects.map((p) => p.id).join(","), [stats.projects]);
+  const projectNames = useMemo(
+    () => new Map(stats.projects.map((p) => [p.id, p.name])),
+    [stats.projects]
+  );
 
-  const systemAvailableMB = popoverData?.diagnosticsInfo.systemAvailableMB ?? null;
+  const systemAvailableMB = popoverData?.diagnosticsInfo?.systemAvailableMB ?? null;
   const ageSec =
     popoverSampledAt !== null ? Math.max(0, Math.round((nowTs - popoverSampledAt) / 1000)) : null;
-  const ageLabel =
-    ageSec === null ? null : ageSec < 2 ? "Updated just now" : `Updated ${ageSec}s ago`;
+  // Silent while fresh. The popover polls every 4s, so "Updated just now" on
+  // every open said nothing; an age only earns its line once the reads stall.
+  const ageLabel = ageSec !== null && ageSec >= STALE_AFTER_SEC ? `Updated ${ageSec}s ago` : null;
 
   const fetchStats = useCallback(async () => {
     try {
-      const [projects, appMetrics] = await Promise.all([
+      const [projectsResult, metricsResult] = await Promise.allSettled([
         projectClient.getAll(),
         systemClient.getAppMetrics(),
       ]);
+      // Without the project list there is nothing to count against.
+      if (projectsResult.status === "rejected") throw projectsResult.reason;
+      const projects = projectsResult.value;
 
-      // Suppress the reading rather than reporting a misleading "0MB" when the
-      // main process couldn't read process metrics.
-      if (appMetrics.unavailable) return null;
+      // A failed metrics read — rejected or reported unavailable — withholds
+      // the memory figure, never a fake 0, but not the project count, which
+      // comes from the stats store and has nothing to do with whether main
+      // could read its own processes.
+      const appMetrics = settled(metricsResult, "app metrics");
+      const memoryMB = appMetrics && !appMetrics.unavailable ? appMetrics.totalMemoryMB : null;
 
       const currentStats = useProjectStatsStore.getState().stats;
       let running = 0;
@@ -381,15 +484,15 @@ export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourc
         if ((currentStats[p.id]?.processCount ?? 0) > 0) running++;
       }
 
-      const nextSamples = [
-        ...samplesRef.current.slice(-(MAX_SAMPLES - 1)),
-        appMetrics.totalMemoryMB,
-      ];
+      const nextSamples =
+        memoryMB === null
+          ? samplesRef.current
+          : [...samplesRef.current.slice(-(MAX_SAMPLES - 1)), memoryMB];
 
       return {
         nextSamples,
         runningProjects: running,
-        totalMemoryMB: appMetrics.totalMemoryMB,
+        totalMemoryMB: memoryMB,
         projects: projects.map((p: Project) => ({ id: p.id, name: p.name })),
       };
     } catch (error) {
@@ -451,10 +554,16 @@ export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourc
         if (cancelled || gen !== generation || !result) return;
         samplesRef.current = result.nextSamples;
         setSamples(result.nextSamples);
-        setStats({
-          runningProjects: result.runningProjects,
-          totalMemoryMB: result.totalMemoryMB,
-          projects: result.projects,
+        const now = Date.now();
+        setStats((prev) => {
+          const sampledAt = result.totalMemoryMB !== null ? now : prev.memorySampledAt;
+          return {
+            runningProjects: result.runningProjects,
+            totalMemoryMB: result.totalMemoryMB ?? prev.totalMemoryMB,
+            memorySampledAt: sampledAt,
+            memoryFresh: sampledAt !== null && now - sampledAt <= APP_MEMORY_FRESH_MS,
+            projects: result.projects,
+          };
         });
         setIsLoading(false);
       } finally {
@@ -538,21 +647,23 @@ export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourc
       // here at all — Radix keeps the popover open across both.
       if (document.hidden || isProjectViewCached()) return;
       try {
-        const [processMetrics, heapStats, diagnosticsInfo, snapshot] = await Promise.all([
+        // Settled one by one. The memory summary and the diagnostics come from
+        // unrelated reads, and a single rejection in a `Promise.all` used to
+        // hold back a perfectly good snapshot along with everything else.
+        const [metricsResult, heapResult, infoResult, snapshotResult] = await Promise.allSettled([
           systemClient.getProcessMetrics(),
           systemClient.getHeapStats(),
           systemClient.getDiagnosticsInfo(),
-          // Isolate a snapshot failure: the rest of the popover still updates,
-          // and the memory rows degrade to their last-good/unavailable states.
-          systemClient.getMemorySnapshot().catch(() => null),
+          systemClient.getMemorySnapshot(),
         ]);
-
-        const projectIds = projectIdsKey ? projectIdsKey.split(",") : [];
-        const projectStats =
-          projectIds.length > 0 ? await projectClient.getBulkStats(projectIds) : {};
+        const snapshot = snapshotResult.status === "fulfilled" ? snapshotResult.value : null;
 
         if (!cancelled) {
-          setPopoverData({ processMetrics, heapStats, diagnosticsInfo, projectStats });
+          setPopoverData({
+            processMetrics: settled(metricsResult, "process metrics"),
+            heapStats: settled(heapResult, "heap stats"),
+            diagnosticsInfo: settled(infoResult, "diagnostics info"),
+          });
           // A failed snapshot poll clears the live slice so old readings can't
           // masquerade as current; last-good values still render via
           // lastGoodWorkloads with their "showing last reading" note.
@@ -574,7 +685,7 @@ export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourc
       cancelled = true;
       clearInterval(interval);
     };
-  }, [open, projectIdsKey]);
+  }, [open]);
 
   // Tick a 1s clock while the popover is open so the "updated Ns ago" label
   // advances and a stalled metric path reveals itself instead of looking fresh.
@@ -606,7 +717,18 @@ export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourc
   }, [showReadout]);
 
   if (!showReadout) {
-    return null;
+    // The readout waits for its first read, but whatever the footer pinned
+    // beside it must not: Run command has nothing to do with whether the
+    // metrics read has landed or failed.
+    if (trailing == null) return null;
+    return (
+      <div
+        data-sidebar-status-bar=""
+        className="flex items-center justify-end shrink-0 w-full min-h-7"
+      >
+        {trailing}
+      </div>
+    );
   }
 
   // The count is a separate fact from the activity state and stays in words;
@@ -630,32 +752,65 @@ export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourc
   const announcement =
     stats.runningProjects > 0 ? `${isWorking ? "Working" : "Idle"}, ${readoutLabel}` : readoutLabel;
 
+  // The snapshot's own measurement when it has one. Otherwise the badge's
+  // 10s read of the same `getAppMetrics` source, but only while that read is
+  // itself recent: a metrics path that has stalled shows "Unavailable" rather
+  // than a number that silently stopped moving.
+  const appMemoryMB = memorySnapshot?.electron.available
+    ? memorySnapshot.electron.totalWorkingSetMb
+    : stats.memoryFresh
+      ? stats.totalMemoryMB
+      : null;
+  const popoverMemoryState =
+    appMemoryMB === null ? "normal" : getMemoryState(appMemoryMB, thresholds);
+
+  const { shown: shownWorkloads, note: workloadNote } = pickWorkloads(
+    memorySnapshot?.terminalWorkloads ?? null,
+    lastGoodWorkloads
+  );
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <div
-        data-sidebar-status-bar=""
-        className="border-t border-divider surface-chrome flex items-center shrink-0 w-full min-h-7"
-      >
+      {/* The footer owns the surface and the top divider; this row is its
+          bottom line, with the readout on the left and whatever the footer
+          pins to the right. */}
+      <div data-sidebar-status-bar="" className="flex items-center shrink-0 w-full min-h-7">
         <PopoverTrigger asChild>
           <button
             data-status-readout=""
-            aria-label={`${announcement} — open resource breakdown`}
+            aria-label={`${announcement} — open resource usage`}
             className="px-4 py-1.5 flex items-center flex-1 min-w-0 self-stretch hover:bg-overlay-soft transition-colors cursor-pointer"
           >
             <div className="flex items-center gap-2 min-w-0">
               {/* Decorative: the working/idle state it encodes is carried in
                   words by the label and the live region, so announcing the mark
                   as well would say everything twice. */}
-              <span
-                key={`${isWorking}-${memoryState}`}
-                aria-hidden="true"
-                data-working={isWorking ? "true" : "false"}
-                className={`status-mark inline-flex h-2 w-2 rounded-full shrink-0 ${
-                  isWorking ? WORKING_DOT_CLASS : IDLE_DOT_CLASS
-                } animate-diagnostics-flash`}
-              />
+              <SidebarFooterGlyph>
+                <span
+                  key={`${isWorking}-${memoryState}`}
+                  aria-hidden="true"
+                  data-working={isWorking ? "true" : "false"}
+                  className={`status-mark inline-flex h-2 w-2 rounded-full shrink-0 ${
+                    isWorking ? WORKING_DOT_CLASS : IDLE_DOT_CLASS
+                  } animate-diagnostics-flash`}
+                />
+              </SidebarFooterGlyph>
               <span className="text-2xs tabular-nums text-text-secondary font-medium truncate">
-                {readoutLabel}
+                {/* The row shares its width with Run command, so at the 200px
+                    floor the count drops its noun ("7 active") rather than
+                    truncating mid-word. One string either way, so the text
+                    never exists twice. */}
+                {stats.runningProjects > 0 ? (
+                  <>
+                    {stats.runningProjects}
+                    <span className="@max-[280px]/footer:hidden">
+                      {` project${stats.runningProjects !== 1 ? "s" : ""}`}
+                    </span>
+                    {" active"}
+                  </>
+                ) : (
+                  readoutLabel
+                )}
               </span>
             </div>
           </button>
@@ -664,41 +819,99 @@ export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourc
             its ancestor. Wrapping the button would re-announce the whole strip
             on every press; nesting the region inside it puts a live region in a
             control's own subtree. Visually redundant with the label above, so
-            it is screen-reader only.
-
-            It announces the working state in words, not just the count: the
-            mark is the only thing that carries it visually, and a run whose
-            project count never changes would otherwise go from working to idle
-            in complete silence. */}
+            it is screen-reader only. */}
         <span role="status" className="sr-only">
           {announcement}
         </span>
         {memoryState === "critical" && (
           <span
             data-testid="sidebar-status-items"
-            className="ml-auto flex items-center gap-1 pr-3 shrink-0 text-2xs font-medium text-text-primary"
+            title="Daintree's own memory use is high — open the readout for details"
+            className="flex items-center pl-1 pr-2 shrink-0"
           >
-            {/* The triangle carries the severity colour; the words stay neutral.
-                Status-coloured body text misses 4.5:1 on most of the fifteen
-                themes — there is no status *text* ramp — and "High memory" has
-                to be readable on all of them. */}
-            <TriangleAlert className="h-3 w-3 shrink-0 text-status-warning" aria-hidden="true" />
-            High memory
+            {/* The glyph alone on the row; the words live in the popover. With
+                the count on the left and Run command on the right, a worded
+                chip left 320px with "4 a…" — the warning cost the row its
+                first answer. The triangle carries the severity colour. */}
+            <TriangleAlert
+              className="h-3 w-3 shrink-0 text-status-warning"
+              data-resource-glyph=""
+              aria-hidden="true"
+            />
+            <span className="sr-only">High app memory</span>
           </span>
         )}
+        {trailing}
       </div>
-      <PopoverContent side="top" align="start" sideOffset={8} className="w-72 p-3">
+      <PopoverContent
+        side="top"
+        align="start"
+        sideOffset={8}
+        collisionPadding={8}
+        aria-labelledby="resource-usage-title"
+        // Focus the popover itself, not its first control. Radix's default
+        // landed on the keep-awake row and painted a ring on a settings link
+        // nobody had reached for; leaving focus on the readout instead strands
+        // keyboard users, because the content is portalled to the end of the
+        // document and Tab from the readout never reaches it.
+        ref={popoverContentRef}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          popoverContentRef.current?.focus({ preventScroll: true, focusVisible: false });
+        }}
+        className="w-72 p-3"
+      >
         <div className="space-y-3">
-          {/* The keep-awake hold used to be a coffee cup pinned to the strip,
-              where it cost a permanent unlabelled glyph to say what the mark
-              now says. The explanation and its settings route survive here.
+          <div className="space-y-1.5">
+            {popoverMemoryState === "critical" && (
+              <div className="flex items-start gap-1.5 text-2xs text-text-primary">
+                <TriangleAlert
+                  className="mt-px h-3 w-3 shrink-0 text-status-warning"
+                  data-resource-glyph=""
+                  aria-hidden="true"
+                />
+                Daintree's own memory use is high for this machine
+              </div>
+            )}
+            {/* Mounted before the data lands: it names the popover, and the
+                popover takes focus on open, so a heading that waited for the
+                first read left focus on an unnamed dialog. */}
+            <div className="flex items-baseline justify-between gap-2">
+              <SectionLabel id="resource-usage-title">Memory</SectionLabel>
+              {ageLabel && <span className="text-2xs text-text-secondary">{ageLabel}</span>}
+            </div>
+            {popoverData ? (
+              <MemorySummary
+                appMemoryMB={appMemoryMB}
+                workloads={shownWorkloads}
+                workloadNote={workloadNote}
+                systemAvailableMB={systemAvailableMB}
+              />
+            ) : (
+              <Skeleton label="Loading resource details" className="space-y-1.5">
+                <SkeletonBone className="h-3 w-full" />
+                <SkeletonBone className="h-3 w-5/6" />
+                <SkeletonBone className="h-3 w-3/4" />
+              </Skeleton>
+            )}
+          </div>
+          {popoverData && (
+            <>
+              {shownWorkloads !== null && (
+                <ProjectBreakdown workloads={shownWorkloads} projectNames={projectNames} />
+              )}
+              <p className="text-2xs leading-snug text-text-secondary">
+                Each process is counted in full, so memory two processes share is counted twice and
+                these totals run high.
+              </p>
+            </>
+          )}
+          {/* The keep-awake hold used to be a coffee cup pinned to the strip.
+              Its state and settings route survive here as one line.
 
               Mounted unconditionally, with only its wording changing: the hold
               ends on main's schedule, so a row that appeared only while holding
-              could vanish under a keyboard user mid-popover — the same
-              focus-dropping problem the cup's own `useLayoutEffect` existed to
-              patch. The shared close-time restoration does not cover a child
-              disappearing while the popover stays open. */}
+              could vanish under a keyboard user mid-popover. */}
           <button
             type="button"
             onClick={() =>
@@ -708,60 +921,27 @@ export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourc
                 { source: "user" }
               )
             }
-            className="flex w-full items-start gap-2 rounded-[var(--radius-sm)] p-1 text-left hover:bg-overlay-soft transition-colors"
+            aria-label={`${
+              holdingWakeLock ? "Keeping this machine awake" : "Not keeping this machine awake"
+            } — keep-awake settings`}
+            className="-mx-1 flex min-h-6 w-[calc(100%+0.5rem)] items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-2xs text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors"
           >
-            <Coffee
-              className="h-3.5 w-3.5 shrink-0 mt-0.5 text-text-secondary"
-              aria-hidden="true"
-            />
-            <span className="flex flex-col gap-0.5 min-w-0">
-              <span className="text-2xs font-medium text-text-primary">
-                {holdingWakeLock ? "Keeping this machine awake" : "Not holding sleep off"}
-              </span>
-              <span className="text-3xs text-text-secondary leading-tight">
-                {holdingWakeLock
-                  ? "Idle sleep is held off while an agent is working. The display can still turn off."
-                  : "Idle sleep is allowed right now. Change when Daintree holds it off in settings."}
-              </span>
+            <Coffee className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">
+              {holdingWakeLock ? "Keeping this machine awake" : "Not keeping this machine awake"}
             </span>
+            <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
           </button>
-          {popoverData ? (
-            <>
-              <MemorySummary
-                appMemoryMB={
-                  memorySnapshot?.electron.available
-                    ? memorySnapshot.electron.totalWorkingSetMb
-                    : stats.totalMemoryMB
-                }
-                workloads={memorySnapshot?.terminalWorkloads ?? null}
-                lastGoodWorkloads={lastGoodWorkloads}
-                systemAvailableMB={systemAvailableMB}
-              />
-              <ProjectBreakdown projects={stats.projects} projectStats={popoverData.projectStats} />
-              <ProcessTable metrics={popoverData.processMetrics} />
-              <HeapBar heapStats={popoverData.heapStats} />
+          {popoverData && (
+            <div className="border-t border-divider pt-2">
               <DiagnosticsSection
                 diagnosticsInfo={popoverData.diagnosticsInfo}
+                processMetrics={popoverData.processMetrics}
+                heapStats={popoverData.heapStats}
                 trend={trend}
                 trendSamples={samples}
               />
-              <div className="pt-1 border-t border-divider space-y-0.5">
-                {ageLabel && <div className="text-4xs text-text-placeholder">{ageLabel}</div>}
-                <div className="text-4xs text-text-placeholder leading-tight">
-                  Figures sum working-set memory and count shared pages once per process
-                </div>
-              </div>
-            </>
-          ) : (
-            <Skeleton label="Loading resource details" className="space-y-3">
-              <div className="space-y-1.5">
-                <SkeletonBone className="h-3 w-16" />
-                <SkeletonBone className="h-3 w-full" />
-                <SkeletonBone className="h-3 w-5/6" />
-                <SkeletonBone className="h-3 w-3/4" />
-              </div>
-              <SkeletonBone className="h-1.5 w-full rounded-full" />
-            </Skeleton>
+            </div>
           )}
         </div>
       </PopoverContent>

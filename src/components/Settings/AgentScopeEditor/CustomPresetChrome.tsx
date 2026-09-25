@@ -1,5 +1,10 @@
-import { Copy, Trash2, Pencil } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { Pencil, TriangleAlert } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PresetColorPicker } from "../PresetColorPicker";
+import { SETTINGS_CONTROL_WIDTH, SettingsRow } from "../SettingsGroup";
 import type { AgentPreset } from "@/config/agents";
 
 interface CustomPresetChromeProps {
@@ -8,15 +13,17 @@ interface CustomPresetChromeProps {
   isEditing: boolean;
   editName: string;
   onEditNameChange: (value: string) => void;
-  onCommitEdit: () => void;
+  /** Returns false when the name was refused and editing continues. */
+  onCommitEdit: () => boolean;
   onCancelEdit: () => void;
+  renameError: string | null;
   onStartEdit: (preset: AgentPreset) => void;
   onColorChange: (color: string | undefined) => void;
   onDisplayTitleChange: (value: string) => void;
   onDuplicate: (preset: AgentPreset) => void;
-  onDelete: (presetId: string) => void;
 }
 
+/** Name, colour and display title of a custom preset — the rows that identify it. */
 export function CustomPresetChrome({
   selectedPreset,
   agentColor,
@@ -25,95 +32,170 @@ export function CustomPresetChrome({
   onEditNameChange,
   onCommitEdit,
   onCancelEdit,
+  renameError,
   onStartEdit,
   onColorChange,
   onDisplayTitleChange,
   onDuplicate,
-  onDelete,
 }: CustomPresetChromeProps) {
+  const renameButtonRef = useRef<HTMLButtonElement>(null);
+  // Enter and Escape unmount the input that has focus. Hand focus back to the
+  // rename button then — but not after an ordinary blur, where the user already
+  // put focus somewhere else on purpose.
+  const restoreFocusRef = useRef(false);
+  const errorId = useId();
+  useEffect(() => {
+    if (!isEditing && restoreFocusRef.current) {
+      restoreFocusRef.current = false;
+      renameButtonRef.current?.focus();
+    }
+  }, [isEditing]);
+
   return (
-    <div
-      id="agents-preset-detail"
-      className="rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30 px-3 py-2.5 space-y-2.5"
-    >
-      <div className="flex items-center gap-2">
-        <PresetColorPicker
-          color={selectedPreset.color}
-          agentColor={agentColor}
-          onChange={onColorChange}
-          ariaLabel="Preset color"
-        />
-        {isEditing ? (
-          <input
-            className="flex-1 text-sm font-medium bg-surface-canvas border border-border-strong rounded px-2 py-0.5 focus:outline-hidden"
-            value={editName}
-            onChange={(e) => onEditNameChange(e.target.value)}
-            onBlur={onCommitEdit}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                onCommitEdit();
-              }
-              if (e.key === "Escape") {
-                e.preventDefault();
-                e.stopPropagation();
-                onCancelEdit();
-              }
-            }}
-            autoFocus
-            data-testid="preset-edit-input"
-            placeholder="Preset name..."
-          />
-        ) : (
-          <button
-            className="flex items-center gap-1.5 text-sm font-medium text-text-primary hover:text-daintree-text/80 hover:underline underline-offset-2 transition-colors text-left"
-            onClick={() => onStartEdit(selectedPreset)}
-            aria-label={`Edit ${selectedPreset.name}`}
-            title="Click to rename"
-          >
-            <span>{selectedPreset.name}</span>
-            <Pencil size={12} className="text-daintree-text/30" />
-          </button>
-        )}
-        <div className="flex items-center gap-1.5 ml-auto shrink-0">
-          <button
-            className="text-daintree-text/30 hover:text-text-primary transition-colors"
+    <>
+      <SettingsRow
+        id="agents-preset-detail"
+        label={
+          <span className="inline-flex items-center gap-2">
+            <PresetColorPicker
+              color={selectedPreset.color}
+              agentColor={agentColor}
+              onChange={onColorChange}
+              ariaLabel="Preset color"
+            />
+            {isEditing ? (
+              <input
+                className="flex-1 text-sm font-medium bg-surface-canvas border border-border-strong rounded-[var(--radius-sm)] px-2 py-0.5 focus:outline-hidden focus-visible:border-accent-primary"
+                value={editName}
+                onChange={(e) => onEditNameChange(e.target.value)}
+                onBlur={() => void onCommitEdit()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    restoreFocusRef.current = true;
+                    if (!onCommitEdit()) restoreFocusRef.current = false;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    restoreFocusRef.current = true;
+                    onCancelEdit();
+                  }
+                }}
+                autoFocus
+                aria-label="Preset name"
+                aria-invalid={renameError ? true : undefined}
+                aria-describedby={renameError ? errorId : undefined}
+                data-testid="preset-edit-input"
+                placeholder="Preset name"
+              />
+            ) : (
+              <button
+                ref={renameButtonRef}
+                type="button"
+                className="flex items-center gap-1.5 text-sm font-medium text-text-primary hover:underline underline-offset-2 text-left"
+                onClick={() => onStartEdit(selectedPreset)}
+                aria-label={`Edit ${selectedPreset.name}`}
+                title="Rename"
+              >
+                <span>{selectedPreset.name}</span>
+                <Pencil size={12} className="text-text-secondary" aria-hidden="true" />
+              </button>
+            )}
+          </span>
+        }
+        labelText={selectedPreset.name}
+        description="The colour marks this preset on its launch button and panel tab"
+        error={
+          isEditing && renameError ? (
+            // Local neutral text with a glyph: the row's own error colour is
+            // status-coloured body text, which fails contrast on most themes.
+            <span
+              id={errorId}
+              role="alert"
+              className="flex items-start gap-1.5 text-text-secondary"
+            >
+              <TriangleAlert
+                className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
+                aria-hidden="true"
+              />
+              <span>{renameError}</span>
+            </span>
+          ) : undefined
+        }
+        control={
+          <Button
+            size="sm"
+            variant="outline"
             onClick={() => onDuplicate(selectedPreset)}
             aria-label={`Duplicate ${selectedPreset.name}`}
-            title="Duplicate"
           >
-            <Copy size={13} />
-          </button>
-          <button
-            className="text-daintree-text/30 hover:text-status-error transition-colors"
-            onClick={() => onDelete(selectedPreset.id)}
-            aria-label={`Delete ${selectedPreset.name}`}
-            title="Delete"
+            Duplicate
+          </Button>
+        }
+      />
+      <SettingsRow
+        label="Display title"
+        description="Shown on the panel tab and launch button instead of the preset name"
+        control={({ labelId, descriptionId }) => (
+          <Input
+            id="preset-display-title-input"
+            className={SETTINGS_CONTROL_WIDTH.wide}
+            value={selectedPreset.displayTitle ?? ""}
+            onChange={(e) => onDisplayTitleChange(e.target.value)}
+            maxLength={100}
+            placeholder={selectedPreset.name}
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            data-testid="preset-display-title-input"
+          />
+        )}
+      />
+    </>
+  );
+}
+
+/**
+ * Deleting a custom preset is local and irreversible, so it confirms (D1) and sits as
+ * the last row of the preset's group, never beside its routine actions.
+ */
+export function PresetDeleteRow({
+  preset,
+  onDelete,
+}: {
+  preset: AgentPreset;
+  onDelete: (presetId: string) => void;
+}) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  return (
+    <>
+      <SettingsRow
+        label={`Delete ${preset.name}`}
+        labelText={preset.name}
+        description="Sessions that launch with it switch back to the agent's own settings"
+        control={
+          <Button
+            size="sm"
+            variant="ghost-danger"
+            onClick={() => setConfirmOpen(true)}
+            aria-label={`Delete ${preset.name}`}
           >
-            <Trash2 size={13} />
-          </button>
-        </div>
-      </div>
-      <div className="space-y-1">
-        <label
-          htmlFor="preset-display-title-input"
-          className="text-xs font-medium text-text-secondary"
-        >
-          Display title
-        </label>
-        <input
-          id="preset-display-title-input"
-          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-1.5 text-sm focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-placeholder"
-          value={selectedPreset.displayTitle ?? ""}
-          onChange={(e) => onDisplayTitleChange(e.target.value)}
-          maxLength={100}
-          placeholder={`Uses preset name (${selectedPreset.name})`}
-          data-testid="preset-display-title-input"
-        />
-        <p className="text-xs text-text-secondary select-text">
-          Shown on the panel tab and launch button. Leave empty to use the preset name.
-        </p>
-      </div>
-    </div>
+            Delete preset
+          </Button>
+        }
+      />
+      <ConfirmDialog
+        isOpen={confirmOpen}
+        variant="destructive"
+        onClose={() => setConfirmOpen(false)}
+        onConfirm={() => {
+          setConfirmOpen(false);
+          onDelete(preset.id);
+        }}
+        title={`Delete '${preset.name}'?`}
+        description="Its environment variables, arguments and fallbacks are deleted, and new sessions launch with the agent's own settings instead."
+        confirmLabel="Delete preset"
+      />
+    </>
   );
 }

@@ -1,10 +1,11 @@
 import { vi, type Mock } from "vitest";
 
 /**
- * The launch outcomes execa 9.6.1 actually produces, verified against the
+ * The launch outcomes execa 10 actually produces, verified against the
  * installed package. None of them is a synchronous throw: `execa()` converts
  * every broken command into an async rejection, and its early-error path hands
- * back a real `ChildProcess` that never emits anything at all.
+ * back a real `ChildProcess` that never emits anything at all. Node's own
+ * events and `unref()` live on `nodeChildProcess`, not on the execa promise.
  */
 export type ChildBehaviour =
   /** A detached GUI editor: 'spawn' fires and the promise outlives us. */
@@ -20,13 +21,23 @@ export type ChildBehaviour =
   /** Nothing happens until the test drives it — see `ChildDouble` controls. */
   | "manual";
 
-export interface ChildDouble {
+/** The Node `ChildProcess` execa 10 exposes as `subprocess.nodeChildProcess`. */
+export interface NodeChildDouble {
   unref: Mock;
-  catch: Mock;
-  then: Mock;
   once: Mock;
   on: Mock;
   listenerCount: (event: string) => number;
+}
+
+/**
+ * The execa subprocess: a promise carrying `nodeChildProcess`. It deliberately
+ * has no `unref` or event methods of its own, as in execa 10, so code that
+ * reaches for them on the wrong object throws instead of passing.
+ */
+export interface ChildDouble {
+  nodeChildProcess: NodeChildDouble;
+  catch: Mock;
+  then: Mock;
   /** Drive a "manual" child from the test, one channel at a time. */
   emitSpawn: () => void;
   rejectLaunch: (error?: Error) => void;
@@ -58,23 +69,27 @@ export function makeChildDouble(behaviour: ChildBehaviour): ChildDouble {
     rejectPromise = reject;
   });
 
-  const child: ChildDouble = {
+  const nodeChildProcess: NodeChildDouble = {
     unref: vi.fn(),
-    catch: vi.fn((onRejected: (reason: unknown) => unknown) => promise.catch(onRejected)),
-    then: vi.fn((onFulfilled?: () => unknown, onRejected?: () => unknown) =>
-      promise.then(onFulfilled, onRejected)
-    ),
     once: vi.fn((event: string, listener: () => void) => {
       register(event, listener, true);
-      return child;
+      return nodeChildProcess;
     }),
     // Present so an event-only implementation written against `on` registers
     // here and hangs, rather than dying on a missing method and looking fixed.
     on: vi.fn((event: string, listener: () => void) => {
       register(event, listener, false);
-      return child;
+      return nodeChildProcess;
     }),
     listenerCount: (event: string) => listeners.get(event)?.length ?? 0,
+  };
+
+  const child: ChildDouble = {
+    nodeChildProcess,
+    catch: vi.fn((onRejected: (reason: unknown) => unknown) => promise.catch(onRejected)),
+    then: vi.fn((onFulfilled?: () => unknown, onRejected?: () => unknown) =>
+      promise.then(onFulfilled, onRejected)
+    ),
     emitSpawn: () => emit("spawn"),
     rejectLaunch: (error = new Error("spawn ENOENT")) => rejectPromise(error),
   };

@@ -4,6 +4,7 @@ import {
   getGroupedInsertionIndex,
   getToolbarDividerAfterIds,
   orderToolbarButtonsByGroup,
+  stepToolbarButton,
   type ResolveToolbarButtonGroup,
 } from "../toolbarButtonGrouping";
 import { getToolbarButtonGroup } from "../toolbarButtonMetadata";
@@ -212,5 +213,70 @@ describe("getGroupedInsertionIndex", () => {
     spliced.splice(index, 0, "gemini");
 
     expect(orderToolbarButtonsByGroup(spliced, resolve)).toEqual(projected);
+  });
+});
+
+describe("stepToolbarButton", () => {
+  const left: AnyToolbarButtonId[] = [
+    "launcher",
+    "claude",
+    "gemini",
+    "codex",
+    "terminal",
+    "file-browser",
+    "settings",
+  ];
+  const all = () => true;
+
+  it("swaps exactly the button and its rendered neighbour, leaving every other slot alone", () => {
+    for (const id of left) {
+      for (const offset of [-1, 1] as const) {
+        const next = stepToolbarButton(left, id, offset, all, resolve);
+        if (!next) continue;
+        const from = left.indexOf(id);
+        const to = next.indexOf(id);
+        expect(to - from).toBe(offset);
+        expect(next[from]).toBe(left[to]);
+        next.forEach((other, i) => {
+          if (i !== from && i !== to) expect(other).toBe(left[i]);
+        });
+      }
+    }
+  });
+
+  it("never carries a button across a group boundary on the grouped side", () => {
+    for (const id of left) {
+      for (const offset of [-1, 1] as const) {
+        const next = stepToolbarButton(left, id, offset, all, resolve);
+        if (!next) {
+          const neighbour = left[left.indexOf(id) + offset];
+          expect(neighbour === undefined || resolve(neighbour) !== resolve(id)).toBe(true);
+          continue;
+        }
+        expect(next.map(resolve)).toEqual(left.map(resolve));
+      }
+    }
+  });
+
+  it("steps past ids nobody can see instead of swapping with them", () => {
+    const withHidden: AnyToolbarButtonId[] = ["claude", "acme.gone", "gemini"];
+    const rendered = visibleOnly(["claude", "gemini"]);
+
+    const next = stepToolbarButton(withHidden, "gemini", -1, rendered);
+
+    expect(next).not.toBeNull();
+    expect(next!.filter(rendered)).toEqual(["gemini", "claude"]);
+    expect(next).toContain("acme.gone");
+  });
+
+  it("round-trips: a step down undoes a step up", () => {
+    const right: AnyToolbarButtonId[] = ["copy-tree", "notification-center", "settings"];
+    const up = stepToolbarButton(right, "settings", -1, all)!;
+    expect(stepToolbarButton(up, "settings", 1, all)).toEqual(right);
+  });
+
+  it("offers no step off either end of the list", () => {
+    expect(stepToolbarButton(left, "launcher", -1, all, resolve)).toBeNull();
+    expect(stepToolbarButton(left, "settings", 1, all, resolve)).toBeNull();
   });
 });

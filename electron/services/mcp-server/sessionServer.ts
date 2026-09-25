@@ -27,6 +27,7 @@ import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
 import { onWorkspaceResidencyChanged, readWorkspaceBindingState } from "../workspaceResidency.js";
 import type { AuditOutcome } from "./auditLog.js";
+import type { McpDispatchAuthorization } from "../../../shared/types/ipc/mcpServer.js";
 import type {
   McpTier,
   ParsedResourceUri,
@@ -48,6 +49,7 @@ import {
   MCP_SERVER_INSTRUCTIONS,
   TIER_NOT_PERMITTED_CODE,
   CONFIRMATION_REQUIRED_CODE,
+  USER_REJECTED_CODE,
   MCP_DEDUP_ALLOWLIST,
   MCP_DEDUP_TTL_MS,
   MCP_DEDUP_MAX_ENTRIES_PER_SESSION,
@@ -88,6 +90,8 @@ import {
   isWithheldFromBoundSession,
   type SessionSurfacePolicy,
   isTierPermitted,
+  isApprovalRequestable,
+  isTierAutoConfirmed,
   buildToolInputSchema,
   buildAnnotations,
   buildToolOutputSchema,
@@ -95,7 +99,7 @@ import {
   parseToolArguments,
   filterIntrospectionResultForSession,
   type TargetPolicySessionSnapshot,
-  getTierPermittedActionIds,
+  getReachableActionIds,
   readSearchLimit,
   readListPaging,
   readRequestedActionId,
@@ -613,6 +617,18 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     args: unknown,
     confirmed?: boolean
   ) => Promise<{ envelope: DispatchEnvelope; raised: boolean }>;
+  /**
+   * Put a call to the user without running it (#12692). Supplied only for an
+   * agent pane, and its presence is what makes the session one: a pane's
+   * project tier is the line below which calls run without asking, and above
+   * which they ask here instead of being refused. Every other session's tier
+   * stays a hard ceiling.
+   *
+   * Resolves with the dialog's decision in `confirmationDecision` (and
+   * `approvalScope` when the user chose to keep allowing the tool); rejects
+   * exactly as `dispatchAction` does when the view cannot be reached.
+   */
+  requestApproval?: (actionId: string, args: unknown) => Promise<DispatchEnvelope>;
   handleWaitUntilIdle: (
     rawArgs: unknown,
     signal: AbortSignal,
@@ -695,6 +711,7 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     startedAt: number;
     outcome: AuditOutcome;
     confirmationDecision?: import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision;
+    authorization?: McpDispatchAuthorization;
     bannerSuppressed?: boolean;
     /**
      * Turn id snapshotted once at dispatch start (#10067). Forwarded so the
@@ -867,6 +884,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     workspaceBinding,
     terminalWatch,
     resolveOwnPane,
+    requestApproval,
   } = deps;
 
   /**
@@ -884,6 +902,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
    */
   const sessionSurface: SessionSurfacePolicy = {
     workspaceBound: workspaceBinding !== undefined,
+    // Only an agent pane is handed an approval route (#12692).
+    paneApproval: requestApproval !== undefined,
   };
 
   const server = new Server(
@@ -1160,7 +1180,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           );
           return {
             permittedActionIds: new Set<string>([
-              ...getTierPermittedActionIds(tier, rendererOwnedOrigin),
+              ...getReachableActionIds(
+                tier,
+                rendererOwnedOrigin,
+                sessionSurface.paneApproval === true
+              ),
               ...perToolGrantedActionIds,
               ...nativeGrantedActionIds,
             ]),
@@ -1172,6 +1196,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               // Grant issuance gates on the origin too, which is why the
               // policy record carries it rather than re-deriving it.
               rendererOwnedOrigin,
+              paneApproval: sessionSurface.paneApproval === true,
               perToolGrantedActionIds,
               nativeGrantedActionIds,
             } satisfies TargetPolicySessionSnapshot,
@@ -1386,6 +1411,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // the peek below for why nesting them under any one admission source is
     // what made them unreachable in the first place.
     const tierPermitted = isTierPermitted(tier, actionId, rendererOwnedOrigin);
+    // An agent pane's tier is an auto-approval line, not a ceiling (#12692).
+    const paneApproval = sessionSurface.paneApproval === true;
     let grantIssuedAt: number | undefined;
     // Set when a native session-scoped automation grant (#10648) authorized
     // this call. Captured here so the post-dispatch path can refresh the
@@ -1397,7 +1424,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // things below: whether a missing native grant is fatal, and how a lost
     // one is handled at the consume site.
     let authorizedWithoutNativeGrant = tierPermitted;
-    if (!tierPermitted) {
+    // A pane's per-tool grant is minted only by the user's "Allow for this
+    // session", so beyond widening the floor it also stands in for the
+    // confirmation that approval replaced (#12692). That second job is why a
+    // pane consults it even for a tool its tier already permits — the
+    // `action`-tier `worktree.delete` a user has allowed for the session.
+    if (!tierPermitted || paneApproval) {
       const grant = sessionStore.grantCache.check(sessionId, actionId);
       if (grant.granted) {
         // Grant authorised the call. Capture the `issuedAt` token so the
@@ -1433,7 +1465,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         nativeGrantId = native.grantId;
       }
     }
-    if (!authorizedWithoutNativeGrant && nativeGrantId === undefined) {
+    // A pane call above its tier asks the user instead of being refused
+    // (#12692) — so long as it is within what a pane can ever ask for. The ask
+    // happens inside the dispatch below, after every hard refusal has had its
+    // say, and a decline never reaches the denial accounting here: the agent
+    // asked through the front door, which is not a probe.
+    const approvalRequired =
+      !authorizedWithoutNativeGrant &&
+      nativeGrantId === undefined &&
+      isApprovalRequestable(tier, actionId, paneApproval);
+    if (!authorizedWithoutNativeGrant && nativeGrantId === undefined && !approvalRequired) {
       // Increment first, then ask the cache whether to suppress. The
       // post-increment count reflects "this denial counted"; the cache's
       // threshold compares against that. With threshold=2 the 1st and
@@ -1860,10 +1901,24 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       | undefined;
     let confirmationDecision:
       import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision | undefined;
-    // A native automation grant is an explicit user approval of the tool's
-    // scope, so it authorizes a `danger: "confirm"` dispatch without surfacing
-    // a per-call modal — exactly as if the user had just approved it.
-    const dispatchConfirmed = nativeGrantId !== undefined;
+    // What pre-authorizes this dispatch's `danger: "confirm"` modal, if
+    // anything. A native automation grant is an explicit user approval of the
+    // tool's scope, so it authorizes the dispatch without surfacing a per-call
+    // modal — exactly as if the user had just approved it. For an agent pane
+    // the `system` tier does the same, as does a session approval the user gave
+    // from the dialog (#12692); neither ever covers a tool whose dialog is also
+    // where the user picks its targets. An above-tier approval, granted below,
+    // sets this too. The D3 typed-name gate is outside all of them: the bridge
+    // re-derives it for any preconfirmed force delete (#12115).
+    let dispatchAuthorization: McpDispatchAuthorization | undefined =
+      nativeGrantId !== undefined
+        ? "native-grant"
+        : isTierAutoConfirmed(tier, actionId, paneApproval)
+          ? "tier"
+          : paneApproval && grantIssuedAt !== undefined && isGenericNativeGrantEligible(actionId)
+            ? "session-grant"
+            : undefined;
+    let dispatchConfirmed = dispatchAuthorization !== undefined;
     // Tracks whether a live "tool-call-started" push fired for this dispatch so
     // the shared `finally` only emits the matching "settled" push for calls the
     // activity strip is actually showing (#9759). Pre-dispatch rejections never
@@ -1884,6 +1939,116 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       } catch (err) {
         console.error("[MCP] Failed to notify tool-call-started:", err);
       }
+    };
+
+    /**
+     * Mint the per-tool grant behind "Allow for this session" (#12692), unless
+     * the session ended while the user was deciding — a grant written then
+     * would outlive the session it was meant for.
+     */
+    const mintSessionApproval = (): void => {
+      if (!sessionStore.sessions.has(sessionId) && !sessionStore.httpSessions.has(sessionId)) {
+        return;
+      }
+      sessionStore.grantCache.issueGrant(sessionId, actionId);
+    };
+
+    /**
+     * Put an above-tier pane call to the user (#12692). Returns the tool error
+     * to hand back when the call must not run, or `undefined` once approved —
+     * having recorded that approval as the dispatch's confirmation, so the
+     * ordinary dialog is not raised a second time for the same call.
+     *
+     * A decline is `USER_REJECTED` and a missed dialog `CONFIRMATION_TIMEOUT`,
+     * the codes the ordinary dialog already uses: both final for this call, and
+     * neither counted toward revoking the session.
+     */
+    const askForApproval = async (): Promise<CallToolResultLike | undefined> => {
+      if (requestApproval === undefined) {
+        // Unreachable: `approvalRequired` implies a pane, and a pane always has
+        // the route. Refuse rather than run unasked.
+        const message = `action '${actionId}' is not permitted for the '${tier}' tier.`;
+        outcome = {
+          kind: "result",
+          value: { ok: false, error: { code: TIER_NOT_PERMITTED_CODE, message } },
+        };
+        return buildToolError({ code: TIER_NOT_PERMITTED_CODE, message });
+      }
+      let approval: DispatchEnvelope;
+      try {
+        approval = await requestApproval(actionId, args);
+      } catch (err) {
+        outcome = { kind: "throw", error: err };
+        if (err instanceof McpRouteBindingError) {
+          return buildToolError({
+            code: SESSION_BINDING_GONE,
+            message: err.message,
+            retriable: err.retriable,
+          });
+        }
+        if (err instanceof RendererBridgeUnavailableError) {
+          const message =
+            `Action '${actionId}' is above this project's '${tier}' MCP tier, so it needs the user's ` +
+            `approval, but no Daintree window is open to ask them. The action was not run.`;
+          outcome = {
+            kind: "result",
+            value: {
+              ok: false,
+              error: {
+                code: CONFIRMATION_REQUIRED_CODE,
+                message,
+                details: { confirmationChannel: "unavailable" },
+              },
+            },
+          };
+          return buildToolError({
+            code: CONFIRMATION_REQUIRED_CODE,
+            message,
+            details: { confirmationChannel: "unavailable" },
+          });
+        }
+        return buildToolError({
+          code: EXECUTION_ERROR_CODE,
+          message: formatErrorMessage(err, `Could not ask for approval of '${actionId}'`),
+        });
+      }
+      confirmationDecision = approval.confirmationDecision;
+      if (approval.confirmationDecision !== "approved") {
+        // Anything short of an explicit approval is a refusal. The renderer's
+        // own error is kept when it sent one — it says whether the user
+        // declined or the dialog timed out.
+        const error: import("../../../shared/types/actions.js").ActionError = approval.result.ok
+          ? {
+              code: USER_REJECTED_CODE,
+              message: `The user did not approve '${actionId}'. The action was not run.`,
+            }
+          : approval.result.error;
+        outcome = { kind: "result", value: { ok: false, error } };
+        return buildToolError({
+          code: error.code,
+          message: error.message,
+          ...(error.details !== undefined ? { details: error.details } : {}),
+        });
+      }
+      if (sessionStore.getTier(sessionId) === null) throw sessionGoneError();
+      if (approval.approvalScope === "session") mintSessionApproval();
+      // The approval covers the ordinary confirmation too — one ask, not two —
+      // except where that dialog carries something this one could not. A
+      // target-picking tool still needs the pick. An owned tool was approved
+      // under its wrapper id, which the preview does not recognise, so the
+      // delegate's own dialog is the first to show what it destroys. And a
+      // recipe dispatch's dialog is what binds the run to the recipe the user
+      // read (#12263); preconfirming would drop that binding and run whatever
+      // the recipe says by then.
+      if (
+        isGenericNativeGrantEligible(actionId) &&
+        ownedResource === undefined &&
+        !dispatchCarriesRecipeId(args)
+      ) {
+        dispatchConfirmed = true;
+        dispatchAuthorization = "user";
+      }
+      return undefined;
     };
 
     // Wrapped in an inner IIFE so the dedup guard below can register this
@@ -1943,6 +2108,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             createdRecord === undefined
               ? sessionStore.terminalAdoption.get(ownershipOwner, resourceId)
               : undefined;
+        }
+
+        // The ask for a pane call above its tier (#12692). Placed after the
+        // ownership gate, so a call that would be refused anyway never puts a
+        // question to the user, and before every executor — main-only ones
+        // included — so nothing runs until they have answered. Inside the
+        // singleflight promise, so a duplicate creation call shares one ask.
+        if (approvalRequired) {
+          const refusal = await askForApproval();
+          if (refusal !== undefined) return refusal;
         }
 
         // A main-executed owned tool (#12479) runs straight after the gate
@@ -2567,6 +2742,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // its privileges.
           recordDispatchOwnership(envelope);
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
+          // "Allow for this session" on the ordinary confirm dialog of a pane's
+          // own-tier tool (#12692). The bridge only reports the scope for an
+          // approval that offered it; the pane check here is the one that
+          // matters.
+          if (
+            paneApproval &&
+            envelope.confirmationDecision === "approved" &&
+            envelope.approvalScope === "session"
+          ) {
+            mintSessionApproval();
+          }
           dispatchedWorkspace = envelope.dispatchedWorkspace;
           // A raise that did not happen is reported, not swallowed (#12315).
           // The tool's whole promise is that the user ends up looking at the
@@ -2728,6 +2914,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             startedAt,
             outcome: settledOutcome,
             confirmationDecision,
+            ...(dispatchAuthorization !== undefined
+              ? { authorization: dispatchAuthorization }
+              : {}),
             capturedTurnId,
           });
         } catch (err) {

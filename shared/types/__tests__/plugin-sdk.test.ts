@@ -20,6 +20,7 @@ import type {
   PanelViewProps,
   PluginPanelLifecycleEvent,
   PluginPanelLifecyclePhase,
+  PanelReloadResult,
   PluginSystemWakeEvent,
   McpServerContribution,
   PluginCapability,
@@ -577,6 +578,8 @@ describe("plugin-sdk boundary", () => {
       // Spreadable onto a `createPortal` container, which is the one place a
       // view leaves the subtree the host marked as its style root (#12220).
       expectTypeOf(props.styleRootAttributes).toEqualTypeOf<Readonly<Record<string, string>>>();
+      // Optional: a host that cannot police reload loops offers none (#12609).
+      expectTypeOf(props.requestReload).toEqualTypeOf<(() => void) | undefined>();
     });
 
     it("exposes the panel lifecycle contract as named SDK types", () => {
@@ -589,6 +592,18 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(event.phase).toEqualTypeOf<PluginPanelLifecyclePhase>();
       expectTypeOf<"removed">().toMatchTypeOf<PluginPanelLifecyclePhase>();
       expectTypeOf<"hidden">().toMatchTypeOf<PluginPanelLifecyclePhase>();
+    });
+
+    it("exposes host.reloadPanel as a runtime method with a named result (#12610)", () => {
+      expectTypeOf<PanelReloadResult>().toEqualTypeOf<
+        "scheduled" | "not-mounted" | "rate-limited" | "unavailable"
+      >();
+      const host = {} as PluginHostApi;
+      expectTypeOf(host.reloadPanel).parameters.toEqualTypeOf<[panelId: string]>();
+      expectTypeOf(host.reloadPanel).returns.toEqualTypeOf<Promise<PanelReloadResult>>();
+      // Runtime-only: a worker reloads a view when its work finishes, long after
+      // activate() returned.
+      expectTypeOf<PluginActivationApi>().not.toHaveProperty("reloadPanel");
     });
 
     it("PluginActivationApi revoke-guards the panel lifecycle subscription", () => {

@@ -96,6 +96,29 @@ function splitStepKeys(step: string): string[] {
 }
 
 /**
+ * Split a shortcut into its chord steps' raw keys.
+ *
+ * Collapse whitespace around a JOINING `+` so " Cmd + Shift + P " stays a
+ * single chord step. Remaining whitespace is the chord-step separator.
+ *
+ * Only a `+` between two keys joins. A `+` standing alone as a step
+ * ("Cmd+K +") or doubled as a literal key before a step break ("Cmd++ Cmd+P")
+ * is a key, and the whitespace beside it is a step boundary — collapsing it
+ * there dropped the literal step or merged two steps into one.
+ */
+function splitChordSteps(shortcut: string): string[][] {
+  const normalized = shortcut
+    .trim()
+    .replace(/\s+\+\s+(?=\S)/g, "+")
+    .replace(/(?<=[^\s+])\+\s+(?=\S)/g, "+")
+    .replace(/\s+\+(?=[^\s+])/g, "+");
+  return normalized
+    .split(/\s+/)
+    .map((step) => splitStepKeys(step))
+    .filter((tokens) => tokens.length > 0);
+}
+
+/**
  * Parse a shortcut string into display tokens grouped by chord step.
  *
  * @example
@@ -106,16 +129,7 @@ function splitStepKeys(step: string): string[] {
  */
 export function parseChord(shortcut: string, isMac: boolean): string[][] {
   if (!shortcut || !shortcut.trim()) return [];
-
-  // Collapse whitespace around `+` first so " Cmd + Shift + P " stays a single
-  // chord step. Remaining whitespace is the chord-step separator.
-  const normalized = shortcut.trim().replace(/\s*\+\s*/g, "+");
-  const steps = normalized
-    .split(/\s+/)
-    .map((step) => splitStepKeys(step))
-    .filter((tokens) => tokens.length > 0);
-
-  return steps.map((tokens) => tokens.map((token) => mapToken(token, isMac)));
+  return splitChordSteps(shortcut).map((tokens) => tokens.map((token) => mapToken(token, isMac)));
 }
 
 // ── Search utilities ──────────────────────────────────────────────────────
@@ -208,6 +222,8 @@ const ARIA_WIN_MODIFIERS: Record<string, string> = {
 };
 
 const ARIA_KEY_NAMES: Record<string, string> = {
+  // `+` is the grammar's own joiner, so the literal key is spelled out.
+  "+": "Plus",
   return: "Enter",
   enter: "Enter",
   escape: "Escape",
@@ -252,7 +268,7 @@ function mapAriaToken(rawToken: string, modifiers: Record<string, string>): stri
  *
  * @example
  * comboToAriaKeyshortcuts("Cmd+Shift+P", true)  // "Meta+Shift+P"
- * comboToAriaKeyshortcuts("Ctrl++", false)      // "Control++"
+ * comboToAriaKeyshortcuts("Ctrl++", false)      // "Control+Plus"
  * comboToAriaKeyshortcuts("Cmd+K T", true)      // undefined (chord)
  * comboToAriaKeyshortcuts(undefined, true)      // undefined
  */
@@ -263,13 +279,11 @@ export function comboToAriaKeyshortcuts(
   if (!combo || !combo.trim()) return undefined;
 
   const modifiers = isMac ? ARIA_MAC_MODIFIERS : ARIA_WIN_MODIFIERS;
-  const normalized = combo.trim().replace(/\s*\+\s*/g, "+");
-
-  const steps = normalized
-    .split(/\s+/)
-    .map((step) => splitStepKeys(step))
-    .filter((tokens) => tokens.length > 0)
-    .map((tokens) => tokens.map((token) => mapAriaToken(token, modifiers)).join("+"));
+  // The same step split the chips use, so a literal-plus chord is still seen
+  // as two steps and omitted rather than merged into one wrong shortcut.
+  const steps = splitChordSteps(combo).map((tokens) =>
+    tokens.map((token) => mapAriaToken(token, modifiers)).join("+")
+  );
 
   if (steps.length === 0) return undefined;
   if (steps.length > 1) return undefined;
@@ -295,4 +309,98 @@ export function normalizeQuery(query: string): string {
     .split("+")
     .map((token) => MODIFIER_SEARCH_MAP[token] ?? token)
     .join("+");
+}
+
+// ── Spoken form ───────────────────────────────────────────────────────────
+// The visible chips are glyphs, and screen readers read ⌘ ⌥ ⇧ ⌃ as "place of
+// interest sign", "option key", "upwards white arrow" and "up arrowhead" —
+// or skip them. This is the text a listener needs instead: key names in the
+// platform's own words, "then" between chord steps.
+
+const SPOKEN_MAC_NAMES: Record<string, string> = {
+  cmd: "Command",
+  command: "Command",
+  meta: "Command",
+  ctrl: "Control",
+  control: "Control",
+  alt: "Option",
+  option: "Option",
+  shift: "Shift",
+  return: "Return",
+  enter: "Return",
+  escape: "Escape",
+  esc: "Escape",
+  backspace: "Delete",
+  delete: "Forward Delete",
+  del: "Forward Delete",
+};
+
+const SPOKEN_WIN_NAMES: Record<string, string> = {
+  cmd: "Ctrl",
+  command: "Ctrl",
+  meta: "Ctrl",
+  ctrl: "Ctrl",
+  control: "Ctrl",
+  alt: "Alt",
+  option: "Alt",
+  shift: "Shift",
+  return: "Enter",
+  enter: "Enter",
+  escape: "Escape",
+  esc: "Escape",
+  backspace: "Backspace",
+  delete: "Delete",
+  del: "Delete",
+};
+
+const SPOKEN_KEY_NAMES: Record<string, string> = {
+  tab: "Tab",
+  space: "Space",
+  up: "Up Arrow",
+  arrowup: "Up Arrow",
+  down: "Down Arrow",
+  arrowdown: "Down Arrow",
+  left: "Left Arrow",
+  arrowleft: "Left Arrow",
+  right: "Right Arrow",
+  arrowright: "Right Arrow",
+  pageup: "Page Up",
+  pagedown: "Page Down",
+  contextmenu: "Menu",
+  "/": "Slash",
+  "\\": "Backslash",
+  ".": "Period",
+  ",": "Comma",
+  "`": "Backtick",
+  "=": "Equals",
+  "-": "Minus",
+  "+": "Plus",
+  "[": "Left Bracket",
+  "]": "Right Bracket",
+  ";": "Semicolon",
+  "'": "Quote",
+};
+
+function spokenToken(rawToken: string, isMac: boolean): string {
+  const lower = rawToken.toLowerCase();
+  const named = (isMac ? SPOKEN_MAC_NAMES : SPOKEN_WIN_NAMES)[lower] ?? SPOKEN_KEY_NAMES[lower];
+  if (named) return named;
+  // A key range such as "1–9" (a collapsed numbered family) reads as a range.
+  const range = /^(\w)[–-](\w)$/.exec(rawToken);
+  if (range) return `${range[1]!.toUpperCase()} through ${range[2]!.toUpperCase()}`;
+  if (rawToken.length === 1) return rawToken.toUpperCase();
+  return rawToken;
+}
+
+/**
+ * The shortcut as it should be read aloud: `"Cmd+K Cmd+S"` →
+ * `"Command K, then Command S"` on macOS, `"Ctrl K, then Ctrl S"` elsewhere.
+ * Returns `""` for an empty shortcut.
+ */
+export function describeChord(shortcut: string, isMac: boolean): string {
+  if (!shortcut || !shortcut.trim()) return "";
+  // The same step split the chips use, so what is spoken is what is shown.
+  return splitChordSteps(shortcut)
+    .map((tokens) => tokens.map((token) => spokenToken(token, isMac)).join(" "))
+    .join(", then ");
 }

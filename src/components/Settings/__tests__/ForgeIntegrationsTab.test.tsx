@@ -102,15 +102,16 @@ beforeEach(() => {
 });
 
 describe("ForgeIntegrationsTab", () => {
-  it("renders both sections and the empty-project hint when no project is open", async () => {
+  it("renders the provider routing section and the empty-project hint when no project is open", async () => {
     installForgeMocks({ providers: [makeProvider("builtin", "github", "GitHub", ["github.com"])] });
     render(<ForgeIntegrationsTab />);
 
     await waitFor(() => {
-      expect(screen.getByText("Default forge provider")).toBeTruthy();
-      expect(screen.getByText("Active project routing")).toBeTruthy();
+      expect(screen.getByText("Provider routing")).toBeTruthy();
+      expect(screen.getByText("Default provider")).toBeTruthy();
+      expect(screen.getByRole("group", { name: "Active project remotes" })).toBeTruthy();
     });
-    expect(screen.getByText(/Open a project to view its forge routing/i)).toBeTruthy();
+    expect(screen.getByText("Open a project to see which provider each remote uses")).toBeTruthy();
     expect(window.electron.project.listRemotes).not.toHaveBeenCalled();
   });
 
@@ -133,10 +134,10 @@ describe("ForgeIntegrationsTab", () => {
       render(<ForgeIntegrationsTab />);
     }
 
-    /** The row `<li>` whose remote name cell matches. */
+    /** The settings row whose remote name label matches. */
     function rowFor(name: string): HTMLElement {
       const cell = screen.getByText(name);
-      const row = cell.closest("li");
+      const row = cell.closest<HTMLElement>("[data-settings-row]");
       if (!row) throw new Error(`No routing row found for remote "${name}"`);
       return row;
     }
@@ -144,9 +145,10 @@ describe("ForgeIntegrationsTab", () => {
     it("marks the remote named by the project setting", async () => {
       renderWithBothRemotes("upstream");
 
-      await waitFor(() => expect(screen.getByText("Active")).toBeTruthy());
-      expect(rowFor("upstream").textContent).toContain("Active");
-      expect(rowFor("origin").textContent).not.toContain("Active");
+      await waitFor(() => expect(screen.getByText("In use")).toBeTruthy());
+      expect(rowFor("upstream").textContent).toContain("In use");
+      expect(rowFor("upstream").textContent).not.toContain("auto-detected");
+      expect(rowFor("origin").textContent).not.toContain("In use");
     });
 
     it("marks the auto-detected remote when no setting is stored", async () => {
@@ -154,17 +156,17 @@ describe("ForgeIntegrationsTab", () => {
       // same answer PullRequestService reaches.
       renderWithBothRemotes(undefined);
 
-      await waitFor(() => expect(screen.getByText("Active")).toBeTruthy());
-      expect(rowFor("origin").textContent).toContain("Active");
-      expect(rowFor("upstream").textContent).not.toContain("Active");
+      await waitFor(() => expect(screen.getByText("In use · auto-detected")).toBeTruthy());
+      expect(rowFor("origin").textContent).toContain("In use · auto-detected");
+      expect(rowFor("upstream").textContent).not.toContain("In use");
     });
 
     it("marks exactly one remote", async () => {
       renderWithBothRemotes("origin");
 
-      await waitFor(() => expect(screen.getByText("Active")).toBeTruthy());
-      expect(screen.getAllByText("Active")).toHaveLength(1);
-      expect(rowFor("origin").textContent).toContain("Active");
+      await waitFor(() => expect(screen.getByText("In use")).toBeTruthy());
+      expect(screen.getAllByText(/^In use/)).toHaveLength(1);
+      expect(rowFor("origin").textContent).toContain("In use");
     });
   });
 
@@ -203,7 +205,7 @@ describe("ForgeIntegrationsTab", () => {
     );
   });
 
-  it("renders a No match badge when the resolver returns null entry", async () => {
+  it("renders No provider with the fix when the resolver returns null entry", async () => {
     const noMatch: ResolvedForgeProvider = { entry: null, resolvedVia: null };
     const github = makeProvider("builtin", "github", "GitHub", ["github.com"]);
     installForgeMocks({
@@ -218,7 +220,8 @@ describe("ForgeIntegrationsTab", () => {
     render(<ForgeIntegrationsTab />);
 
     await waitFor(() => {
-      expect(screen.getByText("No match")).toBeTruthy();
+      expect(screen.getByText("No provider")).toBeTruthy();
+      expect(screen.getByText("Set one in Project settings")).toBeTruthy();
     });
   });
 
@@ -232,7 +235,9 @@ describe("ForgeIntegrationsTab", () => {
     render(<ForgeIntegrationsTab />);
 
     await waitFor(() => {
-      expect(screen.getByText(/has no git remotes configured/i)).toBeTruthy();
+      expect(
+        screen.getByText("Add a git remote to Repo to route its issues and pull requests")
+      ).toBeTruthy();
     });
   });
 
@@ -240,7 +245,7 @@ describe("ForgeIntegrationsTab", () => {
     // listRemotes never resolves, so the load stays in flight: remotesLoading
     // is true and remotes stays []. Within the 400ms Doherty window the gated
     // `showRemotesLoading` is still false, which previously fell through to the
-    // "has no git remotes configured" empty state.
+    // "Add a git remote" empty state.
     installForgeMocks({
       providers: [makeProvider("builtin", "github", "GitHub", ["github.com"])],
     });
@@ -252,11 +257,13 @@ describe("ForgeIntegrationsTab", () => {
     // Wait until the top-level settings load settles (providers resolved) so we
     // know the component has rendered past its own loading state.
     await waitFor(() => {
-      expect(screen.getByText("Active project routing")).toBeTruthy();
+      expect(screen.getByText("Provider routing")).toBeTruthy();
+      expect((screen.getByRole("combobox") as HTMLButtonElement).disabled).toBe(false);
     });
     expect(window.electron.project.listRemotes).toHaveBeenCalledWith("/pending");
     // The panel renders nothing during the in-flight window — no false empty state.
-    expect(screen.queryByText(/has no git remotes configured/i)).toBeNull();
+    expect(screen.queryByText(/Add a git remote to/i)).toBeNull();
+    expect(screen.queryByRole("group", { name: "Pending remotes" })).toBeNull();
   });
 
   it("shows the no-providers note alongside the remotes list when no plugins are installed", async () => {
@@ -272,14 +279,14 @@ describe("ForgeIntegrationsTab", () => {
     render(<ForgeIntegrationsTab />);
 
     await waitFor(() => {
-      // The informational note remains visible in the routing panel. Match the
-      // phrase unique to it — the default-provider section also says "No forge
-      // plugins are installed yet." which getByText would otherwise conflate.
-      expect(screen.getByText(/Each remote shows as unmatched/i)).toBeTruthy();
-      // …and the remote row with its "No match" badge is now rendered too,
+      // With nothing installed, the unmatched row points at the fix that applies:
+      // installing a plugin, not a project setting no provider could satisfy.
+      expect(screen.getByText("Install a forge plugin")).toBeTruthy();
+      expect(screen.queryByText("Set one in Project settings")).toBeNull();
+      // …and the remote row with its "No provider" result is rendered too,
       // instead of being hidden behind a text-only early return (#9990).
       expect(screen.getByText("origin")).toBeTruthy();
-      expect(screen.getByText("No match")).toBeTruthy();
+      expect(screen.getByText("No provider")).toBeTruthy();
     });
   });
 
@@ -333,7 +340,7 @@ describe("ForgeIntegrationsTab", () => {
     });
   });
 
-  it("displays an override-resolved badge for the override precedence path", async () => {
+  it("names the project setting as the reason for the override precedence path", async () => {
     const gitea = makeProvider("acme.gitea", "gitea", "Gitea", ["gitea.example.com"]);
     const overrideResult: ResolvedForgeProvider = {
       entry: gitea,
@@ -352,7 +359,7 @@ describe("ForgeIntegrationsTab", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Gitea")).toBeTruthy();
-      expect(screen.getByText(/override/i)).toBeTruthy();
+      expect(screen.getByText("by project setting")).toBeTruthy();
     });
   });
 });

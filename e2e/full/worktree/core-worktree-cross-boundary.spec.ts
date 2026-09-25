@@ -221,13 +221,13 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
     ctx.window = await refreshActiveWindow(ctx.app);
     const { window } = ctx;
 
-    await window.keyboard.press(`${mod}+Shift+O`);
+    await window.keyboard.press(`${mod}+Alt+R`);
 
     const modal = window.locator(SEL.worktree.overviewModal);
     await expect(modal).toBeVisible({ timeout: T_LONG });
-    await expect(modal.locator("h2", { hasText: "Worktrees overview" })).toBeVisible();
+    await expect(window.getByRole("dialog", { name: "Worktrees" })).toBeVisible();
 
-    const cards = modal.locator("[data-worktree-branch]");
+    const cards = modal.locator(SEL.worktree.overviewCell);
     await expect(cards.first()).toBeVisible({ timeout: T_LONG });
     await expect.poll(() => cards.count(), { timeout: T_MEDIUM }).toBeGreaterThanOrEqual(2);
   });
@@ -239,20 +239,7 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
     // Ensure the modal is still open from the previous test
     await expect(modal).toBeVisible({ timeout: T_MEDIUM });
 
-    // Ensure main worktree is visible (it may be hidden by a toggle)
-    const showMainBtn = modal.locator('[aria-label="Show main worktree"]');
-    if ((await showMainBtn.getAttribute("aria-checked")) === "false") {
-      await showMainBtn.click();
-      await expect(showMainBtn).toHaveAttribute("aria-checked", "true", { timeout: T_SHORT });
-    }
-    // Clear any active filters
-    const clearBtn = modal.locator('[aria-label="Clear all filters"]');
-    if (await clearBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await clearBtn.click();
-      await window.waitForTimeout(T_SETTLE);
-    }
-
-    const cards = modal.locator("[data-worktree-branch]");
+    const cards = modal.locator(SEL.worktree.overviewCell);
 
     // Wait for all cards to be rendered
     await expect.poll(() => cards.count(), { timeout: T_LONG }).toBeGreaterThanOrEqual(2);
@@ -283,7 +270,7 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
       .poll(() => cards.count(), { timeout: T_MEDIUM })
       .toBeGreaterThanOrEqual(initialCount);
 
-    await modal.locator(SEL.worktree.overviewClose).click();
+    await window.keyboard.press("Escape");
     await expect(modal).not.toBeVisible({ timeout: T_MEDIUM });
   });
 });

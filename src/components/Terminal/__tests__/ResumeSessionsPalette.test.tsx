@@ -310,3 +310,36 @@ describe("ResumeSessionsPalette", () => {
     expect(footer).not.toMatch(/resume resume/i);
   });
 });
+
+describe("ResumeSessionsPalette Escape", () => {
+  function pressEscape() {
+    const input = document.querySelector<HTMLInputElement>('[role="combobox"]')!;
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    input.dispatchEvent(event);
+  }
+
+  beforeEach(() => {
+    paletteState.setQuery.mockClear();
+    paletteState.close.mockClear();
+  });
+
+  it("spends the first press clearing a query, and keeps it from the dialog's backstop", () => {
+    paletteState.query = "rebase";
+    try {
+      render(<ResumeSessionsPalette />);
+      pressEscape();
+      expect(paletteState.setQuery).toHaveBeenCalledWith("");
+      // The dialog's document-level backstop calls `close` if the press reaches it.
+      expect(paletteState.close).not.toHaveBeenCalled();
+    } finally {
+      paletteState.query = "";
+    }
+  });
+
+  it("closes on a press with nothing typed", () => {
+    render(<ResumeSessionsPalette />);
+    pressEscape();
+    expect(paletteState.close).toHaveBeenCalled();
+    expect(paletteState.setQuery).not.toHaveBeenCalled();
+  });
+});

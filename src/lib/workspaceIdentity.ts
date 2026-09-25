@@ -36,24 +36,26 @@ export function activeWorkspaceIdentity(
  *
  * - `hidden` — not mounted at all. A scratch workspace is never a git repo, and
  *   neither is a folder opened without one (#11405), so a faded chip would only
- *   reserve blank width beside the name (issue #11084).
- * - `reserved` — mounted but transparent, holding the chip's width. A project's
- *   branch can arrive late (a view first-paints before its project binds) or never
- *   (detached HEAD); collapsing the pill then would shift the titlebar's no-drag
- *   region, which is why the placeholder exists.
+ *   reserve blank width beside the name (issue #11084). Nothing open has no
+ *   branch either, and a closed project's branch can outlive it in the worktree
+ *   selection, so the empty state drops the chip rather than risk showing it.
+ * - `reserved` — mounted as a placeholder holding the chip's width while a git
+ *   project's branch has not arrived (a view first-paints before its project
+ *   binds). Collapsing the pill then would shift the titlebar's no-drag region
+ *   when the branch lands.
+ * - `detached` — HEAD is on a commit, not a branch. That is an answer, not a
+ *   wait, so it gets its own chip instead of a placeholder that never resolves.
  * - `visible` — mounted and showing the branch.
  */
-export type BranchChipState = "hidden" | "reserved" | "visible";
+export type BranchChipState = "hidden" | "reserved" | "detached" | "visible";
 
 export function branchChipState(
   kind: ActiveWorkspaceIdentity["kind"],
   branchName: string | null | undefined,
-  gitBacked: boolean = true
+  gitBacked: boolean = true,
+  isDetached: boolean = false
 ): BranchChipState {
-  if (kind === "scratch" || !gitBacked) return "hidden";
-  // `branchName` rides the worktree selection, which closing a project does not
-  // clear — so it can outlive `currentProject`. Requiring a project keeps a closed
-  // project's branch from lingering beside the "Select project" empty state.
-  if (kind !== "project" || !branchName) return "reserved";
-  return "visible";
+  if (kind !== "project" || !gitBacked) return "hidden";
+  if (branchName) return "visible";
+  return isDetached ? "detached" : "reserved";
 }

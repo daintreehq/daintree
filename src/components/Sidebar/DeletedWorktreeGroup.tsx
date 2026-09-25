@@ -11,7 +11,7 @@ import {
 import { usePreferencesStore } from "@/store/preferencesStore";
 import {
   useTerminalPendingDestructiveActionStore,
-  type DeletedWorktreeGroupPreviewWorktree,
+  type DestructivePreviewGroup,
 } from "@/store/terminalPendingDestructiveActionStore";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { DeletedWorktreeCard } from "./DeletedWorktreeCard";
@@ -23,6 +23,7 @@ import {
 } from "@/components/DragDrop/SortableWorktreeTerminal";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { buildDestructivePreview } from "@/utils/destructiveSessionConfirm";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 
 interface GroupMember {
@@ -109,19 +110,9 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
   );
 
   const handleClearAll = useCallback(() => {
-    const preview: DeletedWorktreeGroupPreviewWorktree[] = members
+    const preview: DestructivePreviewGroup[] = members
       .filter((m) => m.panels.length > 0)
-      .map((m) => ({
-        worktreeId: m.worktree.id,
-        worktreeTitle: m.worktree.title,
-        terminals: m.panels.map((panel) => ({
-          terminalId: panel.id,
-          // The row's own title, matching what the accordion shows — the
-          // derived chrome label is the terminal's kind, not its name.
-          terminalTitle: panel.title,
-          hasRunningAgent: deriveTerminalChrome(panel).isAgent,
-        })),
-      }));
+      .flatMap((m) => buildDestructivePreview(m.panels, () => m.worktree.title));
     if (preview.length === 0) return;
     const previewedTerminals = preview.reduce((n, entry) => n + entry.terminals.length, 0);
     requestDestructiveAction({

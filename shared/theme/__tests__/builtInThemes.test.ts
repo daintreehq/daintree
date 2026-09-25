@@ -781,7 +781,7 @@ function scanRendererVars(repoRoot: string): {
       continue;
     }
     // Collapse multi-line var(...) so the regex catches names split across
-    // lines (e.g. var(\n  --settings-section-header-bg,\n  ...))
+    // lines (e.g. var(\n  --settings-sidebar-bg,\n  ...))
     const collapsed = contents.replace(/var\(\s*\n\s+/g, "var(").replace(/var\(\s+/g, "var(");
 
     for (const match of collapsed.matchAll(varPattern)) {

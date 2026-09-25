@@ -5,6 +5,7 @@ import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortabl
 import { useDndContext, useDroppable } from "@dnd-kit/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
 import {
@@ -85,6 +86,7 @@ interface ContentDockProps {
 }
 
 export function ContentDock({ density = "normal" }: ContentDockProps) {
+  const skipMotion = useShouldSkipMotion();
   // Subscribe to panel-kind metadata changes (#11375). The dock-membership
   // selectors below call `isDockPanel` (→ `panelKindIsDockable`), which reads
   // the registry, not the panel store — so a `dockable`-only flip or a plugin
@@ -427,7 +429,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             "border-t border-[var(--dock-border)]",
             "shadow-[var(--dock-shadow)]",
             "flex items-center px-[var(--dock-padding-x)] py-[var(--dock-padding-y)] gap-[var(--dock-gap)]",
-            "z-40 shrink-0"
+            "z-40 shrink-0 @container/dock"
           )}
           data-dock-density={density}
         >
@@ -459,7 +461,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                       tabIndex={-1}
                       aria-hidden="true"
                       className={cn(
-                        "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-text-primary",
+                        "pointer-events-auto p-1.5 text-text-secondary hover:text-text-primary",
                         "rounded-[var(--radius-md)] transition-colors",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                       )}
@@ -483,7 +485,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
               onKeyDown={handleDockKeyDown}
               onFocusCapture={handleDockFocusCapture}
               className={cn(
-                "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-smooth scroll-px-4 px-1 transition-[color,background-color,box-shadow]",
+                "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-px-4 px-1 transition-[color,background-color,box-shadow]",
+                !skipMotion && "scroll-smooth",
                 isDockDropRejected && "cursor-no-drop",
                 isOver &&
                   !isDockDropRejected &&
@@ -549,7 +552,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                       tabIndex={-1}
                       aria-hidden="true"
                       className={cn(
-                        "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-text-primary",
+                        "pointer-events-auto p-1.5 text-text-secondary hover:text-text-primary",
                         "rounded-[var(--radius-md)] transition-colors",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                       )}
@@ -564,16 +567,16 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             )}
           </div>
 
-          {/* Separator between terminals and action containers */}
-          {dockItems.length > 0 && (
-            <div className="w-px h-5 bg-[var(--dock-border)] mx-1 shrink-0" />
-          )}
-
-          {/* Action containers: Background + Waiting + Errors + Trash */}
+          {/* The rail above belongs to the active worktree; this tray counts the
+              whole project. Its own shared surface (dock.css) is what says so —
+              it replaces the old separator, which only drew when the rail had
+              chips and so vanished exactly when the tray stood alone. */}
           <div
             ref={actionContainerRef}
             tabIndex={-1}
-            className="shrink-0 pl-1 flex items-center gap-2"
+            role="group"
+            aria-label="All worktrees"
+            className="dock-status-tray shrink-0"
           >
             <BackgroundContainer compact={isCompact} />
             <WaitingContainer compact={isCompact} />
