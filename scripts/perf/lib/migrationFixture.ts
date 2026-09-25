@@ -402,6 +402,7 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
       availabilityFirstSeen: {},
       welcomeCardDismissed: false,
       setupBannerDismissed: false,
+      tour: { completed: false, dismissed: true, muted: true, lastChapter: 3 },
     },
     orchestrationMilestones: {},
     shortcutHintCounts: {},
@@ -998,6 +999,18 @@ async function buildHarness(): Promise<MigrationHarness> {
       }
       const mcpServer = asRecord(config.mcpServer);
       if (mcpServer === null || "fullToolSurface" in mcpServer) scalarMigrationMisses += 1;
+      // 029 keys the single tour record to the built-in tour and hoists mute.
+      const onboarding = asRecord(config.onboarding);
+      if (onboarding === null || "tour" in onboarding) scalarMigrationMisses += 1;
+      const daintreeTour = asRecord(asRecord(onboarding?.tours)?.daintree);
+      if (
+        daintreeTour?.completed !== false ||
+        daintreeTour.dismissed !== true ||
+        daintreeTour.lastChapter !== 3
+      ) {
+        scalarMigrationMisses += 1;
+      }
+      if (onboarding?.tourMuted !== true) scalarMigrationMisses += 1;
 
       // --- MigrationRunner's own backup of the pre-migration store
       let backupMisses = 0;

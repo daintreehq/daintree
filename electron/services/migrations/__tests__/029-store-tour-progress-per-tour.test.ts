@@ -71,6 +71,29 @@ describe("migration029 — tour progress per tour", () => {
     expect(after!.tourMuted).toBe(false);
   });
 
+  it("coerces non-finite legacy chapters to the start", () => {
+    for (const lastChapter of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const { after } = run({
+        ...onboardingBase,
+        tour: { completed: false, dismissed: false, muted: false, lastChapter },
+      });
+      expect(after!.tours).toEqual({
+        daintree: { completed: false, dismissed: false, lastChapter: 0 },
+      });
+    }
+  });
+
+  it("replaces a non-object tours value rather than spreading it", () => {
+    const { after } = run({
+      ...onboardingBase,
+      tours: ["garbage"],
+      tour: { completed: true, dismissed: false, muted: false, lastChapter: 0 },
+    });
+    expect(after!.tours).toEqual({
+      daintree: { completed: true, dismissed: false, lastChapter: 0 },
+    });
+  });
+
   it("drops a non-object legacy record without inventing progress", () => {
     const { after } = run({ ...onboardingBase, tour: "garbage" });
     expect(after).toEqual({ ...onboardingBase, tours: {}, tourMuted: false });

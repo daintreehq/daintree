@@ -47,17 +47,17 @@ function normalizeTour(raw: unknown): TourOnboardingState {
   };
 }
 
+function isTourId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value !== "__proto__";
+}
+
 function normalizeTours(raw: unknown): Record<string, TourOnboardingState> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
   const out: Record<string, TourOnboardingState> = {};
   for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (id && id !== "__proto__") out[id] = normalizeTour(value);
+    if (isTourId(id)) out[id] = normalizeTour(value);
   }
   return out;
-}
-
-function isTourId(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 /**

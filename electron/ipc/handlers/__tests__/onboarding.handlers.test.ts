@@ -282,6 +282,24 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
       expect(state.tourMuted).toBe(false);
     });
 
+    it("treats a non-object tours value as no progress", () => {
+      registerOnboardingHandlers();
+      seedOnboarding({ tours: [{ completed: true }] });
+      expect(read().tours).toEqual({});
+    });
+
+    it("ignores malformed progress updates", () => {
+      registerOnboardingHandlers();
+      seedOnboarding({
+        tours: { daintree: { completed: false, dismissed: false, lastChapter: 2 } },
+      });
+      const progress = getHandler("onboarding:tour-set-progress");
+      progress(null, "daintree", null);
+      progress(null, "daintree", { lastChapter: Number.NaN });
+      progress(null, "daintree", { lastChapter: Number.POSITIVE_INFINITY });
+      expect(read().tours.daintree).toEqual({ completed: false, dismissed: false, lastChapter: 2 });
+    });
+
     it("never exposes the legacy single-tour record", () => {
       registerOnboardingHandlers();
       seedOnboarding({ tour: { completed: true, dismissed: true, muted: true, lastChapter: 3 } });
@@ -328,9 +346,17 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
     it("ignores writes without a usable tour id", () => {
       registerOnboardingHandlers();
       seedOnboarding();
-      getHandler("onboarding:tour-set-progress")(null, "", { completed: true });
-      getHandler("onboarding:tour-set-progress")(null, { completed: true });
-      getHandler("onboarding:tour-dismiss-invite")(null);
+      storeMock.set.mockClear();
+      const progress = getHandler("onboarding:tour-set-progress");
+      const dismiss = getHandler("onboarding:tour-dismiss-invite");
+      progress(null, "", { completed: true });
+      progress(null, "   ", { completed: true });
+      progress(null, "__proto__", { completed: true });
+      progress(null, { completed: true });
+      dismiss(null);
+      dismiss(null, "__proto__");
+      dismiss(null, 42);
+      expect(storeMock.set).not.toHaveBeenCalled();
       expect(read().tours).toEqual({});
     });
 
