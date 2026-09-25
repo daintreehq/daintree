@@ -14,7 +14,7 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
       // trusted to mean "no check".
       const guard = msg.guard === "settled-prompt" ? msg.guard : undefined;
       const imagePaths = Array.isArray(msg.imagePaths)
-        ? msg.imagePaths.filter((path): path is string => typeof path === "string")
+        ? msg.imagePaths.filter((path: unknown): path is string => typeof path === "string")
         : undefined;
       ptyManager.submit(msg.id, msg.text, msg.submissionToken, msg.handbackCode, guard, imagePaths);
     },
