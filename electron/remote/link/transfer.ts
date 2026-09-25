@@ -65,6 +65,15 @@ export type TransferSinkFactory = (
   begin: TransferBeginMessage
 ) => Promise<TransferSink> | TransferSink;
 
+/**
+ * One owner's claim on incoming transfers: a sink (or its promise) for a
+ * destination it minted, null for anyone else's. The decision is synchronous
+ * so providers compose without racing each other.
+ */
+export type TransferSinkProvider = (
+  begin: TransferBeginMessage
+) => Promise<TransferSink> | TransferSink | null;
+
 export interface TransferProgress {
   transferId: number;
   /** Bytes the receiver has confirmed. */
@@ -232,6 +241,7 @@ export class LinkTransfers {
   private readonly incoming = new Map<number, Incoming>();
   private readonly retry: LinkMessage[] = [];
   private sinkFactory: TransferSinkFactory | null = null;
+  private readonly sinkProviders: TransferSinkProvider[] = [];
   private nextId: number;
   private bulkPaused = false;
   private pumping = false;
@@ -247,6 +257,33 @@ export class LinkTransfers {
 
   setSinkFactory(factory: TransferSinkFactory | null): void {
     this.sinkFactory = factory;
+  }
+
+  /**
+   * Accept transfers for destinations `provider` claims, beside any other
+   * owner's. Providers are asked in the order added; a destination none of
+   * them claims goes to the sink factory, or is refused when there is none.
+   */
+  addSinkProvider(provider: TransferSinkProvider): () => void {
+    this.sinkProviders.push(provider);
+    return () => {
+      const index = this.sinkProviders.indexOf(provider);
+      if (index !== -1) this.sinkProviders.splice(index, 1);
+    };
+  }
+
+  private resolveSinkFactory(): TransferSinkFactory | null {
+    const fallback = this.sinkFactory;
+    if (this.sinkProviders.length === 0) return fallback;
+    const providers = [...this.sinkProviders];
+    return (begin) => {
+      for (const provider of providers) {
+        const sink = provider(begin);
+        if (sink) return sink;
+      }
+      if (fallback) return fallback(begin);
+      throw new Error("Unexpected transfer destination");
+    };
   }
 
   get activeOutgoing(): number {
@@ -651,7 +688,7 @@ export class LinkTransfers {
         kind: BulkKind.TRANSFER_ACK,
         body: { transferId: id, receivedBytes: 0, path: null, error: reason },
       });
-    const factory = this.sinkFactory;
+    const factory = this.resolveSinkFactory();
     if (!factory) return refuse("not-accepted");
     if (this.incoming.size >= (this.options.maxIncoming ?? DEFAULT_MAX_INCOMING)) {
       return refuse("busy");

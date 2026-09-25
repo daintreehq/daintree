@@ -88,10 +88,20 @@ const m = vi.hoisted(() => {
     leaseListeners,
     viewFilter,
     mcpResolver,
-    installHybridSplits: vi.fn(() => vi.fn()),
+    installHybridSplits: vi.fn(() => {
+      record("install hybrid splits");
+      return vi.fn();
+    }),
     uninstallPickerSplits: vi.fn(() => record("uninstall picker splits")),
     uninstallHostFileClient: vi.fn(() => record("uninstall host file client")),
     installHostFileClient: vi.fn(),
+    installHostUploadClient: vi.fn(),
+    uninstallHostUploadClient: vi.fn(() => record("uninstall host upload client")),
+    installClipboardSplits: vi.fn(() => record("install clipboard splits")),
+    uninstallClipboardSplits: vi.fn(() => record("uninstall clipboard splits")),
+    installHostUploadService: vi.fn(),
+    hostUploadsDispose: vi.fn(() => record("host uploads dispose")),
+    attachHostUploads: vi.fn(),
     hostEntries,
     installPluginClient: vi.fn(),
     uninstallPluginClient: vi.fn(() => record("uninstall plugin client")),
@@ -262,6 +272,25 @@ vi.mock("../files/clientInstall.js", () => ({
     m.installHostFileClient(feed, hostForView);
     return m.uninstallHostFileClient;
   }),
+}));
+vi.mock("../files/uploadClient.js", () => ({
+  installHostUploadClient: vi.fn((feed: unknown, hostForView: unknown) => {
+    m.installHostUploadClient(feed, hostForView);
+    return m.uninstallHostUploadClient;
+  }),
+}));
+vi.mock("../hybrid/clipboard.js", () => ({
+  installClipboardSplits: vi.fn(() => {
+    m.installClipboardSplits();
+    return m.uninstallClipboardSplits;
+  }),
+}));
+vi.mock("../files/uploadHostInstall.js", () => ({
+  installHostUploadService: vi.fn(() => {
+    m.installHostUploadService();
+    return { service: {}, dispose: m.hostUploadsDispose };
+  }),
+  attachHostUploads: m.attachHostUploads,
 }));
 vi.mock("../files/hostInstall.js", () => ({
   installHostFileService: vi.fn(() => {
@@ -463,6 +492,33 @@ describe("startRemoteHosts", () => {
     expect(m.calls.indexOf("uninstall host file client")).toBeLessThan(
       m.calls.indexOf("uninstall picker splits")
     );
+  });
+
+  it("installs the upload client and clipboard splits on first use, the splits over the base ones", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(m.installHostUploadClient).not.toHaveBeenCalled();
+    expect(m.installClipboardSplits).not.toHaveBeenCalled();
+
+    m.clientHooks.current.onFirstUse?.();
+    expect(m.installHostUploadClient).toHaveBeenCalledTimes(1);
+    const [feed, hostForView] = m.installHostUploadClient.mock.calls[0] as [
+      { onEndpointOpened: unknown; onEndpointClosed: unknown },
+      (id: number) => unknown,
+    ];
+    expect(feed.onEndpointOpened).toBe(m.client.onEndpointOpened);
+    expect(feed.onEndpointClosed).toBe(m.client.onEndpointClosed);
+    m.viewHosts.set(11, "studio-01");
+    expect(hostForView(11)).toBe("studio-01");
+    expect(hostForView(12)).toBeNull();
+    // The clipboard splits replace the base refusals, so they must register after them.
+    expect(m.calls.indexOf("install hybrid splits")).toBeGreaterThanOrEqual(0);
+    expect(m.calls.indexOf("install hybrid splits")).toBeLessThan(
+      m.calls.indexOf("install clipboard splits")
+    );
+
+    await stopRemoteHosts();
+    expect(m.uninstallHostUploadClient).toHaveBeenCalledTimes(1);
+    expect(m.uninstallClipboardSplits).toHaveBeenCalledTimes(1);
   });
 
   it("installs the port forward client and host switch service with the client, dialling nothing", async () => {
@@ -768,6 +824,28 @@ describe("startRemoteHosts", () => {
     expect(m.hostFilesDispose).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts uploads only while listening, for opened and resumed endpoints", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(m.installHostUploadService).not.toHaveBeenCalled();
+
+    const hostMode = getRemoteService("hostMode")!;
+    await hostMode.startListening();
+    expect(m.installHostUploadService).toHaveBeenCalledTimes(1);
+    const endpoint = fakeEndpoint("remote:s1:view-11");
+    const link = { id: "link-1" };
+    openEndpoint(endpoint, "s1", link);
+    expect(m.attachHostUploads).toHaveBeenCalledWith(link, endpoint);
+
+    const resumed = { id: "link-1b" };
+    for (const l of m.server.sessionListeners)
+      l({ sessionId: "s1", resumed: true, session: resumed });
+    expect(m.attachHostUploads).toHaveBeenCalledTimes(2);
+    expect(m.attachHostUploads).toHaveBeenLastCalledWith(resumed, endpoint);
+
+    await hostMode.stopListening();
+    expect(m.hostUploadsDispose).toHaveBeenCalledTimes(1);
+  });
+
   it("re-attaches a session's endpoints to the new link when it resumes", async () => {
     await startRemoteHosts({ hostMode: true });
     const kept = fakeEndpoint("remote:s1:view-11");
@@ -915,7 +993,9 @@ describe("stopRemoteHosts", () => {
       "dispose worktree relays",
       "uninstall view hooks",
       "uninstall plugin client",
+      "uninstall host upload client",
       "uninstall host file client",
+      "uninstall clipboard splits",
       "uninstall picker splits",
       "uninstall worktree override",
       "uninstall terminal override",
@@ -923,6 +1003,7 @@ describe("stopRemoteHosts", () => {
       "uninstall plugin host",
       "uninstall projects host",
       "uninstall host port service",
+      "host uploads dispose",
       "host files dispose",
       "disposeAllTerminalBridges",
       "host.dispose",

@@ -169,6 +169,37 @@ describe("bulk transfer", () => {
     ).rejects.toThrow(/does not accept transfers/);
   });
 
+  it("routes each transfer to the provider that claims it, then the factory, until removed", async () => {
+    const { host, client } = await pair();
+    const claimed = memorySinks();
+    const fallback = memorySinks();
+    const claimsA = (begin: TransferBeginMessage) =>
+      begin.destination.kind === "path" && begin.destination.path.startsWith("a:");
+    const removeA = host.transfers.addSinkProvider((begin) =>
+      claimsA(begin) ? claimed.factory(begin) : null
+    );
+    host.transfers.addSinkProvider(() => null);
+    host.transfers.setSinkFactory(fallback.factory);
+    const send = (destination: string) =>
+      client.transfers.send(bytesTransferSource(new Uint8Array([1])), {
+        name: destination,
+        destination: { kind: "path", path: destination },
+      });
+
+    await send("a:1");
+    await send("b:1");
+    expect(claimed.sinks.map((s) => s.begin.name)).toEqual(["a:1"]);
+    expect(fallback.sinks.map((s) => s.begin.name)).toEqual(["b:1"]);
+
+    removeA();
+    await send("a:2");
+    expect(fallback.sinks.map((s) => s.begin.name)).toEqual(["b:1", "a:2"]);
+
+    // With providers but no factory, an unclaimed destination is refused.
+    host.transfers.setSinkFactory(null);
+    await expect(send("c:1")).rejects.toThrow();
+  });
+
   it("reports HOST_DISCONNECTED when the session drops mid-transfer", async () => {
     const { host, client } = await pair();
     const { sinks, factory } = memorySinks({ writeDelayMs: 2 });

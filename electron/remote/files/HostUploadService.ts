@@ -80,6 +80,11 @@ async function defaultFreeBytes(dir: string): Promise<number | null> {
   }
 }
 
+function isUploadDestination(begin: TransferBeginMessage): boolean {
+  const destination = begin.destination;
+  return destination.kind === "path" && destination.path.startsWith(UPLOAD_SINK_PREFIX);
+}
+
 function notInProject(): AppError {
   return new AppError({
     code: "NOT_FOUND",
@@ -198,12 +203,15 @@ export class HostUploadService {
       session.registerCallHandler(UploadLinkMethod.PREPARE, UploadPreparePayloadSchema, (payload) =>
         this.prepare(created, payload)
       ),
+      // Beside the project bundle provider on the same session, never instead of it.
+      session.transfers.addSinkProvider((begin) =>
+        isUploadDestination(begin) ? this.createSink(created, begin) : null
+      ),
       session.onClose(() => {
         for (const dispose of created.unregister.splice(0)) dispose();
         created.pending.clear();
       })
     );
-    session.transfers.setSinkFactory((begin) => this.createSink(created, begin));
     this.sessions.set(session, created);
     return created;
   }
