@@ -44,6 +44,7 @@ import { getWebviewDialogService } from "../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { logWarn } from "../utils/logger.js";
+import { isValidRemoteHostId } from "../../shared/types/remoteHosts.js";
 
 /**
  * Resolve a `plugin://` authority to the plugin root that serves it.
@@ -279,7 +280,7 @@ function buildDaintreeFileHeaders(mimeType: string, contentLength: number): Reco
   };
 }
 
-function buildDaintreeFileErrorHeaders(): Record<string, string> {
+export function buildDaintreeFileErrorHeaders(): Record<string, string> {
   return {
     "Content-Type": "text/plain",
     "Content-Security-Policy": "sandbox; default-src 'none'",
@@ -478,7 +479,7 @@ async function streamContainedMediaFile(
  * pointing outside root is rejected (CVE-2025-53109 / CVE-2025-54794 class).
  * Returns the canonical file path, or the 404 Response to relay.
  */
-async function resolveContainedRealPath(
+export async function resolveContainedRealPath(
   normalizedRoot: string,
   normalizedFile: string
 ): Promise<{ realFile: string } | Response> {
@@ -745,46 +746,51 @@ function parseContainedFileRequest(
  * streamContainedMediaFile's, unchanged and shared with daintree-file://.
  */
 function createDaintreeMediaProtocolHandler() {
-  return async (request: GlobalRequest) => {
-    try {
-      const parsed = parseContainedFileRequest(request);
-      if (parsed instanceof Response) return parsed;
-      const { normalizedRoot, normalizedFile } = parsed;
+  return async (request: GlobalRequest) =>
+    (await answerHostScopedRequest("daintree-media", request)) ??
+    respondToDaintreeMediaRequest(request);
+}
 
-      const contained = await resolveContainedRealPath(normalizedRoot, normalizedFile);
-      if (contained instanceof Response) return contained;
+async function respondToDaintreeMediaRequest(request: GlobalRequest): Promise<Response> {
+  try {
+    const parsed = parseContainedFileRequest(request);
+    if (parsed instanceof Response) return parsed;
+    const { normalizedRoot, normalizedFile } = parsed;
 
-      // Classified from the canonical path, not the request path: on Windows
-      // O_NOFOLLOW is a no-op, so a final-component symlink (`clip.mp4` →
-      // `secrets.env`) opens fine and request-path routing would stream it
-      // under a media MIME. On POSIX ELOOP rejects that symlink at open, so the
-      // two spellings agree either way.
-      const realMimeType = getMimeType(contained.realFile);
-      if (!isMediaMimeType(realMimeType)) {
-        return new Response("Not Found", {
-          status: 404,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
+    const contained = await resolveContainedRealPath(normalizedRoot, normalizedFile);
+    if (contained instanceof Response) return contained;
 
-      return await streamContainedMediaFile(normalizedFile, realMimeType, request);
-    } catch (err) {
-      console.error("[MAIN] daintree-media protocol error:", err);
-      return new Response("Internal Server Error", {
-        status: 500,
+    // Classified from the canonical path, not the request path: on Windows
+    // O_NOFOLLOW is a no-op, so a final-component symlink (`clip.mp4` →
+    // `secrets.env`) opens fine and request-path routing would stream it
+    // under a media MIME. On POSIX ELOOP rejects that symlink at open, so the
+    // two spellings agree either way.
+    const realMimeType = getMimeType(contained.realFile);
+    if (!isMediaMimeType(realMimeType)) {
+      return new Response("Not Found", {
+        status: 404,
         headers: buildDaintreeFileErrorHeaders(),
       });
     }
-  };
+
+    return await streamContainedMediaFile(normalizedFile, realMimeType, request);
+  } catch (err) {
+    console.error("[MAIN] daintree-media protocol error:", err);
+    return new Response("Internal Server Error", {
+      status: 500,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
 }
 
 /**
  * Create the daintree-file:// protocol handler function.
  */
 function createDaintreeFileProtocolHandler() {
-  const handleRequest = createDaintreeFileRequestCore();
   return async (request: GlobalRequest) => {
-    const response = await handleRequest(request);
+    const response =
+      (await answerHostScopedRequest("daintree-file", request)) ??
+      (await daintreeFileRequestCore(request));
     // Constructed Responses have mutable headers, so the CORS grant rides on
     // every path (success and error alike) — a blocked error response would
     // otherwise surface as an opaque TypeError instead of a readable status.
@@ -836,6 +842,118 @@ function createDaintreeFileRequestCore() {
       });
     }
   };
+}
+
+const daintreeFileRequestCore = createDaintreeFileRequestCore();
+
+/** The three query-string schemes that serve a file from inside a root. */
+export type ContainedFileScheme = "daintree-file" | "daintree-media" | "daintree-pdf";
+
+/**
+ * Serves a host-scoped request for a window attached to a remote host: the
+ * file lives on that host, so it has to be fetched from there rather than read
+ * from this machine at the same path.
+ */
+export type HostFileRequestProxy = (
+  scheme: ContainedFileScheme,
+  hostId: string,
+  request: GlobalRequest
+) => Promise<Response>;
+
+let hostFileRequestProxy: HostFileRequestProxy | null = null;
+
+/** Installed by the remote-hosts client; the returned function removes it. */
+export function setHostFileRequestProxy(proxy: HostFileRequestProxy | null): () => void {
+  hostFileRequestProxy = proxy;
+  return () => {
+    if (hostFileRequestProxy === proxy) hostFileRequestProxy = null;
+  };
+}
+
+/**
+ * A remote view's preview URLs carry the host in the authority and path —
+ * `daintree-file://host/<hostId>/load?path=…&root=…` (the media scheme keeps
+ * its trailing `load/`). Local URLs use the `load` authority and never match,
+ * so they keep their exact shape and handling. A URL with the `host`
+ * authority is never served from this machine, even when malformed.
+ */
+export function parseHostScopedFileUrl(url: string): { hostId: string } | "malformed" | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.host !== "host") return null;
+  const match = /^\/([^/]+)\/load\/?$/.exec(parsed.pathname);
+  if (!match) return "malformed";
+  let hostId: string;
+  try {
+    hostId = decodeURIComponent(match[1]!);
+  } catch {
+    return "malformed";
+  }
+  return isValidRemoteHostId(hostId) ? { hostId } : "malformed";
+}
+
+async function answerHostScopedRequest(
+  scheme: ContainedFileScheme,
+  request: GlobalRequest
+): Promise<Response | null> {
+  const target = parseHostScopedFileUrl(request.url);
+  if (target === null) return null;
+  if (target === "malformed") {
+    return new Response("Invalid host URL", {
+      status: 400,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+  const proxy = hostFileRequestProxy;
+  if (!proxy) {
+    return new Response("Host not connected", {
+      status: 503,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+  try {
+    return await proxy(scheme, target.hostId, request);
+  } catch (err) {
+    console.error(`[MAIN] ${scheme} host proxy error:`, err);
+    return new Response("Bad Gateway", {
+      status: 502,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+}
+
+/** The local-form URL of a contained-file request, as the renderer builds it. */
+export function buildContainedFileUrl(
+  scheme: ContainedFileScheme,
+  filePath: string,
+  rootPath: string
+): string {
+  const query = `?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
+  return scheme === "daintree-media" ? `${scheme}://load/${query}` : `${scheme}://load${query}`;
+}
+
+/**
+ * Answer a contained-file request exactly as this machine's own handler would
+ * for its own views: same validation, containment, caps and range handling,
+ * minus the CORS grant (the caller decides who may read it). A host uses this
+ * to serve an attached Shell's previews.
+ */
+export function serveContainedFileRequest(
+  scheme: ContainedFileScheme,
+  request: GlobalRequest
+): Promise<Response> {
+  switch (scheme) {
+    case "daintree-file":
+      return daintreeFileRequestCore(request);
+    case "daintree-pdf":
+      return respondToDaintreePdfRequest(request);
+    case "daintree-media":
+      return respondToDaintreeMediaRequest(request);
+  }
 }
 
 /** True for any `daintree-html://…` request URL (the sandboxed preview scheme). */
@@ -1120,7 +1238,9 @@ function buildDaintreePdfHeaders(realFile: string, contentLength: number): Recor
  */
 function createDaintreePdfProtocolHandler() {
   return async (request: GlobalRequest) => {
-    const response = await respondToDaintreePdfRequest(request);
+    const response =
+      (await answerHostScopedRequest("daintree-pdf", request)) ??
+      (await respondToDaintreePdfRequest(request));
     const corsOrigin = trustedAppCorsOrigin(request);
     if (corsOrigin) response.headers.set("Access-Control-Allow-Origin", corsOrigin);
     return response;

@@ -460,6 +460,38 @@ async function runCopyTreeOperation(
   );
 }
 
+/**
+ * Put a file on this machine's clipboard as a file (not its text), the way a
+ * file manager's Copy does. A remote window's copy-as-file lands here too,
+ * with the bundle already downloaded from its host.
+ */
+export function copyFileToClipboard(filePath: string): void {
+  if (process.platform === "darwin") {
+    // Electron's `clipboard.writeBuffer` maps to Chromium's
+    // `WritePortableAndPlatformRepresentations`, which calls
+    // `[NSPasteboard clearContents]` on each invocation, so sequential
+    // `writeBuffer` calls cannot install multiple custom UTIs in one
+    // pasteboard session. Keep the legacy `NSFilenamesPboardType` plist
+    // (Finder reads it natively) with the path XML-escaped so a
+    // hostile `TMPDIR` cannot break out of the <string> element.
+    const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+    <string>${escapeXml(filePath)}</string>
+</array>
+</plist>`;
+    clipboard.writeBuffer("NSFilenamesPboardType", Buffer.from(plist, "utf8"));
+  } else if (process.platform === "win32") {
+    clipboard.writeText(filePath);
+  } else {
+    clipboard.writeBuffer(
+      "text/uri-list",
+      Buffer.from(pathToFileURL(filePath).href + "\r\n", "utf8")
+    );
+  }
+}
+
 export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void {
   // copyTree progress is broadcast to all windows
   const handlers: Array<() => void> = [];
@@ -684,30 +716,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const filePath = result.filePath;
 
     try {
-      if (process.platform === "darwin") {
-        // Electron's `clipboard.writeBuffer` maps to Chromium's
-        // `WritePortableAndPlatformRepresentations`, which calls
-        // `[NSPasteboard clearContents]` on each invocation, so sequential
-        // `writeBuffer` calls cannot install multiple custom UTIs in one
-        // pasteboard session. Keep the legacy `NSFilenamesPboardType` plist
-        // (Finder reads it natively) with the path XML-escaped so a
-        // hostile `TMPDIR` cannot break out of the <string> element.
-        const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<array>
-    <string>${escapeXml(filePath)}</string>
-</array>
-</plist>`;
-        clipboard.writeBuffer("NSFilenamesPboardType", Buffer.from(plist, "utf8"));
-      } else if (process.platform === "win32") {
-        clipboard.writeText(filePath);
-      } else {
-        clipboard.writeBuffer(
-          "text/uri-list",
-          Buffer.from(pathToFileURL(filePath).href + "\r\n", "utf8")
-        );
-      }
+      copyFileToClipboard(filePath);
 
       console.log(`[${traceId}] Copied context file to clipboard: ${filePath}`);
 

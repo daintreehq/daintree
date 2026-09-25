@@ -1273,6 +1273,7 @@ export const CHANNELS = {
   FILE_TRANSFER_UPLOAD_BYTES: "file-transfer:upload-bytes",
   FILE_TRANSFER_DOWNLOAD: "file-transfer:download",
   FILE_TRANSFER_CANCEL: "file-transfer:cancel",
+  FILE_TRANSFER_ANSWER_HOST_PICK: "file-transfer:answer-host-pick",
   FILE_TRANSFER_EVENT: "file-transfer:event",
 
   // Remote Hosts: hostSwitch (shell).
