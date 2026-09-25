@@ -52,7 +52,7 @@ export default {
 
 - `scenes` has one zero-prop component per chapter id, and nothing else is keyed by chapter.
 - `chapterTitles` is optional; a chapter without one is titled by its id. Give every chapter a short title (under about 40 characters), written like the built-in tour's: "One task, one worktree", "See who needs you".
-- `mockKit` is optional. Everything in `@daintreehq/tour/mock-app` that draws an agent, an agent state, a CI mark or the assistant button (`MockPane`, `MockApp`'s toolbar agents, `MockWorktreeCard` states) reads its visuals from it, and draws nothing for them without one. Plugin tours rarely use those; if one does, supply a kit (see the `MockKit` type in `mock-app.d.ts`) or draw the plugin's own UI with the kit parts instead.
+- `mockKit` is optional. Everything in `@daintreehq/tour/mock-app` that draws an agent, an agent state, a CI mark or the assistant button (`MockPane`, `MockApp`'s toolbar agents, `MockWorktreeCard` states) looks up an id you pass it (`agent="claude"`, a state or CI id) in it, and draws nothing for an id without one. Plugin tours rarely use those; if one does, pass the full descriptor instead of an id, supply a kit (see the `MockKit` type in `mock-app.d.ts`), or draw the plugin's own UI with the kit parts.
 - A flat map (`export default { intro: IntroScene }`) is wrong: Daintree refuses it.
 
 Put scene files under `src/tour/` and the module at `src/tour.tsx`.
