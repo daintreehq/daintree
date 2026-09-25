@@ -1690,6 +1690,23 @@ describe("claude providerTemplates descriptions", () => {
       expect(template.description!.length).toBeLessThanOrEqual(60);
     }
   });
+
+  // #12783: the flag hides Monitor, PushNotification and claude.ai connectors
+  // from Claude Code, so Daintree must never pre-fill it on the user's behalf.
+  it("never pre-fills CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", () => {
+    const config = getAgentConfig("claude");
+    expect(config?.env?.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBeUndefined();
+    for (const template of config?.providerTemplates ?? []) {
+      expect(template.env?.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, template.id).toBeUndefined();
+    }
+  });
+
+  it("warns that the nonessential-traffic suggestion removes Monitor", () => {
+    const suggestion = getAgentConfig("claude")?.envSuggestions?.find(
+      (s) => s.key === "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
+    );
+    expect(suggestion?.hint).toContain("Monitor");
+  });
 });
 
 describe("opencode detection patterns", () => {

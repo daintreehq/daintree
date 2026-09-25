@@ -228,6 +228,18 @@ describe("AddPresetDialog — what gets created matches what was chosen", () => 
     expect(Object.keys(payload.env ?? {}).length).toBeGreaterThan(0);
   });
 
+  it("creates from a template with no env as an empty env, not undefined", () => {
+    const { onCreate } = renderDialog();
+
+    fireEvent.click(screen.getByRole("radio", { name: "From template" }));
+    const select = screen.getByTestId("template-select") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "anthropic-native" } });
+    fireEvent.click(screen.getByRole("button", { name: /create preset/i }));
+
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    expect(onCreate.mock.calls[0]![0].env).toEqual({});
+  });
+
   it("starts on the blank option every time it opens", () => {
     // Downstream specs depend on the untouched path producing a blank preset,
     // and reopening must not inherit the previous visit's choice.
