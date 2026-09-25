@@ -24,6 +24,9 @@ import { installPluginInstallSplits, installPluginParityClient } from "./plugins
 import { installPortForwardClient } from "./ports/clientInstall.js";
 import { installHostSwitchService } from "./projects/clientInstall.js";
 import { registerRemoteService } from "./runtime.js";
+import type { HostDescriptor } from "../../shared/types/remoteHosts.js";
+import type { LinkTransport } from "./client/transport.js";
+import type { HostSocketLocation } from "./host/hostSocketPath.js";
 import {
   attachClientTerminalRelay,
   detachClientTerminalRelayFor,
@@ -56,6 +59,10 @@ export { setRemoteHostsWindowOpener } from "./client/initClient.js";
 export interface StartRemoteHostsOptions {
   /** Host mode is on for this launch: listen for remote Shells. */
   hostMode: boolean;
+  /** How the Shell reaches a host; system ssh unless given (the integration harness dials a local socket). */
+  createTransport?: (descriptor: HostDescriptor) => LinkTransport;
+  /** Where Host mode listens; the platform's socket path unless given. */
+  hostLocation?: HostSocketLocation;
 }
 
 type Teardown = () => void | Promise<void>;
@@ -64,7 +71,7 @@ type Teardown = () => void | Promise<void>;
 let teardowns: Teardown[] = [];
 let started = false;
 
-function startClient(): void {
+function startClient(options: StartRemoteHostsOptions): void {
   let hostForView: (webContentsId: number) => string | null = () => null;
   let activated = false;
   // Tells each host which of its views a window is actually showing, so its
@@ -134,6 +141,7 @@ function startClient(): void {
   };
 
   const client = initRemoteHostsClient({
+    createTransport: options.createTransport,
     onFirstUse: activate,
     onRemoteViewActivated: (windowId, wc, isNew) => {
       // Showing a remote view retires the window's local terminal pair, as a
@@ -196,9 +204,9 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
     }
   }
   if (!started) return;
-  startClient();
+  startClient(options);
   // Registered whatever the setting, so the switch can start it at runtime.
-  const hostMode = createHostModeService();
+  const hostMode = createHostModeService({ location: options.hostLocation });
   teardowns.push(registerRemoteService("hostMode", hostMode));
   teardowns.push(() => hostMode.dispose());
   if (options.hostMode) await hostMode.startListening();

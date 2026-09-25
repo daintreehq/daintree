@@ -17,7 +17,7 @@ import {
 } from "../../../services/pty/types.js";
 import { ClientTerminalRelay } from "../ClientTerminalRelay.js";
 import { RingBudget } from "../ring.js";
-import { TERMINAL_RESUME_METHOD } from "../protocol.js";
+import { TERMINAL_RESUME_METHOD, TerminalResumeResultSchema } from "../protocol.js";
 import {
   DEFAULT_ACK_TIMEOUT_MS,
   DEFAULT_MAX_OUTSTANDING_BYTES,
@@ -50,6 +50,8 @@ interface Harness {
   snapshots: Map<string, string>;
   /** Owning project per terminal as the host's spawn records say; unset means project-a. */
   owners: Map<string, string | null>;
+  /** While blocked the pty-host refuses the bridge's connection, as while it restarts. */
+  blockPty(blocked: boolean): void;
   host: LinkSession;
   client: LinkSession;
   outFrames: TerminalOutMessage[];
@@ -64,10 +66,12 @@ async function setup(overrides: Partial<TerminalStreamBridgeOptions> = {}): Prom
   const owners = new Map<string, string | null>();
   let ptyPeer: FakePtyHost | null = null;
   let rendererPeer: FakePeer | null = null;
+  let ptyBlocked = false;
 
   const bridge = new TerminalStreamBridge({
     endpointId: ENDPOINT,
     openPort: () => {
+      if (ptyBlocked) return null;
       ptyPeer?.close();
       ptyPeer = new FakePtyHost((id) => {
         const data = snapshots.get(id);
@@ -106,6 +110,9 @@ async function setup(overrides: Partial<TerminalStreamBridgeOptions> = {}): Prom
     incarnations,
     snapshots,
     owners,
+    blockPty: (blocked) => {
+      ptyBlocked = blocked;
+    },
     host: null as unknown as LinkSession,
     client: null as unknown as LinkSession,
     outFrames: [],
@@ -382,21 +389,91 @@ describe("terminal stream over the link", () => {
     ]);
   });
 
-  it("forgets a terminal the host has no stream for instead of waiting on it", async () => {
+  it("repaints a terminal from a snapshot when a fresh host bridge never streamed it", async () => {
+    const h = await setup();
+    h.snapshots.set("t1", "EVERYTHING-SO-FAR");
+    await h.connectLink();
+    h.pty().emit("t1", "a");
+    await waitFor(() => h.relay.position("t1") !== null);
+
+    // A fresh host bridge (the endpoint was recreated) never carried t1, so
+    // it can't replay what the client missed; it must not leave a silent gap.
+    await h.dropLink();
+    h.bridge.setProject(null);
+    h.bridge.setProject("project-a");
+    await h.connectLink();
+    await waitFor(() => h.renderer().ofType("reset").length === 1);
+    expect(h.renderer().ofType("reset")[0]!.snapshot).toMatchObject({ data: "EVERYTHING-SO-FAR" });
+
+    h.pty().emit("t1", "b");
+    await waitFor(() => rendererData(h).includes("b"));
+  });
+
+  it("delivers that repaint once the pty-host connects, even if the terminal stays quiet", async () => {
+    const h = await setup();
+    h.snapshots.set("t1", "QUIET-SINCE");
+    await h.connectLink();
+    h.pty().emit("t1", "a");
+    await waitFor(() => h.relay.position("t1") !== null);
+
+    await h.dropLink();
+    h.blockPty(true);
+    h.bridge.setProject(null);
+    h.bridge.setProject("project-a");
+    await h.connectLink();
+    expect(h.renderer().ofType("reset")).toEqual([]);
+
+    h.blockPty(false);
+    await waitFor(() => h.renderer().ofType("reset").length === 1);
+    expect(h.renderer().ofType("reset")[0]!.snapshot).toMatchObject({ data: "QUIET-SINCE" });
+  });
+
+  it("answers unknown for a stream its own resume retired to make room", async () => {
+    const h = await setup({ maxStreams: 1 });
+    await h.connectLink();
+    h.pty().emit("t1", "a");
+    h.pty().emit("t2", "b");
+    await waitFor(() => h.relay.position("t2") !== null);
+
+    await h.dropLink();
+    h.bridge.setProject(null);
+    h.bridge.setProject("project-a");
+    const answer = TerminalResumeResultSchema.parse(
+      await (async () => {
+        const { host, client } = await openSessionPair(dir);
+        cleanups.push(() => {
+          host.close("test done");
+          client.close("test done");
+        });
+        h.bridge.attach(host);
+        return client.call(TERMINAL_RESUME_METHOD, {
+          endpointId: ENDPOINT,
+          terminals: [
+            { id: "t1", incarnation: 1, lastSeq: 1 },
+            { id: "t2", incarnation: 1, lastSeq: 1 },
+          ],
+        });
+      })()
+    );
+    expect(answer.terminals).toEqual([
+      { id: "t1", outcome: "unknown" },
+      { id: "t2", outcome: "reset" },
+    ]);
+  });
+
+  it("forgets a terminal its project no longer owns instead of waiting on it", async () => {
     const h = await setup();
     await h.connectLink();
     h.pty().emit("t1", "a");
     await waitFor(() => h.relay.position("t1") !== null);
 
-    // A fresh host bridge (the endpoint was recreated) knows nothing of t1.
     await h.dropLink();
+    h.owners.set("t1", null);
     h.bridge.setProject(null);
     h.bridge.setProject("project-a");
     await h.connectLink();
     await waitFor(() => h.relay.position("t1") === null);
-
-    h.pty().emit("t1", "b");
-    await waitFor(() => rendererData(h).includes("b"));
+    expect(h.renderer().ofType("reset")).toEqual([]);
   });
 
   it("answers resume for the right endpoint on a shared session", async () => {

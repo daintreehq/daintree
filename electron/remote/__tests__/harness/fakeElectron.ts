@@ -1,5 +1,7 @@
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
+import { harnessState } from "./harnessState.js";
 
 /**
  * The slice of Electron the Remote Hosts harness runs against. Everything else
@@ -12,6 +14,10 @@ import { MessageChannel, type MessagePort } from "node:worker_threads";
 type InvokeListener = (event: unknown, ...args: unknown[]) => unknown;
 
 export const invokeHandlers = new Map<string, InvokeListener>();
+/** `ipcMain.on` listeners: what a renderer's `ipcRenderer.send` reaches. */
+export const sendListeners = new Map<string, Set<InvokeListener>>();
+/** `protocol.handle` handlers by scheme. */
+export const protocolHandlers = new Map<string, (request: Request) => Promise<Response>>();
 
 const bareIpcMain = {
   handle: (channel: string, listener: InvokeListener) => {
@@ -23,10 +29,24 @@ const bareIpcMain = {
   removeHandler: (channel: string) => {
     invokeHandlers.delete(channel);
   },
-  on: () => undefined,
-  removeListener: () => undefined,
-  removeAllListeners: () => undefined,
-  off: () => undefined,
+  on: (channel: string, listener: InvokeListener) => {
+    let listeners = sendListeners.get(channel);
+    if (!listeners) {
+      listeners = new Set();
+      sendListeners.set(channel, listeners);
+    }
+    listeners.add(listener);
+  },
+  removeListener: (channel: string, listener: InvokeListener) => {
+    sendListeners.get(channel)?.delete(listener);
+  },
+  removeAllListeners: (channel?: string) => {
+    if (channel === undefined) sendListeners.clear();
+    else sendListeners.delete(channel);
+  },
+  off: (channel: string, listener: InvokeListener) => {
+    sendListeners.get(channel)?.delete(listener);
+  },
 };
 
 export const ipcMainMock = { ...bareIpcMain };
@@ -35,6 +55,8 @@ export const ipcMainMock = { ...bareIpcMain };
 export function resetIpcMain(): void {
   Object.assign(ipcMainMock, bareIpcMain);
   invokeHandlers.clear();
+  sendListeners.clear();
+  protocolHandlers.clear();
 }
 
 const openPorts = new Set<FakeMessagePortMain>();
@@ -101,8 +123,26 @@ export const electronMock = {
     isPackaged: false,
     on: () => undefined,
     getVersion: () => "0.0.0-harness",
-    getPath: () => "/nonexistent-harness-user-data",
+    getPath: (name: string) =>
+      name === "userData" ? harnessState.userDataDir : path.join(harnessState.userDataDir, name),
+    getAppPath: () => harnessState.userDataDir,
+    getName: () => "Daintree",
   },
+  safeStorage: {
+    isEncryptionAvailable: () => false,
+    isAsyncEncryptionAvailable: () => false,
+    getSelectedStorageBackend: () => "basic_text",
+  },
+  shell: {},
+  protocol: {
+    handle: (scheme: string, handler: (request: Request) => Promise<Response>) => {
+      protocolHandlers.set(scheme, handler);
+    },
+    unhandle: (scheme: string) => {
+      protocolHandlers.delete(scheme);
+    },
+  },
+  clipboard: {},
   ipcMain: ipcMainMock,
   session: { defaultSession: {}, fromPartition: () => ({}) },
   MessageChannelMain: FakeMessageChannelMain,

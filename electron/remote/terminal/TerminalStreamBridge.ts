@@ -274,7 +274,11 @@ export class TerminalStreamBridge {
       else this.scheduleReconnect();
     }
     previous?.close();
-    if (replaced) for (const stream of this.streams.values()) this.pump(stream);
+    // A reset promised while there was no connection (a resume, or a fence
+    // that could not be posted) is owed on the first one too.
+    for (const stream of this.streams.values()) {
+      if (replaced || stream.needsReset) this.pump(stream);
+    }
   }
 
   /**
@@ -333,7 +337,14 @@ export class TerminalStreamBridge {
     for (const entry of request.terminals) {
       if (mentioned.has(entry.id)) continue;
       mentioned.add(entry.id);
-      const stream = this.streams.get(entry.id);
+      let stream = this.streams.get(entry.id);
+      if (!stream && this.owns(entry.id)) {
+        // The client painted this terminal from a stream this bridge never
+        // carried (the host's listener restarted, or the stream was retired),
+        // so nothing here can show what it missed: repaint from a snapshot.
+        stream = this.createStream(entry.id, this.incarnationOf(entry.id));
+        stream.needsReset = true;
+      }
       if (!stream || !this.owns(entry.id)) {
         if (stream) this.retire(stream, true);
         outcomes.push({ id: entry.id, outcome: "unknown" });
@@ -368,6 +379,11 @@ export class TerminalStreamBridge {
         stream.sentSeq = stream.seq;
         stream.needsReset = false;
       }
+    }
+    // Creating a stream above can retire one answered earlier in this call:
+    // the client must not keep a position for a stream the host has dropped.
+    for (const entry of outcomes) {
+      if (!this.streams.has(entry.id)) entry.outcome = "unknown";
     }
     for (const id of mentioned) {
       const stream = this.streams.get(id);

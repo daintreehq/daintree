@@ -6,7 +6,6 @@ import { AppError } from "../../utils/errorTypes.js";
 import { getRemoteService, requireRemoteService } from "../../remote/runtime.js";
 import { REMOTE_HOSTS_METHOD_CHANNELS } from "./remoteHosts.preload.js";
 import { getLocalHandshakeInfo } from "../../remote/handshakeInfo.js";
-import { persistedClipboardGrants } from "../../remote/plugins/clipboardGrants.js";
 import {
   LOCAL_HOST_ID,
   type HostConnectionState,
@@ -168,8 +167,16 @@ export const remoteHostsNamespace = defineIpcNamespace({
     // This machine's own answers about a host's plugins and its clipboard.
     listClipboardGrants: op(
       REMOTE_HOSTS_METHOD_CHANNELS.listClipboardGrants,
-      async (payload: ListHostProjectsPayload): Promise<HostPluginClipboardGrant[]> =>
-        persistedClipboardGrants.list(requireHostId(payload))
+      async (payload: ListHostProjectsPayload): Promise<HostPluginClipboardGrant[]> => {
+        const hostId = requireHostId(payload);
+        // Loaded lazily behind the raw define so a Windows build drops the module.
+        if (__DAINTREE_REMOTE_HOSTS__) {
+          const { persistedClipboardGrants } =
+            await import("../../remote/plugins/clipboardGrants.js");
+          return persistedClipboardGrants.list(hostId);
+        }
+        return [];
+      }
     ),
     resetClipboardGrants: op(
       REMOTE_HOSTS_METHOD_CHANNELS.resetClipboardGrants,
@@ -178,7 +185,12 @@ export const remoteHostsNamespace = defineIpcNamespace({
         if (pluginId !== undefined && typeof pluginId !== "string") {
           throw new AppError({ code: "VALIDATION", message: "pluginId must be a string" });
         }
-        persistedClipboardGrants.reset(requireHostId(payload), pluginId);
+        const hostId = requireHostId(payload);
+        if (__DAINTREE_REMOTE_HOSTS__) {
+          const { persistedClipboardGrants } =
+            await import("../../remote/plugins/clipboardGrants.js");
+          persistedClipboardGrants.reset(hostId, pluginId);
+        }
       }
     ),
     isInUse: op(REMOTE_HOSTS_METHOD_CHANNELS.isInUse, (): boolean => remoteHostsInUse()),
