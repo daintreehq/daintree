@@ -7,6 +7,11 @@ vi.mock("@/lib/notify", () => ({
   notify: (...args: unknown[]) => mockNotify(...args),
 }));
 
+const mockLogWarn = vi.fn();
+vi.mock("@/utils/logger", () => ({
+  logWarn: (...args: unknown[]) => mockLogWarn(...args),
+}));
+
 const mockRefreshPullRequests = vi.fn().mockResolvedValue(undefined);
 vi.mock("@/clients", () => ({
   worktreeClient: { refreshPullRequests: () => mockRefreshPullRequests() },
@@ -75,6 +80,45 @@ describe("worktree service action definitions", () => {
     expect(payload.type).toBe("error");
     expect(payload.title).toBe("Refresh failed");
     expect(payload.message).toContain("Worktree port timed out");
+  });
+
+  it.each([
+    ["HOST_EXITED", "Worktree port not ready"],
+    ["HOST_EXITED", "Worktree port replaced"],
+    ["APP_SHUTDOWN", "Broker disposed"],
+  ])(
+    "worktree.refresh logs instead of toasting when the port is unavailable (%s: %s)",
+    async (code, message) => {
+      // The exact shape preload's encodeBrokerError produces across contextBridge.
+      mockRequest.mockRejectedValueOnce(new Error(`[BrokerError|${code}] ${message}`));
+
+      const def = registry.get("worktree.refresh")!();
+      await def.run!(undefined as never, undefined as never);
+
+      expect(mockNotify).not.toHaveBeenCalled();
+      expect(mockLogWarn).toHaveBeenCalledWith("Worktree refresh skipped: port unavailable", {
+        code,
+        reason: message,
+      });
+      // The pool-wide PR refresh doesn't depend on this view's port.
+      expect(mockRefreshPullRequests).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("worktree.refresh toasts a broker timeout without the transport prefix", async () => {
+    mockRequest.mockRejectedValueOnce(
+      new Error("[BrokerError|TIMEOUT] Request timeout: refresh (10000ms)")
+    );
+
+    const def = registry.get("worktree.refresh")!();
+    await def.run!(undefined as never, undefined as never);
+
+    expect(mockNotify).toHaveBeenCalledTimes(1);
+    const payload = mockNotify.mock.calls[0]![0] as { title: string; message: string };
+    expect(payload.title).toBe("Refresh failed");
+    expect(payload.message).toBe("Request timeout: refresh (10000ms)");
+    expect(payload.message).not.toContain("[BrokerError");
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
   it("worktree.refresh surfaces an error toast when the host reports ok:false (watchdog tripped)", async () => {

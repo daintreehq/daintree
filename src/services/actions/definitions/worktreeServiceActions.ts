@@ -6,6 +6,8 @@ import { useProjectStore } from "@/store/projectStore";
 import { worktreeClient } from "@/clients";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isClientBrokerError } from "@/utils/clientBrokerError";
+import { logWarn } from "@/utils/logger";
 
 /**
  * A load failure worth retrying: one main or the port watchdog reported, or an
@@ -60,7 +62,24 @@ export function registerWorktreeServiceActions(
       const fallback = "The worktree host isn't responding. Try again in a moment.";
       let failureMessage: string | null = null;
       if (refreshResult.status === "rejected") {
-        failureMessage = formatErrorMessage(refreshResult.reason, fallback);
+        const reason: unknown = refreshResult.reason;
+        // Decoding also strips the `[BrokerError|<code>]` transport prefix from
+        // the message, so it never reaches the toast. A port that isn't attached
+        // yet (or is mid-replacement, or the app is quitting) isn't a failure the
+        // user can act on: the port-attach path re-fetches worktree state on its
+        // own. Toasting it made a successful forge token save read as an error
+        // (#12759).
+        if (
+          isClientBrokerError(reason) &&
+          (reason.code === "HOST_EXITED" || reason.code === "APP_SHUTDOWN")
+        ) {
+          logWarn("Worktree refresh skipped: port unavailable", {
+            code: reason.code,
+            reason: reason.message,
+          });
+          return;
+        }
+        failureMessage = formatErrorMessage(reason, fallback);
       } else if (refreshResult.value.ok === false) {
         failureMessage = refreshResult.value.error ?? fallback;
       }
