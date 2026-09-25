@@ -208,6 +208,10 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     });
     if (sent) {
       this.outstandingFeedBytes += data.length;
+    } else {
+      // The caller may keep the hold and retry, but a chunk it drops instead
+      // is a hole in the mirror no later snapshot can be fenced across.
+      this.continuityLost = true;
     }
     return sent;
   }

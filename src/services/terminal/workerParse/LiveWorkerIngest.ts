@@ -140,7 +140,8 @@ export class LiveWorkerIngest {
       this.releasingBuffer.push({ data, range });
       return;
     }
-    this.session.feed(data);
+    const paint = stripCoveredOutput(this.deps.getStreamFence?.(), data, range);
+    if ((typeof paint === "string" ? paint.length : paint.byteLength) > 0) this.session.feed(paint);
   }
 
   resize(cols: number, rows: number): void {

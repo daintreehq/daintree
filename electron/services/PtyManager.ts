@@ -120,8 +120,15 @@ export class PtyManager extends EventEmitter {
   // those bytes were dropped and a shell blocked on a prompt stayed blank
   // (#12753). Flushed in order right after registration.
   // Last renderer-bound stream offset per terminal id, outliving the process
-  // so a respawn at the same id continues the sequence (#12791).
+  // so a respawn at the same id continues the sequence (#12791). A restarted
+  // host starts from a clock-derived base instead of zero, so its output also
+  // lands past any fence the renderer still holds from the host before it —
+  // the renderer only clears those once it has processed the recovery event,
+  // and output on the fresh port can beat that. 2 KiB per millisecond of
+  // uptime is headroom no terminal's lifetime average approaches, and keeps
+  // offsets far inside Number.MAX_SAFE_INTEGER.
   private streamOffsets = new Map<string, number>();
+  private readonly streamOffsetOrigin = Date.now() * 2048;
   private constructionOutput: {
     id: string;
     chunks: Array<{ data: string; streamEnd: number }>;
@@ -539,7 +546,7 @@ export class PtyManager extends EventEmitter {
         options,
         {
           emitData: (termId, data, streamEnd) => this.emitData(termId, data, streamEnd),
-          streamOffsetBase: this.streamOffsets.get(id) ?? 0,
+          streamOffsetBase: this.streamOffsets.get(id) ?? this.streamOffsetOrigin,
           onExit: (termId, exitCode, signal) => {
             // Guard against stale exit events from previous terminal with same ID
             if (this.registry.get(termId) !== terminalProcess) {

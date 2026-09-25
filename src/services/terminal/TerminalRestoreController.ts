@@ -630,7 +630,7 @@ export class TerminalRestoreController {
         release();
         return "live-output";
       }
-      if (!snapshot?.data) {
+      if (!snapshot || (snapshot.data === "" && !this.restoreTail(snapshot.continuation))) {
         release();
         return "no-host-output";
       }
