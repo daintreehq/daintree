@@ -31,6 +31,7 @@ import {
   broadcastToRenderer,
   broadcastToVisibleRenderers,
   sendToRendererContext,
+  setRemoteBoundViewFilter,
   typedBroadcast,
 } from "../utils.js";
 import { getEndpointRegistry, _resetEndpointRegistryForTesting } from "../endpointRegistry.js";
@@ -177,6 +178,46 @@ describe("broadcast helpers with remote endpoints", () => {
 
     expect(() => broadcastToRenderer("a:b")).not.toThrow();
     expect(healthy.send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("remote-bound view filter", () => {
+  it("withholds a push only from the views the filter refuses, across every local helper", () => {
+    const remoteBound = localView(1);
+    const local = localView(2);
+    localViews.push(remoteBound, local);
+    hasProjectViewsMock.mockReturnValue(true);
+    projectViewsMock.mockReturnValue([remoteBound, local]);
+    const filter = vi.fn((webContentsId: number, channel: string) => {
+      return webContentsId !== 1 || channel === "shell:ok";
+    });
+    const uninstall = setRemoteBoundViewFilter(filter);
+
+    broadcastToRenderer("host:thing", 1);
+    broadcastToVisibleRenderers("host:thing", 2);
+    broadcastToProjectRenderers("proj-1", "host:thing", 3);
+    broadcastToRenderer("shell:ok", 4);
+
+    expect(remoteBound.send.mock.calls).toEqual([["shell:ok", 4]]);
+    expect(local.send).toHaveBeenCalledTimes(4);
+    expect(filter).toHaveBeenCalledWith(1, "host:thing", [3]);
+
+    uninstall();
+    broadcastToRenderer("host:thing", 5);
+    expect(remoteBound.send).toHaveBeenLastCalledWith("host:thing", 5);
+  });
+
+  it("only clears the filter it installed", () => {
+    const view = localView(1);
+    localViews.push(view);
+    const first = setRemoteBoundViewFilter(() => false);
+    const second = setRemoteBoundViewFilter(() => false);
+    first();
+    broadcastToRenderer("a:b");
+    expect(view.send).not.toHaveBeenCalled();
+    second();
+    broadcastToRenderer("a:b");
+    expect(view.send).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -969,7 +969,10 @@ export function createRendererBridge(
     confirmed = false,
     contextOverride?: ActionContext,
     sessionOrigin: McpSessionOrigin = "external",
-    approval?: Pick<WorkspaceDispatchOptions, "approvalOnly" | "approvalReason" | "authorization">
+    approval?: Pick<
+      WorkspaceDispatchOptions,
+      "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization"
+    >
   ): Promise<DispatchEnvelope> {
     return sendDispatchRequest(
       () => getPinnedWebContents(id),

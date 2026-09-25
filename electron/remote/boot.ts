@@ -5,16 +5,27 @@ import {
   getFleetSnapshotService,
   getProjectStatsService,
 } from "../ipc/handlers/projectCrud/index.js";
+import { setRemoteBoundViewFilter } from "../ipc/utils.js";
+import { getDriveLeaseService } from "../services/DriveLeaseService.js";
+import { setMcpDriveTargetResolver } from "../services/mcp-server/driveTarget.js";
 import { releaseWindowTerminalPort, setRemoteViewHooks } from "../window/portDistribution.js";
 import { getPtyClient } from "../window/serviceRefs.js";
 import { resolveLiveWebContents } from "../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { initRemoteHostsClient } from "./client/initClient.js";
+import { installViewReverseRequests } from "./client/viewRequests.js";
 import { getLocalHandshakeInfo } from "./handshakeInfo.js";
 import { HostServer } from "./host/HostServer.js";
 import { hostSocketLocation, type HostSocketLocation } from "./host/hostSocketPath.js";
 import { initRemoteHostsHost } from "./host/initHost.js";
 import type { RemoteViewEndpoint } from "./host/RemoteViewEndpoint.js";
+import {
+  acceptLocalPushForRemoteView,
+  admitHybridHostLegs,
+  installHybridSplits,
+} from "./hybrid/index.js";
+import { Lane } from "./link/frames.js";
+import { ControlKind } from "./link/messages.js";
 import type { LinkSession } from "./link/session.js";
 import { registerRemoteService } from "./runtime.js";
 import {
@@ -93,6 +104,14 @@ function startClient(): void {
     activated = true;
     teardowns.push(installClientTerminalPortOverride(hostForView));
     teardowns.push(installClientWorktreePortOverride(hostForView));
+    teardowns.push(installHybridSplits({ router: client.router }));
+    // This machine's agents, terminals and projects are not a remote view's.
+    teardowns.push(
+      setRemoteBoundViewFilter(
+        (webContentsId, channel, args) =>
+          hostForView(webContentsId) === null || acceptLocalPushForRemoteView(channel, args)
+      )
+    );
     teardowns.push(
       setRemoteViewHooks({
         isRemoteView: (wc) => hostForView(wc.id) !== null,
@@ -138,6 +157,8 @@ function startClient(): void {
   });
   hostForView = client.hostForView;
   teardowns.push(() => client.dispose());
+  // Answered only once a session exists, so registering costs nothing until then.
+  teardowns.push(installViewReverseRequests());
 }
 
 function attachHostStreams(session: LinkSession, endpoint: RemoteViewEndpoint): void {
@@ -171,10 +192,19 @@ async function startHost(): Promise<void> {
   teardowns.push(() => host.dispose());
   teardowns.push(() => disposeAllTerminalBridges());
 
+  teardowns.push(admitHybridHostLegs());
+
+  // MCP dispatch and the drive lease agree on who drives a project.
+  const lease = getDriveLeaseService();
+  teardowns.push(setMcpDriveTargetResolver((projectId) => lease.getHolderEndpoint(projectId)));
+
   const endpointsBySession = new Map<string, Map<string, RemoteViewEndpoint>>();
+  const linksBySession = new Map<string, () => LinkSession | null>();
 
   teardowns.push(
     host.sessionHost.onEndpointOpened((endpoint, handle) => {
+      lease.noteEndpointClient(endpoint.endpointId, handle.client);
+      linksBySession.set(handle.sessionId, handle.link);
       let endpoints = endpointsBySession.get(handle.sessionId);
       if (!endpoints) {
         endpoints = new Map();
@@ -204,9 +234,30 @@ async function startHost(): Promise<void> {
     server.onSessionExpired(({ sessionId }) => {
       const endpoints = endpointsBySession.get(sessionId);
       endpointsBySession.delete(sessionId);
+      linksBySession.delete(sessionId);
       for (const endpointId of endpoints?.keys() ?? []) {
         detachTerminalBridge(endpointId);
         detachWorktreePortBridge(endpointId);
+      }
+    })
+  );
+
+  // A Shell showing the project hears of every holder change, beside the
+  // per-view drive-lease events its views get.
+  teardowns.push(
+    lease.onChange((state) => {
+      for (const [sessionId, endpoints] of endpointsBySession) {
+        const showsProject = [...endpoints.values()].some(
+          (endpoint) => !endpoint.isClosed() && endpoint.projectId === state.projectId
+        );
+        if (!showsProject) continue;
+        try {
+          linksBySession
+            .get(sessionId)?.()
+            ?.post({ lane: Lane.CONTROL, kind: ControlKind.LEASE_CHANGED, body: state });
+        } catch {
+          // A closing link; its Shell resyncs on the way back.
+        }
       }
     })
   );

@@ -336,6 +336,14 @@ export function getDriveLeaseService(): DriveLeaseService {
   return service;
 }
 
+/**
+ * The service if something has started it (Host mode does), without starting
+ * one: a check on a local-only path must not begin arbitrating leases.
+ */
+export function peekDriveLeaseService(): DriveLeaseService | null {
+  return service;
+}
+
 /** @internal Tests only. */
 export function _resetDriveLeaseServiceForTesting(next: DriveLeaseService | null = null): void {
   service?.dispose();
