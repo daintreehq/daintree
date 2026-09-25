@@ -930,6 +930,17 @@ export type WorkspaceHostEvent =
       message: string;
       details?: string;
     }
+  // An externally-deleted worktree whose Git metadata the host kept rather than
+  // pruned, because its submodule stores hold commits that exist nowhere else
+  // or could not be inspected (#12790). Emitted once per distinct loss; the
+  // router surfaces it through `notifyError`, which queues until a renderer
+  // is ready to show it.
+  | {
+      type: "worktree-prune-retained";
+      adminDir: string;
+      worktreePath?: string;
+      message: string;
+    }
   // Linux-only: fired once per host-process lifetime when the recursive file
   // watcher hits the inotify watch limit (ENOSPC).
   | { type: "inotify-limit-reached" }

@@ -542,6 +542,31 @@ describe("WorkspaceHostProcess", () => {
     host.dispose();
   });
 
+  it("relays worktree-prune-retained as host-event (#12790)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+
+    const event = {
+      type: "worktree-prune-retained",
+      adminDir: "/tmp/project/.git/worktrees/wt",
+      worktreePath: "/tmp/wt",
+      message: "kept",
+    };
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", event);
+
+    expect(onHostEvent).toHaveBeenCalledWith(event);
+
+    host.dispose();
+  });
+
   it("routes lifecycle-setup-error as host-event with details (#10778)", async () => {
     const { WorkspaceHostProcess } = await loadModule();
     const host = new WorkspaceHostProcess("/tmp/project", {

@@ -409,6 +409,17 @@ export class WorkspaceHostEventRouter {
         break;
       }
 
+      case "worktree-prune-retained": {
+        notifyError(new Error(event.message), {
+          source: "worktree-prune",
+          // A worktree's id is its path, so this lands on the card the
+          // retained entry keeps showing as, when it has one.
+          context: event.worktreePath ? { worktreeId: event.worktreePath } : undefined,
+          retryability: "none",
+        });
+        break;
+      }
+
       case "emfile-limit-reached": {
         if (this.emfileLimitToastSent) break;
         this.emfileLimitToastSent = true;

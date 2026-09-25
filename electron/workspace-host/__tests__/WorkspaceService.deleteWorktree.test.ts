@@ -1,10 +1,12 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from "vitest";
 import { EventEmitter } from "events";
 import path from "node:path";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
 import type { SubmoduleDeleteRisk } from "../../../shared/types/submodule.js";
+/** The private sweep, reachable for spying. */
+type SweepHost = { sweepPrunableWorktreeEntries: () => Promise<void> };
 
 const n = (p: string) => (p as string).replace(/\\/g, "/");
 
@@ -163,6 +165,14 @@ describe("WorkspaceService.deleteWorktree", () => {
   let service: WorkspaceService;
   let mockSendEvent: ReturnType<typeof vi.fn>;
   let WorktreeMonitorClass: typeof WorktreeMonitor;
+  let sweepSpy: MockInstance<SweepHost["sweepPrunableWorktreeEntries"]>;
+
+  /** Bare `worktree prune` calls — none may remain on any path (#12790). */
+  function barePruneCalls(): unknown[][] {
+    return mockSimpleGit.raw.mock.calls.filter(
+      (c) => Array.isArray(c[0]) && c[0][0] === "worktree" && c[0][1] === "prune"
+    );
+  }
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -196,6 +206,10 @@ describe("WorkspaceService.deleteWorktree", () => {
     // Teardown fixtures here are about ordering and failure handling once the
     // repository's commands are allowed; the unapproved path has its own test.
     vi.spyOn(service["lifecycleService"]["approvals"], "isApproved").mockResolvedValue(true);
+    // The sweep's own per-entry behaviour runs against a real registry in
+    // `WorkspaceService.pruneSweep.test.ts`; here it only matters whether the
+    // delete path reaches it.
+    sweepSpy = vi.spyOn(service as unknown as SweepHost, "sweepPrunableWorktreeEntries");
 
     const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
     WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
@@ -485,7 +499,7 @@ describe("WorkspaceService.deleteWorktree", () => {
     );
   });
 
-  it("prunes instead of removing when worktree directory is missing (#6669)", async () => {
+  it("sweeps stale entries instead of removing when worktree directory is missing (#6669)", async () => {
     const fsModule = await import("fs/promises");
     const mockAccess = vi.mocked(fsModule.access);
     const enoent: NodeJS.ErrnoException = Object.assign(new Error("ENOENT"), {
@@ -504,9 +518,9 @@ describe("WorkspaceService.deleteWorktree", () => {
     await service.deleteWorktree("req-missing", "/test/worktree");
 
     const removeCalls = gitCalls.filter((c) => c[0] === "worktree" && c[1] === "remove");
-    const pruneCalls = gitCalls.filter((c) => c[0] === "worktree" && c[1] === "prune");
     expect(removeCalls.length).toBe(0);
-    expect(pruneCalls.length).toBe(1);
+    expect(sweepSpy).toHaveBeenCalledTimes(1);
+    expect(barePruneCalls()).toEqual([]);
 
     expect(mockSendEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -521,7 +535,7 @@ describe("WorkspaceService.deleteWorktree", () => {
     expect(service["monitors"].has("/test/worktree")).toBe(false);
   });
 
-  it("succeeds when missing path triggers prune even if prune itself fails (#6669)", async () => {
+  it("succeeds when missing path triggers the sweep even if the sweep itself fails (#6669)", async () => {
     const fsModule = await import("fs/promises");
     const mockAccess = vi.mocked(fsModule.access);
     const enoent: NodeJS.ErrnoException = Object.assign(new Error("ENOENT"), {
@@ -529,12 +543,7 @@ describe("WorkspaceService.deleteWorktree", () => {
     });
     mockAccess.mockRejectedValue(enoent);
 
-    mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
-      if (args[0] === "worktree" && args[1] === "prune") {
-        throw new Error("fatal: prune failed (unrelated)");
-      }
-      return undefined;
-    });
+    sweepSpy.mockRejectedValue(new Error("EPERM: registry unreadable"));
 
     createAndRegisterMonitor();
 
@@ -550,7 +559,7 @@ describe("WorkspaceService.deleteWorktree", () => {
     expect(service["monitors"].has("/test/worktree")).toBe(false);
   });
 
-  it("falls back to prune when remove returns 'is not a working tree' (#6669)", async () => {
+  it("falls back to the sweep when remove returns 'is not a working tree' (#6669)", async () => {
     const fsModule = await import("fs/promises");
     const mockAccess = vi.mocked(fsModule.access);
     mockAccess.mockImplementation(async (p: unknown) => {
@@ -572,9 +581,9 @@ describe("WorkspaceService.deleteWorktree", () => {
     await service.deleteWorktree("req-stale", "/test/worktree");
 
     const removeCalls = gitCalls.filter((c) => c[0] === "worktree" && c[1] === "remove");
-    const pruneCalls = gitCalls.filter((c) => c[0] === "worktree" && c[1] === "prune");
     expect(removeCalls.length).toBe(1);
-    expect(pruneCalls.length).toBe(1);
+    expect(sweepSpy).toHaveBeenCalledTimes(1);
+    expect(barePruneCalls()).toEqual([]);
 
     expect(mockSendEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -605,9 +614,8 @@ describe("WorkspaceService.deleteWorktree", () => {
     await service.deleteWorktree("req-eperm", "/test/worktree");
 
     const removeCalls = gitCalls.filter((c) => c[0] === "worktree" && c[1] === "remove");
-    const pruneCalls = gitCalls.filter((c) => c[0] === "worktree" && c[1] === "prune");
     expect(removeCalls.length).toBe(1);
-    expect(pruneCalls.length).toBe(0);
+    expect(sweepSpy).not.toHaveBeenCalled();
 
     expect(mockSendEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1474,9 +1482,8 @@ describe("WorkspaceService.deleteWorktree", () => {
     }
 
     function pruneCallCount(): number {
-      return mockSimpleGit.raw.mock.calls.filter(
-        (c) => Array.isArray(c[0]) && c[0][0] === "worktree" && c[0][1] === "prune"
-      ).length;
+      expect(barePruneCalls()).toEqual([]);
+      return sweepSpy.mock.calls.length;
     }
 
     it("never runs the checkout inventory for a worktree whose folder is already gone", async () => {

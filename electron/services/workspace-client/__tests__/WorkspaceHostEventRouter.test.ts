@@ -34,6 +34,13 @@ vi.mock("../fileSearchCacheInvalidation.js", () => ({
 
 const statusTimingMock = vi.hoisted(() => ({ complete: vi.fn() }));
 
+const notifyErrorMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../ipc/errorHandlers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../ipc/errorHandlers.js")>()),
+  notifyError: notifyErrorMock,
+}));
+
 vi.mock("../../ProjectSwitchStatusTiming.js", () => ({
   projectSwitchStatusTiming: statusTimingMock,
 }));
@@ -160,6 +167,36 @@ describe("WorkspaceHostEventRouter", () => {
       expect(fileSearchCacheInvalidatorMock.handleWorktreeRemoved).toHaveBeenCalledWith(
         "/project/test/wt"
       );
+    });
+  });
+
+  describe("worktree-prune-retained (#12790)", () => {
+    it("surfaces the kept entry through notifyError on the worktree it belongs to", () => {
+      router.routeHostEvent(makeEntry(), {
+        type: "worktree-prune-retained",
+        adminDir: "/project/test/.git/worktrees/wt",
+        worktreePath: "/project/wt",
+        message: "its submodule repositories still hold 1 submodule commit",
+      });
+
+      expect(notifyErrorMock).toHaveBeenCalledTimes(1);
+      const [error, options] = notifyErrorMock.mock.calls[0];
+      expect((error as Error).message).toContain("1 submodule commit");
+      expect(options).toMatchObject({
+        source: "worktree-prune",
+        context: { worktreeId: "/project/wt" },
+      });
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+    });
+
+    it("leaves the context empty for an entry whose pointer named no checkout", () => {
+      router.routeHostEvent(makeEntry(), {
+        type: "worktree-prune-retained",
+        adminDir: "/project/test/.git/worktrees/wt",
+        message: "submodule contents that could not be inspected",
+      });
+
+      expect(notifyErrorMock.mock.calls[0][1].context).toBeUndefined();
     });
   });
 
