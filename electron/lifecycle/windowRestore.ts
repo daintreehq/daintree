@@ -72,6 +72,13 @@ export interface RestoreWindowFleetDeps {
    * createWindow result, so the queue checks before starting each window.
    */
   isShuttingDown?: () => boolean;
+  /**
+   * A window is already up, so every record is a background window (#12801).
+   * Set when a single-crash recovery brings the rest of the fleet back behind
+   * the recovery window: no primary is created, nothing takes focus, and an
+   * empty manifest opens nothing.
+   */
+  primaryAlreadyOpen?: boolean;
 }
 
 /**
@@ -178,12 +185,14 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
     // the ones the user was closest to, and the queue that consumes these is
     // global and ordered, so handing them over first is what makes "the project
     // I was in paints first, the rest fill in behind it" hold across windows.
-    const background = records.slice(1);
-    const primaryResult = await deps.createWindow(primaryProjectId, {
-      backgroundProjectIds: records[0]?.backgroundProjectIds,
-      ...(background.length > 0 ? { awaitHydrationMs: RESTORE_HYDRATION_WAIT_MS } : {}),
-    });
-    if (primaryResult !== "ok") return;
+    const background = deps.primaryAlreadyOpen ? records : records.slice(1);
+    if (!deps.primaryAlreadyOpen) {
+      const primaryResult = await deps.createWindow(primaryProjectId, {
+        backgroundProjectIds: records[0]?.backgroundProjectIds,
+        ...(background.length > 0 ? { awaitHydrationMs: RESTORE_HYDRATION_WAIT_MS } : {}),
+      });
+      if (primaryResult !== "ok") return;
+    }
 
     let backgroundClean = true;
     // Background windows come up one at a time, each waiting for the last to
