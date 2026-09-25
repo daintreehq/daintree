@@ -5,7 +5,11 @@ import type {
   CrashRecoveryAction,
   CrashRecoveryConfig,
 } from "../../../../shared/types/ipc/crashRecovery.js";
-import { typedHandle } from "../../utils.js";
+import {
+  isFleetRestoreEligible,
+  requestCrashFleetRestore,
+} from "../../../lifecycle/crashWindowRestore.js";
+import { typedHandle, typedHandleWithContext } from "../../utils.js";
 
 export function registerCrashRecoveryHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -22,13 +26,18 @@ export function registerCrashRecoveryHandlers(): () => void {
   );
 
   handlers.push(
-    typedHandle(CHANNELS.CRASH_RECOVERY_RESOLVE, (action: CrashRecoveryAction) => {
+    typedHandleWithContext(CHANNELS.CRASH_RECOVERY_RESOLVE, (ctx, action: CrashRecoveryAction) => {
       const service = getCrashRecoveryService();
       if (action.kind === "restore") {
         const ok = service.restoreBackup(action.panelIds);
         if (ok) {
           service.setPanelFilter(action.panelIds);
           service.clearPendingCrash();
+          // One crash brings the whole window set back; a loop keeps the one
+          // recovery window (#12801). Not awaited — see requestCrashFleetRestore.
+          if (isFleetRestoreEligible(getCrashLoopGuard())) {
+            requestCrashFleetRestore(ctx.webContentsId);
+          }
         } else {
           // Propagate the failure to the renderer. `restoreBackup` returns
           // false for: no parseable snapshot, zero-match panel filter, no

@@ -45,10 +45,12 @@ import {
   shouldRestoreWindowFleet,
 } from "./lifecycle/launchIntent.js";
 import {
+  RESTORE_HYDRATION_WAIT_MS,
   resolvePrimaryRestoreProjectId,
   restoreWindowFleet,
   type CreateWindowResult,
 } from "./lifecycle/windowRestore.js";
+import { restoreFleetAfterCrash, setCrashFleetRestorer } from "./lifecycle/crashWindowRestore.js";
 import { registerShutdownHandler } from "./lifecycle/shutdown.js";
 import { getActiveShutdown } from "./lifecycle/shutdownCoordinator.js";
 import {
@@ -126,6 +128,7 @@ import {
   readOpenWindowsManifestSync,
 } from "./services/persistence/readLastProjectId.js";
 import {
+  enableOpenWindowsSaves,
   initOpenWindowsTracker,
   resumeOpenWindowsSaves,
   saveOpenWindowsNow,
@@ -950,20 +953,54 @@ if (!gotTheLock) {
         ? restoreRecords
         : restoreRecords.map(({ projectId }) => ({ projectId }));
 
-      await restoreWindowFleet({
+      const onBackgroundWindowFailed = (reason: unknown): void => {
+        console.error("[MAIN] Restoring a background window failed:", reason);
+      };
+      const isProjectOwned = (projectId: string): boolean =>
+        findOtherProjectOwner(windowRegistry, projectId, {}) !== null;
+      const isShuttingDown = (): boolean => getActiveShutdown() !== null;
+
+      const startupRestore = restoreWindowFleet({
         records: fleetRecords,
         hadManifest,
         fallbackProjectId,
         createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
         suppressSaves: suppressOpenWindowsSaves,
         resumeSaves: resumeOpenWindowsSaves,
-        onBackgroundWindowFailed: (reason) => {
-          console.error("[MAIN] Restoring a background window failed:", reason);
-        },
-        isProjectOwned: (projectId) =>
-          findOtherProjectOwner(windowRegistry, projectId, {}) !== null,
-        isShuttingDown: () => getActiveShutdown() !== null,
+        onBackgroundWindowFailed,
+        isProjectOwned,
+        isShuttingDown,
       });
+
+      // Installed before the startup window boots: its renderer resolves the
+      // crash recovery while `startupRestore` is still pending. The recovery
+      // IPC decides whether this crash is a single one that earns the whole
+      // window set back (#12801); safe mode and loops never trigger it.
+      if (launchIntent === "recovery") {
+        setCrashFleetRestorer((requesterWebContentsId) =>
+          restoreFleetAfterCrash({
+            startupRestore,
+            waitForRequesterHydrated: async () => {
+              const ctx = windowRegistry.getByWebContentsId(requesterWebContentsId);
+              await ctx?.services.projectViewManager?.waitForViewHydrated(requesterWebContentsId, {
+                timeoutMs: RESTORE_HYDRATION_WAIT_MS,
+                signal: ctx.abortController.signal,
+              });
+            },
+            readManifest: readOpenWindowsManifestSync,
+            restoreLiveProjects: store.get("sessionRestore")?.enabled !== false,
+            createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
+            suppressSaves: suppressOpenWindowsSaves,
+            resumeSaves: resumeOpenWindowsSaves,
+            enableSaves: enableOpenWindowsSaves,
+            onBackgroundWindowFailed,
+            isProjectOwned,
+            isShuttingDown,
+          })
+        );
+      }
+
+      await startupRestore;
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
       // Startup crashes hard-exit without running before-quit, which means

@@ -38,6 +38,13 @@ vi.mock("../../../../services/CrashLoopGuardService.js", () => ({
   getCrashLoopGuard: () => crashLoopGuardMock,
 }));
 
+const requestCrashFleetRestoreMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../../lifecycle/crashWindowRestore.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../lifecycle/crashWindowRestore.js")>()),
+  requestCrashFleetRestore: requestCrashFleetRestoreMock,
+}));
+
 vi.mock("../../../../utils/performance.js", () => ({
   isPerformanceCaptureEnabled: vi.fn(() => false),
   markPerformance: vi.fn(),
@@ -60,6 +67,8 @@ describe("registerCrashRecoveryHandlers", () => {
     crashServiceMock.restoreBackup.mockReturnValue(false);
     crashServiceMock.setPanelFilter.mockClear();
     crashServiceMock.resetToFresh.mockClear();
+    crashLoopGuardMock.isSafeMode.mockReturnValue(false);
+    crashLoopGuardMock.getCrashCount.mockReturnValue(0);
   });
 
   it("registers all four crash-recovery channels", () => {
@@ -142,6 +151,69 @@ describe("registerCrashRecoveryHandlers", () => {
         ).rejects.toThrow("Crash recovery restore failed");
 
         expect(crashServiceMock.clearPendingCrash).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("window set after a crash (#12801)", () => {
+      it.each([0, 1])(
+        "asks for the whole window set back after a successful restore at crash count %i",
+        async (count) => {
+          crashServiceMock.restoreBackup.mockReturnValue(true);
+          crashLoopGuardMock.getCrashCount.mockReturnValue(count);
+          registerCrashRecoveryHandlers();
+          const handler = getHandlerFn("crash-recovery:resolve");
+
+          await handler(FAKE_EVENT, { kind: "restore", panelIds: ["p1"] });
+
+          expect(requestCrashFleetRestoreMock).toHaveBeenCalledWith(1);
+          // Pending cleared first, so windows the fleet opens never see the dialog.
+          expect(crashServiceMock.clearPendingCrash.mock.invocationCallOrder[0]).toBeLessThan(
+            requestCrashFleetRestoreMock.mock.invocationCallOrder[0]
+          );
+        }
+      );
+
+      it("keeps the one recovery window in a crash loop", async () => {
+        crashServiceMock.restoreBackup.mockReturnValue(true);
+        crashLoopGuardMock.getCrashCount.mockReturnValue(2);
+        registerCrashRecoveryHandlers();
+        const handler = getHandlerFn("crash-recovery:resolve");
+
+        await handler(FAKE_EVENT, { kind: "restore", panelIds: ["p1"] });
+
+        expect(requestCrashFleetRestoreMock).not.toHaveBeenCalled();
+      });
+
+      it("keeps the one recovery window in safe mode", async () => {
+        crashServiceMock.restoreBackup.mockReturnValue(true);
+        crashLoopGuardMock.isSafeMode.mockReturnValue(true);
+        registerCrashRecoveryHandlers();
+        const handler = getHandlerFn("crash-recovery:resolve");
+
+        await handler(FAKE_EVENT, { kind: "restore", panelIds: ["p1"] });
+
+        expect(requestCrashFleetRestoreMock).not.toHaveBeenCalled();
+      });
+
+      it("opens no windows when the backup restore fails", async () => {
+        crashServiceMock.restoreBackup.mockReturnValue(false);
+        registerCrashRecoveryHandlers();
+        const handler = getHandlerFn("crash-recovery:resolve");
+
+        await expect(
+          Promise.resolve().then(() => handler(FAKE_EVENT, { kind: "restore", panelIds: ["p1"] }))
+        ).rejects.toThrow("Crash recovery restore failed");
+
+        expect(requestCrashFleetRestoreMock).not.toHaveBeenCalled();
+      });
+
+      it("opens no windows when the user starts fresh", async () => {
+        registerCrashRecoveryHandlers();
+        const handler = getHandlerFn("crash-recovery:resolve");
+
+        await handler(FAKE_EVENT, { kind: "fresh" });
+
+        expect(requestCrashFleetRestoreMock).not.toHaveBeenCalled();
       });
     });
 

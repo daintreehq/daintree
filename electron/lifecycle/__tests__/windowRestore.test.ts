@@ -530,3 +530,73 @@ describe("restoreWindowFleet — background project lists (#12320)", () => {
     expect(h.revealModes()).toEqual([undefined, "showInactive"]);
   });
 });
+
+describe("restoreWindowFleet behind a window that is already open (#12801)", () => {
+  it("opens every record as an inactive background window and no primary", async () => {
+    const h = harness({
+      records: [record("a"), record("b"), record("c")],
+      hadManifest: true,
+      primaryAlreadyOpen: true,
+    });
+
+    await restoreWindowFleet(h.deps);
+
+    expect(h.openedProjects()).toEqual(["a", "b", "c"]);
+    expect(h.revealModes()).toEqual(["showInactive", "showInactive", "showInactive"]);
+    expect(h.persisted()).toBe(true);
+  });
+
+  it("skips the project the open window already shows, wherever it sits in the manifest", async () => {
+    const h = harness({
+      records: [record("a"), record("recovered"), record("c")],
+      hadManifest: true,
+      primaryAlreadyOpen: true,
+      isProjectOwned: (id) => id === "recovered",
+    });
+
+    await restoreWindowFleet(h.deps);
+
+    expect(h.openedProjects()).toEqual(["a", "c"]);
+    expect(h.persisted()).toBe(true);
+  });
+
+  it("paces every window but the last on hydration", async () => {
+    const h = harness({
+      records: [record("a"), record("b")],
+      hadManifest: true,
+      primaryAlreadyOpen: true,
+    });
+
+    await restoreWindowFleet(h.deps);
+
+    const waits = h.createWindow.mock.calls.map(
+      (c) => (c[1] as { awaitHydrationMs?: number } | undefined)?.awaitHydrationMs
+    );
+    expect(waits).toEqual([RESTORE_HYDRATION_WAIT_MS, undefined]);
+  });
+
+  it("opens nothing for an empty manifest instead of a fallback window", async () => {
+    const h = harness({
+      records: [],
+      hadManifest: false,
+      fallbackProjectId: "last-active",
+      primaryAlreadyOpen: true,
+    });
+
+    await restoreWindowFleet(h.deps);
+
+    expect(h.createWindow).not.toHaveBeenCalled();
+  });
+
+  it("keeps the manifest when a window fails", async () => {
+    const h = harness(
+      { records: [record("a"), record("b")], hadManifest: true, primaryAlreadyOpen: true },
+      async (projectId) => (projectId === "a" ? "not-registered" : "ok")
+    );
+
+    await restoreWindowFleet(h.deps);
+
+    expect(h.openedProjects()).toEqual(["a", "b"]);
+    expect(h.persisted()).toBe(false);
+  });
+});
