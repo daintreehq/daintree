@@ -235,6 +235,37 @@ vi.mock("../hybrid/index.js", () => ({
 vi.mock("../client/viewRequests.js", () => ({
   installViewReverseRequests: vi.fn(() => m.uninstallViewRequests),
 }));
+// The real service over the real listener, with the system (store, launchd,
+// systemd, mDNS, keychain) faked: boot must never touch this machine.
+vi.mock("../host/hostModeDefaults.js", async () => {
+  const { HostModeService } = await import("../host/HostModeService.js");
+  const { startHostListener } = await import("../host/hostListener.js");
+  return {
+    createHostModeService: () =>
+      new HostModeService({
+        platform: "linux",
+        readSettings: () => ({ enabled: true, startAtLogin: false }),
+        writeSettings: () => {},
+        socketPath: "/run/user/501/daintree-dev/host.sock",
+        startListener: (signal) => startHostListener({ signal }),
+        startAtLogin: null,
+        createAdvertiser: () => ({
+          start: () => m.record("advertise.start"),
+          stop: () => m.record("advertise.stop"),
+          getState: () => ({ status: "off" as const }),
+        }),
+        keychain: {
+          secretTier: () => "unavailable",
+          getSelectedStorageBackend: () => "basic_text",
+          isAsyncEncryptionAvailable: async () => false,
+          encryptStringAsync: async () => Buffer.alloc(0),
+          decryptStringAsync: async () => ({ result: "" }),
+        },
+        run: async () => ({ code: null, stdout: "", stderr: "", failure: "not-found" as const }),
+        broadcast: () => {},
+      }),
+  };
+});
 
 import { startRemoteHosts, stopRemoteHosts } from "../boot.js";
 import { _resetRemoteServicesForTest, getRemoteService } from "../runtime.js";
@@ -269,6 +300,7 @@ beforeEach(() => {
   m.server.sessionListeners.clear();
   m.server.expiredListeners.clear();
   m.openedListeners.clear();
+  m.transportListeners.clear();
   m.clientOpenedListeners.clear();
   m.clientClosedListeners.clear();
   m.viewHosts.clear();
@@ -456,7 +488,7 @@ describe("startRemoteHosts", () => {
     expect(m.attachClientTerminalRelay).not.toHaveBeenCalled();
   });
 
-  it("starts the host side in Host mode and registers the server", async () => {
+  it("starts the host side in Host mode, registers the server and advertises it", async () => {
     await startRemoteHosts({ hostMode: true });
 
     expect(m.calls).toEqual([
@@ -464,9 +496,59 @@ describe("startRemoteHosts", () => {
       "new HostServer",
       "initRemoteHostsHost",
       "server.listen",
+      "advertise.start",
     ]);
     expect(m.initRemoteHostsHost).toHaveBeenCalledWith(m.server);
     expect(getRemoteService("hostServer")).toBe(m.server);
+    expect(getRemoteService("hostMode")).toBeDefined();
+  });
+
+  it("registers the Host mode service without listening when Host mode is off", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(getRemoteService("hostMode")).toBeDefined();
+    expect(m.calls).not.toContain("advertise.start");
+
+    // The switch starts the same host side at runtime.
+    await getRemoteService("hostMode")!.startListening();
+    expect(m.calls).toEqual([
+      "initRemoteHostsClient",
+      "new HostServer",
+      "initRemoteHostsHost",
+      "server.listen",
+      "advertise.start",
+    ]);
+    await stopRemoteHosts();
+    expect(getRemoteService("hostMode")).toBeUndefined();
+    expect(m.server.close).toHaveBeenCalled();
+  });
+
+  it("installs the lease wiring when the switch starts listening and removes it when switched off", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(m.mcpResolver.current).toBeNull();
+    expect(m.transportListeners.size).toBe(0);
+    expect(m.leaseListeners.size).toBe(0);
+
+    const hostMode = getRemoteService("hostMode")!;
+    await hostMode.startListening();
+    expect(m.admitHybridHostLegs).toHaveBeenCalledTimes(1);
+    expect(m.mcpResolver.current?.("proj-1")).toEqual({ state: "vacant" });
+    for (const l of m.transportListeners) l(["remote:s1:view-11"], false);
+    expect(m.lease.noteEndpointTransport).toHaveBeenCalledWith(["remote:s1:view-11"], false);
+    const link = { post: vi.fn() };
+    openEndpoint(fakeEndpoint("remote:s1:view-11", "proj-1"), "s1", link);
+    for (const l of m.leaseListeners) l({ projectId: "proj-1", holder: null });
+    expect(link.post).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: ControlKind.LEASE_CHANGED })
+    );
+
+    await hostMode.stopListening();
+    expect(m.mcpResolver.current).toBeNull();
+    expect(m.transportListeners.size).toBe(0);
+    expect(m.leaseListeners.size).toBe(0);
+    expect(m.openedListeners.size).toBe(0);
+    expect(m.server.close).toHaveBeenCalled();
+    // The client side is untouched by the switch.
+    expect(m.client.dispose).not.toHaveBeenCalled();
   });
 
   it("attaches both bridges and replays snapshots when a remote endpoint opens", async () => {
@@ -601,6 +683,16 @@ describe("startRemoteHosts", () => {
     expect(m.server.close).toHaveBeenCalled();
   });
 
+  it("undoes what host setup registered when a later step throws", async () => {
+    m.initRemoteHostsHost.mockImplementationOnce(() => {
+      throw new Error("session host failed");
+    });
+    await expect(startRemoteHosts({ hostMode: true })).rejects.toThrow("session host failed");
+    expect(getRemoteService("hostServer")).toBeUndefined();
+    expect(m.server.close).toHaveBeenCalled();
+    expect(m.server.listen).not.toHaveBeenCalled();
+  });
+
   it("surfaces a listen failure that was not caused by stop", async () => {
     m.server.listen.mockRejectedValueOnce(new Error("no /run/user/501"));
     await expect(startRemoteHosts({ hostMode: true })).rejects.toThrow("no /run/user/501");
@@ -621,6 +713,7 @@ describe("stopRemoteHosts", () => {
       "uninstall view hooks",
       "uninstall worktree override",
       "uninstall terminal override",
+      "advertise.stop",
       "disposeAllTerminalBridges",
       "host.dispose",
       "server.close",
