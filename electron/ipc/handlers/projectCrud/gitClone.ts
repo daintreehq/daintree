@@ -29,6 +29,7 @@ import type {
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { validateFolderName } from "../../../../shared/utils/folderName.js";
 import { classifyGitError } from "../../../../shared/utils/gitOperationErrors.js";
+import { isSupportedCloneUrl } from "../../../../shared/utils/gitRemoteUrl.js";
 import { AppError, GitOperationError } from "../../../utils/errorTypes.js";
 
 /**
@@ -90,6 +91,190 @@ function normalizeCloneRemote(url: string): string {
     .replace(/\.git$/i, "");
 }
 
+export type CloneDepth = "full" | "shallow" | "partial";
+
+export interface ExecuteCloneOptions {
+  url: string;
+  /** Existing directory the clone is created in. */
+  parentPath: string;
+  folderName: string;
+  /** `parentPath/folderName`; must not exist. */
+  targetPath: string;
+  /** `shallow` is `--depth 1`; `partial` is `--filter=blob:none`. */
+  depth?: CloneDepth;
+  /** Initialise and update submodules once the clone is in place. */
+  recurseSubmodules?: boolean;
+  signal: AbortSignal;
+  onProgress: (stage: string, progress: number, message: string) => void;
+}
+
+function cloneArgs(depth: CloneDepth | undefined): string[] {
+  if (depth === "shallow") return ["--depth", "1"];
+  if (depth === "partial") return ["--filter=blob:none"];
+  return [];
+}
+
+/**
+ * Clone `url` into `targetPath` as this machine: the matching forge
+ * provider's authenticated path when it has one, else plain git with the
+ * user's own credentials. A failed or cancelled clone removes what it left
+ * behind and throws `CANCELLED` or a classified {@link GitOperationError}
+ * whose message is git's own text, scrubbed of credentials.
+ */
+export async function executeClone(options: ExecuteCloneOptions): Promise<void> {
+  const { url, parentPath, folderName: trimmedFolder, targetPath, depth, signal } = options;
+  const shallowClone = depth === "shallow";
+  const emitProgress = options.onProgress;
+  const fs = await import("fs");
+
+  // Resolve the URL's forge provider and probe its clone auth — an
+  // authenticated probe picks the provider's clone path below. Probe
+  // failures mean "no authenticated path", never a clone failure.
+  const cloneCapability = await resolveCloneCapability(url);
+  let authProbe: CloneAuthProbe = { authenticated: false };
+  if (cloneCapability) {
+    try {
+      authProbe = await cloneCapability.probeAuth(signal);
+    } catch {
+      // Fall back to plain git.
+    }
+  }
+
+  // PID of the spawned `git clone` child process, captured via simple-git's
+  // internal `spawn.after` plugin hook. Needed on Windows because aborting
+  // the AbortController only kills the immediate process — git's children
+  // (git-remote-https, index-pack) are orphaned and hold `.git/` file locks,
+  // making the partial-clone cleanup below fail. Internal API (simple-git
+  // 3.36): if `_plugins` ever disappears, `cloneChildPid` stays undefined
+  // and the taskkill branch is simply skipped — degrades to prior behavior.
+  let cloneChildPid: number | undefined;
+
+  try {
+    if (signal.aborted) {
+      throw new AppError({ code: "CANCELLED", message: "Clone cancelled" });
+    }
+
+    // No "starting" event here on purpose: emitting one would populate the
+    // renderer's progress list immediately and defeat the Doherty gate that
+    // suppresses the connecting placeholder for sub-400ms clones. The
+    // renderer owns that phase via `isCloning` + `useDohertyGate`.
+
+    // A provider's own clone command takes no filter, so a partial clone
+    // goes through git with the provider's authenticated URL instead.
+    if (authProbe.authenticated && cloneCapability?.cloneRepository && depth !== "partial") {
+      // Provider-owned clone (e.g. `gh repo clone`). Failures surface
+      // directly — no plain-git retry, matching the historical gh path.
+      await cloneCapability.cloneRepository(url, targetPath, {
+        shallow: Boolean(shallowClone),
+        signal: signal,
+        onProgress: emitProgress,
+      });
+    } else {
+      let cloneUrl = url;
+      if (authProbe.authenticated && cloneCapability?.getAuthenticatedCloneUrl) {
+        // May embed credentials — never log it; error context below already
+        // omits the URL for the same reason.
+        cloneUrl = (await cloneCapability.getAuthenticatedCloneUrl(url).catch(() => null)) ?? url;
+      }
+      const git = await createAuthenticatedGit(parentPath, {
+        signal: signal,
+        progress({ stage, progress }) {
+          // Sentence-case the display label (git emits lowercase, e.g.
+          // "receiving objects"); the lowercase `stage` stays the dedup key.
+          const label = stage.charAt(0).toUpperCase() + stage.slice(1);
+          emitProgress(stage, progress, `${label}: ${progress}%`);
+        },
+        extraConfig: [
+          // CVE-2025-48385 / GHSA-m98c-vgpc-9655 (CVSS 8.6): a malicious
+          // server can abuse Git's bundle-URI transport to write fetched
+          // bundle content to arbitrary filesystem paths. Disabling it
+          // client-side is defense-in-depth for users on git versions before
+          // the 2.43.7 / 2.44.4 / 2.45.4 fixes (the server can't override
+          // this).
+          "transfer.bundleURI=false",
+        ],
+      });
+
+      const pluginStore = (git as unknown as { _plugins?: PluginStoreLike })._plugins;
+      pluginStore?.append?.("spawn.after", (data, context) => {
+        cloneChildPid = context?.spawned?.pid;
+        return data;
+      });
+
+      await git.clone(cloneUrl, trimmedFolder, cloneArgs(depth));
+    }
+
+    if (options.recurseSubmodules) {
+      emitProgress("submodules", 0, "Updating submodules");
+      const submoduleGit = await createAuthenticatedGit(targetPath, { signal });
+      await submoduleGit.raw(["submodule", "update", "--init", "--recursive"]);
+    }
+
+    emitProgress("complete", 100, "Clone complete");
+  } catch (error) {
+    const wasCancelled =
+      signal.aborted ||
+      (error instanceof Error &&
+        (error.name === "AbortError" ||
+          (error instanceof AppError && error.code === "CANCELLED") ||
+          /abort/i.test(error.message)));
+
+    // Clean up partial clone. On Windows the spawned process tree must be
+    // terminated before fs.rm or the orphaned children (git-remote-https,
+    // index-pack) keep `.git/` files locked. A provider's `cloneRepository`
+    // owns its own process-tree teardown on abort; the simple-git path needs
+    // `killCloneProcessTree(cloneChildPid)` here because simple-git owns the
+    // child and only the captured pid is reachable from this scope.
+    killCloneProcessTree(cloneChildPid);
+
+    const partialExists = await fs.promises
+      .access(targetPath)
+      .then(() => true)
+      .catch(() => false);
+    if (partialExists) {
+      await fs.promises.rm(targetPath, { recursive: true, force: true }).catch((rmErr) => {
+        // Don't escalate — the original clone error is what the user sees.
+        // But surface this in logs so partial-cleanup failures (e.g. Windows
+        // antivirus locks) are diagnosable instead of silently swallowed.
+        console.warn("[gitClone] Failed to clean up partial clone at", targetPath, rmErr);
+        // Tier 3 inline banner in the dialog: the leftover directory needs
+        // manual removal, so the user has to know where it is.
+        emitProgress(
+          "cleanup-failed",
+          0,
+          `Couldn't remove the partial clone at ${targetPath}. Close any Git processes using it and delete the folder manually.`
+        );
+      });
+    }
+
+    if (wasCancelled) {
+      emitProgress("cancelled", 0, "Clone cancelled");
+      throw new AppError({
+        code: "CANCELLED",
+        message: "Clone cancelled",
+        context: { targetPath },
+      });
+    }
+
+    // Scrub before surfacing: a simple-git failure can echo the clone
+    // command or remote, and an authenticated clone URL embeds credentials
+    // (https://x-access-token:TOKEN@host/...). `scrubSecrets` redacts URL
+    // basic-auth and known token shapes so neither the progress event nor
+    // the thrown error leaks the secret.
+    const errorMessage = scrubSecrets(formatErrorMessage(error, "Failed to clone repository"));
+    emitProgress("error", 0, `Clone failed: ${errorMessage}`);
+    const reason = classifyGitError(error);
+    // `url` deliberately omitted from context — it can carry embedded
+    // credentials (e.g. https://x-access-token:TOKEN@github.com/...) and
+    // the renderer already has the input URL in local state.
+    throw new GitOperationError(reason, errorMessage, {
+      op: "clone",
+      cause: error instanceof Error ? error : undefined,
+      context: { targetPath },
+    });
+  }
+}
+
 export function registerGitCloneHandlers(): () => void {
   // Track every in-flight clone so cancel aborts each one independently.
   // Electron's ipcMain.handle permits concurrent invocations from multiple
@@ -111,8 +296,8 @@ export function registerGitCloneHandlers(): () => void {
     if (typeof url !== "string" || !url.trim()) {
       throw new Error("Repository URL is required");
     }
-    if (!/^https?:\/\//i.test(url) && !/^git@/i.test(url)) {
-      throw new Error("Only HTTP(S) and SSH (git@) URLs are supported");
+    if (!isSupportedCloneUrl(url)) {
+      throw new Error("Only HTTP(S) and SSH (git@ or ssh://) URLs are supported");
     }
     if (typeof parentPath !== "string" || !parentPath.trim()) {
       throw new Error("Parent path is required");
@@ -260,145 +445,16 @@ export function registerGitCloneHandlers(): () => void {
       });
     }
 
-    // Resolve the URL's forge provider and probe its clone auth — an
-    // authenticated probe picks the provider's clone path below. Probe
-    // failures mean "no authenticated path", never a clone failure.
-    const cloneCapability = await resolveCloneCapability(url);
-    let authProbe: CloneAuthProbe = { authenticated: false };
-    if (cloneCapability) {
-      try {
-        authProbe = await cloneCapability.probeAuth(localController.signal);
-      } catch {
-        // Fall back to plain git.
-      }
-    }
-
-    // PID of the spawned `git clone` child process, captured via simple-git's
-    // internal `spawn.after` plugin hook. Needed on Windows because aborting
-    // the AbortController only kills the immediate process — git's children
-    // (git-remote-https, index-pack) are orphaned and hold `.git/` file locks,
-    // making the partial-clone cleanup below fail. Internal API (simple-git
-    // 3.36): if `_plugins` ever disappears, `cloneChildPid` stays undefined
-    // and the taskkill branch is simply skipped — degrades to prior behavior.
-    let cloneChildPid: number | undefined;
-
-    try {
-      if (localController.signal.aborted) {
-        throw new AppError({ code: "CANCELLED", message: "Clone cancelled" });
-      }
-
-      // No "starting" event here on purpose: emitting one would populate the
-      // renderer's progress list immediately and defeat the Doherty gate that
-      // suppresses the connecting placeholder for sub-400ms clones. The
-      // renderer owns that phase via `isCloning` + `useDohertyGate`.
-
-      if (authProbe.authenticated && cloneCapability?.cloneRepository) {
-        // Provider-owned clone (e.g. `gh repo clone`). Failures surface
-        // directly — no plain-git retry, matching the historical gh path.
-        await cloneCapability.cloneRepository(url, targetPath, {
-          shallow: Boolean(shallowClone),
-          signal: localController.signal,
-          onProgress: emitProgress,
-        });
-      } else {
-        let cloneUrl = url;
-        if (authProbe.authenticated && cloneCapability?.getAuthenticatedCloneUrl) {
-          // May embed credentials — never log it; error context below already
-          // omits the URL for the same reason.
-          cloneUrl = (await cloneCapability.getAuthenticatedCloneUrl(url).catch(() => null)) ?? url;
-        }
-        const git = await createAuthenticatedGit(parentPath, {
-          signal: localController.signal,
-          progress({ stage, progress }) {
-            // Sentence-case the display label (git emits lowercase, e.g.
-            // "receiving objects"); the lowercase `stage` stays the dedup key.
-            const label = stage.charAt(0).toUpperCase() + stage.slice(1);
-            emitProgress(stage, progress, `${label}: ${progress}%`);
-          },
-          extraConfig: [
-            // CVE-2025-48385 / GHSA-m98c-vgpc-9655 (CVSS 8.6): a malicious
-            // server can abuse Git's bundle-URI transport to write fetched
-            // bundle content to arbitrary filesystem paths. Disabling it
-            // client-side is defense-in-depth for users on git versions before
-            // the 2.43.7 / 2.44.4 / 2.45.4 fixes (the server can't override
-            // this).
-            "transfer.bundleURI=false",
-          ],
-        });
-
-        const pluginStore = (git as unknown as { _plugins?: PluginStoreLike })._plugins;
-        pluginStore?.append?.("spawn.after", (data, context) => {
-          cloneChildPid = context?.spawned?.pid;
-          return data;
-        });
-
-        await git.clone(cloneUrl, trimmedFolder, shallowClone ? ["--depth", "1"] : []);
-      }
-
-      emitProgress("complete", 100, "Clone complete");
-      return { clonedPath: targetPath };
-    } catch (error) {
-      const wasCancelled =
-        localController.signal.aborted ||
-        (error instanceof Error &&
-          (error.name === "AbortError" ||
-            (error instanceof AppError && error.code === "CANCELLED") ||
-            /abort/i.test(error.message)));
-
-      // Clean up partial clone. On Windows the spawned process tree must be
-      // terminated before fs.rm or the orphaned children (git-remote-https,
-      // index-pack) keep `.git/` files locked. A provider's `cloneRepository`
-      // owns its own process-tree teardown on abort; the simple-git path needs
-      // `killCloneProcessTree(cloneChildPid)` here because simple-git owns the
-      // child and only the captured pid is reachable from this scope.
-      killCloneProcessTree(cloneChildPid);
-
-      const partialExists = await fs.promises
-        .access(targetPath)
-        .then(() => true)
-        .catch(() => false);
-      if (partialExists) {
-        await fs.promises.rm(targetPath, { recursive: true, force: true }).catch((rmErr) => {
-          // Don't escalate — the original clone error is what the user sees.
-          // But surface this in logs so partial-cleanup failures (e.g. Windows
-          // antivirus locks) are diagnosable instead of silently swallowed.
-          console.warn("[gitClone] Failed to clean up partial clone at", targetPath, rmErr);
-          // Tier 3 inline banner in the dialog: the leftover directory needs
-          // manual removal, so the user has to know where it is.
-          emitProgress(
-            "cleanup-failed",
-            0,
-            `Couldn't remove the partial clone at ${targetPath}. Close any Git processes using it and delete the folder manually.`
-          );
-        });
-      }
-
-      if (wasCancelled) {
-        emitProgress("cancelled", 0, "Clone cancelled");
-        throw new AppError({
-          code: "CANCELLED",
-          message: "Clone cancelled",
-          context: { targetPath },
-        });
-      }
-
-      // Scrub before surfacing: a simple-git failure can echo the clone
-      // command or remote, and an authenticated clone URL embeds credentials
-      // (https://x-access-token:TOKEN@host/...). `scrubSecrets` redacts URL
-      // basic-auth and known token shapes so neither the progress event nor
-      // the thrown error leaks the secret.
-      const errorMessage = scrubSecrets(formatErrorMessage(error, "Failed to clone repository"));
-      emitProgress("error", 0, `Clone failed: ${errorMessage}`);
-      const reason = classifyGitError(error);
-      // `url` deliberately omitted from context — it can carry embedded
-      // credentials (e.g. https://x-access-token:TOKEN@github.com/...) and
-      // the renderer already has the input URL in local state.
-      throw new GitOperationError(reason, errorMessage, {
-        op: "clone",
-        cause: error instanceof Error ? error : undefined,
-        context: { targetPath },
-      });
-    }
+    await executeClone({
+      url,
+      parentPath,
+      folderName: trimmedFolder,
+      targetPath,
+      depth: shallowClone ? "shallow" : "full",
+      signal: localController.signal,
+      onProgress: emitProgress,
+    });
+    return { clonedPath: targetPath };
   };
 
   const handleProjectCloneCancel = async (
