@@ -972,9 +972,10 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
 
 describe("createWorktreeStore — nested worktree refusal (#12789)", () => {
   beforeEach(() => {
-    worktreeClientDeleteMock.mockReset().mockResolvedValue();
+    worktreeClientDeleteMock.mockReset();
     captureWorktreeTerminalSnapshotMock.mockReset().mockReturnValue([]);
     closeTerminalsForWorktreeMock.mockReset().mockResolvedValue();
+    restoreClosedTerminalsMock.mockReset().mockResolvedValue();
     devPreviewGetByWorktreeMock.mockReset().mockResolvedValue(null);
     devPreviewStopByWorktreeMock.mockReset().mockResolvedValue(undefined);
   });
@@ -983,44 +984,24 @@ describe("createWorktreeStore — nested worktree refusal (#12789)", () => {
     vi.clearAllMocks();
   });
 
-  function nested(id: string, path: string, isPrunable = false) {
-    return Object.assign(makeSnapshot(id), { path, isPrunable });
-  }
-
-  it("refuses before closing terminals or stopping the dev server, as a permanent failure", async () => {
+  it("treats the host's refusal as permanent and brings the closed terminals back", async () => {
+    const snapshot = [{ id: "t-1", location: "grid" }];
+    captureWorktreeTerminalSnapshotMock.mockReturnValueOnce(snapshot);
+    worktreeClientDeleteMock.mockRejectedValueOnce(
+      new Error(
+        "Worktree contains a registered worktree at /repo/wt-1/child. Deleting it would delete that worktree too — delete it first."
+      )
+    );
     const store = createWorktreeStore();
-    store
-      .getState()
-      .applySnapshot(
-        [nested("parent", "/repo/parent"), nested("child", "/repo/parent/child")],
-        nextV()
-      );
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
 
-    store.getState().startDelete("parent", { closeTerminals: true, force: true });
+    store.getState().startDelete("wt-1", { closeTerminals: true, force: true });
     await flushPromises();
     await flushPromises();
 
-    expect(closeTerminalsForWorktreeMock).not.toHaveBeenCalled();
-    expect(devPreviewStopByWorktreeMock).not.toHaveBeenCalled();
-    expect(worktreeClientDeleteMock).not.toHaveBeenCalled();
-    expect(store.getState().deleteErrors.get("parent")).toContain("/repo/parent/child");
     const entry = [...store.getState().mutationOutbox.values()][0];
     expect(entry?.status).toBe("failed");
-  });
-
-  it("does not let a prunable nested entry block the delete", async () => {
-    const store = createWorktreeStore();
-    store
-      .getState()
-      .applySnapshot(
-        [nested("parent", "/repo/parent"), nested("child", "/repo/parent/child", true)],
-        nextV()
-      );
-
-    store.getState().startDelete("parent", { force: true });
-    await flushPromises();
-    await flushPromises();
-
-    expect(worktreeClientDeleteMock).toHaveBeenCalledWith("parent", expect.anything());
+    expect(store.getState().deleteErrors.get("wt-1")).toContain("/repo/wt-1/child");
+    expect(restoreClosedTerminalsMock).toHaveBeenCalledWith(snapshot);
   });
 });

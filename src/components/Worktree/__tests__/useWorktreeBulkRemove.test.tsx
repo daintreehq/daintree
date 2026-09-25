@@ -1018,12 +1018,13 @@ describe("useWorktreeBulkRemove — nested worktrees (#12789)", () => {
     });
 
     expect(deletedIds()).toEqual(["child"]);
-    // The parent is first in selection order, so its reason is the one shown.
+    // The parent comes first in selection order, but its failure only echoes
+    // the child's, so the child's cause is the one shown.
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "error",
         title: "Couldn't remove worktrees",
-        message: "Kept because feature/child inside it wasn't removed",
+        message: "Filesystem busy",
       })
     );
   });
@@ -1056,22 +1057,21 @@ describe("useWorktreeBulkRemove — nested worktrees (#12789)", () => {
     expect(logErrorMock).toHaveBeenCalledWith("Bulk remove failed for child", expect.anything());
   });
 
-  it("refuses an ancestor of an unselected worktree without stopping its dev server", async () => {
-    worktreeClientMock.delete.mockResolvedValue(undefined);
-    const other = wt("other", { path: "/repo/other" });
-    const { hook } = setup(["parent", "other"], [parent(), child(), other]);
+  it("names every failed nested worktree when it keeps the ancestor", async () => {
+    worktreeClientMock.delete.mockImplementation((id: string) =>
+      id === "parent" ? Promise.resolve() : Promise.reject(new Error("Filesystem busy"))
+    );
+    const second = wt("second", { path: "/repo/parent/second", branch: "feature/second" });
+    const { hook } = setup(["child", "second", "parent"], [parent(), child(), second]);
     await openAndSettle(hook);
     await act(async () => {
       await hook.result.current.handleConfirm();
     });
 
-    expect(deletedIds()).toEqual(["other"]);
-    expect(devPreviewStopByWorktreeMock).not.toHaveBeenCalledWith({ worktreeId: "parent" });
+    expect(deletedIds()).not.toContain("parent");
+    expect(logErrorMock).toHaveBeenCalledTimes(2);
     expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "warning",
-        message: expect.stringContaining("/repo/parent/child"),
-      })
+      expect.objectContaining({ type: "error", message: "Filesystem busy" })
     );
   });
 

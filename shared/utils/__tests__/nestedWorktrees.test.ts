@@ -16,12 +16,14 @@ describe("findNestedWorktreePaths", () => {
     ).toEqual(["/repo/wt/a/deep", "/repo/wt/b"]);
   });
 
-  it("lists a directory once however it was spelled", () => {
+  it("keeps every spelling that folds together, for the caller to probe", () => {
     expect(
-      findNestedWorktreePaths("C:\\repo\\wt", ["C:\\repo\\wt\\child", "c:/REPO/wt/child/"], {
-        caseInsensitive: true,
-      })
-    ).toEqual(["C:\\repo\\wt\\child"]);
+      findNestedWorktreePaths(
+        "C:\\repo\\wt",
+        ["C:\\repo\\wt\\child", "c:/REPO/wt/child", "C:\\repo\\wt\\child"],
+        { caseInsensitive: true }
+      )
+    ).toEqual(["C:\\repo\\wt\\child", "c:/REPO/wt/child"]);
   });
 });
 
@@ -33,6 +35,6 @@ describe("nestedWorktreeDeleteMessage", () => {
 
     const two = nestedWorktreeDeleteMessage(["/repo/wt/a", "/repo/wt/b"]);
     expect(two).toContain(NESTED_WORKTREE_DELETE_MARKER);
-    expect(two).toContain("/repo/wt/a, /repo/wt/b");
+    expect(two).toContain("2 registered worktrees: /repo/wt/a, /repo/wt/b");
   });
 });

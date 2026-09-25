@@ -4401,7 +4401,12 @@ export class WorkspaceService {
 
       // Before every other guard and before teardown: no consent covers this,
       // so there is no reason to stop anything for a delete that cannot run.
-      await this.guardNestedWorktreeDelete(monitor);
+      // A checkout that is already gone has nothing left inside it to lose and
+      // its prune branch deletes no files, so the #6669 recovery path does not
+      // depend on the registry being readable.
+      if (!(await pathIsMissing(monitor.path))) {
+        await this.guardNestedWorktreeDelete(monitor);
+      }
 
       const wtChanges = monitor.getWorktreeChanges();
       if (!force && (wtChanges?.changedFileCount ?? 0) > 0) {
@@ -4499,8 +4504,9 @@ export class WorkspaceService {
           // worktree mutation lock in this process to make it atomic, so this
           // narrows the window rather than closing it; closing it needs a
           // prepare/commit host API, which is a separate change.
-          await this.guardNestedWorktreeDelete(monitor);
           const needsMechanicalForce = await this.guardSubmoduleDelete(monitor, worktreeId, force);
+          // Last, so no other await sits between it and the removal.
+          await this.guardNestedWorktreeDelete(monitor);
 
           const args = ["worktree", "remove"];
           if (force || needsMechanicalForce) {
@@ -4658,12 +4664,14 @@ export class WorkspaceService {
       registered = records.filter((record) => !record.bare).map((record) => record.path);
     } catch (error) {
       throw new Error(
-        `Couldn't read the worktree list to check for worktrees inside this one: ${(error as Error).message}`,
+        `Couldn't read the worktree list to check for worktrees inside this one: ${formatErrorMessage(error, "unknown error")}`,
         { cause: error }
       );
     }
     const candidates = [...registered, ...[...this.monitors.values()].map((m) => m.path)];
     const caseInsensitive = process.platform === "win32" || process.platform === "darwin";
+    // Every spelling is probed: two that fold together on a case-sensitive
+    // volume can be two directories, one gone and one not.
     const nested: string[] = [];
     for (const candidate of findNestedWorktreePaths(monitor.path, candidates, {
       caseInsensitive,

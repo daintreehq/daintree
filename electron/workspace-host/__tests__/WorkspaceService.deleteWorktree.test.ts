@@ -1714,6 +1714,7 @@ describe("WorkspaceService.deleteWorktree", () => {
       await service.deleteWorktree("req-list-fail", "/test/worktree", true);
 
       expect(failureError()).toContain("index.lock exists");
+      expect(failureError()).not.toContain("undefined");
       expect(teardownSpy).not.toHaveBeenCalled();
       expect(removeCalls()).toEqual([]);
     });
@@ -1795,6 +1796,32 @@ describe("WorkspaceService.deleteWorktree", () => {
 
       expect(failureError()).toContain("c:/repo/WT/nested");
       expect(removeCalls()).toEqual([]);
+    });
+
+    it("probes every spelling that folds together, not just the first", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      // Two directories on a case-sensitive volume: the first listed is gone.
+      await withPresentPaths(["/test/worktree", "/test/worktree/child"]);
+      createAndRegisterMonitor();
+      createAndRegisterMonitor({ id: "/test/worktree/Child", path: "/test/worktree/Child" });
+      createAndRegisterMonitor({ id: "/test/worktree/child", path: "/test/worktree/child" });
+
+      await service.deleteWorktree("req-folded", "/test/worktree", true);
+
+      expect(failureError()).toContain("/test/worktree/child");
+      expect(removeCalls()).toEqual([]);
+    });
+
+    it("leaves phantom-entry recovery independent of the worktree list (#6669)", async () => {
+      // Target folder already gone: the prune branch deletes no files.
+      await withPresentPaths([]);
+      vi.mocked(service["listService"].list).mockRejectedValue(new Error("git not found"));
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-phantom", "/test/worktree");
+
+      expect(failureError()).toBeUndefined();
+      expect(service["monitors"].has("/test/worktree")).toBe(false);
     });
 
     it("compares case-sensitively on Linux", async () => {

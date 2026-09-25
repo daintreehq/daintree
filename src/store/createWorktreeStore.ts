@@ -14,7 +14,6 @@ import { logErrorWithContext } from "@/utils/errorContext";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { NESTED_WORKTREE_DELETE_MARKER } from "@shared/utils/nestedWorktrees";
-import { nestedWorktreeDeleteRefusal } from "@/lib/nestedWorktreeDelete";
 import { issueNumberBelongsToLinkedPr } from "@shared/utils/worktreeIssueProjection";
 import { worktreeNameFromId } from "@/lib/notificationSourceLabel";
 
@@ -1647,12 +1646,6 @@ async function runDeleteAsync(
     // out so this attempt sees the fully-restored set.
     const inFlightRestore = restoreInFlight.get(worktreeId);
     if (inFlightRestore) await inFlightRestore;
-
-    const target = get().worktrees.get(worktreeId);
-    const nestedRefusal = target
-      ? nestedWorktreeDeleteRefusal(target.path, get().worktrees.values())
-      : null;
-    if (nestedRefusal) throw new Error(nestedRefusal);
 
     if (options.closeTerminals) {
       // Capture BEFORE the destructive close so a close-wait timeout can't lose

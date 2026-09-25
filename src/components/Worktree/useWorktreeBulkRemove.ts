@@ -6,7 +6,6 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isPathStrictlyInside } from "@shared/utils/path";
-import { nestedWorktreeDeleteRefusal } from "@/lib/nestedWorktreeDelete";
 import { isMac, isWindows } from "@/lib/platform";
 import {
   buildWorktreeDeletePreview,
@@ -287,6 +286,8 @@ interface BulkRemoveResult {
   name: string;
   reason: string | null;
   stoppedDevServer: boolean;
+  /** Never attempted because a worktree nested inside it failed first. */
+  keptForNested?: boolean;
 }
 
 /**
@@ -516,30 +517,13 @@ export function useWorktreeBulkRemove({
       // and an ancestor whose nested worktree failed is kept. The wait happens
       // BEFORE `queue.add`, never inside a task: an ancestor parked in a queue
       // slot could fill every slot while its descendants wait behind it.
-      //
-      // A nested worktree outside the run — unselected, or excluded by its
-      // preview — will still be there when the ancestor's turn comes, so the
-      // host would refuse it. Refuse here instead, before its dev server stops.
+      // A nested worktree outside the run is the host's to judge: it probes
+      // the folder, where this snapshot can only guess.
       const caseInsensitive = isMac() || isWindows();
-      const targetIds = new Set(targets.map((target) => target.id));
-      const outsideRun = [...worktreeMap.values()].filter(
-        (worktree) => !targetIds.has(worktree.id)
-      );
       const runs = new Map<string, Promise<BulkRemoveResult>>();
       const run = (target: BulkRemoveTarget): Promise<BulkRemoveResult> => {
         const existing = runs.get(target.id);
         if (existing) return existing;
-        const outsideRefusal = nestedWorktreeDeleteRefusal(target.path, outsideRun);
-        if (outsideRefusal) {
-          const refused = Promise.resolve<BulkRemoveResult>({
-            ok: false,
-            name: target.branch ?? target.name,
-            reason: outsideRefusal,
-            stoppedDevServer: false,
-          });
-          runs.set(target.id, refused);
-          return refused;
-        }
         const nested = targets.filter(
           (other) =>
             other.id !== target.id &&
@@ -555,8 +539,12 @@ export function useWorktreeBulkRemove({
           return {
             ok: false,
             name: target.branch ?? target.name,
-            reason: `Kept because ${keptNames} inside it wasn't removed`,
+            reason:
+              kept.length === 1
+                ? `Kept because ${keptNames} inside it wasn't removed`
+                : `Kept because ${kept.length} worktrees inside it weren't removed: ${keptNames}`,
             stoppedDevServer: false,
+            keptForNested: true,
           };
         });
         runs.set(target.id, pending);
@@ -572,6 +560,7 @@ export function useWorktreeBulkRemove({
       let stoppedDevServerCount = 0;
       let stoppedDevServerName: string | null = null;
       const failures: Array<{ name: string; reason: string }> = [];
+      const keptFailures: Array<{ name: string; reason: string }> = [];
       settled.forEach((entry, index) => {
         const target = targets[index];
         const fallbackName = target ? (target.branch ?? target.name) : "worktree";
@@ -599,9 +588,14 @@ export function useWorktreeBulkRemove({
         if (result.ok) {
           successCount++;
         } else {
-          failures.push({ name: result.name, reason: result.reason ?? "Removal failed" });
+          const failure = { name: result.name, reason: result.reason ?? "Removal failed" };
+          // An ancestor kept for its nested worktree only echoes that failure;
+          // the nested one carries the cause, so it leads the summary.
+          if (result.keptForNested) keptFailures.push(failure);
+          else failures.push(failure);
         }
       });
+      failures.push(...keptFailures);
 
       const announce = useAnnouncerStore.getState().announce;
       if (failures.length === 0) {
@@ -665,7 +659,7 @@ export function useWorktreeBulkRemove({
       resetSnapshot();
       clearSelection();
     }
-  }, [clearSelection, resetSnapshot, worktreeMap]);
+  }, [clearSelection, resetSnapshot]);
 
   const eligibleCount = displayTargets.filter(isBulkRemoveEligible).length;
   const hasRetryablePreviews = displayTargets.some(isBulkRemoveRetryable);
