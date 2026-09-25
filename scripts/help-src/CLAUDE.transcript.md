@@ -1,3 +1,3 @@
 ## Session Transcript
 
-If the user asks for this session's chat history or transcript, find its JSONL file using `CLAUDE_CODE_SESSION_ID`: look under `$CLAUDE_CONFIG_DIR/projects` (default `~/.claude/projects`) and return the absolute file path.
+This session's transcript is the JSONL file for `CLAUDE_CODE_SESSION_ID` under `$CLAUDE_CONFIG_DIR/projects` (default `~/.claude/projects`); give its absolute path when asked.

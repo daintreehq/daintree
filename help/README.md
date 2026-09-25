@@ -57,11 +57,11 @@ Adding a new agent requires three things:
 
 ## System Prompts
 
-Both prompt files share the same answer workflow, tone, and topic coverage. They diverge on what the assistant is allowed to do beyond docs search:
+The prompts carry only the basics: orientation, safety rules, and how to answer. Step-by-step procedures live in the runbooks the session loads from `daintree-runbooks` (see [Runbook Search Server](#runbook-search-server)), so a recipe belongs there, not here.
 
-Both open with the same orientation, ahead of any task recipe: the two MCP servers and what to do when either is off, finding tools at runtime (a tool name is its action ID), the tier model with `TIER_NOT_PERMITTED` and confirm-gated actions, and the rule that local tools never stand in for the tier. They also share the task recipes. They differ in:
+Both open with the same orientation: the two MCP servers and what to do when either is off, finding tools at runtime (a tool name is its action ID), the tier model with `TIER_NOT_PERMITTED` and confirm-gated actions, and the rule that local tools never stand in for the tier. Then a short index of the core tools, the rules for answering launched agents' dialogs and confirmations, and how to read agent state as an observation. They differ in:
 
-- **`CLAUDE.md`** — Claude's local tools and its tool-layer deny list, the broadcast and fleet-run recipes, and the `ScheduleWakeup`-paced fleet-polling recipe.
+- **`CLAUDE.md`** — Claude's local tools and its tool-layer deny list, and the rule to pace long waits with notices or `ScheduleWakeup` rather than a blocking call.
 - **`AGENTS.md`** (Codex, and the experimental Copilot integration) — the role-override header and a local-tools restriction that says plainly it is instruction, not enforcement: Codex has no bundled deny list and its session directory is writable, so the server-side tier gate is the real boundary.
 
 Both also share:
@@ -70,7 +70,6 @@ Both also share:
 - **Tone:** Concise, actionable, grounded in documentation
 - **Scope boundary:** If a question is outside docs, search GitHub issues or offer to file one
 - **Forge access:** Search/view issues without confirmation, never write through a forge CLI. Creating an issue requires user approval of the exact draft; because `forge.createIssue` has no repository argument and targets the active worktree's repo, Daintree feedback is handed to the user to file by default and filed directly only when the active worktree is itself a `daintreehq/daintree` checkout
-- **Topic coverage:** 10 documentation areas (getting started, panels, agents, worktrees, keybindings, actions, context injection, recipes, themes, browser/devpreview)
 
 ### Editing the prompts
 
@@ -79,18 +78,17 @@ Both also share:
 ```
 scripts/help-src/
 ├── SHARED.head.md         # orientation: MCP servers, local MCP off, tool discovery, tier model, permissions outside MCP
-├── SHARED.tasks.md        # Common Tasks recipes (launch/check/send/wait/close)
-├── SHARED.md              # How to Answer, launched-agent dialogs, confirmations, readiness checks
-├── SHARED.tail.md         # Topics, GitHub issues, IDK pattern
+├── SHARED.tasks.md        # Common Tasks: the core tool index (launch/check/prompt/wait/close)
+├── SHARED.md              # How to Answer, launched-agent dialogs, confirmations, reading agent state
+├── SHARED.tail.md         # GitHub issues, IDK pattern
 ├── CLAUDE.head.md         # Claude title + local tools and deny list
-├── CLAUDE.tasks.md        # Claude-only recipes (broadcast, fleet run status)
 ├── CLAUDE.transcript.md   # Claude session-transcript lookup
-├── CLAUDE.tail.md         # Claude-only terminal-watching recipe (ScheduleWakeup pacing)
+├── CLAUDE.tail.md         # Claude-only wait pacing (notices, ScheduleWakeup)
 ├── AGENTS.head.md         # Codex Role Override + local-tools restriction
 └── AGENTS.transcript.md   # Codex session-transcript lookup
 ```
 
-`CLAUDE.md` is `CLAUDE.head` + `SHARED.head` + `SHARED.tasks` + `CLAUDE.tasks` + `SHARED` + `CLAUDE.transcript` + `SHARED.tail` + `CLAUDE.tail`; `AGENTS.md` is `AGENTS.head` + `SHARED.head` + `SHARED.tasks` + `SHARED` + `AGENTS.transcript` + `SHARED.tail`. Anything both assistants need therefore belongs in a `SHARED*` partial — the Claude-only partials never reach Codex. Keep `AGENTS.md` well under Codex's 32 KiB `project_doc_max_bytes` ceiling; Codex truncates past it without telling the model. The build test caps the file at 24 KiB and the template at 21,500 bytes, so the runtime notes provisioning appends still fit.
+`CLAUDE.md` is `CLAUDE.head` + `SHARED.head` + `SHARED.tasks` + `SHARED` + `CLAUDE.transcript` + `SHARED.tail` + `CLAUDE.tail`; `AGENTS.md` is `AGENTS.head` + `SHARED.head` + `SHARED.tasks` + `SHARED` + `AGENTS.transcript` + `SHARED.tail`. Anything both assistants need therefore belongs in a `SHARED*` partial — the Claude-only partials never reach Codex. Keep `AGENTS.md` well under Codex's 32 KiB `project_doc_max_bytes` ceiling; Codex truncates past it without telling the model. The build test caps each generated prompt at 12 KiB — procedures belong in the runbooks — and keeps the older 24 KiB and 21,500-byte AGENTS.md caps as backstops.
 
 After editing any partial, run:
 
@@ -125,14 +123,14 @@ Claude Code evaluates permissions in order **deny → ask → allow**, and the f
 
 **Claude** (`.claude/settings.json`):
 
-- Allows: `Read(**)` — a single `Read` rule covers every file-reading tool (`Glob`, `Grep`, `LS`); listing those separately does nothing and makes Claude Code warn at session start — plus `WebFetch`, `mcp__daintree-docs__*`
+- Allows: `Read(**)` — a single `Read` rule covers every file-reading tool (`Glob`, `Grep`, `LS`); listing those separately does nothing and makes Claude Code warn at session start — plus `WebFetch`, `mcp__daintree-docs__*`, `mcp__daintree-runbooks__*`
 - Allows (auto-approved): `Bash(gh *)`, `Bash(glab *)`, `Bash(tea *)` — the full read surface of each forge CLI
 - Denies: `Edit(**)` — a single `Edit` rule covers every file-editing tool (`Write`, `NotebookEdit`, `MultiEdit`); listing those separately does nothing and makes Claude Code warn at session start — plus the destructive forge write paths (`Bash(gh issue create*)`, `Bash(gh pr create*)`, `Bash(gh pr merge*)`, `Bash(gh repo create*)`, `Bash(gh repo delete*)`, and the `glab`/`tea` equivalents including tea's `issues`/`pulls` plural aliases). A Claude Code `deny` is a hard block, not a confirmation prompt — these commands cannot be invoked at the tool layer at all, so autonomous issue/PR creation via the CLI is impossible regardless of the model's reasoning
 - At provision time, `HelpSessionService` adds `mcp__daintree__*` to the allow list when the user has local MCP enabled, and sets `defaultMode: "bypassPermissions"` when skip-permissions is enabled. The session's tool set (`core` / `full`) gates the actual `mcp__daintree__*` tool surface server-side.
 
 **Codex** (runtime `-c` flags injected by the help-session service):
 
-- The codex-cli ignores project-scoped `.codex/config.toml` from cwd, so nothing is bundled on disk. `HelpSessionService.buildCodexLaunchArgs` composes the equivalent settings as `-c key=value` flags at spawn time — `mcp_servers.daintree` (when local MCP is enabled) and `mcp_servers.daintree-docs`.
+- The codex-cli ignores project-scoped `.codex/config.toml` from cwd, so nothing is bundled on disk. `HelpSessionService.buildCodexLaunchArgs` composes the equivalent settings as `-c key=value` flags at spawn time — `mcp_servers.daintree` (when local MCP is enabled), `mcp_servers.daintree-docs`, and `mcp_servers.daintree-runbooks` (when runbooks are on).
 - Those flags wire MCP only. No sandbox or approval-policy flag is injected, and the session directory is writable by design, so "don't mutate the user's project, don't reach past the tier with the shell" is carried by `AGENTS.md` rather than enforced by the CLI. Treat the MCP tier as the enforcement point.
 - Issue creation requires user confirmation via instruction-level guardrails
 
@@ -156,6 +154,14 @@ All documentation is served exclusively through MCP — there are no bundled fal
 
 - Claude reads `.mcp.json` from the session-scoped cwd (rewritten per session by `HelpSessionService` with a fresh bearer token).
 - Codex receives its MCP config via `-c key=value` CLI flags at spawn — there is no `.mcp.json` or `.codex/config.toml` involved.
+
+## Runbook Search Server
+
+While **Follow runbooks** (Settings → Assistant → Daintree Assistant → Behavior) is on, and Daintree control with it, every help session also gets the `daintree-runbooks` MCP server at `https://assistant.daintree.org/v1/daintree/mcp`. It is the stateless runbook search from the `assistant-backend` repo: one tool, `search_runbooks`, which ranks the runbook catalog against a task and returns the matching procedures, marking the ones its classifier would load as `selected`. The setting is on by default.
+
+The rule that makes the assistant use it is not in the generated prompts. Both templates carry an empty `<!-- DAINTREE_RUNBOOKS_START/END -->` slot right after the role, and `HelpSessionService` fills it (`electron/services/helpSessionRunbooks.ts`) only while runbooks are on, emptying it again when they are off — so the rule is among the first things the agent reads, and the prompt never has to say "unless disabled". It requires a search before the first `daintree` call on any request to do something, and it prescribes the query: one sentence of 8–15 words in the user's voice with specifics removed. That shape was measured against the selector — it routed as well as the raw user message, while three-word phrases dropped halves of compound tasks and third-person or "ask …" phrasings were misrouted to the agent-question runbooks.
+
+For development against a local runbook server, set `DAINTREE_RUNBOOKS_MCP_URL` (for example `http://127.0.0.1:8473/v1/daintree/mcp`) in the environment Daintree starts from. It is deliberately not a setting; an override that isn't a plain http(s) URL is ignored in favour of production.
 
 ## How Daintree Launches Help Agents
 

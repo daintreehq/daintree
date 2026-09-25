@@ -348,6 +348,8 @@ export interface StoreSchema {
   helpAssistant: {
     docSearch: boolean;
     daintreeControl: boolean;
+    /** Absent in stores written before runbooks shipped; read as on. */
+    runbookSearch?: boolean;
     /**
      * MCP tool set for the help assistant. Read-time migrated from the
      * pre-split ladder values and the legacy `skipPermissions` boolean — see
@@ -811,6 +813,7 @@ const storeOptions = {
     helpAssistant: {
       docSearch: true,
       daintreeControl: true,
+      runbookSearch: true,
       tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7 as const,

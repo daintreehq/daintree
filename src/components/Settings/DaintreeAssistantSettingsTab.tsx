@@ -60,6 +60,7 @@ const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   debugLogging: "launch",
   docSearch: "behavior",
   daintreeControl: "behavior",
+  runbookSearch: "behavior",
   idleHibernateMinutes: "launch",
   tier: "security",
   bypassPermissions: "security",
@@ -73,6 +74,7 @@ const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
   "debugLogging",
   "docSearch",
   "daintreeControl",
+  "runbookSearch",
   "idleHibernateMinutes",
   "tier",
   "bypassPermissions",
@@ -103,6 +105,7 @@ const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   debugLogging: "Debug logging",
   docSearch: "Search documentation",
   daintreeControl: "Daintree control",
+  runbookSearch: "Follow runbooks",
   idleHibernateMinutes: "Hibernate after",
   tier: "Tool set",
   bypassPermissions: "Bypass",
@@ -118,6 +121,7 @@ interface SaveFailure {
 const DEFAULT_SETTINGS: HelpAssistantSettings = {
   docSearch: true,
   daintreeControl: true,
+  runbookSearch: true,
   tier: "core",
   bypassPermissions: false,
   auditRetention: 7,
@@ -787,6 +791,10 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ daintreeControl: !settings.daintreeControl });
   };
 
+  const toggleRunbookSearch = () => {
+    void persist({ runbookSearch: !settings.runbookSearch });
+  };
+
   const setTier = (value: string) => {
     if (value !== "core" && value !== "full") return;
     void persist({ tier: value });
@@ -1124,6 +1132,20 @@ export function DaintreeAssistantSettingsTab() {
             onReset={() => void persist({ daintreeControl: DEFAULT_SETTINGS.daintreeControl })}
           />
           {!loading && <SettingsDependents>{mcpStatusRow}</SettingsDependents>}
+          <SettingsSwitchCard
+            id="assistant-runbook-search"
+            title="Follow runbooks"
+            subtitle={
+              !loading && !settings.daintreeControl
+                ? "Needs Daintree control. Runbooks are procedures for Daintree actions."
+                : "Before each task, the assistant loads Daintree's step-by-step procedure for it"
+            }
+            isEnabled={settings.runbookSearch}
+            onChange={toggleRunbookSearch}
+            disabled={settingsUnavailable || !settings.daintreeControl}
+            isModified={settings.runbookSearch !== DEFAULT_SETTINGS.runbookSearch}
+            onReset={() => void persist({ runbookSearch: DEFAULT_SETTINGS.runbookSearch })}
+          />
         </SettingsGroup>
       </SettingsSection>
 

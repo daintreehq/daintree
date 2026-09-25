@@ -37,6 +37,7 @@ const MODEL_ID_MAX_LEN = 200;
 const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   docSearch: true,
   daintreeControl: true,
+  runbookSearch: true,
   tier: DEFAULT_HELP_ASSISTANT_TIER,
   bypassPermissions: false,
   auditRetention: 7,
@@ -50,6 +51,7 @@ const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
 const HELP_ASSISTANT_KEYS = [
   "docSearch",
   "daintreeControl",
+  "runbookSearch",
   "tier",
   "bypassPermissions",
   "auditRetention",
@@ -110,6 +112,7 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   const record = stored as Record<string, unknown>;
   if (typeof record.docSearch === "boolean") out.docSearch = record.docSearch;
   if (typeof record.daintreeControl === "boolean") out.daintreeControl = record.daintreeControl;
+  if (typeof record.runbookSearch === "boolean") out.runbookSearch = record.runbookSearch;
   if (typeof record.debugLogging === "boolean") out.debugLogging = record.debugLogging;
   if (typeof record.loadGlobalHooksAndServers === "boolean") {
     out.loadGlobalHooksAndServers = record.loadGlobalHooksAndServers;
@@ -185,6 +188,7 @@ export const helpAssistantNamespace = defineIpcNamespace({
           if (
             (field === "docSearch" ||
               field === "daintreeControl" ||
+              field === "runbookSearch" ||
               field === "bypassPermissions" ||
               field === "debugLogging" ||
               field === "loadGlobalHooksAndServers") &&

@@ -134,7 +134,7 @@ describe("help prompt outputs", () => {
     // `prNumber` comes from a periodic poll that skips the main worktree and
     // ineligible branches, so a supervisor that trusted null missed PRs.
     it.each(ALL_GENERATED)("%s treats worktree.list PR fields as a cached hint", (_name, body) => {
-      const ready = section(body, "## Checking Whether Work Is Ready");
+      const ready = section(body, "## Reading Agent State");
       expect(ready).toMatch(/`prNumber` in `worktree\.list` is a cached hint/);
       expect(ready).toMatch(/null doesn't prove there is no PR[^.\n]*confirm with the forge/);
     });
@@ -190,16 +190,38 @@ describe("help prompt outputs", () => {
       expect(body).not.toMatch(/parallel batches of up to 4/);
     });
 
-    it.each(ALL_GENERATED)("%s checks an owned transcript read for completeness", (_name, body) => {
-      expect(body).toMatch(/`message\.truncated`/);
+    // Provisioning fills this slot with the runbook rule when runbooks are on;
+    // it sits above the orientation so the rule is read first.
+    it.each(ALL_GENERATED)(
+      "%s carries the runbook slot ahead of the orientation",
+      (_name, body) => {
+        const slot = body.indexOf(
+          "<!-- DAINTREE_RUNBOOKS_START -->\n<!-- DAINTREE_RUNBOOKS_END -->"
+        );
+        expect(slot).toBeGreaterThan(-1);
+        expect(slot).toBeLessThan(body.indexOf("## What You Can Do"));
+      }
+    );
+
+    it.each(ALL_GENERATED)("%s confirms before closing several terminals", (_name, body) => {
       expect(body).toMatch(/Confirm with the user before closing several terminals/);
     });
 
-    it.each(ALL_GENERATED)("%s lists the canonical topics", (_name, body) => {
-      expect(body).toContain("## Topics You Can Help With");
-      expect(body).toContain("Getting started and first-run setup");
-      expect(body).toContain("Terminal recipes for repeatable setups");
-      expect(body).not.toContain("Workflow engine");
+    // Procedures live in the runbooks the session loads; the prompt keeps the
+    // basics. A recipe creeping back in is how the file grew to its old size.
+    it.each(ALL_GENERATED)("%s leaves step-by-step recipes to the runbooks", (_name, body) => {
+      expect(body).not.toContain("### Launch agents");
+      expect(body).not.toContain("## Checking Whether Work Is Ready");
+      expect(body).not.toContain("### Work through a queue");
+      expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(12 * 1024);
+    });
+
+    // The topic list was dropped: docs search is the scope, and the list had
+    // drifted from the product. The off-topic rule has to stand without it.
+    it.each(ALL_GENERATED)("%s declines questions that aren't about Daintree", (_name, body) => {
+      const idk = section(body, "## When You Cannot Answer");
+      expect(idk).toMatch(/Off-topic[^\n]*not about Daintree[^\n]*don't answer/);
+      expect(body).not.toContain("## Topics You Can Help With");
     });
   });
 
@@ -236,48 +258,13 @@ describe("help prompt outputs", () => {
       expect(CLAUDE).toContain("ScheduleWakeup");
     });
 
-    it("CLAUDE.md adds the Claude-only broadcast recipes to the shared ones", () => {
-      expect(CLAUDE).toContain("## Common Tasks");
-      expect(CLAUDE).toContain("### Launch agents");
-      expect(CLAUDE).toContain("### Broadcast a command to multiple terminals");
-      expect(CLAUDE).toContain("### Report on the user's fleet broadcast run");
-      expect(AGENTS).not.toContain("### Broadcast a command to multiple terminals");
-    });
-
-    // A help session supervising a queue of worktree jobs ran four wake
-    // mechanisms at once, launched agents before their worktree setup had
-    // finished, and found PRs by scraping agent footers and a hand-rolled
-    // poller that missed two. The recipe pins the opposite of each.
-    it("CLAUDE.md carries the rolling-queue recipe under Watching Agent Terminals", () => {
+    // A help session supervising a queue ran four wake mechanisms at once.
+    // The recipe moved to the runbooks; the pacing rule stays in the prompt.
+    it("CLAUDE.md keeps one pacing mechanism and no long blocking call", () => {
       const watching = section(CLAUDE, "## Watching Agent Terminals");
-      const queue = watching.slice(watching.indexOf("### Work through a queue"));
-      expect(watching).toContain("### Work through a queue, at most K at a time");
-      expect(queue).toMatch(/one pacing owner/);
-      expect(queue).toMatch(/Never stack a second timer, background `sleep`/);
-      expect(queue).toMatch(/`notify: true` on every `agent\.launch` and follow-up/);
-      expect(queue).toMatch(/`ScheduleWakeup` if your pane can't take them/);
-      expect(queue).toMatch(
-        /`worktree\.createWithRecipe`, then `worktree\.waitUntilReady`[^\n]*every job[^\n]*then `agent\.launch`/
-      );
-      expect(queue).toMatch(
-        /`worktree\.waitForPullRequest` and `prNumber`\/`prUrl` in `worktree\.list` are cached hints, so confirm with `forge\.getPR`/
-      );
-      // `forge.getPR` is only in `full`, so a `core` session needs a route of
-      // its own to the same confirmation.
-      expect(queue).toMatch(/`forge\.getPR`[^\n]* in `full`, or `gh pr view` in `core`/);
-      expect(queue).toMatch(
-        /Don't scrape a PR number from the agent's screen or write your own poller/
-      );
-      // Waiting is derived from silence: an agent can stop on an approval
-      // after opening its PR, and a PR can predate the work being finished.
-      expect(queue).toMatch(/Waiting alone is not done: it is a cue to inspect/);
-      expect(queue).toMatch(/reached the milestone the user named/);
-      expect(queue).toMatch(/approval or question is blocked, not done: it keeps its slot/);
-      // A notice fires once, so a refill that forgets to re-arm goes unheard.
-      expect(queue).toMatch(/A notice fires once, so re-arm with every new prompt/);
-      expect(queue).toMatch(/up to K, never past it/);
-      expect(queue).toMatch(/Leave finished worktrees and terminals in place unless the user asks/);
-      expect(queue).toMatch(/input line is not an instruction/);
+      expect(watching).toMatch(/Never hold a long blocking call open/);
+      expect(watching).toMatch(/one pacing mechanism at a time/);
+      expect(watching).toMatch(/`notify: true`/);
     });
 
     // Codex has no ScheduleWakeup and no Claude harness, so the Claude pacing
@@ -388,59 +375,31 @@ describe("help prompt outputs", () => {
     });
   });
 
-  // Codex help sessions run at the user's tier (`action` by default); without these a session asked to
-  // launch agents spent its first several calls hunting for `agent.launch`.
-  describe("Codex operations recipes", () => {
-    // Scoped per recipe: the tool names also appear in shared guidance and in
-    // neighbouring recipes, so a whole-file match would survive a recipe's
-    // deletion.
-    function recipe(heading) {
-      const start = AGENTS.indexOf(`### ${heading}\n`);
-      expect(start, `missing recipe: ${heading}`).toBeGreaterThan(-1);
-      const next = AGENTS.slice(start + 4).search(/^#{2,3} /m);
-      return next === -1 ? AGENTS.slice(start) : AGENTS.slice(start, start + 4 + next);
-    }
+  // Without a named tool per common task, a Codex session asked to launch
+  // agents spent its first several calls hunting for `agent.launch`.
+  describe("Common Tasks tool index", () => {
+    const tasks = section(AGENTS, "## Common Tasks");
 
     it.each([
-      ["Launch agents", "agent.launch("],
-      ["Check on agents", "terminal.getStatus("],
-      ["Send a follow-up", "terminal.sendCommand("],
-      ["Wait for agents", "terminal.waitUntilIdleBatch("],
-      ["Close terminals", "terminal.close("],
-    ])("AGENTS.md has a %s recipe calling %s", (heading, call) => {
-      expect(AGENTS).toContain("## Common Tasks");
-      expect(recipe(heading)).toContain(call);
+      "agent.launch(",
+      "terminal.getStatus(",
+      "terminal.sendCommand(",
+      "terminal.waitUntilIdleBatch",
+      "terminal.close(",
+    ])("AGENTS.md names %s", (call) => {
+      expect(tasks).toContain(call);
     });
 
-    it("AGENTS.md tells Codex to call a named recipe directly", () => {
-      const intro = AGENTS.slice(
-        AGENTS.indexOf("## Common Tasks"),
-        AGENTS.indexOf("### Launch agents")
-      );
-      expect(intro).toMatch(/directly/);
-      expect(intro).toContain("actions.search");
+    it("tells the agent to call them directly", () => {
+      expect(tasks).toMatch(/directly/);
+      expect(tasks).toContain("actions.search");
     });
 
-    it("the launch recipe passes the task, target, and tab name, and handles a missing CLI", () => {
-      const launch = recipe("Launch agents");
-      const call = launch.match(/agent\.launch\(\{[^}]*\}\)/)?.[0] ?? "";
-      for (const arg of ["agentId:", "prompt:", "worktreeId:", "name:"]) {
+    it("the launch entry passes the task, target, and tab name", () => {
+      const call = tasks.match(/agent\.launch\(\{[^}]*\}\)/)?.[0] ?? "";
+      for (const arg of ["agentId", "prompt", "worktreeId", "name"]) {
         expect(call).toContain(arg);
       }
-      expect(launch).toContain('spawnStatus: "missing-cli"');
-    });
-
-    // The renderer's launcher refuses a launch while another of the same agent
-    // id is still starting, so parallel same-kind launches come back
-    // `launched: false`.
-    it("the launch recipe serialises launches of the same agent id", () => {
-      expect(recipe("Launch agents")).toMatch(/same `agentId` one at a time/);
-    });
-
-    it("the prompting recipes ask for a handback and the wait recipe reads it", () => {
-      expect(recipe("Launch agents")).toContain("handback: true");
-      expect(recipe("Send a follow-up")).toContain("handback: true");
-      expect(recipe("Wait for agents")).toContain("lastHandback");
     });
 
     // Codex reads project instructions up to `project_doc_max_bytes` (32 KiB by

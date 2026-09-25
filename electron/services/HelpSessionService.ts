@@ -22,6 +22,14 @@ import {
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
 import { ASSISTANT_SCRATCH_ENV_VAR, getScratchDirForSession } from "./AssistantScratchService.js";
+import {
+  DAINTREE_DOCS_MCP_URL,
+  RUNBOOKS_BLOCK_END,
+  RUNBOOKS_BLOCK_START,
+  RUNBOOKS_MCP_SERVER_NAME,
+  buildRunbooksAddendum,
+  resolveRunbooksMcpUrl,
+} from "./helpSessionRunbooks.js";
 import { agentSupportsAssistantContent, syncAssistantContent } from "./AssistantContentMirror.js";
 import {
   loadAssistantUserConfig,
@@ -99,6 +107,7 @@ const TEMPLATE_HASH_FILE = ".template-hash";
 const DEFAULT_TIER: HelpAssistantTier = DEFAULT_HELP_ASSISTANT_TIER;
 const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
+const DEFAULT_RUNBOOK_SEARCH = true;
 const DEFAULT_BYPASS_PERMISSIONS = false;
 const DEFAULT_DEBUG_LOGGING = false;
 
@@ -116,6 +125,14 @@ const USER_INSTRUCTIONS_SIDECAR_PATTERN = /^assistant-instructions-[0-9a-f]{12}\
 function userInstructionsSidecarName(content: string): string {
   return `assistant-instructions-${createHash("sha256").update(content).digest("hex").slice(0, 12)}.md`;
 }
+/**
+ * Runbooks are procedures for Daintree's own tools, so they ride on Daintree
+ * control: with it off there is nothing for a runbook to drive.
+ */
+function runbooksEnabled(settings: { daintreeControl: boolean; runbookSearch: boolean }): boolean {
+  return settings.daintreeControl && settings.runbookSearch;
+}
+
 const SCRATCH_BLOCK_MARKERS = {
   start: "<!-- DAINTREE_ASSISTANT_SCRATCH_START -->",
   end: "<!-- DAINTREE_ASSISTANT_SCRATCH_END -->",
@@ -1144,6 +1161,7 @@ export class HelpSessionService {
         // Uses managed markers so re-provision replaces the block in place instead
         // of accumulating duplicate stanzas.
         await this.writeScratchAddendum(sessionPath, scratchPath);
+        await this.writeRunbooksAddendum(sessionPath, runbooksEnabled(settings));
         // Same unconditional placement, for the same reason: the facts change
         // independently of the template, and every lane shares these files, so
         // only project-level observations go in — never a lane's focus.
@@ -1229,7 +1247,7 @@ export class HelpSessionService {
     const codexLaunchArgs =
       input.agentId === "codex"
         ? [
-            ...this.buildCodexLaunchArgs(settings.daintreeControl, settings.docSearch, port),
+            ...this.buildCodexLaunchArgs(settings, port),
             ...toCodexMcpServerArgs(
               userConfig.mcpServers,
               userConfig.warnings,
@@ -1340,12 +1358,11 @@ export class HelpSessionService {
    * so no literal token is ever embedded in argv or written to disk.
    */
   private buildCodexLaunchArgs(
-    daintreeControl: boolean,
-    docSearch: boolean,
+    settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
     port: number | null
   ): string[] {
     const args: string[] = [];
-    if (daintreeControl && port) {
+    if (settings.daintreeControl && port) {
       args.push(
         "-c",
         `mcp_servers.daintree.transport="http"`,
@@ -1355,12 +1372,20 @@ export class HelpSessionService {
         `mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"`
       );
     }
-    if (docSearch) {
+    if (settings.docSearch) {
       args.push(
         "-c",
         `mcp_servers.daintree-docs.transport="http"`,
         "-c",
-        `mcp_servers.daintree-docs.url="https://daintree.org/api/mcp"`
+        `mcp_servers.daintree-docs.url="${DAINTREE_DOCS_MCP_URL}"`
+      );
+    }
+    if (runbooksEnabled(settings)) {
+      args.push(
+        "-c",
+        `mcp_servers.${RUNBOOKS_MCP_SERVER_NAME}.transport="http"`,
+        "-c",
+        `mcp_servers.${RUNBOOKS_MCP_SERVER_NAME}.url="${resolveRunbooksMcpUrl()}"`
       );
     }
     return args;
@@ -2099,6 +2124,7 @@ export class HelpSessionService {
   private readSettings(): {
     daintreeControl: boolean;
     docSearch: boolean;
+    runbookSearch: boolean;
     tier: HelpAssistantTier;
     bypassPermissions: boolean;
     debugLogging: boolean;
@@ -2125,6 +2151,8 @@ export class HelpSessionService {
           ? stored.daintreeControl
           : DEFAULT_DAINTREE_CONTROL,
       docSearch: typeof stored.docSearch === "boolean" ? stored.docSearch : DEFAULT_DOC_SEARCH,
+      runbookSearch:
+        typeof stored.runbookSearch === "boolean" ? stored.runbookSearch : DEFAULT_RUNBOOK_SEARCH,
       tier,
       bypassPermissions,
       debugLogging:
@@ -2300,7 +2328,7 @@ export class HelpSessionService {
     sessionPath: string,
     slot: number,
     sessionId: string,
-    settings: { daintreeControl: boolean; docSearch: boolean },
+    settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
     port: number | null,
     token: string,
     userServers: Record<string, AssistantUserMcpServer> = {}
@@ -2314,7 +2342,13 @@ export class HelpSessionService {
     if (settings.docSearch) {
       mcpServers["daintree-docs"] = {
         type: "http",
-        url: "https://daintree.org/api/mcp",
+        url: DAINTREE_DOCS_MCP_URL,
+      };
+    }
+    if (runbooksEnabled(settings)) {
+      mcpServers[RUNBOOKS_MCP_SERVER_NAME] = {
+        type: "http",
+        url: resolveRunbooksMcpUrl(),
       };
     }
     if (settings.daintreeControl && port) {
@@ -2433,7 +2467,7 @@ export class HelpSessionService {
    */
   private async writeCopilotMcpConfig(
     sessionPath: string,
-    settings: { daintreeControl: boolean; docSearch: boolean },
+    settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
     port: number | null,
     userServers: Record<string, AssistantUserMcpServer> = {}
   ): Promise<void> {
@@ -2444,7 +2478,13 @@ export class HelpSessionService {
     if (settings.docSearch) {
       mcpServers["daintree-docs"] = {
         type: "http",
-        url: "https://daintree.org/api/mcp",
+        url: DAINTREE_DOCS_MCP_URL,
+      };
+    }
+    if (runbooksEnabled(settings)) {
+      mcpServers[RUNBOOKS_MCP_SERVER_NAME] = {
+        type: "http",
+        url: resolveRunbooksMcpUrl(),
       };
     }
     if (settings.daintreeControl && port) {
@@ -2561,6 +2601,7 @@ export class HelpSessionService {
           "Read(**)",
           "WebFetch",
           "mcp__daintree-docs__*",
+          "mcp__daintree-runbooks__*",
           "Bash(gh *)",
           "Bash(glab *)",
           "Bash(tea *)",
@@ -2623,6 +2664,22 @@ export class HelpSessionService {
     );
   }
 
+  /**
+   * Fills the runbook slot the template carries right after the role, so the
+   * rule is among the first things the agent reads. Off, the slot is emptied
+   * rather than removed: the session dir is reused across launches, and a
+   * removed slot would put a later rule at the end of the file.
+   */
+  private async writeRunbooksAddendum(sessionPath: string, enabled: boolean): Promise<void> {
+    const markers = { start: RUNBOOKS_BLOCK_START, end: RUNBOOKS_BLOCK_END };
+    const body = enabled ? buildRunbooksAddendum() : "";
+    await Promise.all(
+      ["CLAUDE.md", "AGENTS.md"].map((name) =>
+        this.writeManagedBlock(path.join(sessionPath, name), markers, body)
+      )
+    );
+  }
+
   private async writeProjectMetadataAddendum(sessionPath: string, addendum: string): Promise<void> {
     const markers = { start: PROJECT_METADATA_START, end: PROJECT_METADATA_END };
     const targets = ["CLAUDE.md", "AGENTS.md"];
@@ -2669,9 +2726,7 @@ export class HelpSessionService {
     return [
       "## Assistant Scratch Folder",
       "",
-      `You have a dedicated scratch folder for any temporary or working files you need to create. Its path is in the environment variable \`${ASSISTANT_SCRATCH_ENV_VAR}\`; read that variable rather than assuming a location.`,
-      "",
-      "Use this folder — not the project workspace, not the system temp dir — for any notes, drafts, intermediate output, or other scratch work. The folder is cleared on every Daintree launch, so don't put anything you want to keep there.",
+      `Put notes, drafts and working files in the folder named by \`${ASSISTANT_SCRATCH_ENV_VAR}\` (read the variable; don't assume a path), never in the project or the system temp dir. It is cleared on every Daintree launch.`,
       "",
     ].join("\n");
   }

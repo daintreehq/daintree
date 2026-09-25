@@ -222,6 +222,7 @@ function installApi(
     getSettings: vi.fn().mockResolvedValue({
       docSearch: true,
       daintreeControl: true,
+      runbookSearch: true,
       tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
@@ -340,6 +341,54 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({ docSearch: false });
     });
+  });
+
+  it("persists turning runbooks off from the switch under Daintree control", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Follow runbooks");
+
+    const toggle = screen.getByRole("switch", { name: "Follow runbooks" });
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+        runbookSearch: false,
+      });
+    });
+  });
+
+  it("disables the runbooks row, flush rather than nested, while Daintree control is off", async () => {
+    installApi({
+      getSettings: vi.fn().mockResolvedValue({
+        docSearch: true,
+        daintreeControl: false,
+        runbookSearch: true,
+        tier: "core" as const,
+        bypassPermissions: false,
+        auditRetention: 7,
+      }),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(
+      container,
+      "Needs Daintree control. Runbooks are procedures for Daintree actions."
+    );
+
+    const toggle = screen.getByRole("switch", { name: "Follow runbooks" });
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    expect(toggle.closest("[data-settings-dependents]")).toBeNull();
   });
 
   it("marks the behavior switches modified only when they differ from their defaults, and resets them", async () => {

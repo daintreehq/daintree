@@ -79,6 +79,7 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toEqual({
       docSearch: true,
       daintreeControl: true,
+      runbookSearch: true,
       tier: "core",
       bypassPermissions: false,
       auditRetention: 7,
@@ -103,6 +104,7 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toEqual({
       docSearch: true,
       daintreeControl: true,
+      runbookSearch: true,
       tier: "full",
       bypassPermissions: true,
       auditRetention: 30,
@@ -353,9 +355,26 @@ describe("registerHelpAssistantHandlers", () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
 
-    await handler(null, { docSearch: "yes", daintreeControl: 1, bypassPermissions: 0 });
+    await handler(null, {
+      docSearch: "yes",
+      daintreeControl: 1,
+      runbookSearch: "on",
+      bypassPermissions: 0,
+    } as unknown as Partial<HelpAssistantSettings>);
 
     expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("persists runbookSearch and reads a stored false back", async () => {
+    registerHelpAssistantHandlers();
+    const set = ipcMainMock._handlers.get(SET_CHANNEL)!;
+    await set(null, { runbookSearch: false });
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.runbookSearch", false);
+
+    storeMock.get.mockReturnValue({ runbookSearch: false });
+    const get = ipcMainMock._handlers.get(GET_CHANNEL)!;
+    const result = (await get(null)) as HelpAssistantSettings;
+    expect(result.runbookSearch).toBe(false);
   });
 
   it("does not persist unknown fields the renderer wasn't supposed to send", async () => {
@@ -376,6 +395,7 @@ describe("registerHelpAssistantHandlers", () => {
     storeMock.get.mockReturnValue({
       docSearch: "not-a-boolean" as unknown as boolean,
       daintreeControl: 42 as unknown as boolean,
+      runbookSearch: "no" as unknown as boolean,
       tier: null as unknown as "core",
       bypassPermissions: "yes" as unknown as boolean,
       auditRetention: 365 as unknown as 7,
@@ -387,6 +407,7 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toEqual({
       docSearch: true,
       daintreeControl: true,
+      runbookSearch: true,
       tier: "core",
       bypassPermissions: false,
       auditRetention: 7,

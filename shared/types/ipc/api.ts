@@ -2545,6 +2545,12 @@ export interface HelpAssistantSettings {
   /** Allow the help assistant to call Daintree control tools via the local MCP. Defaults to true. */
   daintreeControl: boolean;
   /**
+   * Wire the runbook-search MCP server and require the assistant to load the
+   * runbook for a task before acting. Only takes effect while `daintreeControl`
+   * is on. Defaults to true.
+   */
+  runbookSearch: boolean;
+  /**
    * MCP tool set the help assistant runs with — controls which Daintree
    * actions the assistant can call. Defaults to `"core"`.
    */

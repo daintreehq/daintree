@@ -206,6 +206,7 @@ function stripManagedAddenda(content: string): string {
       /\n*<!-- DAINTREE_PROJECT_METADATA_START -->[\s\S]*?<!-- DAINTREE_PROJECT_METADATA_END -->\n*/,
       ""
     )
+    .replace(/\n*<!-- DAINTREE_RUNBOOKS_START -->[\s\S]*?<!-- DAINTREE_RUNBOOKS_END -->\n*/, "")
     .replace(/\n+$/, "");
 }
 
@@ -612,6 +613,10 @@ describe("HelpSessionService", () => {
       });
       expect(lane.mcpServers.daintree?.headers?.Authorization).toMatch(/^Bearer /);
       expect(lane.mcpServers["daintree-docs"]).toBeDefined();
+      expect(lane.mcpServers["daintree-runbooks"]).toEqual({
+        type: "http",
+        url: "https://assistant.daintree.org/v1/daintree/mcp",
+      });
       // The shared cwd file stays empty so nothing raises an approval prompt.
       expect((await readSharedMcp(result.sessionPath)).mcpServers).toEqual({});
     });
@@ -3022,7 +3027,7 @@ describe("HelpSessionService", () => {
       expect(mockProbeMcpSseServer).not.toHaveBeenCalled();
     });
 
-    it("getCodexLaunchArgs returns -c flags for both daintree and daintree-docs servers", async () => {
+    it("getCodexLaunchArgs returns -c flags for the daintree, docs and runbook servers", async () => {
       const result = await service.provisionSession(codexInput());
       if (!result) throw new Error("expected result");
 
@@ -3038,6 +3043,10 @@ describe("HelpSessionService", () => {
         'mcp_servers.daintree-docs.transport="http"',
         "-c",
         'mcp_servers.daintree-docs.url="https://daintree.org/api/mcp"',
+        "-c",
+        'mcp_servers.daintree-runbooks.transport="http"',
+        "-c",
+        'mcp_servers.daintree-runbooks.url="https://assistant.daintree.org/v1/daintree/mcp"',
       ]);
       // Token must NEVER appear in argv — Codex reads it from PTY env via
       // `bearer_token_env_var`.
@@ -3054,6 +3063,33 @@ describe("HelpSessionService", () => {
       const flat = args!.join(" ");
       expect(flat).not.toContain("mcp_servers.daintree.");
       expect(flat).toContain("mcp_servers.daintree-docs.");
+      // Runbooks drive Daintree tools, so they go when control goes.
+      expect(flat).not.toContain("mcp_servers.daintree-runbooks.");
+    });
+
+    it("getCodexLaunchArgs omits the runbook server when runbookSearch is off", async () => {
+      mockStoreGet.mockReturnValue({ runbookSearch: false });
+
+      const result = await service.provisionSession(codexInput());
+      if (!result) throw new Error("expected result");
+
+      const flat = service.getCodexLaunchArgs(result.token)!.join(" ");
+      expect(flat).toContain("mcp_servers.daintree.");
+      expect(flat).not.toContain("mcp_servers.daintree-runbooks.");
+    });
+
+    it("getCodexLaunchArgs points the runbook server at the developer override", async () => {
+      vi.stubEnv("DAINTREE_RUNBOOKS_MCP_URL", "http://127.0.0.1:8473/v1/daintree/mcp");
+      try {
+        const result = await service.provisionSession(codexInput());
+        if (!result) throw new Error("expected result");
+
+        expect(service.getCodexLaunchArgs(result.token)).toContain(
+          'mcp_servers.daintree-runbooks.url="http://127.0.0.1:8473/v1/daintree/mcp"'
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
     it("getCodexLaunchArgs returns [] when both server toggles are off", async () => {
@@ -3256,6 +3292,10 @@ describe("HelpSessionService", () => {
       expect(mcp.mcpServers["daintree-docs"]).toEqual({
         type: "http",
         url: "https://daintree.org/api/mcp",
+      });
+      expect(mcp.mcpServers["daintree-runbooks"]).toEqual({
+        type: "http",
+        url: "https://assistant.daintree.org/v1/daintree/mcp",
       });
     });
 
@@ -3876,12 +3916,12 @@ describe("HelpSessionService", () => {
     });
 
     it("refreshes the block in place on re-provision even when the template copy is skipped", async () => {
-      let name = "Before";
+      let name = "OldProjectName";
       service.setProjectMetadataReader(async () => ({ name }));
 
       const first = await service.provisionSession(provisionInput());
       if (!first) throw new Error("expected result");
-      name = "After";
+      name = "NewProjectName";
       const cpSpy = vi.spyOn(fs, "cp");
       const second = await service.provisionSession(provisionInput());
       if (!second) throw new Error("expected result");
@@ -3891,8 +3931,8 @@ describe("HelpSessionService", () => {
         const content = await fs.readFile(path.join(second.sessionPath, file), "utf-8");
         expect(content.match(/<!-- DAINTREE_PROJECT_METADATA_START -->/g) ?? []).toHaveLength(1);
         expect(content.match(/<!-- DAINTREE_ASSISTANT_SCRATCH_START -->/g) ?? []).toHaveLength(1);
-        expect(content).toContain("- Name: `After`");
-        expect(content).not.toContain("Before");
+        expect(content).toContain("- Name: `NewProjectName`");
+        expect(content).not.toContain("OldProjectName");
         expect(content.startsWith(file === "CLAUDE.md" ? "# Help" : "# Agents Help")).toBe(true);
       }
       cpSpy.mockRestore();
@@ -3911,6 +3951,60 @@ describe("HelpSessionService", () => {
 
       const content = await fs.readFile(path.join(second.sessionPath, "AGENTS.md"), "utf-8");
       expect(content).not.toContain("Forge remote");
+    });
+  });
+  describe("runbook rule", () => {
+    const START = "<!-- DAINTREE_RUNBOOKS_START -->";
+
+    it("fills the slot the template carries near the top rather than appending", async () => {
+      await fs.writeFile(
+        path.join(helpFolder, "CLAUDE.md"),
+        `# Help\n\nRole.\n\n${START}\n<!-- DAINTREE_RUNBOOKS_END -->\n\n## Later\n`
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const content = await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8");
+      expect(content.indexOf("search_runbooks")).toBeGreaterThan(-1);
+      expect(content.indexOf("search_runbooks")).toBeLessThan(content.indexOf("## Later"));
+    });
+
+    it("writes the rule into CLAUDE.md and AGENTS.md when runbooks are on", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(result.sessionPath, file), "utf-8");
+        expect(content.match(new RegExp(START, "g")) ?? []).toHaveLength(1);
+        expect(content).toContain("`search_runbooks`");
+      }
+    });
+
+    it("removes the rule on re-provision once runbooks are turned off", async () => {
+      await service.provisionSession(provisionInput());
+      mockStoreGet.mockReturnValue({ runbookSearch: false });
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected result");
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(second.sessionPath, file), "utf-8");
+        // The slot stays, empty, so a later rule lands in the same place.
+        expect(content.match(new RegExp(START, "g")) ?? []).toHaveLength(1);
+        expect(content).not.toContain("search_runbooks");
+      }
+      const lane = await readLaneConfig(second);
+      expect(lane.mcpServers["daintree-runbooks"]).toBeUndefined();
+    });
+
+    it("leaves the rule and the server out while Daintree control is off", async () => {
+      mockStoreGet.mockReturnValue({ daintreeControl: false, runbookSearch: true });
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const claude = await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8");
+      expect(claude).not.toContain("search_runbooks");
+      const lane = await readLaneConfig(result);
+      expect(lane.mcpServers["daintree-runbooks"]).toBeUndefined();
     });
   });
 });
