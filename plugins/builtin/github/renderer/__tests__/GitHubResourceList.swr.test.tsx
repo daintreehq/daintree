@@ -3750,6 +3750,10 @@ describe("GitHubResourceList — the search field (#12752)", () => {
         .closest(".search-field")
         ?.querySelector<HTMLButtonElement>('button[aria-label="Clear search"]');
       expect(clear).toBeTruthy();
+      // Focus the button first, so the assertion below proves focus came back
+      // rather than never having left.
+      act(() => clear!.focus());
+      expect(document.activeElement).toBe(clear);
       fireEvent.click(clear!);
       expect(input.value).toBe("");
       expect(document.activeElement).toBe(input);
