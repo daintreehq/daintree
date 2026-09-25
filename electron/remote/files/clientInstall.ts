@@ -19,6 +19,7 @@ import { registerRemoteService } from "../runtime.js";
 import { ClientFileTransport, type DownloadOutcome } from "./ClientFileTransport.js";
 import { createHostFileProxy } from "./hostFileProxy.js";
 import { HostPickerBridge } from "./HostPickerBridge.js";
+import { ViewFileCapabilities } from "./viewCapabilities.js";
 
 /**
  * What the Shell's core handlers (file-transfer, the copytree split, the
@@ -33,6 +34,12 @@ export interface HostFileClient {
   cancel(opId: string): boolean;
   pickHostPaths(webContentsId: number, request: HostPickRequest): Promise<string[] | null>;
   answerHostPick(webContentsId: number, payload: AnswerHostPickPayload): void;
+  /**
+   * The capability a remote view puts in its host-scoped preview URLs
+   * (`…://host/<hostId>/<capability>/load…`), so its previews run under its own
+   * endpoint on the host. Null for a view that isn't bound to a remote host.
+   */
+  previewCapability(webContentsId: number): string | null;
 }
 
 declare module "../runtime.js" {
@@ -56,6 +63,7 @@ export interface EndpointFeed {
 export interface HostFileClientDeps {
   transport: ClientFileTransport;
   pickers: HostPickerBridge;
+  capabilities: ViewFileCapabilities;
   /** The host a view is bound to, or null for a local view. */
   hostForView(webContentsId: number): HostId | null;
   sendToView(webContentsId: number, event: FileTransferEvent): void;
@@ -175,6 +183,27 @@ export function createHostFileClient(deps: HostFileClientDeps): HostFileClient {
     answerHostPick(webContentsId, payload) {
       deps.pickers.answer(webContentsId, payload);
     },
+
+    previewCapability(webContentsId) {
+      if (deps.hostForView(webContentsId) === null) return null;
+      return deps.capabilities.capabilityFor(webContentsId);
+    },
+  };
+}
+
+function watchView(webContentsId: number, onGone: () => void): () => void {
+  const wc = resolveLiveWebContents(webContentsId);
+  if (!wc) {
+    queueMicrotask(onGone);
+    return () => {};
+  }
+  wc.once("destroyed", onGone);
+  return () => {
+    try {
+      wc.removeListener("destroyed", onGone);
+    } catch {
+      // Already torn down.
+    }
   };
 }
 
@@ -198,25 +227,13 @@ export function installHostFileClient(
         return false;
       }
     },
-    watch(webContentsId, onGone) {
-      const wc = resolveLiveWebContents(webContentsId);
-      if (!wc) {
-        queueMicrotask(onGone);
-        return () => {};
-      }
-      wc.once("destroyed", onGone);
-      return () => {
-        try {
-          wc.removeListener("destroyed", onGone);
-        } catch {
-          // Already torn down.
-        }
-      };
-    },
+    watch: watchView,
   });
+  const capabilities = new ViewFileCapabilities(watchView);
   const client = createHostFileClient({
     transport,
     pickers,
+    capabilities,
     hostForView,
     sendToView(webContentsId, event) {
       try {
@@ -232,11 +249,17 @@ export function installHostFileClient(
   const disposers = [
     feed.onEndpointOpened((hostId, info) => transport.noteEndpointOpened(hostId, info)),
     feed.onEndpointClosed((hostId, info) => transport.noteEndpointClosed(hostId, info)),
-    setHostFileRequestProxy(createHostFileProxy(transport)),
+    setHostFileRequestProxy(
+      createHostFileProxy(transport, {
+        viewForCapability: (capability) => capabilities.viewFor(capability),
+        hostForView,
+      })
+    ),
     registerRemoteService("hostFileClient", client),
   ];
   return () => {
     for (const dispose of disposers.splice(0).reverse()) dispose();
     pickers.dispose();
+    capabilities.dispose();
   };
 }

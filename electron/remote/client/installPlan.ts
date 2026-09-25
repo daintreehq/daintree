@@ -74,6 +74,8 @@ export function planInstall(params: {
   client: ClientBuild;
   probe: HostProbeResult;
   linuxPackage?: LinuxPackagePreference;
+  /** Why the AppImage in use can't be told apart (see ParsedProbe.appImageConflict). */
+  appImageConflict?: string | null;
 }): HostInstallPlan {
   const { client, probe } = params;
   const base = {
@@ -112,6 +114,9 @@ export function planInstall(params: {
 
   const packaging =
     probe.platform === "darwin" ? "app-bundle" : linuxPackaging(probe, params.linuxPackage);
+  if (packaging === "appimage" && params.appImageConflict) {
+    return unsupported(params.appImageConflict);
+  }
   const sameTarget = probe.platform === client.platform && probe.arch === client.arch;
   const canPush =
     sameTarget &&
@@ -140,5 +145,9 @@ export function planInstall(params: {
 
 /** The one command a deb install asks the user to run on the host. */
 export function debInstallCommand(stagedPath: string): string {
-  return `sudo apt install ${stagedPath}`;
+  // The user pastes this into their shell, and a staging path may hold spaces.
+  const quoted = /^[A-Za-z0-9._/+-]+$/.test(stagedPath)
+    ? stagedPath
+    : `'${stagedPath.replace(/'/g, `'"'"'`)}'`;
+  return `sudo apt install ${quoted}`;
 }

@@ -226,6 +226,7 @@ export const CHANNEL_LOCALITY = {
   "file-transfer:cancel": "shell",
   "file-transfer:download": "shell",
   "file-transfer:event": "shell",
+  "file-transfer:get-preview-capability": "shell",
   "file-transfer:upload-bytes": "shell",
   "file-transfer:upload-local-file": "shell",
   "file-watch:fingerprint": "host",

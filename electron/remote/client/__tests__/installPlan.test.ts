@@ -4,6 +4,7 @@ import {
   NIGHTLY_FEED_URL,
   STABLE_FEED_URL,
   artifactNameFor,
+  debInstallCommand,
   feedUrlFor,
   planInstall,
   type ClientBuild,
@@ -157,6 +158,46 @@ describe("planInstall", () => {
     expect(
       planInstall({ client: macClient, probe: probe({ appRunning: true }) }).restartsHost
     ).toBe(true);
+  });
+});
+
+describe("planInstall with conflicting AppImages", () => {
+  it("won't plan an AppImage update while it can't tell which AppImage is used", () => {
+    const linux = probe({
+      platform: "linux",
+      arch: "x64",
+      install: {
+        path: "/home/g/Applications/a.AppImage",
+        version: "1.3.0",
+        commit: null,
+        packaging: "appimage",
+      },
+    });
+    const plan = planInstall({
+      client: macClient,
+      probe: linux,
+      appImageConflict: "There are 2 Daintree AppImages in ~/Applications",
+    });
+    expect(plan).toMatchObject({
+      kind: "unsupported",
+      reason: expect.stringMatching(/2 Daintree/),
+    });
+    // The deb doesn't touch the AppImages, so it can still be planned.
+    expect(
+      planInstall({ client: macClient, probe: linux, linuxPackage: "deb", appImageConflict: "x" })
+        .kind
+    ).toBe("install");
+  });
+});
+
+describe("debInstallCommand", () => {
+  it("quotes a staged path the user's shell would otherwise split", () => {
+    expect(debInstallCommand("/tmp/daintree-stage.abc/daintree_1.4.0_amd64.deb")).toBe(
+      "sudo apt install /tmp/daintree-stage.abc/daintree_1.4.0_amd64.deb"
+    );
+    expect(debInstallCommand("/tmp/my stage/it's.deb")).toBe(
+      `sudo apt install '/tmp/my stage/it'"'"'s.deb'`
+    );
   });
 });
 

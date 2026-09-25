@@ -26,6 +26,15 @@ import {
 } from "../driveLeaseState";
 import { getDriveLeaseBannerCopy } from "../recoveryCopy";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import {
+  _resetHostConnectionSyncForTesting,
+  useHostConnectionSync,
+} from "@/hooks/useHostConnection";
+import {
+  _resetTerminalInputGateForTesting,
+  getTerminalInputBlock,
+} from "@/services/terminal/inputGate";
+import type { HostConnectionState } from "@shared/types/remoteHosts";
 
 function holder(overrides: Partial<DriveLeaseHolder> = {}): DriveLeaseHolder {
   return {
@@ -53,8 +62,12 @@ function view(overrides: Partial<DriveLeaseView> = {}): DriveLeaseView {
 let emit: ((event: DriveLeaseEvent) => void) | null = null;
 const get = vi.fn<(payload: { projectId: string }) => Promise<DriveLeaseView>>();
 const takeOver = vi.fn<(payload: { projectId: string }) => Promise<DriveLeaseView>>();
+const isInUse = vi.fn<() => Promise<boolean>>();
 
+// Mounted the way useGlobalBannerPriority mounts them: the connection sync owns
+// the lease IPC and the banner mirrors what it applied.
 function Harness() {
+  useHostConnectionSync();
   useDriveLeaseSync();
   return <DriveLeaseBanner />;
 }
@@ -78,11 +91,15 @@ beforeAll(() => {
 beforeEach(() => {
   cleanup();
   _resetDriveLeaseBannerForTesting();
+  _resetHostConnectionSyncForTesting();
+  _resetTerminalInputGateForTesting();
   useHostConnectionStore.getState().reset();
   supported.value = true;
   notify.mockClear();
   get.mockReset();
   takeOver.mockReset();
+  isInUse.mockReset();
+  isInUse.mockResolvedValue(false);
   emit = null;
   window.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" } as typeof window.__DAINTREE_INITIAL_PROJECT__;
   Object.defineProperty(window, "electron", {
@@ -98,6 +115,12 @@ beforeEach(() => {
             emit = null;
           };
         },
+      },
+      remoteHosts: {
+        isInUse,
+        onEvent: () => () => {},
+        getWindowHost: () => new Promise(() => {}),
+        connect: vi.fn(),
       },
     },
   });
@@ -135,10 +158,58 @@ describe("selectDriveLeaseBanner", () => {
 });
 
 describe("DriveLeaseBanner", () => {
-  it("renders nothing for a local view nobody else drives, and asks nothing up front", () => {
+  it("renders nothing for a local view nobody else drives, and asks nothing up front", async () => {
     const { container } = render(<Harness />);
+    await waitFor(() => expect(isInUse).toHaveBeenCalled());
+    await act(async () => {});
     expect(container.textContent).toBe("");
     expect(get).not.toHaveBeenCalled();
+  });
+
+  it("hydrates a local view's banner from the gate's lookup once remote hosts are in use", async () => {
+    isInUse.mockResolvedValue(true);
+    get.mockResolvedValue(view());
+    render(<Harness />);
+    const copy = getDriveLeaseBannerCopy(
+      { kind: "taken-from-host", driverName: "greg-mbp" },
+      "studio-01"
+    );
+    expect(await screen.findByText(copy.title)).toBeTruthy();
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(getTerminalInputBlock()).toMatchObject({
+      kind: "driven-elsewhere",
+      driverName: "greg-mbp",
+    });
+  });
+
+  it("shows a remote view's banner once the lookup retried on reconnect answers", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    useHostConnectionStore.setState({ hostId: "studio-01", hostName: "studio-01" });
+    get.mockRejectedValueOnce(new Error("link down"));
+    get.mockResolvedValue(view({ viewerIsHostLocal: false }));
+    const { container } = render(<Harness />);
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    expect(container.textContent).toBe("");
+
+    const connected: HostConnectionState = {
+      status: "connected",
+      rttMs: 1,
+      handshake: {
+        version: "1.0.0",
+        commit: "abc",
+        protocolVersion: 1,
+        platform: "linux",
+        arch: "x64",
+      },
+    };
+    act(() => useHostConnectionStore.setState({ connection: connected }));
+    const copy = getDriveLeaseBannerCopy(
+      { kind: "driven-elsewhere", driverName: "greg-mbp", driverIsHostScreen: false },
+      "studio-01"
+    );
+    expect(await screen.findByText(copy.title)).toBeTruthy();
+    expect(get).toHaveBeenCalledTimes(2);
   });
 
   it("does nothing at all where Remote Hosts isn't supported", () => {
@@ -156,10 +227,13 @@ describe("DriveLeaseBanner", () => {
     );
     expect(screen.getByText(copy.title)).toBeTruthy();
 
+    expect(getTerminalInputBlock()).toMatchObject({ kind: "driven-elsewhere" });
+
     takeOver.mockResolvedValue(view({ holder: holder({ isHostLocal: true }), drivingHere: true }));
     fireEvent.click(screen.getByRole("button", { name: copy.actionLabel }));
     await waitFor(() => expect(takeOver).toHaveBeenCalledWith({ projectId: "p1" }));
     await waitFor(() => expect(screen.queryByText(copy.title)).toBeNull());
+    expect(getTerminalInputBlock()).toBeNull();
   });
 
   it("tells a client that isn't driving which machine does, and takes over", async () => {

@@ -56,9 +56,12 @@ function fakeShell(answer: (script: string) => CommandResult = () => ok()): Fake
     exec: async (script) => {
       shell.scripts.push(script);
       if (script.includes("mktemp -d")) return ok("@@dt:stage /tmp/daintree-stage.abc123\n");
-      if (script.includes("ditto -x -k")) return ok("@@dt:version 1.4.0\n");
+      if (script.includes("ditto -x -k"))
+        return ok(`@@dt:version 1.4.0\n@@dt:buildinfo ${NEW_BUILD}\n`);
+      if (script.includes("--appimage-extract")) return ok(`@@dt:buildinfo ${NEW_BUILD}\n`);
       if (script.includes('echo "@@dt:home')) return ok("@@dt:home /home/greg\n");
       if (script.includes("@@dt:stopped")) return ok("@@dt:stopped yes\n");
+      if (script.includes("@@dt:rolledback")) return ok("@@dt:rolledback yes\n");
       return answer(script);
     },
     upload: async (local, remote) => {
@@ -68,6 +71,17 @@ function fakeShell(answer: (script: string) => CommandResult = () => ok()): Fake
   };
   return shell;
 }
+
+const LINUX_APPIMAGE_HOST = [
+  "@@dt:uname Linux x86_64",
+  "@@dt:appimage /home/greg/Applications/Daintree-1.3.0-x86_64.AppImage",
+  `@@dt:appimageinfo ${OLD_BUILD}`,
+  "@@dt:unit yes",
+  "@@dt:unitexec /home/greg/Applications/Daintree-1.3.0-x86_64.AppImage",
+  "@@dt:listening yes",
+  "@@dt:hostpid 77",
+  "@@dt:end",
+].join("\n");
 
 let cacheDir: string;
 
@@ -259,13 +273,16 @@ describe("runHostInstall", () => {
     shell.exec = async (script) => {
       shell.scripts.push(script);
       if (script.includes("mktemp -d")) return ok("@@dt:stage /tmp/daintree-stage.abc123\n");
-      if (script.includes("ditto -x -k")) return ok("@@dt:version 1.4.0\n");
+      if (script.includes("ditto -x -k"))
+        return ok(`@@dt:version 1.4.0\n@@dt:buildinfo ${NEW_BUILD}\n`);
       if (script.includes("@@dt:stopped")) return ok("@@dt:stopped no\n");
       return ok();
     };
     const deps = makeDeps({ shell, probes: [macProbe({ build: OLD_BUILD, hostMode: true })] });
     await expect(install(deps, { whileWorking: "proceed" })).rejects.toThrow(/didn't quit/);
     expect(shell.scripts.some((s) => s.includes("Daintree.app.old"))).toBe(false);
+    // Recovery still makes sure Daintree is running there.
+    expect(shell.scripts.at(-1)).toBe("open -g -a '/Applications/Daintree.app' --args --host-mode");
   });
 
   it("has a Linux host fetch its deb and hands the user one sudo command", async () => {
@@ -308,20 +325,30 @@ describe("runHostInstall", () => {
     expect(result.status).toBe("installed");
     const swap = shell.scripts.find((s) => s.includes("mv -f"))!;
     expect(swap).toContain("'/home/greg/Applications/Daintree-1.3.0-x86_64.AppImage'");
+    // The marker beside the image is what was read out of the image at staging.
+    const verify = shell.scripts.find((s) => s.includes("--appimage-extract"))!;
+    expect(verify).toContain("resources/app.asar");
     expect(swap).toContain(
       `printf '%s' '${NEW_BUILD}' > '/home/greg/Applications/Daintree-1.3.0-x86_64.AppImage.build-info.json'`
+    );
+    // Its previous marker is kept beside it along with the image.
+    expect(swap).toContain(
+      "cp -p '/home/greg/Applications/Daintree-1.3.0-x86_64.AppImage.build-info.json' '/home/greg/Applications/Daintree-1.3.0-x86_64.AppImage.build-info.json.old'"
     );
     expect(shell.scripts).toContain("systemctl --user start daintree-host.service");
   });
 
   it("puts the previous build back and restarts it when the new one won't start", async () => {
+    let opens = 0;
     const shell = fakeShell((script) =>
-      script.startsWith("open ")
+      script.startsWith("open ") && opens++ === 0
         ? { ...ok(), code: 1, stderr: "LSOpenURLsWithRole() failed" }
         : ok()
     );
     const deps = makeDeps({ shell, probes: [macProbe({ build: OLD_BUILD, hostMode: true })] });
-    await expect(install(deps, { whileWorking: "proceed" })).rejects.toThrow(/start Daintree/);
+    await expect(install(deps, { whileWorking: "proceed" })).rejects.toThrow(
+      /start Daintree.*put back and is running again/s
+    );
     const rollback = shell.scripts.findIndex(
       (s) =>
         s.includes("mv '/Applications/Daintree.app.old' '/Applications/Daintree.app'") &&
@@ -371,6 +398,183 @@ describe("runHostInstall", () => {
     const deps = makeDeps({ shell, probes: [macProbe({ build: null, hostMode: false })] });
     await expect(install(deps)).rejects.toThrow(/expected commit/);
     expect(shell.scripts.some((s) => s.includes("Daintree.app.old"))).toBe(false);
+  });
+
+  it("refuses a staged Mac build that carries no build marker, before stopping anything", async () => {
+    const shell = fakeShell();
+    const base = shell.exec;
+    shell.exec = async (script, options) =>
+      script.includes("ditto -x -k")
+        ? (shell.scripts.push(script), ok("@@dt:version 1.4.0\n@@dt:buildinfo \n"))
+        : base(script, options);
+    const deps = makeDeps({ shell, probes: [macProbe({ build: OLD_BUILD, hostMode: true })] });
+    await expect(install(deps, { whileWorking: "proceed" })).rejects.toThrow(/no build marker/);
+    expect(shell.scripts.some((s) => s.includes("@@dt:stopped"))).toBe(false);
+  });
+
+  it("refuses an AppImage whose own archive has no build marker", async () => {
+    const shell = fakeShell();
+    const base = shell.exec;
+    shell.exec = async (script, options) =>
+      script.includes("--appimage-extract")
+        ? (shell.scripts.push(script), ok("@@dt:buildinfo \n"))
+        : base(script, options);
+    const deps = makeDeps({ shell, probes: [LINUX_APPIMAGE_HOST] });
+    await expect(install(deps, { hostId: "box" })).rejects.toThrow(/no build marker/);
+    expect(shell.scripts.some((s) => s.includes("mv -f"))).toBe(false);
+  });
+
+  it("refuses to pick between AppImages when nothing shows which one is in use", async () => {
+    const shell = fakeShell();
+    const two = [
+      "@@dt:uname Linux x86_64",
+      "@@dt:appimage /home/greg/Applications/Daintree-1.9.0-x86_64.AppImage",
+      "@@dt:appimage /home/greg/Applications/Daintree-1.10.0-x86_64.AppImage",
+      "@@dt:download yes",
+      "@@dt:end",
+    ].join("\n");
+    const deps = makeDeps({ shell, probes: [two] });
+    await expect(install(deps)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+      message: expect.stringMatching(/2 Daintree AppImages/),
+    });
+    expect(shell.scripts).toEqual([]);
+  });
+
+  it("treats a build it can't read back after installing as a failure and puts the old one back", async () => {
+    const shell = fakeShell();
+    const deps = makeDeps({
+      shell,
+      probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        // Version right, but no marker to read the commit from.
+        macProbe({ build: null, hostMode: true }).replace(
+          "@@dt:running",
+          "@@dt:install app-bundle /Applications/Daintree.app\n@@dt:version 1.4.0\n@@dt:running"
+        ),
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+      ],
+    });
+    await expect(install(deps, { hostId: "studio", whileWorking: "proceed" })).rejects.toThrow(
+      /couldn't be read back.*put back and is running again/s
+    );
+    expect(shell.scripts.some((s) => s.includes("@@dt:rolledback"))).toBe(true);
+    expect(deps.reconnect).not.toHaveBeenCalled();
+  });
+
+  it("rolls back when Host mode never comes back after the new build starts", async () => {
+    const shell = fakeShell();
+    const deps = makeDeps({
+      shell,
+      probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        ...Array.from({ length: 200 }, () => macProbe({ build: NEW_BUILD, hostMode: false })),
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+      ],
+    });
+    deps.comeBackTimeoutMs = 5_000;
+    await expect(install(deps, { whileWorking: "proceed" })).rejects.toThrow(
+      /Host mode didn't come back/
+    );
+    const rolledAt = shell.scripts.findIndex((s) => s.includes("@@dt:rolledback"));
+    expect(rolledAt).toBeGreaterThan(-1);
+    // The new build is stopped before the old one goes back.
+    expect(shell.scripts[rolledAt - 1]).toContain("@@dt:stopped");
+  });
+
+  it("says so, rather than claiming a restore, when the rollback itself fails", async () => {
+    const shell = fakeShell();
+    const base = shell.exec;
+    shell.exec = async (script, options) =>
+      script.includes("@@dt:rolledback")
+        ? (shell.scripts.push(script), ok("@@dt:rolledback failed\n"))
+        : base(script, options);
+    const deps = makeDeps({
+      shell,
+      probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+      ],
+    });
+    await expect(install(deps, { whileWorking: "proceed" })).rejects.toThrow(
+      /couldn't be restored on the host/
+    );
+  });
+
+  it("restarts the old build when cancelled right after the host stopped", async () => {
+    const controller = new AbortController();
+    const shell = fakeShell();
+    const base = shell.exec;
+    shell.exec = async (script, options) => {
+      const result = await base(script, options);
+      if (script.includes("@@dt:stopped")) controller.abort();
+      return result;
+    };
+    const deps = makeDeps({
+      shell,
+      probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+      ],
+    });
+    await expect(
+      install(deps, { whileWorking: "proceed" }, controller.signal)
+    ).rejects.toMatchObject({
+      code: "CANCELLED",
+      message: expect.stringMatching(/started again/),
+    });
+    // Nothing was swapped, and Daintree is started again.
+    expect(shell.scripts.some((s) => s.includes("Daintree.app.old"))).toBe(false);
+    expect(shell.scripts.at(-1)).toBe("open -g -a '/Applications/Daintree.app' --args --host-mode");
+  });
+
+  it("puts the old build back when the running host's handshake reports another build", async () => {
+    const shell = fakeShell();
+    const deps = makeDeps({
+      shell,
+      probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        macProbe({ build: NEW_BUILD, hostMode: true }),
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+      ],
+    });
+    deps.reconnect.mockResolvedValue(false);
+    await expect(install(deps, { hostId: "studio", whileWorking: "proceed" })).rejects.toThrow(
+      /running host reported a different build/
+    );
+    expect(shell.scripts.some((s) => s.includes("@@dt:rolledback"))).toBe(true);
+    expect(shell.scripts).not.toContain("rm -rf '/Applications/Daintree.app.old'");
+  });
+
+  it("keeps the backup when the running host's handshake can't be had", async () => {
+    const shell = fakeShell();
+    const deps = makeDeps({
+      shell,
+      probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        macProbe({ build: NEW_BUILD, hostMode: true }),
+      ],
+    });
+    deps.reconnect.mockResolvedValue(null);
+    await expect(install(deps, { hostId: "studio", whileWorking: "proceed" })).rejects.toThrow(
+      /couldn't be confirmed/
+    );
+    expect(shell.scripts).not.toContain("rm -rf '/Applications/Daintree.app.old'");
+    expect(shell.scripts.some((s) => s.includes("@@dt:rolledback"))).toBe(false);
+  });
+
+  it("restores an AppImage's previous marker along with the image", async () => {
+    const shell = fakeShell();
+    const deps = makeDeps({
+      shell,
+      probes: [LINUX_APPIMAGE_HOST, LINUX_APPIMAGE_HOST],
+    });
+    deps.reconnect.mockResolvedValue(false);
+    await expect(install(deps, { hostId: "box" })).rejects.toThrow();
+    const rollback = shell.scripts.find((s) => s.includes("@@dt:rolledback"))!;
+    expect(rollback).toContain(
+      "mv -f '/home/greg/Applications/Daintree-1.3.0-x86_64.AppImage.build-info.json.old' '/home/greg/Applications/Daintree-1.3.0-x86_64.AppImage.build-info.json'"
+    );
   });
 
   it("reports an unreachable host as disconnected with ssh's words", async () => {

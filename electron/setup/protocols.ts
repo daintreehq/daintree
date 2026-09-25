@@ -383,6 +383,18 @@ async function streamContainedMediaFile(
     throw err;
   }
 
+  return streamOpenedMediaFile(fileHandle, mimeType, request);
+}
+
+/**
+ * The post-open half of {@link streamContainedMediaFile}: everything is
+ * decided from the descriptor, which this takes ownership of.
+ */
+async function streamOpenedMediaFile(
+  fileHandle: Awaited<ReturnType<typeof fs.open>>,
+  mimeType: string,
+  request: GlobalRequest
+): Promise<Response> {
   let size: number;
   try {
     const fdStat = await fileHandle.stat();
@@ -856,9 +868,20 @@ export type ContainedFileScheme = "daintree-file" | "daintree-media" | "daintree
  */
 export type HostFileRequestProxy = (
   scheme: ContainedFileScheme,
-  hostId: string,
+  target: HostScopedFileTarget,
   request: GlobalRequest
 ) => Promise<Response>;
+
+/**
+ * The host a preview URL names, and the capability of the view that built it.
+ * A protocol request carries no sender, so the capability (minted by main for
+ * one view) is the only thing that says whose authority the request runs
+ * under; null when the URL has none, which the proxy refuses.
+ */
+export interface HostScopedFileTarget {
+  hostId: string;
+  viewCapability: string | null;
+}
 
 let hostFileRequestProxy: HostFileRequestProxy | null = null;
 
@@ -871,13 +894,14 @@ export function setHostFileRequestProxy(proxy: HostFileRequestProxy | null): () 
 }
 
 /**
- * A remote view's preview URLs carry the host in the authority and path —
- * `daintree-file://host/<hostId>/load?path=…&root=…` (the media scheme keeps
- * its trailing `load/`). Local URLs use the `load` authority and never match,
- * so they keep their exact shape and handling. A URL with the `host`
- * authority is never served from this machine, even when malformed.
+ * A remote view's preview URLs carry the host and the view's capability in
+ * the authority and path —
+ * `daintree-file://host/<hostId>/<capability>/load?path=…&root=…` (the media
+ * scheme keeps its trailing `load/`). Local URLs use the `load` authority and
+ * never match, so they keep their exact shape and handling. A URL with the
+ * `host` authority is never served from this machine, even when malformed.
  */
-export function parseHostScopedFileUrl(url: string): { hostId: string } | "malformed" | null {
+export function parseHostScopedFileUrl(url: string): HostScopedFileTarget | "malformed" | null {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -885,7 +909,7 @@ export function parseHostScopedFileUrl(url: string): { hostId: string } | "malfo
     return null;
   }
   if (parsed.host !== "host") return null;
-  const match = /^\/([^/]+)\/load\/?$/.exec(parsed.pathname);
+  const match = /^\/([^/]+)(?:\/([0-9a-f]{32}))?\/load\/?$/.exec(parsed.pathname);
   if (!match) return "malformed";
   let hostId: string;
   try {
@@ -893,7 +917,7 @@ export function parseHostScopedFileUrl(url: string): { hostId: string } | "malfo
   } catch {
     return "malformed";
   }
-  return isValidRemoteHostId(hostId) ? { hostId } : "malformed";
+  return isValidRemoteHostId(hostId) ? { hostId, viewCapability: match[2] ?? null } : "malformed";
 }
 
 async function answerHostScopedRequest(
@@ -916,7 +940,7 @@ async function answerHostScopedRequest(
     });
   }
   try {
-    return await proxy(scheme, target.hostId, request);
+    return await proxy(scheme, target, request);
   } catch (err) {
     console.error(`[MAIN] ${scheme} host proxy error:`, err);
     return new Response("Bad Gateway", {
@@ -953,6 +977,98 @@ export function serveContainedFileRequest(
       return respondToDaintreePdfRequest(request);
     case "daintree-media":
       return respondToDaintreeMediaRequest(request);
+  }
+}
+
+/** A descriptor a host opened for {@link serveOpenedContainedFile}. */
+export type OpenedContainedFile = Awaited<ReturnType<typeof fs.open>>;
+
+// Return type inferred for the same reason as readContainedDaintreeFile's.
+async function readUpTo(fileHandle: OpenedContainedFile, limit: number) {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  while (total < limit) {
+    const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, limit - total));
+    const { bytesRead } = await fileHandle.read(chunk, 0, chunk.byteLength, total);
+    if (bytesRead === 0) break;
+    chunks.push(chunk.subarray(0, bytesRead));
+    total += bytesRead;
+  }
+  return Buffer.concat(chunks, total);
+}
+
+/**
+ * A host's answer to an attached Shell's preview, served from a descriptor the
+ * host opened itself beneath the admitted root, so nothing is resolved by path
+ * again after admission. The scheme's gates, caps, headers and Range handling
+ * are the local handlers' (minus CORS, as {@link serveContainedFileRequest}).
+ *
+ * Takes ownership of `fileHandle`. `admitBuffered` is asked for the file's size
+ * before a buffered read and may refuse it (503), so the host can bound the
+ * bytes it holds across previews before reading any of them.
+ */
+export async function serveOpenedContainedFile(
+  scheme: ContainedFileScheme,
+  fileHandle: OpenedContainedFile,
+  canonicalPath: string,
+  request: GlobalRequest,
+  admitBuffered: (bytes: number) => boolean = () => true
+): Promise<Response> {
+  const refuse = async (status: number, text: string): Promise<Response> => {
+    await fileHandle.close().catch(() => {});
+    return new Response(text, { status, headers: buildDaintreeFileErrorHeaders() });
+  };
+  try {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return await refuse(405, "Method Not Allowed");
+    }
+    const mimeType = getMimeType(canonicalPath);
+    if (scheme === "daintree-media" && !isMediaMimeType(mimeType)) {
+      return await refuse(404, "Not Found");
+    }
+    if (scheme !== "daintree-pdf" && isMediaMimeType(mimeType)) {
+      return await streamOpenedMediaFile(fileHandle, mimeType, request);
+    }
+
+    const kind: DaintreeReadKind = scheme === "daintree-pdf" ? "pdf" : "file";
+    if (kind === "pdf" && !isPdfPath(canonicalPath)) {
+      return await refuse(415, "Unsupported Media Type");
+    }
+    const stats = await fileHandle.stat();
+    if (!stats.isFile()) return await refuse(404, "Not Found");
+    const maxBytes = maxBytesForFile(canonicalPath, kind);
+    if (stats.size > maxBytes) return await refuse(413, "Payload Too Large");
+    const headersFor = (length: number) =>
+      kind === "pdf"
+        ? buildDaintreePdfHeaders(canonicalPath, length)
+        : buildDaintreeFileHeaders(mimeType, length);
+
+    if (request.method === "HEAD") {
+      await fileHandle.close().catch(() => {});
+      return new Response(null, { status: 200, headers: headersFor(stats.size) });
+    }
+    if (!admitBuffered(stats.size)) return await refuse(503, "Too many open previews");
+    let buffer: Awaited<ReturnType<typeof readUpTo>>;
+    try {
+      buffer = await readUpTo(fileHandle, maxBytes + 1);
+    } finally {
+      await fileHandle.close().catch(() => {});
+    }
+    // Growth after the stat is caught on the bytes actually read, as locally.
+    if (buffer.length > maxBytes) {
+      return new Response("Payload Too Large", {
+        status: 413,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+    return new Response(buffer, { status: 200, headers: headersFor(buffer.length) });
+  } catch (err) {
+    await fileHandle.close().catch(() => {});
+    console.error(`[MAIN] ${scheme} host serve error:`, err);
+    return new Response("Internal Server Error", {
+      status: 500,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
   }
 }
 

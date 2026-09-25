@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CommandResult, CommandRunner } from "../commandRunner.js";
 import {
   discoverHosts,
+  machineKey,
   parseAvahiBrowse,
   parseDnsSdBrowse,
   parseDnsSdLookup,
@@ -68,6 +69,7 @@ describe("parseTailscaleStatus", () => {
         source: "tailscale",
         platform: "darwin",
         online: true,
+        aliases: ["studio-03.tail1234.ts.net", "100.64.0.3"],
       },
       {
         name: "bigbox",
@@ -75,6 +77,7 @@ describe("parseTailscaleStatus", () => {
         source: "tailscale",
         platform: "linux",
         online: true,
+        aliases: ["bigbox.tail1234.ts.net", "100.64.0.4"],
       },
     ]);
   });
@@ -100,6 +103,7 @@ describe("parseTailscaleStatus", () => {
         source: "tailscale",
         platform: "linux",
         online: true,
+        aliases: ["100.64.0.9"],
       },
       {
         name: "mac",
@@ -107,6 +111,7 @@ describe("parseTailscaleStatus", () => {
         source: "tailscale",
         platform: "darwin",
         online: true,
+        aliases: ["mac.example.ts.net"],
       },
     ]);
   });
@@ -132,8 +137,16 @@ describe("parseAvahiBrowse", () => {
         source: "bonjour",
         platform: "linux",
         online: true,
+        aliases: ["192.168.1.5"],
       },
-      { name: "bare", sshTarget: "bare.local", source: "bonjour", platform: null, online: true },
+      {
+        name: "bare",
+        sshTarget: "bare.local",
+        source: "bonjour",
+        platform: null,
+        online: true,
+        aliases: ["fe80::1"],
+      },
     ]);
   });
 });
@@ -167,7 +180,7 @@ describe("dns-sd parsing", () => {
 });
 
 describe("discoverHosts", () => {
-  it("merges the tailnet and the LAN, preferring tailnet names, and marks hosts already added", async () => {
+  it("lists the tailnet and the LAN, never merging machines by a shared first name label", async () => {
     const calls: string[] = [];
     const run: CommandRunner = async (command, args) => {
       calls.push(`${command} ${args.join(" ")}`);
@@ -192,12 +205,71 @@ describe("discoverHosts", () => {
       platform: "darwin",
       knownTargets: ["greg@bigbox.tail1234.ts.net"],
     });
+    // studio-03.local may or may not be the tailnet's studio-03: nothing vouches for it.
     expect(hosts.map((h) => [h.name, h.sshTarget, h.source, h.alreadyAdded])).toEqual([
       ["studio-03", "studio-03.tail1234.ts.net", "tailscale", false],
       ["bigbox", "bigbox.tail1234.ts.net", "tailscale", true],
+      ["studio-03", "studio-03.local", "bonjour", false],
       ["lanbox", "lanbox.local", "bonjour", false],
     ]);
     expect(calls.some((c) => c.startsWith("avahi-browse"))).toBe(false);
+  });
+
+  it("keeps whole IP addresses apart and matches known hosts by an address the tailnet vouches for", async () => {
+    const status = JSON.stringify({
+      Peer: [
+        { HostName: "a", OS: "linux", Online: true, TailscaleIPs: ["100.64.0.3"] },
+        { HostName: "b", OS: "linux", Online: true, TailscaleIPs: ["100.64.0.9"] },
+        {
+          HostName: "c",
+          DNSName: "c.tail1234.ts.net.",
+          OS: "linux",
+          Online: true,
+          TailscaleIPs: ["100.64.0.12"],
+        },
+      ],
+    });
+    const run: CommandRunner = async (command) => (command === "tailscale" ? ok(status) : missing);
+    const hosts = await discoverHosts({
+      run,
+      platform: "linux",
+      knownTargets: ["greg@100.64.0.3", "greg@100.64.0.12"],
+    });
+    expect(hosts.map((h) => [h.sshTarget, h.alreadyAdded])).toEqual([
+      ["100.64.0.3", true],
+      ["100.64.0.9", false],
+      ["c.tail1234.ts.net", true],
+    ]);
+    expect(machineKey("greg@100.64.0.3")).toBe("100.64.0.3");
+    expect(machineKey("Studio.Local.")).toBe("studio.local");
+  });
+
+  it("merges a LAN advert with a tailnet peer only on a shared address", async () => {
+    const status = JSON.stringify({
+      Peer: [
+        {
+          HostName: "box",
+          DNSName: "box.ts.net.",
+          OS: "linux",
+          Online: true,
+          TailscaleIPs: ["100.64.0.4"],
+        },
+      ],
+    });
+    const run: CommandRunner = async (command) => {
+      if (command === "tailscale") return ok(status);
+      if (command === "avahi-browse") {
+        return ok(
+          [
+            '=;eth0;IPv4;box;_daintree._tcp;local;box.local;100.64.0.4;22;"platform=linux"',
+            '=;eth0;IPv4;box;_daintree._tcp;local;box-2.local;192.168.1.9;22;"platform=linux"',
+          ].join("\n")
+        );
+      }
+      return missing;
+    };
+    const hosts = await discoverHosts({ run, platform: "linux", knownTargets: [] });
+    expect(hosts.map((h) => h.sshTarget)).toEqual(["box.ts.net", "box-2.local"]);
   });
 
   it("falls back to the macOS app's bundled CLI and survives every tool being absent", async () => {

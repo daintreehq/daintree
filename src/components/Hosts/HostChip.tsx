@@ -17,6 +17,7 @@ import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { actionService } from "@/services/ActionService";
 import { useDriveLeaseView } from "@/components/Recovery/driveLeaseState";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { requestHostUpdate } from "@/components/Settings/Hosts/hostUpdateRequests";
 import { PlatformGlyph } from "./PlatformGlyph";
 import { isNewWindowClick, switchToHost } from "./hostSwitching";
 import { hasRemoteHosts, useHostList } from "./hostList";
@@ -36,9 +37,11 @@ import {
   type HostMenuRow,
 } from "./hostModel";
 
-function runUpdate(target: "host" | "local"): void {
+function runUpdate(target: "host" | "local", hostId: string): void {
   if (target === "host") {
-    // Updating a host is part of managing it, which lives in Settings → Hosts.
+    // Updating a host is part of managing it, which lives in Settings → Hosts;
+    // the request opens that host's own update flow there.
+    requestHostUpdate(hostId);
     void actionService.dispatch("host.add", undefined, { source: "user" });
     return;
   }
@@ -156,7 +159,7 @@ export function HostChip() {
           <HostMenuItem key={row.hostId} row={row} onPick={pick} />
         ))}
         {mismatch && (
-          <DropdownMenuItem onSelect={() => runUpdate(updateTargetFor(mismatch))}>
+          <DropdownMenuItem onSelect={() => runUpdate(updateTargetFor(mismatch), windowHostId)}>
             {updateActionLabel(mismatch, name)}
           </DropdownMenuItem>
         )}

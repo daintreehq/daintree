@@ -29,7 +29,7 @@ vi.mock("@/utils/logger", () => ({
 }));
 
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
-import { OtherHostsSection } from "../OtherHostsSection";
+import { OtherHostsSection, useOtherHostProjectOptions } from "../OtherHostsSection";
 import { OpenOnHostSubmenu } from "../OpenOnHostSubmenu";
 import { _resetHostListForTesting } from "../hostList";
 import {
@@ -98,6 +98,11 @@ afterEach(() => {
   cleanup();
 });
 
+function Band({ query, onChosen }: { query: string; onChosen: () => void }) {
+  const options = useOtherHostProjectOptions(query);
+  return <OtherHostsSection options={options} activeIndex={null} onChosen={onChosen} />;
+}
+
 async function settle() {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -108,7 +113,7 @@ describe("Other hosts band", () => {
   it("changes nothing for someone with no remote host", async () => {
     list.mockResolvedValue([]);
     setHostProjectsLoader(loader);
-    const { container } = render(<OtherHostsSection query="" onChosen={() => {}} />);
+    const { container } = render(<Band query="" onChosen={() => {}} />);
     await settle();
     expect(container.textContent).toBe("");
     expect(loader).not.toHaveBeenCalled();
@@ -116,7 +121,7 @@ describe("Other hosts band", () => {
 
   it("stays empty while nothing can list another host's projects", async () => {
     list.mockResolvedValue([host("studio-01")]);
-    const { container } = render(<OtherHostsSection query="" onChosen={() => {}} />);
+    const { container } = render(<Band query="" onChosen={() => {}} />);
     await settle();
     expect(container.textContent).toBe("");
   });
@@ -128,7 +133,7 @@ describe("Other hosts band", () => {
       host("studio-03", { status: "unreachable", lastSeenAt: null, detail: null }),
     ]);
     setHostProjectsLoader(loader);
-    render(<OtherHostsSection query="" onChosen={() => {}} />);
+    render(<Band query="" onChosen={() => {}} />);
     const band = await screen.findByTestId("project-switcher-other-hosts");
     const groups = [...band.querySelectorAll('[role="group"]')].map((g) =>
       g.getAttribute("aria-label")
@@ -142,8 +147,8 @@ describe("Other hosts band", () => {
     list.mockResolvedValue([host("studio-01")]);
     setHostProjectsLoader(loader);
     const onChosen = vi.fn();
-    render(<OtherHostsSection query="" onChosen={onChosen} />);
-    fireEvent.click(await screen.findByRole("button", { name: "api on studio-01" }));
+    render(<Band query="" onChosen={onChosen} />);
+    fireEvent.click(await screen.findByRole("option", { name: "api on studio-01" }));
     await waitFor(() =>
       expect(switchWindowHost).toHaveBeenCalledWith({
         hostId: "studio-01",
@@ -153,7 +158,7 @@ describe("Other hosts band", () => {
     );
     expect(onChosen).toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "daintree on studio-01" }), {
+    fireEvent.click(screen.getByRole("option", { name: "daintree on studio-01" }), {
       metaKey: true,
     });
     await waitFor(() =>
@@ -168,9 +173,9 @@ describe("Other hosts band", () => {
   it("narrows to the query", async () => {
     list.mockResolvedValue([host("studio-01"), host("studio-02")]);
     setHostProjectsLoader(loader);
-    render(<OtherHostsSection query="dain" onChosen={() => {}} />);
-    await screen.findByRole("button", { name: "daintree on studio-01" });
-    expect(screen.queryByRole("button", { name: "api on studio-01" })).toBeNull();
+    render(<Band query="dain" onChosen={() => {}} />);
+    await screen.findByRole("option", { name: "daintree on studio-01" });
+    expect(screen.queryByRole("option", { name: "api on studio-01" })).toBeNull();
     expect(screen.queryByRole("group", { name: "studio-02" })).toBeNull();
   });
 });

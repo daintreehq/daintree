@@ -1,6 +1,6 @@
 import { defineIpcNamespace, op } from "../define.js";
 import { pendingRemoteHostsHandler } from "../../remote/pendingHandler.js";
-import { requireRemoteService } from "../../remote/runtime.js";
+import { getRemoteService, requireRemoteService } from "../../remote/runtime.js";
 import { FILE_TRANSFER_METHOD_CHANNELS } from "./fileTransfer.preload.js";
 import type {
   AnswerHostPickPayload,
@@ -41,6 +41,14 @@ export const fileTransferNamespace = defineIpcNamespace({
       FILE_TRANSFER_METHOD_CHANNELS.answerHostPick,
       async (ctx, payload: AnswerHostPickPayload): Promise<void> =>
         requireRemoteService("hostFileClient").answerHostPick(ctx.webContentsId, payload),
+      { withContext: true }
+    ),
+    // Null for a local view, and on a machine where no remote service ever
+    // started, so a view of this machine keeps its plain preview URLs.
+    getPreviewCapability: op(
+      FILE_TRANSFER_METHOD_CHANNELS.getPreviewCapability,
+      async (ctx): Promise<string | null> =>
+        getRemoteService("hostFileClient")?.previewCapability(ctx.webContentsId) ?? null,
       { withContext: true }
     ),
   },

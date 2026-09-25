@@ -1,3 +1,4 @@
+import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
 import { ClientAppError } from "@/utils/clientAppError";
 
 /**
@@ -73,6 +74,29 @@ export function getLeaseInputBlock(): LeaseBlock | null {
   return leaseBlock;
 }
 
+/**
+ * The lease answer the gate was last set from, kept whole so the drive-lease
+ * banner and host chip show the same snapshot that blocks typing rather than
+ * asking the host a second time.
+ */
+let leaseSnapshot: DriveLeaseView | null = null;
+const leaseSnapshotListeners = new Set<() => void>();
+
+export function setDriveLeaseSnapshot(view: DriveLeaseView | null): void {
+  if (leaseSnapshot === view) return;
+  leaseSnapshot = view;
+  for (const listener of [...leaseSnapshotListeners]) listener();
+}
+
+export function getDriveLeaseSnapshot(): DriveLeaseView | null {
+  return leaseSnapshot;
+}
+
+export function subscribeDriveLeaseSnapshot(listener: () => void): () => void {
+  leaseSnapshotListeners.add(listener);
+  return () => leaseSnapshotListeners.delete(listener);
+}
+
 /** A lost link outranks a lease: nothing reaches the host either way, and reconnecting comes first. */
 export function getTerminalInputBlock(): TerminalInputBlock | null {
   return hostBlock ?? leaseBlock;
@@ -118,6 +142,8 @@ export function terminalInputBlockedError(block: TerminalInputBlock): ClientAppE
 export function _resetTerminalInputGateForTesting(): void {
   hostBlock = null;
   leaseBlock = null;
+  leaseSnapshot = null;
   listeners.clear();
   unblockListeners.clear();
+  leaseSnapshotListeners.clear();
 }

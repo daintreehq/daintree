@@ -20,6 +20,7 @@ import {
   type OperationHandle,
 } from "../../services/operations/index.js";
 import type { ClientEndpoint } from "../endpoint.js";
+import { getRemoteService } from "../../remote/runtime.js";
 import { resolveScopedProjectForIpcContext } from "../projectContext.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
@@ -607,6 +608,16 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     await recordCompletedCopyTreeRun(sender.projectId, validated, result);
+
+    // A remote Shell downloads the bundle it just asked for (copy-as-file). The
+    // host serves that one file to that one endpoint, and only because it was
+    // generated for it here; the rest of the shared context folder stays shut.
+    // Only a link call has no event, so a local call never materialises its
+    // lazily-built endpoint just to be told it is local.
+    const endpoint = ctx.event ? undefined : (ctx.endpoint as ClientEndpoint | undefined);
+    if (endpoint?.kind === "remote-view" && result.filePath) {
+      getRemoteService("hostFileService")?.recordBundle(endpoint, result.filePath);
+    }
 
     if (!result.filePath || !validated.includeContent) {
       return result;

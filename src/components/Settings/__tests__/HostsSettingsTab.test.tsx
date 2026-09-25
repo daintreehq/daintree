@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { HostListEntry } from "@shared/types/remoteHosts";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
 import HostsSettingsTab from "../Hosts/HostsSettingsTab";
+import { requestHostUpdate, takePendingHostUpdate } from "../Hosts/hostUpdateRequests";
 
 function entry(id: string, name: string): HostListEntry {
   return {
@@ -127,5 +128,37 @@ describe("HostsSettingsTab", () => {
     const confirm = await screen.findAllByRole("button", { name: "Forget host" });
     fireEvent.click(confirm[confirm.length - 1]!);
     await waitFor(() => expect(remoteHosts.forget).toHaveBeenCalledWith({ hostId: "studio-03" }));
+  });
+
+  it("shows a failed Connect inline and retries it", async () => {
+    remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
+    remoteHosts.connect!.mockRejectedValueOnce(new Error("Permission denied (publickey)"));
+    render(<HostsSettingsTab />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open studio-03" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Couldn't connect: Permission denied (publickey)"
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(remoteHosts.connect).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
+  });
+
+  it("opens a host's update flow when asked before the tab was showing", async () => {
+    remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
+    requestHostUpdate("studio-03");
+    render(<HostsSettingsTab />);
+    expect(await screen.findByText("Update studio-03")).toBeTruthy();
+    expect(takePendingHostUpdate()).toBeNull();
+  });
+
+  it("opens a host's update flow when asked while the tab is showing", async () => {
+    remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
+    render(<HostsSettingsTab />);
+    await screen.findByRole("button", { name: "Open studio-03" });
+    act(() => requestHostUpdate("studio-03"));
+    expect(await screen.findByText("Update studio-03")).toBeTruthy();
   });
 });

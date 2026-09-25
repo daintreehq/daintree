@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { isMac } from "@/lib/platform";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { mintOperationId } from "@/clients/operationsClient";
@@ -86,6 +89,8 @@ function ErrorLine({ message }: { message: string }) {
 export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialogProps) {
   const [step, setStep] = useState<Step>(existing ? "check" : "discover");
   const [discovered, setDiscovered] = useState<DiscoveredHost[] | null>(null);
+  const [discoverError, setDiscoverError] = useState<string | null>(null);
+  const [discoverAttempt, setDiscoverAttempt] = useState(0);
   const [target, setTarget] = useState(existing?.sshTarget ?? "");
   const [name, setName] = useState(existing?.name ?? "");
   const [probe, setProbe] = useState<HostProbeResult | null>(null);
@@ -95,19 +100,36 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const [error, setError] = useState<string | null>(null);
   const [opId, setOpId] = useState<OperationId | null>(null);
   const [installResult, setInstallResult] = useState<InstallHostResult | null>(null);
+  const [confirmProceed, setConfirmProceed] = useState(false);
+  /** Saved to the host list, but the connection that followed failed. */
+  const [added, setAdded] = useState<{ hostId: HostId; name: string } | null>(null);
   const install = useRemoteHostsStore((s) => (opId ? (s.installs[opId] ?? null) : null));
+  const discovering = !existing && discovered === null && discoverError === null;
+  const showDiscovering = useDeferredLoading(discovering, UI_DOHERTY_THRESHOLD);
 
   useEffect(() => {
-    if (!isOpen || existing || discovered !== null) return;
+    if (!isOpen || existing) return;
     let live = true;
     remoteHostsClient.discover().then(
-      (found) => live && setDiscovered(found),
-      () => live && setDiscovered([])
+      (found) => {
+        if (live) setDiscovered(found);
+      },
+      (err: unknown) => {
+        if (live) setDiscoverError(formatErrorMessage(err, "Discovery failed"));
+      }
     );
     return () => {
       live = false;
     };
-  }, [isOpen, existing, discovered]);
+  }, [isOpen, existing, discoverAttempt]);
+
+  const retryDiscover = () => {
+    setDiscovered(null);
+    setDiscoverError(null);
+    setDiscoverAttempt((n) => n + 1);
+  };
+
+  const hostLabel = existing?.name ?? (name.trim() || defaultHostName(target.trim()));
 
   const run = <T,>(work: () => Promise<T>, then: (value: T) => void) => {
     setBusy(true);
@@ -173,21 +195,33 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       (result) => setProbe(result)
     );
 
+  const connectAdded = (hostId: HostId, hostName: string) =>
+    run(
+      async () => {
+        try {
+          await remoteHostsClient.connect(hostId);
+          return true;
+        } catch (err) {
+          // The host is in the list either way; only the connection is retried.
+          setAdded({ hostId, name: hostName });
+          throw err;
+        }
+      },
+      () => onClose()
+    );
+
   const finish = () => {
     if (existing) {
       onClose();
       return;
     }
+    const hostName = name.trim() || defaultHostName(target.trim());
     run(
-      async () => {
-        const descriptor = await remoteHostsClient.add({
-          name: name.trim() || defaultHostName(target.trim()),
-          sshTarget: target.trim(),
-        });
-        if (probe?.hostModeListening) await remoteHostsClient.connect(descriptor.id);
-        return descriptor;
-      },
-      () => onClose()
+      () => remoteHostsClient.add({ name: hostName, sshTarget: target.trim() }),
+      (descriptor) => {
+        if (probe?.hostModeListening) connectAdded(descriptor.id, hostName);
+        else onClose();
+      }
     );
   };
 
@@ -201,15 +235,43 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   let secondary: DialogAction | undefined = { label: "Cancel", onClick: onClose };
   let body: React.ReactNode;
 
-  if (step === "discover") {
+  if (added) {
+    body = (
+      <div className="space-y-2 text-sm">
+        <p className="text-text-primary">{added.name} was added to your hosts.</p>
+        <p className="text-text-secondary">
+          Daintree couldn&apos;t connect to it yet. It stays in the list, so you can connect now or
+          later from Settings → Hosts.
+        </p>
+      </div>
+    );
+    primary = {
+      label: "Connect",
+      onClick: () => connectAdded(added.hostId, added.name),
+      disabled: busy,
+      loading: busy,
+    };
+    secondary = { label: "Close", onClick: onClose };
+  } else if (step === "discover") {
     body = (
       <div className="space-y-4">
         <div>
           <p className="mb-2 text-sm font-medium text-text-primary">On your tailnet and network</p>
-          {discovered === null ? (
-            <p className="flex items-center gap-2 text-sm text-text-secondary">
-              <Spinner size="sm" /> Looking for Macs and Linux machines
-            </p>
+          {discoverError !== null ? (
+            <div className="flex items-start justify-between gap-3">
+              <p role="alert" className="text-sm text-text-secondary select-text">
+                Couldn&apos;t look for machines: {discoverError}
+              </p>
+              <Button variant="outline" size="sm" onClick={retryDiscover}>
+                Retry
+              </Button>
+            </div>
+          ) : discovered === null ? (
+            showDiscovering ? (
+              <p className="flex items-center gap-2 text-sm text-text-secondary">
+                <Spinner size="sm" /> Looking for Macs and Linux machines
+              </p>
+            ) : null
           ) : discovered.length === 0 ? (
             <p className="text-sm text-text-secondary">
               Nothing found. Enter the machine&apos;s SSH target below.
@@ -400,7 +462,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                   Update when idle
                 </Button>
               )}
-              <Button variant="outline" size="sm" onClick={() => startInstall("proceed")}>
+              <Button variant="outline" size="sm" onClick={() => setConfirmProceed(true)}>
                 Update now and end its terminals
               </Button>
             </div>
@@ -471,8 +533,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           <p className="text-text-secondary">
             {probe?.platform === "linux"
               ? probe.advice.keyring === "running"
-                ? "A keyring is running for this user, so plugin secrets can be stored there."
-                : "No keyring was running for this user. Plugin secrets can't be stored on this host until one is."
+                ? "A keyring process was running for the SSH user when checked. Whether plugin secrets can be stored there is known once Host mode runs its own keyring check on that machine."
+                : probe.advice.keyring === "not-running"
+                  ? "No keyring process was seen running for the SSH user when checked. Host mode runs its own keyring check on that machine."
+                  : "The host's keyring wasn't checked. Host mode runs its own keyring check on that machine."
               : "Plugin secrets live in the host's own keychain. Credentials aren't copied between machines: each host signs in for itself."}
           </p>
         </div>
@@ -515,6 +579,19 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         {error && <ErrorLine message={error} />}
       </AppDialog.Body>
       <AppDialog.Footer primaryAction={primary} secondaryAction={secondary} />
+      <ConfirmDialog
+        isOpen={confirmProceed}
+        onClose={() => setConfirmProceed(false)}
+        zIndex="nested"
+        variant="destructive"
+        title={`Update '${hostLabel}' now?`}
+        description={`Daintree on ${hostLabel} restarts to update. Every terminal there ends, and the agents working in them stop mid-task.`}
+        confirmLabel="Update and end terminals"
+        onConfirm={() => {
+          setConfirmProceed(false);
+          startInstall("proceed");
+        }}
+      />
     </AppDialog>
   );
 }

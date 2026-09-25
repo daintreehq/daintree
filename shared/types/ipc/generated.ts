@@ -433,6 +433,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./fileTransfer.js").DownloadPayload];
     result: import("./fileTransfer.js").DownloadResult;
   };
+  "file-transfer:get-preview-capability": {
+    args: [];
+    result: string | null;
+  };
   "file-transfer:upload-bytes": {
     args: [_payload: import("./fileTransfer.js").UploadBytesPayload];
     result: import("./fileTransfer.js").UploadResult;

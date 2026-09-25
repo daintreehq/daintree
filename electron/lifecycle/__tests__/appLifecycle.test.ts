@@ -431,6 +431,43 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
     };
   }
 
+  it("hands a background --host-mode launch to this process without opening or focusing a window", async () => {
+    const onHostModeRequested = vi.fn();
+    const win = makeWindow();
+    const { opts, handler } = await register({
+      onHostModeRequested,
+      getMainWindow: vi.fn(() => win as unknown as import("electron").BrowserWindow),
+    });
+
+    handler({}, ["/opt/Daintree/daintree", "--host-mode"], "/");
+
+    expect(onHostModeRequested).toHaveBeenCalledOnce();
+    expect(win.focus).not.toHaveBeenCalled();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("does the same before the launch has settled, and after it settles opens nothing", async () => {
+    const onHostModeRequested = vi.fn();
+    const { opts, handle, handler } = await register({
+      onHostModeRequested,
+      isLaunchSettled: () => false,
+    });
+
+    handler({}, ["daintree", "--host-mode"], "/");
+    handle.onLaunchSettled();
+
+    expect(onHostModeRequested).toHaveBeenCalledOnce();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("treats --host-mode as a plain relaunch where Host mode can't be handed over", async () => {
+    const { opts, handler } = await register();
+
+    handler({}, ["daintree", "--host-mode"], "/");
+
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
   it("opens a window for a plain relaunch when none exists", async () => {
     const { opts, handler } = await register();
 
