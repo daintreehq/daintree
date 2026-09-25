@@ -114,6 +114,12 @@ export class PtyManager extends EventEmitter {
     string,
     { cols: number; rows: number; generation: number | null }
   >();
+  // Output the TerminalProcess constructor emits before `registry.add` — the
+  // pooled-shell prelude and any chunks the data handoff buffered while the
+  // shell sat in the pool. `emitData` routes by registry entry, so without this
+  // those bytes were dropped and a shell blocked on a prompt stayed blank
+  // (#12753). Flushed in order right after registration.
+  private constructionOutput: { id: string; chunks: Array<string | Uint8Array> } | null = null;
   // Host-local lifecycle ledger. Adopts the generation Main stamped on spawn
   // options so both processes key each incarnation identically; guards the
   // pendingResizes buffer across same-id respawns and provides the audit
@@ -349,6 +355,11 @@ export class PtyManager extends EventEmitter {
    * Accepts both string and Uint8Array data for binary optimization.
    */
   private emitData(id: string, data: string | Uint8Array): void {
+    if (this.constructionOutput?.id === id) {
+      this.constructionOutput.chunks.push(data);
+      return;
+    }
+
     const terminalProcess = this.registry.get(id);
     if (!terminalProcess) {
       return;
@@ -510,6 +521,8 @@ export class PtyManager extends EventEmitter {
     const { ptyProcess, prelude, dataHandoff } = acquired;
 
     let terminalProcess: TerminalProcess;
+    const constructionOutput = { id, chunks: [] as Array<string | Uint8Array> };
+    this.constructionOutput = constructionOutput;
     try {
       terminalProcess = new TerminalProcess(
         id,
@@ -568,6 +581,7 @@ export class PtyManager extends EventEmitter {
         dataHandoff
       );
     } catch (error) {
+      this.constructionOutput = null;
       logError(`TerminalProcess constructor failed for ${id}, killing orphaned PTY`, error);
       try {
         dataHandoff?.dispose();
@@ -585,6 +599,10 @@ export class PtyManager extends EventEmitter {
     const consumedPendingResize = this.pendingResizes.has(id);
     this.pendingResizes.delete(id);
     this.registry.add(id, terminalProcess);
+    this.constructionOutput = null;
+    for (const chunk of constructionOutput.chunks) {
+      this.emitData(id, chunk);
+    }
 
     if (consumedPendingResize) {
       // A resize that beat the spawn became this PTY's boot geometry without
