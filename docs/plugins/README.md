@@ -60,6 +60,7 @@ The two entry points are at the top of this page. Everything below is reference 
 | --- | --- |
 | [Agent extensions](./agent-extensions.md) | The two MCP directions — `mcpServers` (Daintree is the client) and `agentMcp` (Daintree serves your tools to terminal agents) — plus skills |
 | [Forge providers](./forge-provider.md) | Implementing a code-hosting backend. **Built-in plugins only** — the interface is synchronous and can't cross the plugin worker's port |
+| [Tours](./tours.md) | Shipping a narrated welcome tour for a plugin or a panel: manifest entry, narration and cues, scenes from the kit and the mock Daintree window, voicing, previewing, and the house style |
 
 **Contract and internals**
 

@@ -172,19 +172,30 @@ describe("preview protocol", () => {
     ]);
   });
 
-  it("holds the tour module to its scene map contract", () => {
+  it("holds the tour module to the contract Daintree loads it by", () => {
     const Scene = () => null;
     const memo = { $$typeof: Symbol.for("react.memo"), type: Scene };
     expect(
-      sceneMapProblem({ default: { intro: Scene, wrap: memo } }, ["intro", "wrap"])
+      sceneMapProblem({ default: { scenes: { intro: Scene, wrap: memo } } }, ["intro", "wrap"])
     ).toBeNull();
-    expect(sceneMapProblem({}, ["intro"])).toMatch(/must default-export an object/);
-    expect(sceneMapProblem({ default: Scene }, ["intro"])).toMatch(/must default-export an object/);
+    expect(
+      sceneMapProblem(
+        { default: { scenes: { intro: Scene }, chapterTitles: { intro: "Hi" }, mockKit: {} } },
+        ["intro"]
+      )
+    ).toBeNull();
+    expect(sceneMapProblem({}, ["intro"])).toMatch(/must default-export \{ scenes/);
+    expect(sceneMapProblem({ default: Scene }, ["intro"])).toMatch(/must default-export \{ scenes/);
     expect(sceneMapProblem({ default: [Scene] }, ["intro"])).toMatch(/must default-export/);
-    expect(sceneMapProblem({ default: { intro: Scene } }, ["intro", "wrap"])).toBe(
-      `The tour module's default export has no scene for "wrap"`
+    // The flat map Daintree refuses is refused here too, so a preview can't pass what won't open.
+    expect(sceneMapProblem({ default: { intro: Scene } }, ["intro"])).toMatch(/no scenes object/);
+    expect(sceneMapProblem({ default: { scenes: [Scene] } }, ["intro"])).toMatch(
+      /no scenes object/
     );
-    expect(sceneMapProblem({ default: { intro: "Scene" } }, ["intro"])).toBe(
+    expect(sceneMapProblem({ default: { scenes: { intro: Scene } } }, ["intro", "wrap"])).toBe(
+      `The tour module's scenes have no scene for "wrap"`
+    );
+    expect(sceneMapProblem({ default: { scenes: { intro: "Scene" } } }, ["intro"])).toBe(
       `The scene for "intro" is not a React component`
     );
   });
