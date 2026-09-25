@@ -1725,7 +1725,7 @@ export function parsePluginManifestForLoad(
   // round removes at least one entry, which bounds the loop by the array length.
   let tours: unknown[] = raw.contributes.tours;
   let originalIndex = tours.map((_tour, index) => index);
-  let current = result;
+  let current: ReturnType<PluginManifestSchema["safeParse"]> = result;
   const dropped: z.core.$ZodIssue[] = [];
   while (!current.success) {
     const bad = new Set<number>();
