@@ -16,6 +16,7 @@ const notificationServiceMock = vi.hoisted(() => ({
   isWindowFocused: vi.fn(() => false),
   getUserPresence: vi.fn<() => "present" | "away" | "unknown">(() => "present"),
   closeNotificationsForPanel: vi.fn(),
+  isOwnerViewFocused: vi.fn<(owner: number | undefined) => boolean>(() => false),
 }));
 
 const soundServiceMock = vi.hoisted(() => ({
@@ -2132,13 +2133,47 @@ describe("AgentNotificationService", () => {
   // the user was looking at it, and nothing ever took its banners down.
   describe("presence-aware waiting alerts", () => {
     afterEach(() => {
-      notificationServiceMock.isWindowFocused.mockReturnValue(false);
+      notificationServiceMock.isOwnerViewFocused.mockReturnValue(false);
       notificationServiceMock.getUserPresence.mockReturnValue("present");
     });
 
     function focusWorktree(presence: "present" | "away" | "unknown") {
-      notificationServiceMock.isWindowFocused.mockReturnValue(true);
+      notificationServiceMock.isOwnerViewFocused.mockReturnValue(true);
       notificationServiceMock.getUserPresence.mockReturnValue(presence);
+    }
+
+    const twoWorktreeAppState = {
+      activeWorktreeId: "wt-1",
+      terminals: [
+        {
+          id: "term-1",
+          kind: "terminal",
+          agentId: "agent-1",
+          title: "One",
+          location: "dock",
+          worktreeId: "wt-1",
+        },
+        {
+          id: "term-2",
+          kind: "terminal",
+          agentId: "agent-2",
+          title: "Two",
+          location: "dock",
+          worktreeId: "wt-2",
+        },
+        {
+          id: "term-3",
+          kind: "terminal",
+          agentId: "agent-3",
+          title: "Three",
+          location: "dock",
+          worktreeId: "wt-2",
+        },
+      ],
+    };
+
+    function waitingIn(terminalId: string, agentId: string, worktreeId: string) {
+      return { ...makePayload("waiting"), terminalId, agentId, worktreeId };
     }
 
     it("holds back the banner and sound while the user is at the focused worktree", () => {
@@ -2170,6 +2205,82 @@ describe("AgentNotificationService", () => {
         );
       }
     );
+
+    it("pages when the owning view is not the one showing in a focused window", () => {
+      mockStore({ waitingEnabled: true });
+      notificationServiceMock.getUserPresence.mockReturnValue("present");
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.isOwnerViewFocused).toHaveBeenCalledWith(OWNER);
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it("builds a mixed burst from the panes that still need to page", () => {
+      mockStore({ waitingEnabled: true, soundEnabled: true }, twoWorktreeAppState);
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1", "term-2", "term-3"]);
+      focusWorktree("present");
+
+      events.emit("agent:state-changed", waitingIn("term-1", "agent-1", "wt-1"));
+      events.emit("agent:state-changed", waitingIn("term-2", "agent-2", "wt-2"));
+      events.emit("agent:state-changed", waitingIn("term-3", "agent-3", "wt-2"));
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.getUserPresence).toHaveBeenCalledTimes(1);
+      expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agents waiting",
+        "2 agents waiting for input",
+        expect.objectContaining({ panelId: "term-2", worktreeId: "wt-2" }),
+        "notification:watch-navigate",
+        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-2", "term-3"] }
+      );
+    });
+
+    it("still delivers after a waiting → working → waiting flap once the renderer unwatched", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      // The renderer's one-shot unwatch lands as soon as it sees "waiting".
+      agentNotificationService.syncWatchedPanels(OWNER, []);
+      events.emit("agent:state-changed", makePayload("working", "waiting"));
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps an acknowledged pane out of a sibling's grouped escalation", () => {
+      mockStore({ waitingEnabled: true }, twoWorktreeAppState);
+
+      events.emit("agent:state-changed", waitingIn("term-1", "agent-1", "wt-1"));
+      events.emit("agent:state-changed", waitingIn("term-2", "agent-2", "wt-2"));
+      agentNotificationService.acknowledgeWaiting("term-1");
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent still waiting",
+        expect.any(String),
+        expect.objectContaining({ closeWithPanels: ["term-2"] })
+      );
+    });
+
+    it("names every grouped escalation member as a panel to close with", () => {
+      mockStore({ waitingEnabled: true }, twoWorktreeAppState);
+
+      events.emit("agent:state-changed", waitingIn("term-1", "agent-1", "wt-1"));
+      events.emit("agent:state-changed", waitingIn("term-2", "agent-2", "wt-2"));
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agents still waiting",
+        "2 agents have been waiting for input",
+        expect.objectContaining({ closeWithPanels: ["term-1", "term-2"] })
+      );
+    });
 
     it("does not read presence when no window is focused", () => {
       mockStore({ waitingEnabled: true });
@@ -2236,9 +2347,11 @@ describe("AgentNotificationService", () => {
     });
 
     it.each(["agent:exited", "agent:killed"] as const)(
-      "closes the pane's banners on %s",
+      "closes the pane's banners and cancels its reminder on %s",
       (event) => {
         mockStore({ waitingEnabled: true });
+        events.emit("agent:state-changed", makePayload("waiting"));
+        vi.advanceTimersByTime(200);
 
         events.emit(event, {
           terminalId: "term-1",
@@ -2247,6 +2360,8 @@ describe("AgentNotificationService", () => {
         } as never);
 
         expect(notificationServiceMock.closeNotificationsForPanel).toHaveBeenCalledWith("term-1");
+        vi.advanceTimersByTime(180_000);
+        expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
       }
     );
 

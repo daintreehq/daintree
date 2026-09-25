@@ -433,7 +433,7 @@ class AgentNotificationService {
     if (previousState === "waiting" && state !== "waiting" && terminalId) {
       this.waitingTerminalIds.delete(terminalId);
       this.clearWaitingEscalation(terminalId);
-      this.dismissWaitingAlerts(terminalId);
+      notificationService.closeNotificationsForPanel(terminalId);
     }
 
     // Purge any waiting-burst entry for this terminal once the terminal
@@ -648,11 +648,23 @@ class AgentNotificationService {
       dedupedByKey.set(key, item);
     }
     // Someone at the desk looking at the worktree already sees the agent
-    // waiting. Presence is read once per flush: it is the same answer for
-    // every item, and an unknown answer never counts as looking.
+    // waiting. Every part of that has to be proven — the owning view showing
+    // in a focused window, that worktree selected, the user present — and
+    // anything unresolved, including unknown presence, still pages. Presence
+    // and the selection are read at most once per flush.
     let presence: UserPresence | undefined;
+    let activeWorktreeId: string | null | undefined;
     const dedupedItems = Array.from(dedupedByKey.values()).filter((item) => {
-      if (!this.isFocusedOnWorktree(item.worktreeId, false)) return true;
+      // A pane that went back to work inside the burst window has nothing to
+      // announce. Checked here rather than purged on the transition, so a
+      // quick waiting → working → waiting flap still delivers once the
+      // renderer's one-shot unwatch has stopped a second entry being buffered.
+      if (item.terminalId && !this.waitingTerminalIds.has(item.terminalId)) return false;
+      if (!item.worktreeId) return true;
+      const owner = this.emitOwner(item.terminalId, item.ownerWebContentsId);
+      if (!notificationService.isOwnerViewFocused(owner)) return true;
+      activeWorktreeId ??= store.get("appState").activeWorktreeId ?? null;
+      if (activeWorktreeId !== item.worktreeId) return true;
       presence ??= notificationService.getUserPresence();
       return presence !== "present";
     });
@@ -815,16 +827,19 @@ class AgentNotificationService {
   }
 
   acknowledgeWaiting(terminalId: string): void {
-    this.clearWaitingEscalation(terminalId);
     this.dismissWaitingAlerts(terminalId);
   }
 
   /**
-   * The pane has been dealt with: drop any banner still in the burst window
-   * and take down the ones already delivered. Grouped banners only go once
+   * The pane has been dealt with: cancel its reminder, drop any banner still in
+   * the burst window and take down the ones already delivered. Grouped banners only go once
    * every pane they name has been dealt with.
    */
   private dismissWaitingAlerts(terminalId: string): void {
+    // Out of the escalation group too, or a sibling's grouped reminder would
+    // name this pane again. Its next waiting transition puts it back.
+    this.waitingTerminalIds.delete(terminalId);
+    this.clearWaitingEscalation(terminalId);
     this.dropBufferedWaiting(terminalId);
     notificationService.closeNotificationsForPanel(terminalId);
   }
@@ -994,14 +1009,9 @@ class AgentNotificationService {
     }
   }
 
-  /**
-   * `unknownWorktreeMatches` decides a notification with no worktree: the
-   * completion path has always counted it as focused, while waiting alerts
-   * need proof the user is looking at that worktree before holding back.
-   */
-  private isFocusedOnWorktree(worktreeId?: string, unknownWorktreeMatches = true): boolean {
+  private isFocusedOnWorktree(worktreeId?: string): boolean {
     if (!notificationService.isWindowFocused()) return false;
-    if (!worktreeId) return unknownWorktreeMatches;
+    if (!worktreeId) return true;
     // Read active worktree directly from store — always reflects current state
     const activeWorktreeId = store.get("appState").activeWorktreeId;
     return activeWorktreeId === worktreeId;

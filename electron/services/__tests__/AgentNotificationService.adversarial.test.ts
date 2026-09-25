@@ -16,6 +16,7 @@ const notificationServiceMock = vi.hoisted(() => ({
   isWindowFocused: vi.fn(() => false),
   getUserPresence: vi.fn<() => "present" | "away" | "unknown">(() => "present"),
   closeNotificationsForPanel: vi.fn(),
+  isOwnerViewFocused: vi.fn<(owner: number | undefined) => boolean>(() => false),
 }));
 
 const soundServiceMock = vi.hoisted(() => ({

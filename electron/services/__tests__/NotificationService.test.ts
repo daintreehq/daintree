@@ -17,6 +17,7 @@ const electronMock = vi.hoisted(() => {
     removeAllListeners: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
     once(event: string, handler: (...args: unknown[]) => void): NotificationMockInstance;
+    on(event: string, handler: (...args: unknown[]) => void): NotificationMockInstance;
     trigger(event: string, ...args: unknown[]): void;
   }
 
@@ -31,6 +32,10 @@ const electronMock = vi.hoisted(() => {
       notificationInstances.push(this);
     }
     once(event: string, handler: (...args: unknown[]) => void) {
+      this.handlers[event] = handler;
+      return this;
+    }
+    on(event: string, handler: (...args: unknown[]) => void) {
       this.handlers[event] = handler;
       return this;
     }
@@ -728,6 +733,20 @@ describe("NotificationService", () => {
 
       expect(tracked().size).toBe(0);
       expect(instance.close).not.toHaveBeenCalled();
+    });
+
+    it("keeps a Windows toast that timed out into Action Center closeable", () => {
+      notificationService.showNativeNotification("Agent waiting", "a", {
+        closeWithPanels: ["term-1"],
+      });
+      const instance = electronMock.notificationInstances.at(-1)!;
+
+      instance.trigger("close", { reason: "timedOut" });
+      expect(tracked().size).toBe(1);
+
+      notificationService.closeNotificationsForPanel("term-1");
+      expect(instance.close).toHaveBeenCalledTimes(1);
+      expect(tracked().size).toBe(0);
     });
 
     it("drops tracking even when close() throws", () => {

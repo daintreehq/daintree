@@ -300,6 +300,19 @@ class NotificationService {
     return this.focusedWindows.size > 0;
   }
 
+  /**
+   * True only while the owner's renderer is the view its window is showing and
+   * that window has focus. A cached view, or a window behind another, does not
+   * count — its panels are out of sight.
+   */
+  isOwnerViewFocused(ownerWebContentsId: NotificationOwnerId | undefined): boolean {
+    if (ownerWebContentsId === undefined || !this.registry) return false;
+    const ctx = this.registry.getByWebContentsId(ownerWebContentsId);
+    if (!ctx || ctx.browserWindow.isDestroyed()) return false;
+    if (!this.focusedWindows.has(ctx.windowId)) return false;
+    return this.activeOwnerOf(ctx.browserWindow) === ownerWebContentsId;
+  }
+
   getUserPresence(): UserPresence {
     return readUserPresence();
   }
@@ -364,7 +377,12 @@ class NotificationService {
     const cleanup = () => {
       this.forgetNotification(notification);
     };
-    notification.once("close", cleanup);
+    notification.on("close", (details) => {
+      // A Windows toast that times out moves to Action Center rather than
+      // going away, so it stays closeable when its panel is dealt with.
+      if (details?.reason === "timedOut") return;
+      cleanup();
+    });
     notification.once("failed", (_event, error) => {
       // Electron 42 routes macOS notifications through UNNotification, which
       // silently emits "failed" on unsigned dev builds instead of displaying.
