@@ -49,6 +49,10 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   // attached from another machine. Defaults to "supported". See "remote" below.
   "remote": "unsupported",
 
+  // Optional. The operating systems this package has a build for. Omit it
+  // unless the plugin ships native modules for only some. See "platforms" below.
+  "platforms": ["darwin"],
+
   // Path to the compiled ESM entry, relative to the plugin directory.
   // Optional — plugins with only static contributions (themes, static MCP
   // server configs) don't need one.
@@ -200,6 +204,12 @@ Declaring `"scope": "project"` also changes what the manifest may contribute. `c
 `"supported"` (the default when omitted) or `"unsupported"`. Plugin main code always runs on the machine the project lives on; this field is about windows attached to that machine from another one.
 
 Declare `"remote": "unsupported"` when the plugin only works for a person sitting at the machine it runs on — a view that assumes the renderer's `localhost` is the project's machine, or code that relies on local OS behaviour. The host then never starts the plugin for a window on another machine: that window shows a placeholder naming the machine the plugin needs, calls to it are refused with a `PLUGIN_INCOMPATIBLE` error, and each refusal is logged.
+
+### `platforms`
+
+Optional. A list drawn from `"darwin"`, `"linux"` and `"win32"` (Node's `process.platform` names) naming the operating systems the package has a build for. Omit it for a plugin that runs anywhere, which is nearly all of them.
+
+Declare it when the package carries native modules built for only some systems. Installing the plugin on a machine whose OS isn't listed is refused before anything is copied, with a message naming the plugin and the machine. When an installed plugin has native modules (`*.node`) but no `platforms`, Daintree reads the modules' binary headers and treats the plugin as built only for the OSes they name, so **Install on _host_** for another machine is refused before copying. A `.dntr` dropped straight onto a remote window is checked against its declared `platforms` only.
 
 ### `capabilities`
 

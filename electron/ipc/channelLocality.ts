@@ -536,6 +536,7 @@ export const CHANNEL_LOCALITY = {
   "plugin-parity:diff": "shell",
   "plugin-parity:install-on-host": "shell",
   "plugin-parity:update-on-host": "shell",
+  "plugin-parity:claim-switch-notice": "shell",
   "plugin-process:list": "host",
   "plugin:actions-get": "host",
   "plugin:actions-get-request": "host",

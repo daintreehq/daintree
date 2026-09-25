@@ -6,6 +6,7 @@ import { SidebarFooterGlyph } from "@/components/Layout/SidebarFooterGlyph";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import type { ProjectPluginInfo } from "@shared/types/plugin";
+import { useHostPluginParityNotice } from "./useHostPluginParityNotice";
 
 const MICRO_LABEL = "text-3xs font-medium uppercase tracking-wider text-text-secondary";
 
@@ -59,6 +60,9 @@ function rowLabel(plugin: ProjectPluginInfo): string {
  * the reason sits in the popover next to the reload that retries it.
  */
 export function ProjectPluginIndicator() {
+  // The footer is always mounted, so it also carries the once-per-switch note
+  // about this machine's plugins a remote host lacks. A local window skips it.
+  useHostPluginParityNotice();
   const [open, setOpen] = useState(false);
   const plugins = useProjectPluginStore((s) => s.plugins);
   const trust = useProjectPluginStore((s) => s.trust);

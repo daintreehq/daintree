@@ -1314,16 +1314,20 @@ export interface GeneratedIpcInvokeMap {
     args: [config: import("./pluginMcp.js").PluginMcpConfig];
     result: import("./pluginMcp.js").PluginMcpConfig;
   };
+  "plugin-parity:claim-switch-notice": {
+    args: [payload: import("./pluginParity.js").PluginParityPayload];
+    result: boolean;
+  };
   "plugin-parity:diff": {
-    args: [_payload: import("./pluginParity.js").PluginParityPayload];
+    args: [payload: import("./pluginParity.js").PluginParityPayload];
     result: import("./pluginParity.js").PluginParityRow[];
   };
   "plugin-parity:install-on-host": {
-    args: [_payload: import("./pluginParity.js").InstallOnHostPayload];
+    args: [payload: import("./pluginParity.js").InstallOnHostPayload];
     result: void;
   };
   "plugin-parity:update-on-host": {
-    args: [_payload: import("./pluginParity.js").InstallOnHostPayload];
+    args: [payload: import("./pluginParity.js").InstallOnHostPayload];
     result: void;
   };
   "plugin-process:list": {

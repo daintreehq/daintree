@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -10,6 +10,7 @@ import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { SettingsInput } from "../SettingsInput";
 import { SettingsSwitchCard } from "../SettingsSwitchCard";
 import { AddHostDialog } from "./AddHostDialog";
+import { HostPluginsSection } from "./HostPluginsSection";
 import { HostClipboardGrants } from "./HostClipboardGrants";
 import { buildLabel, connectionLabel, platformLabel } from "./hostLabels";
 
@@ -18,6 +19,8 @@ interface HostDetailProps {
   onBack: () => void;
   /** Open straight into this host's update flow (the host chip's "Update …"). */
   openUpdate?: boolean;
+  /** Scroll to this host's plugins (the switch notice's "Review"). */
+  focusPlugins?: boolean;
 }
 
 function useCommittedField(initial: string, commit: (value: string) => Promise<unknown>) {
@@ -34,7 +37,12 @@ function useCommittedField(initial: string, commit: (value: string) => Promise<u
 }
 
 /** One host: its name and SSH target, what its connection reports, and forgetting it. */
-export function HostDetail({ entry, onBack, openUpdate = false }: HostDetailProps) {
+export function HostDetail({
+  entry,
+  onBack,
+  openUpdate = false,
+  focusPlugins = false,
+}: HostDetailProps) {
   const { descriptor, connection, summary } = entry;
   const [confirmForget, setConfirmForget] = useState(false);
   const [forgetError, setForgetError] = useState<string | null>(null);
@@ -58,6 +66,10 @@ export function HostDetail({ entry, onBack, openUpdate = false }: HostDetailProp
       () => setNotifyDraft(null)
     );
   };
+
+  useEffect(() => {
+    if (focusPlugins) document.getElementById("host-plugins")?.scrollIntoView({ block: "start" });
+  }, [focusPlugins]);
 
   const connect = () => {
     setConnecting(true);
@@ -184,7 +196,7 @@ export function HostDetail({ entry, onBack, openUpdate = false }: HostDetailProp
       </SettingsSection>
 
       <SettingsSection
-        title="Accounts and plugins"
+        title="Accounts"
         description="Credentials aren't copied between machines: each host signs in for itself"
       >
         <SettingsGroup>
@@ -192,13 +204,14 @@ export function HostDetail({ entry, onBack, openUpdate = false }: HostDetailProp
             label="Forge connection"
             description="Not reported by this host yet. Open a project on it to see its forge status"
           />
-          <SettingsRow
-            label="Plugin parity"
-            description="Which plugins are only here, only on the host, or on different versions"
-          />
         </SettingsGroup>
       </SettingsSection>
 
+      <HostPluginsSection
+        hostId={descriptor.id}
+        hostName={descriptor.name}
+        connected={connection.status === "connected"}
+      />
       <HostClipboardGrants hostId={descriptor.id} hostName={descriptor.name} />
 
       <SettingsSection title="Forget host">

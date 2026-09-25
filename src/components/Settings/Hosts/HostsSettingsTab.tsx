@@ -9,6 +9,7 @@ import { AddHostDialog } from "./AddHostDialog";
 import { HostDetail } from "./HostDetail";
 import { buildLabel, connectionLabel, platformLabel } from "./hostLabels";
 import { onHostUpdateRequest, takePendingHostUpdate } from "./hostUpdateRequests";
+import { onHostPluginsRequest, takePendingHostPlugins } from "./hostPluginRequests";
 
 /**
  * Settings → Hosts: the machines this one opens projects on, adding one, and
@@ -20,6 +21,9 @@ export default function HostsSettingsTab() {
   const [detailHostId, setDetailHostId] = useState<HostId | null>(null);
   // Each "Update …" request remounts the detail so its update flow opens again.
   const [updateRequest, setUpdateRequest] = useState<{ hostId: HostId; seq: number } | null>(null);
+  const [pluginsRequest, setPluginsRequest] = useState<{ hostId: HostId; seq: number } | null>(
+    null
+  );
 
   useEffect(() => {
     const open = (hostId: HostId) => {
@@ -31,19 +35,38 @@ export default function HostsSettingsTab() {
     return onHostUpdateRequest(open);
   }, []);
 
+  useEffect(() => {
+    const open = (hostId: HostId) => {
+      setDetailHostId(hostId);
+      setPluginsRequest((prev) => ({ hostId, seq: (prev?.seq ?? 0) + 1 }));
+    };
+    const pending = takePendingHostPlugins();
+    if (pending) open(pending);
+    return onHostPluginsRequest(open);
+  }, []);
+
   const detail = detailHostId
     ? (hosts.find((entry) => entry.descriptor.id === detailHostId) ?? null)
     : null;
   if (detail) {
     const openUpdate = updateRequest?.hostId === detail.descriptor.id;
+    const focusPlugins = !openUpdate && pluginsRequest?.hostId === detail.descriptor.id;
     return (
       <HostDetail
-        key={openUpdate ? `update-${updateRequest.seq}` : "detail"}
+        key={
+          openUpdate
+            ? `update-${updateRequest.seq}`
+            : focusPlugins
+              ? `plugins-${pluginsRequest.seq}`
+              : "detail"
+        }
         entry={detail}
         openUpdate={openUpdate}
+        focusPlugins={focusPlugins}
         onBack={() => {
           setDetailHostId(null);
           setUpdateRequest(null);
+          setPluginsRequest(null);
         }}
       />
     );

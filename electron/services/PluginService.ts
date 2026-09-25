@@ -199,6 +199,7 @@ import {
   onPanelKindRegistered,
   onPanelKindUnregistered,
   getPanelKindConfig,
+  toPersistedPanelKindRef,
 } from "../../shared/config/panelKindRegistry.js";
 import {
   registerToolbarButton,
@@ -267,7 +268,19 @@ import { stableArgsSha256 } from "../utils/pluginMcpHash.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { canDisposeIdlePluginWorker } from "../../shared/utils/workerGovernancePolicy.js";
 import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
-import { markAuditedHandlerFailure } from "../utils/pluginAuditMarker.js";
+import { isAuditedHandlerFailure, markAuditedHandlerFailure } from "../utils/pluginAuditMarker.js";
+import {
+  PluginNotOnHostInvokeError,
+  pluginIncompatibleError,
+  pluginNotOnHostError,
+} from "./plugin/parity/errors.js";
+import { buildPluginInventory, type PluginInventory } from "./plugin/parity/inventory.js";
+import {
+  platformDisplayName,
+  pluginInstallRefusal,
+  replacementRefusal,
+} from "./plugin/parity/preflight.js";
+import { readArchiveManifest } from "./PluginArchive.js";
 import { withTimeout, TimeoutError } from "../utils/withTimeout.js";
 import type {
   PluginDiagnosticsAuditRecord,
@@ -3190,6 +3203,12 @@ export class PluginService {
         }
       }
     }
+    // A window on another machine restored or kept a panel whose plugin this
+    // host doesn't have (any more): say so, rather than letting its import 404.
+    const ref = options.remoteFrontend ? toPersistedPanelKindRef(panelKindId) : null;
+    if (ref && ![...this.plugins.values()].some((p) => p.manifest.name === ref.pluginId)) {
+      throw pluginNotOnHostError(ref.pluginId);
+    }
     return { ok: true };
   }
 
@@ -4196,6 +4215,31 @@ export class PluginService {
     ctx: PluginIpcContext,
     args: unknown[]
   ): Promise<unknown> {
+    if (ctx.origin?.kind !== "remote")
+      return this.dispatchLoadedHandler(pluginId, channel, ctx, args);
+    // A window on another machine may still show a plugin this host has since
+    // removed. It is told so in a form it can build its placeholder from, both
+    // up front and for a call the removal cut short.
+    if (!this.plugins.has(pluginId)) throw new PluginNotOnHostInvokeError(pluginId, channel);
+    try {
+      return await this.dispatchLoadedHandler(pluginId, channel, ctx, args);
+    } catch (err) {
+      if (this.plugins.has(pluginId)) throw err;
+      // A handler that was running when its plugin went is audited already;
+      // a call cut off before reaching one is an ownership refusal, as ever.
+      if (!isAuditedHandlerFailure(err)) throw new PluginNotOnHostInvokeError(pluginId, channel);
+      const typed = pluginNotOnHostError(pluginId);
+      markAuditedHandlerFailure(typed);
+      throw typed;
+    }
+  }
+
+  private async dispatchLoadedHandler(
+    pluginId: string,
+    channel: string,
+    ctx: PluginIpcContext,
+    args: unknown[]
+  ): Promise<unknown> {
     // Ownership guard (#10462): the renderer is a single shared WebContents in
     // which every plugin runs in the same realm, so a caller can pass an
     // arbitrary `pluginId`. Reject any id the host has not actually loaded
@@ -4438,6 +4482,87 @@ export class PluginService {
     opts?: PluginInstallOptions
   ): Promise<PluginInstallResult> {
     return this.installer.installPlugin(archivePath, opts);
+  }
+
+  /**
+   * This machine's installed plugins, for another machine to compare with its
+   * own. Only reads; nothing about either machine changes.
+   */
+  async getPluginInventory(options: { includeSecrets?: boolean } = {}): Promise<PluginInventory> {
+    await this.waitForInit();
+    return buildPluginInventory(this, {
+      appVersion: this.appVersion,
+      platform: process.platform,
+      includeSecrets: options.includeSecrets === true,
+    });
+  }
+
+  /**
+   * Install a package another machine sent, through the normal install path.
+   * Before anything reaches the plugins folder, its manifest is read from the
+   * archive and refused if it has no build for this OS or the plugin
+   * blocklist names this version; a package the load-time blocklist would
+   * refuse is never copied into place. `pluginId` pins the package to the
+   * plugin the person asked for, and `update` requires it to be installed
+   * here already.
+   */
+  async installPluginFromAnotherMachine(
+    archivePath: string,
+    expect: { pluginId?: string; update?: boolean } = {}
+  ): Promise<PluginInstallResult> {
+    await this.waitForInit();
+    let manifest: PluginManifest;
+    try {
+      manifest = await readArchiveManifest(archivePath);
+    } catch (err) {
+      return {
+        status: "failed",
+        errors: [{ code: "manifest_invalid", message: formatErrorMessage(err, "Invalid plugin") }],
+      };
+    }
+    if (expect.pluginId !== undefined && manifest.name !== expect.pluginId) {
+      return {
+        status: "failed",
+        errors: [
+          {
+            code: "archive_mismatch",
+            message: `The package is for "${manifest.name}", not "${expect.pluginId}"`,
+          },
+        ],
+      };
+    }
+    const installedVersion =
+      (this.plugins.get(manifest.name) ?? this.disabledPlugins.get(manifest.name))?.manifest
+        .version ?? null;
+    const replacement = replacementRefusal(manifest, installedVersion, expect);
+    if (replacement) {
+      return { status: "failed", errors: [{ code: "archive_mismatch", message: replacement }] };
+    }
+    const blocklist = (await this.blocklistService.getBlocklist()) ?? this.startupBlocklist;
+    const refusal = pluginInstallRefusal(manifest, { platform: process.platform, blocklist });
+    const displayName = manifest.displayName?.trim() || manifest.name;
+    if (refusal?.kind === "platform") {
+      const hostPlatform = process.platform === "darwin" ? "darwin" : "linux";
+      throw pluginIncompatibleError(
+        manifest.name,
+        {
+          kind: "platform",
+          hostPlatform,
+          supported: refusal.supported.filter(
+            (entry): entry is "darwin" | "linux" => entry === "darwin" || entry === "linux"
+          ),
+        },
+        `${displayName} has no build for ${platformDisplayName(process.platform)}.`
+      );
+    }
+    if (refusal?.kind === "blocklisted") {
+      throw pluginIncompatibleError(
+        manifest.name,
+        { kind: "untrusted" },
+        `${displayName} ${manifest.version} is blocked: ${refusal.message}`
+      );
+    }
+    return this.installer.installPlugin(archivePath, { source: "sideload" });
   }
 
   /**

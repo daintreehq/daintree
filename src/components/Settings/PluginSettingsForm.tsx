@@ -24,6 +24,9 @@ import { useProjectStore } from "@/store/projectStore";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
+import { useHostConnection } from "@/hooks/useHostConnection";
+import { useHostPlatform } from "@/hooks/useHostPlatform";
+import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 import type {
   LoadedPluginInfo,
   PluginPickPathRequest,
@@ -181,6 +184,34 @@ interface SettingFieldProps {
 }
 
 /**
+ * The host whose storage a remote window's secrets would land in; null for a
+ * window on this machine. Plugin settings and secrets live on each host.
+ */
+function useSecretStorageHost(): { name: string; platform: string } | null {
+  const { hostName } = useHostConnection();
+  const { platform } = useHostPlatform();
+  const hostId = pluginViewHostId();
+  return hostId === null ? null : { name: hostName ?? hostId, platform };
+}
+
+/**
+ * Why a secret can't be saved. On a remote host the reason and the way around
+ * it are that host's: a Linux machine with no desktop session has no keyring,
+ * which is expected there, and the CLI's own login or the environment still
+ * work.
+ */
+export function unavailableSecretStorageText(
+  host: { name: string; platform: string } | null
+): string {
+  if (host === null) return "Secure storage unavailable — secrets can't be saved on this device";
+  const where =
+    host.platform === "linux"
+      ? `No keyring on ${host.name} (headless Linux)`
+      : `No keychain available on ${host.name}`;
+  return `${where} — secrets can't be saved there; use environment variables or the CLI's own login on that host`;
+}
+
+/**
  * One generated field. Owns its own draft/validation/reveal state. Project-scoped
  * fields are remounted by the parent on project switch (keyed on projectId), so
  * the draft re-initializes from the new project's stored value.
@@ -212,6 +243,7 @@ function SettingField({
   // would go stale after the first write or reset.
   const [overridden, setOverridden] = useState(false);
   const tierId = useId();
+  const secretHost = useSecretStorageHost();
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Secret-specific state.
@@ -672,7 +704,7 @@ function SettingField({
     );
     const tierText =
       secretTier === "unavailable"
-        ? "Secure storage unavailable — secrets can't be saved on this device"
+        ? unavailableSecretStorageText(secretHost)
         : hasStored && secretIsPlaintext && !migratedToKeychain
           ? "Stored as plaintext — re-save to move it into the OS keychain"
           : "Stored in OS keychain";

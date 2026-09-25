@@ -858,6 +858,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["plugin-mcp:set-config"]["result"]>;
   };
   pluginParity: {
+    claimSwitchNotice(
+      ...args: IpcInvokeMap["plugin-parity:claim-switch-notice"]["args"]
+    ): Promise<IpcInvokeMap["plugin-parity:claim-switch-notice"]["result"]>;
     diff(
       ...args: IpcInvokeMap["plugin-parity:diff"]["args"]
     ): Promise<IpcInvokeMap["plugin-parity:diff"]["result"]>;
