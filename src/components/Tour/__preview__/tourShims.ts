@@ -1,32 +1,31 @@
 import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
-import type { TourOnboardingState } from "@shared/types";
+import type { TourOnboardingState, TourProgressUpdate } from "@shared/types";
+import { tourProgressFor } from "@shared/utils/tourIds";
 
 /**
  * Imported first by `preview.tsx`: the tour only talks to main through the
  * onboarding namespace, so that is all the harness answers.
  */
-const tour: TourOnboardingState = {
-  completed: false,
-  dismissed: false,
-  muted: false,
-  lastChapter: 0,
-};
+const tours: Record<string, TourOnboardingState> = {};
+let tourMuted = false;
+
+function update(tourId: string, patch: Partial<TourOnboardingState>): TourOnboardingState {
+  tours[tourId] = { ...tourProgressFor(tours, tourId), ...patch };
+  return structuredClone(tours[tourId]!);
+}
 
 installPreviewShims({
   onboarding: {
-    get: async () => ({ tour: structuredClone(tour) }),
-    dismissTourInvite: async () => {
-      tour.dismissed = true;
-      return structuredClone(tour);
-    },
-    setTourProgress: async (update: { completed?: boolean; lastChapter?: number }) => {
-      if (update.completed) tour.completed = true;
-      if (typeof update.lastChapter === "number") tour.lastChapter = update.lastChapter;
-      return structuredClone(tour);
-    },
+    get: async () => ({ tours: structuredClone(tours), tourMuted }),
+    dismissTourInvite: async (tourId: string) => update(tourId, { dismissed: true }),
+    setTourProgress: async (tourId: string, progress: TourProgressUpdate) =>
+      update(tourId, {
+        ...(progress.completed ? { completed: true } : {}),
+        ...(typeof progress.lastChapter === "number" ? { lastChapter: progress.lastChapter } : {}),
+      }),
     setTourMuted: async (muted: boolean) => {
-      tour.muted = muted;
-      return structuredClone(tour);
+      tourMuted = muted;
+      return tourMuted;
     },
   },
 });

@@ -253,58 +253,96 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
   });
 
   describe("tour", () => {
-    it("defaults tour state for stores written before the tour existed", () => {
+    const PLUGIN_TOUR = "acme.tools.welcome";
+    const OTHER_PLUGIN_TOUR = "other.plugin.welcome";
+
+    type TourView = { tours: Record<string, Record<string, unknown>>; tourMuted: boolean };
+    const read = () => getHandler("onboarding:get")(null) as TourView;
+
+    it("has no tour progress for stores written before tours existed", () => {
       registerOnboardingHandlers();
       seedOnboarding();
-      const state = getHandler("onboarding:get")(null) as { tour: Record<string, unknown> };
-      expect(state.tour).toEqual({
-        completed: false,
-        dismissed: false,
-        muted: false,
-        lastChapter: 0,
-      });
+      expect(read()).toMatchObject({ tours: {}, tourMuted: false });
     });
 
     it("drops malformed persisted tour fields", () => {
       registerOnboardingHandlers();
       seedOnboarding({
-        tour: { completed: "yes", dismissed: "no", muted: 1, lastChapter: 2.7 },
+        tours: {
+          daintree: { completed: "yes", dismissed: "no", muted: true, lastChapter: 2.7 },
+          [PLUGIN_TOUR]: "garbage",
+        },
+        tourMuted: "yes",
       });
-      const state = getHandler("onboarding:get")(null) as { tour: Record<string, unknown> };
-      expect(state.tour).toEqual({
-        completed: false,
-        dismissed: false,
-        muted: false,
-        lastChapter: 2,
+      const state = read();
+      expect(state.tours).toEqual({
+        daintree: { completed: false, dismissed: false, lastChapter: 2 },
+        [PLUGIN_TOUR]: { completed: false, dismissed: false, lastChapter: 0 },
       });
+      expect(state.tourMuted).toBe(false);
     });
 
-    it("remembers a dismissed invitation", () => {
+    it("never exposes the legacy single-tour record", () => {
+      registerOnboardingHandlers();
+      seedOnboarding({ tour: { completed: true, dismissed: true, muted: true, lastChapter: 3 } });
+      expect("tour" in read()).toBe(false);
+    });
+
+    it("remembers a dismissed invitation for that tour only", () => {
       registerOnboardingHandlers();
       seedOnboarding();
-      getHandler("onboarding:tour-dismiss-invite")(null);
-      const state = getHandler("onboarding:get")(null) as { tour: { dismissed: boolean } };
-      expect(state.tour.dismissed).toBe(true);
+      getHandler("onboarding:tour-dismiss-invite")(null, PLUGIN_TOUR);
+      const { tours } = read();
+      expect(tours[PLUGIN_TOUR]).toMatchObject({ dismissed: true });
+      expect(tours.daintree).toBeUndefined();
     });
 
     it("keeps completion sticky while recording the last chapter", () => {
       registerOnboardingHandlers();
       seedOnboarding();
       const progress = getHandler("onboarding:tour-set-progress");
-      progress(null, { completed: true, lastChapter: 5 });
-      const after = progress(null, { completed: false, lastChapter: 1 }) as {
-        completed: boolean;
-        lastChapter: number;
-      };
-      expect(after).toMatchObject({ completed: true, lastChapter: 1 });
+      progress(null, "daintree", { completed: true, lastChapter: 5 });
+      const after = progress(null, "daintree", { completed: false, lastChapter: 1 });
+      expect(after).toEqual({ completed: true, dismissed: false, lastChapter: 1 });
     });
 
-    it("persists the mute preference", () => {
+    it("keeps each tour's progress separate, including dotted plugin ids", () => {
       registerOnboardingHandlers();
       seedOnboarding();
-      getHandler("onboarding:tour-set-muted")(null, true);
-      const state = getHandler("onboarding:get")(null) as { tour: { muted: boolean } };
-      expect(state.tour.muted).toBe(true);
+      const progress = getHandler("onboarding:tour-set-progress");
+      progress(null, "daintree", { lastChapter: 2 });
+      progress(null, PLUGIN_TOUR, { completed: true, lastChapter: 4 });
+      progress(null, OTHER_PLUGIN_TOUR, { lastChapter: 1 });
+      expect(read().tours).toEqual({
+        daintree: { completed: false, dismissed: false, lastChapter: 2 },
+        [PLUGIN_TOUR]: { completed: true, dismissed: false, lastChapter: 4 },
+        [OTHER_PLUGIN_TOUR]: { completed: false, dismissed: false, lastChapter: 1 },
+      });
+      // Written as one flat map, not split into nested objects at the dots.
+      const persisted = (storeMock._data["onboarding"] as { tours: Record<string, unknown> }).tours;
+      expect(Object.keys(persisted).sort()).toEqual(
+        ["daintree", OTHER_PLUGIN_TOUR, PLUGIN_TOUR].sort()
+      );
+    });
+
+    it("ignores writes without a usable tour id", () => {
+      registerOnboardingHandlers();
+      seedOnboarding();
+      getHandler("onboarding:tour-set-progress")(null, "", { completed: true });
+      getHandler("onboarding:tour-set-progress")(null, { completed: true });
+      getHandler("onboarding:tour-dismiss-invite")(null);
+      expect(read().tours).toEqual({});
+    });
+
+    it("keeps one mute preference across every tour", () => {
+      registerOnboardingHandlers();
+      seedOnboarding({
+        tours: { daintree: { completed: false, dismissed: false, lastChapter: 1 } },
+      });
+      expect(getHandler("onboarding:tour-set-muted")(null, true)).toBe(true);
+      const state = read();
+      expect(state.tourMuted).toBe(true);
+      expect(state.tours.daintree).toEqual({ completed: false, dismissed: false, lastChapter: 1 });
     });
   });
 });

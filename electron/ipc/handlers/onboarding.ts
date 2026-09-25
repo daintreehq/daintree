@@ -12,6 +12,11 @@ import type {
   TourProgressUpdate,
 } from "../../../shared/types/ipc/maps.js";
 import { isE2ESkipFirstRunDialogs } from "../../setup/runtimeFlags.js";
+import {
+  DAINTREE_TOUR_ID,
+  DEFAULT_TOUR_PROGRESS,
+  tourProgressFor,
+} from "../../../shared/utils/tourIds.js";
 
 type StoredOnboardingState = StoreSchema["onboarding"];
 
@@ -26,13 +31,6 @@ const DEFAULT_CHECKLIST: ChecklistState = {
   },
 };
 
-const DEFAULT_TOUR: TourOnboardingState = {
-  completed: false,
-  dismissed: false,
-  muted: false,
-  lastChapter: 0,
-};
-
 const SKIP_E2E = isE2ESkipFirstRunDialogs;
 
 function normalizeCount(value: unknown): number {
@@ -40,14 +38,37 @@ function normalizeCount(value: unknown): number {
 }
 
 function normalizeTour(raw: unknown): TourOnboardingState {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...DEFAULT_TOUR };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...DEFAULT_TOUR_PROGRESS };
   const tour = raw as Record<string, unknown>;
   return {
     completed: tour.completed === true,
     dismissed: tour.dismissed === true,
-    muted: tour.muted === true,
     lastChapter: normalizeCount(tour.lastChapter),
   };
+}
+
+function normalizeTours(raw: unknown): Record<string, TourOnboardingState> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, TourOnboardingState> = {};
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (id && id !== "__proto__") out[id] = normalizeTour(value);
+  }
+  return out;
+}
+
+function isTourId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * Tour ids carry dots (`{pluginId}.{localId}`), which electron-store would read
+ * as nested path segments — so the map is always written whole, never through
+ * a per-tour key path.
+ */
+function writeTourProgress(tourId: string, next: TourOnboardingState): TourOnboardingState {
+  const tours = getOnboardingState().tours;
+  store.set("onboarding.tours", { ...tours, [tourId]: next });
+  return next;
 }
 
 function normalizeAvailabilityFirstSeen(raw: unknown): Record<string, number> {
@@ -85,7 +106,8 @@ function getOnboardingState(): OnboardingState {
           ranSecondParallelAgent: true,
         },
       },
-      tour: { ...DEFAULT_TOUR, completed: true },
+      tours: { [DAINTREE_TOUR_ID]: { ...DEFAULT_TOUR_PROGRESS, completed: true } },
+      tourMuted: false,
     };
   }
   const raw = store.get("onboarding") as StoredOnboardingState | undefined;
@@ -103,13 +125,16 @@ function getOnboardingState(): OnboardingState {
       welcomeCardDismissed: false,
       setupBannerDismissed: false,
       checklist: DEFAULT_CHECKLIST,
-      tour: { ...DEFAULT_TOUR },
+      tours: {},
+      tourMuted: false,
     };
   }
   const checklist = raw.checklist ?? DEFAULT_CHECKLIST;
   const mergedItems = { ...DEFAULT_CHECKLIST.items, ...checklist.items };
+  const { tour: _legacyTour, ...current } = raw;
+  void _legacyTour;
   return {
-    ...raw,
+    ...current,
     agentSetupIds: Array.isArray(raw.agentSetupIds) ? raw.agentSetupIds : [],
     seenAgentIds: Array.isArray(raw.seenAgentIds)
       ? (raw.seenAgentIds as string[]).filter((id) => typeof id === "string")
@@ -130,7 +155,8 @@ function getOnboardingState(): OnboardingState {
         ranSecondParallelAgent: mergedItems.ranSecondParallelAgent ?? false,
       },
     },
-    tour: normalizeTour((raw as { tour?: unknown }).tour),
+    tours: normalizeTours(raw.tours),
+    tourMuted: raw.tourMuted === true,
   };
 }
 
@@ -257,17 +283,20 @@ export const onboardingNamespace = defineIpcNamespace({
         store.set("onboarding.checklist.celebrationShown", true);
       }
     ),
-    dismissTourInvite: op(ONBOARDING_METHOD_CHANNELS.dismissTourInvite, (): TourOnboardingState => {
-      const tour = getOnboardingState().tour;
-      if (SKIP_E2E) return tour;
-      const next = { ...tour, dismissed: true };
-      store.set("onboarding.tour", next);
-      return next;
-    }),
+    dismissTourInvite: op(
+      ONBOARDING_METHOD_CHANNELS.dismissTourInvite,
+      (tourId: string): TourOnboardingState => {
+        if (!isTourId(tourId)) return { ...DEFAULT_TOUR_PROGRESS };
+        const tour = tourProgressFor(getOnboardingState().tours, tourId);
+        if (SKIP_E2E) return tour;
+        return writeTourProgress(tourId, { ...tour, dismissed: true });
+      }
+    ),
     setTourProgress: op(
       ONBOARDING_METHOD_CHANNELS.setTourProgress,
-      (update: TourProgressUpdate): TourOnboardingState => {
-        const tour = getOnboardingState().tour;
+      (tourId: string, update: TourProgressUpdate): TourOnboardingState => {
+        if (!isTourId(tourId)) return { ...DEFAULT_TOUR_PROGRESS };
+        const tour = tourProgressFor(getOnboardingState().tours, tourId);
         if (SKIP_E2E || !update || typeof update !== "object") return tour;
         const next = { ...tour };
         // Completion is sticky: replaying the tour later never un-completes it.
@@ -275,20 +304,15 @@ export const onboardingNamespace = defineIpcNamespace({
         if (typeof update.lastChapter === "number" && Number.isFinite(update.lastChapter)) {
           next.lastChapter = normalizeCount(update.lastChapter);
         }
-        store.set("onboarding.tour", next);
-        return next;
+        return writeTourProgress(tourId, next);
       }
     ),
-    setTourMuted: op(
-      ONBOARDING_METHOD_CHANNELS.setTourMuted,
-      (muted: boolean): TourOnboardingState => {
-        const tour = getOnboardingState().tour;
-        if (SKIP_E2E) return tour;
-        const next = { ...tour, muted: muted === true };
-        store.set("onboarding.tour", next);
-        return next;
-      }
-    ),
+    setTourMuted: op(ONBOARDING_METHOD_CHANNELS.setTourMuted, (muted: boolean): boolean => {
+      if (SKIP_E2E) return getOnboardingState().tourMuted;
+      const next = muted === true;
+      store.set("onboarding.tourMuted", next);
+      return next;
+    }),
   },
 });
 

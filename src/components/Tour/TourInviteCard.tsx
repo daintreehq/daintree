@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { CirclePlay, X } from "lucide-react";
 import type { TourOnboardingState } from "@shared/types";
+import { DAINTREE_TOUR_ID, tourProgressFor } from "@shared/utils/tourIds";
 import { Button } from "@/components/ui/button";
 import { getOnboardingState } from "@/clients/onboardingClient";
 import { cn } from "@/lib/utils";
@@ -46,7 +47,9 @@ function useTourOffer() {
           .then((onboarding) => {
             if (!active) return;
             setState((current) =>
-              current.kind === "dismissed-note" ? current : inviteStateFor(onboarding.tour)
+              current.kind === "dismissed-note"
+                ? current
+                : inviteStateFor(tourProgressFor(onboarding.tours, DAINTREE_TOUR_ID))
             );
           }),
         { context: "Reading tour invitation state" }
@@ -99,7 +102,7 @@ export function TourInviteCard({ className }: { className?: string }) {
 
   const dismiss = () => {
     setState({ kind: "dismissed-note" });
-    safeFireAndForget(window.electron.onboarding.dismissTourInvite(), {
+    safeFireAndForget(window.electron.onboarding.dismissTourInvite(DAINTREE_TOUR_ID), {
       context: "Dismissing the tour invitation",
     });
   };
