@@ -113,22 +113,28 @@ function readManifest() {
   }
 }
 
-// The React facade chunks (`host-react-*`) that vite.config.ts emits for the
-// plugin import map (#11208) are entry chunks, but they are NOT the app entry —
+// The facade chunks (`host-react-*`, `host-daintreehq-tour*`) that vite.config.ts
+// emits for the plugin import map (#11208) are entry chunks, but they are NOT the app entry —
 // they're re-export shims third-party plugin bundles resolve against. Manifest
 // order is not specified, so without this a facade could be picked as the entry
 // and the gate would silently measure a ~1KB shim instead of the app.
 // Matches on `name` when the manifest carries one and falls back to the emitted
 // `file` path, so the check holds regardless of which field Vite populates.
-function isHostReactFacadeChunk(chunk) {
+// Tour facade names are exact (`host-daintreehq-tour`, `host-daintreehq-tour-react`)
+// so a real entry that merely shares the prefix is still picked; files carry the
+// 8-character Rolldown hash after the name.
+const HOST_FACADE_NAME = /^host-(?:react-|daintreehq-tour(?:-react)?$)/;
+const HOST_FACADE_FILE = /(^|\/)host-(?:react-|daintreehq-tour(?:-react)?-[\w-]{8}\.js$)/;
+
+function isHostFacadeChunk(chunk) {
   const name = typeof chunk?.name === "string" ? chunk.name : "";
   const file = typeof chunk?.file === "string" ? chunk.file : "";
-  return name.startsWith("host-react-") || /(^|\/)host-react-/.test(file);
+  return HOST_FACADE_NAME.test(name) || HOST_FACADE_FILE.test(file);
 }
 
 export function findEntryKey(manifest) {
   for (const [key, chunk] of Object.entries(manifest)) {
-    if (chunk?.isEntry && !isHostReactFacadeChunk(chunk)) return key;
+    if (chunk?.isEntry && !isHostFacadeChunk(chunk)) return key;
   }
   return null;
 }
