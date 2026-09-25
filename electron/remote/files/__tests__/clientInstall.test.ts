@@ -14,6 +14,7 @@ import type { FileTransferEvent } from "../../../../shared/types/ipc/fileTransfe
 import type { ClientFileTransport, DownloadOptions } from "../ClientFileTransport.js";
 import { createHostFileClient } from "../clientInstall.js";
 import type { HostPickerBridge } from "../HostPickerBridge.js";
+import { ViewFileCapabilities } from "../viewCapabilities.js";
 
 function setup(bound: string | null = "studio-01") {
   const events: FileTransferEvent[] = [];
@@ -32,6 +33,7 @@ function setup(bound: string | null = "studio-01") {
   const client = createHostFileClient({
     transport: { download } as unknown as ClientFileTransport,
     pickers: {} as HostPickerBridge,
+    capabilities: new ViewFileCapabilities(() => () => {}),
     hostForView: () => bound,
     sendToView: (_wc, event) => events.push(event),
     downloadsDir: () => "/Users/greg/Downloads",
@@ -99,5 +101,31 @@ describe("createHostFileClient.download", () => {
     ]) {
       expect(() => client.download(7, bad)).toThrow();
     }
+  });
+});
+
+describe("preview capabilities", () => {
+  it("mints one capability per remote view and has none for a local view", () => {
+    const { client } = setup();
+    const token = client.previewCapability(7);
+    expect(token).toMatch(/^[0-9a-f]{32}$/);
+    expect(client.previewCapability(7)).toBe(token);
+    expect(client.previewCapability(8)).not.toBe(token);
+    expect(setup(null).client.previewCapability(7)).toBeNull();
+  });
+
+  it("forgets a view's capability once the view is gone", () => {
+    const gone = new Map<number, () => void>();
+    const capabilities = new ViewFileCapabilities((webContentsId, onGone) => {
+      gone.set(webContentsId, onGone);
+      return () => gone.delete(webContentsId);
+    });
+    const token = capabilities.capabilityFor(7);
+    expect(capabilities.viewFor(token)).toBe(7);
+    gone.get(7)!();
+    expect(capabilities.viewFor(token)).toBeNull();
+    expect(capabilities.capabilityFor(7)).not.toBe(token);
+    capabilities.dispose();
+    expect(gone.size).toBe(0);
   });
 });

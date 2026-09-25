@@ -9,6 +9,7 @@ import { resyncHostTerminals } from "@/store/hostTerminalResync";
 import {
   getLeaseInputBlock,
   getTerminalInputBlock,
+  setDriveLeaseSnapshot,
   setHostInputBlock,
   setLeaseInputBlock,
   subscribeTerminalInputGate,
@@ -18,6 +19,7 @@ import { ClientAppError } from "@/utils/clientAppError";
 import { isUnknownOutcomeError, resolveUnknownOutcome } from "@/utils/resolveUnknownOutcome";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { primeHostPreviewCapability } from "@/components/FileViewer/filePreviewKinds";
 
 /** The remote host this view runs on, or null when it runs on this machine. */
 export function getViewHostId(): HostId | null {
@@ -134,6 +136,7 @@ async function refreshLease(): Promise<void> {
 }
 
 function applyLease(lease: DriveLeaseView): void {
+  setDriveLeaseSnapshot(lease);
   const driver = drivenElsewhereBy(lease);
   setLeaseInputBlock(
     driver === null
@@ -201,6 +204,9 @@ function beginSync(): () => void {
   const hostId = getViewHostId();
   const projectId = getViewWorkspaceId();
   let disposed = false;
+
+  // Fetched up front so the first preview this view builds already carries it.
+  if (hostId !== null) void primeHostPreviewCapability();
 
   if (window.electron?.driveLease && projectId) {
     disposers.push(
@@ -297,6 +303,7 @@ function beginSync(): () => void {
     for (const dispose of disposers.splice(0)) dispose();
     setHostInputBlock(null);
     setLeaseInputBlock(null);
+    setDriveLeaseSnapshot(null);
     useHostConnectionStore.getState().reset();
   };
 }

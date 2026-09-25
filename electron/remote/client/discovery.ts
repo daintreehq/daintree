@@ -27,6 +27,12 @@ export interface DiscoveryCandidate {
   source: "tailscale" | "bonjour";
   platform: HostPlatform | null;
   online: boolean;
+  /**
+   * Other names the same source vouches for as this machine (a tailnet node's
+   * addresses and MagicDNS name, an mDNS record's resolved address). Matching
+   * across sources and against the host list uses only these and the target.
+   */
+  aliases?: string[];
 }
 
 function platformFromOs(os: unknown): HostPlatform | null {
@@ -78,12 +84,16 @@ export function parseTailscaleStatus(text: string): DiscoveryCandidate[] {
     const target = dnsName || firstString(peer.TailscaleIPs) || "";
     if (!target || !isValidSshTarget(target)) continue;
     const hostName = typeof peer.HostName === "string" ? peer.HostName.trim() : "";
+    const ips = Array.isArray(peer.TailscaleIPs)
+      ? peer.TailscaleIPs.filter((v): v is string => typeof v === "string" && v.length > 0)
+      : [];
     out.push({
-      name: hostName || target.split(".")[0] || target,
+      name: hostName || (isIpAddress(target) ? target : target.split(".")[0]) || target,
       sshTarget: target,
       source: "tailscale",
       platform,
       online: true,
+      aliases: dnsName ? [dnsName, ...ips] : ips,
     });
   }
   return out;
@@ -127,12 +137,14 @@ export function parseAvahiBrowse(text: string): DiscoveryCandidate[] {
     const txt = parseTxt(txtRaw.match(/"[^"]*"/g) ?? []);
     const target = bonjourTarget(host, txt);
     if (!target) continue;
+    const address = (fields[7] ?? "").trim();
     out.push({
       name: name || host,
       sshTarget: target,
       source: "bonjour",
       platform: platformFromOs(txt.platform),
       online: true,
+      aliases: address ? [address] : [],
     });
   }
   return out;
@@ -239,15 +251,28 @@ async function discoverBonjourLinux(deps: DiscoverDeps): Promise<DiscoveryCandid
   return parseAvahiBrowse(result.stdout);
 }
 
-/** The machine part of a target, for matching one machine seen by two sources. */
+function isIpAddress(value: string): boolean {
+  return (
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(value) || (value.includes(":") && /^[0-9a-f:.]+$/i.test(value))
+  );
+}
+
+/**
+ * The machine a target names: its host part, lower-cased, whole. An IP
+ * address is kept complete, and names are never shortened to their first
+ * label: `studio.local` and `studio.tailnet.ts.net` may be different machines.
+ */
 export function machineKey(sshTarget: string): string {
   const host = sshTarget.slice(sshTarget.lastIndexOf("@") + 1).toLowerCase();
-  return host.split(".")[0] ?? host;
+  const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  return bare.endsWith(".") ? bare.slice(0, -1) : bare;
 }
 
 /**
  * Tailnet peers first (their names work from anywhere on the tailnet), then
- * LAN hosts not already seen there. Manual entry is the dialog's own field.
+ * LAN hosts. One machine seen by both sources is merged only when a source
+ * vouches for a shared name or address; otherwise both rows are shown.
+ * Manual entry is the dialog's own field.
  */
 export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[]> {
   const bonjour =
@@ -265,12 +290,17 @@ export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[
   const seen = new Set<string>();
   const out: DiscoveredHost[] = [];
   for (const candidate of [...tailnet, ...lan]) {
-    const key = machineKey(candidate.sshTarget);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const keys = [candidate.sshTarget, ...(candidate.aliases ?? [])].map(machineKey);
+    if (keys.some((key) => seen.has(key))) continue;
+    for (const key of keys) seen.add(key);
     out.push({
-      ...candidate,
-      alreadyAdded: known.has(candidate.sshTarget.toLowerCase()) || knownMachines.has(key),
+      name: candidate.name,
+      sshTarget: candidate.sshTarget,
+      source: candidate.source,
+      platform: candidate.platform,
+      online: candidate.online,
+      alreadyAdded:
+        known.has(candidate.sshTarget.toLowerCase()) || keys.some((key) => knownMachines.has(key)),
     });
   }
   return out;

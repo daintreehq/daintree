@@ -12,6 +12,7 @@ import { isWindowRecreating } from "./windowRecreationState.js";
 import { SAFETY_BELT_TIMEOUT_MS } from "./shutdownConfig.js";
 import { extractDaintreeUrl, handleDaintreeUrl } from "../setup/deepLinkInstall.js";
 import { dispatchOpenDirPath, hasOpenDirConsumer } from "../setup/environment.js";
+import { isHostModeRequested } from "../boot/hostModeLaunch.js";
 
 const CLI_PATH_FLAG = "--cli-path";
 const CLI_PATH_PREFIX = `${CLI_PATH_FLAG}=`;
@@ -240,6 +241,12 @@ export interface AppLifecycleOptions {
    * window of its own — the startup path is about to.
    */
   isLaunchSettled?: () => boolean;
+  /**
+   * A second launch asked for Host mode (`--host-mode`, from a login item or
+   * the systemd unit). Only where Remote Hosts exists; without it such a
+   * launch is handled like any other.
+   */
+  onHostModeRequested?: () => void;
 }
 
 export interface AppLifecycleHandle {
@@ -336,6 +343,14 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
 
   app.on("second-instance", (_event, commandLine, workingDirectory) => {
     console.log("[MAIN] Second instance detected");
+    // A background Host-mode launch (login item, systemd unit, or a Shell
+    // starting Host mode over SSH) is a request for this process to serve,
+    // never for a window: nothing is focused or opened for it.
+    if (opts.onHostModeRequested && isHostModeRequested(commandLine)) {
+      console.log("[MAIN] Second instance asked for Host mode");
+      opts.onHostModeRequested();
+      return;
+    }
     const liveWindow = getLiveWindow();
     const cliPath = extractCliPath(commandLine, workingDirectory);
     // An explicit `--cli-path` already names the folder to open, so the URI

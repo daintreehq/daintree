@@ -48,16 +48,35 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     isAbsoluteHostPath(request.defaultPath) ? request.defaultPath : null
   );
   const [listing, setListing] = useState<HostDirectoryListing | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // The folder `listing` was fetched for: a listing only ever answers for that one.
+  const [listedDirectory, setListedDirectory] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [pathError, setPathError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [showHidden, setShowHidden] = useState(false);
   const [selectedNames, setSelectedNames] = useState<string[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [pathDraft, setPathDraft] = useState("");
+  const [pathInput, setPathInput] = useState<HTMLInputElement | null>(null);
+  const focusOwedRef = useRef(true);
   const listRef = useRef<HTMLDivElement>(null);
   const listId = useId();
   const hiddenId = useId();
   const showSpinner = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
+
+  // AppDialog is told not to place focus: the path field takes it, a frame
+  // after the field mounts, so the dialog has already recorded the invoker it
+  // hands focus back to on close.
+  useEffect(() => {
+    if (!pathInput || !focusOwedRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      if (!focusOwedRef.current || !pathInput.isConnected) return;
+      focusOwedRef.current = false;
+      pathInput.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pathInput]);
 
   useEffect(() => {
     let cancelled = false;
@@ -85,14 +104,15 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
       .then((result) => {
         if (cancelled) return;
         setListing(result);
+        setListedDirectory(directory);
         setPathDraft(result.path);
         setSelectedNames([]);
         setActiveIndex(0);
-        setError(null);
+        setLoadError(null);
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
-        setError(formatErrorMessage(cause, "Couldn't open that folder"));
+        setLoadError(formatErrorMessage(cause, "Couldn't open that folder"));
         setPathDraft(directory);
       })
       .finally(() => {
@@ -101,24 +121,49 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     return () => {
       cancelled = true;
     };
-  }, [directory, showHidden]);
+  }, [directory, showHidden, reloadKey]);
 
-  const entries = useMemo(() => listing?.entries ?? [], [listing]);
-  const selectedEntries = entries.filter((entry) => selectedNames.includes(entry.name));
-  const choice = resolveChoice(request, listing?.path ?? null, selectedEntries);
+  // Anything chosen belongs to the listing on screen, and only while that
+  // listing is the answer for the folder asked for: never mid-load, after a
+  // failure, or from the folder before.
+  const ready = listing !== null && listedDirectory === directory && !loading && loadError === null;
+  const entries = useMemo(
+    () => (listing && loadError === null ? listing.entries : []),
+    [listing, loadError]
+  );
+  const selectedEntries = ready
+    ? entries.filter((entry) => selectedNames.includes(entry.name))
+    : [];
+  const choice = ready ? resolveChoice(request, listing.path, selectedEntries) : null;
   const confirmLabel = defaultButtonLabel(request);
+  const optionId = (index: number) => `${listId}-option-${index}`;
+  const activeEntry = ready ? entries[activeIndex] : undefined;
+
+  const navigate = (target: string) => {
+    setSelectedNames([]);
+    setActiveIndex(0);
+    setLoadError(null);
+    setPathError(null);
+    if (target === directory) setReloadKey((key) => key + 1);
+    else setDirectory(target);
+  };
+
+  const retry = () => {
+    setLoadError(null);
+    setReloadKey((key) => key + 1);
+  };
 
   const open = (entry: HostDirectoryEntry) => {
-    if (!listing) return;
+    if (!ready) return;
     if (isNavigable(entry)) {
-      setDirectory(joinHostPath(listing.path, entry.name));
+      navigate(joinHostPath(listing.path, entry.name));
       return;
     }
     if (isSelectable(entry, request)) onResolve([joinHostPath(listing.path, entry.name)]);
   };
 
   const toggle = (entry: HostDirectoryEntry, additive: boolean) => {
-    if (!isSelectable(entry, request)) return;
+    if (!ready || !isSelectable(entry, request)) return;
     setSelectedNames((current) => {
       if (additive && request.mode === "file" && request.multiple) {
         return current.includes(entry.name)
@@ -136,28 +181,27 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   const goToDraft = () => {
     const target = pathDraft.trim();
     if (!isAbsoluteHostPath(target)) {
-      setError("Enter an absolute path, starting with /");
+      setPathError("Enter an absolute path, starting with /");
       return;
     }
-    setDirectory(target);
+    navigate(target);
   };
 
   const onListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (entries.length === 0) return;
+    if (!ready || entries.length === 0) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const step = event.key === "ArrowDown" ? 1 : -1;
       setActiveIndex((index) => Math.min(entries.length - 1, Math.max(0, index + step)));
       return;
     }
-    const active = entries[activeIndex];
-    if (!active) return;
+    if (!activeEntry) return;
     if (event.key === "Enter") {
       event.preventDefault();
-      open(active);
+      open(activeEntry);
     } else if (event.key === " ") {
       event.preventDefault();
-      toggle(active, event.metaKey || event.ctrlKey);
+      toggle(activeEntry, event.metaKey || event.ctrlKey);
     }
   };
 
@@ -166,11 +210,11 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     row?.scrollIntoView?.({ block: "nearest" });
   }, [activeIndex]);
 
-  const hint = error ? (
+  const hint = pathError ? (
     <span className="truncate text-status-error" role="alert">
-      {error}
+      {pathError}
     </span>
-  ) : listing?.truncated ? (
+  ) : ready && listing.truncated ? (
     <span className="truncate">
       Showing the first {entries.length.toLocaleString()} items. Type a path to go deeper.
     </span>
@@ -199,22 +243,30 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
             variant="ghost"
             size="icon-sm"
             aria-label="Parent folder"
-            disabled={!listing?.parent}
-            onClick={() => listing?.parent && setDirectory(listing.parent)}
+            disabled={!ready || !listing.parent}
+            onClick={() => ready && listing.parent && navigate(listing.parent)}
           >
             <ArrowUp />
           </Button>
           <Input
+            ref={setPathInput}
             density="compact"
             aria-label="Folder path"
+            aria-controls={listId}
             value={pathDraft}
             spellCheck={false}
             autoComplete="off"
-            onChange={(event) => setPathDraft(event.target.value)}
+            onChange={(event) => {
+              setPathDraft(event.target.value);
+              setPathError(null);
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
                 goToDraft();
+              } else if (event.key === "ArrowDown") {
+                event.preventDefault();
+                listRef.current?.focus();
               }
             }}
           />
@@ -228,7 +280,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
                 variant="ghost"
                 size="xs"
                 title={root.path}
-                onClick={() => setDirectory(root.path)}
+                onClick={() => navigate(root.path)}
               >
                 {root.label}
               </Button>
@@ -236,58 +288,76 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
           </div>
         )}
 
-        <div
-          ref={listRef}
-          id={listId}
-          role="listbox"
-          aria-label="Folder contents"
-          aria-multiselectable={request.mode === "file" && request.multiple ? true : undefined}
-          tabIndex={0}
-          onKeyDown={onListKeyDown}
-          className="relative min-h-[16rem] max-h-[24rem] flex-1 overflow-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
-        >
+        <div className="relative flex min-h-[16rem] max-h-[24rem] flex-1 flex-col">
+          <div
+            ref={listRef}
+            id={listId}
+            role="listbox"
+            aria-label="Folder contents"
+            aria-busy={loading || undefined}
+            aria-multiselectable={request.mode === "file" && request.multiple ? true : undefined}
+            aria-activedescendant={activeEntry ? optionId(activeIndex) : undefined}
+            tabIndex={0}
+            onKeyDown={onListKeyDown}
+            className="min-h-0 flex-1 overflow-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+          >
+            {ready && entries.length === 0 && (
+              <p className="px-3 py-6 text-center text-sm text-text-secondary">
+                {showHidden
+                  ? "This folder is empty"
+                  : "No visible items. Show hidden files to see more."}
+              </p>
+            )}
+            {entries.map((entry, index) => {
+              const selectable = isSelectable(entry, request);
+              const selected = ready && selectedNames.includes(entry.name);
+              return (
+                <div
+                  key={entry.name}
+                  id={optionId(index)}
+                  role="option"
+                  data-index={index}
+                  aria-selected={selected}
+                  aria-disabled={!ready || (!selectable && !isNavigable(entry)) ? true : undefined}
+                  onClick={(event) => {
+                    if (!ready) return;
+                    setActiveIndex(index);
+                    toggle(entry, event.metaKey || event.ctrlKey);
+                  }}
+                  onDoubleClick={() => open(entry)}
+                  className={cn(
+                    "flex cursor-default select-none items-center gap-2 px-3 py-1.5 text-sm",
+                    selected ? "bg-overlay-medium" : "hover:bg-overlay-subtle",
+                    ready && index === activeIndex && "bg-overlay-subtle",
+                    !ready || (!selectable && !isNavigable(entry))
+                      ? "text-text-secondary"
+                      : "text-text-primary"
+                  )}
+                >
+                  <EntryIcon entry={entry} />
+                  <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                  <span className="shrink-0 text-xs tabular-nums text-text-secondary">
+                    {formatEntrySize(entry.size)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
           {showSpinner && (
-            <div className="absolute inset-0 flex items-center justify-center">
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <Spinner size="md" />
             </div>
           )}
-          {!loading && listing && entries.length === 0 && (
-            <p className="px-3 py-6 text-center text-sm text-text-secondary">
-              {showHidden
-                ? "This folder is empty"
-                : "No visible items. Show hidden files to see more."}
-            </p>
+          {loadError !== null && !loading && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+              <p className="text-sm text-status-error" role="alert">
+                {loadError}
+              </p>
+              <Button variant="outline" size="sm" onClick={retry}>
+                Retry
+              </Button>
+            </div>
           )}
-          {entries.map((entry, index) => {
-            const selectable = isSelectable(entry, request);
-            const selected = selectedNames.includes(entry.name);
-            return (
-              <div
-                key={entry.name}
-                role="option"
-                data-index={index}
-                aria-selected={selected}
-                aria-disabled={!selectable && !isNavigable(entry) ? true : undefined}
-                onClick={(event) => {
-                  setActiveIndex(index);
-                  toggle(entry, event.metaKey || event.ctrlKey);
-                }}
-                onDoubleClick={() => open(entry)}
-                className={cn(
-                  "flex cursor-default select-none items-center gap-2 px-3 py-1.5 text-sm",
-                  selected ? "bg-overlay-medium" : "hover:bg-overlay-subtle",
-                  index === activeIndex && "bg-overlay-subtle",
-                  !selectable && !isNavigable(entry) ? "text-text-secondary" : "text-text-primary"
-                )}
-              >
-                <EntryIcon entry={entry} />
-                <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-                <span className="shrink-0 text-xs tabular-nums text-text-secondary">
-                  {formatEntrySize(entry.size)}
-                </span>
-              </div>
-            );
-          })}
         </div>
 
         <label

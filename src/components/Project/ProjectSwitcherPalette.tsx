@@ -106,7 +106,14 @@ import {
 } from "@shared/config/scratchCleanup";
 import { PathSegments } from "@/components/ui/PathSegments";
 import { OpenOnHostSubmenu } from "@/components/Hosts/OpenOnHostSubmenu";
-import { OtherHostsSection } from "@/components/Hosts/OtherHostsSection";
+import {
+  OTHER_HOSTS_LIST_ID,
+  OtherHostsSection,
+  openOtherHostProject,
+  otherHostOptionId,
+  useOtherHostProjectOptions,
+} from "@/components/Hosts/OtherHostsSection";
+import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 
 export interface ProjectSwitcherPaletteProps {
   isOpen: boolean;
@@ -2265,7 +2272,43 @@ function ProjectPaletteInner({
   const projectSwitcherShortcut = useEffectiveCombo("project.switcherPalette");
   const fleetSummary = fleetLiveness ? formatFleetLiveness(fleetLiveness) : null;
 
+  // Other hosts' projects are the tail of the arrow-key order: ArrowDown off the
+  // last result enters them, and moving past either end wraps back into
+  // `results`, the same wrap the hook applies inside them. The hook owns the
+  // selection within `results`; this cursor exists only while it sits in the
+  // band, and only for the query it was set under.
+  const hostOptions = useOtherHostProjectOptions(query);
+  const [hostCursorState, setHostCursorState] = useState<{ query: string; index: number } | null>(
+    null
+  );
+  const hostCursor =
+    hostCursorState !== null &&
+    hostCursorState.query === query &&
+    hostCursorState.index < hostOptions.length
+      ? hostCursorState.index
+      : null;
+  const setHostCursor = (index: number | null) =>
+    setHostCursorState(index === null ? null : { query, index });
+  const resultsCursor = hostCursor === null ? selectedIndex : -1;
+
+  // The hook only steps relative to its own selection (its updater composes
+  // batched steps), so returning from the band is a walk the short way round.
+  const moveResultsSelectionTo = (target: number) => {
+    const count = results.length;
+    const from = selectedIndex >= 0 && selectedIndex < count ? selectedIndex : 0;
+    const forward = (target - from + count) % count;
+    const backward = (from - target + count) % count;
+    if (forward <= backward) for (let i = 0; i < forward; i += 1) onSelectNext();
+    else for (let i = 0; i < backward; i += 1) onSelectPrevious();
+  };
+
   useEffect(() => {
+    if (hostCursor === null) return;
+    document.getElementById(otherHostOptionId(hostCursor))?.scrollIntoView?.({ block: "nearest" });
+  }, [hostCursor]);
+
+  useEffect(() => {
+    if (hostCursor !== null) return;
     if (listRef.current && selectedIndex >= 0 && selectedIndex < results.length) {
       const selectedItem = listRef.current.querySelector(
         `#project-option-${results[selectedIndex]!.id}`
@@ -2274,84 +2317,101 @@ function ProjectPaletteInner({
         selectedItem.scrollIntoView({ block: "nearest" });
       }
     }
-  }, [listRef, selectedIndex, results]);
+  }, [listRef, selectedIndex, results, hostCursor]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      switch (e.key) {
-        case "ArrowUp":
-          e.preventDefault();
-          e.stopPropagation();
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    switch (e.key) {
+      case "ArrowUp":
+        e.preventDefault();
+        e.stopPropagation();
+        if (hostCursor !== null) {
+          if (hostCursor > 0) setHostCursor(hostCursor - 1);
+          else if (results.length > 0) {
+            setHostCursor(null);
+            moveResultsSelectionTo(results.length - 1);
+          } else setHostCursor(hostOptions.length - 1);
+        } else if (hostOptions.length > 0 && (results.length === 0 || selectedIndex <= 0)) {
+          setHostCursor(hostOptions.length - 1);
+        } else {
           onSelectPrevious();
-          break;
-        case "ArrowDown":
-          e.preventDefault();
-          e.stopPropagation();
-          onSelectNext();
-          break;
-        case "Enter":
-          e.preventDefault();
-          e.stopPropagation();
-          if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-            const selected = results[selectedIndex]!;
-            // Anything ⌘↵ can't open a window for falls through to the plain
-            // switch rather than swallowing the keypress.
-            if (
-              (e.metaKey || e.ctrlKey) &&
-              onSelectNewWindow &&
-              modEnterOpensWindow(selected, true)
-            ) {
-              onSelectNewWindow(selected);
-            } else {
-              onSelect(selected, "keyboard");
-            }
-          }
-          break;
-        case "Escape":
-          // An IME spends Escape cancelling its candidate; leave the query alone.
-          if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) break;
-          // Anchored mode leaves Escape entirely to the shell, which spends the
-          // first press clearing the query. Closing here would beat that: this
-          // runs on bubble, after Radix's capture-phase dismissal has already
-          // been vetoed, so the palette would shut on a press meant to filter.
-          if (mode === "dropdown") break;
-          e.preventDefault();
-          e.stopPropagation();
-          // The dialog spends its first press the same way the shell does.
-          if (query !== "") onQueryChange("");
-          else onClose();
-          break;
-        case "Backspace": {
-          // Projects only. Both paths confirm now, but the chord means "close
-          // the project" — pointing it at a scratch row would overload one key
-          // with a reversible close and an irreversible delete.
-          const target = results[selectedIndex];
-          if ((e.metaKey || e.ctrlKey) && onCloseProject && target?.kind === "project") {
-            e.preventDefault();
-            e.stopPropagation();
-            onCloseProject(target.id);
-          }
-          break;
         }
+        break;
+      case "ArrowDown":
+        e.preventDefault();
+        e.stopPropagation();
+        if (hostCursor !== null) {
+          if (hostCursor < hostOptions.length - 1) setHostCursor(hostCursor + 1);
+          else if (results.length > 0) {
+            setHostCursor(null);
+            moveResultsSelectionTo(0);
+          } else setHostCursor(0);
+        } else if (
+          hostOptions.length > 0 &&
+          (results.length === 0 || selectedIndex >= results.length - 1)
+        ) {
+          setHostCursor(0);
+        } else {
+          onSelectNext();
+        }
+        break;
+      case "Enter":
+        e.preventDefault();
+        e.stopPropagation();
+        if (hostCursor !== null) {
+          // Same modifier as a click on the row: a new window on ⌘/Ctrl.
+          onClose();
+          openOtherHostProject(hostOptions[hostCursor]!, isNewWindowClick(e));
+        } else if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
+          const selected = results[selectedIndex]!;
+          // Anything ⌘↵ can't open a window for falls through to the plain
+          // switch rather than swallowing the keypress.
+          if (
+            (e.metaKey || e.ctrlKey) &&
+            onSelectNewWindow &&
+            modEnterOpensWindow(selected, true)
+          ) {
+            onSelectNewWindow(selected);
+          } else {
+            onSelect(selected, "keyboard");
+          }
+        }
+        break;
+      case "Escape":
+        // An IME spends Escape cancelling its candidate; leave the query alone.
+        if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) break;
+        // Anchored mode leaves Escape entirely to the shell, which spends the
+        // first press clearing the query. Closing here would beat that: this
+        // runs on bubble, after Radix's capture-phase dismissal has already
+        // been vetoed, so the palette would shut on a press meant to filter.
+        if (mode === "dropdown") break;
+        e.preventDefault();
+        e.stopPropagation();
+        // The dialog spends its first press the same way the shell does.
+        if (query !== "") onQueryChange("");
+        else onClose();
+        break;
+      case "Backspace": {
+        // Projects only. Both paths confirm now, but the chord means "close
+        // the project" — pointing it at a scratch row would overload one key
+        // with a reversible close and an irreversible delete.
+        const target = hostCursor === null ? results[selectedIndex] : undefined;
+        if ((e.metaKey || e.ctrlKey) && onCloseProject && target?.kind === "project") {
+          e.preventDefault();
+          e.stopPropagation();
+          onCloseProject(target.id);
+        }
+        break;
       }
-    },
-    [
-      results,
-      selectedIndex,
-      mode,
-      query,
-      onQueryChange,
-      onSelectPrevious,
-      onSelectNext,
-      onSelect,
-      onSelectNewWindow,
-      onClose,
-      onCloseProject,
-    ]
-  );
+    }
+  };
 
-  const activeResult = results[selectedIndex];
-  const activeDescendant = activeResult ? `project-option-${activeResult.id}` : undefined;
+  const activeResult = hostCursor === null ? results[selectedIndex] : undefined;
+  const activeDescendant =
+    hostCursor !== null
+      ? otherHostOptionId(hostCursor)
+      : activeResult
+        ? `project-option-${activeResult.id}`
+        : undefined;
   // The RANKED list owns the scratches, and it trails the box by a commit.
   // Hiding the pinned section on the live query instead would blank them for
   // that frame — and for a user whose only workspaces are scratches, that frame
@@ -2388,7 +2448,9 @@ function ProjectPaletteInner({
           aria-expanded={true}
           aria-haspopup="listbox"
           aria-label="Search workspaces"
-          aria-controls="project-list"
+          aria-controls={
+            hostOptions.length > 0 ? `project-list ${OTHER_HOSTS_LIST_ID}` : "project-list"
+          }
           aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>
@@ -2433,7 +2495,7 @@ function ProjectPaletteInner({
         <ProjectListContent
           results={results}
           browseBands={browseBands}
-          selectedIndex={selectedIndex}
+          selectedIndex={resultsCursor}
           query={query}
           onSelect={onSelect}
           listRef={listRef}
@@ -2468,7 +2530,7 @@ function ProjectPaletteInner({
             />
           </>
         )}
-        <OtherHostsSection query={query} onChosen={onClose} />
+        <OtherHostsSection options={hostOptions} activeIndex={hostCursor} onChosen={onClose} />
       </AppPaletteDialog.Body>
 
       {(onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder) && (

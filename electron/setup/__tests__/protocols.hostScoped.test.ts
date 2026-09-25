@@ -25,6 +25,7 @@ const {
   registerDaintreeMediaProtocol,
   registerDaintreePdfProtocol,
   serveContainedFileRequest,
+  serveOpenedContainedFile,
   setHostFileRequestProxy,
 } = await import("../protocols.js");
 
@@ -45,6 +46,8 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
 });
 
+const CAP = "0123456789abcdef0123456789abcdef";
+
 function query(filePath: string, root: string): string {
   return `?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(root)}`;
 }
@@ -59,13 +62,13 @@ describe("parseHostScopedFileUrl", () => {
   it("reads the host from a host-scoped URL on every scheme", () => {
     expect(
       parseHostScopedFileUrl(`daintree-file://host/studio-01/load${query("/a", "/")}`)
-    ).toEqual({ hostId: "studio-01" });
+    ).toEqual({ hostId: "studio-01", viewCapability: null });
     expect(
-      parseHostScopedFileUrl(`daintree-media://host/studio-01/load/${query("/a", "/")}`)
-    ).toEqual({ hostId: "studio-01" });
-    expect(parseHostScopedFileUrl(`daintree-pdf://host/Mac.lan/load${query("/a", "/")}`)).toEqual({
-      hostId: "Mac.lan",
-    });
+      parseHostScopedFileUrl(`daintree-media://host/studio-01/${CAP}/load/${query("/a", "/")}`)
+    ).toEqual({ hostId: "studio-01", viewCapability: CAP });
+    expect(
+      parseHostScopedFileUrl(`daintree-pdf://host/Mac.lan/${CAP}/load${query("/a", "/")}`)
+    ).toEqual({ hostId: "Mac.lan", viewCapability: CAP });
   });
 
   it("refuses a host-scoped URL it can't read rather than treating it as local", () => {
@@ -78,6 +81,9 @@ describe("parseHostScopedFileUrl", () => {
     expect(parseHostScopedFileUrl(`daintree-file://host/studio/other${query("/a", "/")}`)).toBe(
       "malformed"
     );
+    expect(
+      parseHostScopedFileUrl(`daintree-file://host/studio/NOT-A-CAP/load${query("/a", "/")}`)
+    ).toBe("malformed");
   });
 });
 
@@ -99,13 +105,17 @@ describe("host-scoped routing", () => {
     offProxy = setHostFileRequestProxy(proxy);
     const file = path.join(dir, "note.txt");
     for (const [scheme, url] of [
-      ["daintree-file", `daintree-file://host/studio-01/load${query(file, dir)}`],
-      ["daintree-media", `daintree-media://host/studio-01/load/${query(file, dir)}`],
-      ["daintree-pdf", `daintree-pdf://host/studio-01/load${query(file, dir)}`],
+      ["daintree-file", `daintree-file://host/studio-01/${CAP}/load${query(file, dir)}`],
+      ["daintree-media", `daintree-media://host/studio-01/${CAP}/load/${query(file, dir)}`],
+      ["daintree-pdf", `daintree-pdf://host/studio-01/${CAP}/load${query(file, dir)}`],
     ] as const) {
       const response = await handlers.get(scheme)!(new Request(url));
       expect(await response.text()).toBe("host bytes");
-      expect(proxy).toHaveBeenLastCalledWith(scheme, "studio-01", expect.any(Request));
+      expect(proxy).toHaveBeenLastCalledWith(
+        scheme,
+        { hostId: "studio-01", viewCapability: CAP },
+        expect.any(Request)
+      );
     }
   });
 
@@ -165,5 +175,73 @@ describe("serveContainedFileRequest", () => {
     } finally {
       await fs.rm(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe("serveOpenedContainedFile", () => {
+  async function serve(
+    scheme: "daintree-file" | "daintree-media" | "daintree-pdf",
+    name: string,
+    init: RequestInit = {},
+    admitBuffered?: (bytes: number) => boolean
+  ) {
+    const file = path.join(dir, name);
+    const handle = await fs.open(file, "r");
+    const close = vi.spyOn(handle, "close");
+    const response = await serveOpenedContainedFile(
+      scheme,
+      handle,
+      file,
+      new Request(`${scheme}://load?path=x&root=y`, init),
+      admitBuffered
+    );
+    return { response, close };
+  }
+
+  it("serves a buffered file from the descriptor with the local headers", async () => {
+    const { response, close } = await serve("daintree-file", "note.txt");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-security-policy")).toContain("sandbox");
+    expect(await response.text()).toBe("local bytes");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("answers HEAD from the descriptor's size without reading or reserving", async () => {
+    const admit = vi.fn(() => true);
+    const { response } = await serve("daintree-file", "note.txt", { method: "HEAD" }, admit);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-length")).toBe(String("local bytes".length));
+    expect(admit).not.toHaveBeenCalled();
+  });
+
+  it("asks for the buffered bytes before reading and answers 503 when refused", async () => {
+    const admit = vi.fn(() => false);
+    const { response, close } = await serve("daintree-file", "note.txt", {}, admit);
+    expect(admit).toHaveBeenCalledWith("local bytes".length);
+    expect(response.status).toBe(503);
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("refuses an oversized file on its size, before reading", async () => {
+    await fs.writeFile(path.join(dir, "big.txt"), Buffer.alloc(512 * 1024 + 1));
+    const admit = vi.fn(() => true);
+    const { response } = await serve("daintree-file", "big.txt", {}, admit);
+    expect(response.status).toBe(413);
+    expect(admit).not.toHaveBeenCalled();
+  });
+
+  it("keeps the PDF and media gates", async () => {
+    expect((await serve("daintree-pdf", "note.txt")).response.status).toBe(415);
+    expect((await serve("daintree-media", "note.txt")).response.status).toBe(404);
+  });
+
+  it("streams media ranges from the descriptor", async () => {
+    await fs.writeFile(path.join(dir, "clip.mp4"), Buffer.from("0123456789"));
+    const { response } = await serve("daintree-media", "clip.mp4", {
+      headers: { range: "bytes=2-5" },
+    });
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe("bytes 2-5/10");
+    expect(await response.text()).toBe("2345");
   });
 });

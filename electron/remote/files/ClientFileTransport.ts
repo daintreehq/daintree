@@ -32,8 +32,8 @@ export interface ClientFileTransportOptions {
 }
 
 export interface DownloadOptions {
-  /** The view asking: its endpoint is tried first. */
-  webContentsId?: number;
+  /** The view asking: the download runs under its own endpoint on the host, never another's. */
+  webContentsId: number;
   destinationDir: string;
   onProgress?: (receivedBytes: number, totalBytes: number) => void;
   signal?: AbortSignal;
@@ -171,14 +171,19 @@ export class ClientFileTransport {
     if (link.endpoints.size === 0) this.hosts.delete(hostId);
   }
 
-  /** This Shell's endpoints on the host, the asking view's first. */
-  endpointIdsFor(hostId: HostId, webContentsId?: number): string[] {
+  /**
+   * The asking view's own endpoint on the host (its newest, after a rebind),
+   * or null. Never another view's: the host authorizes a file call against
+   * exactly this endpoint's project and lease.
+   */
+  endpointFor(hostId: HostId, webContentsId: number): string | null {
     const link = this.hosts.get(hostId);
-    if (!link) return [];
-    const ids = [...link.endpoints.keys()];
-    if (webContentsId === undefined) return ids.slice(0, 64);
-    const own = ids.filter((id) => link.endpoints.get(id) === webContentsId);
-    return [...own, ...ids.filter((id) => !own.includes(id))].slice(0, 64);
+    if (!link) return null;
+    let found: string | null = null;
+    for (const [endpointId, owner] of link.endpoints) {
+      if (owner === webContentsId) found = endpointId;
+    }
+    return found;
   }
 
   private sessionFor(hostId: HostId): LinkSession {
@@ -215,14 +220,14 @@ export class ClientFileTransport {
 
   async request(
     hostId: HostId,
-    payload: Omit<FileRequestPayload, "endpointIds">,
-    webContentsId?: number
+    payload: Omit<FileRequestPayload, "endpointId">,
+    webContentsId: number
   ): Promise<FileResponse> {
-    const endpointIds = this.endpointIdsFor(hostId, webContentsId);
-    if (endpointIds.length === 0) throw disconnected(hostId);
+    const endpointId = this.endpointFor(hostId, webContentsId);
+    if (endpointId === null) throw disconnected(hostId);
     const answer = await this.sessionFor(hostId).call(FileLinkMethod.REQUEST, {
       ...payload,
-      endpointIds,
+      endpointId,
     });
     return FileResponseSchema.parse(answer);
   }
@@ -314,8 +319,8 @@ export class ClientFileTransport {
     const { signal } = options;
     if (signal?.aborted) throw new AppError({ code: "CANCELLED", message: "Download cancelled" });
     const session = this.sessionFor(hostId);
-    const endpointIds = this.endpointIdsFor(hostId, options.webContentsId);
-    if (endpointIds.length === 0) throw disconnected(hostId);
+    const endpointId = this.endpointFor(hostId, options.webContentsId);
+    if (endpointId === null) throw disconnected(hostId);
 
     const token = newToken();
     const destination = `${DOWNLOAD_SINK_PREFIX}${token}`;
@@ -349,8 +354,18 @@ export class ClientFileTransport {
       return {
         async write(chunk) {
           if (signal?.aborted) throw new Error("cancelled");
-          await handle.write(chunk);
-          written += chunk.byteLength;
+          // A write may take fewer bytes than offered; count only what reached the file.
+          for (let offset = 0; offset < chunk.byteLength;) {
+            const { bytesWritten } = await handle.write(
+              chunk,
+              offset,
+              chunk.byteLength - offset,
+              written
+            );
+            if (bytesWritten <= 0) throw new Error("The download could not be written");
+            offset += bytesWritten;
+            written += bytesWritten;
+          }
           try {
             options.onProgress?.(written, begin.size);
           } catch {
@@ -358,10 +373,24 @@ export class ClientFileTransport {
           }
         },
         async commit() {
-          await close();
+          let savedBytes: number;
+          try {
+            await handle.sync();
+            savedBytes = (await handle.stat()).size;
+          } finally {
+            await close();
+          }
           // Cancelled after the last byte: never place it.
           if (signal?.aborted) throw new Error("cancelled");
           try {
+            // The checksum covers what arrived, not what landed on disk.
+            if (savedBytes !== written || written !== begin.size) {
+              throw new AppError({
+                code: "INTERNAL",
+                message: "The saved download is not the size that was sent",
+                userMessage: "The download couldn't be saved completely. Try again.",
+              });
+            }
             const localPath = await placeUnique(partPath, options.destinationDir, name);
             settle.resolve({ localPath, bytes: written });
           } catch (error) {
@@ -402,7 +431,7 @@ export class ClientFileTransport {
       FileDownloadStartSchema.parse(
         await session.call(
           FileLinkMethod.DOWNLOAD,
-          { endpointIds, hostPath, token },
+          { endpointId, hostPath, token },
           { timeoutMs, signal }
         )
       );

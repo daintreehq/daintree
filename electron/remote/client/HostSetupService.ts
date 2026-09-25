@@ -120,11 +120,12 @@ export class HostSetupService {
   }
 
   async planInstall(payload: PlanInstallPayload): Promise<HostInstallPlan> {
-    const probe = await this.probe(payload);
+    const outcome = await this.probeOutcome(requireTarget(payload));
     return planInstall({
       client: this.deps.clientBuild(),
-      probe,
+      probe: outcome.result,
       linuxPackage: payload.linuxPackage,
+      appImageConflict: outcome.parsed?.appImageConflict ?? null,
     });
   }
 

@@ -36,6 +36,7 @@ vi.mock("@/utils/logger", () => ({
 import { HostChip } from "../HostChip";
 import { _resetHostListForTesting } from "../hostList";
 import { requestHostMenu } from "../hostMenuRequests";
+import { takePendingHostUpdate } from "@/components/Settings/Hosts/hostUpdateRequests";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { _resetDriveLeaseBannerForTesting } from "@/components/Recovery/driveLeaseState";
 
@@ -247,6 +248,28 @@ describe("HostChip", () => {
       await renderWithHosts([host("h1", "studio-01")]);
       const menu = await openMenu();
       expect(menu.textContent).toContain("Update studio-01");
+    } finally {
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+    }
+  });
+
+  it("routes Update <host> to that host's own update flow", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "h1" };
+    try {
+      useHostConnectionStore.setState({
+        hostId: "h1",
+        hostName: "studio-01",
+        connection: {
+          status: "version-mismatch",
+          mismatch: { kind: "version", local: "1.4.0", remote: "1.3.0" },
+          remote: { ...HANDSHAKE, version: "1.3.0" },
+        },
+      });
+      await renderWithHosts([host("h1", "studio-01")]);
+      await openMenu();
+      fireEvent.click(screen.getByText("Update studio-01"));
+      expect(takePendingHostUpdate()).toBe("h1");
+      expect(dispatch).toHaveBeenCalledWith("host.add", undefined, { source: "user" });
     } finally {
       delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
     }

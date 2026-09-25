@@ -140,6 +140,7 @@ import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
 import { startHostRuntime } from "./boot/hostBootstrap.js";
 import { isHostModeRequested, resolveHostModeLaunch } from "./boot/hostModeLaunch.js";
 import { isRemoteHostsSupported } from "./remote/buildGate.js";
+import { getRemoteService } from "./remote/runtime.js";
 
 // CRITICAL: Run IPC sender validation before any handlers are registered
 enforceIpcSenderValidation();
@@ -397,6 +398,19 @@ if (!gotTheLock) {
   // a second launch before then doesn't open a window of its own.
   let launchSettled = false;
   let stopRemoteHosts: (() => Promise<void>) | null = null;
+  // A later `--host-mode` launch (login item, systemd unit, a Shell starting
+  // Host mode over SSH) hands over to this process: it serves as a host until
+  // quit, without changing the setting. Kept apart from `hostModeLaunch`,
+  // which also means "this launch opens no window".
+  let hostModeHandedOff = false;
+  let remoteHostsStarted = false;
+  const listenForHandedOffHostMode = (): void => {
+    getRemoteService("hostMode")
+      ?.startListening()
+      .catch((error: unknown) => {
+        console.error("[MAIN] Host mode requested by a second launch failed to start:", error);
+      });
+  };
 
   function ensureFocusThrottle(): void {
     if (focusThrottleInitialized) return;
@@ -861,8 +875,15 @@ if (!gotTheLock) {
     onCreateWindow: () => createWindow().then(() => {}),
     getMainWindow,
     windowRegistry,
-    isHostModeActive: () => hostModeLaunch || isHostModeEnabled(),
+    isHostModeActive: () => hostModeLaunch || hostModeHandedOff || isHostModeEnabled(),
     isLaunchSettled: () => launchSettled,
+    onHostModeRequested: isRemoteHostsSupported()
+      ? () => {
+          hostModeHandedOff = true;
+          // Before the remote runtime is up, its startup reads the flag instead.
+          if (remoteHostsStarted) listenForHandedOffHostMode();
+        }
+      : undefined,
   });
 
   registerShutdownHandler({
@@ -1120,8 +1141,11 @@ if (!gotTheLock) {
               return id;
             });
             await remoteHosts.startRemoteHosts({
-              hostMode: hostModeLaunch || isHostModeEnabled(),
+              hostMode: hostModeLaunch || hostModeHandedOff || isHostModeEnabled(),
             });
+            remoteHostsStarted = true;
+            // A handoff that landed while the start was in flight.
+            if (hostModeHandedOff) listenForHandedOffHostMode();
           } catch (error) {
             console.error("[MAIN] Remote Hosts failed to start:", error);
           }

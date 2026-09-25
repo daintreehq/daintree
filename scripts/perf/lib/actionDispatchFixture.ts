@@ -462,6 +462,32 @@ function probeDefinitions(): unknown[] {
 // --- Catalog ----------------------------------------------------------------
 
 /**
+ * Built-in actions listed only once this machine has added a remote host: their
+ * `isVisible` reads the renderer's host list, which is filled over IPC this
+ * bundle has no `window.electron` for. So the fully-loaded window here is one
+ * with no hosts, which is also every user who never sets one up, and these must
+ * be absent from its listing. Named rather than derived from `isVisible`, so a
+ * predicate that starts hiding anything else still scores as a miss.
+ */
+export const HOST_GATED_ACTION_IDS: ReadonlySet<string> = new Set([
+  "host.switch",
+  "project.openOnHost",
+]);
+
+const CLONE_ID_MARKER = "#perfclone";
+
+/** The shipped id a scaling clone was copied from, or the id itself. */
+function sourceActionId(id: string): string {
+  const marker = id.indexOf(CLONE_ID_MARKER);
+  return marker === -1 ? id : id.slice(0, marker);
+}
+
+/** Registered ids a no-host `FULL_CONTEXT` listing must not contain. */
+export function isHostGatedActionId(id: string): boolean {
+  return HOST_GATED_ACTION_IDS.has(sourceActionId(id));
+}
+
+/**
  * What one definition declares about itself, read off the definition OBJECT
  * before it is handed to `register()`.
  *
@@ -551,6 +577,12 @@ export interface CatalogService {
    * correct — the fastest sweep and the best slope the harness can record.
    */
   registeredIds: readonly string[];
+  /**
+   * The subset of `registeredIds` a `list(FULL_CONTEXT)` owes back: every one
+   * except the {@link HOST_GATED_ACTION_IDS} (and their clones), which a
+   * window with no remote host must not list at all.
+   */
+  listedIds: readonly string[];
   /** Per-id declaration, read off the definitions rather than the manifest. */
   expectations: ReadonlyMap<string, SurfaceExpectation>;
   /** Time spent building the definition objects from their factories. */
@@ -598,7 +630,7 @@ export function buildCatalogService(
     const originals = definitions.slice(0, definitions.length);
     for (let i = 0; i < clones; i += 1) {
       const source = originals[i % originals.length] as { id: string };
-      definitions.push({ ...source, id: `${source.id}#perfclone${i}` });
+      definitions.push({ ...source, id: `${source.id}${CLONE_ID_MARKER}${i}` });
     }
   }
   const factoryMs = performance.now() - factoryStart;
@@ -627,6 +659,7 @@ export function buildCatalogService(
     service,
     actionCount: definitions.length,
     registeredIds,
+    listedIds: registeredIds.filter((id) => !isHostGatedActionId(id)),
     expectations,
     factoryMs,
     registerMs,

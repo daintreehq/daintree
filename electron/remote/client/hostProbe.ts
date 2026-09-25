@@ -33,8 +33,10 @@ export const LINUX_UNIT_NAME = "daintree-host.service";
 const MARK = "@@dt:";
 
 /**
- * An AppImage is compressed, so its build can't be read out of it. An install
- * from here writes the build marker next to it instead.
+ * An AppImage is compressed, so grep can't read its build out of it. An
+ * install from here extracts the marker from the image itself and writes what
+ * it read next to it; the probe trusts that file only while it is newer than
+ * the image, so an image replaced by hand afterwards reads as unknown.
  */
 export const APPIMAGE_BUILD_INFO_SUFFIX = ".build-info.json";
 
@@ -78,12 +80,18 @@ export function buildHostProbeScript(): string {
     `if [ -d ${DEB_INSTALL_DIR} ]; then echo "${MARK}install deb ${DEB_INSTALL_DIR}"`,
     `echo "${MARK}version $(dpkg-query -W -f='\${Version}' daintree 2>/dev/null)"`,
     `${buildInfoRead(`${DEB_INSTALL_DIR}/resources/app.asar`)}; fi`,
-    `for f in "$HOME"/Applications/Daintree*.AppImage "$HOME"/Applications/daintree*.AppImage; do if [ -f "$f" ]; then b=""; if [ -f "$f${APPIMAGE_BUILD_INFO_SUFFIX}" ]; then b=$(head -c 512 "$f${APPIMAGE_BUILD_INFO_SUFFIX}"); fi; echo "${MARK}appimage $f"; echo "${MARK}appimageinfo $b"; fi; done`,
+    // Which AppImage is actually in use: the one the Daintree unit starts, and
+    // the one the running process was started from (AppImage runtimes export
+    // APPIMAGE). File names say nothing reliable about that.
+    `u=""; if [ -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" ]; then u=$(sed -n 's/^ExecStart="\\([^"]*\\)".*/\\1/p' "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" | head -n 1); echo "${MARK}unitexec $u"; fi`,
+    `r=""; p=$(pgrep -u "$(id -u)" -o -x daintree 2>/dev/null); if [ -n "$p" ]; then r=$(tr '\\000' '\\n' < "/proc/$p/environ" 2>/dev/null | sed -n 's/^APPIMAGE=//p' | head -n 1); echo "${MARK}runningappimage $r"; fi`,
+    `for f in "$HOME"/Applications/Daintree*.AppImage "$HOME"/Applications/daintree*.AppImage "$u" "$r"; do case "$f" in /*.AppImage) if [ -f "$f" ]; then b=""; i="$f${APPIMAGE_BUILD_INFO_SUFFIX}"; if [ -f "$i" ] && [ "$i" -nt "$f" ]; then b=$(head -c 512 "$i"); fi; echo "${MARK}appimage $f"; echo "${MARK}appimageinfo $b"; fi ;; esac; done`,
     `if pgrep -x daintree >/dev/null 2>&1; then echo "${MARK}running yes"; fi`,
     `echo "${MARK}sleep $(systemctl is-enabled sleep.target 2>/dev/null)"`,
     `if [ -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" ]; then echo "${MARK}unit yes"; else echo "${MARK}unit no"; fi`,
     `echo "${MARK}linger $(loginctl show-user "$(id -un)" -p Linger 2>/dev/null)"`,
-    `if pgrep -x gnome-keyring-d >/dev/null 2>&1 || pgrep -x kwalletd5 >/dev/null 2>&1 || pgrep -x kwalletd6 >/dev/null 2>&1; then echo "${MARK}keyring running"; else echo "${MARK}keyring none"; fi`,
+    // Only this SSH user's processes: another user's keyring is no use here.
+    `k=none; for n in gnome-keyring-d kwalletd5 kwalletd6; do if pgrep -u "$(id -u)" -x $n >/dev/null 2>&1; then k=$n; break; fi; done; echo "${MARK}keyring $k"`,
   ].join("; ");
   return [
     `echo "${MARK}uname $(uname -sm)"`,
@@ -99,6 +107,13 @@ export interface ParsedProbe {
   arch: HostArch | null;
   install: HostInstallInfo | null;
   appImages: string[];
+  /**
+   * Set when more than one AppImage could be the one in use and nothing on the
+   * host says which; an update then refuses rather than guess.
+   */
+  appImageConflict: string | null;
+  /** The keyring process seen running for the SSH user, if any. */
+  keyringProcess: string | null;
   appRunning: boolean;
   hostModeListening: boolean;
   hostPid: number | null;
@@ -119,6 +134,37 @@ function versionFromAppImage(filePath: string): string | null {
   const match =
     /^daintree-(\d[0-9A-Za-z.+-]*?)(?:-(?:x86_64|arm64|aarch64|amd64))?\.AppImage$/i.exec(name);
   return match?.[1] ?? null;
+}
+
+function versionParts(version: string): { core: number[]; pre: string | null } {
+  const [core = "", ...rest] = version.split("-");
+  return {
+    core: core.split(".").map((part) => Number.parseInt(part, 10) || 0),
+    pre: rest.length > 0 ? rest.join("-") : null,
+  };
+}
+
+/** Semver-ish ordering, so 1.10.0 sorts after 1.9.0 and a release after its prereleases. */
+export function compareVersions(a: string, b: string): number {
+  const left = versionParts(a);
+  const right = versionParts(b);
+  for (let i = 0; i < Math.max(left.core.length, right.core.length); i++) {
+    const diff = (left.core[i] ?? 0) - (right.core[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  if (left.pre === right.pre) return 0;
+  if (left.pre === null) return 1;
+  if (right.pre === null) return -1;
+  return left.pre.localeCompare(right.pre, "en", { numeric: true });
+}
+
+/** A path as the unit file quotes it (see systemdQuote in host/startAtLogin.ts). */
+function systemdUnquote(value: string): string {
+  return value.replace(/%%|\$\$|\\\\/g, (m) => (m === "%%" ? "%" : m === "$$" ? "$" : "\\"));
+}
+
+function isAppImagePath(value: string | null): value is string {
+  return !!value && value.startsWith("/") && value.endsWith(".AppImage");
 }
 
 function parseBuildInfo(text: string): { version: string; commit: string } | null {
@@ -162,7 +208,11 @@ export function parseHostProbe(stdout: string): ParsedProbe {
     os === "Darwin" ? "darwin" : os === "Linux" ? "linux" : null;
   const arch = archFromMachine(machine);
 
-  const appImages = (values.get("appimage") ?? []).filter((p) => p.startsWith("/"));
+  const appImages = [...new Set((values.get("appimage") ?? []).filter((p) => p.startsWith("/")))];
+  const unitExec = one("unitexec");
+  const unitImage = unitExec ? systemdUnquote(unitExec) : null;
+  const runningImage = one("runningappimage");
+  let appImageConflict: string | null = null;
   const installLine = one("install");
   const build = parseBuildInfo(one("buildinfo") ?? "");
   let install: HostInstallInfo | null = null;
@@ -178,15 +228,37 @@ export function parseHostProbe(stdout: string): ParsedProbe {
       commit: build?.commit ?? null,
       packaging: kind === "app-bundle" ? "app-bundle" : kind === "deb" ? "deb" : "unknown",
     };
-  } else if (appImages.length > 0) {
-    const newest = [...appImages].sort().at(-1)!;
-    const marker = parseBuildInfo(appImageInfo.get(newest) ?? "");
-    install = {
-      path: newest,
-      version: marker?.version ?? versionFromAppImage(newest),
-      commit: marker?.commit ?? null,
-      packaging: "appimage",
+  } else {
+    const fromUnit = isAppImagePath(unitImage) ? unitImage : null;
+    const fromProcess = isAppImagePath(runningImage) ? runningImage : null;
+    let active: string | null = fromUnit ?? fromProcess;
+    if (fromUnit && fromProcess && fromUnit !== fromProcess) {
+      appImageConflict = `The Host mode service starts ${fromUnit}, but Daintree is running from ${fromProcess}.`;
+      active = null;
+    } else if (!active && appImages.length > 1) {
+      appImageConflict = `There are ${appImages.length} Daintree AppImages in ~/Applications and nothing shows which one is used. Keep only one there, then check again.`;
+    } else if (!active && appImages.length === 1) {
+      active = appImages[0]!;
+    }
+    const describe = (imagePath: string): HostInstallInfo => {
+      const marker = parseBuildInfo(appImageInfo.get(imagePath) ?? "");
+      return {
+        path: imagePath,
+        version: marker?.version ?? versionFromAppImage(imagePath),
+        commit: marker?.commit ?? null,
+        packaging: "appimage",
+      };
     };
+    if (active) {
+      install = describe(active);
+    } else if (appImages.length > 0) {
+      // Shown only: an update refuses while the conflict stands.
+      install = appImages
+        .map(describe)
+        .reduce((best, next) =>
+          compareVersions(next.version ?? "0", best.version ?? "0") > 0 ? next : best
+        );
+    }
   }
 
   const sleepObserved = one("sleep") || null;
@@ -216,6 +288,8 @@ export function parseHostProbe(stdout: string): ParsedProbe {
     arch,
     install,
     appImages,
+    appImageConflict,
+    keyringProcess: keyringText && keyringText !== "none" ? keyringText : null,
     appRunning: one("running") === "yes",
     hostModeListening: one("listening") === "yes",
     hostPid: hostPidText && /^\d{1,10}$/.test(hostPidText) ? Number(hostPidText) : null,
@@ -225,9 +299,9 @@ export function parseHostProbe(stdout: string): ParsedProbe {
       sleepDisabled,
       keyring:
         platform === "linux" && keyringText
-          ? keyringText === "running"
-            ? "running"
-            : "not-running"
+          ? keyringText === "none"
+            ? "not-running"
+            : "running"
           : null,
       linger,
       hostModeUnit: platform === "linux" ? one("unit") === "yes" : null,
@@ -328,7 +402,8 @@ export async function probeHost(params: {
       appRunning: parsed.appRunning || parsed.hostModeListening,
       appImages: parsed.appImages,
       canDownload: parsed.canDownload,
-      matchesClient: installMatches(parsed.install, params.client),
+      // Which AppImage runs is unknown, so whether it matches is too.
+      matchesClient: parsed.appImageConflict ? null : installMatches(parsed.install, params.client),
       advice: parsed.advice,
     },
   };
