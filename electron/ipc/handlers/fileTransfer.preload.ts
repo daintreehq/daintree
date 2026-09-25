@@ -7,6 +7,9 @@ export const FILE_TRANSFER_METHOD_CHANNELS = {
   cancel: "file-transfer:cancel",
   answerHostPick: "file-transfer:answer-host-pick",
   getPreviewCapability: "file-transfer:get-preview-capability",
+  statLocalFile: "file-transfer:stat-local-file",
+  getUploadPreferences: "file-transfer:get-upload-preferences",
+  setUploadPreferences: "file-transfer:set-upload-preferences",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof FILE_TRANSFER_METHOD_CHANNELS;

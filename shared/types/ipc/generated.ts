@@ -437,12 +437,24 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: string | null;
   };
+  "file-transfer:get-upload-preferences": {
+    args: [];
+    result: import("./fileTransfer.js").UploadPreferences;
+  };
+  "file-transfer:set-upload-preferences": {
+    args: [patch: Partial<import("./fileTransfer.js").UploadPreferences>];
+    result: import("./fileTransfer.js").UploadPreferences;
+  };
+  "file-transfer:stat-local-file": {
+    args: [payload: { localPath: string }];
+    result: import("./fileTransfer.js").LocalFileStat | null;
+  };
   "file-transfer:upload-bytes": {
-    args: [_payload: import("./fileTransfer.js").UploadBytesPayload];
+    args: [payload: import("./fileTransfer.js").UploadBytesPayload];
     result: import("./fileTransfer.js").UploadResult;
   };
   "file-transfer:upload-local-file": {
-    args: [_payload: import("./fileTransfer.js").UploadLocalFilePayload];
+    args: [payload: import("./fileTransfer.js").UploadLocalFilePayload];
     result: import("./fileTransfer.js").UploadResult;
   };
   "file-watch:fingerprint": {

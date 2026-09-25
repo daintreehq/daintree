@@ -109,6 +109,19 @@ describe("resolveTransferSources", () => {
     expect(sources).toEqual([{ kind: "host", path: "/repo/a.ts" }]);
   });
 
+  it("keeps the host a remote window's tree drag names", () => {
+    const sources = resolveTransferSources(
+      transfer({ internal: encodeFileDragPaths(["/srv/a.ts"], "studio-02") })
+    );
+
+    expect(sources).toEqual([{ kind: "host", path: "/srv/a.ts", hostId: "studio-02" }]);
+    expect(toMaterializeSource(sources[0]!)).toEqual({
+      kind: "host-file",
+      path: "/srv/a.ts",
+      hostId: "studio-02",
+    });
+  });
+
   it("treats a malformed in-app payload as an empty drop, not an OS drop", () => {
     const sources = resolveTransferSources(
       transfer({ files: [fileAt("os.ts", "/Users/test/os.ts")], internal: "not json" })

@@ -230,6 +230,15 @@ export interface GeneratedElectronAPI {
     getPreviewCapability(
       ...args: IpcInvokeMap["file-transfer:get-preview-capability"]["args"]
     ): Promise<IpcInvokeMap["file-transfer:get-preview-capability"]["result"]>;
+    getUploadPreferences(
+      ...args: IpcInvokeMap["file-transfer:get-upload-preferences"]["args"]
+    ): Promise<IpcInvokeMap["file-transfer:get-upload-preferences"]["result"]>;
+    setUploadPreferences(
+      ...args: IpcInvokeMap["file-transfer:set-upload-preferences"]["args"]
+    ): Promise<IpcInvokeMap["file-transfer:set-upload-preferences"]["result"]>;
+    statLocalFile(
+      ...args: IpcInvokeMap["file-transfer:stat-local-file"]["args"]
+    ): Promise<IpcInvokeMap["file-transfer:stat-local-file"]["result"]>;
     uploadBytes(
       ...args: IpcInvokeMap["file-transfer:upload-bytes"]["args"]
     ): Promise<IpcInvokeMap["file-transfer:upload-bytes"]["result"]>;

@@ -57,7 +57,8 @@ import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
-import { resolveHostTmpDir } from "@/hooks/useHostPlatform";
+import { isRemoteWindow, resolveHostTmpDir } from "@/hooks/useHostPlatform";
+import { agentClipboardDirectory } from "@shared/types/agentSettings";
 
 export interface RecipeSpawnResult {
   index: number;
@@ -1106,7 +1107,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
         ]);
         agentSettings = settings;
-        clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
+        clipboardDirectory = tmpDir ? agentClipboardDirectory(tmpDir, isRemoteWindow()) : undefined;
       } catch (error) {
         logError("Failed to fetch agent settings for recipe", error);
       }

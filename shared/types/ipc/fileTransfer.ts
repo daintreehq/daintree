@@ -2,7 +2,19 @@ import type { HostId, OperationId } from "../remoteHosts.js";
 import type { HostPickRequest } from "./hostFiles.js";
 
 export type TransferDestination =
-  { kind: "inbox"; bucket: "clipboard" | "files" } | { kind: "worktree"; directory: string };
+  | { kind: "inbox"; bucket: "clipboard" | "files" }
+  /**
+   * "Add to project": into a folder of the project on the host. An existing
+   * file there is only replaced with `overwrite`, which the user confirmed.
+   */
+  | { kind: "worktree"; directory: string; overwrite?: boolean };
+
+/**
+ * The folder, under the host's temp dir, that holds everything dropped, pasted
+ * or attached in a remote window: `clipboard/` for pasted images and
+ * `files/<yyyymmdd-hhmmss>-<id>/<name>` for files.
+ */
+export const HOST_INBOX_DIR_NAME = "daintree-inbox";
 
 export interface UploadLocalFilePayload {
   hostId: HostId;
@@ -25,6 +37,24 @@ export interface UploadResult {
   bytes: number;
   /** True when an identical file already in the inbox was reused. */
   deduplicated: boolean;
+  /**
+   * Add to project only: a file of that name is already in the folder and
+   * `overwrite` was not set. Nothing was written; `hostPath` names the file
+   * that is there, so the caller can ask before replacing it.
+   */
+  conflict?: boolean;
+}
+
+/** A local file as the upload paths see it, before anything is sent. */
+export interface LocalFileStat {
+  size: number;
+  isDirectory: boolean;
+}
+
+/** Device-owned choices about sending local files to a host. */
+export interface UploadPreferences {
+  /** Ctrl+V in an agent terminal of a remote window sends a clipboard image to the host. */
+  interceptCtrlVImages: boolean;
 }
 
 export interface DownloadPayload {
