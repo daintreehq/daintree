@@ -448,6 +448,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;
     read(payload: FileReadPayload): Promise<FileReadResult>;
+    /**
+     * The native path of each dropped or pasted `File`, in order, via
+     * `webUtils.getPathForFile` in the preload. The only path-recovery bridge
+     * on `window.electron`; it narrows the surface but does not isolate it —
+     * plugin views render in this same document and can reach it too. `""`
+     * for a synthetic or non-disk File (treat it as unresolvable).
+     */
+    getDroppedFilePaths(files: readonly File[]): string[];
   };
   watchdog: {
     restart(): Promise<void>;
@@ -1567,9 +1575,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     listBookmarks(input?: { projectId?: string }): Promise<AgentSessionRecord[]>;
   };
   // clipboard is generated — see GeneratedElectronAPI.
-  webUtils: {
-    getPathForFile(file: File): string;
-  };
   appTheme: {
     get(): Promise<AppThemeConfig>;
     setColorScheme(schemeId: string): Promise<void>;
@@ -2237,14 +2242,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // helpers that aren't expressible through IpcInvokeMap, and the on*
   // entries are renderer-only subscriptions.
   plugin: GeneratedElectronAPI["plugin"] & {
-    /**
-     * Resolve the absolute native filesystem path of a dropped File via
-     * `webUtils.getPathForFile`. Plugin-scoped (never exposed globally) so
-     * native-path recovery stays confined to the plugin install surface
-     * (#9295). Returns `""` for synthetic/non-disk File objects (clipboard
-     * paste, virtual files) — treat empty as a structured error.
-     */
-    getDroppedFilePath(file: File): string;
     invoke(pluginId: string, channel: string, ...args: unknown[]): Promise<unknown>;
     /**
      * Subscribe to broadcast pushes for `(pluginId, channel)` — every

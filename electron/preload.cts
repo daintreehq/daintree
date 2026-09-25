@@ -1498,6 +1498,15 @@ function buildElectronApi(): ElectronAPI {
     files: {
       search: (payload) => _unwrappingInvoke(CHANNELS.FILES_SEARCH, payload),
       read: (payload) => _unwrappingInvoke(CHANNELS.FILES_READ, payload),
+      // The one bridge from a dropped or pasted `File` to its native path.
+      // `webUtils.getPathForFile` has to run here (Electron 32 removed
+      // `File.path`), and it is exposed only as this purpose-named batch call
+      // rather than as `webUtils` itself. That narrows the surface; it is not
+      // isolation. Plugin views render inline in this same document, so any
+      // code in the page can still call it — separating them would need a
+      // context of their own. `""` for a File with nothing on disk behind it.
+      getDroppedFilePaths: (files: readonly File[]): string[] =>
+        Array.from(files, (file) => webUtils.getPathForFile(file)),
     },
 
     // Diff media API — HEAD vs working-tree image versions for image compare
@@ -2868,11 +2877,6 @@ function buildElectronApi(): ElectronAPI {
     // preloads. See #5691.
     clipboard: buildClipboardPreloadBindings(_unwrappingInvoke),
 
-    // Web Utils API
-    webUtils: {
-      getPathForFile: (file: File) => webUtils.getPathForFile(file),
-    },
-
     appTheme: {
       get: () => _unwrappingInvoke(CHANNELS.APP_THEME_GET),
 
@@ -3362,14 +3366,6 @@ function buildElectronApi(): ElectronAPI {
 
     plugin: {
       ...buildPluginPreloadBindings(_unwrappingInvoke),
-
-      // Plugin-scoped bridge to the native filesystem path of a dropped File.
-      // `webUtils.getPathForFile` must run in the preload (Electron 32 removed
-      // `File.path`). Confined to the plugin namespace — deliberately NOT a
-      // global `window.electron` method — so arbitrary native-path recovery
-      // stays bounded to the plugin install surface (#9295). Returns `""` for
-      // synthetic/non-disk File objects; the renderer treats empty as an error.
-      getDroppedFilePath: (file: File): string => webUtils.getPathForFile(file),
 
       // plugin:invoke uses raw ipcMain.handle with variadic args — its signature
       // can't be expressed through IpcInvokeMap, so it stays inline.

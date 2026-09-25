@@ -1,16 +1,8 @@
 import { useCallback, useRef, useState } from "react";
 import type { EditorView } from "@codemirror/view";
-import {
-  FILE_DRAG_MIME,
-  decodeFileDragPaths,
-  hasFileDrag,
-  hasInternalFileDrag,
-} from "@/lib/fileDragPayload";
-import {
-  fileAttachmentEntryFromPath,
-  insertFileAttachments,
-  type FileAttachmentEntry,
-} from "../fileAttachments";
+import { hasFileDrag } from "@/lib/fileDragPayload";
+import { resolveTransferSources } from "@/lib/transferSources";
+import { fileAttachmentEntryFromSource, insertFileAttachments } from "../fileAttachments";
 import { usePanelStore } from "@/store/panelStore";
 
 /**
@@ -70,27 +62,7 @@ export function useDragDrop(
       // Both provenances reduce to the same entry shape before anything is
       // resolved, so an in-app drag (#11576) and an OS drop cannot disagree
       // about what they insert.
-      //
-      // The internal type wins when both are somehow present; decoding it and
-      // then also draining `files` would insert every reference twice.
-      const dropped: FileAttachmentEntry[] = hasInternalFileDrag(e.dataTransfer.types)
-        ? (decodeFileDragPaths(e.dataTransfer.getData(FILE_DRAG_MIME)) ?? []).map(
-            fileAttachmentEntryFromPath
-          )
-        : Array.from(e.dataTransfer.files)
-            .map((file) => ({
-              filePath: window.electron.webUtils.getPathForFile(file),
-              rawName: file.name,
-              fileSize: file.size,
-            }))
-            // A file the OS declines to resolve to a path is not referenceable.
-            .filter((entry) => entry.filePath !== "")
-            .map(({ filePath, rawName, fileSize }) => ({
-              filePath,
-              rawName,
-              fileName: rawName.trim() || filePath.split(/[/\\]/).filter(Boolean).pop() || filePath,
-              fileSize,
-            }));
+      const dropped = resolveTransferSources(e.dataTransfer).map(fileAttachmentEntryFromSource);
 
       if (dropped.length === 0) return;
 

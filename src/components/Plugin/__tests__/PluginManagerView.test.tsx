@@ -120,6 +120,9 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
   };
 }
 
+/** The native path the OS would report for a dropped test file; absent means none. */
+const droppedPaths = new WeakMap<File, string>();
+
 beforeEach(() => {
   vi.clearAllMocks();
   usePluginManagerStore.setState({ isOpen: true });
@@ -130,7 +133,6 @@ beforeEach(() => {
       installFromFile: vi.fn().mockResolvedValue({ status: "not-implemented" }),
       installFromUrl: vi.fn().mockResolvedValue({ status: "not-implemented" }),
       installFromPath: vi.fn().mockResolvedValue({ status: "not-implemented" }),
-      getDroppedFilePath: vi.fn().mockReturnValue(null),
       uninstall: vi.fn().mockResolvedValue(undefined),
       checkForUpdate: vi.fn().mockResolvedValue({ status: "up-to-date" }),
       onProvenanceChanged: vi.fn().mockReturnValue(() => {}),
@@ -144,6 +146,13 @@ beforeEach(() => {
       setSettingValue: vi.fn().mockResolvedValue(undefined),
       deleteSettingValue: vi.fn().mockResolvedValue(undefined),
       revealSecretSetting: vi.fn().mockResolvedValue(null),
+    },
+    // A dropped `.dntr` resolves to its native path through the one shared
+    // bridge; the plugin namespace has no path API of its own.
+    files: {
+      getDroppedFilePaths: vi.fn((files: readonly File[]) =>
+        files.map((file) => droppedPaths.get(file) ?? "")
+      ),
     },
     // The restart-required bar relaunches via this app IPC.
     app: {
@@ -219,6 +228,44 @@ function pluginRow(name: string): HTMLElement {
   if (!match) throw new Error(`No plugin row matching "${name}"`);
   return match;
 }
+
+function droppedFile(name: string, path?: string): File {
+  const file = new File(["x"], name);
+  if (path !== undefined) droppedPaths.set(file, path);
+  return file;
+}
+
+async function dropOnView(files: File[]) {
+  // Any node inside the drop container will do; the event bubbles to it.
+  const inside = await screen.findByText("No plugins installed");
+  fireEvent.drop(inside, { dataTransfer: { types: ["Files"], files } });
+}
+
+describe("PluginManagerView — .dntr drop", () => {
+  it("installs a dropped archive from the path the shared bridge resolves", async () => {
+    renderDialog();
+    const file = droppedFile("acme.dntr", "/Users/test/Downloads/acme.dntr");
+
+    await dropOnView([file]);
+
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromPath).toHaveBeenCalledWith(
+        "/Users/test/Downloads/acme.dntr",
+        expect.any(String)
+      )
+    );
+    expect(window.electron.files.getDroppedFilePaths).toHaveBeenCalledWith([file]);
+  });
+
+  it("reports a dropped archive with no path behind it instead of installing", async () => {
+    renderDialog();
+
+    await dropOnView([droppedFile("ghost.dntr")]);
+
+    await waitFor(() => expect(screen.getByText(/couldn't read its location/)).toBeTruthy());
+    expect(window.electron.plugin.installFromPath).not.toHaveBeenCalled();
+  });
+});
 
 describe("PluginManagerView", () => {
   it("renders the search field immediately", async () => {

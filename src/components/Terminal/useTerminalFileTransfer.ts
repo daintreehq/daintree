@@ -8,12 +8,9 @@ import {
   formatWithBracketedPaste,
   neutralizeControlCharacters,
 } from "@shared/utils/terminalInputProtocol.js";
-import {
-  FILE_DRAG_MIME,
-  decodeFileDragPaths,
-  hasFileDrag,
-  hasInternalFileDrag,
-} from "@/lib/fileDragPayload";
+import { hasFileDrag } from "@/lib/fileDragPayload";
+import { materializeTransferSources, resolveTransferSources } from "@/lib/transferSources";
+import { materialize } from "@/services/materialize";
 import { formatAtFileTokenForCwd } from "./hybridInputParsing";
 import { usePanelStore } from "@/store/panelStore";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
@@ -107,10 +104,10 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
  * Attaches paste and drag-and-drop handlers to the xterm container element.
  *
  * - **Image paste:** Intercepts in capture phase before xterm processes the event.
- *   Calls `clipboard.saveImage()` and writes the resulting file path into the terminal.
+ *   Materializes the clipboard image and writes the resulting path into the terminal.
  * - **Text paste:** Passes through to xterm's native handler (bracketed paste, etc.).
- * - **File drop:** Resolves file paths via `webUtils.getPathForFile()` and writes them
- *   into the terminal as text. Works for both image and non-image files.
+ * - **File drop:** Resolves the dropped paths, runs each through `materialize`, and
+ *   writes the results into the terminal as text. Works for image and non-image files.
  * - **Images to an agent that attaches them** (#12792): when the agent declares
  *   `imageInput: "bracketed-path"` and xterm reports bracketed-paste mode, each
  *   image is pasted on its own as its raw absolute path — the only form the
@@ -353,7 +350,7 @@ export function useTerminalFileTransfer(
       const lockEpoch = lockEpochRef.current;
 
       try {
-        const { filePath } = await window.electron.clipboard.saveImage();
+        const { hostPath: filePath } = await materialize({ kind: "clipboard-image" });
         // Re-check after the await: the pane may have unmounted or locked, and
         // the running agent may have changed, while the image was being saved.
         if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
@@ -390,7 +387,7 @@ export function useTerminalFileTransfer(
       }
     };
 
-    const handleDrop = (e: DragEvent) => {
+    const handleDrop = async (e: DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
       dragDepthRef.current = 0;
@@ -403,11 +400,16 @@ export function useTerminalFileTransfer(
       // A drag out of the file browser (#11576) carries paths where the OS
       // hands over `File` objects. Only the source of the paths differs —
       // both axes below stay exactly as an OS drop drives them, so the two
-      // gestures cannot produce different bytes for the same file. The
-      // internal type wins when both are present, so nothing is written twice.
-      const paths = hasInternalFileDrag(transfer.types)
-        ? (decodeFileDragPaths(transfer.getData(FILE_DRAG_MIME)) ?? [])
-        : Array.from(transfer.files).map((file) => window.electron.webUtils.getPathForFile(file));
+      // gestures cannot produce different bytes for the same file. Read now:
+      // the transfer is blank once this handler yields.
+      const sources = resolveTransferSources(transfer);
+      if (sources.length === 0) return;
+
+      const materialized = await materializeTransferSources(sources);
+      // Same re-checks as the image paste: the pane may have unmounted or
+      // locked, and the running agent changed, while the paths resolved.
+      if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
+      const paths = materialized.map((result) => result?.hostPath ?? "");
 
       const isAgent = isAgentTerminal();
       const deliverable = paths.filter(

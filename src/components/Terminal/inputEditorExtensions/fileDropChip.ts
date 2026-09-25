@@ -4,6 +4,7 @@ import { StateField, StateEffect } from "@codemirror/state";
 import { formatFileSize, removeChipRange } from "./base";
 import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
 import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
+import { resolveLocalFileSources } from "@/lib/transferSources";
 
 interface FileDropChipEntry {
   from: number;
@@ -186,18 +187,21 @@ export function createFilePasteHandler(
       const items = event.clipboardData?.items;
       if (!items) return false;
 
-      const files: { path: string; name: string; size: number }[] = [];
+      // Image items stay with the image paste handler, which saves the
+      // clipboard bitmap rather than referencing a file.
+      const pasted: File[] = [];
       for (const item of items) {
         if (item.kind === "file" && !item.type.startsWith("image/")) {
           const file = item.getAsFile();
-          const filePath = file ? window.electron.webUtils.getPathForFile(file) : undefined;
-          if (file && filePath) {
-            const name =
-              file.name.trim() || filePath.split(/[/\\]/).filter(Boolean).pop() || filePath;
-            files.push({ path: filePath, name, size: file.size });
-          }
+          if (file) pasted.push(file);
         }
       }
+
+      const files = resolveLocalFileSources(pasted).map(({ path, name, size }) => ({
+        path,
+        name: name.trim() || path.split(/[/\\]/).filter(Boolean).pop() || path,
+        size,
+      }));
 
       if (files.length === 0) return false;
 
