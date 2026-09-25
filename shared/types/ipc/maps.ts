@@ -2004,6 +2004,11 @@ export interface IpcEventMap {
     complete: boolean;
   };
 
+  // Plugin tour registry snapshot (main → renderer, scoped to the view's project).
+  "plugin:tours-changed": {
+    tours: import("../plugin.js").PluginTourDescriptor[];
+  };
+
   // Plugin file-decoration invalidation (main → renderer). Carries only the
   // changed scope (optionally narrowed to `paths`) — never decoration data.
   // The renderer re-pulls fresh decorations via `plugin:file-decorations-get`.
@@ -2215,6 +2220,7 @@ export type IpcEventBusMap = Pick<
   | "plugin:agents-changed"
   // Plugin recipe registry (global broadcast)
   | "plugin:recipes-changed"
+  | "plugin:tours-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
   // Plugin panel-badge state (global broadcast)

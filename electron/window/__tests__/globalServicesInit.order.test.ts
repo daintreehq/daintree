@@ -138,6 +138,7 @@ vi.mock("../../services/PluginService.js", () => ({
 
 vi.mock("../../setup/protocols.js", () => ({
   setPluginDirResolver,
+  setPluginTourAudioResolver: vi.fn(),
 }));
 
 vi.mock("../../setup/openFileInstall.js", () => ({

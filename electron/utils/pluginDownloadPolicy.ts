@@ -68,7 +68,12 @@ export type GuardedFetchResult =
   | { ok: true; response: Response }
   | {
       ok: false;
-      reason: "private-redirect" | "private-host" | "insecure-protocol" | "too-many-redirects";
+      reason:
+        | "private-redirect"
+        | "private-host"
+        | "insecure-protocol"
+        | "too-many-redirects"
+        | "disallowed-host";
     };
 
 /** Spec-aligned cap (RFC 7231 recommends a limit; browsers default to ~20). */
@@ -120,11 +125,15 @@ async function resolvesToPrivateAddress(hostname: string): Promise<boolean> {
  * The caller still owns the timeout/size signal — it's threaded through every
  * hop via `init.signal`. Non-redirect responses (including the final 2xx and
  * any 4xx/5xx) are returned as-is for the caller to inspect.
+ *
+ * `isAllowedHost`, when given, must accept every hop's hostname — a caller
+ * bound to a declared host list refuses a redirect off it before connecting.
  */
 export async function fetchWithPrivateHostGuard(
   netFetch: typeof ElectronNet.fetch,
   url: string,
-  init: RequestInit
+  init: RequestInit,
+  isAllowedHost?: (hostname: string) => boolean
 ): Promise<GuardedFetchResult> {
   let currentUrl = url;
   for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
@@ -144,6 +153,9 @@ export async function fetchWithPrivateHostGuard(
     }
     if (parsedHop && parsedHop.protocol !== "https:") {
       return { ok: false, reason: "insecure-protocol" };
+    }
+    if (isAllowedHost && (!parsedHop || !isAllowedHost(parsedHop.hostname))) {
+      return { ok: false, reason: "disallowed-host" };
     }
     if (parsedHop && (await resolvesToPrivateAddress(parsedHop.hostname))) {
       return { ok: false, reason: "private-host" };

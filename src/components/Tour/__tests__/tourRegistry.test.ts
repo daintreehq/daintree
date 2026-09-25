@@ -2,7 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { DAINTREE_TOUR_ID } from "@shared/utils/tourIds";
 import type { TourRegistration } from "../tourDefinition";
 import { TOUR_CHAPTER_TITLES, TOUR_MINUTES } from "../tourSummary.generated";
-import { getTour, registerTour } from "../tourRegistry";
+import { createPluginTourRegistration } from "../pluginTours";
+import {
+  getRegisteredTourIdsSnapshot,
+  getTour,
+  registerTour,
+  subscribeToTourRegistry,
+  subscribeTours,
+} from "../tourRegistry";
 
 const registration = (id: string): TourRegistration => ({
   summary: { id, title: "Acme Tour", minutes: 2, chapterTitles: ["One"] },
@@ -52,5 +59,52 @@ describe("tourRegistry", () => {
     expect(tour.chapters.map((chapter) => chapter.title)).toEqual(TOUR_CHAPTER_TITLES);
     expect(tour.chapters.every((chapter) => typeof chapter.scene === "function")).toBe(true);
     expect(tour.resolveTimings("mac")).toHaveLength(tour.chapters.length);
+  });
+
+  it("tells subscribers when a tour arrives and when it is withdrawn", () => {
+    const seen: string[] = [];
+    const unsubscribe = subscribeTours((id) => seen.push(`${id}:${getTour(id) ? "in" : "out"}`));
+    const unregister = registerTour(registration("acme.tools.watch"));
+    unregister();
+    // A second cleanup withdraws nothing, so it says nothing.
+    unregister();
+    unsubscribe();
+    registerTour(registration("acme.tools.unwatched"))();
+    expect(seen).toEqual(["acme.tools.watch:in", "acme.tools.watch:out"]);
+  });
+
+  it("publishes a plugin tour to menu snapshots when it registers and when it is withdrawn", () => {
+    const tourId = "acme.welcome-tour.panel";
+    const onChange = vi.fn();
+    const unsubscribe = subscribeToTourRegistry(onChange);
+    const before = getRegisteredTourIdsSnapshot();
+
+    const unregister = registerTour(
+      createPluginTourRegistration({
+        id: tourId,
+        pluginId: "acme.welcome-tour",
+        pluginName: "Acme Site Builder",
+        title: "Welcome Tour",
+        panelKind: "site-builder",
+        moduleUrl: "plugin://pi-abc/__dtv-1/tours/panel.js",
+        chapters: [],
+      })
+    );
+    const registered = getRegisteredTourIdsSnapshot();
+    expect(registered).not.toBe(before);
+    expect(registered.has(tourId)).toBe(true);
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    unregister();
+    const withdrawn = getRegisteredTourIdsSnapshot();
+    expect(withdrawn).not.toBe(registered);
+    expect(withdrawn.has(tourId)).toBe(false);
+    expect(onChange).toHaveBeenCalledTimes(2);
+
+    // A stale cleanup withdraws nothing, so the snapshot and listeners stay put.
+    unregister();
+    expect(getRegisteredTourIdsSnapshot()).toBe(withdrawn);
+    expect(onChange).toHaveBeenCalledTimes(2);
+    unsubscribe();
   });
 });

@@ -843,7 +843,8 @@ export interface PluginTourChapter {
  * that panel's menu, and `panelKind` must name one of this plugin's own
  * `contributes.panels`. Remote narration may only be fetched from the hosts
  * listed in `audioHosts`, so the user can see where audio comes from.
- * Declaration only for now — loading and playback are a follow-up.
+ * Registered while the plugin is loaded; the scene module is imported only
+ * when the tour opens.
  */
 export interface PluginTourContribution {
   id: string;
@@ -854,6 +855,36 @@ export interface PluginTourContribution {
   /** Bare hostnames remote chapter audio is fetched from, e.g. `cdn.example.com`. */
   audioHosts?: string[];
   chapters: PluginTourChapter[];
+}
+
+/** One chapter of a {@link PluginTourDescriptor}: manifest timing with its audio resolved. */
+export interface PluginTourDescriptorChapter {
+  id: string;
+  duration: number;
+  cues: Record<string, number>;
+  captions: PluginTourCaption[];
+  /**
+   * Where the player fetches narration: a `plugin://` URL for bundled audio or
+   * for the host's audio route to a declared remote host, `null` when silent.
+   */
+  audioUrl: string | null;
+}
+
+/**
+ * A loaded plugin's tour as renderers see it. Serializable: the scene module
+ * is named by URL and imported only when the tour opens.
+ */
+export interface PluginTourDescriptor {
+  /** Qualified id, `{pluginId}.{tourId}` — what progress and `help.tour.show` key on. */
+  id: string;
+  pluginId: string;
+  /** The plugin's display name, which Help and the palette list the tour under. */
+  pluginName: string;
+  title: string;
+  panelKind?: string;
+  /** `plugin://` URL of the scene module, carrying the load's view generation. */
+  moduleUrl: string;
+  chapters: PluginTourDescriptorChapter[];
 }
 
 /**

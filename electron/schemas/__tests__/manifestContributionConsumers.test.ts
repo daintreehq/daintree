@@ -92,6 +92,8 @@ const MCP_SUPERVISOR = "electron/services/PluginMcpSupervisor.ts";
 const PLUGIN_SCHEMA = "electron/schemas/plugin.ts";
 const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
 const RECIPE_REGISTRY = "electron/services/plugin/PluginRecipeRegistry.ts";
+const TOUR_REGISTRY = "electron/services/plugin/PluginTourRegistry.ts";
+const PLUGIN_TOURS = "src/components/Tour/pluginTours.tsx";
 const RECIPE_SANITIZER = "shared/utils/recipeSanitizer.ts";
 const ARCHIVE_INSTALL_INTENT = "electron/setup/archiveInstallIntent.ts";
 const PROCESS_TOOL_REGISTRY = "shared/config/pluginProcessToolRegistry.ts";
@@ -1101,27 +1103,33 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
   },
   tours: {
     id: {
-      mode: "intentional-metadata",
+      mode: "derived-input",
       consumers: [
         {
           file: PLUGIN_SCHEMA,
           symbol: "getPluginManifestSchema superRefine (reportDuplicateIds tours)",
         },
         { file: PLUGIN_SERVICE, symbol: "loadPlugin (makePluginTourId → PanelKindConfig.tourId)" },
+        { file: TOUR_REGISTRY, symbol: "registerPluginTours (makePluginTourId)" },
       ],
-      note: "Unique within contributes.tours. Qualified with makePluginTourId into the tourId a panel kind's menus play through help.tour.show (#12774); tour loading and playback are a follow-up that registers under the same id.",
+      note: "Unique within contributes.tours. Qualified as `{pluginId}.{id}`, the id progress, Help, the palette and a panel kind's menus (#12774) key on; also names the remote-audio route.",
     },
     title: {
-      mode: "intentional-metadata",
-      consumers: [{ file: PLUGIN_SCHEMA, symbol: "TourContributionSchema" }],
-      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+      mode: "verbatim",
+      consumers: [
+        { file: TOUR_REGISTRY, symbol: "registerPluginTours" },
+        { file: "electron/menu.ts", symbol: "createApplicationMenu (pluginTourItems)" },
+      ],
+      note: "Shown in the dialog header and listed as `<plugin>: <title>` in Help and the palette.",
     },
     componentPath: {
-      mode: "intentional-metadata",
+      mode: "derived-input",
       consumers: [
         { file: PLUGIN_SCHEMA, symbol: "TourContributionSchema (isSafePluginAssetPath)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (registerPluginTours, buildPluginViewUrl)" },
+        { file: PLUGIN_TOURS, symbol: "createPluginTourRegistration (load)" },
       ],
-      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+      note: "Resolved to a generation-stamped plugin:// URL and imported only when the tour opens.",
     },
     panelKind: {
       mode: "cross-reference",
@@ -1131,8 +1139,12 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           symbol: "getPluginManifestSchema superRefine (tour_panel_kind_unknown)",
         },
         { file: PLUGIN_SERVICE, symbol: "loadPlugin (tourIdByPanelId → PanelKindConfig.tourId)" },
+        {
+          file: "src/hooks/usePluginTours.ts",
+          symbol: "mirror (panel tours stay off the palette)",
+        },
       ],
-      note: "Must name one of this manifest's own contributes.panels ids. Stamps the tour onto that panel kind so its menus offer it as a Welcome Tour (#12774); the first tour naming a kind wins.",
+      note: "Must name one of this manifest's own contributes.panels ids. Stamps the tour onto that panel kind so its menus offer it as a Welcome Tour once registered (#12774), and keeps it out of Help and the palette; the first tour naming a kind wins.",
     },
     audioHosts: {
       mode: "cross-reference",
@@ -1141,98 +1153,95 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           file: PLUGIN_SCHEMA,
           symbol: "TourContributionSchema superRefine (tour_audio_host_undeclared)",
         },
+        { file: "electron/setup/protocols.ts", symbol: "proxyPluginTourAudio (isAllowedHost)" },
       ],
-      note: "Every remote chapter audioUrl hostname must appear here.",
+      note: "Every remote chapter audioUrl hostname must appear here, and every fetch hop must stay on it.",
     },
     chapters: {
-      mode: "intentional-metadata",
+      mode: "derived-input",
       consumers: [
         {
           file: PLUGIN_SCHEMA,
           symbol: "TourContributionSchema superRefine (tour_chapter_duplicate_id)",
         },
+        { file: TOUR_REGISTRY, symbol: "registerPluginTours" },
       ],
-      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+      note: "Played in manifest order; each needs a scene in the module.",
     },
   },
   "tours.chapters": {
     id: {
-      mode: "intentional-metadata",
+      mode: "cross-reference",
       consumers: [
         {
           file: PLUGIN_SCHEMA,
           symbol: "TourContributionSchema superRefine (tour_chapter_duplicate_id)",
         },
+        { file: PLUGIN_TOURS, symbol: "readPluginTourModule (scenes by chapter id)" },
       ],
-      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+      note: "Keys the module's scene and optional title.",
     },
     duration: {
-      mode: "intentional-metadata",
-      consumers: [
-        { file: PLUGIN_SCHEMA, symbol: "TourChapterSchema superRefine (cue/caption range)" },
-      ],
-      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (resolveTimings)" }],
+      note: "Chapter timing handed to the player; also sums to the summary's minutes.",
     },
     cues: {
-      mode: "intentional-metadata",
-      consumers: [
-        { file: PLUGIN_SCHEMA, symbol: "TourChapterSchema superRefine (tour_cue_out_of_range)" },
-      ],
-      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (resolveTimings)" }],
+      note: "Named cues scenes read through useCue.",
     },
     captions: {
-      mode: "intentional-metadata",
-      consumers: [
-        {
-          file: PLUGIN_SCHEMA,
-          symbol: "TourChapterSchema superRefine (tour_caption_out_of_range)",
-        },
-      ],
-      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (resolveTimings)" }],
+      note: "Shown under the stage, and all a chapter has when its audio can't play.",
     },
     audioUrl: {
-      mode: "cross-reference",
+      mode: "derived-input",
       consumers: [
         {
           file: PLUGIN_SCHEMA,
           symbol: "TourContributionSchema superRefine (tour_audio_host_undeclared)",
         },
+        { file: TOUR_REGISTRY, symbol: "registerPluginTours (bundled or audio route)" },
       ],
-      note: "A remote URL's hostname is checked against the tour's audioHosts; a bundled path must be a safe asset path.",
+      note: "A bundled path resolves from the plugin root; a remote URL stays in main behind the plugin:// audio route.",
     },
     narrationHash: {
       mode: "intentional-metadata",
       consumers: [
         { file: PLUGIN_SCHEMA, symbol: "TourChapterSchema (TOUR_NARRATION_HASH_PATTERN)" },
       ],
-      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+      note: "Authoring metadata for `daintree-plugin tour voice`; playback has no narration to check it against.",
     },
   },
   "tours.chapters.captions": {
     start: {
-      mode: "intentional-metadata",
+      mode: "verbatim",
       consumers: [
         {
           file: PLUGIN_SCHEMA,
           symbol: "TourChapterSchema superRefine (tour_caption_out_of_range)",
         },
+        { file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (resolveTimings)" },
       ],
-      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+      note: "Caption timing handed to the player.",
     },
     end: {
-      mode: "intentional-metadata",
+      mode: "verbatim",
       consumers: [
         {
           file: PLUGIN_SCHEMA,
           symbol: "TourChapterSchema superRefine (tour_caption_out_of_range)",
         },
+        { file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (resolveTimings)" },
       ],
-      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+      note: "Caption timing handed to the player.",
     },
     text: {
-      mode: "intentional-metadata",
-      consumers: [{ file: PLUGIN_SCHEMA, symbol: "TourCaptionSchema" }],
-      note: "Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (resolveTimings)" }],
+      note: "The caption line shown under the stage.",
     },
   },
 } satisfies FieldConsumerCoverage;

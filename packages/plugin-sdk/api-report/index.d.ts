@@ -2380,7 +2380,8 @@ interface PluginTourChapter {
  * that panel's menu, and `panelKind` must name one of this plugin's own
  * `contributes.panels`. Remote narration may only be fetched from the hosts
  * listed in `audioHosts`, so the user can see where audio comes from.
- * Declaration only for now — loading and playback are a follow-up.
+ * Registered while the plugin is loaded; the scene module is imported only
+ * when the tour opens.
  */
 interface PluginTourContribution {
     id: string;

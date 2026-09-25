@@ -62,6 +62,7 @@ import type {
   PluginActivate,
   PluginActionContribution,
   PluginActionDescriptor,
+  PluginTourDescriptor,
   PluginChannelSchema,
   PluginTypedIpcHandler,
   ActionHandler,
@@ -247,6 +248,13 @@ import {
   setPluginRecipeMetadataSnapshot,
   unregisterPluginRecipes,
 } from "./plugin/PluginRecipeRegistry.js";
+import {
+  getPluginTourRemoteAudio,
+  getPluginTours,
+  registerPluginTours,
+  unregisterPluginTours,
+  type PluginTourRemoteAudio,
+} from "./plugin/PluginTourRegistry.js";
 import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js";
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../ipc/utils.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
@@ -1436,6 +1444,26 @@ export class PluginService {
     return getPluginRecipes();
   }
 
+  /** Every loaded plugin's tours, before per-project visibility is applied. */
+  getPluginTours(): PluginTourDescriptor[] {
+    return getPluginTours();
+  }
+
+  /**
+   * The remote narration a tour audio route on `authority` stands for. Resolved
+   * through the live authority map, so an unloaded plugin's routes die with it.
+   */
+  getPluginTourRemoteAudio(
+    authority: string,
+    tourId: string,
+    chapterId: string
+  ): PluginTourRemoteAudio | undefined {
+    for (const [pluginId, current] of this.pluginAuthorities) {
+      if (current === authority) return getPluginTourRemoteAudio(pluginId, tourId, chapterId);
+    }
+    return undefined;
+  }
+
   /**
    * Append one run timestamp for a plugin recipe. Provenance is resolved from
    * the registry, never from the caller — a renderer supplies only the
@@ -2189,6 +2217,19 @@ export class PluginService {
       console.warn(
         `[PluginService] Plugin "${manifest.name}": views entry "${orphanId}" has no matching contributes.panels entry and will be ignored`
       );
+    }
+
+    // Tours (#12773) resolve their scene module and bundled audio under this
+    // load's authority and generation, so a reload hands renderers URLs V8 has
+    // never cached. The module itself is imported only when a tour opens.
+    // Project plugins can't declare tours (rejected by the schema).
+    if (manifest.contributes.tours.length > 0) {
+      registerPluginTours(pluginId, manifest.contributes.tours, {
+        pluginName: manifest.displayName ?? manifest.name,
+        pluginUrl: (relativePath) =>
+          buildPluginViewUrl(authority, relativePath, plugin.viewGeneration),
+      });
+      this.broadcaster.scheduleToursBroadcast();
     }
 
     // Project surface claims (§7.8). After the panels loop, because a claim
@@ -5406,6 +5447,10 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterPluginRecipes", () => unregisterPluginRecipes(pluginId));
     runUnloadStep(pluginId, "scheduleRecipesBroadcast", () =>
       this.broadcaster.scheduleRecipesBroadcast(true)
+    );
+    runUnloadStep(pluginId, "unregisterPluginTours", () => unregisterPluginTours(pluginId));
+    runUnloadStep(pluginId, "scheduleToursBroadcast", () =>
+      this.broadcaster.scheduleToursBroadcast()
     );
     runUnloadStep(pluginId, "unregisterPluginAgents", () => unregisterPluginAgents(pluginId));
     runUnloadStep(pluginId, "scheduleAgentsBroadcast", () =>

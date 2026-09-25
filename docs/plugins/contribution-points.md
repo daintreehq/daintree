@@ -682,11 +682,11 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 
 **Agent-initiated runs are confirmation-gated.** Any agent or MCP dispatch that carries a `recipeId` — through `recipe.run` or a composite like `worktree.createWithRecipe` — pauses for a single human approval showing the resolved recipe, its origin, and the commands each terminal will run (env keys are listed, values are not). This applies to every recipe tier, not just plugin-contributed ones. An external MCP session bound to one workspace has no one watching that view to answer the dialog, so there the dispatch is refused outright rather than paused (#11789).
 
-## Tours — _Planned_
+## Tours — _Shipped (installed plugins)_
 
-Welcome tours that play in the same dialog as the Daintree tour. The manifest entry is validated today; loading and playing contributed tours is a follow-up. A panel kind that names a tour gets a Welcome Tour item in its menus once that tour is registered, so the item never appears with nothing to play.
+Welcome tours that play in the same dialog as the Daintree tour. An enabled plugin's tours register when it loads and are withdrawn when it is disabled, uninstalled or hidden in the project; a tour that is open at that moment closes, keeping the viewer's progress. A reload closes it too, and reopening plays the new version.
 
-A tour without `panelKind` is a **plugin tour**, offered from Help and the command palette (for example "SvelteKit Site Builder: Welcome Tour"). A tour with `panelKind` is a **panel tour**, opened from that panel's three-dots menu as "<Panel name> Welcome Tour"; it keeps to a couple of chapters but is held to the same standard as any other tour.
+A tour without `panelKind` is a **plugin tour**, offered from Help and the command palette under the plugin's display name (for example "SvelteKit Site Builder: Welcome Tour"). A tour with `panelKind` is a **panel tour**, opened from that panel's three-dots menu as "<Panel name> Welcome Tour"; it keeps to a couple of chapters but is held to the same standard as any other tour. The panel's Welcome Tour item appears once its tour is registered and disappears when it is withdrawn, so the item never appears with nothing to play.
 
 ```json
 {
@@ -739,6 +739,29 @@ A tour without `panelKind` is a **plugin tour**, offered from Help and the comma
 | `chapters[].captions` | no | `{ start, end, text }` in seconds; each must end after it starts and within `duration`. |
 | `chapters[].audioUrl` | yes | A plugin-relative audio file, an `https://` URL on a host listed in `audioHosts`, or `null` for a silent chapter. |
 | `chapters[].narrationHash` | yes | The 8-character lowercase hex fingerprint of the narration the timing was generated from. |
+
+**The scene module.** `componentPath` is imported only when the tour opens, never at startup, and must default-export the scenes by chapter id:
+
+```js
+import { useCue } from "@daintreehq/tour/react";
+
+function Intro() {
+  const shown = useCue("open-preview");
+  return <div className={shown ? "text-category-amber-text" : "text-text-secondary"}>…</div>;
+}
+
+export default {
+  scenes: { intro: Intro, publish: Publish },
+  // Optional. A chapter without a title is titled by its id.
+  chapterTitles: { intro: "Meet the site builder", publish: "Go live" },
+  // Optional mock-app data, as `@daintreehq/tour/mock-app` components read it.
+  mockKit: undefined,
+};
+```
+
+Scenes take no props and animate off the manifest's cues through `@daintreehq/tour/react`, which the host import map resolves to its own player, so a raw module can bare-import `react` and `@daintreehq/tour/*` exactly as a raw view does. Every chapter needs a scene; a module that fails to import, times out after 10 seconds, or is missing one opens nothing and tells the user. Each scene renders inside the plugin style root, so its classes compile scoped exactly as they do in a plugin view, and the design contract's tokens — `category-*` included — are available to style your own additions beside the kit's.
+
+**Audio.** A plugin-relative `audioUrl` resolves from the plugin root, not from `componentPath`. A remote one is fetched by Daintree on the player's behalf from the URL in your manifest, and every redirect must stay on an `audioHosts` entry; the request never names a destination, so nothing else is reachable through it. Audio that is missing, refused or blocked leaves the chapter playing silently with its captions.
 
 A malformed tour is reported with the offending path, like any other malformed contribution: `daintree-plugin validate` and the installer refuse it, and at load Daintree logs the issues and drops only that tour, so the rest of the plugin still loads. Exceeding the tour cap is still a whole-manifest error. `audioHosts` entries are ASCII (punycode) hostnames. Tours are refused under `scope: "project"`.
 

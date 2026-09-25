@@ -11,6 +11,7 @@ import { getPluginKeybindings } from "../pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../pluginContextMenuRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import { getPluginRecipes } from "./PluginRecipeRegistry.js";
+import { getPluginTours, notifyPluginToursVisibilityChanged } from "./PluginTourRegistry.js";
 import {
   hasProjectPluginVisibilityOverrides,
   isPluginVisibleInProject,
@@ -194,6 +195,11 @@ export function getPluginKeybindingsForProject(projectId: string | null | undefi
   );
 }
 
+/** Plugin tours visible in a view of `projectId`. */
+export function getPluginToursForProject(projectId: string | null | undefined) {
+  return selectContributionsForProject(getPluginTours(), (tour) => tour.pluginId, projectId);
+}
+
 /** Plugin context-menu items visible in a view of `projectId`. */
 export function getPluginContextMenuItemsForProject(projectId: string | null | undefined) {
   return selectContributionsForProject(
@@ -285,6 +291,12 @@ export class PluginContributionBroadcaster {
   private recipesBroadcastPending = false;
   /** Mirrors {@link toolbarButtonsBroadcastComplete} for plugin recipes. */
   private recipesBroadcastComplete = false;
+  /**
+   * Same coalescing rationale as {@link panelKindsBroadcastPending}. Tours carry
+   * no `complete` flag: the renderer only mirrors them into the tour registry
+   * and keeps no preference to sweep, so every snapshot replaces wholesale.
+   */
+  private toursBroadcastPending = false;
 
   constructor(deps: PluginContributionBroadcasterDeps) {
     this.deps = deps;
@@ -362,6 +374,9 @@ export class PluginContributionBroadcaster {
     this.scheduleToolbarButtonsBroadcast(true);
     this.scheduleKeybindingsBroadcast(true);
     this.scheduleContextMenuItemsBroadcast(true);
+    this.scheduleToursBroadcast();
+    // The native Help menu lists tours per project too; rebuild it.
+    notifyPluginToursVisibilityChanged();
   }
 
   /**
@@ -543,6 +558,20 @@ export class PluginContributionBroadcaster {
     });
   }
 
+  /** Coalesce tour registry mutations into one scoped snapshot per tick. */
+  scheduleToursBroadcast(): void {
+    if (this.deps.isDisposed()) return;
+    if (this.toursBroadcastPending) return;
+    this.toursBroadcastPending = true;
+    queueMicrotask(() => {
+      this.toursBroadcastPending = false;
+      if (this.deps.isDisposed()) return;
+      this.emitScoped("plugin:tours-changed", (projectId) => ({
+        tours: forProject(getPluginTours(), (tour) => tour.pluginId, projectId),
+      }));
+    });
+  }
+
   /**
    * Replay the current actions / panel-kinds / toolbar-button snapshots to a
    * single target webContents. Used by the cold-start view-ready hook so a
@@ -624,6 +653,10 @@ export class PluginContributionBroadcaster {
       {
         name: "plugin:recipes-changed",
         payload: { recipes: getPluginRecipes(), complete: false },
+      },
+      {
+        name: "plugin:tours-changed",
+        payload: { tours: forProject(getPluginTours(), (tour) => tour.pluginId, target) },
       },
       // Narrowed by instance ownership, not by `forProject`: a runtime status is
       // health metadata about a backend, so what governs it is which project the
