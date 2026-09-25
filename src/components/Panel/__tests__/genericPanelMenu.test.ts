@@ -20,11 +20,15 @@ import {
 const PTY_PLUGIN_KIND = "acme.shell";
 const VIEW_PLUGIN_KIND = "acme.dashboard";
 const UNDOCKABLE_PLUGIN_KIND = "acme.wallboard";
+const TOURED_PLUGIN_KIND = "acme.metrics";
 
-function registerPluginKind(id: string, overrides: { hasPty?: boolean; dockable?: boolean } = {}) {
+function registerPluginKind(
+  id: string,
+  overrides: { hasPty?: boolean; dockable?: boolean; name?: string; tourId?: string } = {}
+) {
   registerPanelKind({
     id,
-    name: id,
+    name: overrides.name ?? id,
     iconId: "terminal",
     color: "#abcdef",
     hasPty: overrides.hasPty ?? false,
@@ -32,6 +36,7 @@ function registerPluginKind(id: string, overrides: { hasPty?: boolean; dockable?
     canConvert: false,
     extensionId: "acme",
     ...(overrides.dockable !== undefined ? { dockable: overrides.dockable } : {}),
+    ...(overrides.tourId !== undefined ? { tourId: overrides.tourId } : {}),
   });
 }
 
@@ -50,6 +55,7 @@ afterEach(() => {
   unregisterPanelKind(PTY_PLUGIN_KIND);
   unregisterPanelKind(VIEW_PLUGIN_KIND);
   unregisterPanelKind(UNDOCKABLE_PLUGIN_KIND);
+  unregisterPanelKind(TOURED_PLUGIN_KIND);
 });
 
 describe("readPanelKindMenuCapabilities", () => {
@@ -72,8 +78,17 @@ describe("readPanelKindMenuCapabilities", () => {
       expect(readPanelKindMenuCapabilities(snapshot, kind)).toEqual({
         hasPty: panelKindHasPty(kind),
         isDockable: panelKindIsDockable(kind),
+        tour: null,
       });
     }
+  });
+
+  it("offers the tour a kind declares under the kind's own name (#12774)", () => {
+    registerPluginKind(TOURED_PLUGIN_KIND, { name: "Metrics", tourId: "acme.metrics-intro" });
+
+    expect(
+      readPanelKindMenuCapabilities(getPanelKindRegistrySnapshot(), TOURED_PLUGIN_KIND).tour
+    ).toEqual({ id: "acme.metrics-intro", label: "Metrics Welcome Tour" });
   });
 
   it("reads the snapshot it is handed, not the live registry", () => {
@@ -204,7 +219,8 @@ describe("getGenericPanelMenuGroups", () => {
   it("gives every command but the worktree move and reload an action to dispatch", () => {
     for (const input of LAYOUT_INPUTS) {
       for (const command of groups(input).flat()) {
-        if (command.id === "move-to-worktree" || command.id === "reload") continue;
+        if (command.id === "move-to-worktree" || command.id === "reload" || command.id === "tour")
+          continue;
         expect(GENERIC_PANEL_MENU_ACTION_IDS[command.id]).toBeDefined();
       }
     }
@@ -219,6 +235,29 @@ describe("getGenericPanelMenuGroups", () => {
     expect(reload.label).toBe("Reload panel");
     expect(reload.destructive).toBeUndefined();
     expect(GENERIC_PANEL_RELOAD_ACTION_ID).toBe("plugin.reloadPanel");
+  });
+
+  it("offers a declared tour in a group of its own, before the removal commands (#12774)", () => {
+    const withTour = ids({ tourLabel: "Metrics Welcome Tour" });
+    const withoutTour = ids();
+
+    expect(withoutTour.flat()).not.toContain("tour");
+    expect(withTour.find((group) => group.includes("tour"))).toEqual(["tour"]);
+    expect(withTour.filter((group) => !group.includes("tour"))).toEqual(withoutTour);
+    expect(withTour.flat().indexOf("tour")).toBeLessThan(withTour.flat().indexOf("trash"));
+
+    const tour = groups({ tourLabel: "Metrics Welcome Tour" })
+      .flat()
+      .find((command) => command.id === "tour")!;
+    expect(tour.label).toBe("Metrics Welcome Tour");
+    expect(tour.destructive).toBeUndefined();
+    expect(tour.disabled).toBeUndefined();
+  });
+
+  it("still ends on its one destructive command with a tour offered", () => {
+    const all = groups({ tourLabel: "Metrics Welcome Tour" }).flat();
+    expect(all.at(-1)?.destructive).toBe(true);
+    expect(all.filter((command) => command.destructive)).toHaveLength(1);
   });
 });
 

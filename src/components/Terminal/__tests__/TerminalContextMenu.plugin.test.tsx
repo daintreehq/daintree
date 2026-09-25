@@ -248,10 +248,13 @@ function renderMenuFor(panel: Record<string, unknown>, forceLocation?: PanelLoca
   );
 }
 
-function registerPluginKind(id: string, options: { hasPty?: boolean; dockable?: boolean } = {}) {
+function registerPluginKind(
+  id: string,
+  options: { hasPty?: boolean; dockable?: boolean; name?: string; tourId?: string } = {}
+) {
   registerPanelKind({
     id,
-    name: id,
+    name: options.name ?? id,
     iconId: "terminal",
     color: "#abcdef",
     hasPty: options.hasPty ?? false,
@@ -259,6 +262,7 @@ function registerPluginKind(id: string, options: { hasPty?: boolean; dockable?: 
     canConvert: false,
     extensionId: "acme",
     ...(options.dockable !== undefined ? { dockable: options.dockable } : {}),
+    ...(options.tourId !== undefined ? { tourId: options.tourId } : {}),
   });
 }
 
@@ -424,6 +428,21 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     );
   });
 
+  it("offers a kind's declared tour in the shared list and plays it by id (#12774)", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { name: "Dashboard", tourId: "acme.dashboard-intro" });
+    renderMenuFor(pluginPanel);
+
+    expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
+    findRow("Dashboard Welcome Tour")!.click();
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      "help.tour.show",
+      { tourId: "acme.dashboard-intro" },
+      expect.anything()
+    );
+  });
+
   it("asks a panel holding unsaved work before removing it", async () => {
     let verdict: "proceed" | "cancel" = "cancel";
     const guard = vi.fn(async () => verdict);
@@ -511,5 +530,29 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     expect(screen.getByText("Rename terminal")).toBeTruthy();
     // Its kind has no duplicate recipe, so a Duplicate here would throw.
     expect(screen.queryByText("Duplicate terminal")).toBeNull();
+    expect(screen.queryByText(/Welcome Tour$/)).toBeNull();
+  });
+
+  it("offers a PTY-backed plugin kind's tour on the terminal menu (#12774)", () => {
+    registerPluginKind(PTY_PLUGIN_KIND, {
+      hasPty: true,
+      name: "Shell",
+      tourId: "acme.shell-intro",
+    });
+    renderMenuFor({
+      id: "panel-1",
+      title: "Acme Shell",
+      kind: PTY_PLUGIN_KIND,
+      pluginId: "acme",
+      worktreeId: "wt-1",
+    });
+
+    findRow("Shell Welcome Tour")!.click();
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "help.tour.show",
+      { tourId: "acme.shell-intro" },
+      expect.anything()
+    );
   });
 });

@@ -951,11 +951,11 @@ describe("PanelHeader", () => {
 
     function registerPluginKind(
       id: string,
-      options: { hasPty?: boolean; dockable?: boolean } = {}
+      options: { hasPty?: boolean; dockable?: boolean; name?: string; tourId?: string } = {}
     ) {
       registerPanelKind({
         id,
-        name: id,
+        name: options.name ?? id,
         iconId: "terminal",
         color: "#abcdef",
         hasPty: options.hasPty ?? false,
@@ -963,6 +963,7 @@ describe("PanelHeader", () => {
         canConvert: false,
         extensionId: "acme",
         ...(options.dockable !== undefined ? { dockable: options.dockable } : {}),
+        ...(options.tourId !== undefined ? { tourId: options.tourId } : {}),
       });
     }
 
@@ -1186,6 +1187,28 @@ describe("PanelHeader", () => {
       );
     });
 
+    it("offers a kind's declared tour in the shared list and plays it by id (#12774)", () => {
+      registerPluginKind(PLUGIN_KIND, { name: "Dashboard", tourId: "acme.dashboard-intro" });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+
+      expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
+      findMenuButton("Dashboard Welcome Tour")!.click();
+
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "help.tour.show",
+        { tourId: "acme.dashboard-intro" },
+        { source: "menu" }
+      );
+    });
+
+    it("offers no tour for a kind that declares none", () => {
+      registerPluginKind(PLUGIN_KIND, { name: "Dashboard" });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+
+      expect(findMenuButton("Dashboard Welcome Tour")).toBeUndefined();
+    });
+
     it.each(["file", "file-browser", "diff"])("offers no Reload panel on %s panels", (kind) => {
       render(<PanelHeader {...makeProps({ kind })} />);
 
@@ -1241,6 +1264,25 @@ describe("PanelHeader", () => {
       expect(findMenuButton("Lock input")).toBeDefined();
       expect(findMenuButton("Rename panel")).toBeUndefined();
       expect(findMenuButton("Duplicate")).toBeUndefined();
+    });
+
+    it("offers a PTY-backed plugin kind's tour on the terminal menu (#12774)", () => {
+      registerPluginKind(PTY_PLUGIN_KIND, {
+        hasPty: true,
+        name: "Shell",
+        tourId: "acme.shell-intro",
+      });
+      mockHasPty = true;
+      storePanelKind(PTY_PLUGIN_KIND);
+      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+
+      findMenuButton("Shell Welcome Tour")!.click();
+
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "help.tour.show",
+        { tourId: "acme.shell-intro" },
+        { source: "menu" }
+      );
     });
 
     it("switches to the terminal menu when the plugin registers its kind after mount", () => {

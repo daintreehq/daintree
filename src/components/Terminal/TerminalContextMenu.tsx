@@ -66,6 +66,7 @@ import {
   ArrowDownFromLine,
   Bell,
   BellOff,
+  CirclePlay,
   Clipboard,
   Copy,
   CopyPlus,
@@ -109,6 +110,7 @@ import { PopoverAnchor } from "@/components/ui/popover";
 import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
 import {
   GENERIC_PANEL_RELOAD_ACTION_ID,
+  GENERIC_PANEL_TOUR_ACTION_ID,
   canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
@@ -697,6 +699,19 @@ export function TerminalContextMenu({
             { source: sourceRef.current }
           );
           break;
+        case "tour": {
+          const tour = readPanelKindMenuCapabilities(
+            panelKindRegistry,
+            terminal.kind ?? "terminal"
+          ).tour;
+          if (!tour) break;
+          void actionService.dispatch(
+            GENERIC_PANEL_TOUR_ACTION_ID,
+            { tourId: tour.id },
+            { source: sourceRef.current }
+          );
+          break;
+        }
         case "reload-browser":
           void actionService.dispatch(
             "browser.reload",
@@ -724,7 +739,7 @@ export function TerminalContextMenu({
           break;
       }
     },
-    [terminal, terminalId, terminalPty, terminalBrowser]
+    [terminal, terminalId, terminalPty, terminalBrowser, panelKindRegistry]
   );
 
   const handleCloseAutoFocus = useCallback(
@@ -1122,6 +1137,7 @@ export function TerminalContextMenu({
             isDockable: kindCapabilities.isDockable,
             canMoveToWorktree,
             canReload: canReloadPanelKind(kind),
+            tourLabel: kindCapabilities.tour?.label,
           }).map((group, groupIndex) => (
             <Fragment key={group[0]?.id ?? groupIndex}>
               {groupIndex > 0 && <ContextMenuSeparator />}
@@ -1420,6 +1436,12 @@ export function TerminalContextMenu({
             <Info className={ICON_CLASS} aria-hidden="true" />
             View terminal info
           </ContextMenuItem>
+          {kindCapabilities.tour && (
+            <ContextMenuItem onSelect={() => handleAction("tour")}>
+              <CirclePlay className={ICON_CLASS} aria-hidden="true" />
+              {kindCapabilities.tour.label}
+            </ContextMenuItem>
+          )}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />

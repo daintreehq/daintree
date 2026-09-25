@@ -61,6 +61,9 @@ const PANEL_KIND_META_KEYS = [
   // out would keep serving a cached host judging state against the version the
   // PREVIOUS build declared (#12280).
   "stateVersion",
+  // A reload that only adds, drops or retargets a tour changes only this, and
+  // the panel menus read it off the registered config.
+  "tourId",
 ] as const satisfies readonly (keyof PanelKindConfig)[];
 
 function panelKindMetaEqual(a: PanelKindConfig, b: PanelKindConfig): boolean {

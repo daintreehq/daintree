@@ -19,6 +19,7 @@ import {
   Bell,
   BellOff,
   ChevronDown,
+  CirclePlay,
   CopyPlus,
   Ellipsis,
   Lock,
@@ -96,6 +97,7 @@ import { MoveToWorktreePicker } from "./MoveToWorktreePicker";
 import {
   GENERIC_PANEL_MENU_ACTION_IDS,
   GENERIC_PANEL_RELOAD_ACTION_ID,
+  GENERIC_PANEL_TOUR_ACTION_ID,
   canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
@@ -422,6 +424,17 @@ function PanelHeaderComponent({
   // through TerminalPane, which hands this header "terminal", but only the
   // stored kind says whether Duplicate has a recipe to run.
   const storedKind = usePanelStore((state) => state.panelsById[id]?.kind);
+  // Read off the stored kind for the same reason: a PTY-backed plugin kind's
+  // tour belongs to it, not to "terminal".
+  const kindTour = readPanelKindMenuCapabilities(panelKindRegistry, storedKind ?? kind).tour;
+  const handleTourSelect = () => {
+    if (!kindTour) return;
+    void actionService.dispatch(
+      GENERIC_PANEL_TOUR_ACTION_ID,
+      { tourId: kindTour.id },
+      { source: "menu" }
+    );
+  };
   // A count, not the worktree list, so a poll that changes nothing but a
   // worktree's status doesn't re-render every header. Counted against the live
   // map rather than as `size > 1`: a panel whose worktree has already gone
@@ -493,6 +506,7 @@ function PanelHeaderComponent({
         isDockable: kindCapabilities.isDockable,
         canMoveToWorktree,
         canReload: canReloadPanelKind(kind),
+        tourLabel: kindTour?.label,
       })
     : null;
   const handleGenericMenuCommand = (commandId: GenericPanelMenuCommandId) => {
@@ -506,6 +520,10 @@ function PanelHeaderComponent({
         { panelId: id },
         { source: "menu" }
       );
+      return;
+    }
+    if (commandId === "tour") {
+      handleTourSelect();
       return;
     }
     if (commandId === "kill" && hasPanelCloseGuard(id)) {
@@ -1507,6 +1525,12 @@ function PanelHeaderComponent({
                     >
                       <CopyPlus className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Duplicate
+                    </DropdownMenuItem>
+                  )}
+                  {kindTour && (
+                    <DropdownMenuItem onSelect={handleTourSelect}>
+                      <CirclePlay className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      {kindTour.label}
                     </DropdownMenuItem>
                   )}
                   {hasPty && (

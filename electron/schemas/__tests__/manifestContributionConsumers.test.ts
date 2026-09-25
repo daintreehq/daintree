@@ -1107,8 +1107,9 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           file: PLUGIN_SCHEMA,
           symbol: "getPluginManifestSchema superRefine (reportDuplicateIds tours)",
         },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (makePluginTourId → PanelKindConfig.tourId)" },
       ],
-      note: "Unique within contributes.tours. Declaration only (#12768): validated at the manifest gate; tour loading and playback are a follow-up that will read it.",
+      note: "Unique within contributes.tours. Qualified with makePluginTourId into the tourId a panel kind's menus play through help.tour.show (#12774); tour loading and playback are a follow-up that registers under the same id.",
     },
     title: {
       mode: "intentional-metadata",
@@ -1129,8 +1130,9 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           file: PLUGIN_SCHEMA,
           symbol: "getPluginManifestSchema superRefine (tour_panel_kind_unknown)",
         },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (tourIdByPanelId → PanelKindConfig.tourId)" },
       ],
-      note: "Must name one of this manifest's own contributes.panels ids.",
+      note: "Must name one of this manifest's own contributes.panels ids. Stamps the tour onto that panel kind so its menus offer it as a Welcome Tour (#12774); the first tour naming a kind wins.",
     },
     audioHosts: {
       mode: "cross-reference",
