@@ -260,7 +260,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       if (!hostId) return null;
       if (workingAgentsSource) return workingAgentsSource(hostId);
       const entry = client.list().find((host) => host.descriptor.id === hostId);
-      return entry?.summary?.agentsObserved.working ?? null;
+      return entry?.summary?.agentsObserved?.working ?? null;
     },
     async reconnect(hostId) {
       const existing = manager.get(hostId);

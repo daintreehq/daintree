@@ -10,6 +10,7 @@ import {
   describeDriver,
   describeMemory,
   describeObservedAgents,
+  describeProjects,
   describeRtt,
   describeSwap,
   describeThermal,
@@ -110,12 +111,7 @@ export function HostCard({ row, history, onSwitch, children }: HostCardProps) {
 
       <dl className="flex flex-col gap-1">
         {summary && <Fact label="Agents" value={describeObservedAgents(summary)} />}
-        {summary && (
-          <Fact
-            label="Projects"
-            value={`${summary.projectCount} open · ${summary.worktreeCount} worktrees`}
-          />
-        )}
+        {summary && <Fact label="Projects" value={describeProjects(summary)} />}
         {summary && <Fact label="Memory" value={describeMemory(summary)} />}
         {summary && <Fact label="Swap" value={describeSwap(summary)} />}
         {summary && <Fact label="Thermal" value={describeThermal(summary)} />}

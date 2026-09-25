@@ -1,9 +1,14 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import * as semver from "semver";
 import os from "node:os";
 import path from "node:path";
 import type { PluginParityRow } from "../../../../shared/types/ipc/pluginParity.js";
-import type { PluginInstallResult } from "../../../../shared/types/plugin.js";
+import type {
+  PluginInstallErrorCode,
+  PluginInstallPhase,
+  PluginInstallResult,
+} from "../../../../shared/types/plugin.js";
 import { isValidRemoteHostId, type HostId } from "../../../../shared/types/remoteHosts.js";
 import { computePluginParity } from "../../../services/plugin/parity/diff.js";
 import { pluginIncompatibleError } from "../../../services/plugin/parity/errors.js";
@@ -17,6 +22,7 @@ import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { fileTransferSource, type TransferSource } from "../../link/transfer.js";
 import {
+  InstallStatusResultSchema,
   MAX_STAGED_BYTES,
   PluginParityLinkMethod,
   STAGE_CHUNK_BYTES,
@@ -45,10 +51,31 @@ export interface ClientPluginParityDeps {
   /** Pack a plugin folder into a package at `outputPath`. */
   pack(dir: string, outputPath: string): Promise<void>;
   tmpDir?: string;
+  /** Mints the id an install is known by on the host. */
+  newOperationId?: () => string;
+  /** How long to keep asking the host about an install whose answer was lost. */
+  reconcileTimeoutMs?: number;
+  /** Interval between those questions, and between progress reads. */
+  pollMs?: number;
+}
+
+/** A window's install job: its id, and where the host's install phases go. */
+export interface InstallJob {
+  jobId?: string;
+  onPhase?: (phase: PluginInstallPhase) => void;
 }
 
 const INVENTORY_TIMEOUT_MS = 30_000;
 const INSTALL_TIMEOUT_MS = 180_000;
+const STATUS_TIMEOUT_MS = 10_000;
+const RECONCILE_TIMEOUT_MS = 120_000;
+const POLL_MS = 500;
+const PHASES: ReadonlySet<string> = new Set<PluginInstallPhase>([
+  "downloading",
+  "extracting",
+  "validating",
+  "activating",
+]);
 /** Windows remembered for the switch notice; far more than anyone has open. */
 const MAX_NOTICE_WINDOWS = 256;
 
@@ -95,9 +122,23 @@ export class ClientPluginParity {
   }
 
   private async hostInventory(hostId: HostId, session: ParitySession): Promise<PluginInventory> {
-    const parsed = PluginInventorySchema.safeParse(
-      await session.call(PluginParityLinkMethod.INVENTORY, {}, { timeoutMs: INVENTORY_TIMEOUT_MS })
-    );
+    let raw: unknown;
+    try {
+      raw = await session.call(
+        PluginParityLinkMethod.INVENTORY,
+        {},
+        { timeoutMs: INVENTORY_TIMEOUT_MS }
+      );
+    } catch (error) {
+      const hostLabel = this.deps.hostLabel(hostId);
+      if (errorCode(error) === "HOST_DISCONNECTED") throw notConnected(hostLabel);
+      throw new AppError({
+        code: "INTERNAL",
+        message: formatErrorMessage(error, "The host's plugin list could not be read"),
+        userMessage: `Couldn't read the plugins installed on ${hostLabel}.`,
+      });
+    }
+    const parsed = PluginInventorySchema.safeParse(raw);
     if (!parsed.success) {
       throw new AppError({
         code: "INTERNAL",
@@ -231,21 +272,103 @@ export class ClientPluginParity {
    * regular `.dntr` file that starts like a ZIP) before a byte leaves here, and
    * answers the way the local install does.
    */
-  async installLocalPackageOnHost(hostId: HostId, localPath: string): Promise<PluginInstallResult> {
+  async installLocalPackageOnHost(
+    hostId: HostId,
+    localPath: string,
+    job: InstallJob = {}
+  ): Promise<PluginInstallResult> {
     this.requireHost(hostId);
     const session = this.session(hostId);
     const refusal = await localArchiveRefusal(localPath);
     if (refusal) return failed("archive_invalid", refusal);
-    return this.sendPackage(hostId, session, localPath, { update: false });
+    return this.sendPackage(hostId, session, localPath, { update: false }, job);
+  }
+
+  private sleep(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, this.deps.pollMs ?? POLL_MS));
+  }
+
+  private async installStatus(session: ParitySession, opId: string) {
+    const parsed = InstallStatusResultSchema.safeParse(
+      await session.call(
+        PluginParityLinkMethod.INSTALL_STATUS,
+        { opId },
+        { timeoutMs: STATUS_TIMEOUT_MS }
+      )
+    );
+    return parsed.success ? parsed.data : null;
+  }
+
+  /** Relay the host's install phases to the window's job until stopped. */
+  private followPhases(session: ParitySession, opId: string, job: InstallJob): () => void {
+    const onPhase = job.onPhase;
+    if (!onPhase) return () => {};
+    let stopped = false;
+    let last: string | null = null;
+    void (async () => {
+      while (!stopped) {
+        await this.sleep();
+        if (stopped || !session.isOpen) return;
+        const status = await this.installStatus(session, opId).catch(() => null);
+        if (stopped || status?.status !== "running") continue;
+        const stage = status.progress?.stage ?? null;
+        if (stage !== null && stage !== last && PHASES.has(stage)) {
+          last = stage;
+          onPhase(stage as PluginInstallPhase);
+        }
+      }
+    })();
+    return () => {
+      stopped = true;
+    };
+  }
+
+  /**
+   * The link dropped or timed out after the install was sent, so it may have
+   * run. Ask the host what became of it (over whichever session is open by
+   * then) before telling the person anything, so a retry is only offered for
+   * an install that didn't happen.
+   */
+  private async reconcile(hostId: HostId, opId: string): Promise<PluginInstallResult> {
+    const hostLabel = this.deps.hostLabel(hostId);
+    const deadline = Date.now() + (this.deps.reconcileTimeoutMs ?? RECONCILE_TIMEOUT_MS);
+    for (;;) {
+      const session = this.deps.sessionFor(hostId);
+      const status = session?.isOpen
+        ? await this.installStatus(session, opId).catch(() => null)
+        : null;
+      switch (status?.status) {
+        case "succeeded": {
+          const result = StageInstallResultSchema.safeParse(status.result);
+          if (result.success) return result.data;
+          throw unknownOutcome(hostLabel);
+        }
+        case "cancelled":
+          return { status: "cancelled" };
+        case "failed":
+          if (status.error.code === "CANCELLED") return { status: "cancelled" };
+          throw hostFailure(status.error.code, hostLabel);
+        case "unknown":
+          throw new AppError({
+            code: "INTERNAL",
+            message: "The install never reached the host",
+            userMessage: `The connection to ${hostLabel} dropped before the install reached it. Nothing was installed; try again.`,
+          });
+      }
+      if (Date.now() >= deadline) throw unknownOutcome(hostLabel);
+      await this.sleep();
+    }
   }
 
   private async sendPackage(
     hostId: HostId,
     session: ParitySession,
     archivePath: string,
-    target: { pluginId?: string; update: boolean }
+    target: { pluginId?: string; update: boolean },
+    job: InstallJob = {}
   ): Promise<PluginInstallResult> {
     const hostLabel = this.deps.hostLabel(hostId);
+    const opId = (this.deps.newOperationId ?? randomUUID)();
     let source: TransferSource;
     try {
       source = await fileTransferSource(archivePath);
@@ -260,6 +383,7 @@ export class ClientPluginParity {
         await session.call(PluginParityLinkMethod.STAGE_BEGIN, {
           size: source.size,
           sha256: source.sha256,
+          ...(job.jobId !== undefined ? { jobId: job.jobId } : {}),
         })
       );
       try {
@@ -277,22 +401,33 @@ export class ClientPluginParity {
         await session.call(PluginParityLinkMethod.STAGE_DISCARD, { token }).catch(() => undefined);
         throw error;
       }
-      return StageInstallResultSchema.parse(
-        await session.call(
-          PluginParityLinkMethod.STAGE_INSTALL,
-          {
-            token,
-            update: target.update,
-            ...(target.pluginId ? { pluginId: target.pluginId } : {}),
-          },
-          { timeoutMs: INSTALL_TIMEOUT_MS }
-        )
-      );
+      const stopPhases = this.followPhases(session, opId, job);
+      try {
+        return StageInstallResultSchema.parse(
+          await session.call(
+            PluginParityLinkMethod.STAGE_INSTALL,
+            {
+              token,
+              update: target.update,
+              opId,
+              ...(target.pluginId ? { pluginId: target.pluginId } : {}),
+            },
+            { timeoutMs: INSTALL_TIMEOUT_MS }
+          )
+        );
+      } catch (error) {
+        if (errorCode(error) !== "OUTCOME_UNKNOWN") throw error;
+      } finally {
+        stopPhases();
+      }
     } catch (error) {
+      // The person's Cancel reached the host before its commit point.
+      if (errorCode(error) === "CANCELLED") return { status: "cancelled" };
       throw restate(error, hostId, hostLabel);
     } finally {
       await Promise.resolve(source.close?.()).catch(() => {});
     }
+    return this.reconcile(hostId, opId);
   }
 }
 
@@ -327,41 +462,82 @@ function errorCode(error: unknown): string | null {
   return typeof error.code === "string" ? error.code : null;
 }
 
+function unknownOutcome(hostLabel: string): AppError {
+  return new AppError({
+    code: "OUTCOME_UNKNOWN",
+    message: "The link dropped during a plugin install",
+    userMessage: `The connection to ${hostLabel} dropped during the install. Check its plugin list before trying again.`,
+  });
+}
+
+/**
+ * A host-side failure by its code alone. The host's own text can carry its
+ * paths or transport detail, so what the person reads is written here.
+ */
+function hostFailure(code: string | null, hostLabel: string): AppError {
+  switch (code) {
+    case "HOST_DISCONNECTED":
+      return notConnected(hostLabel);
+    case "OUTCOME_UNKNOWN":
+      return unknownOutcome(hostLabel);
+    case "RATE_LIMITED":
+      return new AppError({
+        code: "RATE_LIMITED",
+        message: "The host is busy with other plugin installs",
+        userMessage: `${hostLabel} is busy with other plugin installs. Try again in a moment.`,
+      });
+    case "VALIDATION":
+      return new AppError({
+        code: "VALIDATION",
+        message: "The host refused the staged plugin package",
+        userMessage: `The plugin package didn't reach ${hostLabel} intact. Try again.`,
+      });
+    case "PLUGIN_INCOMPATIBLE":
+      return new AppError({
+        code: "PLUGIN_INCOMPATIBLE",
+        message: "The host refused the plugin as incompatible",
+        userMessage: `That plugin can't run on ${hostLabel}.`,
+      });
+    default:
+      return new AppError({
+        code: "INTERNAL",
+        message: `Plugin install on the host failed (${code ?? "no code"})`,
+        userMessage: `Couldn't install the plugin on ${hostLabel}.`,
+      });
+  }
+}
+
 /** A host or link failure, restated with the host's name; typed plugin errors keep their details. */
 function restate(error: unknown, hostId: HostId, hostLabel: string): Error {
   const code = errorCode(error);
   const details = (error as { details?: unknown } | null)?.details;
   if ((code === "PLUGIN_INCOMPATIBLE" || code === "PLUGIN_NOT_ON_HOST") && details) {
-    const userMessage = (error as { userMessage?: unknown }).userMessage;
-    const raw = details as { pluginId?: unknown; reason?: unknown };
+    const raw = details as { pluginId?: unknown; reason?: { kind?: unknown } };
     if (code === "PLUGIN_INCOMPATIBLE" && typeof raw.pluginId === "string" && raw.reason) {
+      // Written here from the reason's kind: the host's own wording is not shown.
       return pluginIncompatibleError(
         raw.pluginId,
         raw.reason as Parameters<typeof pluginIncompatibleError>[1],
-        typeof userMessage === "string"
-          ? `${stripPeriod(userMessage)}; it can't be installed on ${hostLabel}.`
-          : `That plugin can't run on ${hostLabel}.`,
+        incompatibleOnHost(raw.reason.kind, hostLabel),
         hostId
       );
     }
     return error as Error;
   }
-  if (error instanceof AppError && code !== "HOST_DISCONNECTED" && code !== "OUTCOME_UNKNOWN") {
-    return error;
+  return hostFailure(code, hostLabel);
+}
+
+function incompatibleOnHost(kind: unknown, hostLabel: string): string {
+  switch (kind) {
+    case "platform":
+      return `That plugin has no build for ${hostLabel}'s system, so it can't be installed there.`;
+    case "untrusted":
+      return `That plugin is blocked on ${hostLabel} by the plugin blocklist.`;
+    case "engine":
+      return `That plugin needs a different Daintree version than ${hostLabel} runs.`;
+    default:
+      return `That plugin can't be installed on ${hostLabel}.`;
   }
-  if (code === "HOST_DISCONNECTED") return notConnected(hostLabel);
-  if (code === "OUTCOME_UNKNOWN") {
-    return new AppError({
-      code: "OUTCOME_UNKNOWN",
-      message: "The link dropped during a plugin install",
-      userMessage: `The connection to ${hostLabel} dropped during the install. Check its plugin list before trying again.`,
-    });
-  }
-  return new AppError({
-    code: code === "RATE_LIMITED" ? "RATE_LIMITED" : "INTERNAL",
-    message: formatErrorMessage(error, "Plugin install on the host failed"),
-    userMessage: `Couldn't install the plugin on ${hostLabel}.`,
-  });
 }
 
 function isNewer(candidate: string, than: string): boolean {
@@ -370,18 +546,47 @@ function isNewer(candidate: string, than: string): boolean {
   return a !== null && b !== null && semver.gt(a, b);
 }
 
-function stripPeriod(text: string): string {
-  return text.endsWith(".") ? text.slice(0, -1) : text;
+/** What the person reads for each way the host's install can refuse or fail. */
+function installFailureReason(
+  code: PluginInstallErrorCode | undefined,
+  displayName: string,
+  hostLabel: string
+): string {
+  switch (code) {
+    case "archive_mismatch":
+      return `${hostLabel}'s copy of ${displayName} changed since the comparison. Refresh the list and try again.`;
+    case "lock_failed":
+      return `${hostLabel} is busy installing another plugin. Try again in a moment.`;
+    case "name_collision":
+      return `${displayName} clashes with a plugin built into ${hostLabel}.`;
+    case "extraction_timeout":
+      return `${displayName} took too long to unpack on ${hostLabel}. Try again.`;
+    case "archive_invalid":
+    case "manifest_invalid":
+    case "namespace_unauthorized":
+    case "hash_failed":
+    case "size_exceeded":
+      return `${hostLabel} couldn't read this machine's package of ${displayName}.`;
+    case "load_failed":
+    case "unload_failed":
+    case "swap_failed":
+    case "swap_unrecoverable":
+      return `${displayName} didn't load on ${hostLabel}. Check its plugin list.`;
+    default:
+      return `Couldn't install ${displayName} on ${hostLabel}.`;
+  }
 }
 
 function installFailure(result: PluginInstallResult, displayName: string, hostLabel: string) {
-  const reason =
-    result.status === "failed"
-      ? (result.errors[0]?.message ?? "the install failed")
-      : "the install didn't finish";
+  const code = result.status === "failed" ? result.errors[0]?.code : undefined;
   return new AppError({
     code: "INTERNAL",
-    message: `Plugin install on the host did not complete (${result.status})`,
-    userMessage: `Couldn't install ${displayName} on ${hostLabel}: ${reason}`,
+    message: `Plugin install on the host did not complete (${result.status}${code ? `: ${code}` : ""})`,
+    userMessage:
+      result.status === "failed"
+        ? installFailureReason(code, displayName, hostLabel)
+        : result.status === "cancelled"
+          ? `The install of ${displayName} on ${hostLabel} was cancelled.`
+          : `Couldn't install ${displayName} on ${hostLabel}.`,
   });
 }

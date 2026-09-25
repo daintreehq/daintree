@@ -135,7 +135,7 @@ describe("installing a package sent from another machine", () => {
       status: "installed",
       pluginId: "acme.graph",
     });
-    expect(installSpy).toHaveBeenCalledWith(archive, { source: "sideload" });
+    expect(installSpy).toHaveBeenCalledWith(archive, { source: "sideload" }, expect.any(Function));
   });
 
   it("refuses a package for a different plugin than the one asked for", async () => {
@@ -145,15 +145,18 @@ describe("installing a package sent from another machine", () => {
     expect(installSpy).not.toHaveBeenCalled();
   });
 
-  it("refuses an update for a plugin that isn't installed here", async () => {
+  it("hands the installer the replacement rule to apply under its lock", async () => {
     const archive = await makeArchive({ name: "acme.graph", version: "2.0.0" });
-    const result = await svc.installPluginFromAnotherMachine(archive, { update: true });
-    expect(result).toMatchObject({ status: "failed" });
-    register("acme.graph");
-    await expect(svc.installPluginFromAnotherMachine(archive, { update: true })).resolves.toEqual({
-      status: "installed",
-      pluginId: "acme.graph",
-    });
+    await svc.installPluginFromAnotherMachine(archive, { update: true, jobId: "job-1" });
+    const [, options, check] = installSpy.mock.calls[0] as unknown as [
+      string,
+      unknown,
+      (installed: string | null) => string | null,
+    ];
+    expect(options).toEqual({ source: "sideload", jobId: "job-1" });
+    expect(check(null)).toMatch(/no longer installed/);
+    expect(check("2.0.0")).toMatch(/isn't newer/);
+    expect(check("1.0.0")).toBeNull();
   });
 });
 

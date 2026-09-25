@@ -725,6 +725,14 @@ describe("remote session wiring", () => {
       submitFleet: async () => {},
       listWorktrees: async () => [],
       onAgentWaiting: () => () => {},
+      notificationSettings: () => ({
+        enabled: true,
+        waitingEnabled: true,
+        quietHoursEnabled: false,
+        quietHoursStartMin: 0,
+        quietHoursEndMin: 0,
+        quietHoursWeekdays: [],
+      }),
       now: Date.now,
     });
     cleanups.push(disposeHost);

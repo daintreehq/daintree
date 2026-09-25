@@ -33,7 +33,7 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
   const rows = buildHostMenuRows(hostList.hosts, {
     localPlatform: clientPlatform(),
     currentHostId: windowHostId,
-    localSummary: history[LOCAL_HOST_ID]?.[0] ?? hostList.localSummary,
+    localSummary: history.get(LOCAL_HOST_ID)?.[0] ?? hostList.localSummary,
   });
 
   const switchTo = (hostId: HostId, isCurrent: boolean, newWindow: boolean) => {
@@ -65,7 +65,7 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
               <HostCard
                 key={row.hostId}
                 row={row}
-                history={history[row.hostId] ?? EMPTY_HISTORY}
+                history={history.get(row.hostId) ?? EMPTY_HISTORY}
                 onSwitch={(newWindow) => switchTo(row.hostId, row.isCurrent, newWindow)}
               >
                 <PluginParitySummary

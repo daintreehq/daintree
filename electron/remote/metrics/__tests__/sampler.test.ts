@@ -125,4 +125,25 @@ describe("HostMetricsSampler", () => {
     expect(summary.driver).toBeNull();
     expect(summary.projectCount).toBe(4);
   });
+
+  it("reports agent and project reads that fail as unknown, never zero", async () => {
+    const summary = await new HostMetricsSampler(
+      sources({
+        agents: async () => {
+          throw new Error("pty host down");
+        },
+        projects: async () => {
+          throw new Error("store unreadable");
+        },
+      })
+    ).sample();
+    expect(summary.agentsObserved).toBeNull();
+    expect(summary.projectCount).toBeNull();
+    expect(summary.worktreeCount).toBeNull();
+  });
+
+  it("passes an incomplete agent read through as unknown", async () => {
+    const summary = await new HostMetricsSampler(sources({ agents: async () => null })).sample();
+    expect(summary.agentsObserved).toBeNull();
+  });
 });

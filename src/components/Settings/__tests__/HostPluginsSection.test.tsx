@@ -108,12 +108,19 @@ describe("Settings → Hosts → host → Plugins", () => {
 
   it("shows an install failure on its row", async () => {
     parity.diff.mockResolvedValue([row({})]);
-    parity.installOnHost.mockRejectedValueOnce(new Error("Not connected to studio-01."));
+    parity.installOnHost.mockRejectedValueOnce(
+      new Error("[AppError|HOST_DISCONNECTED] link closed at /Users/alice/.daintree/host.sock")
+    );
     const { container, findByRole } = render(
       <HostPluginsSection hostId="studio-01" hostName="studio-01" connected />
     );
     fireEvent.click(await findByRole("button", { name: "Install on studio-01" }));
-    await waitFor(() => expect(container.textContent).toContain("Not connected to studio-01."));
+    await waitFor(() =>
+      expect(container.textContent).toContain(
+        "Not connected to studio-01. Connect to it and try again."
+      )
+    );
+    expect(container.textContent).not.toContain("/Users/alice");
   });
 });
 

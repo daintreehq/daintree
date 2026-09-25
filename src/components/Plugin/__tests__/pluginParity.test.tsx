@@ -25,7 +25,12 @@ import { isPluginNotOnHostError, isRemoteUnsupportedError } from "../remotePlugi
 import { PluginNotOnHostPlaceholder } from "../PluginNotOnHostPlaceholder";
 import { _resetPluginPanelRemovalForTesting, trackPluginPanelKinds } from "../pluginPanelRemoval";
 import { useHostPluginParityNotice } from "../useHostPluginParityNotice";
-import { describeIncompatibility, summarizePluginParity } from "../pluginParityCopy";
+import {
+  describeIncompatibility,
+  pluginParityErrorText,
+  summarizePluginParity,
+} from "../pluginParityCopy";
+import { usePluginParity } from "../usePluginParity";
 
 function row(patch: Partial<PluginParityRow>): PluginParityRow {
   return {
@@ -174,6 +179,114 @@ describe("PluginNotOnHostPlaceholder", () => {
 
     notifyMock.mockClear();
     render(<PluginNotOnHostPlaceholder pluginId="acme.other" kind="acme.other.view" />);
+    await act(async () => {});
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("plugin parity failures", () => {
+  const leaky = () =>
+    acrossBridge({
+      name: "AppError",
+      message: "EACCES: permission denied, open '/Users/me/.daintree/plugins/acme.md/plugin.json'",
+      code: "INTERNAL",
+      userMessage: "Couldn't read /home/greg/secret/package.dntr on studio-01",
+    });
+
+  it("never shows a path or transport text from a bridged failure", () => {
+    const text = pluginParityErrorText(leaky(), "studio-01", "fallback");
+    expect(text).not.toMatch(/\/Users|\/home|EACCES|AppError/);
+    expect(text).toBe("Couldn't read a file on studio-01");
+    expect(
+      pluginParityErrorText(
+        acrossBridge({
+          name: "AppError",
+          message: "x",
+          code: "INTERNAL",
+          userMessage: "Couldn't open file:///home/greg/p.dntr or C:/Users/g/p.dntr",
+        }),
+        "studio-01",
+        "fallback"
+      )
+    ).toBe("Couldn't open a file or a file");
+    // An error with no typed parts gets the host-named fallback, not its message.
+    expect(
+      pluginParityErrorText(new Error("ECONNRESET /Users/me/x"), "studio-01", "Couldn't install")
+    ).toBe("Couldn't install");
+    expect(
+      pluginParityErrorText(
+        acrossBridge({
+          name: "AppError",
+          message: "Link closed: ECONNRESET",
+          code: "OUTCOME_UNKNOWN",
+        }),
+        "studio-01",
+        "fallback"
+      )
+    ).toBe(
+      "The connection to studio-01 dropped before it answered. Check its plugin list before trying again."
+    );
+  });
+
+  it("shows the sanitized message when an install on the host fails", async () => {
+    parity.diff.mockResolvedValue([row({})]);
+    parity.installOnHost.mockRejectedValueOnce(leaky());
+    const { container, findByRole, getByRole } = render(
+      <PluginNotOnHostPlaceholder pluginId="acme.md" />
+    );
+    await findByRole("button", { name: "Install on studio-01" });
+    fireEvent.click(getByRole("button", { name: "Install on studio-01" }));
+    const alert = await findByRole("alert");
+    expect(alert.textContent).toBe("Couldn't read a file on studio-01");
+    expect(container.textContent).not.toMatch(/\/Users|\/home|EACCES/);
+  });
+
+  it("names the host when the comparison fails, without the raw error", async () => {
+    parity.diff.mockRejectedValue(leaky());
+    const { result } = renderHook(() => usePluginParity("studio-01", true, "studio-01"));
+    await waitFor(() => expect(result.current.state.status).toBe("error"));
+    expect(result.current.state).toEqual({
+      status: "error",
+      message: "Couldn't read a file on studio-01",
+    });
+  });
+
+  it("announces no removal when the host couldn't be asked", async () => {
+    parity.diff.mockRejectedValue(new Error("link down"));
+    registerPanelKind({
+      id: "acme.md.preview",
+      name: "Preview",
+      iconId: "puzzle",
+      color: "#888",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme.md",
+    });
+    unregisterPluginPanelKinds("acme.md");
+    render(<PluginNotOnHostPlaceholder pluginId="acme.md" kind="acme.md.preview" />);
+    await waitFor(() => expect(parity.diff).toHaveBeenCalled());
+    await act(async () => {});
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("announces no removal when the host still has the plugin", async () => {
+    parity.diff.mockResolvedValue([
+      row({ group: "incompatible", hostVersion: "1.0.0", action: null }),
+    ]);
+    registerPanelKind({
+      id: "acme.md.preview",
+      name: "Preview",
+      iconId: "puzzle",
+      color: "#888",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme.md",
+    });
+    unregisterPluginPanelKinds("acme.md");
+    render(<PluginNotOnHostPlaceholder pluginId="acme.md" kind="acme.md.preview" />);
+    await waitFor(() => expect(parity.diff).toHaveBeenCalled());
     await act(async () => {});
     expect(notifyMock).not.toHaveBeenCalled();
   });

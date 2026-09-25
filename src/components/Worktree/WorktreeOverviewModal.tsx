@@ -47,7 +47,7 @@ import { isTerminalVisible } from "@/lib/terminalVisibility";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
 import { pluralize } from "@/lib/pluralize";
-import { OtherHostsWorktrees } from "@/components/Hosts/Overview/OtherHostsWorktrees";
+import { LazyOtherHostsWorktrees } from "@/components/Hosts/Overview/LazyHostOverviewParts";
 
 const LIST_ID = "worktree-overview-list";
 
@@ -813,7 +813,7 @@ export function WorktreeOverviewModal({
             )}
           </ScrollShadow>
 
-          <OtherHostsWorktrees onNavigate={onClose} />
+          <LazyOtherHostsWorktrees onNavigate={onClose} />
 
           {/* The footer is the action bar: the keyboard contract at rest, the
               bulk actions while a selection is active — next to the count they

@@ -124,9 +124,12 @@ export function describeHostRowStatus(row: HostMenuRow, now: number = Date.now()
   const summary = liveSummary(row);
   if (!summary) return row.isLocal ? null : "Connected";
   const agents: string[] = [];
-  if (summary.agentsObserved.working > 0) agents.push(`${summary.agentsObserved.working} working`);
-  if (summary.agentsObserved.waiting > 0) agents.push(`${summary.agentsObserved.waiting} waiting`);
-  const projects = plural(summary.projectCount, "project");
+  const observed = summary.agentsObserved;
+  if (observed && observed.working > 0) agents.push(`${observed.working} working`);
+  if (observed && observed.waiting > 0) agents.push(`${observed.waiting} waiting`);
+  // A failed read is unknown, not zero.
+  const projects =
+    summary.projectCount === null ? "Projects unknown" : plural(summary.projectCount, "project");
   // Agent states are what the host's output heuristics saw, and say so.
   return agents.length > 0 ? `${projects} · ${agents.join(" · ")} (observed)` : projects;
 }

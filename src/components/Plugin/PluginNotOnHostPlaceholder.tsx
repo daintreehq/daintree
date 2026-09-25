@@ -3,11 +3,10 @@ import { Puzzle } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
 import { useHostConnection } from "@/hooks/useHostConnection";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { PluginParityRow } from "@shared/types/ipc/pluginParity";
 import { pluginViewHostId } from "./remotePluginView";
 import { announcePluginRemovedFromHost } from "./pluginPanelRemoval";
-import { describeIncompatibility } from "./pluginParityCopy";
+import { describeIncompatibility, pluginParityErrorText } from "./pluginParityCopy";
 
 export interface PluginNotOnHostPlaceholderProps {
   /** The plugin's id as the panel names it. */
@@ -66,10 +65,15 @@ export function PluginNotOnHostPlaceholder({
     };
   }, [hostId, pluginId]);
 
-  const settled = rowState.status !== "loading";
+  // Only a comparison that succeeded and found no copy on the host is evidence
+  // of a removal; a host that couldn't answer proves nothing.
+  const confirmedAbsent =
+    rowState.status === "ready" && (rowState.row === null || rowState.row.hostVersion === null);
   useEffect(() => {
-    if (kind !== undefined && settled) announcePluginRemovedFromHost(kind, pluginId, name, host);
-  }, [kind, settled, pluginId, name, host]);
+    if (kind !== undefined && confirmedAbsent) {
+      announcePluginRemovedFromHost(kind, pluginId, name, host);
+    }
+  }, [kind, confirmedAbsent, pluginId, name, host]);
 
   const canInstall = hostId !== null && row?.action === "install-on-host";
 
@@ -83,7 +87,7 @@ export function PluginNotOnHostPlaceholder({
       () => setInstalling(false),
       (err: unknown) => {
         setInstalling(false);
-        setInstallError(formatErrorMessage(err, `Couldn't install ${name} on ${host}`));
+        setInstallError(pluginParityErrorText(err, host, `Couldn't install ${name} on ${host}`));
       }
     );
   };
