@@ -1824,6 +1824,36 @@ describe("WorkspaceService.deleteWorktree", () => {
       expect(service["monitors"].has("/test/worktree")).toBe(false);
     });
 
+    it("re-checks before a lock retry", async () => {
+      vi.useFakeTimers();
+      try {
+        await withPresentPaths(["/test/worktree", "/test/worktree/during-retry"]);
+        let removeAttempts = 0;
+        mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+          if (args[0] === "worktree" && args[1] === "remove") {
+            removeAttempts += 1;
+            // Registered while the first attempt holds the lock.
+            createAndRegisterMonitor({
+              id: "/test/worktree/during-retry",
+              path: "/test/worktree/during-retry",
+            });
+            throw new Error("fatal: failed to delete '/test/worktree': Permission denied");
+          }
+          return undefined;
+        });
+        createAndRegisterMonitor();
+
+        const pending = service.deleteWorktree("req-retry-nested", "/test/worktree", true);
+        await vi.advanceTimersByTimeAsync(250);
+        await pending;
+
+        expect(removeAttempts).toBe(1);
+        expect(failureError()).toContain("/test/worktree/during-retry");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("compares case-sensitively on Linux", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
       await withPresentPaths(["/test/worktree", "/test/Worktree/nested"]);

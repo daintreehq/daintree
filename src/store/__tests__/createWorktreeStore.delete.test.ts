@@ -81,6 +81,7 @@ vi.mock("@/utils/errorContext", async () => {
 // Import after mocks so the store picks up the mocked deps.
 import { createWorktreeStore, OUTBOX_RETRY_CAP } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
+import { nestedWorktreeDeleteMessage } from "@shared/utils/nestedWorktrees";
 
 function makeSnapshot(id: string): WorktreeSnapshot {
   return {
@@ -988,9 +989,7 @@ describe("createWorktreeStore — nested worktree refusal (#12789)", () => {
     const snapshot = [{ id: "t-1", location: "grid" }];
     captureWorktreeTerminalSnapshotMock.mockReturnValueOnce(snapshot);
     worktreeClientDeleteMock.mockRejectedValueOnce(
-      new Error(
-        "Worktree contains a registered worktree at /repo/wt-1/child. Deleting it would delete that worktree too — delete it first."
-      )
+      new Error(nestedWorktreeDeleteMessage(["/repo/wt-1/child"]))
     );
     const store = createWorktreeStore();
     store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
@@ -1003,5 +1002,21 @@ describe("createWorktreeStore — nested worktree refusal (#12789)", () => {
     expect(entry?.status).toBe("failed");
     expect(store.getState().deleteErrors.get("wt-1")).toContain("/repo/wt-1/child");
     expect(restoreClosedTerminalsMock).toHaveBeenCalledWith(snapshot);
+  });
+
+  it("does not read an unrelated error that merely mentions a registered worktree as permanent", async () => {
+    worktreeClientDeleteMock.mockRejectedValue(
+      new Error("fatal: cannot lock ref in /repo/registered worktree/wt-1")
+    );
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: true });
+    await flushPromises();
+    await flushPromises();
+
+    const entry = [...store.getState().mutationOutbox.values()][0];
+    expect(entry?.status).toBe("pending");
+    expect(entry?.retryCount).toBe(1);
   });
 });

@@ -4516,7 +4516,14 @@ export class WorkspaceService {
           // positional rather than parsed as a flag.
           args.push("--end-of-options", monitor.path);
           markHostPerformance("wtdelete.git-remove:start", { worktreeId });
-          const removeResult = await this.removeGitWorktreeWithRetry(this.git, args, monitor.path);
+          const removeResult = await this.removeGitWorktreeWithRetry(
+            this.git,
+            args,
+            monitor.path,
+            // A lock retry waits up to seconds between attempts; a worktree
+            // nested in that window must stop the next one.
+            () => this.guardNestedWorktreeDelete(monitor)
+          );
           markHostPerformance("wtdelete.git-remove:end", { worktreeId });
           if (removeResult === "stale") {
             try {
@@ -5066,9 +5073,11 @@ export class WorkspaceService {
   private async removeGitWorktreeWithRetry(
     git: SimpleGit,
     args: string[],
-    worktreePath: string
+    worktreePath: string,
+    beforeRetry: () => Promise<void>
   ): Promise<"removed" | "stale"> {
     for (let attempt = 0; ; attempt++) {
+      if (attempt > 0) await beforeRetry();
       try {
         await git.raw(args);
         return "removed";

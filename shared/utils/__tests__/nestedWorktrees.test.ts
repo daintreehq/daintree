@@ -35,6 +35,6 @@ describe("nestedWorktreeDeleteMessage", () => {
 
     const two = nestedWorktreeDeleteMessage(["/repo/wt/a", "/repo/wt/b"]);
     expect(two).toContain(NESTED_WORKTREE_DELETE_MARKER);
-    expect(two).toContain("2 registered worktrees: /repo/wt/a, /repo/wt/b");
+    expect(two).toContain("2 registered worktrees (/repo/wt/a, /repo/wt/b)");
   });
 });

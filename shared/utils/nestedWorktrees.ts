@@ -2,9 +2,10 @@ import { isPathStrictlyInside } from "./path.js";
 
 /**
  * Stable fragment of the refusal below. The renderer's outbox matches on it to
- * treat the refusal as permanent rather than retrying a deterministic failure.
+ * treat the refusal as permanent rather than retrying a deterministic failure,
+ * so it is a phrase no path or git message will contain by accident.
  */
-export const NESTED_WORKTREE_DELETE_MARKER = "registered worktree";
+export const NESTED_WORKTREE_DELETE_MARKER = "which deleting it would destroy — delete the nested";
 
 /**
  * The candidate paths that sit strictly inside `targetPath`, sorted so the
@@ -30,7 +31,7 @@ export function findNestedWorktreePaths(
  */
 export function nestedWorktreeDeleteMessage(nestedPaths: readonly string[]): string {
   if (nestedPaths.length === 1) {
-    return `Worktree contains a ${NESTED_WORKTREE_DELETE_MARKER} at ${nestedPaths[0]}. Deleting it would delete that worktree too — delete it first.`;
+    return `Worktree contains a registered worktree at ${nestedPaths[0]}, ${NESTED_WORKTREE_DELETE_MARKER} worktree first.`;
   }
-  return `Worktree contains ${nestedPaths.length} ${NESTED_WORKTREE_DELETE_MARKER}s: ${nestedPaths.join(", ")}. Deleting it would delete them too — delete them first.`;
+  return `Worktree contains ${nestedPaths.length} registered worktrees (${nestedPaths.join(", ")}), ${NESTED_WORKTREE_DELETE_MARKER} worktrees first.`;
 }
