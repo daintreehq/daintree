@@ -22,11 +22,13 @@ function fakeManager() {
       hostInfo: { platform: "linux"; homeDir: string; tmpDir: string } | null;
       state: () => HostConnectionState;
       describeProject: ReturnType<typeof vi.fn>;
+      whenReady: ReturnType<typeof vi.fn>;
     }
   >();
   const listeners = new Set<(hostId: string, state: HostConnectionState) => void>();
   const manager = {
     status: "connected" as string,
+    readiness: "ready" as string,
     connect: vi.fn((hostId: string) => {
       let connection = connections.get(hostId);
       if (!connection) {
@@ -39,6 +41,7 @@ function fakeManager() {
             path: `/srv/${projectId}`,
             name: projectId,
           })),
+          whenReady: vi.fn(async () => manager.readiness),
         };
         connections.set(hostId, connection);
       }
@@ -83,6 +86,7 @@ describe("RemoteHostsClient", () => {
   let keys: Map<number, string>;
   let client: RemoteHostsClient;
   let router: RemoteRouter;
+  let onFirstUse: Mock<() => void>;
 
   beforeEach(() => {
     registry = new HostRegistry(memoryStore());
@@ -102,7 +106,9 @@ describe("RemoteHostsClient", () => {
     };
     installRouter = vi.fn<(router: RemoteRouter | null) => void>();
     events = [];
+    onFirstUse = vi.fn<() => void>();
     client = new RemoteHostsClient({
+      onFirstUse,
       registry,
       manager: manager as unknown as RemoteHostManager,
       bindings,
@@ -220,5 +226,59 @@ describe("RemoteHostsClient", () => {
       hostId: "studio-01",
       connection: { status: "unreachable", lastSeenAt: 5, detail: "refused" },
     });
+  });
+
+  it("runs the first-use wiring once, and never for a user who only reads", async () => {
+    client.list();
+    client.getWindowHost(ctxFor(5, 1));
+    expect(onFirstUse).not.toHaveBeenCalled();
+    client.connect({ hostId: "studio-01" });
+    await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false });
+    expect(onFirstUse).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the link before opening a project, and fails clearly when it never comes", async () => {
+    manager.readiness = "timeout";
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      })
+    ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+    expect(bindings.get(1)).toBe("local");
+
+    manager.readiness = "version-mismatch";
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: true,
+        projectId: "proj-1",
+      })
+    ).rejects.toMatchObject({ code: "HOST_VERSION_MISMATCH" });
+    // No window is opened for a host that cannot serve it.
+    expect(windows.openWindow).not.toHaveBeenCalled();
+  });
+
+  it("never opens a remote view without the host's path for the project", async () => {
+    const connection = manager.connect("studio-01");
+    connection.describeProject.mockResolvedValueOnce(null);
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "gone",
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    connection.describeProject.mockRejectedValueOnce(new Error("link dropped"));
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
   });
 });

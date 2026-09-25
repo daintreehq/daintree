@@ -3,6 +3,7 @@ import { Lane } from "../link/frames.js";
 import { InteractiveKind } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
 import { safePost, type PortLike } from "../terminal/ports.js";
+import { checkRemoteWorktreePortRequest } from "./requestSchema.js";
 
 /**
  * The worktree RPC port over the link. The renderer's preload client posts
@@ -55,6 +56,11 @@ export interface WorktreePortHostBridgeOptions {
   open(projectId: string): void;
   /** Close the endpoint's workspace-host port for good. */
   release(): void;
+  /**
+   * The root of the endpoint's project, read per request so a project moved
+   * or forgotten since the port opened is judged by where it is now.
+   */
+  resolveProjectRoot(projectId: string): string | null;
 }
 
 /** Host side: one remote endpoint's port to its project's workspace host. */
@@ -150,10 +156,22 @@ export class WorktreePortHostBridge {
   }
 
   private onClientMessage(raw: unknown): void {
-    const parsed = WorktreePortRequestSchema.safeParse(raw);
-    if (!parsed.success) return;
-    if (!safePost(this.port, parsed.data)) {
-      postWorktree(this.session, this.endpointId, { id: parsed.data.id, error: HOST_UNAVAILABLE });
+    // The far end is another machine: nothing reaches the trusted workspace
+    // port unless it is a protocol request aimed at this endpoint's project.
+    const projectRoot =
+      this.projectId === null ? null : this.opts.resolveProjectRoot(this.projectId);
+    const checked = checkRemoteWorktreePortRequest(raw, projectRoot);
+    if (!checked.ok) {
+      if (checked.id !== null) {
+        postWorktree(this.session, this.endpointId, { id: checked.id, error: checked.error });
+      }
+      return;
+    }
+    if (!safePost(this.port, checked.request)) {
+      postWorktree(this.session, this.endpointId, {
+        id: checked.request.id,
+        error: HOST_UNAVAILABLE,
+      });
     }
   }
 }

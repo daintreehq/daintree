@@ -1,0 +1,473 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const m = vi.hoisted(() => {
+  const calls: string[] = [];
+  const record = (name: string): void => {
+    calls.push(name);
+  };
+
+  type Listener<T> = (value: T) => void;
+  const server = {
+    sessionListeners: new Set<Listener<unknown>>(),
+    expiredListeners: new Set<Listener<unknown>>(),
+    listen: vi.fn(async () => record("server.listen")),
+    close: vi.fn(async () => record("server.close")),
+    onSession: vi.fn((l: Listener<unknown>) => {
+      server.sessionListeners.add(l);
+      return () => server.sessionListeners.delete(l);
+    }),
+    onSessionExpired: vi.fn((l: Listener<unknown>) => {
+      server.expiredListeners.add(l);
+      return () => server.expiredListeners.delete(l);
+    }),
+  };
+
+  const openedListeners = new Set<(endpoint: unknown, handle: unknown) => void>();
+  const sessionHost = {
+    onEndpointOpened: vi.fn((l: (endpoint: unknown, handle: unknown) => void) => {
+      openedListeners.add(l);
+      return () => openedListeners.delete(l);
+    }),
+  };
+
+  const clientOpenedListeners = new Set<(hostId: string, info: unknown) => void>();
+  const clientClosedListeners = new Set<(hostId: string, info: unknown) => void>();
+  const viewHosts = new Map<number, string>();
+  const clientHooks: {
+    current: {
+      onFirstUse?: () => void;
+      onRemoteViewActivated?: (windowId: number, wc: unknown, isNew: boolean) => void;
+    };
+  } = { current: {} };
+  const client = {
+    client: { connect: vi.fn() },
+    onEndpointOpened: vi.fn((l: (hostId: string, info: unknown) => void) => {
+      clientOpenedListeners.add(l);
+      return () => clientOpenedListeners.delete(l);
+    }),
+    onEndpointClosed: vi.fn((l: (hostId: string, info: unknown) => void) => {
+      clientClosedListeners.add(l);
+      return () => clientClosedListeners.delete(l);
+    }),
+    hostForView: (id: number) => viewHosts.get(id) ?? null,
+    dispose: vi.fn(async () => record("client.dispose")),
+  };
+  const remoteViewHooks: { current: unknown } = { current: null };
+
+  return {
+    calls,
+    record,
+    server,
+    sessionHost,
+    openedListeners,
+    client,
+    clientOpenedListeners,
+    clientClosedListeners,
+    viewHosts,
+    clientHooks,
+    remoteViewHooks,
+    HostServer: vi.fn(function HostServer() {
+      record("new HostServer");
+      return server;
+    }),
+    initRemoteHostsHost: vi.fn(() => {
+      record("initRemoteHostsHost");
+      return { sessionHost, dispose: vi.fn(() => record("host.dispose")) };
+    }),
+    initRemoteHostsClient: vi.fn((hooks: typeof clientHooks.current = {}) => {
+      record("initRemoteHostsClient");
+      clientHooks.current = hooks;
+      return client;
+    }),
+    attachTerminalBridge: vi.fn(),
+    detachTerminalBridge: vi.fn(),
+    disposeAllTerminalBridges: vi.fn(() => record("disposeAllTerminalBridges")),
+    attachWorktreePortBridge: vi.fn(),
+    detachWorktreePortBridge: vi.fn(),
+    attachClientTerminalRelay: vi.fn(),
+    attachClientWorktreeRelay: vi.fn(),
+    detachClientTerminalRelayFor: vi.fn(),
+    detachClientWorktreeRelayFor: vi.fn(),
+    disposeAllClientTerminalRelays: vi.fn(() => record("dispose terminal relays")),
+    disposeAllClientWorktreeRelays: vi.fn(() => record("dispose worktree relays")),
+    redeliverClientWorktreePort: vi.fn(),
+    releaseWindowTerminalPort: vi.fn(),
+    installTerminalOverride: vi.fn(),
+    installWorktreeOverride: vi.fn(),
+    uninstallHooks: vi.fn(() => {
+      record("uninstall view hooks");
+      remoteViewHooks.current = null;
+    }),
+    uninstallTerminal: vi.fn(() => record("uninstall terminal override")),
+    uninstallWorktree: vi.fn(() => record("uninstall worktree override")),
+    statsPush: vi.fn(),
+    fleetPush: vi.fn(),
+    runHistoryPush: vi.fn(),
+    isWorkspaceClientStarting: vi.fn(() => false),
+    ensureWorkspaceClient: vi.fn(async () => ({})),
+    resolveLiveWebContents: vi.fn((id: number) => ({ id })),
+  };
+});
+
+vi.mock("electron", () => ({
+  app: { getPath: () => "/tmp/daintree-user-data", isPackaged: false },
+}));
+vi.mock("../../boot/hostServices.js", () => ({
+  ensureWorkspaceClient: m.ensureWorkspaceClient,
+  isWorkspaceClientStarting: m.isWorkspaceClientStarting,
+}));
+vi.mock("../../ipc/handlers/projectCrud/index.js", () => ({
+  getProjectStatsService: () => ({ pushSnapshotToEndpoint: m.statsPush }),
+  getFleetSnapshotService: () => ({ pushSnapshotToEndpoint: m.fleetPush }),
+}));
+vi.mock("../../services/runHistory/runHistoryService.js", () => ({
+  pushRunHistorySnapshotToEndpoint: m.runHistoryPush,
+}));
+vi.mock("../../window/webContentsRegistry.js", () => ({
+  resolveLiveWebContents: m.resolveLiveWebContents,
+}));
+vi.mock("../../window/portDistribution.js", () => ({
+  releaseWindowTerminalPort: m.releaseWindowTerminalPort,
+  setRemoteViewHooks: vi.fn((hooks: unknown) => {
+    m.remoteViewHooks.current = hooks;
+    return m.uninstallHooks;
+  }),
+}));
+vi.mock("../../window/serviceRefs.js", () => ({ getPtyClient: () => ({ pty: true }) }));
+vi.mock("../../window/windowRef.js", () => ({
+  getWindowRegistry: () => ({ getByWindowId: (id: number) => ({ windowId: id }) }),
+}));
+vi.mock("../client/initClient.js", () => ({
+  initRemoteHostsClient: m.initRemoteHostsClient,
+  setRemoteHostsWindowOpener: vi.fn(),
+}));
+vi.mock("../handshakeInfo.js", () => ({ getLocalHandshakeInfo: () => ({ version: "test" }) }));
+vi.mock("../host/HostServer.js", () => ({ HostServer: m.HostServer }));
+vi.mock("../host/initHost.js", () => ({ initRemoteHostsHost: m.initRemoteHostsHost }));
+vi.mock("../terminal/clientAttach.js", () => ({
+  attachClientTerminalRelay: m.attachClientTerminalRelay,
+  detachClientTerminalRelayFor: m.detachClientTerminalRelayFor,
+  disposeAllClientTerminalRelays: m.disposeAllClientTerminalRelays,
+  installClientTerminalPortOverride: vi.fn((hostForView: unknown) => {
+    m.installTerminalOverride(hostForView);
+    return m.uninstallTerminal;
+  }),
+}));
+vi.mock("../terminal/hostAttach.js", () => ({
+  attachTerminalBridge: m.attachTerminalBridge,
+  detachTerminalBridge: m.detachTerminalBridge,
+  disposeAllTerminalBridges: m.disposeAllTerminalBridges,
+}));
+vi.mock("../worktreePort/attach.js", () => ({
+  attachWorktreePortBridge: m.attachWorktreePortBridge,
+  detachWorktreePortBridge: m.detachWorktreePortBridge,
+  attachClientWorktreeRelay: m.attachClientWorktreeRelay,
+  detachClientWorktreeRelayFor: m.detachClientWorktreeRelayFor,
+  disposeAllClientWorktreeRelays: m.disposeAllClientWorktreeRelays,
+  redeliverClientWorktreePort: m.redeliverClientWorktreePort,
+  installClientWorktreePortOverride: vi.fn((hostForView: unknown) => {
+    m.installWorktreeOverride(hostForView);
+    return m.uninstallWorktree;
+  }),
+}));
+
+import { startRemoteHosts, stopRemoteHosts } from "../boot.js";
+import { _resetRemoteServicesForTest, getRemoteService } from "../runtime.js";
+
+function fakeEndpoint(endpointId: string) {
+  const closeListeners: Array<() => void> = [];
+  let closed = false;
+  return {
+    endpointId,
+    clientEndpointId: endpointId.split(":").at(-1),
+    isClosed: () => closed,
+    onClose: (l: () => void) => {
+      closeListeners.push(l);
+      return { dispose: () => {} };
+    },
+    close() {
+      closed = true;
+      for (const l of closeListeners) l();
+    },
+  };
+}
+
+function openEndpoint(endpoint: unknown, sessionId: string, link: unknown) {
+  for (const l of [...m.openedListeners]) l(endpoint, { sessionId, link: () => link });
+}
+
+beforeEach(() => {
+  m.calls.length = 0;
+  m.server.sessionListeners.clear();
+  m.server.expiredListeners.clear();
+  m.openedListeners.clear();
+  m.clientOpenedListeners.clear();
+  m.clientClosedListeners.clear();
+  m.viewHosts.clear();
+  m.clientHooks.current = {};
+  m.remoteViewHooks.current = null;
+  vi.clearAllMocks();
+  _resetRemoteServicesForTest();
+});
+
+afterEach(async () => {
+  await stopRemoteHosts();
+});
+
+describe("startRemoteHosts", () => {
+  it("starts only the client side when Host mode is off, and dials nothing", async () => {
+    await startRemoteHosts({ hostMode: false });
+
+    expect(m.initRemoteHostsClient).toHaveBeenCalledTimes(1);
+    expect(m.HostServer).not.toHaveBeenCalled();
+    expect(m.initRemoteHostsHost).not.toHaveBeenCalled();
+    expect(m.server.listen).not.toHaveBeenCalled();
+    expect(getRemoteService("hostServer")).toBeUndefined();
+    // A user with no hosts: boot never asks for a connection.
+    expect(m.client.client.connect).not.toHaveBeenCalled();
+    expect(m.attachClientTerminalRelay).not.toHaveBeenCalled();
+    // Nothing per-view is installed until a host is actually used.
+    expect(m.installTerminalOverride).not.toHaveBeenCalled();
+    expect(m.installWorktreeOverride).not.toHaveBeenCalled();
+    expect(m.remoteViewHooks.current).toBeNull();
+    expect(m.clientOpenedListeners.size).toBe(0);
+    // Both boot paths already started the workspace client; boot never starts one.
+    expect(m.ensureWorkspaceClient).not.toHaveBeenCalled();
+  });
+
+  it("waits for a workspace client still starting before installing the port overrides", async () => {
+    m.isWorkspaceClientStarting.mockReturnValueOnce(true);
+    await startRemoteHosts({ hostMode: false });
+    expect(m.ensureWorkspaceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs the overrides and view hooks once, on the first use of a host", async () => {
+    await startRemoteHosts({ hostMode: false });
+    m.clientHooks.current.onFirstUse?.();
+    m.clientHooks.current.onFirstUse?.();
+    expect(m.installTerminalOverride).toHaveBeenCalledTimes(1);
+    expect(m.installWorktreeOverride).toHaveBeenCalledTimes(1);
+    const hostForView = m.installTerminalOverride.mock.calls[0]![0] as (id: number) => unknown;
+    m.viewHosts.set(11, "studio-01");
+    expect(hostForView(11)).toBe("studio-01");
+    const hooks = m.remoteViewHooks.current as { isRemoteView(wc: { id: number }): boolean };
+    expect(hooks.isRemoteView({ id: 11 })).toBe(true);
+    expect(hooks.isRemoteView({ id: 12 })).toBe(false);
+  });
+
+  it("attaches both client relays when a view's endpoint is on a session", async () => {
+    await startRemoteHosts({ hostMode: false });
+    m.clientHooks.current.onFirstUse?.();
+    m.viewHosts.set(11, "studio-01");
+    const session = { id: "s" };
+    for (const l of m.clientOpenedListeners) {
+      l("studio-01", { session, webContentsId: 11, endpointId: "view-11" });
+    }
+    expect(m.attachClientTerminalRelay).toHaveBeenCalledWith(
+      session,
+      { id: 11 },
+      "view-11",
+      "studio-01"
+    );
+    expect(m.attachClientWorktreeRelay).toHaveBeenCalledWith(
+      session,
+      { id: 11 },
+      "view-11",
+      "studio-01"
+    );
+  });
+
+  it("attaches no streams for a view whose authoritative host is another one", async () => {
+    await startRemoteHosts({ hostMode: false });
+    m.clientHooks.current.onFirstUse?.();
+    m.viewHosts.set(11, "studio-02");
+    for (const l of m.clientOpenedListeners) {
+      l("studio-01", { session: {}, webContentsId: 11, endpointId: "view-11" });
+    }
+    m.viewHosts.delete(11);
+    for (const l of m.clientOpenedListeners) {
+      l("studio-01", { session: {}, webContentsId: 11, endpointId: "view-11" });
+    }
+    expect(m.attachClientTerminalRelay).not.toHaveBeenCalled();
+    expect(m.attachClientWorktreeRelay).not.toHaveBeenCalled();
+  });
+
+  it("retires a view's relays when its endpoint is discarded", async () => {
+    await startRemoteHosts({ hostMode: false });
+    m.clientHooks.current.onFirstUse?.();
+    for (const l of m.clientClosedListeners) {
+      l("studio-01", { webContentsId: 11, endpointId: "view-11" });
+    }
+    expect(m.detachClientTerminalRelayFor).toHaveBeenCalledWith(11, "studio-01", "view-11");
+    expect(m.detachClientWorktreeRelayFor).toHaveBeenCalledWith(11, "studio-01", "view-11");
+  });
+
+  it("retires the local pair when a remote view is shown, and re-posts a cached view's worktree port", async () => {
+    await startRemoteHosts({ hostMode: false });
+    const wc = { id: 11 };
+    m.clientHooks.current.onRemoteViewActivated?.(3, wc, true);
+    expect(m.releaseWindowTerminalPort).toHaveBeenCalledWith({ windowId: 3 }, { pty: true });
+    expect(m.redeliverClientWorktreePort).not.toHaveBeenCalled();
+    m.clientHooks.current.onRemoteViewActivated?.(3, wc, false);
+    expect(m.redeliverClientWorktreePort).toHaveBeenCalledWith(wc);
+  });
+
+  it("skips relays for a view that is already gone", async () => {
+    await startRemoteHosts({ hostMode: false });
+    m.clientHooks.current.onFirstUse?.();
+    m.viewHosts.set(11, "studio-01");
+    m.resolveLiveWebContents.mockReturnValueOnce(null as never);
+    for (const l of m.clientOpenedListeners) {
+      l("studio-01", { session: {}, webContentsId: 11, endpointId: "view-11" });
+    }
+    expect(m.attachClientTerminalRelay).not.toHaveBeenCalled();
+  });
+
+  it("starts the host side in Host mode and registers the server", async () => {
+    await startRemoteHosts({ hostMode: true });
+
+    expect(m.calls).toEqual([
+      "initRemoteHostsClient",
+      "new HostServer",
+      "initRemoteHostsHost",
+      "server.listen",
+    ]);
+    expect(m.initRemoteHostsHost).toHaveBeenCalledWith(m.server);
+    expect(getRemoteService("hostServer")).toBe(m.server);
+  });
+
+  it("attaches both bridges and replays snapshots when a remote endpoint opens", async () => {
+    await startRemoteHosts({ hostMode: true });
+    const endpoint = fakeEndpoint("remote:s1:view-11");
+    const link = { id: "link-1" };
+
+    openEndpoint(endpoint, "s1", link);
+    await vi.waitFor(() => expect(m.runHistoryPush).toHaveBeenCalledWith(endpoint));
+
+    expect(m.attachTerminalBridge).toHaveBeenCalledWith(link, endpoint);
+    expect(m.attachWorktreePortBridge).toHaveBeenCalledWith(link, endpoint);
+    expect(m.statsPush).toHaveBeenCalledWith(endpoint);
+    expect(m.fleetPush).toHaveBeenCalledWith(endpoint);
+  });
+
+  it("re-attaches a session's endpoints to the new link when it resumes", async () => {
+    await startRemoteHosts({ hostMode: true });
+    const kept = fakeEndpoint("remote:s1:view-11");
+    const closed = fakeEndpoint("remote:s1:view-12");
+    const other = fakeEndpoint("remote:s2:view-13");
+    openEndpoint(kept, "s1", { id: "link-1" });
+    openEndpoint(closed, "s1", { id: "link-1" });
+    openEndpoint(other, "s2", { id: "link-2" });
+    closed.close();
+    m.attachTerminalBridge.mockClear();
+    m.attachWorktreePortBridge.mockClear();
+
+    const resumed = { id: "link-1b" };
+    for (const l of m.server.sessionListeners)
+      l({ sessionId: "s1", resumed: true, session: resumed });
+    // A fresh (non-resumed) session opens its endpoints anew; nothing to carry.
+    for (const l of m.server.sessionListeners) l({ sessionId: "s2", resumed: false, session: {} });
+
+    expect(m.attachTerminalBridge.mock.calls).toEqual([[resumed, kept]]);
+    expect(m.attachWorktreePortBridge.mock.calls).toEqual([[resumed, kept]]);
+  });
+
+  it("detaches both bridges for every endpoint of an expired session", async () => {
+    await startRemoteHosts({ hostMode: true });
+    openEndpoint(fakeEndpoint("remote:s1:view-11"), "s1", {});
+    openEndpoint(fakeEndpoint("remote:s1:view-12"), "s1", {});
+    openEndpoint(fakeEndpoint("remote:s2:view-13"), "s2", {});
+
+    for (const l of m.server.expiredListeners) l({ sessionId: "s1", clientId: "c" });
+
+    expect(m.detachTerminalBridge.mock.calls.flat()).toEqual([
+      "remote:s1:view-11",
+      "remote:s1:view-12",
+    ]);
+    expect(m.detachWorktreePortBridge.mock.calls.flat()).toEqual([
+      "remote:s1:view-11",
+      "remote:s1:view-12",
+    ]);
+  });
+
+  it("does not treat a listen interrupted by stop as a failure", async () => {
+    let rejectListen!: (error: Error) => void;
+    m.server.listen.mockImplementationOnce(
+      () => new Promise<void>((_resolve, reject) => (rejectListen = reject))
+    );
+    const starting = startRemoteHosts({ hostMode: true });
+    await vi.waitFor(() => expect(m.server.listen).toHaveBeenCalled());
+
+    const stopping = stopRemoteHosts();
+    rejectListen(new Error("Host server was closed before it finished starting"));
+
+    await expect(starting).resolves.toBeUndefined();
+    await stopping;
+    expect(m.server.close).toHaveBeenCalled();
+  });
+
+  it("surfaces a listen failure that was not caused by stop", async () => {
+    m.server.listen.mockRejectedValueOnce(new Error("no /run/user/501"));
+    await expect(startRemoteHosts({ hostMode: true })).rejects.toThrow("no /run/user/501");
+  });
+});
+
+describe("stopRemoteHosts", () => {
+  it("tears the host down before the client, in reverse of start", async () => {
+    await startRemoteHosts({ hostMode: true });
+    m.clientHooks.current.onFirstUse?.();
+    m.calls.length = 0;
+
+    await stopRemoteHosts();
+
+    expect(m.calls).toEqual([
+      "dispose terminal relays",
+      "dispose worktree relays",
+      "uninstall view hooks",
+      "uninstall worktree override",
+      "uninstall terminal override",
+      "disposeAllTerminalBridges",
+      "host.dispose",
+      "server.close",
+      "client.dispose",
+    ]);
+    expect(getRemoteService("hostServer")).toBeUndefined();
+    expect(m.openedListeners.size).toBe(0);
+    expect(m.server.sessionListeners.size).toBe(0);
+    expect(m.clientOpenedListeners.size).toBe(0);
+    expect(m.clientClosedListeners.size).toBe(0);
+  });
+
+  it("disposes client relays on every stop while a view survives reconnects", async () => {
+    for (let cycle = 0; cycle < 3; cycle++) {
+      await startRemoteHosts({ hostMode: false });
+      m.clientHooks.current.onFirstUse?.();
+      m.viewHosts.set(11, "studio-01");
+      // Disconnect and reconnect: the endpoint is discarded, then reopened.
+      for (const l of m.clientClosedListeners) {
+        l("studio-01", { webContentsId: 11, endpointId: "view-11" });
+      }
+      for (const l of m.clientOpenedListeners) {
+        l("studio-01", { session: { cycle }, webContentsId: 11, endpointId: "view-11" });
+      }
+      await stopRemoteHosts();
+      expect(m.clientOpenedListeners.size).toBe(0);
+      expect(m.clientClosedListeners.size).toBe(0);
+      expect(m.remoteViewHooks.current).toBeNull();
+    }
+    expect(m.detachClientTerminalRelayFor).toHaveBeenCalledTimes(3);
+    expect(m.attachClientTerminalRelay).toHaveBeenCalledTimes(3);
+    expect(m.disposeAllClientTerminalRelays).toHaveBeenCalledTimes(3);
+    expect(m.disposeAllClientWorktreeRelays).toHaveBeenCalledTimes(3);
+    expect(m.uninstallTerminal).toHaveBeenCalledTimes(3);
+  });
+
+  it("is a no-op when nothing started, and a second stop does nothing more", async () => {
+    await stopRemoteHosts();
+    await startRemoteHosts({ hostMode: false });
+    await stopRemoteHosts();
+    m.calls.length = 0;
+    await stopRemoteHosts();
+    expect(m.calls).toEqual([]);
+  });
+});

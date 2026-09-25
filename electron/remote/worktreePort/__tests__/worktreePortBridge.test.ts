@@ -21,7 +21,9 @@ afterEach(async () => {
   await removeTempDir(dir);
 });
 
-async function setup() {
+const PROJECT_ROOT = "/repos/project-a";
+
+async function setup(projectRoot: string | null = PROJECT_ROOT) {
   let workspace: FakePeer | null = null;
   let renderer: FakePeer | null = null;
   const opened: string[] = [];
@@ -40,6 +42,7 @@ async function setup() {
       released++;
       workspace?.close();
     },
+    resolveProjectRoot: (projectId) => (projectId === "project-a" ? projectRoot : null),
   });
   const relay: WorktreePortClientRelay = new WorktreePortClientRelay({
     endpointId: "ep-1",
@@ -166,5 +169,91 @@ describe("worktree port over the link", () => {
     await waitFor(() => h.renderer().received.length === 1);
     expect(h.renderer().received[0]).toMatchObject({ id: "worktree-4" });
     expect(typeof h.renderer().received[0]!.error).toBe("string");
+  });
+});
+
+describe("worktree requests from a remote endpoint", () => {
+  it("forwards a request naming the endpoint's own project root", async () => {
+    const h = await setup();
+    await h.connect();
+
+    h.renderer().post({ id: "b-1", action: "list-branches", payload: { rootPath: PROJECT_ROOT } });
+    h.renderer().post({
+      id: "b-2",
+      action: "has-resource-config",
+      payload: { rootPath: `${PROJECT_ROOT}/` },
+    });
+    await waitFor(() => h.workspace().received.length === 2);
+    expect(h.workspace().received[0]).toEqual({
+      id: "b-1",
+      action: "list-branches",
+      payload: { rootPath: PROJECT_ROOT },
+    });
+  });
+
+  it.each([
+    ["another project's root", "/repos/project-b"],
+    ["a parent of the root", "/repos"],
+    ["a path under the root", `${PROJECT_ROOT}/sub`],
+    ["a relative path", "project-a"],
+    ["a traversal back out", `${PROJECT_ROOT}/../project-b`],
+  ])("refuses %s and fails the request instead of forwarding it", async (_label, rootPath) => {
+    const h = await setup();
+    await h.connect();
+
+    h.renderer().post({
+      id: "c-1",
+      action: "create-worktree",
+      payload: { rootPath, options: { baseBranch: "main", newBranch: "x", path: "/tmp/x" } },
+    });
+    await waitFor(() => h.renderer().received.length === 1);
+    expect(h.renderer().received[0]).toEqual({ id: "c-1", error: "Path is outside this project" });
+    expect(h.workspace().received).toEqual([]);
+  });
+
+  it("refuses every path-bearing request when the project has no known root", async () => {
+    const h = await setup(null);
+    await h.connect();
+
+    h.renderer().post({ id: "r-1", action: "get-recent-branches", payload: { rootPath: "/x" } });
+    await waitFor(() => h.renderer().received.length === 1);
+    expect(h.renderer().received[0]).toMatchObject({ id: "r-1", error: expect.any(String) });
+    expect(h.workspace().received).toEqual([]);
+  });
+
+  it("refuses actions outside the protocol and payloads that don't match it", async () => {
+    const h = await setup();
+    await h.connect();
+
+    h.renderer().post({ id: "x-1", action: "run-shell", payload: { cmd: "rm -rf /" } });
+    h.renderer().post({ id: "x-2", action: "set-active", payload: {} });
+    h.renderer().post({
+      id: "x-3",
+      action: "resource-action",
+      payload: { worktreeId: "w", action: "format-disk" },
+    });
+    h.renderer().post({ id: "x-4", action: "delete-worktree", payload: { worktreeId: 7 } });
+    await waitFor(() => h.renderer().received.length === 4);
+    for (const reply of h.renderer().received) {
+      expect(typeof (reply as { error?: unknown }).error).toBe("string");
+    }
+    expect(h.workspace().received).toEqual([]);
+  });
+
+  it("forwards only the fields the protocol defines", async () => {
+    const h = await setup();
+    await h.connect();
+
+    h.renderer().post({
+      id: "d-1",
+      action: "delete-worktree",
+      payload: { worktreeId: "/repos/wt", force: true, rootPath: "/elsewhere" },
+    });
+    await waitFor(() => h.workspace().received.length === 1);
+    expect(h.workspace().received[0]).toEqual({
+      id: "d-1",
+      action: "delete-worktree",
+      payload: { worktreeId: "/repos/wt", force: true },
+    });
   });
 });

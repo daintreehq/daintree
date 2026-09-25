@@ -30,7 +30,9 @@ interface TestProjectViewManager {
 }
 
 const browserWindowMock = vi.hoisted(() => ({
-  fromWebContents: vi.fn<() => { id: number; isDestroyed: () => boolean } | null>(() => null),
+  fromWebContents: vi.fn<
+    () => { id: number; isDestroyed: () => boolean; webContents?: unknown } | null
+  >(() => null),
   getAllWindows: vi.fn(() => []),
 }));
 
@@ -1149,15 +1151,59 @@ describe("file-backed generation", () => {
     });
   });
 
-  it("generates every time for callers that name no operation", async () => {
-    _resetOperationRegistryForTest(new OperationRegistry());
+  it("generates every time for callers that name no operation, recording nothing", async () => {
+    const events: OperationsEvent[] = [];
+    const registry = new OperationRegistry({ emit: (_projectId, event) => events.push(event) });
+    _resetOperationRegistryForTest(registry);
     const generateContext = makeService("<files/>");
+    const send = vi.fn();
+    browserWindowMock.fromWebContents.mockReturnValue({
+      id: 7,
+      isDestroyed: () => false,
+      webContents: { send, isDestroyed: () => false },
+    });
+    const writeBundle = generateContext.getMockImplementation()!;
+    generateContext.mockImplementation(async (root, options, onProgress, outputPath) => {
+      (onProgress as (p: { stage: string; progress: number; message: string }) => void)({
+        stage: "load",
+        progress: 0.5,
+        message: "Loading",
+      });
+      return writeBundle(root, options, onProgress, outputPath);
+    });
     const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
 
     await handler(mockSender, { worktreeId: "wt-1" });
     await handler(mockSender, { worktreeId: "wt-1" });
 
     expect(generateContext).toHaveBeenCalledTimes(2);
+    expect(registry.list()).toEqual([]);
+    expect(events).toEqual([]);
+    // Progress still reaches the renderer, without an operation stamp.
+    const progress = send.mock.calls
+      .filter(([channel]) => channel === CHANNELS.COPYTREE_PROGRESS)
+      .map(([, event]) => event as Record<string, unknown>);
+    expect(progress.length).toBeGreaterThan(0);
+    for (const event of progress) expect(event).not.toHaveProperty("opId");
+  });
+
+  it.each([
+    [CHANNELS.COPYTREE_GENERATE, { worktreeId: "wt-1" }],
+    [CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, { worktreeId: "wt-1" }],
+    [CHANNELS.COPYTREE_INJECT, { worktreeId: "wt-1", terminalId: "term-1" }],
+  ])("%s rejects a malformed opId before any work", async (channel, payload) => {
+    const registry = new OperationRegistry();
+    _resetOperationRegistryForTest(registry);
+    const generateContext = makeService("<files/>");
+    const handler = getInvokeHandler(channel);
+
+    for (const opId of ["has space", "", "x".repeat(129), 7, null]) {
+      await expect(handler(mockSender, { ...payload, opId })).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+    }
+    expect(generateContext).not.toHaveBeenCalled();
+    expect(registry.list()).toEqual([]);
   });
 });
 

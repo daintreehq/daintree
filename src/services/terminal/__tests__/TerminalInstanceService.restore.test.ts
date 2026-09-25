@@ -16,6 +16,7 @@ vi.mock("@/clients", () => ({
     onExit: vi.fn(() => vi.fn()),
     onResizeResult: vi.fn(() => vi.fn()),
     onTierChanged: vi.fn(() => vi.fn()),
+    onReset: vi.fn(() => vi.fn()),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
     getSerializedState: vi.fn(),

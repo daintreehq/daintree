@@ -9,10 +9,22 @@ import {
   removeTempDir,
   waitFor,
 } from "../../link/__tests__/linkTestUtils.js";
+import {
+  IPC_HIGH_WATERMARK_PERCENT,
+  IPC_MAX_PAUSE_MS,
+  IPC_MAX_QUEUE_BYTES,
+  IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES,
+} from "../../../services/pty/types.js";
 import { ClientTerminalRelay } from "../ClientTerminalRelay.js";
 import { RingBudget } from "../ring.js";
 import { TERMINAL_RESUME_METHOD } from "../protocol.js";
-import { TerminalStreamBridge, type TerminalStreamBridgeOptions } from "../TerminalStreamBridge.js";
+import {
+  DEFAULT_ACK_TIMEOUT_MS,
+  DEFAULT_MAX_OUTSTANDING_BYTES,
+  DEFAULT_MAX_TOTAL_OUTSTANDING_BYTES,
+  TerminalStreamBridge,
+  type TerminalStreamBridgeOptions,
+} from "../TerminalStreamBridge.js";
 import { FakePeer, FakePtyHost, decode } from "./streamTestUtils.js";
 
 let dir: string;
@@ -36,6 +48,8 @@ interface Harness {
   renderer: () => FakePeer;
   incarnations: Map<string, number>;
   snapshots: Map<string, string>;
+  /** Owning project per terminal as the host's spawn records say; unset means project-a. */
+  owners: Map<string, string | null>;
   host: LinkSession;
   client: LinkSession;
   outFrames: TerminalOutMessage[];
@@ -47,6 +61,7 @@ interface Harness {
 async function setup(overrides: Partial<TerminalStreamBridgeOptions> = {}): Promise<Harness> {
   const incarnations = new Map<string, number>();
   const snapshots = new Map<string, string>();
+  const owners = new Map<string, string | null>();
   let ptyPeer: FakePtyHost | null = null;
   let rendererPeer: FakePeer | null = null;
 
@@ -54,12 +69,15 @@ async function setup(overrides: Partial<TerminalStreamBridgeOptions> = {}): Prom
     endpointId: ENDPOINT,
     openPort: () => {
       ptyPeer?.close();
-      ptyPeer = new FakePtyHost();
+      ptyPeer = new FakePtyHost((id) => {
+        const data = snapshots.get(id);
+        return data === undefined ? null : { data, cols: 100, rows: 30 };
+      });
       return ptyPeer.port;
     },
     releasePort: () => ptyPeer?.close(),
     getIncarnation: (id) => incarnations.get(id) ?? 1,
-    getSnapshot: async (id) => snapshots.get(id) ?? null,
+    ownerOf: (id) => (owners.has(id) ? owners.get(id)! : "project-a"),
     reconnectDelayMs: 10,
     ...overrides,
   });
@@ -87,6 +105,7 @@ async function setup(overrides: Partial<TerminalStreamBridgeOptions> = {}): Prom
     renderer: () => rendererPeer!,
     incarnations,
     snapshots,
+    owners,
     host: null as unknown as LinkSession,
     client: null as unknown as LinkSession,
     outFrames: [],
@@ -103,9 +122,9 @@ async function setup(overrides: Partial<TerminalStreamBridgeOptions> = {}): Prom
       client.on(Lane.INTERACTIVE, InteractiveKind.TERMINAL_RESET, (body) => h.resets.push(body));
       bridge.attach(host);
       relay.attach(client);
-      await waitFor(() => relay.isAttached && bridge.isAttached);
-      // Let the attach-time resume settle before the test drives traffic.
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      // The attach-time resume must have been answered and applied before the
+      // test drives traffic: until then the host holds output back.
+      await waitFor(() => relay.isAttached && bridge.isResumed && !relay.resumeInFlight);
     },
     async dropLink() {
       const closed = new Promise((resolve) => h.host.onClose(resolve));
@@ -225,7 +244,7 @@ describe("terminal stream over the link", () => {
     expect(h.renderer().ofType("reset")[0]).toEqual({
       type: "reset",
       id: "t1",
-      snapshot: "SNAPSHOT-OF-T1",
+      snapshot: { data: "SNAPSHOT-OF-T1", cols: 100, rows: 30 },
     });
     expect(h.resets[0]).toMatchObject({ terminalId: "t1", seq: 11, incarnation: 1 });
 
@@ -248,7 +267,7 @@ describe("terminal stream over the link", () => {
     await h.connectLink();
     await waitFor(() => h.renderer().ofType("reset").length === 1);
     expect(h.resets[0]).toMatchObject({ terminalId: "t1", incarnation: 2, seq: 1 });
-    expect(h.renderer().ofType("reset")[0]!.snapshot).toBe("FRESH");
+    expect(h.renderer().ofType("reset")[0]!.snapshot).toMatchObject({ data: "FRESH" });
     expect(h.relay.position("t1")).toEqual({ incarnation: 2, lastSeq: 1 });
   });
 
@@ -305,7 +324,7 @@ describe("terminal stream over the link", () => {
     // The PTY is released rather than left paused on a renderer that is not acking.
     await waitFor(() => h.pty().ackedBytes() >= 100);
     expect(h.pty().ackedBytes()).toBeLessThanOrEqual(produced);
-    expect(h.renderer().ofType("reset")[0]!.snapshot).toBe("RESYNC");
+    expect(h.renderer().ofType("reset")[0]!.snapshot).toMatchObject({ data: "RESYNC" });
   });
 
   it("enforces the host-wide ring cap across terminals", async () => {
@@ -378,9 +397,182 @@ describe("terminal stream over the link", () => {
     await waitFor(() => h.pty() !== first);
     // Bytes the old connection held are gone, so the stream is repainted.
     await waitFor(() => h.renderer().ofType("reset").length === 1);
-    expect(h.renderer().ofType("reset")[0]!.snapshot).toBe("REPAINT");
+    expect(h.renderer().ofType("reset")[0]!.snapshot).toMatchObject({ data: "REPAINT" });
 
     h.pty().emit("t1", "after reconnect");
     await waitFor(() => rendererData(h).includes("after reconnect"));
+  });
+  it("refuses input for terminals the endpoint's project does not own", async () => {
+    const h = await setup();
+    h.owners.set("foreign", "project-b");
+    h.owners.set("gone", null);
+    await h.connectLink();
+
+    h.renderer().post({ type: "write", id: "foreign", data: "rm -rf ~\r" });
+    h.renderer().post({ type: "resize", id: "foreign", cols: 10, rows: 10 });
+    h.renderer().post({ type: "ack", id: "foreign", bytes: 1_000 });
+    h.renderer().post({ type: "write", id: "gone", data: "x" });
+    h.renderer().post({ type: "write", id: "t1", data: "mine" });
+    await waitFor(() => h.pty().received.some((m) => m.type === "write"));
+    expect(h.pty().received).toEqual([{ type: "write", id: "t1", data: "mine" }]);
+  });
+
+  it("never streams a foreign terminal's output, but releases its bytes", async () => {
+    const h = await setup();
+    h.owners.set("foreign", "project-b");
+    await h.connectLink();
+
+    const bytes = h.pty().emit("foreign", "secret");
+    h.pty().emit("t1", "visible");
+    await waitFor(() => rendererData(h).length === 1);
+    expect(rendererData(h)).toEqual(["visible"]);
+    expect(h.bridge.position("foreign")).toBeNull();
+    expect(h.pty().ackedBytes("foreign")).toBe(bytes);
+  });
+
+  it("answers a resume for a foreign terminal as unknown", async () => {
+    const h = await setup();
+    await h.connectLink();
+    h.pty().emit("t1", "a");
+    await waitFor(() => h.bridge.position("t1") !== null);
+
+    // The spawn records moved t1 away (or it was never ours).
+    h.owners.set("t1", "project-b");
+    const result = await h.client.call(TERMINAL_RESUME_METHOD, {
+      endpointId: ENDPOINT,
+      terminals: [{ id: "t1", incarnation: 1, lastSeq: 0 }],
+    });
+    expect(result).toEqual({ terminals: [{ id: "t1", outcome: "unknown" }] });
+    expect(h.bridge.position("t1")).toBeNull();
+  });
+
+  it("resets instead of replaying when the client asks for it", async () => {
+    const h = await setup();
+    h.snapshots.set("t1", "REPAINT");
+    await h.connectLink();
+    h.pty().emit("t1", "a");
+    await waitFor(() => rendererData(h).length === 1);
+
+    const result = await h.client.call(TERMINAL_RESUME_METHOD, {
+      endpointId: ENDPOINT,
+      terminals: [{ id: "t1", incarnation: 1, lastSeq: 1, reset: true }],
+    });
+    expect(result).toEqual({ terminals: [{ id: "t1", outcome: "reset" }] });
+    await waitFor(() => h.renderer().ofType("reset").length === 1);
+  });
+
+  it("fences a reset so output around the snapshot is neither repeated nor lost", async () => {
+    const h = await setup({ maxOutstandingBytes: 10 });
+    await h.connectLink();
+    h.pty().holdFences = true;
+
+    // Over the outstanding cap: the bridge asks the pty-host for a fenced snapshot.
+    h.pty().emit("t1", "0123456789ABC");
+    await waitFor(() => h.pty().pendingFences.length === 1);
+    const fence = h.pty().pendingFences[0]!;
+    // Before the marker: already in the snapshot, so it must never be sent.
+    h.pty().emit("t1", "before-fence");
+    h.pty().postFenceMarker(fence);
+    // After the marker: not in the snapshot, so it must follow the reset.
+    h.pty().emit("t1", "after-fence");
+    await waitFor(() => h.bridge.position("t1")?.seq === 3);
+    h.pty().postSnapshot(fence, { data: "SNAP", cols: 132, rows: 43 });
+
+    await waitFor(() => rendererData(h).includes("after-fence"));
+    expect(h.renderer().ofType("reset")).toEqual([
+      { type: "reset", id: "t1", snapshot: { data: "SNAP", cols: 132, rows: 43 } },
+    ]);
+    expect(h.resets[0]).toMatchObject({ terminalId: "t1", seq: 2 });
+    expect(rendererData(h)).not.toContain("before-fence");
+    const order = h.renderer().received.map((m) => (m.type === "reset" ? "reset" : decode(m)));
+    expect(order.slice(order.indexOf("reset"))).toEqual(["reset", "after-fence"]);
+  });
+
+  it("resets to a cleared screen when the snapshot never arrives", async () => {
+    const h = await setup({ maxOutstandingBytes: 10, snapshotTimeoutMs: 30 });
+    await h.connectLink();
+    h.pty().holdFences = true;
+    h.pty().emit("t1", "0123456789ABC");
+    await waitFor(() => h.renderer().ofType("reset").length === 1);
+    expect(h.renderer().ofType("reset")[0]).toEqual({ type: "reset", id: "t1", snapshot: null });
+  });
+
+  it("keeps its resync thresholds under the pty-host's pause watermarks and safety timeout", () => {
+    expect(DEFAULT_MAX_OUTSTANDING_BYTES).toBeLessThan(
+      (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100
+    );
+    expect(DEFAULT_MAX_TOTAL_OUTSTANDING_BYTES).toBeLessThan(IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES);
+    expect(DEFAULT_ACK_TIMEOUT_MS).toBeLessThan(IPC_MAX_PAUSE_MS);
+  });
+
+  it("releases a PTY whose renderer never acks, well before the pause safety timeout", async () => {
+    const h = await setup({ ackTimeoutMs: 40 });
+    h.snapshots.set("t1", "LATEST");
+    await h.connectLink();
+
+    const produced = h.pty().emit("t1", "small, far under any byte cap");
+    await waitFor(() => rendererData(h).length === 1);
+    expect(h.pty().ackedBytes("t1")).toBe(0);
+
+    // The renderer never acks: after the ack timeout the bridge settles the
+    // bytes itself and resyncs the view rather than hold the PTY.
+    await waitFor(() => h.pty().ackedBytes("t1") === produced, 1_000);
+    await waitFor(() => h.renderer().ofType("reset").length === 1);
+    expect(h.renderer().ofType("reset")[0]!.snapshot).toMatchObject({ data: "LATEST" });
+  });
+
+  it("resyncs the busiest terminal when the endpoint's total unacked output grows too large", async () => {
+    const h = await setup({ maxOutstandingBytes: 1_000, maxTotalOutstandingBytes: 150 });
+    await h.connectLink();
+    h.pty().emit("t1", "a".repeat(120));
+    h.pty().emit("t2", "b".repeat(40));
+    await waitFor(() => h.renderer().ofType("reset").length === 1);
+    expect(h.renderer().ofType("reset")[0]!.id).toBe("t1");
+  });
+
+  it("keeps stream state bounded as thousands of terminals come and go", async () => {
+    const budget = new RingBudget(64 * 1024);
+    const live = new Set<string>();
+    // A synchronous port, so each terminal's output lands while it is alive.
+    let deliver: (message: unknown) => void = () => {};
+    const churn = new TerminalStreamBridge({
+      endpointId: "ep-churn",
+      openPort: () => ({
+        postMessage: () => {},
+        onMessage: (listener) => (deliver = listener),
+        onClose: () => {},
+        close: () => {},
+      }),
+      releasePort: () => {},
+      getIncarnation: () => 1,
+      ownerOf: (id) => (live.has(id) ? "project-a" : null),
+      budget,
+    });
+    cleanups.push(() => churn.dispose());
+    churn.setProject("project-a");
+
+    const data = new TextEncoder().encode("x");
+    let peak = 0;
+    for (let i = 0; i < 5_000; i++) {
+      const id = `term-${i}`;
+      live.add(id);
+      deliver({ type: "data", id, data, bytes: data.byteLength });
+      expect(churn.position(id)).not.toBeNull();
+      // Terminals are destroyed as new ones start; only a handful run at once.
+      live.delete(`term-${i - 8}`);
+      peak = Math.max(peak, churn.streamCount);
+    }
+    expect(peak).toBeLessThan(200);
+    expect(budget.usedBytes).toBeLessThanOrEqual(64 * 1024);
+  });
+
+  it("caps tracked terminals even when all of them are still alive", async () => {
+    const h = await setup({ maxStreams: 50 });
+    await h.connectLink();
+    for (let i = 0; i < 120; i++) h.pty().emit(`live-${i}`, "x");
+    await waitFor(() => h.bridge.position("live-119") !== null);
+    expect(h.bridge.streamCount).toBeLessThanOrEqual(50);
+    // The least recently active went first.
+    expect(h.bridge.position("live-0")).toBeNull();
   });
 });

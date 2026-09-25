@@ -15,6 +15,7 @@ import {
 import {
   getOperationRegistry,
   normalizeOperationId,
+  untrackedOperationHandle,
   type OperationHandle,
 } from "../../services/operations/index.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
@@ -69,7 +70,7 @@ import type {
 } from "../../../shared/types/ipc/git.js";
 import { classifyGitError } from "../../../shared/utils/gitOperationErrors.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { GitOperationError } from "../../utils/errorTypes.js";
+import { AppError, GitOperationError } from "../../utils/errorTypes.js";
 import {
   resolveGitPushDestination,
   resolveGitUpstream,
@@ -1143,15 +1144,25 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   const pushingCwds = new Set<string>();
 
   const handlePush = async (ctx: IpcContext, payload: GitPushPayload): Promise<void> => {
-    const opId = normalizeOperationId(payload?.opId);
-    const registry = getOperationRegistry();
-    const dedupKey = `git-push:${payload?.cwd}`;
-    // A caller that names its operation joins a retry or a push already running
-    // for this cwd and gets the real outcome. Without an opId the in-flight
-    // push is still a silent no-op, as it always was.
-    const joined = opId
-      ? registry.join<void>({ opId, kind: "git-push", projectId: ctx.projectId, dedupKey })
+    const rawOpId = payload?.opId;
+    const opId = normalizeOperationId(rawOpId);
+    if (rawOpId !== undefined && opId === null) {
+      throw new AppError({ code: "VALIDATION", message: "Invalid operation id" });
+    }
+    // Only a caller that names its operation (a remote view) is recorded,
+    // published and joinable. Without an opId the push runs exactly as it
+    // always has, and one already in flight for the cwd is a silent no-op.
+    const input = opId
+      ? {
+          opId,
+          kind: "git-push" as const,
+          projectId: ctx.projectId,
+          dedupKey: `git-push:${payload.cwd}`,
+          fingerprint: JSON.stringify({ setUpstream: Boolean(payload.setUpstream) }),
+        }
       : null;
+    const registry = getOperationRegistry();
+    const joined = input ? registry.join<void>(input) : null;
     if (joined) return joined;
     if (pushingCwds.has(payload.cwd)) return;
 
@@ -1160,9 +1171,11 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     pushingCwds.add(payload.cwd);
     try {
-      await registry.run({ opId, kind: "git-push", projectId: ctx.projectId, dedupKey }, (op) =>
-        runPush(ctx, payload, op)
-      );
+      if (input) {
+        await registry.run(input, (op) => runPush(ctx, payload, op));
+      } else {
+        await runPush(ctx, payload, untrackedOperationHandle());
+      }
     } finally {
       pushingCwds.delete(payload.cwd);
     }

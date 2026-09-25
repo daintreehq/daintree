@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
+import type { ClientEndpoint } from "../../endpoint.js";
 import {
   distributeTerminalWorkerPortToView,
   releaseTerminalWorkerPort,
@@ -44,12 +45,27 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   }
   const handlers: Array<() => void> = [];
 
-  const handleTerminalInput = (_ctx: IpcContext, id: string, data: string) => {
+  /**
+   * A remote view is bound to one project and may touch only that project's
+   * terminals. Ownership comes from main's own spawn records, never from the
+   * caller, and an id main does not track is refused as well: a terminal it
+   * cannot place might be anyone's. Local views keep their ungated path.
+   */
+  const isRefusedForRemoteCaller = (ctx: IpcContext, id: unknown): boolean => {
+    const endpoint = ctx.endpoint as ClientEndpoint | undefined;
+    if (endpoint?.kind !== "remote-view") return false;
+    if (typeof id !== "string" || id === "") return true;
+    const owner = ptyClient.getTerminalProjectId(id);
+    return owner === null || owner !== endpoint.projectId;
+  };
+
+  const handleTerminalInput = (ctx: IpcContext, id: string, data: string) => {
     try {
       if (typeof id !== "string" || typeof data !== "string") {
         console.error("Invalid terminal input parameters");
         return;
       }
+      if (isRefusedForRemoteCaller(ctx, id)) return;
       ptyClient.write(id, data);
     } catch (error) {
       console.error("Error writing to terminal:", error);
@@ -57,12 +73,13 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   };
   handlers.push(onWithContext(CHANNELS.TERMINAL_INPUT, handleTerminalInput));
 
-  const handleTerminalSendKey = (_ctx: IpcContext, id: string, key: string) => {
+  const handleTerminalSendKey = (ctx: IpcContext, id: string, key: string) => {
     try {
       if (typeof id !== "string" || typeof key !== "string") {
         console.error("Invalid terminal sendKey parameters");
         return;
       }
+      if (isRefusedForRemoteCaller(ctx, id)) return;
       ptyClient.sendKey(id, key);
     } catch (error) {
       console.error("Error sending key to terminal:", error);
@@ -70,13 +87,16 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   };
   handlers.push(onWithContext(CHANNELS.TERMINAL_SEND_KEY, handleTerminalSendKey));
 
-  const handleTerminalBatchDoubleEscape = (_ctx: IpcContext, ids: unknown) => {
+  const handleTerminalBatchDoubleEscape = (ctx: IpcContext, ids: unknown) => {
     try {
       if (!Array.isArray(ids)) {
         console.error("Invalid terminal batchDoubleEscape parameters: expected string[]");
         return;
       }
-      const validIds = ids.filter((id): id is string => typeof id === "string" && id.length > 0);
+      const validIds = ids.filter(
+        (id): id is string =>
+          typeof id === "string" && id.length > 0 && !isRefusedForRemoteCaller(ctx, id)
+      );
       if (validIds.length === 0) return;
       ptyClient.batchDoubleEscape(validIds);
     } catch (error) {
@@ -87,13 +107,16 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     onWithContext(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, handleTerminalBatchDoubleEscape)
   );
 
-  const handleTerminalBroadcastWrite = (_ctx: IpcContext, ids: unknown, data: unknown) => {
+  const handleTerminalBroadcastWrite = (ctx: IpcContext, ids: unknown, data: unknown) => {
     try {
       if (!Array.isArray(ids) || typeof data !== "string") {
         console.error("Invalid terminal broadcastWrite parameters");
         return;
       }
-      const validIds = ids.filter((id): id is string => typeof id === "string" && id.length > 0);
+      const validIds = ids.filter(
+        (id): id is string =>
+          typeof id === "string" && id.length > 0 && !isRefusedForRemoteCaller(ctx, id)
+      );
       if (validIds.length === 0 || data.length === 0) return;
       ptyClient.broadcastWrite(validIds, data);
     } catch (error) {
@@ -103,6 +126,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   handlers.push(onWithContext(CHANNELS.TERMINAL_BROADCAST_WRITE, handleTerminalBroadcastWrite));
 
   const handleTerminalSubmit = async (
+    ctx: IpcContext,
     id: string,
     text: string,
     submissionToken?: string,
@@ -173,7 +197,9 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       // method that propagates broker errors; out of scope for #8706. The
       // pre-fix behavior had the opposite failure mode (kept firing into
       // dead pipes), so this trade is a net win for the common case.
-      const info = await ptyClient.getTerminalAsync(id);
+      // A foreign id answers exactly as a missing one, so a remote caller
+      // learns nothing about which terminals exist outside its project.
+      const info = isRefusedForRemoteCaller(ctx, id) ? null : await ptyClient.getTerminalAsync(id);
       if (!info) {
         throw new AppError({
           code: "NOT_FOUND",
@@ -202,7 +228,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     }
   };
 
-  const handleTerminalResize = (_ctx: IpcContext, payload: TerminalResizePayload) => {
+  const handleTerminalResize = (ctx: IpcContext, payload: TerminalResizePayload) => {
     try {
       const parseResult = TerminalResizePayloadSchema.safeParse(payload);
       if (!parseResult.success) {
@@ -211,6 +237,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       }
 
       const { id, cols, rows } = parseResult.data;
+      if (isRefusedForRemoteCaller(ctx, id)) return;
       // Defensive backstop at the shared ceiling. The renderer already
       // normalized to the same bound before choosing a transport, so this
       // agrees with what the MessagePort path (which bypasses Main entirely)
@@ -250,6 +277,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       }
       const { id, tier, pollingIntervalMs } = payload;
       if (typeof id !== "string" || !id) return;
+      if (isRefusedForRemoteCaller(ctx, id)) return;
       const effectiveTier: PtyHostActivityTier = tier === "background" ? "background" : "active";
       if (effectiveTier === "background" && isShadowedCachedViewDemotion(ctx.webContentsId, id)) {
         return;
@@ -275,6 +303,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       if (!payload || typeof payload !== "object") return;
       const { id } = payload;
       if (id !== null && (typeof id !== "string" || !id)) return;
+      if (id !== null && isRefusedForRemoteCaller(ctx, id)) return;
       // Focus is inherently per-window: resolve the owning window from the
       // sender's webContents (works for WebContentsView project views, not just
       // the top-level BrowserWindow). Without a resolvable window the signal is
@@ -289,7 +318,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   handlers.push(onWithContext(CHANNELS.TERMINAL_SET_FOCUSED, handleTerminalSetFocused));
 
   const handleTerminalAcknowledgeData = (
-    _ctx: IpcContext,
+    ctx: IpcContext,
     payload: { id: string; length: number }
   ) => {
     try {
@@ -299,6 +328,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       if (typeof payload.id !== "string" || typeof payload.length !== "number") {
         return;
       }
+      if (isRefusedForRemoteCaller(ctx, payload.id)) return;
       ptyClient.acknowledgeData(payload.id, payload.length);
     } catch (error) {
       console.error("Error acknowledging terminal data:", error);
@@ -307,13 +337,14 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   handlers.push(onWithContext(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, handleTerminalAcknowledgeData));
 
   const handleTerminalAgentTitleState = (
-    _ctx: IpcContext,
+    ctx: IpcContext,
     payload: { id: string; state: string }
   ) => {
     try {
       if (!payload || typeof payload !== "object") return;
       const { id, state } = payload;
       if (typeof id !== "string" || !id) return;
+      if (isRefusedForRemoteCaller(ctx, id)) return;
       if (state !== "working" && state !== "waiting") return;
 
       const event = state === "working" ? { type: "busy" } : { type: "prompt" };
@@ -325,13 +356,14 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   handlers.push(onWithContext(CHANNELS.TERMINAL_AGENT_TITLE_STATE, handleTerminalAgentTitleState));
 
   const handleTerminalUpdateObservedTitle = (
-    _ctx: IpcContext,
+    ctx: IpcContext,
     payload: { id: string; title: string }
   ) => {
     try {
       if (!payload || typeof payload !== "object") return;
       const { id, title } = payload;
       if (typeof id !== "string" || !id) return;
+      if (isRefusedForRemoteCaller(ctx, id)) return;
       const normalized = normalizeObservedTitle(title);
       if (!normalized) return;
       ptyClient.updateObservedTitle(id, normalized);
@@ -348,13 +380,14 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   // Without this hop those surfaces keep naming the run by its launch title
   // and every `titleMode === "user"` branch in main stays unreachable (#11830).
   const handleTerminalUpdateTitle = (
-    _ctx: IpcContext,
+    ctx: IpcContext,
     payload: { id: string; title: string; titleMode: PanelTitleMode }
   ) => {
     try {
       if (!payload || typeof payload !== "object") return;
       const { id, title, titleMode } = payload;
       if (typeof id !== "string" || !id) return;
+      if (isRefusedForRemoteCaller(ctx, id)) return;
       if (typeof title !== "string") return;
       if (!isPanelTitleMode(titleMode)) return;
       ptyClient.updateTitle(id, title, titleMode);
@@ -385,6 +418,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       if (!payload || typeof payload !== "object") return;
       const { id, worktreeId } = payload;
       if (typeof id !== "string" || id.trim() === "") return;
+      if (isRefusedForRemoteCaller(ctx, id)) return;
       if (worktreeId !== null && (typeof worktreeId !== "string" || worktreeId.trim() === "")) {
         return;
       }
@@ -403,11 +437,18 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     onWithContext(CHANNELS.TERMINAL_UPDATE_WORKTREE_ID, handleTerminalUpdateWorktreeId)
   );
 
-  const handleTerminalForceResume = async (id: string): Promise<void> => {
+  const handleTerminalForceResume = async (ctx: IpcContext, id: string): Promise<void> => {
     if (typeof id !== "string" || !id) {
       throw new AppError({
         code: "VALIDATION",
         message: "Invalid terminal ID: must be a non-empty string",
+      });
+    }
+    if (isRefusedForRemoteCaller(ctx, id)) {
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: `Terminal ${id} not found`,
+        context: { terminalId: id },
       });
     }
     try {
@@ -623,7 +664,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   const namespace = defineIpcNamespace({
     name: "terminalIo",
     ops: {
-      submit: op(CHANNELS.TERMINAL_SUBMIT, handleTerminalSubmit),
+      submit: op(CHANNELS.TERMINAL_SUBMIT, handleTerminalSubmit, { withContext: true }),
       getSubmissions: op(CHANNELS.TERMINAL_GET_SUBMISSIONS, handleTerminalGetSubmissions, {
         withContext: true,
       }),
@@ -632,7 +673,9 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
         handleTerminalGetOutputActivity,
         { withContext: true }
       ),
-      forceResume: op(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume),
+      forceResume: op(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume, {
+        withContext: true,
+      }),
       requestWorkerIngestPort: op(
         CHANNELS.TERMINAL_REQUEST_WORKER_INGEST_PORT,
         handleTerminalRequestWorkerIngestPort,

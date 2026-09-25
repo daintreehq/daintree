@@ -9,6 +9,7 @@ import type { ClientEndpoint } from "../../endpoint.js";
 import {
   getOperationRegistry,
   normalizeOperationId,
+  untrackedOperationHandle,
   type OperationHandle,
 } from "../../../services/operations/index.js";
 import { createAuthenticatedGit } from "../../../utils/hardenedGit.js";
@@ -136,14 +137,29 @@ export function registerGitCloneHandlers(): () => void {
       throw new Error("Folder name resolves outside of the parent directory");
     }
 
-    // Only a caller that names its operation joins another: an unnamed clone
-    // into a busy destination still fails on the existing folder, as before.
     const opId = normalizeOperationId(options.opId);
+    if (options.opId !== undefined && opId === null) {
+      throw new AppError({ code: "VALIDATION", message: "Invalid operation id" });
+    }
+    // Only a caller that names its operation (a remote view) is recorded,
+    // published and joinable. An unnamed clone runs exactly as it always has,
+    // and one into a busy destination still fails on the existing folder.
+    if (opId === null) {
+      return cloneRepository(ctx, options, trimmedFolder, targetPath, untrackedOperationHandle());
+    }
+    const remote = normalizeCloneRemote(url);
     const input = {
       opId,
       kind: "git-clone" as const,
       projectId: ctx.projectId,
-      dedupKey: opId ? `git-clone:${normalizeCloneRemote(url)}\0${normalizedTarget}` : null,
+      dedupKey: `git-clone:${remote}\0${normalizedTarget}`,
+      // Every option that shapes the result: a joiner asking for a full clone
+      // must not be handed a shallow one.
+      fingerprint: JSON.stringify({
+        remote,
+        target: normalizedTarget,
+        shallowClone: Boolean(options.shallowClone),
+      }),
     };
     return getOperationRegistry().run(input, (op) =>
       cloneRepository(ctx, options, trimmedFolder, targetPath, op)
@@ -157,8 +173,38 @@ export function registerGitCloneHandlers(): () => void {
     targetPath: string,
     op: OperationHandle
   ): Promise<CloneRepoResult> => {
-    const { url, parentPath, shallowClone } = options;
     const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
+
+    // Registered before the first await, so a Stop pressed while the checks
+    // below are still running cancels this clone instead of missing it.
+    const localController = new AbortController();
+    activeControllers.set(localController, op.opId);
+    op.onCancel(() => localController.abort());
+    try {
+      return await runClone(
+        ctx,
+        options,
+        trimmedFolder,
+        targetPath,
+        op,
+        senderWindow,
+        localController
+      );
+    } finally {
+      activeControllers.delete(localController);
+    }
+  };
+
+  const runClone = async (
+    ctx: IpcContext,
+    options: CloneRepoOptions,
+    trimmedFolder: string,
+    targetPath: string,
+    op: OperationHandle,
+    senderWindow: ReturnType<typeof getWindowForWebContents> | null,
+    localController: AbortController
+  ): Promise<CloneRepoResult> => {
+    const { url, parentPath, shallowClone } = options;
     const fs = await import("fs");
 
     try {
@@ -184,7 +230,7 @@ export function registerGitCloneHandlers(): () => void {
 
     const emitProgress = (stage: string, progress: number, message: string) => {
       const progressEvent: CloneRepoProgressEvent = {
-        opId: op.opId,
+        ...(op.tracked ? { opId: op.opId } : {}),
         stage,
         progress,
         message,
@@ -202,9 +248,17 @@ export function registerGitCloneHandlers(): () => void {
       op.progress({ fraction: progress / 100, stage, message });
     };
 
-    const localController = new AbortController();
-    activeControllers.set(localController, op.opId);
-    op.onCancel(() => localController.abort());
+    // Stopped during the checks above: nothing was created, so there is no
+    // partial clone to clean up — and the folder check just proved the target
+    // isn't ours to remove.
+    if (localController.signal.aborted) {
+      emitProgress("cancelled", 0, "Clone cancelled");
+      throw new AppError({
+        code: "CANCELLED",
+        message: "Clone cancelled",
+        context: { targetPath },
+      });
+    }
 
     // Resolve the URL's forge provider and probe its clone auth — an
     // authenticated probe picks the provider's clone path below. Probe
@@ -344,17 +398,40 @@ export function registerGitCloneHandlers(): () => void {
         cause: error instanceof Error ? error : undefined,
         context: { targetPath },
       });
-    } finally {
-      activeControllers.delete(localController);
     }
   };
 
-  const handleProjectCloneCancel = async (payload?: CloneCancelPayload): Promise<void> => {
+  const handleProjectCloneCancel = async (
+    ctx: IpcContext,
+    payload?: CloneCancelPayload
+  ): Promise<void> => {
+    const rawOpId = payload?.opId;
+    const requested = normalizeOperationId(rawOpId);
+    // A malformed id is refused, never read as "no id": that would widen a
+    // cancel meant for one clone into a cancel of every clone.
+    if (rawOpId !== undefined && requested === null) {
+      throw new AppError({ code: "VALIDATION", message: "Invalid operation id" });
+    }
+    const registry = getOperationRegistry();
+    if ((ctx.endpoint as ClientEndpoint | undefined)?.kind === "remote-view") {
+      // A remote client may stop only its own project's clone, by id, through
+      // the scoped registry. Cancel-all is this machine's own UI's alone.
+      if (requested === null) {
+        throw new AppError({
+          code: "VALIDATION",
+          message: "A remote caller must name the clone to cancel",
+        });
+      }
+      const record = registry.get(requested);
+      if (record && record.kind === "git-clone" && record.projectId === ctx.projectId) {
+        registry.cancel(requested);
+      }
+      return;
+    }
     // Without an opId every in-flight clone is cancelled — the historical
     // behaviour callers that don't name their clone still rely on.
-    const requested = normalizeOperationId(payload?.opId);
     // A caller that joined another's clone names it by its own id.
-    const opId = requested && (getOperationRegistry().canonicalId(requested) ?? requested);
+    const opId = requested && (registry.canonicalId(requested) ?? requested);
     for (const [controller, controllerOpId] of activeControllers) {
       if (opId === null || controllerOpId === opId) controller.abort();
     }
@@ -364,7 +441,9 @@ export function registerGitCloneHandlers(): () => void {
     name: "gitClone",
     ops: {
       cloneRepo: op(CHANNELS.PROJECT_CLONE_REPO, handleProjectCloneRepo, { withContext: true }),
-      cancelClone: op(CHANNELS.PROJECT_CLONE_CANCEL, handleProjectCloneCancel),
+      cancelClone: op(CHANNELS.PROJECT_CLONE_CANCEL, handleProjectCloneCancel, {
+        withContext: true,
+      }),
     },
   }).register();
 }

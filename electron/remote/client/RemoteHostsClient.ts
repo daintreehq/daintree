@@ -50,7 +50,16 @@ export interface RemoteHostsClientOptions {
   installRouter: (router: RemoteRouter | null) => void;
   /** Push to every local renderer. */
   emit: (event: RemoteHostsEvent) => void;
+  /**
+   * Runs once, the first time a host is actually used (connect or switch), so
+   * the per-view stream wiring costs nothing for a user who never adds one.
+   */
+  onFirstUse?: () => void;
+  /** How long opening a host's project waits for its link before giving up. */
+  readyTimeoutMs?: number;
 }
+
+const DEFAULT_READY_TIMEOUT_MS = 20_000;
 
 const MAX_PROJECT_ID_LENGTH = 256;
 
@@ -166,17 +175,36 @@ export class RemoteHostsClient {
     }
 
     const remote = !isLocalHostId(hostId);
+    let projectPath: string | null = null;
     if (remote) {
       this.options.registry.require(hostId);
       this.ensureRouter();
       const connection = this.options.manager.connect(hostId);
-      const refused = connection.linkState.status === "version-mismatch";
-      if (refused) {
-        throw new AppError({
-          code: "HOST_VERSION_MISMATCH",
-          message: `Host ${hostId} runs a different build`,
-          userMessage: "This host runs a different Daintree build. Update it to connect.",
-        });
+      if (connection.linkState.status === "version-mismatch") throw versionMismatch(hostId);
+      if (projectId !== undefined) {
+        // A cold switch dials the host now. The view is created only once the
+        // link is up and the host has named the project's path: a view made
+        // before that would open with no path and its first calls would fail.
+        const readiness = await connection.whenReady(
+          this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS
+        );
+        if (readiness === "version-mismatch") throw versionMismatch(hostId);
+        if (readiness !== "ready") {
+          throw new AppError({
+            code: "HOST_DISCONNECTED",
+            message: `Host ${hostId} did not connect (${readiness})`,
+            userMessage: "Couldn't reach this host. Check that it is on and try again.",
+          });
+        }
+        const description = await connection.describeProject(projectId).catch(() => null);
+        if (!description?.path) {
+          throw new AppError({
+            code: "NOT_FOUND",
+            message: `Host ${hostId} has no project ${projectId}`,
+            userMessage: "This project isn't on that host.",
+          });
+        }
+        projectPath = description.path;
       }
     }
 
@@ -198,16 +226,9 @@ export class RemoteHostsClient {
       await this.options.windows.openLocalProject(windowId, projectId);
       return;
     }
-    const description = await this.options.manager
-      .get(hostId)
-      ?.describeProject(projectId)
-      .catch(() => null);
-    await this.options.windows.openRemoteProject(
-      windowId,
-      hostId,
-      projectId,
-      description?.path ?? ""
-    );
+    // Set above for every remote switch that names a project; never open a pathless view.
+    if (projectPath === null) throw new AppError({ code: "INTERNAL", message: "No host path" });
+    await this.options.windows.openRemoteProject(windowId, hostId, projectId, projectPath);
   }
 
   async dispose(): Promise<void> {
@@ -221,6 +242,7 @@ export class RemoteHostsClient {
     if (this.routerInstalled) return;
     this.routerInstalled = true;
     this.options.installRouter(this.options.router);
+    this.options.onFirstUse?.();
   }
 
   private windowOf(ctx: IpcContext): number | null {
@@ -236,6 +258,14 @@ export class RemoteHostsClient {
     const windowId = this.windowOf(ctx);
     return windowId === null ? LOCAL_HOST_ID : this.options.bindings.get(windowId);
   }
+}
+
+function versionMismatch(hostId: HostId): AppError {
+  return new AppError({
+    code: "HOST_VERSION_MISMATCH",
+    message: `Host ${hostId} runs a different build`,
+    userMessage: "This host runs a different Daintree build. Update it to connect.",
+  });
 }
 
 export function localWindowHost(): WindowHostInfo {

@@ -120,6 +120,8 @@ function invoke(channel: string, fromView: number, ...args: unknown[]): Promise<
 function recordingSink() {
   const delivered = new Map<number, Array<{ channel: string; args: unknown[] }>>();
   const resyncs: Array<{ webContentsId: number; reason: string }> = [];
+  const goneListeners = new Map<number, () => void>();
+  const hosts = new Map<number, string | null>();
   const sink: ViewSink = {
     send(webContentsId, channel, args) {
       const list = delivered.get(webContentsId) ?? [];
@@ -127,12 +129,19 @@ function recordingSink() {
       delivered.set(webContentsId, list);
       return true;
     },
-    watch: () => () => {},
+    watch: (webContentsId, onGone) => {
+      goneListeners.set(webContentsId, onGone);
+      return () => goneListeners.delete(webContentsId);
+    },
     resync(webContentsId, _hostId, reason) {
       resyncs.push({ webContentsId, reason });
     },
+    // Views default to the host the test talks to; a test can move one away.
+    hostOf: (webContentsId) => (hosts.has(webContentsId) ? hosts.get(webContentsId)! : HOST_ID),
   };
-  return { sink, delivered, resyncs };
+  /** The view was destroyed. */
+  const gone = (webContentsId: number) => goneListeners.get(webContentsId)?.();
+  return { sink, delivered, resyncs, gone, hosts };
 }
 
 interface Harness {
@@ -149,7 +158,9 @@ interface Harness {
 const cleanups: Array<() => unknown> = [];
 let h: Harness;
 
-async function startHarness(options: { eventsLimits?: { high: number; cap: number } } = {}) {
+async function startHarness(
+  options: { eventsLimits?: { high: number; cap: number }; maxEndpoints?: number } = {}
+) {
   const dir = await makeTempDir();
   const location = hostSocketLocation({ platform: "darwin", userDataDir: dir });
   const laneLimits = options.eventsLimits
@@ -178,6 +189,7 @@ async function startHarness(options: { eventsLimits?: { high: number; cap: numbe
     describeProject: (projectId) =>
       projectId === "proj-1" ? { projectId, path: "/srv/proj-1", name: "one" } : null,
     eventsHighWaterBytes: options.eventsLimits?.high,
+    maxEndpointsPerSession: options.maxEndpoints,
   });
 
   const registry = new HostRegistry(memoryStore());
@@ -397,6 +409,40 @@ describe("remote session wiring", () => {
     expect(hostContexts.at(-1)!.endpoint).toBe(endpoint);
   });
 
+  it("tells endpoint listeners when a view's endpoint opens and again on a resumed session", async () => {
+    await startHarness();
+    const opened: Array<{
+      hostId: string;
+      webContentsId: number;
+      endpointId: string;
+      session: unknown;
+    }> = [];
+    cleanups.push(h.manager.onEndpointOpened((hostId, info) => opened.push({ hostId, ...info })));
+    await connect();
+    expect(opened).toEqual([]);
+
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatchObject({
+      hostId: HOST_ID,
+      webContentsId: VIEW_A,
+      endpointId: "view-11",
+    });
+    const first = opened[0]!.session;
+
+    for (const socket of h.sockets) socket.destroy();
+    await waitFor(() => h.frontendCounts.at(-1) === 0);
+    await waitFor(() => opened.length === 2);
+
+    expect(opened[1]).toMatchObject({
+      hostId: HOST_ID,
+      webContentsId: VIEW_A,
+      endpointId: "view-11",
+    });
+    expect(opened[1]!.session).not.toBe(first);
+  });
+
   it("drops a Shell whose event lane overflows to a snapshot resync instead of queueing", async () => {
     await startHarness({ eventsLimits: { high: 4 * 1024, cap: 16 * 1024 } });
     await connect();
@@ -465,5 +511,83 @@ describe("remote session wiring", () => {
       name: "one",
     });
     await expect(connection.describeProject("nope")).resolves.toBeNull();
+  });
+
+  it("closes endpoints of views that went away while the link was down once it resumes", async () => {
+    await startHarness({ maxEndpoints: 2 });
+    await connect();
+    for (let cycle = 0; cycle < 5; cycle++) {
+      const view = 100 + cycle;
+      projectKeys.set(view, `${HOST_ID}:proj-1`);
+      const envelope = await invoke(HOST_CHANNEL, view, {});
+      expect(envelope.ok).toBe(true);
+
+      h.allowConnect.value = false;
+      for (const socket of h.sockets.splice(0)) socket.destroy();
+      await waitFor(() => h.frontendCounts.at(-1) === 0);
+      h.sink.gone(view);
+      h.allowConnect.value = true;
+      await waitFor(() => h.manager.get(HOST_ID)?.unavailableEnvelope() === null);
+      // Resumed, not replaced: the close owed from the outage reaches the host.
+      await waitFor(() => getEndpointRegistry().getRemote().length === 0);
+    }
+  });
+
+  it("delivers nothing to a view that now belongs to another host", async () => {
+    await startHarness();
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    await invoke(HOST_CHANNEL, VIEW_B, {});
+    h.sink.hosts.set(VIEW_A, "studio-02");
+
+    broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
+    await waitFor(() => (h.sink.delivered.get(VIEW_B)?.length ?? 0) === 1);
+    expect(h.sink.delivered.has(VIEW_A)).toBe(false);
+  });
+
+  it("reports discarded endpoints and reopens bound views' endpoints on a fresh session", async () => {
+    await startHarness();
+    const closed: Array<{ hostId: string; webContentsId: number; endpointId: string }> = [];
+    const opened: number[] = [];
+    cleanups.push(h.manager.onEndpointClosed((hostId, info) => closed.push({ hostId, ...info })));
+    cleanups.push(h.manager.onEndpointOpened((_hostId, info) => opened.push(info.webContentsId)));
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    await invoke(HOST_CHANNEL, VIEW_B, {});
+    opened.length = 0;
+
+    // Past the resume grace, so the next session is a fresh one; VIEW_B moved away meanwhile.
+    h.allowConnect.value = false;
+    for (const socket of h.sockets.splice(0)) socket.destroy();
+    await waitFor(() => getEndpointRegistry().getRemote().length === 0, 2_000);
+    h.sink.hosts.set(VIEW_B, null);
+    h.allowConnect.value = true;
+    await waitFor(() => opened.length === 1);
+
+    expect(opened).toEqual([VIEW_A]);
+    expect(closed).toEqual([{ hostId: HOST_ID, webContentsId: VIEW_B, endpointId: "view-12" }]);
+    await waitFor(() => getEndpointRegistry().getRemote().length === 1);
+
+    h.sink.gone(VIEW_A);
+    expect(closed.at(-1)).toEqual({
+      hostId: HOST_ID,
+      webContentsId: VIEW_A,
+      endpointId: "view-11",
+    });
+    await h.manager.disconnect(HOST_ID);
+    expect(closed).toHaveLength(2);
+  });
+
+  it("settles whenReady on connect, stop and timeout", async () => {
+    await startHarness();
+    h.allowConnect.value = false;
+    const connection = h.manager.connect(HOST_ID);
+    await expect(connection.whenReady(30)).resolves.toBe("timeout");
+    const waiting = connection.whenReady(5_000);
+    h.allowConnect.value = true;
+    await expect(waiting).resolves.toBe("ready");
+    const stopped = h.manager.get(HOST_ID)!;
+    await h.manager.disconnect(HOST_ID);
+    await expect(stopped.whenReady(5_000)).resolves.toBe("stopped");
   });
 });

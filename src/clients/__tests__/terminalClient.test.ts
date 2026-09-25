@@ -793,6 +793,7 @@ describe("terminalClient MessagePort data routing", () => {
   describe("reset from a relayed remote port", () => {
     const PORT_DELIVERY_MS = 30;
     const tick = () => new Promise((resolve) => setTimeout(resolve, PORT_DELIVERY_MS));
+    const SNAP = { data: "S", cols: 120, rows: 40 };
 
     function collectAcks(port: MessagePort): number[] {
       const acks: number[] = [];
@@ -814,7 +815,11 @@ describe("terminalClient MessagePort data routing", () => {
       });
 
       port.postMessage({ type: "data", id: "term-1", data: "before", bytes: 6 });
-      port.postMessage({ type: "reset", id: "term-1", snapshot: "SNAPSHOT" });
+      port.postMessage({
+        type: "reset",
+        id: "term-1",
+        snapshot: { data: "SNAPSHOT", cols: 100, rows: 30 },
+      });
       port.postMessage({ type: "data", id: "term-1", data: "after", bytes: 5 });
       await tick();
 
@@ -839,7 +844,7 @@ describe("terminalClient MessagePort data routing", () => {
 
       port.postMessage({ type: "data", id: "term-1", data: "one", bytes: 3 });
       port.postMessage({ type: "data", id: "term-1", data: "two", bytes: 4 });
-      port.postMessage({ type: "reset", id: "term-1", snapshot: "S" });
+      port.postMessage({ type: "reset", id: "term-1", snapshot: SNAP });
       await tick();
       // The repaint write completes, then the stale chunks' writes complete.
       terminalClient.acknowledgePortData("term-1", 0, 3);
@@ -854,7 +859,7 @@ describe("terminalClient MessagePort data routing", () => {
     it("replaces early-buffered output with the repaint when nothing is attached yet", async () => {
       const port = acquirePort();
       port.postMessage({ type: "data", id: "term-1", data: "stale", bytes: 5 });
-      port.postMessage({ type: "reset", id: "term-1", snapshot: "S" });
+      port.postMessage({ type: "reset", id: "term-1", snapshot: SNAP });
       await tick();
 
       const received: string[] = [];
@@ -865,16 +870,73 @@ describe("terminalClient MessagePort data routing", () => {
     it("hands the reset to a subscriber instead of painting it itself", async () => {
       const port = acquirePort();
       const received: string[] = [];
-      const resets: Array<{ id: string; snapshot: string | null }> = [];
+      const resets: Array<{ id: string; snapshot: unknown }> = [];
       terminalClient.onData("term-1", (data) => received.push(String(data)));
       const unsubscribe = terminalClient.onReset((id, snapshot) => resets.push({ id, snapshot }));
 
-      port.postMessage({ type: "reset", id: "term-1", snapshot: "S" });
+      port.postMessage({ type: "reset", id: "term-1", snapshot: SNAP });
       await tick();
       unsubscribe();
 
-      expect(resets).toEqual([{ id: "term-1", snapshot: "S" }]);
+      expect(resets).toEqual([{ id: "term-1", snapshot: { data: "S", cols: 120, rows: 40 } }]);
       expect(received).toEqual([]);
+    });
+
+    it("keeps a snapshot whose geometry is not a grid, without the geometry", async () => {
+      const port = acquirePort();
+      const resets: unknown[] = [];
+      const unsubscribe = terminalClient.onReset((_id, snapshot) => resets.push(snapshot));
+
+      port.postMessage({
+        type: "reset",
+        id: "term-1",
+        snapshot: { data: "S", cols: -1, rows: 1.5 },
+      });
+      port.postMessage({ type: "reset", id: "term-1", snapshot: { cols: 80, rows: 24 } });
+      await tick();
+      unsubscribe();
+
+      expect(resets).toEqual([{ data: "S", cols: 0, rows: 0 }, null]);
+    });
+
+    it("never lets a write queued before the reset settle output queued after it", async () => {
+      const port = acquirePort();
+      const acks = collectAcks(port);
+      const unsubscribe = terminalClient.onReset(() => {});
+      terminalClient.onData("term-1", () => {});
+      expect(terminalClient.getPortAckGeneration("term-1")).toBe(0);
+
+      port.postMessage({ type: "data", id: "term-1", data: "old", bytes: 3 });
+      await tick();
+      const oldGeneration = terminalClient.getPortAckGeneration("term-1");
+
+      port.postMessage({ type: "reset", id: "term-1", snapshot: SNAP });
+      port.postMessage({ type: "data", id: "term-1", data: "new", bytes: 7 });
+      await tick();
+      const newGeneration = terminalClient.getPortAckGeneration("term-1");
+      expect(newGeneration).toBe(oldGeneration + 1);
+
+      // The pre-reset write completes only now: it must not consume "new".
+      terminalClient.acknowledgePortData("term-1", 3, 1, oldGeneration);
+      await tick();
+      expect(acks).toEqual([]);
+
+      terminalClient.acknowledgePortData("term-1", 7, 1, newGeneration);
+      await tick();
+      unsubscribe();
+      expect(acks).toEqual([7]);
+    });
+
+    it("leaves a terminal that never reset on generation 0", async () => {
+      const port = acquirePort();
+      const acks = collectAcks(port);
+      terminalClient.onData("term-2", () => {});
+      port.postMessage({ type: "data", id: "term-2", data: "x", bytes: 1 });
+      await tick();
+      terminalClient.acknowledgePortData("term-2", 1, 1, 0);
+      await tick();
+      expect(terminalClient.getPortAckGeneration("term-2")).toBe(0);
+      expect(acks).toEqual([1]);
     });
   });
 });

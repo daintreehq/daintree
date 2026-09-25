@@ -1,3 +1,13 @@
+import {
+  IPC_HIGH_WATERMARK_PERCENT,
+  IPC_MAX_PAUSE_MS,
+  IPC_MAX_QUEUE_BYTES,
+  IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES,
+} from "../../services/pty/types.js";
+import {
+  isValidTerminalGeometry,
+  type SerializedTerminalSnapshot,
+} from "../../../shared/types/terminal.js";
 import { Lane } from "../link/frames.js";
 import { InteractiveKind } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
@@ -21,13 +31,14 @@ import { DEFAULT_TERMINAL_RING_BYTES, RingBudget, TerminalRing, type RingFrame }
  * local view does. This bridge sits between that port and the link: output is
  * stamped with the PTY's incarnation and a per-terminal sequence number, kept
  * in a bounded ring, and posted on the interactive lane; input (write, resize,
- * ack) goes the other way.
+ * ack) goes the other way, and only for terminals the endpoint's project owns.
  *
  * Acks stay end to end while the client is attached, so a slow renderer still
  * throttles its PTY. While the client is away the bridge acks everything
  * itself, so no PTY stalls waiting for a renderer that is not there, and the
- * ring holds the output for the client's resume. A client that stops acking
- * altogether is dropped to a snapshot resync instead of holding its PTYs.
+ * ring holds the output for the client's resume. A client that falls too far
+ * behind, or stops acking for too long, is dropped to a snapshot resync well
+ * before the pty-host would pause the PTY on its account.
  */
 
 export interface TerminalStreamBridgeOptions {
@@ -42,21 +53,34 @@ export interface TerminalStreamBridgeOptions {
   releasePort(): void;
   /** The PTY's current launch generation. */
   getIncarnation(terminalId: string): number;
-  /** Serialized state of the terminal's headless mirror, or null. */
-  getSnapshot(terminalId: string): Promise<string | null>;
+  /**
+   * The project that owns a terminal, from the host's own spawn records, or
+   * null when the host does not know it (never spawned, or gone). Terminal ids
+   * arriving from the client are never trusted on their own.
+   */
+  ownerOf(terminalId: string): string | null;
   budget?: RingBudget;
   ringBytesPerTerminal?: number;
   /**
-   * Unacked bytes a client may hold for one terminal before it is treated as
-   * stuck and dropped to a snapshot resync.
+   * Unacked bytes a client may hold for one terminal before it is dropped to a
+   * snapshot resync. Must stay below the pty-host's pause watermark, or the
+   * PTY is paused before the bridge ever notices.
    */
   maxOutstandingBytes?: number;
+  /** Unacked bytes across all of this endpoint's terminals before the busiest one is resynced. */
+  maxTotalOutstandingBytes?: number;
+  /** How long outstanding output may go without an ack before its terminal is resynced. */
+  ackTimeoutMs?: number;
   /** Queued interactive-lane bytes above which output waits in the ring. */
   busyBytes?: number;
   /** Delay before reconnecting a pty-host port that closed underneath us. */
   reconnectDelayMs?: number;
   /** Largest snapshot sent in a reset; a larger one resets to a cleared screen. */
   maxSnapshotBytes?: number;
+  /** How long a snapshot may take before the reset goes out with a cleared screen. */
+  snapshotTimeoutMs?: number;
+  /** Terminals tracked at once; the least recently active beyond it are retired. */
+  maxStreams?: number;
 }
 
 interface StreamState {
@@ -69,8 +93,20 @@ interface StreamState {
   sentSeq: number;
   /** Bytes queued for the client that the pty-host still counts against this port. */
   outstanding: number;
+  /** When the oldest unacked output went out without an ack since; 0 when nothing is owed. */
+  owedSince: number;
+  /** Order of last output, for retiring the least recently active stream. */
+  lastActivity: number;
   needsReset: boolean;
   resetting: boolean;
+}
+
+/** A snapshot requested through the pty-host port, fenced against the stream. */
+interface PendingFence {
+  stream: StreamState;
+  /** Seq of the last frame before the fence marker; null until it arrives. */
+  boundary: number | null;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 let sharedBudget: RingBudget | null = null;
@@ -81,12 +117,33 @@ export function getSharedRingBudget(): RingBudget {
   return sharedBudget;
 }
 
+const PAUSE_WATERMARK_BYTES = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
+/** Half the pty-host's pause watermark: resynced long before the PTY would pause. */
+export const DEFAULT_MAX_OUTSTANDING_BYTES = Math.floor(PAUSE_WATERMARK_BYTES / 2);
+/** Half the pty-host's aggregate pause watermark, for the same reason. */
+export const DEFAULT_MAX_TOTAL_OUTSTANDING_BYTES = Math.floor(
+  IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES / 2
+);
+/** Well inside the pty-host's safety timeout, so a silent client never holds a PTY that long. */
+export const DEFAULT_ACK_TIMEOUT_MS = Math.floor(IPC_MAX_PAUSE_MS / 4);
+export const DEFAULT_MAX_STREAMS = 4096;
+
 const DEFAULT_BUSY_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_RECONNECT_DELAY_MS = 1_000;
+const DEFAULT_SNAPSHOT_TIMEOUT_MS = 15_000;
+/** Streams tracked before the first sweep for terminals that are gone. */
+const MIN_SWEEP_AT = 64;
 
 function toIncarnation(value: number): number {
   return Number.isInteger(value) && value >= 0 ? value % 0x1_0000_0000 : 0;
+}
+
+function toSnapshot(value: unknown): SerializedTerminalSnapshot | null {
+  if (!isValidTerminalGeometry(value)) return null;
+  const data = (value as { data?: unknown }).data;
+  if (typeof data !== "string") return null;
+  return { data, cols: value.cols, rows: value.rows };
 }
 
 export class TerminalStreamBridge {
@@ -96,8 +153,11 @@ export class TerminalStreamBridge {
   private readonly budget: RingBudget;
   private readonly ringBytes: number;
   private readonly maxOutstanding: number;
+  private readonly maxTotalOutstanding: number;
+  private readonly ackTimeoutMs: number;
   private readonly busyBytes: number;
   private readonly maxSnapshotBytes: number;
+  private readonly maxStreams: number;
 
   private projectId: string | null = null;
   private port: PortLike | null = null;
@@ -111,6 +171,12 @@ export class TerminalStreamBridge {
 
   private readonly streams = new Map<string, StreamState>();
   private readonly behind = new Set<StreamState>();
+  private readonly fences = new Map<number, PendingFence>();
+  private nextFenceId = 0;
+  private totalOutstanding = 0;
+  private ackTimer: ReturnType<typeof setTimeout> | null = null;
+  private activityClock = 0;
+  private sweepAt = MIN_SWEEP_AT;
   private disposed = false;
 
   constructor(options: TerminalStreamBridgeOptions) {
@@ -118,17 +184,31 @@ export class TerminalStreamBridge {
     this.endpointId = options.endpointId;
     this.budget = options.budget ?? getSharedRingBudget();
     this.ringBytes = options.ringBytesPerTerminal ?? DEFAULT_TERMINAL_RING_BYTES;
-    this.maxOutstanding = options.maxOutstandingBytes ?? this.ringBytes;
+    this.maxOutstanding = options.maxOutstandingBytes ?? DEFAULT_MAX_OUTSTANDING_BYTES;
+    this.maxTotalOutstanding =
+      options.maxTotalOutstandingBytes ?? DEFAULT_MAX_TOTAL_OUTSTANDING_BYTES;
+    this.ackTimeoutMs = options.ackTimeoutMs ?? DEFAULT_ACK_TIMEOUT_MS;
     this.busyBytes = options.busyBytes ?? DEFAULT_BUSY_BYTES;
     this.maxSnapshotBytes = options.maxSnapshotBytes ?? DEFAULT_MAX_SNAPSHOT_BYTES;
+    this.maxStreams = options.maxStreams ?? DEFAULT_MAX_STREAMS;
   }
 
   get isAttached(): boolean {
     return this.session !== null;
   }
 
+  /** The attached client has said where it is, so output flows to it. */
+  get isResumed(): boolean {
+    return this.session !== null && this.resumed;
+  }
+
   get isDisposed(): boolean {
     return this.disposed;
+  }
+
+  /** Terminals this bridge holds stream state for. */
+  get streamCount(): number {
+    return this.streams.size;
   }
 
   /** Stream position for a terminal, for diagnostics and tests. */
@@ -147,9 +227,10 @@ export class TerminalStreamBridge {
     const hadPort = this.port !== null;
     this.projectId = projectId;
     this.connected = false;
-    for (const stream of this.streams.values()) stream.ring.dispose();
-    this.streams.clear();
+    this.abandonFences(false);
+    for (const stream of [...this.streams.values()]) this.retire(stream, false);
     this.behind.clear();
+    this.sweepAt = MIN_SWEEP_AT;
     if (projectId === null) {
       this.dropPort();
       if (hadPort) this.opts.releasePort();
@@ -173,8 +254,10 @@ export class TerminalStreamBridge {
     // so a stream carried across connections can have lost bytes the seq
     // cannot show. Repaint every stream the client is following.
     const replaced = this.connected;
+    // A fence asked of the old connection is never answered by the new one.
+    this.abandonFences(true);
     for (const stream of this.streams.values()) {
-      stream.outstanding = 0;
+      this.setOutstanding(stream, 0);
       if (replaced) stream.needsReset = true;
     }
     if (this.projectId !== null) {
@@ -217,6 +300,7 @@ export class TerminalStreamBridge {
     for (const cleanup of this.sessionCleanup.splice(0)) cleanup();
     for (const stream of this.streams.values()) this.settleOutstanding(stream);
     this.behind.clear();
+    this.clearAckTimer();
   }
 
   dispose(): void {
@@ -224,6 +308,7 @@ export class TerminalStreamBridge {
     this.detach();
     this.disposed = true;
     this.clearReconnectTimer();
+    this.abandonFences(false);
     const hadPort = this.port !== null || this.projectId !== null;
     this.dropPort();
     if (hadPort) this.opts.releasePort();
@@ -241,7 +326,8 @@ export class TerminalStreamBridge {
       if (mentioned.has(entry.id)) continue;
       mentioned.add(entry.id);
       const stream = this.streams.get(entry.id);
-      if (!stream) {
+      if (!stream || !this.owns(entry.id)) {
+        if (stream) this.retire(stream, true);
         outcomes.push({ id: entry.id, outcome: "unknown" });
         continue;
       }
@@ -251,6 +337,7 @@ export class TerminalStreamBridge {
         continue;
       }
       const replayable =
+        entry.reset !== true &&
         !stream.needsReset &&
         stream.incarnation === entry.incarnation &&
         entry.lastSeq <= stream.seq &&
@@ -281,6 +368,10 @@ export class TerminalStreamBridge {
     return { terminals: outcomes };
   }
 
+  private owns(terminalId: string): boolean {
+    return this.projectId !== null && this.opts.ownerOf(terminalId) === this.projectId;
+  }
+
   private adoptPort(port: PortLike): void {
     this.port = port;
     this.connected = true;
@@ -290,6 +381,7 @@ export class TerminalStreamBridge {
     port.onClose(() => {
       if (this.port !== port) return;
       this.port = null;
+      this.abandonFences(true);
       this.scheduleReconnect();
     });
   }
@@ -324,7 +416,7 @@ export class TerminalStreamBridge {
 
   private onPtyMessage(raw: unknown): void {
     if (!raw || typeof raw !== "object") return;
-    const message = raw as { type?: unknown; id?: unknown };
+    const message = raw as { type?: unknown; id?: unknown; requestId?: unknown };
     if (typeof message.id !== "string" || message.id.length === 0) return;
     if (message.type === "data") {
       const { data, bytes } = raw as { data?: unknown; bytes?: unknown };
@@ -332,11 +424,28 @@ export class TerminalStreamBridge {
       this.onData(message.id, data, bytes);
       return;
     }
+    if (message.type === "serialize-fence" || message.type === "serialized-state") {
+      if (typeof message.requestId !== "number") return;
+      const fence = this.fences.get(message.requestId);
+      if (!fence || fence.stream.id !== message.id) return;
+      if (message.type === "serialize-fence") {
+        // Every frame before this marker is in the snapshot on its way.
+        fence.boundary = fence.stream.seq;
+      } else {
+        this.completeFence(
+          message.requestId,
+          fence,
+          toSnapshot((raw as { state?: unknown }).state)
+        );
+      }
+      return;
+    }
     // Status pulses are relayed live and never replayed: they describe the
     // moment, and a resumed client learns the present from the next one.
     if (message.type === "tier-changed" || message.type === "terminal-status") {
       if (!this.canSend) return;
       const stream = this.streams.get(message.id);
+      if (!stream && !this.owns(message.id)) return;
       this.post(message.id, stream?.incarnation ?? this.incarnationOf(message.id), 0, raw);
     }
     // `worker-ingest-engaged` never arrives: a remote view cannot engage.
@@ -353,41 +462,100 @@ export class TerminalStreamBridge {
       if (stream) {
         // The PTY restarted under the same id: its old output is history the
         // client already has; the new incarnation streams from seq 1.
-        this.settleOutstanding(stream);
-        stream.ring.dispose();
-        this.behind.delete(stream);
+        this.retire(stream, true);
+      } else if (!this.owns(id)) {
+        // The pty-host scopes this port to the project already; a terminal
+        // the host's records do not put there is never streamed, but its
+        // bytes are released so nothing stalls on them.
+        this.ackPty(id, bytes);
+        return;
       }
-      stream = {
-        id,
-        incarnation,
-        seq: 0,
-        ring: new TerminalRing(this.ringBytes, this.budget),
-        sentSeq: 0,
-        outstanding: 0,
-        needsReset: false,
-        resetting: false,
-      };
-      this.streams.set(id, stream);
+      stream = this.createStream(id, incarnation);
     }
     stream.seq++;
+    stream.lastActivity = ++this.activityClock;
     stream.ring.push({ seq: stream.seq, data, bytes });
-    if (!this.canSend) {
+    if (!this.canSend || stream.resetting) {
+      // Nobody to ack it, or it is about to be covered by a snapshot.
       this.ackPty(id, bytes);
       return;
     }
-    stream.outstanding += bytes;
-    if (stream.outstanding > this.maxOutstanding && !stream.resetting) {
-      // The client has stopped acking. Holding its PTY paused would stall the
-      // agent for everyone; resync it from a snapshot when it catches up.
+    this.setOutstanding(stream, stream.outstanding + bytes);
+    if (stream.outstanding > this.maxOutstanding) {
+      // Far enough behind that the pty-host would soon pause the PTY for
+      // everyone; resync it from a snapshot instead.
       stream.needsReset = true;
+    } else if (this.totalOutstanding > this.maxTotalOutstanding) {
+      // Same for the pty-host's aggregate watermark across this endpoint.
+      const busiest = this.busiestStream();
+      busiest.needsReset = true;
+      if (busiest !== stream) this.pump(busiest);
     }
     this.pump(stream);
+  }
+
+  private createStream(id: string, incarnation: number): StreamState {
+    if (this.streams.size >= this.sweepAt) {
+      this.sweep();
+      this.sweepAt = Math.max(MIN_SWEEP_AT, this.streams.size * 2);
+    }
+    while (this.streams.size >= this.maxStreams) {
+      let oldest: StreamState | null = null;
+      for (const candidate of this.streams.values()) {
+        if (!oldest || candidate.lastActivity < oldest.lastActivity) oldest = candidate;
+      }
+      if (!oldest) break;
+      this.retire(oldest, true);
+    }
+    const stream: StreamState = {
+      id,
+      incarnation,
+      seq: 0,
+      ring: new TerminalRing(this.ringBytes, this.budget),
+      sentSeq: 0,
+      outstanding: 0,
+      owedSince: 0,
+      lastActivity: 0,
+      needsReset: false,
+      resetting: false,
+    };
+    this.streams.set(id, stream);
+    return stream;
+  }
+
+  /** Retire streams for terminals the host no longer runs for this project. */
+  private sweep(): void {
+    for (const stream of [...this.streams.values()]) {
+      if (!this.owns(stream.id)) this.retire(stream, true);
+    }
+  }
+
+  /** Forget a terminal's stream, releasing what it held against the PTY and the ring budget. */
+  private retire(stream: StreamState, settle: boolean): void {
+    if (settle) this.settleOutstanding(stream);
+    else this.setOutstanding(stream, 0);
+    for (const [requestId, fence] of this.fences) {
+      if (fence.stream !== stream) continue;
+      clearTimeout(fence.timer);
+      this.fences.delete(requestId);
+    }
+    stream.ring.dispose();
+    this.behind.delete(stream);
+    if (this.streams.get(stream.id) === stream) this.streams.delete(stream.id);
+  }
+
+  private busiestStream(): StreamState {
+    let busiest: StreamState | null = null;
+    for (const stream of this.streams.values()) {
+      if (!busiest || stream.outstanding > busiest.outstanding) busiest = stream;
+    }
+    return busiest!;
   }
 
   private pump(stream: StreamState): void {
     if (!this.canSend || stream.resetting) return;
     if (stream.needsReset) {
-      void this.reset(stream);
+      this.reset(stream);
       return;
     }
     while (stream.sentSeq < stream.seq) {
@@ -398,7 +566,7 @@ export class TerminalStreamBridge {
       const frame: RingFrame | null = stream.ring.get(stream.sentSeq + 1);
       if (!frame) {
         // Evicted before it could be sent: the gap can only be closed by a snapshot.
-        void this.reset(stream);
+        this.reset(stream);
         return;
       }
       const result = this.post(stream.id, stream.incarnation, frame.seq, {
@@ -428,31 +596,57 @@ export class TerminalStreamBridge {
     }
   }
 
-  private async reset(stream: StreamState): Promise<void> {
+  /**
+   * Resync a stream from a snapshot fenced against its output: the pty-host
+   * posts a marker on this port behind everything it had sent, then takes the
+   * snapshot, so frames before the marker are covered by it and frames after
+   * it follow the reset. Nothing is painted twice and nothing is lost.
+   */
+  private reset(stream: StreamState): void {
     if (stream.resetting) return;
     stream.resetting = true;
     stream.needsReset = false;
     this.behind.delete(stream);
-    // Everything up to the boundary is covered by the snapshot, so the client
-    // no longer owes acks for it.
+    // The snapshot covers everything sent so far, so the client no longer
+    // owes acks for it; output until the reset goes out is acked on arrival.
     this.settleOutstanding(stream);
-    // Output at or before this seq is in the snapshot: the mirror is fed as
-    // output is produced, ahead of the port batcher that feeds this bridge.
-    // Later frames may overlap its tail; that is the price of never losing any.
-    const boundary = stream.seq;
-    let snapshot: string | null;
-    try {
-      snapshot = await this.opts.getSnapshot(stream.id);
-    } catch {
-      snapshot = null;
+    const requestId = ++this.nextFenceId;
+    const timer = setTimeout(() => {
+      const fence = this.fences.get(requestId);
+      if (fence) this.completeFence(requestId, fence, null);
+    }, this.opts.snapshotTimeoutMs ?? DEFAULT_SNAPSHOT_TIMEOUT_MS);
+    timer.unref?.();
+    this.fences.set(requestId, { stream, boundary: null, timer });
+    if (!safePost(this.port, { type: "serialize-fence", id: stream.id, requestId })) {
+      // No pty-host connection: the next one repaints every stream anyway.
+      clearTimeout(timer);
+      this.fences.delete(requestId);
+      stream.resetting = false;
+      stream.needsReset = true;
     }
+  }
+
+  private completeFence(
+    requestId: number,
+    fence: PendingFence,
+    received: SerializedTerminalSnapshot | null
+  ): void {
+    clearTimeout(fence.timer);
+    this.fences.delete(requestId);
+    const stream = fence.stream;
     stream.resetting = false;
     if (this.disposed || this.streams.get(stream.id) !== stream) return;
     if (!this.canSend) {
       stream.needsReset = true;
       return;
     }
-    if (snapshot !== null && Buffer.byteLength(snapshot, "utf8") > this.maxSnapshotBytes) {
+    // Without a marker (the snapshot timed out first) nothing sent so far is
+    // known to be covered; a cleared screen at the current end loses the
+    // least.
+    const covered = fence.boundary !== null;
+    const boundary = fence.boundary ?? stream.seq;
+    let snapshot = covered ? received : null;
+    if (snapshot !== null && Buffer.byteLength(snapshot.data, "utf8") > this.maxSnapshotBytes) {
       snapshot = null;
     }
     const result = this.postReset(stream, boundary, snapshot);
@@ -465,10 +659,24 @@ export class TerminalStreamBridge {
     this.pump(stream);
   }
 
-  private postReset(stream: StreamState, boundary: number, snapshot: string | null): EnqueueResult {
+  /** Give up on outstanding fences; `resync` asks for another reset once possible. */
+  private abandonFences(resync: boolean): void {
+    for (const fence of this.fences.values()) {
+      clearTimeout(fence.timer);
+      fence.stream.resetting = false;
+      if (resync) fence.stream.needsReset = true;
+    }
+    this.fences.clear();
+  }
+
+  private postReset(
+    stream: StreamState,
+    boundary: number,
+    snapshot: SerializedTerminalSnapshot | null
+  ): EnqueueResult {
     const session = this.session;
     if (!session) return "refused";
-    const build = (snap: string | null) => ({
+    const build = (snap: SerializedTerminalSnapshot | null) => ({
       lane: Lane.INTERACTIVE,
       kind: InteractiveKind.TERMINAL_RESET,
       body: {
@@ -506,6 +714,8 @@ export class TerminalStreamBridge {
     const parsed = TerminalInPortMessageSchema.safeParse(raw);
     if (!parsed.success) return;
     const message = parsed.data;
+    // The id is the client's claim; the host's spawn records decide.
+    if (!this.owns(message.id)) return;
     if (message.type === "ack") {
       // Clamped: acks for frames the bridge already settled (a replay, a
       // reset, an earlier session) must not be counted twice by the pty-host.
@@ -513,7 +723,9 @@ export class TerminalStreamBridge {
       if (!stream) return;
       const bytes = Math.min(message.bytes, stream.outstanding);
       if (bytes <= 0) return;
-      stream.outstanding -= bytes;
+      this.setOutstanding(stream, stream.outstanding - bytes);
+      // Progress restarts the clock on whatever is still owed.
+      if (stream.outstanding > 0) stream.owedSince = Date.now();
       this.ackPty(message.id, bytes);
       return;
     }
@@ -522,7 +734,57 @@ export class TerminalStreamBridge {
 
   private settleOutstanding(stream: StreamState): void {
     if (stream.outstanding > 0) this.ackPty(stream.id, stream.outstanding);
-    stream.outstanding = 0;
+    this.setOutstanding(stream, 0);
+  }
+
+  /** Every change to a stream's unacked bytes goes through here, so the total and the ack clock stay right. */
+  private setOutstanding(stream: StreamState, bytes: number): void {
+    this.totalOutstanding += bytes - stream.outstanding;
+    if (bytes > 0 && stream.outstanding === 0) {
+      stream.owedSince = Date.now();
+      this.armAckTimer();
+    } else if (bytes === 0) {
+      stream.owedSince = 0;
+    }
+    stream.outstanding = bytes;
+  }
+
+  private armAckTimer(): void {
+    if (this.ackTimer || this.disposed) return;
+    this.ackTimer = setTimeout(() => this.checkAcks(), this.ackTimeoutMs);
+    this.ackTimer.unref?.();
+  }
+
+  private clearAckTimer(): void {
+    if (this.ackTimer) clearTimeout(this.ackTimer);
+    this.ackTimer = null;
+  }
+
+  /**
+   * A client that stops acking would leave its PTYs paused until the pty-host's
+   * safety timeout; resync whatever it has owed for too long instead.
+   */
+  private checkAcks(): void {
+    this.ackTimer = null;
+    if (!this.canSend) return;
+    const now = Date.now();
+    let earliest = Infinity;
+    for (const stream of [...this.streams.values()]) {
+      if (stream.outstanding === 0) continue;
+      if (now - stream.owedSince >= this.ackTimeoutMs) {
+        stream.needsReset = true;
+        this.pump(stream);
+      } else {
+        earliest = Math.min(earliest, stream.owedSince);
+      }
+    }
+    if (earliest !== Infinity && !this.ackTimer) {
+      this.ackTimer = setTimeout(
+        () => this.checkAcks(),
+        Math.max(1, earliest + this.ackTimeoutMs - now)
+      );
+      this.ackTimer.unref?.();
+    }
   }
 
   private ackPty(id: string, bytes: number): void {

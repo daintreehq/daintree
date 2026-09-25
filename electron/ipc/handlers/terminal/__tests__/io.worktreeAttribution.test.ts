@@ -64,6 +64,8 @@ function buildDeps(): HandlerDependencies {
     ptyClient: {
       updateWorktreeId,
       getTerminalAsync: vi.fn(() => Promise.resolve(null)),
+      // Main's spawn record for the one run a remote view owns in these specs.
+      getTerminalProjectId: vi.fn((id: string) => (id === "t1" ? "project-remote" : null)),
     },
     windowRegistry: { getByWindowId: () => undefined },
   } as unknown as HandlerDependencies;

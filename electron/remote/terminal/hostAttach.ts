@@ -54,9 +54,16 @@ export function createPtyHostPortFactory(
   };
 }
 
+/**
+ * A remote endpoint as the host's registry knows it, plus the id its Shell
+ * uses for it. Stream messages carry the Shell's id, so that is what the
+ * bridge matches on; the registry id keys the bridge on this host.
+ */
+export type RemoteStreamEndpoint = ClientEndpoint & { readonly clientEndpointId: string };
+
 export function attachTerminalBridge(
   session: LinkSession,
-  endpoint: ClientEndpoint,
+  endpoint: RemoteStreamEndpoint,
   overrides: BridgeOverrides = {}
 ): TerminalStreamBridge {
   let entry = bridges.get(endpoint.endpointId);
@@ -70,10 +77,12 @@ export function attachTerminalBridge(
       bridge?.reconnect()
     );
     bridge = new TerminalStreamBridge({
-      endpointId: endpoint.endpointId,
+      endpointId: endpoint.clientEndpointId,
       ...ports,
       getIncarnation: (id) => getLifecycleLedger().currentGeneration(id) ?? 0,
-      getSnapshot: async (id) => (await getPtyClient()?.getSerializedStateAsync(id))?.data ?? null,
+      // Main's spawn records are written before any output exists and dropped
+      // when the terminal goes, so they decide what this endpoint may touch.
+      ownerOf: (id) => getPtyClient()?.getTerminalProjectId(id) ?? null,
       ...overrides,
     });
     const created = bridge;
