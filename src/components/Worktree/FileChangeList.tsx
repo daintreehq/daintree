@@ -412,7 +412,10 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
           // hover bleed overflows the container, and with overflow-y set,
           // `visible` on x computes to `auto` — a horizontal scrollbar. The
           // container's padding absorbs the bleed; anything longer truncates.
-          "overflow-y-auto overflow-x-hidden",
+          // `contain-paint` makes the scrollport a hard paint boundary: with
+          // only the overflow clip, mid-scroll frames painted row text far
+          // down the sidebar, outside this box (#12828).
+          "overflow-y-auto overflow-x-hidden contain-paint",
           isStale && "surface-stale"
         )}
         aria-busy={isStale || undefined}

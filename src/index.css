@@ -1310,7 +1310,10 @@ body,
   background-color: var(--color-status-info);
   border-radius: 1px;
   animation: file-change-row-appear 2000ms ease-out 1 both;
-  will-change: opacity;
+  /* No `will-change`: the bar rests invisible for as long as the row stays
+   * "new", and a standing hint kept one composited layer per row inside the
+   * list's scroller — layers that could paint outside it mid-scroll (#12828).
+   * The running opacity animation composites without the hint. */
   pointer-events: none;
 }
 
