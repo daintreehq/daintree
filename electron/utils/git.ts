@@ -21,6 +21,12 @@ const inFlightWorktreeChanges = new Map<
   { promise: Promise<WorktreeChanges>; signal: AbortSignal | undefined }
 >();
 
+// Oversized-repo warnings fire once per cwd and re-arm only when a later fetch
+// measures the count back under the cap. Not cleared on cache invalidation:
+// watcher events invalidate constantly on exactly the repos that trip these.
+const warnedLargeNumstat = new Set<string>();
+const warnedLargeUntracked = new Set<string>();
+
 export function invalidateWorktreeCache(cwd: string): void {
   GIT_WORKTREE_CHANGES_CACHE.invalidate(cwd);
 }
@@ -732,6 +738,9 @@ export async function getWorktreeChangesWithStats(
           ...status.staged,
         ]),
       ];
+      if (trackedChangedFiles.length <= MAX_FILES_FOR_NUMSTAT) {
+        warnedLargeNumstat.delete(cwd);
+      }
 
       // Early stat pass: gather (mtimeMs, size) for each tracked file so we can
       // probe the per-file cache before shelling out to `git diff`. Stat failures
@@ -798,11 +807,14 @@ export async function getWorktreeChangesWithStats(
             "--",
             ...limitedFiles,
           ]);
-          logWarn("Large changeset detected; limiting numstat to first 100 files", {
-            cwd,
-            totalFiles: trackedChangedFiles.length,
-            limitedTo: MAX_FILES_FOR_NUMSTAT,
-          });
+          if (!warnedLargeNumstat.has(cwd)) {
+            warnedLargeNumstat.add(cwd);
+            logWarn("Large changeset detected; limiting numstat to first 100 files", {
+              cwd,
+              totalFiles: trackedChangedFiles.length,
+              limitedTo: MAX_FILES_FOR_NUMSTAT,
+            });
+          }
         } else {
           diffOutput = await git.diff([
             "--no-ext-diff",
@@ -953,11 +965,16 @@ export async function getWorktreeChangesWithStats(
           : untrackedFiles;
 
       if (untrackedFiles.length > MAX_UNTRACKED_FILES) {
-        logWarn("Large number of untracked files; limiting to first 200", {
-          cwd,
-          totalUntracked: untrackedFiles.length,
-          limitedTo: MAX_UNTRACKED_FILES,
-        });
+        if (!warnedLargeUntracked.has(cwd)) {
+          warnedLargeUntracked.add(cwd);
+          logWarn("Large number of untracked files; limiting to first 200", {
+            cwd,
+            totalUntracked: untrackedFiles.length,
+            limitedTo: MAX_UNTRACKED_FILES,
+          });
+        }
+      } else {
+        warnedLargeUntracked.delete(cwd);
       }
 
       for (let i = 0; i < limitedUntrackedFiles.length; i += concurrencyLimit) {
