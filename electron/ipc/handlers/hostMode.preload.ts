@@ -3,6 +3,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const HOST_MODE_METHOD_CHANNELS = {
   getStatus: "host-mode:get-status",
   setEnabled: "host-mode:set-enabled",
+  runKeychainPreflight: "host-mode:run-keychain-preflight",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof HOST_MODE_METHOD_CHANNELS;

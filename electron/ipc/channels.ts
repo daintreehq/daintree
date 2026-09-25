@@ -1245,6 +1245,7 @@ export const CHANNELS = {
   // Remote Hosts: hostMode (shell).
   HOST_MODE_GET_STATUS: "host-mode:get-status",
   HOST_MODE_SET_ENABLED: "host-mode:set-enabled",
+  HOST_MODE_RUN_KEYCHAIN_PREFLIGHT: "host-mode:run-keychain-preflight",
   HOST_MODE_EVENT: "host-mode:event",
 
   // Remote Hosts: driveLease (host).
