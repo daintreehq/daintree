@@ -110,10 +110,49 @@ describe("installPortForwardClient", () => {
     expect(gate(7, "http://localhost:1/")).toBeNull();
     expect(hooks.resolver).toBeTypeOf("function");
 
-    uninstall();
+    await uninstall();
     cleanups.pop();
     expect(getRemoteService("portForwards")).toBeUndefined();
     expect(hooks.gate).toBeNull();
     expect(hooks.resolver).toBeNull();
+  });
+
+  it("forwards from a host no local view is on, through its current session", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const remotePort = await new Promise<number>((resolve) =>
+      upstream.listen(0, "127.0.0.1", () => resolve((upstream.address() as net.AddressInfo).port))
+    );
+    cleanups.push(() => upstream.close());
+
+    let current: LinkSession | null = null;
+    cleanups.push(
+      installPortForwardClient({
+        onEndpointOpened: () => () => {},
+        hostForView: () => null,
+        isKnownHost: (hostId) => hostId === HOST,
+        sessionFor: (hostId) => (hostId === HOST ? current : null),
+        hostIds: () => [HOST],
+        sshTargetFor: () => null,
+        clientDir: dir,
+      })
+    );
+    const service = getRemoteService("portForwards")!;
+
+    await expect(service.forward({ hostId: HOST, remotePort })).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+    current = client;
+    const forward = await service.forward({ hostId: HOST, remotePort });
+    expect(forward).toMatchObject({ hostId: HOST, remotePort });
+    const body = await new Promise<string>((resolve, reject) => {
+      http
+        .get(`http://127.0.0.1:${forward.localPort}/`, (res) => {
+          let text = "";
+          res.on("data", (chunk) => (text += chunk));
+          res.on("end", () => resolve(text));
+        })
+        .on("error", reject);
+    });
+    expect(body).toBe("ok");
   });
 });

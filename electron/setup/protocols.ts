@@ -28,13 +28,9 @@ import {
 } from "../utils/webviewCsp.js";
 import { resolveHtmlPreviewRoot } from "./htmlPreviewTokens.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
-import {
-  isLocalhostUrl,
-  isDevPreviewProxyUrl,
-  isSafeNavigationUrl,
-  formatDialogOrigin,
-} from "../../shared/utils/urlUtils.js";
+import { formatDialogOrigin } from "../../shared/utils/urlUtils.js";
 import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
+import { isGuestNavigationAllowed } from "../window/webviewSrcGate.js";
 import {
   parsePluginTourAudioPath,
   stripPluginViewGeneration,
@@ -2213,12 +2209,16 @@ export function setupWebviewCSP(): void {
       // navigate away afterwards).
       // Browser partition allows cross-origin http/https for OAuth/OIDC flows.
       // Dev-preview and other partitions remain restricted to localhost only.
+      // Both use the attach gate's host-aware rule, so a guest in a remote-bound
+      // view can't reach this machine's localhost except through a forward.
       contents.on("will-navigate", (event, navigationUrl) => {
         const isBrowserPanel = isBrowserPanelContents(contents);
 
-        const blocked = isBrowserPanel
-          ? !isSafeNavigationUrl(navigationUrl)
-          : !isLocalhostUrl(navigationUrl) && !isDevPreviewProxyUrl(navigationUrl);
+        const blocked = !isGuestNavigationAllowed(
+          (contents.hostWebContents ?? contents).id,
+          navigationUrl,
+          isBrowserPanel
+        );
 
         if (blocked) {
           const label = isBrowserPanel ? "unsafe" : "non-localhost";
@@ -2231,9 +2231,11 @@ export function setupWebviewCSP(): void {
       contents.on("will-redirect", (event, redirectUrl) => {
         const isBrowserPanel = isBrowserPanelContents(contents);
 
-        const blocked = isBrowserPanel
-          ? !isSafeNavigationUrl(redirectUrl)
-          : !isLocalhostUrl(redirectUrl) && !isDevPreviewProxyUrl(redirectUrl);
+        const blocked = !isGuestNavigationAllowed(
+          (contents.hostWebContents ?? contents).id,
+          redirectUrl,
+          isBrowserPanel
+        );
 
         if (blocked) {
           const label = isBrowserPanel ? "unsafe" : "non-localhost";

@@ -162,6 +162,42 @@ describe("HostServer socket and discovery", () => {
     await expect(blocked.listen()).rejects.toThrow(/not a socket/);
   });
 
+  it("lets exactly one of two concurrent starts take over a stale socket", async () => {
+    await fs.mkdir(location.dir, { recursive: true });
+    const child = spawn(process.execPath, [
+      "-e",
+      `require("net").createServer().listen(${JSON.stringify(location.socketPath)}); setInterval(() => {}, 1000);`,
+    ]);
+    await waitFor(() => existsSync(location.socketPath));
+    child.kill("SIGKILL");
+    await new Promise((r) => child.once("exit", r));
+
+    const make = () => {
+      const s = new HostServer({ location, handshake: TEST_HANDSHAKE, hostName: "h" });
+      servers.push(s);
+      return s;
+    };
+    const a = make();
+    const b = make();
+    const results = await Promise.allSettled([a.listen(), b.listen()]);
+    const won = results.filter((r) => r.status === "fulfilled");
+    const lost = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    expect(String(lost[0]!.reason)).toMatch(/already listening/);
+
+    const winner = results[0]!.status === "fulfilled" ? a : b;
+    expect(winner.isListening).toBe(true);
+    expect((await readDiscoveryFile(location.discoveryPath))?.token).toBe(winner.token);
+    const probe = net.connect(location.socketPath);
+    await new Promise<void>((resolve, reject) => {
+      probe.once("connect", resolve);
+      probe.once("error", reject);
+    });
+    probe.destroy();
+    expect(existsSync(`${location.socketPath}.lock`)).toBe(false);
+  });
+
   it("fails clearly when the socket path exceeds the platform limit", async () => {
     const long = hostSocketLocation({
       platform: "darwin",
@@ -449,6 +485,23 @@ describe("HostServer listen/close serialization", () => {
     vi.restoreAllMocks();
     await server.listen();
     expect(server.isListening).toBe(true);
+  });
+
+  it("tears down a start whose close() lands while the socket lock is being released", async () => {
+    const server = new HostServer({ location, handshake: TEST_HANDSHAKE, hostName: "h" });
+    servers.push(server);
+    const realUnlink = fs.unlink.bind(fs);
+    let closing: Promise<void> | null = null;
+    vi.spyOn(fs, "unlink").mockImplementation(async (target) => {
+      if (!closing && String(target).endsWith(".lock")) closing = server.close();
+      return realUnlink(target);
+    });
+    await server.listen();
+    expect(closing).not.toBeNull();
+    await closing;
+    expect(server.isListening).toBe(false);
+    expect(existsSync(location.socketPath)).toBe(false);
+    expect(existsSync(location.discoveryPath)).toBe(false);
   });
 
   it("starts again cleanly when listen() follows close() before it finished", async () => {

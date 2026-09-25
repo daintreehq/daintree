@@ -38,6 +38,13 @@ export interface PortForwardClientDeps {
   /** The view's host, or null when it runs on this machine. */
   hostForView(webContentsId: number): HostId | null;
   isKnownHost(hostId: HostId): boolean;
+  /**
+   * The host's open session whether or not a local view has an endpoint on
+   * it, so a port can be forwarded from a host no window is showing.
+   */
+  sessionFor?(hostId: HostId): LinkSession | null;
+  /** Every host in the list, for preview lookups on hosts no view is showing. */
+  hostIds?(): HostId[];
   /** The SSH target the host is dialled with, or null for a host reached another way. */
   sshTargetFor(hostId: HostId): string | null;
   /** The Daintree-owned directory holding the hosts' ControlMaster sockets. */
@@ -70,15 +77,20 @@ function broadcastLocal(event: PortForwardsEvent): void {
  * dev previews whose server runs on a host, and the webview rule that makes a
  * forwarded port the host's localhost in that host's windows.
  */
-export function installPortForwardClient(deps: PortForwardClientDeps): () => void {
+export function installPortForwardClient(deps: PortForwardClientDeps): () => Promise<void> {
   const sessions = new Map<HostId, LinkSession>();
   const liveSession = (hostId: HostId): LinkSession | null => {
+    const current = deps.sessionFor?.(hostId) ?? null;
+    if (current?.isOpen) return current;
     const session = sessions.get(hostId);
     return session?.isOpen ? session : null;
   };
   const manager = new PortForwardManager({
     sessionFor: liveSession,
-    connectedHosts: () => [...sessions.keys()].filter((hostId) => liveSession(hostId) !== null),
+    connectedHosts: () =>
+      [...new Set([...sessions.keys(), ...(deps.hostIds?.() ?? [])])].filter(
+        (hostId) => liveSession(hostId) !== null
+      ),
     isKnownHost: deps.isKnownHost,
     sshMuxFor(hostId): SshMuxTarget | null {
       const target = deps.sshTargetFor(hostId);
@@ -118,9 +130,11 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => voi
     }),
   ];
 
-  return () => {
+  // Resolves once listeners are closed and ssh forwards cancelled, so a stop
+  // finishes before the host connections these ride on are torn down.
+  return async () => {
     for (const dispose of disposers.splice(0).reverse()) dispose();
     sessions.clear();
-    void manager.dispose();
+    await manager.dispose();
   };
 }

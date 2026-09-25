@@ -7,7 +7,8 @@ import { z } from "zod";
  * The owner-only file next to the host socket that tells a client (through
  * `ssh <target> cat`) which socket to forward and which per-launch token to
  * present. Written atomically so a reader never sees half a file, and removed
- * on shutdown only while it still carries this launch's token.
+ * on shutdown only while it still carries this launch's token. The host server
+ * publishes and removes it under the socket lock (`hostSocketLock.ts`).
  */
 
 export interface HostDiscoveryInfo {
@@ -59,12 +60,30 @@ export async function readDiscoveryFile(filePath: string): Promise<HostDiscovery
   }
 }
 
-/** Remove the file only if it still advertises `token`; another launch may own it now. */
+/**
+ * Remove the file only if it still advertises `token`; another launch may own
+ * it now. The file is claimed by an atomic rename before it is judged, so a
+ * replacement published after the first read is never the one deleted: if the
+ * claimed file turns out to be someone else's, it goes back (unless a newer
+ * one has been published meanwhile, which then wins).
+ */
 export async function removeDiscoveryFile(filePath: string, token: string): Promise<boolean> {
   const current = await readDiscoveryFile(filePath);
   if (!current || !tokensEqual(current.token, token)) return false;
-  await fs.rm(filePath, { force: true }).catch(() => {});
-  return true;
+  const claimed = `${filePath}.rm-${crypto.randomBytes(6).toString("hex")}`;
+  try {
+    await fs.rename(filePath, claimed);
+  } catch {
+    return false;
+  }
+  const taken = await readDiscoveryFile(claimed);
+  if (taken && tokensEqual(taken.token, token)) {
+    await fs.rm(claimed, { force: true }).catch(() => {});
+    return true;
+  }
+  await fs.link(claimed, filePath).catch(() => {});
+  await fs.rm(claimed, { force: true }).catch(() => {});
+  return false;
 }
 
 /** Constant-time comparison; unequal lengths fail without comparing. */

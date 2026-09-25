@@ -44,8 +44,10 @@ const m = vi.hoisted(() => {
       onRemoteViewActivated?: (windowId: number, wc: unknown, isNew: boolean) => void;
     };
   } = { current: {} };
+  const hostEntries: Array<{ descriptor: { id: string; sshTarget: string } }> = [];
   const client = {
-    client: { connect: vi.fn() },
+    client: { connect: vi.fn(), list: vi.fn(() => hostEntries) },
+    sessionFor: vi.fn((_hostId: string) => null as unknown),
     onEndpointOpened: vi.fn((l: (hostId: string, info: unknown) => void) => {
       clientOpenedListeners.add(l);
       return () => clientOpenedListeners.delete(l);
@@ -90,6 +92,20 @@ const m = vi.hoisted(() => {
     uninstallPickerSplits: vi.fn(() => record("uninstall picker splits")),
     uninstallHostFileClient: vi.fn(() => record("uninstall host file client")),
     installHostFileClient: vi.fn(),
+    hostEntries,
+    installPluginClient: vi.fn(),
+    uninstallPluginClient: vi.fn(() => record("uninstall plugin client")),
+    installPortForwardClient: vi.fn(),
+    uninstallPortForwardClient: vi.fn(() => record("uninstall port forward client")),
+    installHostSwitchService: vi.fn(),
+    uninstallHostSwitchService: vi.fn(() => record("uninstall host switch service")),
+    installHostPortService: vi.fn(),
+    uninstallHostPortService: vi.fn(() => record("uninstall host port service")),
+    installProjectsHost: vi.fn(),
+    uninstallProjectsHost: vi.fn(() => record("uninstall projects host")),
+    installPluginHost: vi.fn(),
+    uninstallPluginHost: vi.fn(() => record("uninstall plugin host")),
+    attachHostPluginAssets: vi.fn(),
     hostFilesDispose: vi.fn(() => record("host files dispose")),
     installHostFileService: vi.fn(),
     attachHostFiles: vi.fn(),
@@ -254,6 +270,41 @@ vi.mock("../files/hostInstall.js", () => ({
   }),
   attachHostFiles: m.attachHostFiles,
 }));
+vi.mock("../plugins/install.js", () => ({
+  installPluginClient: vi.fn((feed: unknown) => {
+    m.installPluginClient(feed);
+    return m.uninstallPluginClient;
+  }),
+  installPluginHost: vi.fn(() => {
+    m.installPluginHost();
+    return m.uninstallPluginHost;
+  }),
+  attachHostPluginAssets: m.attachHostPluginAssets,
+}));
+vi.mock("../ports/clientInstall.js", () => ({
+  installPortForwardClient: vi.fn((deps: unknown) => {
+    m.installPortForwardClient(deps);
+    return m.uninstallPortForwardClient;
+  }),
+}));
+vi.mock("../ports/hostPorts.js", () => ({
+  installHostPortService: vi.fn((server: unknown) => {
+    m.installHostPortService(server);
+    return m.uninstallHostPortService;
+  }),
+}));
+vi.mock("../projects/clientInstall.js", () => ({
+  installHostSwitchService: vi.fn((deps: unknown) => {
+    m.installHostSwitchService(deps);
+    return m.uninstallHostSwitchService;
+  }),
+}));
+vi.mock("../projects/hostInstall.js", () => ({
+  installProjectsHost: vi.fn((server: unknown) => {
+    m.installProjectsHost(server);
+    return m.uninstallProjectsHost;
+  }),
+}));
 vi.mock("../client/viewRequests.js", () => ({
   installViewReverseRequests: vi.fn(() => m.uninstallViewRequests),
 }));
@@ -331,6 +382,7 @@ beforeEach(() => {
   m.leaseListeners.clear();
   m.viewFilter.current = null;
   m.mcpResolver.current = null;
+  m.hostEntries.length = 0;
   vi.clearAllMocks();
   _resetRemoteServicesForTest();
 });
@@ -411,6 +463,55 @@ describe("startRemoteHosts", () => {
     expect(m.calls.indexOf("uninstall host file client")).toBeLessThan(
       m.calls.indexOf("uninstall picker splits")
     );
+  });
+
+  it("installs the port forward client and host switch service with the client, dialling nothing", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(m.client.client.connect).not.toHaveBeenCalled();
+
+    expect(m.installHostSwitchService).toHaveBeenCalledWith({
+      client: m.client.client,
+      sessionFor: m.client.sessionFor,
+    });
+    expect(m.installPortForwardClient).toHaveBeenCalledTimes(1);
+    const deps = m.installPortForwardClient.mock.calls[0]![0] as {
+      onEndpointOpened: unknown;
+      hostForView(id: number): unknown;
+      isKnownHost(hostId: string): boolean;
+      sessionFor(hostId: string): unknown;
+      hostIds(): string[];
+      sshTargetFor(hostId: string): string | null;
+      clientDir: string;
+    };
+    expect(deps.onEndpointOpened).toBe(m.client.onEndpointOpened);
+    expect(deps.sessionFor).toBe(m.client.sessionFor);
+    expect(deps.clientDir).toBe("/tmp/daintree-user-data/rh");
+    m.viewHosts.set(11, "studio-01");
+    expect(deps.hostForView(11)).toBe("studio-01");
+    expect(deps.hostForView(12)).toBeNull();
+    m.hostEntries.push({ descriptor: { id: "studio-01", sshTarget: "greg@studio" } });
+    expect(deps.isKnownHost("studio-01")).toBe(true);
+    expect(deps.isKnownHost("studio-02")).toBe(false);
+    expect(deps.hostIds()).toEqual(["studio-01"]);
+    expect(deps.sshTargetFor("studio-01")).toBe("greg@studio");
+    expect(deps.sshTargetFor("studio-02")).toBeNull();
+
+    await stopRemoteHosts();
+    expect(m.uninstallPortForwardClient).toHaveBeenCalledTimes(1);
+    expect(m.uninstallHostSwitchService).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs the plugin client only on first use, on the client's endpoint feed", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(m.installPluginClient).not.toHaveBeenCalled();
+
+    m.clientHooks.current.onFirstUse?.();
+    expect(m.installPluginClient).toHaveBeenCalledWith({
+      onEndpointOpened: m.client.onEndpointOpened,
+      onEndpointClosed: m.client.onEndpointClosed,
+    });
+    await stopRemoteHosts();
+    expect(m.uninstallPluginClient).toHaveBeenCalledTimes(1);
   });
 
   it("waits for a workspace client still starting before installing the port overrides", async () => {
@@ -611,6 +712,41 @@ describe("startRemoteHosts", () => {
     expect(m.fleetPush).toHaveBeenCalledWith(endpoint);
   });
 
+  it("serves ports, project moves and plugins only while listening, on the server's sessions", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(m.installHostPortService).not.toHaveBeenCalled();
+    expect(m.installProjectsHost).not.toHaveBeenCalled();
+    expect(m.installPluginHost).not.toHaveBeenCalled();
+
+    const hostMode = getRemoteService("hostMode")!;
+    await hostMode.startListening();
+    expect(m.installHostPortService).toHaveBeenCalledWith(m.server);
+    expect(m.installProjectsHost).toHaveBeenCalledWith(m.server);
+    expect(m.installPluginHost).toHaveBeenCalledTimes(1);
+
+    await hostMode.stopListening();
+    expect(m.uninstallHostPortService).toHaveBeenCalledTimes(1);
+    expect(m.uninstallProjectsHost).toHaveBeenCalledTimes(1);
+    expect(m.uninstallPluginHost).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves plugin assets for opened endpoints and moves them to a resumed link", async () => {
+    await startRemoteHosts({ hostMode: true });
+    const endpoint = fakeEndpoint("remote:s1:view-11");
+    const link = { id: "link-1" };
+    openEndpoint(endpoint, "s1", link);
+    expect(m.attachHostPluginAssets).toHaveBeenCalledWith(link, endpoint);
+
+    // No link yet: nothing to attach to.
+    openEndpoint(fakeEndpoint("remote:s2:view-12"), "s2", null);
+    expect(m.attachHostPluginAssets).toHaveBeenCalledTimes(1);
+
+    const resumed = { id: "link-1b" };
+    for (const l of m.server.sessionListeners)
+      l({ sessionId: "s1", resumed: true, session: resumed });
+    expect(m.attachHostPluginAssets).toHaveBeenLastCalledWith(resumed, endpoint);
+  });
+
   it("serves host files only while listening, for opened and resumed endpoints", async () => {
     await startRemoteHosts({ hostMode: false });
     expect(m.installHostFileService).not.toHaveBeenCalled();
@@ -778,15 +914,21 @@ describe("stopRemoteHosts", () => {
       "dispose terminal relays",
       "dispose worktree relays",
       "uninstall view hooks",
+      "uninstall plugin client",
       "uninstall host file client",
       "uninstall picker splits",
       "uninstall worktree override",
       "uninstall terminal override",
       "advertise.stop",
+      "uninstall plugin host",
+      "uninstall projects host",
+      "uninstall host port service",
       "host files dispose",
       "disposeAllTerminalBridges",
       "host.dispose",
       "server.close",
+      "uninstall port forward client",
+      "uninstall host switch service",
       "client.dispose",
     ]);
     expect(getRemoteService("hostServer")).toBeUndefined();
