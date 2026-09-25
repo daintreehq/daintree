@@ -418,6 +418,23 @@ describe("TerminalRendererPolicy", () => {
       expect(onResumeFlush).not.toHaveBeenCalled();
     });
 
+    it("no-ops while the view is suppressed (#12798)", async () => {
+      const { terminalClient } = await import("@/clients");
+      const onResumeFlush = vi.fn();
+      mockDeps.onResumeFlush = onResumeFlush;
+      mockDeps.isViewSuppressed = () => true;
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
+      policy.initializeBackendTier("test-id", "background");
+      policy.reassertActiveTier("test-id");
+
+      expect(policy.getLastBackendTier("test-id")).toBe("background");
+      expect(terminalClient.setActivityTier).not.toHaveBeenCalledWith("test-id", "active", 200);
+      expect(onResumeFlush).not.toHaveBeenCalled();
+    });
+
     it("cancels a pending hysteresis downgrade so the repair is not undone", () => {
       mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
       mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
@@ -456,7 +473,7 @@ describe("TerminalRendererPolicy", () => {
       const { terminalClient } = await import("@/clients");
       const onTierApplied = vi.fn();
       mockDeps.onTierApplied = onTierApplied;
-      mockDeps.isViewCached = () => true;
+      mockDeps.isViewSuppressed = () => true;
       const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
       policy = new TerminalRendererPolicy(mockDeps);
       mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
@@ -477,7 +494,7 @@ describe("TerminalRendererPolicy", () => {
 
     it("cancels a pending foreground downgrade timer when the view is cached", async () => {
       let cached = false;
-      mockDeps.isViewCached = () => cached;
+      mockDeps.isViewSuppressed = () => cached;
       const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
       policy = new TerminalRendererPolicy(mockDeps);
       mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
@@ -501,7 +518,7 @@ describe("TerminalRendererPolicy", () => {
       let cached = true;
       const onResumeFlush = vi.fn();
       mockDeps.onResumeFlush = onResumeFlush;
-      mockDeps.isViewCached = () => cached;
+      mockDeps.isViewSuppressed = () => cached;
       const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
       policy = new TerminalRendererPolicy(mockDeps);
       mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
@@ -535,7 +552,7 @@ describe("TerminalRendererPolicy", () => {
     });
 
     it("keeps downgrade hysteresis for a view that is not cached", async () => {
-      mockDeps.isViewCached = () => false;
+      mockDeps.isViewSuppressed = () => false;
       const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
       policy = new TerminalRendererPolicy(mockDeps);
       mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;

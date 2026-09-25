@@ -10,10 +10,11 @@ export interface RendererPolicyDeps {
   onTierApplied?: (id: string, tier: TerminalRefreshTier, managed: ManagedTerminal) => void;
   applyDeferredResize?: (id: string) => boolean;
   /**
-   * Whether this project view is cached (#12514). A cached view holds no
-   * foreground tier: every request clamps to BACKGROUND and applies at once.
+   * Whether nobody can see this view — cached (#12514) or its window hidden
+   * (#12798). Such a view holds no foreground tier: every request clamps to
+   * BACKGROUND and applies at once.
    */
-  isViewCached?: () => boolean;
+  isViewSuppressed?: () => boolean;
 }
 
 // Backend cadence hint sent to the PTY host alongside the binary
@@ -88,8 +89,8 @@ export class TerminalRendererPolicy {
     // Clamped here rather than only in the tier providers because overrides
     // bypass them — the write-burst path requests BURST on every chunk a
     // cached agent streams.
-    const isCached = this.deps.isViewCached?.() === true;
-    const tier = isCached ? TerminalRefreshTier.BACKGROUND : requestedTier;
+    const isSuppressed = this.deps.isViewSuppressed?.() === true;
+    const tier = isSuppressed ? TerminalRefreshTier.BACKGROUND : requestedTier;
 
     // #9779: A pending BACKGROUND downgrade in the hysteresis window means the
     // ingest queue is holding bytes (the computed-tier gate). If the computed
@@ -149,9 +150,9 @@ export class TerminalRendererPolicy {
       return;
     }
 
-    // No hysteresis for a cached view: the downgrade guards against focus and
-    // scroll flapping, and nothing flaps in a view nobody can see.
-    if (isCached) {
+    // No hysteresis for a suppressed view: the downgrade guards against focus
+    // and scroll flapping, and nothing flaps in a view nobody can see.
+    if (isSuppressed) {
       if (managed.tierChangeTimer !== undefined) {
         clearTimeout(managed.tierChangeTimer);
         managed.tierChangeTimer = undefined;
@@ -227,6 +228,7 @@ export class TerminalRendererPolicy {
     if (!managed) return;
     const tier = managed.lastAppliedTier ?? managed.getRefreshTier();
     if (tier === TerminalRefreshTier.BACKGROUND) return;
+    if (this.deps.isViewSuppressed?.() === true) return;
     if (this.lastBackendTier.get(id) !== "background") return;
     // Cancel any pending hysteresis downgrade (mirrors the isUpgrade path in
     // applyRendererPolicy) — a stale BACKGROUND timer firing right after this
