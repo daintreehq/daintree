@@ -1,5 +1,6 @@
 // eager-import-allow: reaches the project file store only from copy-tree IPC handlers, never at boot
 import { CHANNELS } from "../ipc/channels.js";
+import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import { getWebContentsForProject } from "../window/webContentsRegistry.js";
 import { projectStore } from "./ProjectStore.js";
 import type {
@@ -17,14 +18,24 @@ import type {
  * nothing to push.
  */
 function pushCopyTreeHistory(projectId: string, records: CopyTreeHistoryRecord[]): void {
+  const event = { name: "copy-tree-history:update", payload: { projectId, records } };
   for (const wc of getWebContentsForProject(projectId)) {
     try {
-      wc.send(CHANNELS.EVENTS_PUSH, {
-        name: "copy-tree-history:update",
-        payload: { projectId, records },
-      });
+      wc.send(CHANNELS.EVENTS_PUSH, event);
     } catch {
       // Silently ignore send failures during window initialization/disposal.
+    }
+  }
+  // Views attached over a link are bound to exactly one project, so the same
+  // exact-binding rule holds for them.
+  const registry = getEndpointRegistry();
+  if (!registry.hasRemote()) return;
+  for (const endpoint of registry.getForProject(projectId)) {
+    if (endpoint.kind !== "remote-view" || endpoint.isClosed()) continue;
+    try {
+      endpoint.send({ type: "event", channel: CHANNELS.EVENTS_PUSH, args: [event] });
+    } catch {
+      // A closing link must not break delivery to the remaining endpoints.
     }
   }
 }

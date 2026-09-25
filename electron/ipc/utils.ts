@@ -695,6 +695,60 @@ function buildIpcContext(event: Electron.IpcMainInvokeEvent): IpcContext {
   };
 }
 
+/**
+ * The {@link IpcContext} for a local fire-and-forget message. Window and
+ * project are resolved on first read: these listeners include the per-keystroke
+ * and per-chunk-ack paths, and most never look at either.
+ */
+function buildSendContext(event: Electron.IpcMainEvent): IpcContext {
+  const sender = event.sender;
+  let senderWindow: BrowserWindow | null | undefined;
+  let projectId: string | null | undefined;
+  let endpoint: ClientEndpoint | undefined;
+  return {
+    event: event as unknown as Electron.IpcMainInvokeEvent,
+    webContentsId: sender.id,
+    get senderWindow(): BrowserWindow | null {
+      if (senderWindow === undefined) senderWindow = getWindowForWebContents(sender);
+      return senderWindow;
+    },
+    get projectId(): string | null {
+      if (projectId === undefined) projectId = getProjectForWebContents(sender.id);
+      return projectId;
+    },
+    get endpoint(): ClientEndpoint {
+      endpoint ??= getLocalEndpoint(sender);
+      return endpoint;
+    },
+    client: getLocalClientRef(),
+  };
+}
+
+/**
+ * Register a fire-and-forget listener with both transports: `ipcMain.on` for
+ * local views (through the sender-validated wrapper, with a context built from
+ * the event) and the dispatcher for messages that arrive over a link. A plain
+ * `ipcMain.on` listener cannot serve a link send — it needs a real
+ * `IpcMainEvent` — so host-side send channels register here.
+ */
+export function onWithContext<A extends unknown[]>(
+  channel: string,
+  listener: (ctx: IpcContext, ...args: A) => void
+): () => void {
+  assertIpcSecurityReady(channel);
+  // Arguments are whatever the sender put on the wire; listeners validate them.
+  const dispatch = listener as (ctx: IpcContext, ...args: unknown[]) => void;
+  const local = (event: Electron.IpcMainEvent, ...args: unknown[]) => {
+    dispatch(buildSendContext(event), ...args);
+  };
+  ipcMain.on(channel, local);
+  const unregister = getIpcDispatcher().registerSend(channel, dispatch);
+  return () => {
+    unregister();
+    ipcMain.removeListener(channel, local);
+  };
+}
+
 export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
   channel: K,
   handler: (

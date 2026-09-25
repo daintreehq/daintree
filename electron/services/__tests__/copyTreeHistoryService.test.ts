@@ -14,6 +14,11 @@ vi.mock("../../window/webContentsRegistry.js", () => registryMock);
 import { CHANNELS } from "../../ipc/channels.js";
 import { recordCopyTreeRun } from "../copyTreeHistoryService.js";
 import type { CopyTreeHistoryAppendInput } from "../../../shared/types/ipc/copyTreeHistory.js";
+import {
+  getEndpointRegistry,
+  _resetEndpointRegistryForTesting,
+} from "../../ipc/endpointRegistry.js";
+import type { ClientEndpoint } from "../../ipc/endpoint.js";
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
@@ -34,6 +39,7 @@ describe("recordCopyTreeRun", () => {
     vi.clearAllMocks();
     projectStoreMock.appendCopyTreeRun.mockResolvedValue([{ id: "r1" }]);
     registryMock.getWebContentsForProject.mockReturnValue([]);
+    _resetEndpointRegistryForTesting();
   });
 
   it("appends against the project it was given", async () => {
@@ -105,5 +111,38 @@ describe("recordCopyTreeRun", () => {
     await expect(recordCopyTreeRun(PROJECT_A, INPUT)).resolves.toBeUndefined();
     // Nothing committed, so nothing is pushed.
     expect(bound.send).not.toHaveBeenCalled();
+  });
+  it("pushes to the project's views attached over a link, and only those", async () => {
+    const endpoint = (handle: number, projectId: string, kind: ClientEndpoint["kind"]) => ({
+      endpointId: `${kind}:${handle}`,
+      clientId: "client-b",
+      projectId,
+      kind,
+      handle,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => undefined }),
+      isClosed: () => false,
+    });
+    const own = endpoint(-1, PROJECT_A, "remote-view");
+    const foreign = endpoint(-2, PROJECT_B, "remote-view");
+    // A local view is reached through its WebContents, never twice.
+    const localAdapter = endpoint(9, PROJECT_A, "local-view");
+    for (const ep of [own, foreign, localAdapter]) getEndpointRegistry().add(ep);
+
+    await recordCopyTreeRun(PROJECT_A, INPUT);
+
+    expect(own.send).toHaveBeenCalledWith({
+      type: "event",
+      channel: CHANNELS.EVENTS_PUSH,
+      args: [
+        {
+          name: "copy-tree-history:update",
+          payload: { projectId: PROJECT_A, records: [{ id: "r1" }] },
+        },
+      ],
+    });
+    expect(foreign.send).not.toHaveBeenCalled();
+    expect(localAdapter.send).not.toHaveBeenCalled();
   });
 });

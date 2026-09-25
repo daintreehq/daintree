@@ -2,7 +2,6 @@
  * Terminal I/O handlers - input, resize, submit, sendKey, acknowledge, forceResume.
  */
 
-import { ipcMain } from "electron";
 import { z } from "zod";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
@@ -18,11 +17,11 @@ import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.
 import { isPanelTitleMode, type PanelTitleMode } from "../../../../shared/types/panel.js";
 import { events } from "../../../services/events.js";
 import {
-  getProjectForWebContents,
   getWebContentsForProject,
   isCachedViewWebContents,
 } from "../../../window/webContentsRegistry.js";
 import { defineIpcNamespace, op } from "../../define.js";
+import { onWithContext } from "../../utils.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { isHandbackCode } from "../../../../shared/utils/handback.js";
 import {
@@ -45,7 +44,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   }
   const handlers: Array<() => void> = [];
 
-  const handleTerminalInput = (_event: Electron.IpcMainEvent, id: string, data: string) => {
+  const handleTerminalInput = (_ctx: IpcContext, id: string, data: string) => {
     try {
       if (typeof id !== "string" || typeof data !== "string") {
         console.error("Invalid terminal input parameters");
@@ -56,10 +55,9 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       console.error("Error writing to terminal:", error);
     }
   };
-  ipcMain.on(CHANNELS.TERMINAL_INPUT, handleTerminalInput);
-  handlers.push(() => ipcMain.removeListener(CHANNELS.TERMINAL_INPUT, handleTerminalInput));
+  handlers.push(onWithContext(CHANNELS.TERMINAL_INPUT, handleTerminalInput));
 
-  const handleTerminalSendKey = (_event: Electron.IpcMainEvent, id: string, key: string) => {
+  const handleTerminalSendKey = (_ctx: IpcContext, id: string, key: string) => {
     try {
       if (typeof id !== "string" || typeof key !== "string") {
         console.error("Invalid terminal sendKey parameters");
@@ -70,10 +68,9 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       console.error("Error sending key to terminal:", error);
     }
   };
-  ipcMain.on(CHANNELS.TERMINAL_SEND_KEY, handleTerminalSendKey);
-  handlers.push(() => ipcMain.removeListener(CHANNELS.TERMINAL_SEND_KEY, handleTerminalSendKey));
+  handlers.push(onWithContext(CHANNELS.TERMINAL_SEND_KEY, handleTerminalSendKey));
 
-  const handleTerminalBatchDoubleEscape = (_event: Electron.IpcMainEvent, ids: unknown) => {
+  const handleTerminalBatchDoubleEscape = (_ctx: IpcContext, ids: unknown) => {
     try {
       if (!Array.isArray(ids)) {
         console.error("Invalid terminal batchDoubleEscape parameters: expected string[]");
@@ -86,16 +83,11 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       console.error("Error sending batch double escape to terminals:", error);
     }
   };
-  ipcMain.on(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, handleTerminalBatchDoubleEscape);
-  handlers.push(() =>
-    ipcMain.removeListener(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, handleTerminalBatchDoubleEscape)
+  handlers.push(
+    onWithContext(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, handleTerminalBatchDoubleEscape)
   );
 
-  const handleTerminalBroadcastWrite = (
-    _event: Electron.IpcMainEvent,
-    ids: unknown,
-    data: unknown
-  ) => {
+  const handleTerminalBroadcastWrite = (_ctx: IpcContext, ids: unknown, data: unknown) => {
     try {
       if (!Array.isArray(ids) || typeof data !== "string") {
         console.error("Invalid terminal broadcastWrite parameters");
@@ -108,10 +100,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       console.error("Error broadcasting write to terminals:", error);
     }
   };
-  ipcMain.on(CHANNELS.TERMINAL_BROADCAST_WRITE, handleTerminalBroadcastWrite);
-  handlers.push(() =>
-    ipcMain.removeListener(CHANNELS.TERMINAL_BROADCAST_WRITE, handleTerminalBroadcastWrite)
-  );
+  handlers.push(onWithContext(CHANNELS.TERMINAL_BROADCAST_WRITE, handleTerminalBroadcastWrite));
 
   const handleTerminalSubmit = async (
     id: string,
@@ -213,7 +202,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     }
   };
 
-  const handleTerminalResize = (_event: Electron.IpcMainEvent, payload: TerminalResizePayload) => {
+  const handleTerminalResize = (_ctx: IpcContext, payload: TerminalResizePayload) => {
     try {
       const parseResult = TerminalResizePayloadSchema.safeParse(payload);
       if (!parseResult.success) {
@@ -235,8 +224,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       console.error("Error resizing terminal:", error);
     }
   };
-  ipcMain.on(CHANNELS.TERMINAL_RESIZE, handleTerminalResize);
-  handlers.push(() => ipcMain.removeListener(CHANNELS.TERMINAL_RESIZE, handleTerminalResize));
+  handlers.push(onWithContext(CHANNELS.TERMINAL_RESIZE, handleTerminalResize));
 
   /**
    * The pty-host keeps one cadence per terminal and the last writer wins. The
@@ -253,7 +241,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   };
 
   const handleTerminalSetActivityTier = (
-    event: Electron.IpcMainEvent,
+    ctx: IpcContext,
     payload: { id: string; tier: PtyHostActivityTier; pollingIntervalMs?: number }
   ) => {
     try {
@@ -263,7 +251,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       const { id, tier, pollingIntervalMs } = payload;
       if (typeof id !== "string" || !id) return;
       const effectiveTier: PtyHostActivityTier = tier === "background" ? "background" : "active";
-      if (effectiveTier === "background" && isShadowedCachedViewDemotion(event.sender.id, id)) {
+      if (effectiveTier === "background" && isShadowedCachedViewDemotion(ctx.webContentsId, id)) {
         return;
       }
       // The renderer may send a cadence hint (issue #8596 — 200ms for VISIBLE-
@@ -280,15 +268,9 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       console.error("[IPC] Failed to set activity tier:", error);
     }
   };
-  ipcMain.on(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, handleTerminalSetActivityTier);
-  handlers.push(() =>
-    ipcMain.removeListener(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, handleTerminalSetActivityTier)
-  );
+  handlers.push(onWithContext(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, handleTerminalSetActivityTier));
 
-  const handleTerminalSetFocused = (
-    event: Electron.IpcMainEvent,
-    payload: { id: string | null }
-  ) => {
+  const handleTerminalSetFocused = (ctx: IpcContext, payload: { id: string | null }) => {
     try {
       if (!payload || typeof payload !== "object") return;
       const { id } = payload;
@@ -297,20 +279,17 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       // sender's webContents (works for WebContentsView project views, not just
       // the top-level BrowserWindow). Without a resolvable window the signal is
       // dropped — it's a soft prioritization hint, so the host behaves as before.
-      const windowId = deps.windowRegistry?.getByWebContentsId(event.sender.id)?.windowId;
+      const windowId = deps.windowRegistry?.getByWebContentsId(ctx.webContentsId)?.windowId;
       if (typeof windowId !== "number") return;
       ptyClient.setFocusedTerminal(windowId, id);
     } catch (error) {
       console.error("[IPC] Failed to set focused terminal:", error);
     }
   };
-  ipcMain.on(CHANNELS.TERMINAL_SET_FOCUSED, handleTerminalSetFocused);
-  handlers.push(() =>
-    ipcMain.removeListener(CHANNELS.TERMINAL_SET_FOCUSED, handleTerminalSetFocused)
-  );
+  handlers.push(onWithContext(CHANNELS.TERMINAL_SET_FOCUSED, handleTerminalSetFocused));
 
   const handleTerminalAcknowledgeData = (
-    _event: Electron.IpcMainEvent,
+    _ctx: IpcContext,
     payload: { id: string; length: number }
   ) => {
     try {
@@ -325,13 +304,10 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       console.error("Error acknowledging terminal data:", error);
     }
   };
-  ipcMain.on(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, handleTerminalAcknowledgeData);
-  handlers.push(() =>
-    ipcMain.removeListener(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, handleTerminalAcknowledgeData)
-  );
+  handlers.push(onWithContext(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, handleTerminalAcknowledgeData));
 
   const handleTerminalAgentTitleState = (
-    _event: Electron.IpcMainEvent,
+    _ctx: IpcContext,
     payload: { id: string; state: string }
   ) => {
     try {
@@ -346,13 +322,10 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       console.error("[IPC] Error handling agent title state:", error);
     }
   };
-  ipcMain.on(CHANNELS.TERMINAL_AGENT_TITLE_STATE, handleTerminalAgentTitleState);
-  handlers.push(() =>
-    ipcMain.removeListener(CHANNELS.TERMINAL_AGENT_TITLE_STATE, handleTerminalAgentTitleState)
-  );
+  handlers.push(onWithContext(CHANNELS.TERMINAL_AGENT_TITLE_STATE, handleTerminalAgentTitleState));
 
   const handleTerminalUpdateObservedTitle = (
-    _event: Electron.IpcMainEvent,
+    _ctx: IpcContext,
     payload: { id: string; title: string }
   ) => {
     try {
@@ -366,12 +339,8 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       console.error("[IPC] Error handling observed title update:", error);
     }
   };
-  ipcMain.on(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, handleTerminalUpdateObservedTitle);
-  handlers.push(() =>
-    ipcMain.removeListener(
-      CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE,
-      handleTerminalUpdateObservedTitle
-    )
+  handlers.push(
+    onWithContext(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, handleTerminalUpdateObservedTitle)
   );
 
   // A rename lives in the renderer panel store, but the record the fleet
@@ -379,7 +348,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   // Without this hop those surfaces keep naming the run by its launch title
   // and every `titleMode === "user"` branch in main stays unreachable (#11830).
   const handleTerminalUpdateTitle = (
-    _event: Electron.IpcMainEvent,
+    _ctx: IpcContext,
     payload: { id: string; title: string; titleMode: PanelTitleMode }
   ) => {
     try {
@@ -396,10 +365,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       console.error("[IPC] Error handling title update:", error);
     }
   };
-  ipcMain.on(CHANNELS.TERMINAL_UPDATE_TITLE, handleTerminalUpdateTitle);
-  handlers.push(() =>
-    ipcMain.removeListener(CHANNELS.TERMINAL_UPDATE_TITLE, handleTerminalUpdateTitle)
-  );
+  handlers.push(onWithContext(CHANNELS.TERMINAL_UPDATE_TITLE, handleTerminalUpdateTitle));
 
   // A cross-worktree move lands in the renderer panel store, but the record the
   // fleet palette groups by is the pty-host's. Without this hop a moved — or
@@ -412,7 +378,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   // worktree belongs in the no-worktree bucket, and a run with one belongs
   // under its own real id. A malformed payload is dropped, never guessed at.
   const handleTerminalUpdateWorktreeId = (
-    _event: Electron.IpcMainEvent,
+    ctx: IpcContext,
     payload: { id: string; worktreeId: string | null }
   ) => {
     try {
@@ -424,7 +390,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       }
       // Resolved synchronously, so the send path keeps its FIFO ordering — an
       // awaited ownership lookup here could land two rapid moves out of order.
-      ptyClient.updateWorktreeId(id, worktreeId, getProjectForWebContents(_event.sender.id));
+      ptyClient.updateWorktreeId(id, worktreeId, ctx.projectId);
       // Same reason the rename hop emits: the snapshot poll is 5s-aligned and
       // no other feed reports a move, so the palette would regroup up to a full
       // cycle after the drag that caused it.
@@ -433,9 +399,8 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       console.error("[IPC] Error handling worktree update:", error);
     }
   };
-  ipcMain.on(CHANNELS.TERMINAL_UPDATE_WORKTREE_ID, handleTerminalUpdateWorktreeId);
-  handlers.push(() =>
-    ipcMain.removeListener(CHANNELS.TERMINAL_UPDATE_WORKTREE_ID, handleTerminalUpdateWorktreeId)
+  handlers.push(
+    onWithContext(CHANNELS.TERMINAL_UPDATE_WORKTREE_ID, handleTerminalUpdateWorktreeId)
   );
 
   const handleTerminalForceResume = async (id: string): Promise<void> => {

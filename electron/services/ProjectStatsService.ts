@@ -1,5 +1,6 @@
 import { CHANNELS } from "../ipc/channels.js";
 import { typedBroadcast } from "../ipc/utils.js";
+import type { ClientEndpoint } from "../ipc/endpoint.js";
 import { events } from "./events.js";
 import { projectStore } from "./ProjectStore.js";
 import { scratchStore } from "./ScratchStore.js";
@@ -110,6 +111,21 @@ export class ProjectStatsService {
       webContents.send(CHANNELS.PROJECT_STATS_UPDATED, this.lastBroadcast);
     } catch {
       // Silently ignore send failures during window initialization/disposal.
+    }
+  }
+
+  /** {@link pushSnapshotTo} for a view attached over a link. */
+  pushSnapshotToEndpoint(endpoint: ClientEndpoint): void {
+    if (endpoint.kind !== "remote-view" || endpoint.isClosed()) return;
+    if (Object.keys(this.lastBroadcast).length === 0) return;
+    try {
+      endpoint.send({
+        type: "event",
+        channel: CHANNELS.PROJECT_STATS_UPDATED,
+        args: [this.lastBroadcast],
+      });
+    } catch {
+      // Silently ignore send failures on a closing link.
     }
   }
 

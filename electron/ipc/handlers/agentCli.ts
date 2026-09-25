@@ -6,7 +6,7 @@ import type {
   AgentCliDetails,
   AgentInstallPayload,
 } from "../../../shared/types/ipc/system.js";
-import { sendToRenderer, typedHandle, typedHandleWithContext } from "../utils.js";
+import { sendToRendererContext, typedHandle, typedHandleWithContext } from "../utils.js";
 import { runAgentInstall } from "../../services/AgentInstallService.js";
 import type { HandlerDependencies } from "../types.js";
 
@@ -204,8 +204,6 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
     ctx: import("../types.js").IpcContext,
     payload: AgentInstallPayload
   ) => {
-    const senderWindow = ctx.senderWindow;
-
     const hasAgentId = typeof payload?.agentId === "string" && payload.agentId.length > 0;
     const hasPrerequisiteTool =
       typeof payload?.prerequisiteTool === "string" && payload.prerequisiteTool.length > 0;
@@ -222,9 +220,7 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
     }
 
     return await runAgentInstall(payload, (progressEvent) => {
-      if (senderWindow) {
-        sendToRenderer(senderWindow, CHANNELS.SETUP_AGENT_INSTALL_PROGRESS, progressEvent);
-      }
+      sendToRendererContext(ctx, CHANNELS.SETUP_AGENT_INSTALL_PROGRESS, progressEvent);
     });
   };
   handlers.push(
