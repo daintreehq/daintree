@@ -109,4 +109,25 @@ describe("diffNotesStore", () => {
     });
     expect(merged.state.notes).toEqual({ [original.id]: rewritten });
   });
+
+  it("keeps a sibling's rewrite saved in the same millisecond as the stale baseline", () => {
+    const original = add();
+    const rewritten = { ...original, body: "Same tick, new words" };
+    const merged = mergeDiffNotesPersistedWrite({
+      baseline: { version: 0, state: { notes: { [original.id]: original } } },
+      incoming: { version: 0, state: { notes: {} } },
+      onDisk: { version: 0, state: { notes: { [original.id]: rewritten } } },
+    });
+    expect(merged.state.notes[original.id]?.body).toBe("Same tick, new words");
+  });
+
+  it("lets a deletion land when disk still holds the revision the writer saw", () => {
+    const original = add();
+    const merged = mergeDiffNotesPersistedWrite({
+      baseline: { version: 0, state: { notes: { [original.id]: original } } },
+      incoming: { version: 0, state: { notes: {} } },
+      onDisk: { version: 0, state: { notes: { [original.id]: original } } },
+    });
+    expect(merged.state.notes).toEqual({});
+  });
 });

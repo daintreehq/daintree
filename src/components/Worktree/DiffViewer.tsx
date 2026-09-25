@@ -87,7 +87,12 @@ import {
   type DiffNoteAnchor,
   type DiffNoteSide,
 } from "./diffNotes";
-import { DiffNoteCard, DiffNoteComposer, type DiffNoteCardPlacement } from "./DiffNoteWidgets";
+import {
+  clearComposerDraft,
+  DiffNoteCard,
+  DiffNoteComposer,
+  type DiffNoteCardPlacement,
+} from "./DiffNoteWidgets";
 
 export { _resetLangStateForTests, _flushLangLoadsForTests } from "./diffRefractor";
 
@@ -905,9 +910,12 @@ function FileDiff({
     )
   );
   const [noteDraft, setNoteDraft] = useState<DiffNoteDraft | null>(null);
+  const draftOwnerId = useId();
   useEffect(() => {
     setNoteDraft(null);
-  }, [file]);
+    clearComposerDraft(draftOwnerId);
+  }, [file, draftOwnerId]);
+  useEffect(() => () => clearComposerDraft(draftOwnerId), [draftOwnerId]);
 
   // Anchors are checked against every rendered row, expanded context included,
   // so a note written on revealed context still matches once it is revealed.
@@ -943,7 +951,10 @@ function FileDiff({
     return { anchor: { kind: "lines", side, startLine, endLine, contentHash }, keys };
   }, [noteDraft, renderedLineIndex]);
 
-  const closeNoteDraft = useCallback(() => setNoteDraft(null), []);
+  const closeNoteDraft = useCallback(() => {
+    setNoteDraft(null);
+    clearComposerDraft(draftOwnerId);
+  }, [draftOwnerId]);
 
   // Notes that can't sit under their lines — file notes, stale ones, and any
   // whose rows are collapsed or not yet revealed — are listed above the table
@@ -989,6 +1000,7 @@ function FileDiff({
           ))}
           {key === draftWidgetKey && draftPlacement && (
             <DiffNoteComposer
+              ownerId={draftOwnerId}
               worktreePath={notesWorktree}
               filePath={relPath}
               anchor={draftPlacement.anchor}
@@ -999,7 +1011,15 @@ function FileDiff({
       );
     }
     return result;
-  }, [rowNotes, draftWidgetKey, draftPlacement, notesWorktree, relPath, closeNoteDraft]);
+  }, [
+    rowNotes,
+    draftWidgetKey,
+    draftPlacement,
+    draftOwnerId,
+    notesWorktree,
+    relPath,
+    closeNoteDraft,
+  ]);
 
   // Click a line number to note that line; shift-click extends the open draft
   // across a contiguous run of rows on the same side.
@@ -1565,6 +1585,7 @@ function FileDiff({
           ))}
           {draftPlacement?.anchor.kind === "file" && (
             <DiffNoteComposer
+              ownerId={draftOwnerId}
               worktreePath={notesWorktree}
               filePath={relPath}
               anchor={draftPlacement.anchor}

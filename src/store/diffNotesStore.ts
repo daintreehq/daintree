@@ -7,6 +7,7 @@ import {
   type PersistWriteMergeContext,
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
+import { deepEqualIgnoringUndefined } from "@shared/utils/layoutMerge";
 import type { DiffNote, DiffNoteAnchor } from "@/components/Worktree/diffNotes";
 
 /**
@@ -69,7 +70,7 @@ export function mergeDiffNotesPersistedWrite({
   for (const [id, before] of Object.entries(baselineNotes)) {
     if (id in incomingNotes) continue;
     const current = onDiskNotes[id];
-    if (current && current.updatedAt !== before.updatedAt) merged[id] = current;
+    if (current && !deepEqualIgnoringUndefined(current, before)) merged[id] = current;
   }
   return { version: incoming.version, state: { notes: merged } };
 }

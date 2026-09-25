@@ -718,13 +718,27 @@ export function DiffPane({
   const showRendered =
     renderedRequested && renderedAvailability.visible && renderedAvailability.enabled;
   const layout: DiffPaneLayout = showRendered ? "rendered" : diffViewType;
-  // Whether the diff table (and so its note cards) is what the body shows. A
-  // still-loading diff counts as inline so the fallback list doesn't flash.
+  // Whether the diff table (and so its note cards) is what the body shows.
+  // While a diff reloads, the last settled answer for the same file holds: a
+  // retried error keeps its fallback list (and any editor open in it) mounted,
+  // and a first load doesn't flash the list ahead of the table.
+  const [settledContent, setSettledContent] = useState<{
+    filePath: string | undefined;
+    content: string;
+  } | null>(null);
+  if (content && (settledContent?.content !== content || settledContent.filePath !== filePath)) {
+    setSettledContent({ filePath, content });
+  }
+  const shownContent =
+    content ??
+    (settledContent !== null && settledContent.filePath === filePath
+      ? settledContent.content
+      : undefined);
   const notesRenderInline =
     !isImageMode &&
     !isMediaMode &&
     !isPdfMode &&
-    (!content || (!showRendered && !DIFF_SENTINEL_CONTENT.has(content)));
+    (!shownContent || (!showRendered && !DIFF_SENTINEL_CONTENT.has(shownContent)));
 
   const handleLayoutChange = useCallback(
     (next: DiffPaneLayout) => {

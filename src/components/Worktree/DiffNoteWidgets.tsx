@@ -96,17 +96,20 @@ function nameAnchor(anchor: DiffNoteAnchor): string {
 }
 
 /**
- * Unsaved composer text per file. Shift-click moves the draft's widget to a
- * new row, which remounts the composer, so its text can't live only in the
- * editor it had. Per project view, like the draft itself.
+ * Unsaved composer text, keyed by the file view that owns the draft.
+ * Shift-click moves the draft's widget to a new row, which remounts the
+ * composer, so its text can't live only in the editor it had. The owner
+ * clears its entry when its draft closes or it unmounts.
  */
 const composerDrafts = new Map<string, string>();
 
-function composerDraftKey(worktreePath: string, filePath: string): string {
-  return `${worktreePath}\0${filePath}`;
+export function clearComposerDraft(ownerId: string): void {
+  composerDrafts.delete(ownerId);
 }
 
 interface DiffNoteComposerProps {
+  /** Stable per owning file view; two panes on one file keep separate drafts. */
+  ownerId: string;
   worktreePath: string;
   filePath: string;
   anchor: DiffNoteAnchor;
@@ -114,30 +117,26 @@ interface DiffNoteComposerProps {
 }
 
 export const DiffNoteComposer = memo(function DiffNoteComposer({
+  ownerId,
   worktreePath,
   filePath,
   anchor,
   onDone,
 }: DiffNoteComposerProps) {
   const addNote = useDiffNotesStore((s) => s.addNote);
-  const draftKey = composerDraftKey(worktreePath, filePath);
   return (
     <div className="diff-note" data-testid="diff-note-composer">
       <div className="mb-1.5 text-xs text-text-secondary">{describeAnchor(anchor)}</div>
       <DiffNoteEditor
-        initialBody={composerDrafts.get(draftKey) ?? ""}
+        initialBody={composerDrafts.get(ownerId) ?? ""}
         label={`New ${nameAnchor(anchor)}`}
         saveLabel="Add note"
-        onChange={(body) => composerDrafts.set(draftKey, body)}
+        onChange={(body) => composerDrafts.set(ownerId, body)}
         onSave={(body) => {
           addNote({ worktreePath, filePath, anchor, body });
-          composerDrafts.delete(draftKey);
           onDone();
         }}
-        onCancel={() => {
-          composerDrafts.delete(draftKey);
-          onDone();
-        }}
+        onCancel={onDone}
       />
     </div>
   );
