@@ -1,4 +1,5 @@
 // eager-import-allow: reads/writes the electron-store JSON file via sync fs (it is the synchronous store itself)
+import type { AssistantModelProviderId } from "../shared/config/assistantModelProviders.js";
 import Store from "electron-store";
 import fs from "fs";
 import path from "path";
@@ -374,6 +375,16 @@ export interface StoreSchema {
     skipPermissions?: boolean;
     auditRetention: 7 | 30 | 0;
   };
+  /**
+   * The user's own model-provider keys for the Daintree Assistant, one per provider
+   * (`shared/config/assistantModelProviders.ts`). Written only through
+   * `electron/services/assistant-host/assistantProviderKeys.ts`, which encrypts with the
+   * OS keychain where one exists and records which it used. Read in main only; the
+   * renderer is told whether a key is saved, never what it is.
+   */
+  assistantProviderKeys?: Partial<
+    Record<AssistantModelProviderId, { value: string; storage: "keychain" | "plaintext" }>
+  >;
   pendingErrors: ErrorRecord[];
   errorFingerprints: Record<string, { count: number; firstSeen: number; lastSeen: number }>;
   gpu: {

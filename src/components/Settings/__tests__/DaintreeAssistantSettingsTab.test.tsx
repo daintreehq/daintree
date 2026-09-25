@@ -83,6 +83,9 @@ function settingsFixture(): HelpAssistantSettings {
     modelId: "",
     idleHibernateMinutes: 0,
     loadGlobalHooksAndServers: false,
+    modelProvider: "baseten",
+    providerModels: {},
+    openRouterRouting: { sort: "latency", allowTraining: false, zeroRetention: false },
   };
 }
 
@@ -217,6 +220,10 @@ interface HelpAssistantApi {
   getSettings: ReturnType<typeof vi.fn>;
   setSettings: ReturnType<typeof vi.fn>;
   getLiveSessionStatus: ReturnType<typeof vi.fn>;
+  getProviderKeyStatus: ReturnType<typeof vi.fn>;
+  setProviderKey: ReturnType<typeof vi.fn>;
+  clearProviderKey: ReturnType<typeof vi.fn>;
+  testProviderKey: ReturnType<typeof vi.fn>;
 }
 
 interface McpServerApi {
@@ -240,6 +247,15 @@ interface SystemApi {
   getAgentVersion: ReturnType<typeof vi.fn>;
 }
 
+const NO_PROVIDER_KEYS = {
+  keychain: true,
+  providers: {
+    baseten: { saved: false, hint: null, storage: null, revision: 0 },
+    openrouter: { saved: false, hint: null, storage: null, revision: 0 },
+    openai: { saved: false, hint: null, storage: null, revision: 0 },
+  },
+};
+
 function installApi(
   helpAssistant: Partial<HelpAssistantApi> = {},
   mcpServer: Partial<McpServerApi> = {},
@@ -257,6 +273,10 @@ function installApi(
     getLiveSessionStatus: vi
       .fn()
       .mockResolvedValue({ connected: false, tier: "workbench", activeGrants: [] }),
+    getProviderKeyStatus: vi.fn().mockResolvedValue(NO_PROVIDER_KEYS),
+    setProviderKey: vi.fn().mockResolvedValue(NO_PROVIDER_KEYS),
+    clearProviderKey: vi.fn().mockResolvedValue(NO_PROVIDER_KEYS),
+    testProviderKey: vi.fn().mockResolvedValue({ accepted: true, message: "ok" }),
   };
   const mcpDefaults: McpServerApi = {
     getStatus: vi.fn().mockResolvedValue({
@@ -339,6 +359,50 @@ describe("DaintreeAssistantSettingsTab", () => {
       },
       { timeout: 5000 }
     );
+
+  it("shows the model provider settings only while the Daintree Assistant is the agent", async () => {
+    helpPanelState.preferredAgentId = "daintree-assistant";
+    const native = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(native.container, "Model provider");
+    expect(native.container.textContent).toContain("Baseten API key");
+    native.unmount();
+
+    helpPanelState.preferredAgentId = "claude";
+    const claude = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(claude.container, "Behavior");
+    expect(claude.container.textContent).not.toContain("Model provider");
+    expect(window.electron.helpAssistant.getProviderKeyStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("rolls a rejected model save back to the stored value", async () => {
+    helpPanelState.preferredAgentId = "daintree-assistant";
+    installApi({
+      setSettings: vi.fn().mockRejectedValue(new Error("disk full")),
+    });
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Model provider");
+    const model = screen.getByLabelText("Model") as HTMLInputElement;
+    fireEvent.change(model, { target: { value: "zai-org/GLM-5.3" } });
+    await waitFor(() => expect(window.electron.helpAssistant.setSettings).toHaveBeenCalled(), {
+      timeout: 3000,
+    });
+    await waitFor(() => expect(container.textContent).toContain("Couldn't save that change"));
+    expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+      providerModels: { baseten: "zai-org/GLM-5.3" },
+    });
+  });
 
   it("loads settings and MCP status on mount", async () => {
     const { container } = render(
@@ -1017,6 +1081,9 @@ describe("DaintreeAssistantSettingsTab", () => {
   });
 
   it("does not render a Preferred model section", async () => {
+    // The legacy per-agent picker. The Daintree Assistant's provider model lives in its
+    // own section, covered by the provider-settings tests.
+    helpPanelState.preferredAgentId = "claude";
     const { container } = render(
       <SettingsValidationProvider>
         <DaintreeAssistantSettingsTab />

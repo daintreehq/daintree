@@ -149,6 +149,16 @@ export const ENGINE_CONTROLLED_ENV = [
   // happened to be launched from, and the engine has already ruled that a bound repository
   // may not decide this either.
   "DAINTREE_WORKFLOW_INTELLIGENCE",
+  // The user's own model provider, model and key (bring your own key). Daintree sets
+  // them from the assistant settings when a key is saved. Stripped so a value exported
+  // in a shell cannot run the session on a key the user never chose in Settings — or,
+  // with no key saved, silently spend one.
+  "DAINTREE_UPSTREAM_PROVIDER",
+  "DAINTREE_UPSTREAM_MODEL",
+  "DAINTREE_UPSTREAM_API_KEY",
+  "DAINTREE_UPSTREAM_SORT",
+  "DAINTREE_UPSTREAM_DATA_COLLECTION",
+  "DAINTREE_UPSTREAM_ZDR",
 ] as const;
 
 /**

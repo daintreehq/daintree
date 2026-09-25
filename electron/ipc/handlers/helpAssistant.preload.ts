@@ -4,6 +4,10 @@ export const HELP_ASSISTANT_METHOD_CHANNELS = {
   getSettings: "help-assistant:get-settings",
   setSettings: "help-assistant:set-settings",
   getLiveSessionStatus: "help-assistant:get-live-session-status",
+  getProviderKeyStatus: "help-assistant:get-provider-key-status",
+  setProviderKey: "help-assistant:set-provider-key",
+  clearProviderKey: "help-assistant:clear-provider-key",
+  testProviderKey: "help-assistant:test-provider-key",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof HELP_ASSISTANT_METHOD_CHANNELS;

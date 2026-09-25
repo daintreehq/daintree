@@ -1,3 +1,7 @@
+import type {
+  AssistantModelProviderId,
+  OpenRouterRoutingPreferences,
+} from "../../config/assistantModelProviders.js";
 import type { PushProgressEvent } from "./gitPush.js";
 import type { IdArrayFieldEdit } from "../../utils/layoutMerge.js";
 import type { GitStatus, StagingStatus } from "../git.js";
@@ -2627,6 +2631,51 @@ export interface HelpAssistantSettings {
    * Defaults to false.
    */
   loadGlobalHooksAndServers: boolean;
+  /**
+   * Which model provider the Daintree Assistant runs its model calls on, with the key
+   * the user saved for it (bring your own key). Only the native Daintree Assistant
+   * reads this; other agents bring their own models. Defaults to `"baseten"`.
+   */
+  modelProvider: AssistantModelProviderId;
+  /**
+   * A model id per provider, overriding its recommendation. Absent or empty means the
+   * provider's recommended model (`ASSISTANT_MODEL_PROVIDERS`). Kept per provider so
+   * switching back and forth does not lose a choice. Defaults to `{}`.
+   */
+  providerModels: Partial<Record<AssistantModelProviderId, string>>;
+  /** OpenRouter's routing preferences, sent only when OpenRouter is the provider. */
+  openRouterRouting: OpenRouterRoutingPreferences;
+}
+
+/**
+ * Whether a key is saved for each model provider, never the key itself. `hint` is the
+ * last four characters so the user can tell which key it is; `storage` says whether it
+ * is in the OS keychain or, where there is none, in Daintree's settings file.
+ */
+export interface AssistantProviderKeyStatus {
+  /** Whether a key saved now would go into the OS keychain, or the settings file. */
+  keychain: boolean;
+  providers: Record<
+    AssistantModelProviderId,
+    {
+      saved: boolean;
+      hint: string | null;
+      storage: "keychain" | "plaintext" | null;
+      /**
+       * Bumped by every save or removal in this app session, in main. A save names
+       * the revision it started from and is refused if another window changed the
+       * key in between.
+       */
+      revision: number;
+    }
+  >;
+}
+
+/** What a provider said about a key when asked directly. */
+export interface AssistantProviderKeyTestResult {
+  /** Whether the provider accepted the key. A verdict, not an IPC success flag. */
+  accepted: boolean;
+  message: string;
 }
 
 /**

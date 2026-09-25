@@ -28,6 +28,11 @@ import { SettingsInput } from "./SettingsInput";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
+import { AssistantModelProviderSettings } from "./AssistantModelProviderSettings";
+import {
+  DEFAULT_ASSISTANT_MODEL_PROVIDER,
+  DEFAULT_OPENROUTER_ROUTING,
+} from "@shared/config/assistantModelProviders";
 import { McpAuditLogViewer } from "./McpAuditLogViewer";
 import { McpAuditLatencyTable } from "./McpAuditLatencyTable";
 import { TurnOutcomeDiagnostics } from "./TurnOutcomeDiagnostics";
@@ -62,7 +67,7 @@ import {
 const COPY_RESET_DELAY_MS = 2000;
 const CUSTOM_ARGS_DEBOUNCE_MS = 500;
 
-type SaveGroup = "agent" | "launch" | "behavior" | "security" | "privacy" | "content";
+type SaveGroup = "agent" | "provider" | "launch" | "behavior" | "security" | "privacy" | "content";
 
 const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   modelId: "agent",
@@ -74,6 +79,9 @@ const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   bypassPermissions: "security",
   auditRetention: "privacy",
   loadGlobalHooksAndServers: "content",
+  modelProvider: "provider",
+  providerModels: "provider",
+  openRouterRouting: "provider",
 };
 
 const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
@@ -86,6 +94,9 @@ const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
   "bypassPermissions",
   "auditRetention",
   "loadGlobalHooksAndServers",
+  "modelProvider",
+  "providerModels",
+  "openRouterRouting",
 ];
 
 function patchedKeys(patch: Partial<HelpAssistantSettings>): (keyof HelpAssistantSettings)[] {
@@ -115,7 +126,31 @@ const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   bypassPermissions: "Bypass",
   auditRetention: "Audit log retention",
   loadGlobalHooksAndServers: "Load my MCP servers and hooks",
+  modelProvider: "Model provider",
+  providerModels: "Model",
+  openRouterRouting: "OpenRouter routing",
 };
+
+/**
+ * The optimistic view of a patch, matching how main applies it: `providerModels` is a
+ * per-provider patch (an empty string clears one), not a replacement map, so merging
+ * it wholesale would briefly show every other provider's override as cleared.
+ */
+function mergeSettingsPatch(
+  current: HelpAssistantSettings,
+  patch: Partial<HelpAssistantSettings>
+): HelpAssistantSettings {
+  const next = { ...current, ...patch } as HelpAssistantSettings;
+  if (patch.providerModels) {
+    const models = { ...(current.providerModels ?? {}) };
+    for (const [id, model] of Object.entries(patch.providerModels)) {
+      if (model) models[id as keyof typeof models] = model;
+      else delete models[id as keyof typeof models];
+    }
+    next.providerModels = models;
+  }
+  return next;
+}
 
 interface SaveFailure {
   group: SaveGroup;
@@ -132,6 +167,9 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   customArgs: "",
   idleHibernateMinutes: 5,
   loadGlobalHooksAndServers: false,
+  modelProvider: DEFAULT_ASSISTANT_MODEL_PROVIDER,
+  providerModels: {},
+  openRouterRouting: DEFAULT_OPENROUTER_ROUTING,
 };
 
 // Radix Select rejects an empty-string item value, so the "use the CLI default"
@@ -413,6 +451,9 @@ export function DaintreeAssistantSettingsTab() {
   // suggest a value is set when it isn't, leaving onChange unfired and the help
   // panel still in its empty state. The placeholder makes "no selection" explicit.
   const agentSelectValue = preferredAgentId ?? "";
+  const runsDaintreeAssistant =
+    platformSupport.supported &&
+    (preferredAgentId ?? DAINTREE_ASSISTANT_AGENT_ID) === DAINTREE_ASSISTANT_AGENT_ID;
 
   const bypassCopy = useMemo(
     () => getBypassCopy(preferredAgentId, settings.tier),
@@ -778,7 +819,7 @@ export function DaintreeAssistantSettingsTab() {
       // switching the environment and then flicking a toggle is an ordinary thing to
       // do. Merging into a captured `settings` would make the second write's snapshot
       // the last word, silently undoing whatever the first one had already landed.
-      setSettings((current) => ({ ...current, ...patch }) as HelpAssistantSettings);
+      setSettings((current) => mergeSettingsPatch(current, patch));
       try {
         const stored = await window.electron.helpAssistant.setSettings(patch);
         setSettings(stored);
@@ -789,6 +830,19 @@ export function DaintreeAssistantSettingsTab() {
           const reverted: HelpAssistantSettings = { ...current };
           for (const key of patchedKeys(patch)) {
             if (current[key] === patch[key]) copySetting(reverted, previous, key);
+          }
+          // `providerModels` is merged per provider on the way in (mergeSettingsPatch),
+          // so the identity test above never matches it. Main rejected the write and
+          // changed nothing, so put back each provider this patch touched — and only
+          // those, so a concurrent edit to another provider survives.
+          if (patch.providerModels) {
+            const models = { ...(current.providerModels ?? {}) };
+            for (const id of Object.keys(patch.providerModels) as (keyof typeof models)[]) {
+              const before = previous.providerModels?.[id];
+              if (before) models[id] = before;
+              else delete models[id];
+            }
+            reverted.providerModels = models;
           }
           return reverted;
         });
@@ -1127,6 +1181,21 @@ export function DaintreeAssistantSettingsTab() {
           />
         )}
       </SettingsSection>
+
+      {/* Only the Daintree Assistant runs on a provider key; every other agent brings its
+          own models, so these options do not exist for it. No choice yet counts as the
+          Daintree Assistant, because that is what the panel starts. */}
+      {runsDaintreeAssistant && (
+        <>
+          {saveError("provider")}
+          <AssistantModelProviderSettings
+            settings={settings}
+            persist={persist}
+            disabled={settingsUnavailable}
+            disabledReason={unavailableReason}
+          />
+        </>
+      )}
 
       <SettingsSection
         title="Behavior"

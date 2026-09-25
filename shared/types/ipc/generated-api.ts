@@ -325,15 +325,27 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["help:unmark-terminal"]["result"]>;
   };
   helpAssistant: {
+    clearProviderKey(
+      ...args: IpcInvokeMap["help-assistant:clear-provider-key"]["args"]
+    ): Promise<IpcInvokeMap["help-assistant:clear-provider-key"]["result"]>;
     getLiveSessionStatus(
       ...args: IpcInvokeMap["help-assistant:get-live-session-status"]["args"]
     ): Promise<IpcInvokeMap["help-assistant:get-live-session-status"]["result"]>;
+    getProviderKeyStatus(
+      ...args: IpcInvokeMap["help-assistant:get-provider-key-status"]["args"]
+    ): Promise<IpcInvokeMap["help-assistant:get-provider-key-status"]["result"]>;
     getSettings(
       ...args: IpcInvokeMap["help-assistant:get-settings"]["args"]
     ): Promise<IpcInvokeMap["help-assistant:get-settings"]["result"]>;
+    setProviderKey(
+      ...args: IpcInvokeMap["help-assistant:set-provider-key"]["args"]
+    ): Promise<IpcInvokeMap["help-assistant:set-provider-key"]["result"]>;
     setSettings(
       ...args: IpcInvokeMap["help-assistant:set-settings"]["args"]
     ): Promise<IpcInvokeMap["help-assistant:set-settings"]["result"]>;
+    testProviderKey(
+      ...args: IpcInvokeMap["help-assistant:test-provider-key"]["args"]
+    ): Promise<IpcInvokeMap["help-assistant:test-provider-key"]["result"]>;
   };
   hibernation: {
     getConfig(

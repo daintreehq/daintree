@@ -131,4 +131,18 @@ describe("assistantChildEnv", () => {
     );
     expect(survivors).toEqual([]);
   });
+
+  it("strips an inherited model provider and key, so only one saved in Settings is sent", () => {
+    setEnv("DAINTREE_UPSTREAM_PROVIDER", "openai");
+    setEnv("DAINTREE_UPSTREAM_MODEL", "gpt-6-luna");
+    setEnv("DAINTREE_UPSTREAM_API_KEY", "sk-from-a-shell-profile");
+    setEnv("daintree_upstream_api_key", "sk-lowercase-on-windows");
+
+    const env = assistantChildEnv();
+
+    expect(env.DAINTREE_UPSTREAM_PROVIDER).toBeUndefined();
+    expect(env.DAINTREE_UPSTREAM_MODEL).toBeUndefined();
+    expect(env.DAINTREE_UPSTREAM_API_KEY).toBeUndefined();
+    expect(env.daintree_upstream_api_key).toBeUndefined();
+  });
 });

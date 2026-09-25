@@ -70,6 +70,23 @@ import { assistantChildEnv, ENGINE_CONTROLLED_ENV } from "../assistantChildEnv.j
  * - Anything a new store or service does. The scans are scoped to the modules the
  *   assistant owns today.
  *
+ * ## The one credential Daintree does keep: the user's model-provider key
+ *
+ * The Daintree Assistant runs its model calls on the user's OWN provider key (bring your
+ * own key: Baseten, OpenRouter or OpenAI), chosen in Settings. That key is not the
+ * assistant account and decides nothing this file guards — who a session is, or where it
+ * talks. It is a third-party key of the same kind as the voice-input keys, it pays for
+ * model calls on the user's own provider account, and the backend it is forwarded to is
+ * still whichever one the ENGINE chose. So it is allowed, narrowly and structurally:
+ *
+ * - it is written through four declared channels below, and READ only in main — the
+ *   renderer can learn whether a key is saved and its last four characters, never the
+ *   value, and no IPC handler imports the one function that returns it;
+ * - it is stored by `assistantProviderKeys.ts`, outside `HELP_ASSISTANT_KEYS`, encrypted
+ *   with the OS keychain where one exists;
+ * - it reaches the engine as `DAINTREE_UPSTREAM_*`, which are stripped from what the
+ *   engine inherits, so only a key the user saved in Settings is ever sent.
+ *
  * ## Out of scope on purpose
  *
  * `app-agent:*` is a REAL credential IPC with a persisted key, belonging to the separate
@@ -139,6 +156,23 @@ const ASSISTANT_CHANNEL_SURFACE = new Map<string, string>([
     CHANNELS.HELP_ASSISTANT_GET_LIVE_SESSION_STATUS,
     "What the MCP control plane is granting this session right now. Daintree's own " +
       "capability state, not the engine's account.",
+  ],
+  [
+    CHANNELS.HELP_ASSISTANT_GET_PROVIDER_KEY_STATUS,
+    "Whether a model-provider key is saved for each provider, and its last four " +
+      "characters. Never the key. The provider key is the user's own third-party " +
+      "key (see the header), not the assistant account.",
+  ],
+  [
+    CHANNELS.HELP_ASSISTANT_SET_PROVIDER_KEY,
+    "Saves the user's model-provider key into main's keychain-backed store. The " +
+      "value goes one way: renderer to main, answered with the status above.",
+  ],
+  [CHANNELS.HELP_ASSISTANT_CLEAR_PROVIDER_KEY, "Forgets a saved model-provider key."],
+  [
+    CHANNELS.HELP_ASSISTANT_TEST_PROVIDER_KEY,
+    "Asks the provider itself whether a typed or saved key works, before it is " +
+      "saved. A verdict and a sentence back; no key and no provider response body.",
   ],
   [
     CHANNELS.HELP_OPEN_ASSISTANT_CONTENT_FOLDER,
@@ -639,6 +673,7 @@ function assistantSourceFiles(): string[] {
       "shared/types/ipc/assistantHost.ts",
       "src/store/assistantStore.ts",
       "src/components/Settings/DaintreeAssistantSettingsTab.tsx",
+      "src/components/Settings/AssistantModelProviderSettings.tsx",
     ].map((file) => path.join(REPO_ROOT, file)),
     ...readdirSync(panelDir, { recursive: true })
       .map(String)
@@ -700,6 +735,39 @@ describe("assistant account-ownership boundary", () => {
         offRegistry,
         `renderer-callable assistant methods off the declared surface: ${offRegistry.join(", ")}`
       ).toEqual([]);
+    });
+
+    it("never hands the renderer a saved model-provider key", () => {
+      // Every function in the key store that returns a plaintext key exists for an
+      // engine spawn. So the only IPC handlers allowed to import the module at all are
+      // the two that need it — each named with why — and a new importer has to be read
+      // by a human before it can pass. A tripwire on one symbol name would miss
+      // `assistantProviderEnv`, which returns the key too.
+      const allowed = new Map([
+        [
+          "helpAssistant.ts",
+          "status, save, clear and test ops: metadata and verdicts out, never the key",
+        ],
+        [
+          "terminal/lifecycle.ts",
+          "the terminal-hosted assistant's spawn env, handed to the PTY host in main",
+        ],
+      ]);
+      const handlerDir = path.join(REPO_ROOT, "electron/ipc/handlers");
+      const importers = readdirSync(handlerDir, { recursive: true })
+        .map((file) => String(file).split(path.sep).join("/"))
+        .filter((file) => /\.tsx?$/.test(file) && !file.includes("__tests__"))
+        .filter((file) =>
+          /assistantProviderKeys/.test(
+            withoutComments(readFileSync(path.join(handlerDir, file), "utf8"))
+          )
+        );
+      const unexpected = importers.filter((file) => !allowed.has(file));
+      expect(
+        unexpected,
+        `IPC handlers importing the provider key store: ${unexpected.join(", ")}`
+      ).toEqual([]);
+      expect(importers.sort()).toEqual([...allowed.keys()].sort());
     });
 
     it("reaches none of the app agent's credential IPC", () => {

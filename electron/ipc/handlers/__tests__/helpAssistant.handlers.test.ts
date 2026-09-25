@@ -86,6 +86,9 @@ describe("registerHelpAssistantHandlers", () => {
       customArgs: "",
       idleHibernateMinutes: 5,
       loadGlobalHooksAndServers: false,
+      modelProvider: "openai",
+      providerModels: {},
+      openRouterRouting: { sort: "latency", allowTraining: false, zeroRetention: false },
     });
   });
 
@@ -109,6 +112,9 @@ describe("registerHelpAssistantHandlers", () => {
       customArgs: "",
       idleHibernateMinutes: 5,
       loadGlobalHooksAndServers: false,
+      modelProvider: "openai",
+      providerModels: {},
+      openRouterRouting: { sort: "latency", allowTraining: false, zeroRetention: false },
     });
   });
 
@@ -375,6 +381,9 @@ describe("registerHelpAssistantHandlers", () => {
       customArgs: "",
       idleHibernateMinutes: 5,
       loadGlobalHooksAndServers: false,
+      modelProvider: "openai",
+      providerModels: {},
+      openRouterRouting: { sort: "latency", allowTraining: false, zeroRetention: false },
     });
   });
 
@@ -748,5 +757,151 @@ describe("registerHelpAssistantHandlers — getLiveSessionStatus (#10032)", () =
     await expect(handler(CTX, { sessionId: "" })).rejects.toThrow();
     await expect(handler(CTX, {})).rejects.toThrow();
     expect(mcpServiceMock.getHelpSessionLiveStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe("model provider settings", () => {
+  beforeEach(() => {
+    storeMock.get.mockReset();
+    storeMock.set.mockReset();
+    ipcMainMock._handlers.clear();
+    registerHelpAssistantHandlers();
+  });
+
+  const setSettings = () =>
+    ipcMainMock._handlers.get("help-assistant:set-settings") as (
+      e: unknown,
+      patch: Partial<HelpAssistantSettings>
+    ) => Promise<HelpAssistantSettings>;
+
+  it("persists a known provider and drops an unknown one", async () => {
+    await setSettings()(null, { modelProvider: "openai" });
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.modelProvider", "openai");
+    storeMock.set.mockClear();
+    await setSettings()(null, {
+      modelProvider: "anthropic" as unknown as HelpAssistantSettings["modelProvider"],
+    });
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("merges a per-provider model patch into what is stored, and clears on empty", async () => {
+    storeMock.get.mockReturnValue({
+      providerModels: { baseten: "zai-org/GLM-5.3", openrouter: "z-ai/glm-5.3" },
+    } as Partial<HelpAssistantSettings>);
+    await setSettings()(null, {
+      providerModels: {
+        openai: "gpt-6-sol",
+        openrouter: "",
+        // @ts-expect-error — an id this build does not know
+        anthropic: "claude",
+      },
+    });
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.providerModels", {
+      baseten: "zai-org/GLM-5.3",
+      openai: "gpt-6-sol",
+    });
+  });
+
+  it("drops a dirty model id without touching the rest", async () => {
+    storeMock.get.mockReturnValue({
+      providerModels: { baseten: "zai-org/GLM-5.3" },
+    } as Partial<HelpAssistantSettings>);
+    await setSettings()(null, { providerModels: { openai: "has space" } });
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.providerModels", {
+      baseten: "zai-org/GLM-5.3",
+    });
+  });
+
+  it("normalises OpenRouter routing preferences", async () => {
+    await setSettings()(null, {
+      openRouterRouting: {
+        sort: "fastest" as unknown as "price",
+        allowTraining: "yes" as unknown as boolean,
+        zeroRetention: true,
+      },
+    });
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.openRouterRouting", {
+      sort: "latency",
+      allowTraining: false,
+      zeroRetention: true,
+    });
+  });
+
+  it("reads a stored provider back, and falls back to OpenAI for a corrupt one", async () => {
+    const getSettings = ipcMainMock._handlers.get("help-assistant:get-settings") as (
+      e: unknown
+    ) => Promise<HelpAssistantSettings>;
+    storeMock.get.mockReturnValue({
+      modelProvider: "openrouter",
+      providerModels: { openrouter: "z-ai/glm-5.3" },
+    } as Partial<HelpAssistantSettings>);
+    expect(await getSettings(null)).toMatchObject({
+      modelProvider: "openrouter",
+      providerModels: { openrouter: "z-ai/glm-5.3" },
+    });
+    storeMock.get.mockReturnValue({
+      modelProvider: "nope",
+    } as unknown as Partial<HelpAssistantSettings>);
+    expect((await getSettings(null)).modelProvider).toBe("openai");
+  });
+});
+
+describe("provider key IPC", () => {
+  const SENTINEL = "sk-SENTINEL-must-never-cross-9f3a";
+  const stored: { value: unknown } = { value: undefined };
+
+  beforeEach(async () => {
+    stored.value = undefined;
+    storeMock.get.mockReset();
+    storeMock.set.mockReset();
+    storeMock.get.mockImplementation(((key: string) =>
+      key === "assistantProviderKeys" ? stored.value : undefined) as never);
+    storeMock.set.mockImplementation(((key: string, value: unknown) => {
+      if (key === "assistantProviderKeys") stored.value = value;
+    }) as never);
+    const keys = await import("../../../services/assistant-host/assistantProviderKeys.js");
+    keys.setAssistantProviderKeyCipherForTests({
+      tier: () => "keychain",
+      encrypt: (plain: string) => `enc:${Buffer.from(plain).toString("base64")}`,
+      decrypt: (c: string) => Buffer.from(c.slice(4), "base64").toString(),
+    });
+    ipcMainMock._handlers.clear();
+    registerHelpAssistantHandlers();
+  });
+
+  const call = (channel: string, ...args: unknown[]) =>
+    (ipcMainMock._handlers.get(channel) as (e: unknown, ...a: unknown[]) => Promise<unknown>)(
+      null,
+      ...args
+    );
+
+  it("never answers with the key, on any channel", async () => {
+    const responses = [
+      await call("help-assistant:set-provider-key", "openai", SENTINEL, 0),
+      await call("help-assistant:get-provider-key-status"),
+      await call("help-assistant:get-settings"),
+    ];
+    for (const response of responses) {
+      expect(JSON.stringify(response)).not.toContain(SENTINEL);
+    }
+    expect(JSON.stringify(stored.value)).not.toContain(SENTINEL);
+    const status = responses[1] as { providers: { openai: { saved: boolean; hint: string } } };
+    expect(status.providers.openai).toMatchObject({ saved: true, hint: "9f3a" });
+  });
+
+  it("refuses a save that does not name the revision its check started from", async () => {
+    await expect(call("help-assistant:set-provider-key", "openai", "sk-ok")).rejects.toThrow(
+      /revision/
+    );
+    expect(stored.value).toBeUndefined();
+  });
+
+  it("refuses a malformed key with a reason that does not quote it", async () => {
+    await expect(
+      call("help-assistant:set-provider-key", "openai", "sk bad key", 0)
+    ).rejects.toThrow(/spaces/);
+    await call("help-assistant:set-provider-key", "openai", "sk bad key", 0).catch((err: Error) =>
+      expect(err.message).not.toContain("sk bad key")
+    );
   });
 });

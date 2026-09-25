@@ -291,6 +291,8 @@ export type {
   VoiceParagraphingStrategy,
   VoiceRecordingMode,
   HelpAssistantSettings,
+  AssistantProviderKeyStatus,
+  AssistantProviderKeyTestResult,
   HelpAssistantAuditRetention,
   HelpAssistantIdleHibernateMinutes,
   HelpSessionLiveStatus,

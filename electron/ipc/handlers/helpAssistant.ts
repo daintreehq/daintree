@@ -5,6 +5,8 @@ import { defineIpcNamespace, op, opValidated } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { HELP_ASSISTANT_METHOD_CHANNELS } from "./helpAssistant.preload.js";
 import type {
+  AssistantProviderKeyStatus,
+  AssistantProviderKeyTestResult,
   HelpAssistantAuditRetention,
   HelpAssistantIdleHibernateMinutes,
   HelpAssistantSettings,
@@ -13,6 +15,20 @@ import type {
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 import { hasShellMetachar } from "../../../shared/utils/shellEscape.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
+import {
+  ASSISTANT_MODEL_PROVIDER_IDS,
+  DEFAULT_ASSISTANT_MODEL_PROVIDER,
+  DEFAULT_OPENROUTER_ROUTING,
+  isAssistantModelProviderId,
+  type AssistantModelProviderId,
+  type OpenRouterRoutingPreferences,
+} from "../../../shared/config/assistantModelProviders.js";
+import {
+  clearAssistantProviderKey,
+  getAssistantProviderKeyStatus,
+  saveAssistantProviderKey,
+  testAssistantProviderKey,
+} from "../../services/assistant-host/assistantProviderKeys.js";
 
 type McpServerSingleton = typeof McpServerServiceModule.mcpServerService;
 
@@ -40,6 +56,9 @@ const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   customArgs: "",
   idleHibernateMinutes: 5,
   loadGlobalHooksAndServers: false,
+  modelProvider: DEFAULT_ASSISTANT_MODEL_PROVIDER,
+  providerModels: {},
+  openRouterRouting: DEFAULT_OPENROUTER_ROUTING,
 };
 
 const HELP_ASSISTANT_KEYS = [
@@ -52,6 +71,9 @@ const HELP_ASSISTANT_KEYS = [
   "customArgs",
   "idleHibernateMinutes",
   "loadGlobalHooksAndServers",
+  "modelProvider",
+  "providerModels",
+  "openRouterRouting",
 ] as const satisfies ReadonlyArray<keyof HelpAssistantSettings>;
 
 const KNOWN_KEYS: ReadonlySet<string> = new Set(HELP_ASSISTANT_KEYS);
@@ -96,6 +118,59 @@ function sanitizeModelId(value: unknown): string | undefined {
   return trimmed.slice(0, MODEL_ID_MAX_LEN);
 }
 
+/**
+ * Per-provider model overrides, each held to the same single-token rule as `modelId`.
+ * An unknown provider or a dirty id is dropped rather than failing the whole map, and an
+ * empty id is dropped too — absent already means "the recommendation".
+ */
+function sanitizeProviderModels(
+  value: unknown
+): Partial<Record<AssistantModelProviderId, string>> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const out: Partial<Record<AssistantModelProviderId, string>> = {};
+  const record = value as Record<string, unknown>;
+  for (const id of ASSISTANT_MODEL_PROVIDER_IDS) {
+    const model = sanitizeModelId(record[id]);
+    if (model) out[id] = model;
+  }
+  return out;
+}
+
+/**
+ * A per-provider model PATCH: each entry sets that provider's override, and an empty
+ * string clears it. Merged against what is stored rather than replacing the map, so two
+ * Settings views editing different providers cannot erase each other's choice.
+ */
+function mergeProviderModels(
+  patch: unknown
+): Partial<Record<AssistantModelProviderId, string>> | undefined {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return undefined;
+  const next = {
+    ...(sanitizeProviderModels(
+      (store.get("helpAssistant") as Record<string, unknown> | undefined)?.providerModels
+    ) ?? {}),
+  };
+  const record = patch as Record<string, unknown>;
+  for (const id of ASSISTANT_MODEL_PROVIDER_IDS) {
+    if (!(id in record)) continue;
+    const model = sanitizeModelId(record[id]);
+    if (model === undefined) continue;
+    if (model) next[id] = model;
+    else delete next[id];
+  }
+  return next;
+}
+
+function sanitizeOpenRouterRouting(value: unknown): OpenRouterRoutingPreferences | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  return {
+    sort: record.sort === "price" ? "price" : "latency",
+    allowTraining: record.allowTraining === true,
+    zeroRetention: record.zeroRetention === true,
+  };
+}
+
 function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   if (!stored || typeof stored !== "object") return {};
   const out: Partial<HelpAssistantSettings> = {};
@@ -127,6 +202,11 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   if (sanitizedModelId !== undefined) out.modelId = sanitizedModelId;
   const sanitizedArgs = sanitizeCustomArgs(record.customArgs);
   if (sanitizedArgs !== undefined) out.customArgs = sanitizedArgs;
+  if (isAssistantModelProviderId(record.modelProvider)) out.modelProvider = record.modelProvider;
+  const providerModels = sanitizeProviderModels(record.providerModels);
+  if (providerModels !== undefined) out.providerModels = providerModels;
+  const routing = sanitizeOpenRouterRouting(record.openRouterRouting);
+  if (routing !== undefined) out.openRouterRouting = routing;
   return out;
 }
 
@@ -184,6 +264,7 @@ export const helpAssistantNamespace = defineIpcNamespace({
           if (field === "auditRetention" && !isValidAuditRetention(value)) continue;
           if (field === "idleHibernateMinutes" && !isValidIdleHibernateMinutes(value)) continue;
           if (field === "tier" && !isValidHelpAssistantTier(value)) continue;
+          if (field === "modelProvider" && !isAssistantModelProviderId(value)) continue;
           if (
             (field === "docSearch" ||
               field === "daintreeControl" ||
@@ -201,6 +282,16 @@ export const helpAssistantNamespace = defineIpcNamespace({
           }
           if (field === "modelId") {
             const sanitized = sanitizeModelId(value);
+            if (sanitized === undefined) continue;
+            storedValue = sanitized;
+          }
+          if (field === "providerModels") {
+            const merged = mergeProviderModels(value);
+            if (merged === undefined) continue;
+            storedValue = merged;
+          }
+          if (field === "openRouterRouting") {
+            const sanitized = sanitizeOpenRouterRouting(value);
             if (sanitized === undefined) continue;
             storedValue = sanitized;
           }
@@ -258,6 +349,42 @@ export const helpAssistantNamespace = defineIpcNamespace({
         // now true, and echoing would hide every one of them.
         return getHelpAssistantSettings();
       }
+    ),
+    /**
+     * Whether a key is saved for each model provider — never the key. The key itself is
+     * read in main only, at engine spawn (`assistantProviderKeys.ts`).
+     */
+    getProviderKeyStatus: op(
+      HELP_ASSISTANT_METHOD_CHANNELS.getProviderKeyStatus,
+      async (): Promise<AssistantProviderKeyStatus> => getAssistantProviderKeyStatus()
+    ),
+    setProviderKey: op(
+      HELP_ASSISTANT_METHOD_CHANNELS.setProviderKey,
+      async (
+        provider: AssistantModelProviderId,
+        key: string,
+        expectedRevision: number
+      ): Promise<AssistantProviderKeyStatus> => {
+        // Required at the boundary: a save that does not say which revision its check
+        // started from could land after another window removed the key.
+        if (typeof expectedRevision !== "number" || !Number.isInteger(expectedRevision)) {
+          throw new Error("A key save must name the revision its check started from.");
+        }
+        return saveAssistantProviderKey(provider, key, expectedRevision);
+      }
+    ),
+    clearProviderKey: op(
+      HELP_ASSISTANT_METHOD_CHANNELS.clearProviderKey,
+      async (provider: AssistantModelProviderId): Promise<AssistantProviderKeyStatus> =>
+        clearAssistantProviderKey(provider)
+    ),
+    /** Checks a typed key, or the saved one when `key` is empty, with the provider itself. */
+    testProviderKey: op(
+      HELP_ASSISTANT_METHOD_CHANNELS.testProviderKey,
+      async (
+        provider: AssistantModelProviderId,
+        key?: string
+      ): Promise<AssistantProviderKeyTestResult> => testAssistantProviderKey(provider, key ?? "")
     ),
     getLiveSessionStatus: opValidated(
       HELP_ASSISTANT_METHOD_CHANNELS.getLiveSessionStatus,

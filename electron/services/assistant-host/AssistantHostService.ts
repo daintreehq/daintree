@@ -6,6 +6,11 @@ import { getNativeAssistantResumeStore } from "./NativeAssistantResumeStore.js";
 import { resolveAssistantBinary, ASSISTANT_BIN_ENV } from "./resolveAssistantBinary.js";
 import { assistantPlatformSupport } from "../../../shared/config/assistantPlatform.js";
 import { assistantChildEnv } from "./assistantChildEnv.js";
+import { assistantProviderEnv } from "./assistantProviderKeys.js";
+import {
+  DEFAULT_ASSISTANT_MODEL_PROVIDER,
+  isAssistantModelProviderId,
+} from "../../../shared/config/assistantModelProviders.js";
 import { getHelpAssistantSettings } from "../../ipc/handlers/helpAssistant.js";
 import { helpSessionService } from "../HelpSessionService.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -628,6 +633,26 @@ export class AssistantHostService {
       });
     }
 
+    // The user's own model provider and key (bring your own key). Read HERE, in main,
+    // at the moment of spawn: the key never crosses to the renderer, and a key saved
+    // after this engine started reaches the next session, like every other assistant
+    // setting. No saved key means no variables — the backend then tells the user, in
+    // the conversation, to add one in Settings.
+    const assistantSettings = getHelpAssistantSettings();
+    const modelProvider = isAssistantModelProviderId(assistantSettings.modelProvider)
+      ? assistantSettings.modelProvider
+      : DEFAULT_ASSISTANT_MODEL_PROVIDER;
+    const upstream = assistantProviderEnv(
+      modelProvider,
+      assistantSettings.providerModels?.[modelProvider],
+      assistantSettings.openRouterRouting
+    );
+    logger.info("Model provider for this session", {
+      sessionId,
+      provider: modelProvider,
+      keySaved: upstream !== null,
+    });
+
     const host = new AssistantHostProcess({
       binaryPath,
       cwd: opts.cwd,
@@ -710,6 +735,25 @@ export class AssistantHostService {
         // "configured but broken" and reports a connection error, where unset is the
         // honest "no control plane" it already knows how to degrade around.
         ...(mcp?.url ? { DAINTREE_MCP_URL: mcp.url, DAINTREE_MCP_TOKEN: mcp.token } : {}),
+        // Bring your own key: which provider pays for this session's model calls, and
+        // with what key. Unset when no key is saved, never set-to-empty — the engine
+        // refuses a half-configured provider at startup. The model is sent only when
+        // the user overrode the recommendation, so the backend's recommendation stays
+        // the one source for the default.
+        ...(upstream
+          ? {
+              DAINTREE_UPSTREAM_PROVIDER: upstream.provider,
+              DAINTREE_UPSTREAM_API_KEY: upstream.key,
+            }
+          : {}),
+        ...(upstream?.model ? { DAINTREE_UPSTREAM_MODEL: upstream.model } : {}),
+        // OpenRouter's routing preferences — how to rank the hosts serving the model,
+        // and which data policies a host must meet. Empty for every other provider.
+        ...(upstream?.sort ? { DAINTREE_UPSTREAM_SORT: upstream.sort } : {}),
+        ...(upstream?.dataCollection
+          ? { DAINTREE_UPSTREAM_DATA_COLLECTION: upstream.dataCollection }
+          : {}),
+        ...(upstream?.zdr ? { DAINTREE_UPSTREAM_ZDR: upstream.zdr } : {}),
       },
       onEvent: (event) => {
         if (CONVERSATION_EVENTS.has(event.type)) this.recordConversation(sessionId);

@@ -357,6 +357,14 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Diff insertion count against the base branch",
     },
   ],
+  "src/components/Settings/AssistantModelProviderSettings.tsx": [
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      expectedOccurrences: 1,
+      rationale: "Recorded result of the provider-key check the user ran before saving",
+    },
+  ],
   "src/components/Settings/VoiceInputSettingsTab.tsx": [
     {
       category: "outcome",
@@ -760,5 +768,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 89;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 93;
+export const EXPECTED_STATUS_SUCCESS_SITES = 90;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 94;

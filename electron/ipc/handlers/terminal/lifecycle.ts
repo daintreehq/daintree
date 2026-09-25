@@ -30,6 +30,8 @@ import {
   ListBookmarksPayloadSchema,
 } from "../../../schemas/ipc.js";
 import { store } from "../../../store.js";
+import { assistantProviderEnvVars } from "../../../services/assistant-host/assistantProviderKeys.js";
+import { getHelpAssistantSettings } from "../helpAssistant.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { withTimeout } from "../../../utils/withTimeout.js";
 import { armSpawnConfirmation, settleSpawnConfirmation } from "./spawnConfirmation.js";
@@ -920,6 +922,18 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           "[TerminalSpawn] Failed to prepare Daintree Assistant MCP env; continuing without MCP injection:",
           mcpErr
         );
+      }
+    }
+
+    // The Daintree Assistant in a terminal runs on the user's own model provider and
+    // key exactly like the native panel does (`AssistantHostService`): read in main at
+    // spawn, handed over in the PTY env beside the MCP bearer, never through the
+    // renderer. Nothing is set when no key is saved; the backend then says, in the
+    // conversation, to add one in Settings.
+    if (launchAgentId === "daintree-assistant" && safeCommand.length > 0) {
+      const providerEnv = assistantProviderEnvVars(getHelpAssistantSettings());
+      if (Object.keys(providerEnv).length > 0) {
+        spawnEnv = { ...(spawnEnv ?? {}), ...providerEnv };
       }
     }
 

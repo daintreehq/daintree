@@ -890,6 +890,10 @@ export const CHANNELS = {
   HELP_ASSISTANT_GET_SETTINGS: "help-assistant:get-settings",
   HELP_ASSISTANT_SET_SETTINGS: "help-assistant:set-settings",
   HELP_ASSISTANT_GET_LIVE_SESSION_STATUS: "help-assistant:get-live-session-status",
+  HELP_ASSISTANT_GET_PROVIDER_KEY_STATUS: "help-assistant:get-provider-key-status",
+  HELP_ASSISTANT_SET_PROVIDER_KEY: "help-assistant:set-provider-key",
+  HELP_ASSISTANT_CLEAR_PROVIDER_KEY: "help-assistant:clear-provider-key",
+  HELP_ASSISTANT_TEST_PROVIDER_KEY: "help-assistant:test-provider-key",
 
   // Onboarding channels
   ONBOARDING_GET: "onboarding:get",

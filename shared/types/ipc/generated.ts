@@ -859,17 +859,33 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "help-assistant:clear-provider-key": {
+    args: [provider: "openai" | "baseten" | "openrouter"];
+    result: import("./api.js").AssistantProviderKeyStatus;
+  };
   "help-assistant:get-live-session-status": {
     args: [__1: { sessionId: string }];
     result: import("./api.js").HelpSessionLiveStatus;
+  };
+  "help-assistant:get-provider-key-status": {
+    args: [];
+    result: import("./api.js").AssistantProviderKeyStatus;
   };
   "help-assistant:get-settings": {
     args: [];
     result: import("./api.js").HelpAssistantSettings;
   };
+  "help-assistant:set-provider-key": {
+    args: [provider: "openai" | "baseten" | "openrouter", key: string, expectedRevision: number];
+    result: import("./api.js").AssistantProviderKeyStatus;
+  };
   "help-assistant:set-settings": {
     args: [patch: Partial<import("./api.js").HelpAssistantSettings>];
     result: import("./api.js").HelpAssistantSettings;
+  };
+  "help-assistant:test-provider-key": {
+    args: [provider: "openai" | "baseten" | "openrouter", key?: string | undefined];
+    result: import("./api.js").AssistantProviderKeyTestResult;
   };
   "help:get-folder-path": {
     args: [];

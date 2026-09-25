@@ -236,6 +236,11 @@ const mockGetAssistantScratchEnv = vi.hoisted(() =>
 
 const mockIsHelpTerminal = vi.hoisted(() => vi.fn<(terminalId: string) => boolean>(() => false));
 
+const mockProviderEnv = vi.hoisted(() => ({ value: {} as Record<string, string> }));
+vi.mock("../../../../services/assistant-host/assistantProviderKeys.js", () => ({
+  assistantProviderEnvVars: () => mockProviderEnv.value,
+}));
+
 vi.mock("../../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     validateToken: (token: string) => mockValidateToken(token),
@@ -3370,5 +3375,59 @@ describe("terminal spawn handler - Windows PATH refresh", () => {
       handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24 })
     ).resolves.toBeTruthy();
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("terminal spawn handler - Daintree Assistant model provider env", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const os = await import("os");
+    tmpDir = os.tmpdir();
+    ptyClient = { spawn: vi.fn(), hasTerminal: vi.fn(() => false), write: vi.fn() };
+    mockGetCurrentProject.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "off" });
+    mockValidateToken.mockReturnValue(false);
+    mockProviderEnv.value = {
+      DAINTREE_UPSTREAM_PROVIDER: "openai",
+      DAINTREE_UPSTREAM_API_KEY: "sk-saved-in-settings",
+    };
+  });
+  afterEach(() => {
+    mockProviderEnv.value = {};
+  });
+
+  async function spawnAgent(agent: string) {
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: agent,
+        launchAgentId: agent,
+      } as unknown as Parameters<typeof handler>[1]
+    );
+    return ptyClient.spawn.mock.calls.at(-1)![1];
+  }
+
+  it("hands the terminal-hosted assistant the provider and key saved in Settings", async () => {
+    const spawnArgs = await spawnAgent("daintree-assistant");
+    expect(spawnArgs.env?.DAINTREE_UPSTREAM_PROVIDER).toBe("openai");
+    expect(spawnArgs.env?.DAINTREE_UPSTREAM_API_KEY).toBe("sk-saved-in-settings");
+  });
+
+  it("gives no other agent the assistant's provider key", async () => {
+    const spawnArgs = await spawnAgent("claude");
+    expect(spawnArgs.env?.DAINTREE_UPSTREAM_API_KEY).toBeUndefined();
   });
 });
