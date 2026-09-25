@@ -491,6 +491,8 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     if ((info.projectId ?? null) !== ctx.projectId) {
       return null;
     }
+    // A worker port is a local MessagePort; a remote view keeps the shared path.
+    if (ctx.event === null) return null;
     return distributeTerminalWorkerPortToView(win, wctx, ctx.event.sender, ptyClient, id);
   };
 

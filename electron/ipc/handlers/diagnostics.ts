@@ -403,7 +403,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       if (!payload || !Number.isFinite(payload.allocated)) return;
       // Late IPC reply against an evicted view: don't reinsert into the
       // sample map (forgetBlinkSample already cleaned it up on cleanupEntry).
-      if (ctx.event.sender.isDestroyed()) return;
+      if (ctx.event ? ctx.event.sender.isDestroyed() : ctx.endpoint.isClosed()) return;
       const optionalKb = (v: unknown): number | undefined =>
         Number.isFinite(v) ? (v as number) : undefined;
       recordBlinkSample(ctx.webContentsId, {
@@ -427,7 +427,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       ) {
         return;
       }
-      if (ctx.event.sender.isDestroyed()) return;
+      if (ctx.event ? ctx.event.sender.isDestroyed() : ctx.endpoint.isClosed()) return;
       recordEluSample(ctx.webContentsId, {
         blockingDurationMs: payload.blockingDurationMs,
         sampleWindowMs: payload.sampleWindowMs,
@@ -521,8 +521,8 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   const handleRendererCpuProfileStart = async (
     ctx: IpcContext
   ): Promise<RendererCpuProfileStartResult> => {
-    const wc = ctx.event.sender;
-    if (wc.isDestroyed()) {
+    const wc = ctx.event?.sender;
+    if (!wc || wc.isDestroyed()) {
       return { status: "failed", reason: "webcontents-destroyed" };
     }
 

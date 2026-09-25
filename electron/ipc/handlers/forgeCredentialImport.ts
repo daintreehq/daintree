@@ -93,15 +93,18 @@ async function withImportSignal<T>(
   const controller = new AbortController();
   const abort = () => controller.abort();
   const timer = setTimeout(abort, IMPORT_DEADLINE_MS);
-  const sender = ctx.event.sender;
+  const sender = ctx.event?.sender ?? null;
+  // A remote requester goes away when its endpoint closes.
+  const endpointClose = sender ? null : ctx.endpoint.onClose(abort);
   // `destroyed` never fires again for a sender that is already gone.
-  if (sender.isDestroyed()) abort();
-  else sender.once("destroyed", abort);
+  if (sender ? sender.isDestroyed() : ctx.endpoint.isClosed()) abort();
+  else sender?.once("destroyed", abort);
   try {
     return await run(controller.signal);
   } finally {
     clearTimeout(timer);
-    sender.removeListener("destroyed", abort);
+    sender?.removeListener("destroyed", abort);
+    endpointClose?.dispose();
   }
 }
 

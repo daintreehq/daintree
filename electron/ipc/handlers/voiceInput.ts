@@ -492,8 +492,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       unsubscribe();
       service?.stop();
     };
-    ctx.event.sender.once("destroyed", onDestroyed);
-    activeDestroyListener = { sender: ctx.event.sender, fn: onDestroyed };
+    const sender = ctx.event?.sender ?? null;
+    sender?.once("destroyed", onDestroyed);
+    activeDestroyListener = sender ? { sender, fn: onDestroyed } : null;
 
     // Freeze the assembled keyterms into the session settings snapshot. Assembly
     // has its own internal timeouts, so this await is bounded and never blocks the
@@ -518,7 +519,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         activeEventUnsubscribe = null;
       }
       unsubscribe();
-      ctx.event.sender.removeListener("destroyed", onDestroyed);
+      sender?.removeListener("destroyed", onDestroyed);
       if (activeDestroyListener?.fn === onDestroyed) {
         activeDestroyListener = null;
       }
@@ -531,7 +532,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         activeEventUnsubscribe = null;
       }
       unsubscribe();
-      ctx.event.sender.removeListener("destroyed", onDestroyed);
+      sender?.removeListener("destroyed", onDestroyed);
       activeDestroyListener = null;
       // Tear down the session controller so an orphaned signal isn't left
       // attached to correctionService for the next session.

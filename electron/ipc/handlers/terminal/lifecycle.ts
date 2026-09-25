@@ -764,7 +764,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // routing still checks the view belongs to the workspace on every call.
       const hasSender = Number.isInteger(ctx.webContentsId) && ctx.webContentsId > 0;
       const senderWorkspaceId = hasSender
-        ? (ctx.projectId ?? getProjectIdFromSenderUrl(ctx.event.sender))
+        ? (ctx.projectId ?? (ctx.event && getProjectIdFromSenderUrl(ctx.event.sender)))
         : null;
       const launchViewWebContentsId =
         senderWorkspaceId === resolvedProject.id ? ctx.webContentsId : null;
