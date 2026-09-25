@@ -25,6 +25,11 @@ import {
   type ProjectDescription,
 } from "../host/linkMethods.js";
 import type { HostRegistry } from "./HostRegistry.js";
+import {
+  ResyncCoordinator,
+  type SessionAttachedInfo,
+  type ViewResyncReason,
+} from "./reconnect/ResyncCoordinator.js";
 import { LinkClient, type LinkClientOptions, type LinkClientState } from "./LinkClient.js";
 import type { LinkTransport } from "./transport.js";
 
@@ -37,8 +42,12 @@ export interface ViewSink {
   send(webContentsId: number, channel: string, args: unknown[]): boolean;
   /** Call `onGone` once when the view is destroyed; returns an unsubscribe. */
   watch(webContentsId: number, onGone: () => void): () => void;
-  /** The host asked this view to repaint from a snapshot. */
-  resync(webContentsId: number, hostId: HostId, reason: EndpointResyncReason): void;
+  /** The view must refetch its host state: the host asked, or the link came back fresh. */
+  resync(
+    webContentsId: number,
+    hostId: HostId,
+    reason: EndpointResyncReason | ViewResyncReason
+  ): void;
   /**
    * The host the view is authoritatively bound to (its project key, else its
    * window's binding), or null for a local view. When present, a connection
@@ -68,6 +77,8 @@ export interface EndpointClosedInfo {
 }
 
 export type EndpointClosedListener = (info: EndpointClosedInfo) => void;
+
+export type SessionAttachedListener = (info: SessionAttachedInfo) => void;
 
 /** How {@link HostConnection.whenReady} settled. */
 export type HostReadiness = "ready" | "version-mismatch" | "timeout" | "stopped";
@@ -100,6 +111,8 @@ export class HostConnection {
   private readonly watched = new Map<number, () => void>();
   private readonly openedListeners = new Set<EndpointOpenedListener>();
   private readonly closedListeners = new Set<EndpointClosedListener>();
+  private readonly attachedListeners = new Set<SessionAttachedListener>();
+  private hadSession = false;
   /**
    * Endpoints closed while the link was down. The host keeps a dropped
    * session's endpoints for a resume, so these are closed there once it
@@ -155,6 +168,15 @@ export class HostConnection {
   onEndpointClosed(listener: EndpointClosedListener): () => void {
     this.closedListeners.add(listener);
     return () => this.closedListeners.delete(listener);
+  }
+
+  /**
+   * Told once per reconnect, after endpoints are back on the new session and
+   * their streams have moved. Not told for the connection's first session.
+   */
+  onSessionAttached(listener: SessionAttachedListener): () => void {
+    this.attachedListeners.add(listener);
+    return () => this.attachedListeners.delete(listener);
   }
 
   start(): void {
@@ -215,6 +237,8 @@ export class HostConnection {
     this.watched.clear();
     this.openedListeners.clear();
     this.closedListeners.clear();
+    this.attachedListeners.clear();
+    this.hadSession = false;
   }
 
   state(): HostConnectionState {
@@ -349,6 +373,7 @@ export class HostConnection {
     // A fresh session reopens the endpoints of views still bound here, so
     // their terminal and worktree streams come back without waiting for the
     // view's next call; the rest are discarded.
+    const reopened: number[] = [];
     for (const [webContentsId, open] of reopen) {
       const endpointId = this.isBoundHere(webContentsId)
         ? this.ensureEndpoint(session, webContentsId, open.projectId)
@@ -356,8 +381,13 @@ export class HostConnection {
       if (endpointId === null) {
         this.unwatch(webContentsId);
         this.notifyClosed({ webContentsId, endpointId: open.endpointId });
+      } else {
+        reopened.push(webContentsId);
       }
     }
+    const isReconnect = this.hadSession;
+    this.hadSession = true;
+    if (isReconnect) this.notifyAttached({ resumed, reopened });
     this.checkReady();
     void session.call(LinkMethod.HOST_INFO, null).then(
       (answer) => {
@@ -448,6 +478,16 @@ export class HostConnection {
     this.watched.delete(webContentsId);
   }
 
+  private notifyAttached(info: SessionAttachedInfo): void {
+    for (const listener of [...this.attachedListeners]) {
+      try {
+        listener(info);
+      } catch (error) {
+        console.error("[RemoteHostManager] session-attached listener failed:", error);
+      }
+    }
+  }
+
   private notifyClosed(info: EndpointClosedInfo): void {
     for (const listener of [...this.closedListeners]) {
       try {
@@ -508,10 +548,18 @@ export class RemoteHostManager {
     (hostId: HostId, info: EndpointSessionInfo) => void
   >();
   private readonly closedListeners = new Set<(hostId: HostId, info: EndpointClosedInfo) => void>();
+  private readonly attachedListeners = new Set<
+    (hostId: HostId, info: SessionAttachedInfo) => void
+  >();
   private readonly now: () => number;
 
   constructor(private readonly options: RemoteHostManagerOptions) {
     this.now = options.now ?? Date.now;
+    const coordinator = new ResyncCoordinator({
+      resync: (webContentsId, hostId, reason) =>
+        this.options.views.resync(webContentsId, hostId, reason),
+    });
+    this.attachedListeners.add((hostId, info) => coordinator.onSessionAttached(hostId, info));
   }
 
   get(hostId: HostId): HostConnection | undefined {
@@ -537,6 +585,12 @@ export class RemoteHostManager {
   onEndpointClosed(listener: (hostId: HostId, info: EndpointClosedInfo) => void): () => void {
     this.closedListeners.add(listener);
     return () => this.closedListeners.delete(listener);
+  }
+
+  /** {@link HostConnection.onSessionAttached} across every connection, including later ones. */
+  onSessionAttached(listener: (hostId: HostId, info: SessionAttachedInfo) => void): () => void {
+    this.attachedListeners.add(listener);
+    return () => this.attachedListeners.delete(listener);
   }
 
   /** Start (or nudge) the host's link. Resolves once the attempt is under way, not connected. */
@@ -571,6 +625,16 @@ export class RemoteHostManager {
             listener(hostId, info);
           } catch (error) {
             console.error("[RemoteHostManager] endpoint-opened listener failed:", error);
+          }
+        }
+      });
+      conn.onSessionAttached((info) => {
+        if (this.connections.get(hostId) !== conn) return;
+        for (const listener of [...this.attachedListeners]) {
+          try {
+            listener(hostId, info);
+          } catch (error) {
+            console.error("[RemoteHostManager] session-attached listener failed:", error);
           }
         }
       });

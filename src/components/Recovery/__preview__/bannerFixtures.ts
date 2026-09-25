@@ -4,6 +4,7 @@ import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
+import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
 import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
@@ -70,6 +71,32 @@ function seedPluginDocument() {
 }
 
 export const BANNER_FIXTURES = {
+  "host-connection": {
+    slot: "host-connection",
+    what: "a remote window's host is unreachable — says what was seen and when, never why",
+    seed: () => {
+      useHostConnectionStore.setState({
+        hostId: "studio-01",
+        hostName: "studio-01",
+        everConnected: true,
+        connection: { status: "unreachable", lastSeenAt: Date.now() - 120_000, detail: null },
+        lastSeenAt: Date.now() - 120_000,
+      });
+    },
+  },
+  "host-connection-reconnecting": {
+    slot: "host-connection",
+    what: "link dropped and is redialling — shown only past the 400ms Doherty gate",
+    seed: () => {
+      useHostConnectionStore.setState({
+        hostId: "studio-01",
+        hostName: "studio-01",
+        everConnected: true,
+        connection: { status: "connecting", attempt: 1 },
+      });
+    },
+    settleMs: 600,
+  },
   "host-crash": {
     slot: "host-crash",
     what: "backend gone after three restarts — the one blocking error in the family",
@@ -220,8 +247,9 @@ export const BANNER_FIXTURES = {
 
 export type BannerFixtureName = keyof typeof BANNER_FIXTURES;
 
-/** The nine slots, in coordinator priority order, one canonical fixture each. */
+/** The ten slots, in coordinator priority order, one canonical fixture each. */
 export const SHEET_ROWS: readonly BannerFixtureName[] = [
+  "host-connection",
   "host-crash",
   "watchdog-disabled",
   "host-memory-stall",

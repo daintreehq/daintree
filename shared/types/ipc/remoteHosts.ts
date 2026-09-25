@@ -77,7 +77,12 @@ export type RemoteHostsEvent =
   | { type: "local-handshake"; handshake: HostHandshakeInfo }
   /**
    * Sent to one remote view: the host dropped events on their way to it (the
-   * link fell behind, or it was away), so what it shows may be stale. Refetch
-   * state rather than trusting what has been applied.
+   * link fell behind, or it was away), or the link came back on a fresh
+   * session that knows nothing of the old one, so what it shows may be stale.
+   * Refetch state rather than trusting what has been applied.
    */
-  | { type: "resync-required"; hostId: HostId; reason: "overflow" | "reattached" };
+  | {
+      type: "resync-required";
+      hostId: HostId;
+      reason: "overflow" | "reattached" | "reconnected";
+    };

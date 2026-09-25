@@ -32,6 +32,11 @@ import { logDebug, logWarn } from "@/utils/logger";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 import { markSwitch } from "@/utils/switchTrace";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import {
+  getTerminalInputBlock,
+  isTerminalInputBlocked,
+  terminalInputBlockedError,
+} from "@/services/terminal/inputGate";
 
 let messagePort: MessagePort | null = null;
 let expectedToken: string | null = null;
@@ -445,6 +450,10 @@ export const terminalClient = {
   },
 
   write: (id: string, data: string): void => {
+    // Typed input is dropped, not queued, while the host is out of reach or
+    // another frontend drives: replaying it later would land keystrokes the
+    // user can no longer see the context for.
+    if (isTerminalInputBlocked()) return;
     if (messagePort) {
       maybeStartEchoProbe(id);
       try {
@@ -480,6 +489,8 @@ export const terminalClient = {
     submissionToken?: string,
     handbackCode?: string
   ): Promise<void> => {
+    const blocked = getTerminalInputBlock();
+    if (blocked) return Promise.reject(terminalInputBlockedError(blocked));
     return handbackCode === undefined
       ? window.electron.terminal.submit(id, text, submissionToken)
       : window.electron.terminal.submit(id, text, submissionToken, handbackCode);
@@ -528,6 +539,7 @@ export const terminalClient = {
    * Send a single key chord to the terminal (e.g. "escape", "ctrl+c").
    */
   sendKey: (id: string, key: string): void => {
+    if (isTerminalInputBlocked()) return;
     window.electron.terminal.sendKey(id, key);
   },
 
@@ -552,7 +564,7 @@ export const terminalClient = {
    * timing collapse that renderer-side setTimeout exhibits under IPC jitter.
    */
   batchDoubleEscape: (ids: string[]): void => {
-    if (ids.length === 0) return;
+    if (ids.length === 0 || isTerminalInputBlocked()) return;
     window.electron.terminal.batchDoubleEscape(ids);
   },
 
@@ -563,7 +575,7 @@ export const terminalClient = {
    * latency bounded regardless of fleet size.
    */
   broadcast: (ids: string[], data: string, reportSuccess = false): void => {
-    if (ids.length === 0 || data.length === 0) return;
+    if (ids.length === 0 || data.length === 0 || isTerminalInputBlocked()) return;
     window.electron.terminal.broadcastWrite(ids, data, reportSuccess);
   },
 

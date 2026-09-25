@@ -7,12 +7,15 @@ import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { useEffect, useSyncExternalStore } from "react";
 import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
 import { useGlobalBannerDismissalStore } from "@/store/globalBannerDismissalStore";
+import { useHostConnectionSync } from "@/hooks/useHostConnection";
+import { selectHostBannerVariant, useHostConnectionStore } from "@/store/hostConnectionStore";
 import {
   useMissingPrerequisiteStore,
   selectMissingPrerequisiteVisible,
 } from "@/store/missingPrerequisiteStore";
 
 export type GlobalBannerSlot =
+  | "host-connection"
   | "host-crash"
   | "watchdog-disabled"
   | "host-memory-stall"
@@ -25,6 +28,8 @@ export type GlobalBannerSlot =
   | null;
 
 // Precedence (highest first):
+//   host-connection    — a remote window's link to its host is down or a
+//                        different build; everything the window shows lives there
 //   host-crash         — backend is unusable right now (#8678 motivator)
 //   watchdog-disabled  — deadlock detector is gone; protection layer down (#8674)
 //   host-memory-stall  — a terminal host's memory pause isn't recovering (#12375)
@@ -62,7 +67,16 @@ export type GlobalBannerSlot =
 // cloud-sync it's environmental with no acute failure, but it's even more
 // static — nothing in the app can change it, only reinstalling the native
 // build — so any more actionable banner deserves the slot first.
+//
+// host-connection sits above host-crash because in a remote window the host
+// runs the terminals, git and agents: with the link down, nothing below it is
+// reachable, and a local backend problem is not what the user can act on first.
+// It never claims the slot in a window that runs on this machine. Its
+// transient variants (reconnecting, checking) render nothing inside the 400ms
+// gate, which holds the slot exactly as host-crash's recovering variant does.
 export function useGlobalBannerPriority(): GlobalBannerSlot {
+  useHostConnectionSync();
+  const hostBanner = useHostConnectionStore(selectHostBannerVariant);
   const backendStatus = usePanelStore((s) => s.backendStatus);
   const watchdogStatus = usePanelStore((s) => s.watchdogStatus);
   const hostMemoryStalled = useHostMemoryPauseStore((s) => s.snapshot?.stalled ?? false);
@@ -89,6 +103,7 @@ export function useGlobalBannerPriority(): GlobalBannerSlot {
     if (!pluginsNeedReload) resetDismissal("plugin-document");
   }, [watchdogDisabled, pluginsNeedReload, resetDismissal]);
 
+  if (hostBanner !== null) return "host-connection";
   if (backendStatus !== "connected") return "host-crash";
   if (watchdogDisabled && !dismissed.has("watchdog-disabled")) return "watchdog-disabled";
   if (hostMemoryStalled) return "host-memory-stall";
