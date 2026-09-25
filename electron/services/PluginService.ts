@@ -92,6 +92,13 @@ import type {
   ProjectSurfaceChoices,
   ProjectSurfaceChoicesSnapshot,
 } from "../../shared/types/plugin.js";
+import {
+  PluginFileLogLimiter,
+  boundPluginFileLogText,
+  pluginFileLogIdentity,
+  type PluginFileLogCategory,
+  type PluginFileLogSuppressed,
+} from "./plugin/pluginFileLog.js";
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
 import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadcaster.js";
 import {
@@ -691,6 +698,20 @@ export class PluginService {
    * so {@link recordPluginLog} runs `scrubSecrets` once before either sink.
    */
   private logBuffers = new Map<string, PluginDiagnosticsLogLine[]>();
+  /**
+   * Rate bound for everything this service writes to `daintree.log` on a
+   * plugin's behalf — its own `host.logger` reports and the lifecycle the host
+   * observes. The ring above is the full-fidelity record; the file gets a
+   * bounded share that survives a crash (#12804).
+   */
+  private fileLogLimiter = new PluginFileLogLimiter();
+  /**
+   * The last load error written to the file per loaded instance, so a plugin
+   * failing every retry logs the failure once rather than once per attempt.
+   * Keyed by the instance, not the id: a reload is a new load that should
+   * record its first failure even when it matches the previous one.
+   */
+  private fileLoggedLoadErrors = new WeakMap<LoadedPlugin, string>();
   /**
    * Owns the typed/legacy IPC handler maps, the registration capability gate,
    * per-channel schema/requires bookkeeping, and per-plugin removal. The
@@ -3172,6 +3193,64 @@ export class PluginService {
     }
 
     console[level](`[plugin:${pluginId}] ${rendered}`);
+
+    // Info stays in the ring: the file gets what a diagnosis needs, not a
+    // plugin's routine chatter. `fields` are left out of the durable copy —
+    // they are arbitrary plugin payloads, and the only place a terminal buffer
+    // or a prompt body could ride along wholesale.
+    if (level === "warn" || level === "error") {
+      this.writePluginFileLog(
+        pluginId,
+        level,
+        level === "error" ? "Plugin reported an error" : "Plugin reported a warning",
+        { message: boundPluginFileLogText(message) }
+      );
+    }
+  }
+
+  /**
+   * Write one plugin-attributed line to `daintree.log` through the rate bound.
+   * `category` picks the budget; the level follows it except for lifecycle,
+   * which the caller may raise to `warn`. Never throws — this runs inside
+   * `host.logger.*` and lifecycle bookkeeping, neither of which may fail
+   * because the log did.
+   */
+  private writePluginFileLog(
+    pluginId: string,
+    category: PluginFileLogCategory,
+    message: string,
+    context: Record<string, unknown> = {},
+    level: "info" | "warn" | "error" = category === "lifecycle" ? "info" : category
+  ): void {
+    try {
+      const identity = pluginFileLogIdentity(pluginId);
+      const { admitted, suppressedInPreviousWindow } = this.fileLogLimiter.admit(
+        pluginId,
+        category
+      );
+      if (suppressedInPreviousWindow) {
+        this.writePluginFileLogSummary(pluginId, suppressedInPreviousWindow);
+      }
+      if (!admitted) return;
+      if (level === "error") {
+        logger.error(message, undefined, { ...identity, ...context });
+      } else {
+        logger[level](message, { ...identity, ...context });
+      }
+    } catch {
+      // A failing log write must not become a failing plugin call.
+    }
+  }
+
+  private writePluginFileLogSummary(pluginId: string, suppressed: PluginFileLogSuppressed): void {
+    try {
+      logger.warn("Plugin log lines suppressed by rate limit", {
+        ...pluginFileLogIdentity(pluginId),
+        suppressed,
+      });
+    } catch {
+      // See writePluginFileLog.
+    }
   }
 
   /**
@@ -4467,6 +4546,24 @@ export class PluginService {
       detail,
     });
     this.emitRuntimeStatus(pluginId);
+
+    // A crash reports as `starting` + `crashed` while the supervisor decides
+    // whether to respawn, so it warns alongside an outright failure.
+    const abnormal = state === "failed" || reason === "crashed";
+    this.writePluginFileLog(
+      pluginId,
+      "lifecycle",
+      "Plugin worker state changed",
+      {
+        state,
+        previousState: prior?.state ?? null,
+        generation,
+        ...(reason ? { reason } : {}),
+        // Detail can carry the plugin's own activation error text.
+        ...(detail ? { detail: boundPluginFileLogText(detail) } : {}),
+      },
+      abnormal ? "warn" : "info"
+    );
   }
 
   /**
@@ -5114,12 +5211,30 @@ export class PluginService {
       instanceKey,
       binding: { projectId: args.projectId, projectRoot: args.projectRoot },
     });
-    if (!loaded) return false;
+    if (!loaded) {
+      this.writePluginFileLog(
+        instanceKey,
+        "lifecycle",
+        "Project plugin rejected at load",
+        {},
+        "warn"
+      );
+      return false;
+    }
+
+    const activatesOnStartup = this.shouldActivateOnStartup(loaded.manifest);
+    // Recorded before activation so a lazy plugin that is never triggered still
+    // leaves evidence that it loaded — its absence of worker transitions then
+    // reads as "never activated", not "never loaded".
+    this.writePluginFileLog(instanceKey, "lifecycle", "Project plugin loaded", {
+      version: loaded.manifest.version,
+      activation: activatesOnStartup ? "startup" : "lazy",
+    });
 
     // Activation still obeys the manifest's own activation events — a trusted
     // project plugin with no `onStartupFinished` does not execute until
     // something actually triggers it, exactly like an installed plugin.
-    if (this.shouldActivateOnStartup(loaded.manifest)) {
+    if (activatesOnStartup) {
       await this.activatePlugin(instanceKey);
     }
     return true;
@@ -5354,6 +5469,14 @@ export class PluginService {
     // Drop the diagnostic log ring buffer so a reload of the same plugin
     // doesn't carry forward log lines from the previous session.
     this.logBuffers.delete(pluginId);
+
+    // Close out the plugin's file-log window: an unload is the last chance to
+    // say how much a noisy plugin had dropped before it went.
+    if (isProjectPluginInstanceKey(pluginId)) {
+      this.writePluginFileLog(pluginId, "lifecycle", "Project plugin unloaded");
+    }
+    const suppressed = this.fileLogLimiter.drain(pluginId);
+    if (suppressed) this.writePluginFileLogSummary(pluginId, suppressed);
 
     // Resolve any imperative UI prompt this plugin had open (#10522) — the
     // pending host.show* promise resolves undefined/false (never throws) and the
@@ -6045,6 +6168,7 @@ export class PluginService {
   ): boolean {
     if (this.plugins.get(pluginId) !== plugin) return false;
     if (plugin.isBuiltin) return false;
+    this.fileLogLoadError(pluginId, plugin, loadError);
     if (!isProjectPluginInstanceKey(pluginId)) {
       this.records.upsertInstalledRecord(pluginId, { loadError });
       return true;
@@ -6071,6 +6195,29 @@ export class PluginService {
     // thing that constructs the controller.
     this.projectPluginController?.notifyLoadErrorChanged(pluginId);
     return true;
+  }
+
+  /**
+   * Put a load error in `daintree.log` — for a project plugin the in-memory map
+   * is otherwise its only record, and that dies with the process. Repeats
+   * within one load are written once; `null` re-arms the next failure.
+   */
+  private fileLogLoadError(
+    pluginId: string,
+    plugin: LoadedPlugin,
+    loadError: PluginLoadError | null
+  ): void {
+    if (loadError === null) {
+      this.fileLoggedLoadErrors.delete(plugin);
+      return;
+    }
+    const signature = `${loadError.message}\n${loadError.stack ?? ""}`;
+    if (this.fileLoggedLoadErrors.get(plugin) === signature) return;
+    this.fileLoggedLoadErrors.set(plugin, signature);
+    this.writePluginFileLog(pluginId, "error", "Plugin failed to load", {
+      error: boundPluginFileLogText(loadError.message),
+      ...(loadError.stack ? { stack: boundPluginFileLogText(loadError.stack) } : {}),
+    });
   }
 
   /**
