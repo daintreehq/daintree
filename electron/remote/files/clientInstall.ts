@@ -30,8 +30,8 @@ export interface HostFileClient {
   download(webContentsId: number, payload: DownloadPayload): Promise<DownloadResult>;
   /** Save a host file into a private temp folder here (for the clipboard, not the user). */
   downloadToTemp(hostId: HostId, hostPath: string, webContentsId: number): Promise<DownloadOutcome>;
-  /** Cancel a download by its operation id; false when none is running. */
-  cancel(opId: string): boolean;
+  /** Cancel the view's own download by its operation id; false when it has none running. */
+  cancel(opId: string, webContentsId: number): boolean;
   pickHostPaths(webContentsId: number, request: HostPickRequest): Promise<string[] | null>;
   answerHostPick(webContentsId: number, payload: AnswerHostPickPayload): void;
   /**
@@ -113,7 +113,12 @@ async function pruneTempDir(dir: string): Promise<void> {
 export function createHostFileClient(deps: HostFileClientDeps): HostFileClient {
   const running = new Map<
     string,
-    { promise: Promise<DownloadResult>; controller: AbortController }
+    {
+      webContentsId: number;
+      fingerprint: string;
+      promise: Promise<DownloadResult>;
+      controller: AbortController;
+    }
   >();
 
   const requireBoundHost = (webContentsId: number, hostId: HostId): void => {
@@ -130,9 +135,21 @@ export function createHostFileClient(deps: HostFileClientDeps): HostFileClient {
   return {
     download(webContentsId, rawPayload) {
       const payload = validateDownload(rawPayload);
-      const existing = running.get(payload.opId);
-      if (existing) return existing.promise;
       requireBoundHost(webContentsId, payload.hostId);
+      const fingerprint = JSON.stringify([payload.hostId, payload.hostPath]);
+      const existing = running.get(payload.opId);
+      if (existing) {
+        // One id is one download, for the view that started it.
+        if (existing.webContentsId !== webContentsId || existing.fingerprint !== fingerprint) {
+          return Promise.reject(
+            new AppError({
+              code: "VALIDATION",
+              message: "That operation id belongs to another download",
+            })
+          );
+        }
+        return existing.promise;
+      }
       const controller = new AbortController();
       let lastSent = 0;
       const promise = deps.transport
@@ -153,8 +170,10 @@ export function createHostFileClient(deps: HostFileClientDeps): HostFileClient {
           },
         })
         .then((outcome) => ({ localPath: outcome.localPath, bytes: outcome.bytes }))
-        .finally(() => running.delete(payload.opId));
-      running.set(payload.opId, { promise, controller });
+        .finally(() => {
+          if (running.get(payload.opId)?.promise === promise) running.delete(payload.opId);
+        });
+      running.set(payload.opId, { webContentsId, fingerprint, promise, controller });
       return promise;
     },
 
@@ -169,9 +188,9 @@ export function createHostFileClient(deps: HostFileClientDeps): HostFileClient {
       });
     },
 
-    cancel(opId) {
+    cancel(opId, webContentsId) {
       const entry = running.get(opId);
-      if (!entry) return false;
+      if (!entry || entry.webContentsId !== webContentsId) return false;
       entry.controller.abort();
       return true;
     },

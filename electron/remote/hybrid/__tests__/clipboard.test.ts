@@ -33,7 +33,7 @@ describe("clipboard splits for a remote window", () => {
     const uploadClipboardImage = vi.fn(async () => "/tmp/daintree-inbox/clipboard/clipboard-1.png");
     const splits = createClipboardSplits({
       readImage: () => fakeImage(false),
-      uploader: () => ({ uploadClipboardImage }),
+      uploader: () => ({ uploadClipboardImage, grantLocalSources: vi.fn() }),
     });
     const result = await call(splits[CHANNELS.CLIPBOARD_SAVE_IMAGE]!);
     expect(result).toEqual({
@@ -47,7 +47,7 @@ describe("clipboard splits for a remote window", () => {
     const uploadClipboardImage = vi.fn();
     const splits = createClipboardSplits({
       readImage: () => fakeImage(true),
-      uploader: () => ({ uploadClipboardImage }),
+      uploader: () => ({ uploadClipboardImage, grantLocalSources: vi.fn() }),
     });
     await expect(call(splits[CHANNELS.CLIPBOARD_SAVE_IMAGE]!)).rejects.toMatchObject({
       code: "CLIPBOARD_EMPTY",
@@ -65,5 +65,20 @@ describe("clipboard splits for a remote window", () => {
       "/Users/me/a.png",
     ]);
     expect(local).toHaveBeenCalled();
+  });
+
+  it("records what the dialog returned as chosen in this view, and nothing for a dismissal", async () => {
+    const grantLocalSources = vi.fn();
+    const splits = createClipboardSplits({
+      readImage: () => fakeImage(true),
+      uploader: () => ({ uploadClipboardImage: vi.fn(), grantLocalSources }),
+    });
+    await call(splits[CHANNELS.CLIPBOARD_PICK_ATTACHMENTS]!);
+    expect(grantLocalSources).toHaveBeenCalledWith(7, ["/Users/me/a.png"]);
+    await call(
+      splits[CHANNELS.CLIPBOARD_PICK_ATTACHMENTS]!,
+      vi.fn(async () => [])
+    );
+    expect(grantLocalSources).toHaveBeenCalledTimes(1);
   });
 });

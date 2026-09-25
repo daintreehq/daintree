@@ -20,7 +20,7 @@ import type { HostUploadClient } from "../files/uploadClient.js";
 
 export interface ClipboardSplitDeps {
   readImage(): NativeImage;
-  uploader(): Pick<HostUploadClient, "uploadClipboardImage"> | undefined;
+  uploader(): Pick<HostUploadClient, "uploadClipboardImage" | "grantLocalSources"> | undefined;
 }
 
 const THUMB_HEIGHT = 40;
@@ -67,15 +67,24 @@ function saveImage(deps: ClipboardSplitDeps): HybridSplit {
   };
 }
 
-// The picker is this machine's; what it returns are local paths the window uploads.
-const pickAttachments: HybridSplit = ({ local }) => local();
+// The picker is this machine's; what it returns are local paths the window
+// uploads, recorded as the person's choice in this view so the upload may read them.
+function pickAttachments(deps: ClipboardSplitDeps): HybridSplit {
+  return async ({ local, webContentsId }) => {
+    const picked = await local();
+    if (Array.isArray(picked) && picked.length > 0) {
+      deps.uploader()?.grantLocalSources(webContentsId, picked);
+    }
+    return picked;
+  };
+}
 
 export function createClipboardSplits(
   deps: ClipboardSplitDeps
 ): Readonly<Record<string, HybridSplit>> {
   return {
     [CHANNELS.CLIPBOARD_SAVE_IMAGE]: saveImage(deps),
-    [CHANNELS.CLIPBOARD_PICK_ATTACHMENTS]: pickAttachments,
+    [CHANNELS.CLIPBOARD_PICK_ATTACHMENTS]: pickAttachments(deps),
   };
 }
 

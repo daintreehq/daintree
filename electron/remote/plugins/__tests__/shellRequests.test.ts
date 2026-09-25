@@ -25,6 +25,7 @@ const electronMock = vi.hoisted(() => {
 
 const registry = vi.hoisted(() => ({
   views: new Map<number, { projectKey: string | null; focused: boolean; wc: unknown }>(),
+  cached: new Set<number>(),
 }));
 
 const consentMock = vi.hoisted(() => ({
@@ -43,7 +44,7 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
     isFocused: () => registry.views.get(wc.id)?.focused ?? false,
   }),
   getWebContentsForProject: () => [],
-  isCachedViewWebContents: () => false,
+  isCachedViewWebContents: (id: number) => registry.cached.has(id),
 }));
 vi.mock("../../../window/windowRef.js", () => ({
   getWindowRegistry: () => null,
@@ -59,8 +60,24 @@ import {
   _resetReverseRequestMethodsForTesting,
   answerReverseRequest,
 } from "../../client/reverseRequests.js";
-import { PluginFrontendMethod } from "../../../services/plugin/pluginFrontendRequests.js";
+import {
+  PluginFrontendMethod,
+  REMOTE_CLIPBOARD_TIMEOUT_MS,
+} from "../../../services/plugin/pluginFrontendRequests.js";
+import type { PluginCapabilityConsentOutcome } from "../../../../shared/types/pluginCapabilityConsent.js";
 import { installPluginShellRequests } from "../shellRequests.js";
+import type { ClipboardGrantStore } from "../clipboardGrants.js";
+
+function memoryGrants() {
+  const decisions = new Map<string, "allow" | "deny">();
+  const grants: ClipboardGrantStore = {
+    get: (hostId, pluginId, access) => decisions.get(`${hostId}|${pluginId}|${access}`) ?? null,
+    set: (hostId, pluginId, access, decision) => {
+      decisions.set(`${hostId}|${pluginId}|${access}`, decision);
+    },
+  };
+  return { grants, decisions };
+}
 
 const HOST = "studio-01";
 const PROJECT = "a".repeat(64);
@@ -91,12 +108,26 @@ const promptPayload = (overrides: Record<string, unknown> = {}) => ({
 
 describe("Shell answers for a host's plugins", () => {
   let teardown: () => void;
+  let clock = 0;
+  let grants: ClipboardGrantStore;
+  let decisions: Map<string, "allow" | "deny">;
+  let askGrant: ReturnType<
+    typeof vi.fn<(...args: unknown[]) => Promise<PluginCapabilityConsentOutcome>>
+  >;
 
   beforeEach(() => {
     registry.views.clear();
     vi.clearAllMocks();
     _resetReverseRequestMethodsForTesting();
-    teardown = installPluginShellRequests({ hostName: (id) => `name-of-${id}` });
+    registry.cached.clear();
+    ({ grants, decisions } = memoryGrants());
+    askGrant = vi.fn(async (): Promise<PluginCapabilityConsentOutcome> => "approved-and-pin");
+    teardown = installPluginShellRequests({
+      hostName: (id) => `name-of-${id}`,
+      clipboardGrants: grants,
+      askClipboardGrant: askGrant,
+      now: () => clock,
+    });
   });
 
   afterEach(() => {
@@ -181,17 +212,88 @@ describe("Shell answers for a host's plugins", () => {
     ).rejects.toMatchObject({ code: "VALIDATION" });
   });
 
-  it("writes to this machine's clipboard for the driving view", async () => {
+  it("asks once before a host's plugin writes this machine's clipboard, then remembers", async () => {
     makeView();
-    await ask(PluginFrontendMethod.CLIPBOARD, {
-      op: "writeText",
+    const write = () =>
+      ask(PluginFrontendMethod.CLIPBOARD, { op: "writeText", pluginId: "acme.deploy", text: "hi" });
+    await write();
+    await write();
+    expect(electronMock.clipboard.writeText).toHaveBeenCalledTimes(2);
+    expect(askGrant).toHaveBeenCalledTimes(1);
+    expect(askGrant).toHaveBeenCalledWith(expect.objectContaining({ id: WC_ID }), {
+      hostId: HOST,
       pluginId: "acme.deploy",
-      text: "hi",
+      access: "write",
     });
-    expect(electronMock.clipboard.writeText).toHaveBeenCalledWith("hi");
+    expect(decisions.get(`${HOST}|acme.deploy|write`)).toBe("allow");
   });
 
-  it("reads this machine's clipboard only while the host's window is focused", async () => {
+  it("refuses without a grant, and remembers a refusal", async () => {
+    makeView();
+    askGrant.mockResolvedValue("rejected");
+    const write = () =>
+      ask(PluginFrontendMethod.CLIPBOARD, { op: "writeText", pluginId: "acme.deploy", text: "hi" });
+    await expect(write()).rejects.toMatchObject({ code: "PERMISSION" });
+    await expect(write()).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(askGrant).toHaveBeenCalledTimes(1);
+    expect(electronMock.clipboard.writeText).not.toHaveBeenCalled();
+  });
+
+  it("decides nothing when the question never reached anyone", async () => {
+    makeView();
+    askGrant.mockResolvedValue("undeliverable");
+    await expect(
+      ask(PluginFrontendMethod.CLIPBOARD, { op: "readText", pluginId: "acme.deploy" })
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(decisions.size).toBe(0);
+    expect(electronMock.clipboard.readText).not.toHaveBeenCalled();
+  });
+
+  it("never lets a write grant stand in for reading, nor one host's grant for another's", async () => {
+    makeView();
+    grants.set(HOST, "acme.deploy", "write", "allow");
+    askGrant.mockResolvedValue("rejected");
+    await expect(
+      ask(PluginFrontendMethod.CLIPBOARD, { op: "readText", pluginId: "acme.deploy" })
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(askGrant).toHaveBeenCalledWith(expect.anything(), {
+      hostId: HOST,
+      pluginId: "acme.deploy",
+      access: "read",
+    });
+    expect(electronMock.clipboard.readText).not.toHaveBeenCalled();
+
+    // The same plugin id on another host is another plugin.
+    registry.views.clear();
+    makeView(`other-host:${PROJECT}`);
+    askGrant.mockClear();
+    askGrant.mockResolvedValue("rejected");
+    await expect(
+      ask(
+        PluginFrontendMethod.CLIPBOARD,
+        { op: "writeText", pluginId: "acme.deploy", text: "x" },
+        "other-host"
+      )
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(askGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one question between calls that arrive while it is open", async () => {
+    makeView();
+    let answer!: (outcome: PluginCapabilityConsentOutcome) => void;
+    askGrant.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    const payload = { op: "writeText", pluginId: "acme.deploy", text: "hi" };
+    const first = ask(PluginFrontendMethod.CLIPBOARD, payload);
+    const second = ask(PluginFrontendMethod.CLIPBOARD, payload);
+    await new Promise((r) => setTimeout(r, 0));
+    answer("approved-and-pin");
+    await Promise.all([first, second]);
+    expect(askGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses this machine's clipboard only from the view in front", async () => {
+    grants.set(HOST, "acme.deploy", "read", "allow");
+    grants.set(HOST, "acme.deploy", "write", "allow");
     makeView(undefined, true);
     await expect(
       ask(PluginFrontendMethod.CLIPBOARD, { op: "readText", pluginId: "acme.deploy" })
@@ -200,6 +302,59 @@ describe("Shell answers for a host's plugins", () => {
     await expect(
       ask(PluginFrontendMethod.CLIPBOARD, { op: "readText", pluginId: "acme.deploy" })
     ).rejects.toMatchObject({ code: "PERMISSION" });
+    await expect(
+      ask(PluginFrontendMethod.CLIPBOARD, { op: "writeText", pluginId: "acme.deploy", text: "x" })
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    // A cached view of a focused window is not the one the person sees.
+    makeView(undefined, true);
+    registry.cached.add(WC_ID);
+    await expect(
+      ask(PluginFrontendMethod.CLIPBOARD, { op: "readText", pluginId: "acme.deploy" })
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(askGrant).not.toHaveBeenCalled();
+  });
+
+  it("carries out a first call the person took a minute to approve", async () => {
+    makeView();
+    clock = 0;
+    askGrant.mockImplementation(async () => {
+      clock = 60_000;
+      return "approved-and-pin";
+    });
+    await ask(PluginFrontendMethod.CLIPBOARD, {
+      op: "writeText",
+      pluginId: "acme.deploy",
+      text: "hi",
+    });
+    expect(electronMock.clipboard.writeText).toHaveBeenCalledWith("hi");
+  });
+
+  it("remembers a late approval but does not carry out the call the host gave up on", async () => {
+    makeView();
+    clock = 0;
+    askGrant.mockImplementation(async () => {
+      clock = REMOTE_CLIPBOARD_TIMEOUT_MS;
+      return "approved-and-pin";
+    });
+    const write = () =>
+      ask(PluginFrontendMethod.CLIPBOARD, { op: "writeText", pluginId: "acme.deploy", text: "hi" });
+    await expect(write()).rejects.toMatchObject({ code: "STALE_GENERATION" });
+    expect(electronMock.clipboard.writeText).not.toHaveBeenCalled();
+    expect(decisions.get(`${HOST}|acme.deploy|write`)).toBe("allow");
+    await write();
+    expect(electronMock.clipboard.writeText).toHaveBeenCalledWith("hi");
+  });
+
+  it("re-checks the view is still in front after the person answers", async () => {
+    makeView();
+    askGrant.mockImplementation(async () => {
+      registry.views.get(WC_ID)!.focused = false;
+      return "approved-and-pin";
+    });
+    await expect(
+      ask(PluginFrontendMethod.CLIPBOARD, { op: "readText", pluginId: "acme.deploy" })
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(electronMock.clipboard.readText).not.toHaveBeenCalled();
   });
 });
 

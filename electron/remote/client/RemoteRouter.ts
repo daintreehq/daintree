@@ -9,6 +9,28 @@ import { hostDisconnectedEnvelope } from "../link/envelopes.js";
 import type { RemoteHostManager } from "./RemoteHostManager.js";
 import type { WindowHostBinding } from "./WindowHostBinding.js";
 
+/** A call this Shell is forwarding to a host on behalf of one of its own views. */
+export interface ForwardedInvoke {
+  hostId: HostId;
+  webContentsId: number;
+  /** The view's project as the host knows it, from this machine's own view key. */
+  hostProjectId: string | null;
+  channel: string;
+  args: unknown[];
+}
+
+const forwardObservers = new Set<(call: ForwardedInvoke) => void>();
+
+/**
+ * Watch calls the Shell forwarded that the host answered successfully, for
+ * Shell-side records of what its views had a host create (a dev preview's
+ * origin, for one). A refused or failed call is never reported.
+ */
+export function observeForwardedInvokes(observer: (call: ForwardedInvoke) => void): () => void {
+  forwardObservers.add(observer);
+  return () => forwardObservers.delete(observer);
+}
+
 export interface SenderLookup {
   /** The view's host-scoped project key, or null for a view with no project. */
   projectKeyFor(webContentsId: number): string | null;
@@ -50,7 +72,20 @@ export class RemoteRouterImpl implements RemoteRouter {
     if (!connection) {
       return Promise.resolve(hostDisconnectedEnvelope(`host ${hostId} is not connected`));
     }
-    return connection.invoke(webContentsId, this.hostProjectId(webContentsId), channel, args);
+    const hostProjectId = this.hostProjectId(webContentsId);
+    const call = connection.invoke(webContentsId, hostProjectId, channel, args);
+    if (forwardObservers.size === 0) return call;
+    return call.then((envelope) => {
+      if (!envelope.ok) return envelope;
+      for (const observer of forwardObservers) {
+        try {
+          observer({ hostId, webContentsId, hostProjectId, channel, args });
+        } catch {
+          // An observer must never change the call's answer.
+        }
+      }
+      return envelope;
+    });
   }
 
   forwardSend(hostId: HostId, webContentsId: number, channel: string, args: unknown[]): void {

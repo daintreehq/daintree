@@ -1,7 +1,9 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
   FileTransferEvent,
+  LocalFileStat,
   TransferDestination,
   UploadBytesPayload,
   UploadLocalFilePayload,
@@ -23,14 +25,29 @@ import type { EndpointFeed } from "./clientInstall.js";
 /**
  * What the Shell's file-transfer handler and the clipboard split reach
  * through the remote-hosts runtime to put local files on a host.
+ *
+ * A remote window's page runs code the host supplied (its plugins' views), so
+ * a local path from the page is never enough to send a file. Only a path the
+ * Shell itself saw the person choose in that same view can be read: one the
+ * preload resolved from a real dropped or pasted File, or one the attach
+ * dialog returned. Those are recorded here per view ({@link grantLocalSources})
+ * and everything else is refused.
  */
 export interface HostUploadClient {
   uploadLocalFile(webContentsId: number, payload: UploadLocalFilePayload): Promise<UploadResult>;
   uploadBytes(webContentsId: number, payload: UploadBytesPayload): Promise<UploadResult>;
   /** A pasted image, captured on this machine, into the host inbox's clipboard folder. */
   uploadClipboardImage(webContentsId: number, hostId: HostId, png: Uint8Array): Promise<string>;
-  /** Cancel an upload by its operation id; false when none is running. */
-  cancel(opId: string): boolean;
+  /** Cancel the view's own upload by its operation id; false when it has none running. */
+  cancel(opId: string, webContentsId: number): boolean;
+  /**
+   * Local files the person chose in this remote-bound view (a drop or paste
+   * the preload resolved, an attach dialog's answer). Ignored for a view that
+   * isn't attached to a host.
+   */
+  grantLocalSources(webContentsId: number, paths: unknown): void;
+  /** Size and kind of a local file this view was granted, or null when there is none. */
+  statLocalSource(webContentsId: number, localPath: unknown): Promise<LocalFileStat | null>;
 }
 
 declare module "../runtime.js" {
@@ -40,18 +57,32 @@ declare module "../runtime.js" {
 }
 
 export interface HostUploadClientDeps {
-  transport: Pick<ClientUploadTransport, "upload">;
+  transport: Pick<ClientUploadTransport, "upload"> &
+    Partial<Pick<ClientUploadTransport, "whenReachable">>;
   hostForView(webContentsId: number): HostId | null;
   hostLabel(hostId: HostId): string;
   sendToView(webContentsId: number, event: FileTransferEvent): void;
   /** This machine, as messages name it ("This Mac"). */
   localLabel: string;
   maxUploadBytes?: number;
+  /** How long a granted local file stays sendable from its view. */
+  grantTtlMs?: number;
+  /** How long an upload whose answer was lost waits for its host to come back. */
+  reconnectWaitMs?: number;
 }
 
 const PROGRESS_INTERVAL_MS = 100;
 const MAX_BYTES_PAYLOAD = 64 * 1024 * 1024;
 const MAX_NAME_LENGTH = 1024;
+const MAX_PATH_LENGTH = 4096;
+const DEFAULT_GRANT_TTL_MS = 30 * 60_000;
+const MAX_GRANTS_PER_VIEW = 1_000;
+const MAX_GRANT_VIEWS = 64;
+const MAX_GRANT_BATCH = 1_000;
+const DEFAULT_RECONNECT_WAIT_MS = 30_000;
+/** Answers lost in transit are reconciled with the host at most this many times. */
+const MAX_RECONCILE_ATTEMPTS = 2;
+const REPLACE_TOKEN = /^[0-9a-f]{32}$/;
 
 function invalid(message: string): AppError {
   return new AppError({ code: "VALIDATION", message });
@@ -85,7 +116,12 @@ function validateCommon(payload: {
     ) {
       throw invalid("Invalid destination folder");
     }
-    return { kind: "worktree", directory, overwrite: destination.overwrite === true };
+    const replaceToken = destination.replaceToken;
+    if (replaceToken === undefined) return { kind: "worktree", directory };
+    if (typeof replaceToken !== "string" || !REPLACE_TOKEN.test(replaceToken)) {
+      throw invalid("Invalid replace token");
+    }
+    return { kind: "worktree", directory, replaceToken };
   }
   throw invalid("Invalid destination");
 }
@@ -94,12 +130,52 @@ function localBaseName(localPath: string): string {
   return path.basename(localPath) || "file";
 }
 
+function isLocalPath(candidate: unknown): candidate is string {
+  return (
+    typeof candidate === "string" &&
+    candidate.length <= MAX_PATH_LENGTH &&
+    path.isAbsolute(candidate) &&
+    !candidate.includes("\0")
+  );
+}
+
+function codeOf(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("code" in error)) return null;
+  return typeof error.code === "string" ? error.code : null;
+}
+
 export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadClient {
   const running = new Map<
     string,
-    { promise: Promise<UploadResult>; controller: AbortController }
+    {
+      webContentsId: number;
+      fingerprint: string;
+      promise: Promise<UploadResult>;
+      controller: AbortController;
+    }
   >();
   const maxBytes = deps.maxUploadBytes ?? UPLOAD_REFUSE_BYTES;
+  const grantTtlMs = deps.grantTtlMs ?? DEFAULT_GRANT_TTL_MS;
+  /** Per view, the local files the person chose there, and until when. */
+  const grants = new Map<number, Map<string, number>>();
+
+  const isGranted = (webContentsId: number, localPath: string): boolean => {
+    const forView = grants.get(webContentsId);
+    const expiresAt = forView?.get(localPath);
+    if (forView === undefined || expiresAt === undefined) return false;
+    if (expiresAt <= Date.now()) {
+      forView.delete(localPath);
+      return false;
+    }
+    return true;
+  };
+
+  const notGranted = (localPath: string) =>
+    new AppError({
+      code: "PERMISSION",
+      message: "The local file was not chosen in this window",
+      userMessage: `Couldn't send ${localBaseName(localPath)}: it wasn't dropped, pasted or attached in this window.`,
+    });
 
   const requireBoundHost = (webContentsId: number, hostId: HostId): void => {
     if (deps.hostForView(webContentsId) !== hostId) {
@@ -125,22 +201,32 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
     webContentsId: number,
     hostId: HostId,
     opId: string,
+    source: string,
     name: string,
     destination: TransferDestination,
     openSource: () => Promise<TransferSource>
   ): Promise<UploadResult> => {
+    // One id is one upload: the same view asking again for the same thing
+    // shares it, and anything else claiming the id is refused.
+    const fingerprint = JSON.stringify([hostId, source, destination]);
     const existing = running.get(opId);
-    if (existing) return existing.promise;
+    if (existing) {
+      if (existing.webContentsId !== webContentsId || existing.fingerprint !== fingerprint) {
+        return Promise.reject(invalid("That operation id belongs to another upload"));
+      }
+      return existing.promise;
+    }
     const controller = new AbortController();
     let lastSent = 0;
-    const promise = (async () => {
-      const source = await openSource();
+    const attempt = async (): Promise<UploadResult> => {
+      const opened = await openSource();
       try {
         if (controller.signal.aborted) {
           throw new AppError({ code: "CANCELLED", message: "Upload cancelled" });
         }
-        return await deps.transport.upload(hostId, source, {
+        return await deps.transport.upload(hostId, opened, {
           webContentsId,
+          opId,
           hostLabel: deps.hostLabel(hostId),
           name,
           destination,
@@ -158,10 +244,39 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
           },
         });
       } finally {
-        await Promise.resolve(source.close?.()).catch(() => {});
+        await Promise.resolve(opened.close?.()).catch(() => {});
       }
-    })().finally(() => running.delete(opId));
-    running.set(opId, { promise, controller });
+    };
+    const promise = (async () => {
+      let reconciled = 0;
+      for (;;) {
+        try {
+          return await attempt();
+        } catch (error) {
+          // The file may have landed and only the answer was lost. Ask the host
+          // again under the same id once it is reachable: it answers from what
+          // it recorded instead of placing (or replacing) the file a second time.
+          if (
+            codeOf(error) !== "OUTCOME_UNKNOWN" ||
+            controller.signal.aborted ||
+            reconciled >= MAX_RECONCILE_ATTEMPTS ||
+            !deps.transport.whenReachable ||
+            !(await deps.transport.whenReachable(
+              hostId,
+              webContentsId,
+              deps.reconnectWaitMs ?? DEFAULT_RECONNECT_WAIT_MS,
+              controller.signal
+            ))
+          ) {
+            throw error;
+          }
+          reconciled += 1;
+        }
+      }
+    })().finally(() => {
+      if (running.get(opId)?.promise === promise) running.delete(opId);
+    });
+    running.set(opId, { webContentsId, fingerprint, promise, controller });
     return promise;
   };
 
@@ -169,14 +284,9 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
     async uploadLocalFile(webContentsId, payload) {
       const destination = validateCommon(payload ?? {});
       const localPath = payload.localPath;
-      if (
-        typeof localPath !== "string" ||
-        !path.isAbsolute(localPath) ||
-        localPath.includes("\0")
-      ) {
-        throw invalid("Invalid local path");
-      }
+      if (!isLocalPath(localPath)) throw invalid("Invalid local path");
       requireBoundHost(webContentsId, payload.hostId);
+      if (!isGranted(webContentsId, localPath)) throw notGranted(localPath);
       const name = localBaseName(localPath);
       const couldNotRead = () =>
         new AppError({
@@ -184,24 +294,33 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
           message: "The local file could not be read",
           userMessage: `Couldn't read ${name} on ${deps.localLabel}.`,
         });
-      return run(webContentsId, payload.hostId, payload.opId, name, destination, async () => {
-        const stat = await fs.stat(localPath).catch(() => null);
-        if (!stat) throw couldNotRead();
-        if (stat.isDirectory()) {
-          throw new AppError({
-            code: "UNSUPPORTED",
-            message: "Folders can't be uploaded",
-            userMessage: `${name} is a folder. Sending folders to ${deps.hostLabel(payload.hostId)} isn't available yet.`,
-          });
+      const source = `file:${localPath}`;
+      return run(
+        webContentsId,
+        payload.hostId,
+        payload.opId,
+        source,
+        name,
+        destination,
+        async () => {
+          const stat = await fs.stat(localPath).catch(() => null);
+          if (!stat) throw couldNotRead();
+          if (stat.isDirectory()) {
+            throw new AppError({
+              code: "UNSUPPORTED",
+              message: "Folders can't be uploaded",
+              userMessage: `${name} is a folder. Sending folders to ${deps.hostLabel(payload.hostId)} isn't available yet.`,
+            });
+          }
+          if (!stat.isFile()) throw couldNotRead();
+          if (stat.size > maxBytes) throw tooLarge(name, payload.hostId);
+          try {
+            return await fileTransferSource(localPath);
+          } catch {
+            throw couldNotRead();
+          }
         }
-        if (!stat.isFile()) throw couldNotRead();
-        if (stat.size > maxBytes) throw tooLarge(name, payload.hostId);
-        try {
-          return await fileTransferSource(localPath);
-        } catch {
-          throw couldNotRead();
-        }
-      });
+      );
     },
 
     async uploadBytes(webContentsId, payload) {
@@ -219,8 +338,16 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
         throw tooLarge(payload.name, payload.hostId);
       }
       const bytes = payload.bytes;
-      return run(webContentsId, payload.hostId, payload.opId, payload.name, destination, async () =>
-        bytesTransferSource(bytes)
+      const digest = crypto.createHash("sha256").update(bytes).digest("hex");
+      const source = `bytes:${payload.name}:${digest}`;
+      return run(
+        webContentsId,
+        payload.hostId,
+        payload.opId,
+        source,
+        payload.name,
+        destination,
+        async () => bytesTransferSource(bytes)
       );
     },
 
@@ -228,6 +355,7 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
       requireBoundHost(webContentsId, hostId);
       const result = await deps.transport.upload(hostId, bytesTransferSource(png), {
         webContentsId,
+        opId: `clipboard-${crypto.randomUUID()}`,
         hostLabel: deps.hostLabel(hostId),
         name: "clipboard.png",
         destination: { kind: "inbox", bucket: "clipboard" },
@@ -235,11 +363,46 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
       return result.hostPath;
     },
 
-    cancel(opId) {
+    cancel(opId, webContentsId) {
       const entry = running.get(opId);
-      if (!entry) return false;
+      // Only the view that started an upload can stop it.
+      if (!entry || entry.webContentsId !== webContentsId) return false;
       entry.controller.abort();
       return true;
+    },
+
+    grantLocalSources(webContentsId, paths) {
+      if (deps.hostForView(webContentsId) === null) return;
+      if (!Array.isArray(paths) || paths.length > MAX_GRANT_BATCH) return;
+      let forView = grants.get(webContentsId);
+      if (!forView) {
+        while (grants.size >= MAX_GRANT_VIEWS) {
+          const oldest = grants.keys().next().value;
+          if (oldest === undefined) break;
+          grants.delete(oldest);
+        }
+        forView = new Map();
+        grants.set(webContentsId, forView);
+      }
+      const expiresAt = Date.now() + grantTtlMs;
+      for (const candidate of paths) {
+        if (!isLocalPath(candidate)) continue;
+        forView.delete(candidate);
+        forView.set(candidate, expiresAt);
+      }
+      const now = Date.now();
+      for (const [granted, until] of forView) {
+        if (forView.size <= MAX_GRANTS_PER_VIEW && until > now) continue;
+        forView.delete(granted);
+      }
+    },
+
+    async statLocalSource(webContentsId, localPath) {
+      if (!isLocalPath(localPath)) throw invalid("Invalid local path");
+      if (!isGranted(webContentsId, localPath)) throw notGranted(localPath);
+      const stat = await fs.stat(localPath).catch(() => null);
+      if (!stat) return null;
+      return { size: stat.size, isDirectory: stat.isDirectory() };
     },
   };
 }

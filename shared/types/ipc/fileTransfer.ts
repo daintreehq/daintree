@@ -5,9 +5,11 @@ export type TransferDestination =
   | { kind: "inbox"; bucket: "clipboard" | "files" }
   /**
    * "Add to project": into a folder of the project on the host. An existing
-   * file there is only replaced with `overwrite`, which the user confirmed.
+   * file there is only replaced with the `replaceToken` the host handed back
+   * when it reported that file (see {@link UploadResult.conflict}), once the
+   * user confirmed; the host honours it for that unchanged file only.
    */
-  | { kind: "worktree"; directory: string; overwrite?: boolean };
+  | { kind: "worktree"; directory: string; replaceToken?: string };
 
 /**
  * The folder, under the host's temp dir, that holds everything dropped, pasted
@@ -38,11 +40,13 @@ export interface UploadResult {
   /** True when an identical file already in the inbox was reused. */
   deduplicated: boolean;
   /**
-   * Add to project only: a file of that name is already in the folder and
-   * `overwrite` was not set. Nothing was written; `hostPath` names the file
-   * that is there, so the caller can ask before replacing it.
+   * Add to project only: a file of that name is already in the folder.
+   * Nothing was written; `hostPath` names the file that is there, so the
+   * caller can ask before replacing it, and `replaceToken` is what a retry
+   * carries to replace exactly that file.
    */
   conflict?: boolean;
+  replaceToken?: string;
 }
 
 /** A local file as the upload paths see it, before anything is sent. */

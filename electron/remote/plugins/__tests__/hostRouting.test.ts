@@ -11,9 +11,9 @@ import type { DriveTarget } from "../../../services/DriveLeaseService.js";
 import {
   _resetPluginFrontendRoutingForTesting,
   isPluginFrontendRoutingEnabled,
-  notePluginInvokeOrigin,
   onPluginFrontendChange,
   resolvePluginFrontend,
+  runInPluginInvocation,
 } from "../../../services/plugin/pluginFrontendRouting.js";
 import { installPluginHostRouting } from "../hostRouting.js";
 import type { DriveLeaseHolder } from "../../../../shared/types/remoteHosts.js";
@@ -98,7 +98,11 @@ describe("plugin frontend routing in Host mode", () => {
   it("sends a project driven from another machine to that endpoint", () => {
     const { ep } = endpoint("remote-view");
     targets.set(PROJECT, { kind: "live", holder: holder(false), endpoint: ep });
-    expect(resolvePluginFrontend(PROJECT, "acme.x")).toEqual({ kind: "remote", endpoint: ep });
+    expect(resolvePluginFrontend(PROJECT, "acme.x")).toEqual({
+      kind: "remote",
+      endpoint: ep,
+      leaseId: 1,
+    });
   });
 
   it("keeps a project driven from this machine local", () => {
@@ -125,18 +129,111 @@ describe("plugin frontend routing in Host mode", () => {
     expect(resolvePluginFrontend(null, `project__${OTHER}__acme.x`)).toEqual({
       kind: "remote",
       endpoint: ep,
+      leaseId: 1,
     });
   });
 
-  it("sends an app-global plugin's prompt to whoever called it last", () => {
+  it("sends an app-global plugin's prompt to the caller of the invocation it runs inside", async () => {
     const { ep, close } = endpoint("remote-view");
     targets.set(PROJECT, { kind: "live", holder: holder(false), endpoint: ep });
     expect(resolvePluginFrontend(null, "acme.global")).toEqual({ kind: "none", reason: "vacant" });
-    notePluginInvokeOrigin("acme.global", ep);
-    expect(resolvePluginFrontend(null, "acme.global")).toEqual({ kind: "remote", endpoint: ep });
+    await runInPluginInvocation("acme.global", ep, async () => {
+      await Promise.resolve();
+      expect(resolvePluginFrontend(null, "acme.global")).toEqual({
+        kind: "remote",
+        endpoint: ep,
+        leaseId: 1,
+      });
+      // Another plugin's work inside this call is not this caller's.
+      expect(resolvePluginFrontend(null, "acme.other")).toEqual({ kind: "none", reason: "vacant" });
+    });
+    // Outside any invocation nothing is remembered.
+    anyLocalView = false;
+    expect(resolvePluginFrontend(null, "acme.global")).toEqual({ kind: "none", reason: "vacant" });
     close();
+  });
+
+  it("keeps a call on its caller's project after the caller disconnects", async () => {
+    const { ep, close } = endpoint("remote-view");
+    targets.set(PROJECT, { kind: "live", holder: holder(false), endpoint: ep });
+    await runInPluginInvocation("acme.global", ep, async () => {
+      close();
+      // Unrelated windows here never inherit the question.
+      anyLocalView = true;
+      localProjectViews.add(OTHER);
+      targets.set(PROJECT, { kind: "reserved", holder: holder(false) });
+      expect(resolvePluginFrontend(null, "acme.global")).toEqual({
+        kind: "none",
+        reason: "reserved",
+      });
+      // Whoever drives that project next answers it.
+      const next = endpoint("remote-view").ep;
+      targets.set(PROJECT, {
+        kind: "live",
+        holder: { ...holder(false), leaseId: 2 },
+        endpoint: next,
+      });
+      expect(resolvePluginFrontend(null, "acme.global")).toEqual({
+        kind: "remote",
+        endpoint: next,
+        leaseId: 2,
+      });
+      // Or a window here showing that same project, once nobody drives it.
+      targets.set(PROJECT, { kind: "vacant" });
+      localProjectViews.add(PROJECT);
+      expect(resolvePluginFrontend(null, "acme.global")).toEqual({ kind: "local" });
+    });
+  });
+
+  it("never hands a project-less remote caller's call to a window here", async () => {
+    const { ep, close } = endpoint("remote-view", null);
     anyLocalView = true;
-    expect(resolvePluginFrontend(null, "acme.global")).toEqual({ kind: "local" });
+    await runInPluginInvocation("acme.global", ep, async () => {
+      expect(resolvePluginFrontend(null, "acme.global")).toEqual({ kind: "remote", endpoint: ep });
+      close();
+      expect(resolvePluginFrontend(null, "acme.global")).toEqual({
+        kind: "none",
+        reason: "vacant",
+      });
+    });
+  });
+
+  it("keeps two interleaved calls from different projects on their own callers", async () => {
+    const a = endpoint("remote-view", PROJECT).ep;
+    const b = { ...endpoint("remote-view", OTHER).ep, endpointId: "remote-view:2" };
+    targets.set(PROJECT, { kind: "live", holder: holder(false), endpoint: a });
+    targets.set(OTHER, { kind: "live", holder: holder(false), endpoint: b });
+    let releaseA!: () => void;
+    const aWaits = new Promise<void>((resolve) => (releaseA = resolve));
+    const seen: Record<string, unknown> = {};
+    const callA = runInPluginInvocation("acme.global", a, async () => {
+      await aWaits;
+      seen.a = resolvePluginFrontend(null, "acme.global");
+    });
+    const callB = runInPluginInvocation("acme.global", b, async () => {
+      seen.b = resolvePluginFrontend(null, "acme.global");
+    });
+    await callB;
+    releaseA();
+    await callA;
+    expect(seen.a).toEqual({ kind: "remote", endpoint: a, leaseId: 1 });
+    expect(seen.b).toEqual({ kind: "remote", endpoint: b, leaseId: 1 });
+  });
+
+  it("keeps the caller's project even if its view moves while the call runs", async () => {
+    const { ep } = endpoint("remote-view", PROJECT);
+    const other = endpoint("remote-view", OTHER).ep;
+    targets.set(PROJECT, { kind: "live", holder: holder(false), endpoint: ep });
+    targets.set(OTHER, { kind: "live", holder: holder(false), endpoint: other });
+    await runInPluginInvocation("acme.global", ep, async () => {
+      (ep as { projectId: string | null }).projectId = OTHER;
+      await Promise.resolve();
+      expect(resolvePluginFrontend(null, "acme.global")).toEqual({
+        kind: "remote",
+        endpoint: ep,
+        leaseId: 1,
+      });
+    });
   });
 
   it("treats a closed live endpoint as nobody, and a throwing lease as nobody", () => {

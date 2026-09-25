@@ -1,11 +1,14 @@
 import { z } from "zod";
 import type {
+  CheckDestinationPayload,
   CloneAndOpenOutcome,
+  CloneAndOpenPayload,
   DestinationCheck,
   HostCloneEnvironment,
   HostProjectOpened,
   ProjectMatchCandidate,
   PushBranchOutcome,
+  PushBranchPayload,
   SourceProjectDescription,
 } from "../../../shared/types/ipc/projectMatch.js";
 import type { OperationOutcome } from "../../../shared/types/remoteHosts.js";
@@ -19,6 +22,8 @@ import type { OperationOutcome } from "../../../shared/types/remoteHosts.js";
 export const ProjectLinkMethod = {
   DESCRIBE_SOURCE: "projects.describe-source",
   PUSH_BRANCH: "projects.push-branch",
+  /** Kill the push this session started under that opId. */
+  PUSH_CANCEL: "projects.push-cancel",
   ENVIRONMENT: "projects.environment",
   MATCH: "projects.match",
   CHECK_DESTINATION: "projects.check-destination",
@@ -36,6 +41,16 @@ export const ProjectLinkMethod = {
   BUNDLE_EXPECT: "projects.bundle-expect",
   BUNDLE_DISCARD: "projects.bundle-discard",
 } as const;
+
+/**
+ * What only crosses the link. The host mints a destination grant for a free
+ * folder it checked for this session, and a clone starts only into a granted
+ * folder; a push carries the opId its cancel names.
+ */
+export type LinkCheckDestinationPayload = CheckDestinationPayload & { mintGrant?: boolean };
+export type LinkDestinationCheck = DestinationCheck & { grant?: string | null };
+export type LinkStartClonePayload = CloneAndOpenPayload & { destinationGrant?: string | null };
+export type LinkPushBranchPayload = PushBranchPayload & { opId?: string };
 
 /** Transfer destinations for bundles, each followed by the receiver's token. */
 export const BUNDLE_SINK_PREFIX = "daintree-bundle:";
@@ -58,10 +73,15 @@ export const PushBranchSchema = z.object({
   branch: branchName,
   remote: z.string().min(1).max(256),
   remoteBranch: branchName,
+  opId: opId.optional(),
 });
 export const EmptySchema = z.union([z.null(), z.undefined(), z.object({}).strict()]);
 export const MatchSchema = z.object({ remoteUrls, committedProjectId: projectId.nullable() });
-export const CheckDestinationSchema = z.object({ path: hostPath, remoteUrls });
+export const CheckDestinationSchema = z.object({
+  path: hostPath,
+  remoteUrls,
+  mintGrant: z.boolean().optional(),
+});
 export const SuggestDestinationSchema = z.object({
   homeRelativePath: hostPath.nullable(),
   repoName: z.string().min(1).max(255),
@@ -80,6 +100,7 @@ export const StartCloneSchema = z.object({
     depth: z.enum(["full", "shallow", "partial"]),
   }),
   setupRecipeId: z.string().min(1).max(256).nullable(),
+  destinationGrant: token.nullable().optional(),
 });
 export const OpIdSchema = z.object({ opId });
 export const OpenSchema = z.object({
@@ -170,11 +191,12 @@ export const CandidatesSchema: z.ZodType<ProjectMatchCandidate[]> = z
   )
   .max(200);
 
-export const DestinationSchema: z.ZodType<DestinationCheck> = z.object({
+export const DestinationSchema: z.ZodType<LinkDestinationCheck> = z.object({
   path: z.string().max(4096),
   status: z.enum(["free", "same-repository", "occupied", "invalid"]),
   detail: text(1024).nullable(),
   suggestion: hostPath.nullable(),
+  grant: token.nullable().optional(),
 });
 
 const openedFields = {

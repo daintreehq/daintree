@@ -50,6 +50,7 @@ import type {
   PluginProcessDataChunk,
   PluginProcessMode,
 } from "../../../shared/types/plugin.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { pathToFileURL } from "node:url";
 import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
 import type {
@@ -158,6 +159,12 @@ export class PluginDevWorkerHostProxy {
    * module's state is the worker exiting, not this map.
    */
   private readonly commandModules = new Map<string, Promise<ActionHandler>>();
+  /**
+   * The main-side invocation the plugin's current work is answering. Stamped
+   * on each host call so main can put a prompt or clipboard call in front of
+   * the person who made that invocation, not whoever called the plugin last.
+   */
+  private readonly invocation = new AsyncLocalStorage<string>();
 
   constructor(pluginId: string, post: Post, identity: PluginIdentity) {
     this.pluginId = pluginId;
@@ -209,7 +216,7 @@ export class PluginDevWorkerHostProxy {
       }
       case "invoke":
         if (msg.kind === "mcp-tool") void this.handleMcpToolInvoke(msg);
-        else void this.handleInvoke(msg);
+        else void this.invocation.run(msg.requestId, () => this.handleInvoke(msg));
         return true;
       case "invoke-cancel": {
         // Released here rather than when `execute` settles: a tool that ignores
@@ -528,7 +535,14 @@ export class PluginDevWorkerHostProxy {
         signal.addEventListener("abort", onAbort, { once: true });
       }
       try {
-        this.post({ type: "host-call", requestId, method, params });
+        const invocationId = this.invocation.getStore();
+        this.post({
+          type: "host-call",
+          requestId,
+          method,
+          params,
+          ...(invocationId !== undefined ? { invocationId } : {}),
+        });
       } catch (err) {
         // A non-structured-clone-safe `params` makes `postMessage` throw
         // (DataCloneError). Drop the pending entry so it doesn't leak until

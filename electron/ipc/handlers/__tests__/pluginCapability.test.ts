@@ -685,4 +685,19 @@ describe("pluginCapability consent bridge — a driver that lost the lease", () 
     expect(settled.ok).toBe(false);
     dispose();
   });
+
+  it("does not accept an approval from the same window after it lost and retook the lease", async () => {
+    _resetPluginFrontendRoutingForTesting();
+    const endpoint = { isClosed: () => false } as unknown as ClientEndpoint;
+    let frontend: PluginFrontend = { kind: "remote", endpoint, leaseId: 1 };
+    (endpoint as { request: unknown }).request = vi.fn(async () => {
+      frontend = { kind: "remote", endpoint, leaseId: 3 };
+      return "approved-and-pin";
+    });
+    setPluginFrontendRouter({ resolve: () => frontend, onChange: () => () => {} });
+    const dispose = registerPluginCapabilityHandlers();
+    const settled = await startGatedCall();
+    expect(settled.ok).toBe(false);
+    dispose();
+  });
 });

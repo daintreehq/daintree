@@ -31,6 +31,7 @@ import {
   isSupportedCloneUrl,
   normalizeGitRemoteUrl,
   repositoryNameFromRemote,
+  stripRemoteListCredentials,
 } from "../../../shared/utils/gitRemoteUrl.js";
 import { safeRecipeFilename } from "../../../shared/utils/recipeFilename.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
@@ -53,6 +54,8 @@ import {
 import type { ProjectAcrossHostsDeps } from "./types.js";
 
 const BRANCH_FETCH_TIMEOUT_MS = 15_000;
+/** A push that has made no end by then is stuck (a hung credential prompt, a dead link). */
+export const PUSH_TIMEOUT_MS = 10 * 60_000;
 const MAX_PENDING_SETUPS = 64;
 const MAX_PREVIEW_COMMITS = 20;
 
@@ -90,6 +93,24 @@ function gitText(error: unknown, fallback: string): string {
 }
 
 /**
+ * Move a finished clone into place without replacing anything: rename(2)
+ * refuses a destination with content in it (and a file or symlink), so only
+ * an absent or empty folder — what the free-folder check accepted — is taken.
+ */
+async function publishClone(staged: string, destination: string): Promise<void> {
+  try {
+    await fs.rename(staged, destination);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code === "ENOTEMPTY" || code === "EEXIST" || code === "ENOTDIR" || code === "EISDIR") {
+      const detail = "Something else appeared in this folder during the clone.";
+      throw new AppError({ code: "VALIDATION", message: detail, userMessage: detail });
+    }
+    throw error;
+  }
+}
+
+/**
  * The host side of moving a project between hosts, used for this machine's
  * own projects (when the Shell here is the source or the target) and for a
  * remote Shell's requests over its link alike. Everything that talks to a
@@ -99,6 +120,11 @@ function gitText(error: unknown, fallback: string): string {
 export class ProjectAcrossHostsService {
   readonly bundles: BundleStore;
   private readonly pendingSetups = new Map<string, PendingHostSetup>();
+  /**
+   * Destinations a clone is going into right now, whatever its source: a
+   * second clone into one of them is refused rather than racing the first.
+   */
+  private readonly reservedDestinations = new Set<string>();
 
   constructor(
     private readonly deps: ProjectAcrossHostsDeps,
@@ -155,10 +181,12 @@ export class ProjectAcrossHostsService {
     const remotes = await this.listRemotes(project.path).catch(() => []);
 
     const branchResult = await checkBranchAgainstRemote({ git, networkGit, remotes });
+    // Everything below leaves this host: never a remote's embedded credentials.
+    const shownRemotes = stripRemoteListCredentials(remotes);
     const cloneRemote =
-      remotes.find((r) => r.name === branchResult.remote) ??
-      remotes.find((r) => r.name === "origin") ??
-      (remotes.length === 1 ? remotes[0] : undefined);
+      shownRemotes.find((r) => r.name === branchResult.remote) ??
+      shownRemotes.find((r) => r.name === "origin") ??
+      (shownRemotes.length === 1 ? shownRemotes[0] : undefined);
     const cloneUrl = cloneRemote?.url ?? null;
 
     const status = await tryRaw(git, ["status", "--porcelain"]);
@@ -205,7 +233,7 @@ export class ProjectAcrossHostsService {
       cloneUrl,
       hasUncommittedChanges: (status ?? "").trim().length > 0,
       unpushedCommits,
-      remotes,
+      remotes: shownRemotes,
       committedProjectId,
       homeRelativePath,
       repoName: (cloneUrl && repositoryNameFromRemote(cloneUrl)) || path.basename(project.path),
@@ -248,15 +276,27 @@ export class ProjectAcrossHostsService {
       });
   }
 
-  /** Push the branch with this host's credentials and make the remote branch its upstream. */
-  async pushBranch(payload: PushBranchPayload): Promise<PushBranchOutcome> {
+  /**
+   * Push the branch with this host's credentials and make the remote branch
+   * its upstream. `signal` cancels it (the git child is killed and the push
+   * throws CANCELLED); a push that runs past {@link PUSH_TIMEOUT_MS} is
+   * killed the same way and reported as timed out.
+   */
+  async pushBranch(
+    payload: PushBranchPayload,
+    signal?: AbortSignal,
+    timeoutMs: number = PUSH_TIMEOUT_MS
+  ): Promise<PushBranchOutcome> {
     const project = this.requireProject(payload?.projectId);
     const worktreePath = await this.resolveWorktree(project, payload.worktreePath);
     const branch = requireBranchName(payload.branch, "branch");
     const remoteBranch = requireBranchName(payload.remoteBranch, "remote branch");
     const remotes = await this.listRemotes(project.path).catch(() => []);
     if (!remotes.some((r) => r.name === payload.remote)) throw invalid("Unknown remote");
-    const git = await this.deps.git.network(worktreePath);
+    if (signal?.aborted) throw new AppError({ code: "CANCELLED", message: "Push cancelled" });
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    const git = await this.deps.git.network(worktreePath, combined);
     try {
       await git.raw([
         "push",
@@ -266,6 +306,14 @@ export class ProjectAcrossHostsService {
       ]);
       return { ok: true };
     } catch (error) {
+      if (signal?.aborted) throw new AppError({ code: "CANCELLED", message: "Push cancelled" });
+      if (timeout.aborted) {
+        return {
+          ok: false,
+          reason: "timeout",
+          message: "git push took too long and was stopped.",
+        };
+      }
       return {
         ok: false,
         reason: classifyGitError(error),
@@ -395,7 +443,17 @@ export class ProjectAcrossHostsService {
       (op) => {
         // Cancellable from the moment it starts: the clone reads op.signal.
         op.onCancel(() => {});
-        return this.runCloneAndOpen(payload, destination, { depth, submodules }, op);
+        // Reserved before anything awaits, so two clones can't both pass the free-folder check.
+        if (this.reservedDestinations.has(destination)) {
+          const detail = "Another clone is already going into this folder.";
+          return Promise.reject(
+            new AppError({ code: "VALIDATION", message: detail, userMessage: detail })
+          );
+        }
+        this.reservedDestinations.add(destination);
+        return this.runCloneAndOpen(payload, destination, { depth, submodules }, op).finally(() => {
+          this.reservedDestinations.delete(destination);
+        });
       }
     );
   }
@@ -415,6 +473,9 @@ export class ProjectAcrossHostsService {
   ): Promise<CloneAndOpenOutcome> {
     const source = payload.source;
     const bundle = source.kind === "bundle" ? this.bundles.get(source.token) : null;
+    // The clone is made here, next to the destination, and only moved into
+    // place once complete; a failure removes this folder and nothing else.
+    let staging: string | null = null;
     try {
       if (source.kind === "bundle" && !bundle) {
         throw new AppError({
@@ -430,16 +491,19 @@ export class ProjectAcrossHostsService {
         throw new AppError({ code: "VALIDATION", message: detail, userMessage: detail });
       }
       const parent = path.dirname(destination);
+      const folderName = path.basename(destination);
       await fs.mkdir(parent, { recursive: true });
+      staging = await fs.mkdtemp(path.join(parent, `.${folderName}.daintree-clone-`));
+      const stagedRepo = path.join(staging, folderName);
 
       op.progress({ fraction: 0, stage: "cloning", message: "Cloning" });
       try {
         if (source.kind === "remote") {
           await this.deps.clone({
             url: source.url.trim(),
-            parentPath: parent,
-            folderName: path.basename(destination),
-            targetPath: destination,
+            parentPath: staging,
+            folderName,
+            targetPath: stagedRepo,
             depth: options.depth,
             recurseSubmodules: options.submodules,
             signal: op.signal,
@@ -447,7 +511,7 @@ export class ProjectAcrossHostsService {
               op.progress({ fraction: progress / 100, stage, message }),
           });
         } else {
-          await this.cloneFromBundle(bundle!.path, destination, op.signal);
+          await this.cloneFromBundle(bundle!.path, stagedRepo, op.signal);
         }
       } catch (error) {
         if (isCancellation(error, op.signal) || error instanceof GitOperationError) throw error;
@@ -457,10 +521,10 @@ export class ProjectAcrossHostsService {
         });
       }
 
-      if (op.signal.aborted) {
-        await fs.rm(destination, { recursive: true, force: true }).catch(() => {});
-        throw new AppError({ code: "CANCELLED", message: "Clone cancelled" });
-      }
+      if (op.signal.aborted) throw new AppError({ code: "CANCELLED", message: "Clone cancelled" });
+      await publishClone(stagedRepo, destination);
+      await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
+      staging = null;
       if (source.kind === "remote" && options.depth === "shallow" && payload.branch) {
         // A shallow clone carries only the default branch; fetch the one asked for.
         const networkGit = await this.deps.git.network(destination);
@@ -516,6 +580,7 @@ export class ProjectAcrossHostsService {
         setupRecipeId,
       };
     } finally {
+      if (staging) await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
       if (bundle) await this.bundles.discard(bundle.token);
     }
   }
@@ -523,6 +588,7 @@ export class ProjectAcrossHostsService {
   /**
    * Clone a bundle, keep every branch it carried as a local branch, then drop
    * `origin`: it names the bundle file, which is deleted straight after.
+   * `destination` is the operation's staging folder, which the caller removes on failure.
    */
   private async cloneFromBundle(
     bundlePath: string,
@@ -530,35 +596,30 @@ export class ProjectAcrossHostsService {
     signal: AbortSignal
   ): Promise<void> {
     const parentGit = await this.deps.git.local(path.dirname(destination));
-    try {
-      if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Clone cancelled" });
-      await parentGit.raw(["clone", "--quiet", "--", bundlePath, destination]);
-      const repo = await this.deps.git.local(destination);
-      const current = (
-        (await tryRaw(repo, ["symbolic-ref", "--quiet", "--short", "HEAD"])) ?? ""
-      ).trim();
-      const refs = (
-        (await tryRaw(repo, [
-          "for-each-ref",
-          "--format=%(refname:strip=3)",
-          "refs/remotes/origin",
-        ])) ?? ""
-      )
-        .split("\n")
-        .map((ref) => ref.trim())
-        .filter((ref) => ref.length > 0 && ref !== "HEAD" && ref !== current);
-      for (const ref of refs) {
-        await repo.raw(["branch", "--no-track", ref, `refs/remotes/origin/${ref}`]);
-        if (!(await refExists(repo, `refs/heads/${ref}`))) {
-          throw new Error(`Couldn't keep branch ${ref} from the repository copy`);
-        }
+    if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Clone cancelled" });
+    await parentGit.raw(["clone", "--quiet", "--", bundlePath, destination]);
+    const repo = await this.deps.git.local(destination);
+    const current = (
+      (await tryRaw(repo, ["symbolic-ref", "--quiet", "--short", "HEAD"])) ?? ""
+    ).trim();
+    const refs = (
+      (await tryRaw(repo, [
+        "for-each-ref",
+        "--format=%(refname:strip=3)",
+        "refs/remotes/origin",
+      ])) ?? ""
+    )
+      .split("\n")
+      .map((ref) => ref.trim())
+      .filter((ref) => ref.length > 0 && ref !== "HEAD" && ref !== current);
+    for (const ref of refs) {
+      await repo.raw(["branch", "--no-track", ref, `refs/remotes/origin/${ref}`]);
+      if (!(await refExists(repo, `refs/heads/${ref}`))) {
+        throw new Error(`Couldn't keep branch ${ref} from the repository copy`);
       }
-      await repo.raw(["remote", "remove", "origin"]);
-      if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Clone cancelled" });
-    } catch (error) {
-      await fs.rm(destination, { recursive: true, force: true }).catch(() => {});
-      throw error;
     }
+    await repo.raw(["remote", "remove", "origin"]);
+    if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Clone cancelled" });
   }
 
   /**

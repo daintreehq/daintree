@@ -112,10 +112,12 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
 
   const toDestination = (
     options: MaterializeOptions | undefined,
-    overwrite = false
+    replaceToken?: string
   ): TransferDestination =>
     options?.destination?.kind === "worktree"
-      ? { kind: "worktree", directory: options.destination.directory, overwrite }
+      ? replaceToken === undefined
+        ? { kind: "worktree", directory: options.destination.directory }
+        : { kind: "worktree", directory: options.destination.directory, replaceToken }
       : { kind: "inbox", bucket: "files" };
 
   /** Run one upload under an operation id: progress follows it, and the signal cancels it. */
@@ -147,19 +149,25 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
     }
   };
 
-  /** Add to project met a file of the same name: replace it only if the user says so. */
+  /**
+   * Add to project met a file of the same name: replace it only if the user
+   * says so, with the token the host issued for exactly that file. If the file
+   * changed in the meantime the host reports the clash again, and nothing is
+   * replaced.
+   */
   const resolveConflict = async (
     result: UploadResult,
-    retry: () => Promise<UploadResult>
+    retry: (replaceToken: string) => Promise<UploadResult>
   ): Promise<UploadResult> => {
     if (!result.conflict) return result;
+    if (!result.replaceToken) throw cancelled();
     const replace = await deps.confirmReplace({
       name: basename(result.hostPath),
       folder: dirname(result.hostPath),
       hostLabel: deps.hostLabel(),
     });
     if (!replace) throw cancelled();
-    const replaced = await retry();
+    const replaced = await retry(result.replaceToken);
     if (replaced.conflict) throw cancelled();
     return replaced;
   };
@@ -190,16 +198,16 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
       const go = await deps.confirmLargeUpload({ name, bytes: stat.size, hostLabel: host });
       if (!go) throw cancelled();
     }
-    const send = (overwrite: boolean) =>
+    const send = (replaceToken?: string) =>
       upload(options, (opId) =>
         deps.fileTransfer.uploadLocalFile({
           hostId: deps.hostId,
           localPath,
-          destination: toDestination(options, overwrite),
+          destination: toDestination(options, replaceToken),
           opId,
         })
       );
-    const result = await resolveConflict(await send(false), () => send(true));
+    const result = await resolveConflict(await send(), send);
     return { hostPath: result.hostPath, displayName: name, bytes: result.bytes };
   };
 
@@ -222,18 +230,18 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
       });
       if (!go) throw cancelled();
     }
-    const send = (overwrite: boolean) =>
+    const send = (replaceToken?: string) =>
       upload(options, (opId) =>
         deps.fileTransfer.uploadBytes({
           hostId: deps.hostId,
           bytes: source.bytes,
           name: source.name,
           mimeType: source.mimeType,
-          destination: toDestination(options, overwrite),
+          destination: toDestination(options, replaceToken),
           opId,
         })
       );
-    const result = await resolveConflict(await send(false), () => send(true));
+    const result = await resolveConflict(await send(), send);
     return { hostPath: result.hostPath, displayName: source.name, bytes: result.bytes };
   };
 

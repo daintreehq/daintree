@@ -9,6 +9,7 @@ import { UPLOAD_CONFIRM_BYTES, UPLOAD_REFUSE_BYTES } from "@shared/types/remoteH
 import { createRemoteMaterializer, type RemoteMaterializerDeps } from "../remoteMaterializer";
 
 const MB = 1024 * 1024;
+const REPLACE_TOKEN = "0123456789abcdef0123456789abcdef";
 
 function setup(overrides: Partial<RemoteMaterializerDeps> = {}) {
   const listeners = new Set<(event: FileTransferEvent) => void>();
@@ -203,6 +204,7 @@ describe("remote materialize", () => {
         bytes: 0,
         deduplicated: false,
         conflict: true,
+        replaceToken: REPLACE_TOKEN,
       })
       .mockResolvedValueOnce({
         hostPath: "/srv/proj/docs/spec.md",
@@ -220,8 +222,8 @@ describe("remote materialize", () => {
     });
     expect(fileTransfer.uploadLocalFile.mock.calls.map(([payload]) => payload.destination)).toEqual(
       [
-        { kind: "worktree", directory: "/srv/proj/docs", overwrite: false },
-        { kind: "worktree", directory: "/srv/proj/docs", overwrite: true },
+        { kind: "worktree", directory: "/srv/proj/docs" },
+        { kind: "worktree", directory: "/srv/proj/docs", replaceToken: REPLACE_TOKEN },
       ]
     );
     expect(result.hostPath).toBe("/srv/proj/docs/spec.md");
@@ -234,6 +236,7 @@ describe("remote materialize", () => {
       bytes: 0,
       deduplicated: false,
       conflict: true,
+      replaceToken: REPLACE_TOKEN,
     });
     await expect(
       materialize(
@@ -278,6 +281,83 @@ describe("remote materialize", () => {
     expect(fileTransfer.uploadBytes).toHaveBeenCalledWith(
       expect.objectContaining({ bytes, name: "shot.png", hostId: "studio-01" })
     );
+  });
+
+  it("never asks to replace, or replaces, without a token from the host", async () => {
+    const confirmReplace = vi.fn(async () => true);
+    const { materialize, fileTransfer } = setup({ confirmReplace });
+    fileTransfer.uploadLocalFile.mockResolvedValueOnce({
+      hostPath: "/srv/proj/spec.md",
+      bytes: 0,
+      deduplicated: false,
+      conflict: true,
+    });
+    await expect(
+      materialize(
+        { kind: "local-file", path: "/Users/me/spec.md" },
+        { destination: { kind: "worktree", directory: "/srv/proj" } }
+      )
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(confirmReplace).not.toHaveBeenCalled();
+    expect(fileTransfer.uploadLocalFile).toHaveBeenCalledTimes(1);
+  });
+
+  // Fixed values, not the constants: a change to either limit must fail here.
+  describe("size limits", () => {
+    const FIFTY_MB = 50 * 1024 * 1024;
+    const FIVE_HUNDRED_MB = 500 * 1024 * 1024;
+
+    it("holds the confirm threshold at 50 MB and the hard cap at 500 MB", () => {
+      expect(UPLOAD_CONFIRM_BYTES).toBe(FIFTY_MB);
+      expect(UPLOAD_REFUSE_BYTES).toBe(FIVE_HUNDRED_MB);
+    });
+
+    it.each([
+      [FIFTY_MB, false],
+      [FIFTY_MB + 1, true],
+    ])("a %i-byte file asks first: %s", async (size, asks) => {
+      const { materialize, fileTransfer, deps } = setup();
+      fileTransfer.statLocalFile.mockResolvedValueOnce({ size, isDirectory: false });
+      await materialize({ kind: "local-file", path: "/Users/me/file.bin" });
+      expect(deps.confirmLargeUpload).toHaveBeenCalledTimes(asks ? 1 : 0);
+      expect(fileTransfer.uploadLocalFile).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      [FIVE_HUNDRED_MB, false],
+      [FIVE_HUNDRED_MB + 1, true],
+    ])("a %i-byte file is refused: %s", async (size, refused) => {
+      const { materialize, fileTransfer } = setup();
+      fileTransfer.statLocalFile.mockResolvedValueOnce({ size, isDirectory: false });
+      const pending = materialize({ kind: "local-file", path: "/Users/me/file.bin" });
+      if (refused) {
+        await expect(pending).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+        expect(fileTransfer.uploadLocalFile).not.toHaveBeenCalled();
+      } else {
+        await expect(pending).resolves.toMatchObject({ displayName: "file.bin" });
+        expect(fileTransfer.uploadLocalFile).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it.each([
+      [FIFTY_MB, false, false],
+      [FIFTY_MB + 1, true, false],
+      [FIVE_HUNDRED_MB, true, false],
+      [FIVE_HUNDRED_MB + 1, false, true],
+    ])("pasted bytes of %i: asks %s, refused %s", async (size, asks, refused) => {
+      const { materialize, fileTransfer, deps } = setup();
+      // A view over a large buffer, without allocating one.
+      const bytes = Object.defineProperty(new Uint8Array(0), "byteLength", { value: size });
+      const pending = materialize({ kind: "local-bytes", bytes, name: "blob.bin", mimeType: null });
+      if (refused) {
+        await expect(pending).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+        expect(fileTransfer.uploadBytes).not.toHaveBeenCalled();
+      } else {
+        await pending;
+        expect(fileTransfer.uploadBytes).toHaveBeenCalledTimes(1);
+      }
+      expect(deps.confirmLargeUpload).toHaveBeenCalledTimes(asks ? 1 : 0);
+    });
   });
 
   it("refuses folders", async () => {

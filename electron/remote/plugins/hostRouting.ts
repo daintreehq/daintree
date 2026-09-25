@@ -31,7 +31,9 @@ export interface PluginHostRoutingDeps {
  *   is one; otherwise nobody can answer.
  *
  * An app-global plugin has no project of its own, so it follows the project of
- * whoever called it last, then falls back to whatever window is open here.
+ * the invocation it is answering. Work that belongs to no invocation (a timer,
+ * a subscription) goes to a window here if there is one, and to nobody
+ * otherwise: it never borrows another caller's project.
  */
 export function createPluginFrontendRouter(deps: PluginHostRoutingDeps = {}): PluginFrontendRouter {
   const lease = deps.lease ?? getDriveLeaseService();
@@ -46,7 +48,7 @@ export function createPluginFrontendRouter(deps: PluginHostRoutingDeps = {}): Pl
       case "live":
         return target.endpoint.kind === "local-view"
           ? { kind: "local" }
-          : { kind: "remote", endpoint: target.endpoint };
+          : { kind: "remote", endpoint: target.endpoint, leaseId: target.holder.leaseId };
       case "reserved":
         // A window here stepping away leaves the project with this machine's
         // other windows; a remote driver stepping away holds it for its grace.
@@ -66,7 +68,14 @@ export function createPluginFrontendRouter(deps: PluginHostRoutingDeps = {}): Pl
       if (bound !== null) return forProject(bound);
       const origin = getPluginInvokeOrigin(pluginId);
       if (origin?.projectId) return forProject(origin.projectId);
-      if (origin?.kind === "local-view" || hasLocalView()) return { kind: "local" };
+      if (origin) {
+        // A caller with no project: its own view answers, or nobody does.
+        if (origin.endpoint.kind === "local-view") return { kind: "local" };
+        return origin.endpoint.isClosed()
+          ? { kind: "none", reason: "vacant" }
+          : { kind: "remote", endpoint: origin.endpoint };
+      }
+      if (hasLocalView()) return { kind: "local" };
       return { kind: "none", reason: "vacant" };
     },
     onChange(listener) {

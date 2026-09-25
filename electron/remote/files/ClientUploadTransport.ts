@@ -19,6 +19,8 @@ import {
 
 export interface UploadOptions {
   webContentsId: number;
+  /** The operation this upload belongs to; the host answers a repeat from its record. */
+  opId: string;
   /** The host's display name, for messages. */
   hostLabel: string;
   name: string;
@@ -128,6 +130,7 @@ function sendFailure(error: unknown, name: string, hostLabel: string): Error {
 
 export class ClientUploadTransport {
   private readonly hosts = new Map<HostId, HostLink>();
+  private readonly openedListeners = new Set<() => void>();
 
   noteEndpointOpened(
     hostId: HostId,
@@ -140,6 +143,43 @@ export class ClientUploadTransport {
     }
     link.session = info.session;
     link.endpoints.set(info.endpointId, info.webContentsId);
+    for (const listener of [...this.openedListeners]) listener();
+  }
+
+  /** Whether the view has an endpoint on an open link to the host right now. */
+  isReachable(hostId: HostId, webContentsId: number): boolean {
+    const session = this.hosts.get(hostId)?.session;
+    return !!session?.isOpen && this.endpointFor(hostId, webContentsId) !== null;
+  }
+
+  /**
+   * Resolves true once the view is reachable on the host again (a link that
+   * dropped has come back), false after `timeoutMs` or on abort.
+   */
+  whenReachable(
+    hostId: HostId,
+    webContentsId: number,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    if (this.isReachable(hostId, webContentsId)) return Promise.resolve(true);
+    if (signal?.aborted) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const finish = (reachable: boolean) => {
+        clearTimeout(timer);
+        this.openedListeners.delete(check);
+        signal?.removeEventListener("abort", onAbort);
+        resolve(reachable);
+      };
+      const check = () => {
+        if (this.isReachable(hostId, webContentsId)) finish(true);
+      };
+      const onAbort = () => finish(false);
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      timer.unref?.();
+      this.openedListeners.add(check);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   noteEndpointClosed(hostId: HostId, info: { endpointId: string }): void {
@@ -177,14 +217,23 @@ export class ClientUploadTransport {
         : {
             kind: "worktree" as const,
             directory: options.destination.directory,
-            overwrite: options.destination.overwrite === true,
+            ...(options.destination.replaceToken !== undefined
+              ? { replaceToken: options.destination.replaceToken }
+              : {}),
           };
     let prepared;
     try {
       prepared = UploadPrepareResultSchema.parse(
         await session.call(
           UploadLinkMethod.PREPARE,
-          { endpointId, name, size: source.size, sha256: source.sha256, destination },
+          {
+            endpointId,
+            name,
+            size: source.size,
+            sha256: source.sha256,
+            opId: options.opId,
+            destination,
+          },
           { timeoutMs: PREPARE_TIMEOUT_MS, signal }
         )
       );
@@ -197,18 +246,28 @@ export class ClientUploadTransport {
           userMessage: `Another window is driving this project on ${hostLabel}. Take it over to add files.`,
         });
       }
+      if (errorCode(error) === "VALIDATION") {
+        throw new AppError({
+          code: "VALIDATION",
+          message: "The host refused the upload request",
+          userMessage: `Couldn't send ${name} to ${hostLabel}.`,
+        });
+      }
       throw sendFailure(error, name, hostLabel);
     }
 
     switch (prepared.status) {
       case "duplicate":
         return { hostPath: prepared.hostPath, bytes: source.size, deduplicated: true };
+      case "done":
+        return { hostPath: prepared.hostPath, bytes: prepared.bytes, deduplicated: false };
       case "conflict":
         return {
           hostPath: prepared.hostPath,
           bytes: 0,
           deduplicated: false,
           conflict: true,
+          replaceToken: prepared.replaceToken,
         };
       case "refused":
         throw refusal(prepared.reason, name, hostLabel);

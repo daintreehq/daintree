@@ -133,3 +133,35 @@ export function repositoryNameFromRemote(url: string): string | null {
 export function isSupportedCloneUrl(url: string): boolean {
   return /^https?:\/\//i.test(url) || /^git@/i.test(url) || /^ssh:\/\//i.test(url);
 }
+
+/**
+ * A remote without the credentials some HTTPS remotes embed
+ * (`https://user:token@host/repo.git`): what may be shown, matched or sent to
+ * another host, which fetches with its own credentials. An HTTP(S) user name
+ * goes too (it is often the token itself); an SSH user name (`git@`) is kept,
+ * since the other host needs it to connect and it is not a secret, but an SSH
+ * password is not. Anything without user info comes back unchanged.
+ */
+export function stripGitRemoteCredentials(url: string): string {
+  if (typeof url !== "string") return url;
+  const trimmed = url.trim();
+  if (!trimmed.includes("://") || !trimmed.includes("@")) return url;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    // Unparseable, so fail closed: drop whatever sits before the host's `@`.
+    return trimmed.replace(/^([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/?#]*@/, "$1");
+  }
+  const scheme = parsed.protocol.toLowerCase();
+  const isHttp = scheme === "https:" || scheme === "http:";
+  if (!parsed.password && !(isHttp && parsed.username)) return url;
+  parsed.password = "";
+  if (isHttp) parsed.username = "";
+  return parsed.toString();
+}
+
+/** {@link stripGitRemoteCredentials} over a remote list. */
+export function stripRemoteListCredentials<T extends { url: string }>(remotes: T[]): T[] {
+  return remotes.map((remote) => ({ ...remote, url: stripGitRemoteCredentials(remote.url) }));
+}

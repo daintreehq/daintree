@@ -10,6 +10,7 @@ import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { SettingsInput } from "../SettingsInput";
 import { SettingsSwitchCard } from "../SettingsSwitchCard";
 import { AddHostDialog } from "./AddHostDialog";
+import { HostClipboardGrants } from "./HostClipboardGrants";
 import { buildLabel, connectionLabel, platformLabel } from "./hostLabels";
 
 interface HostDetailProps {
@@ -197,6 +198,8 @@ export function HostDetail({ entry, onBack, openUpdate = false }: HostDetailProp
           />
         </SettingsGroup>
       </SettingsSection>
+
+      <HostClipboardGrants hostId={descriptor.id} hostName={descriptor.name} />
 
       <SettingsSection title="Forget host">
         <SettingsGroup>

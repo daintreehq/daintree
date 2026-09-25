@@ -11,8 +11,8 @@ import {
 type NotificationContext = NotificationHistoryEntry["context"];
 
 /**
- * Where a notification came from, in words: the project's name and the
- * worktree's. Never an id — a project id is a sha256, and one that names no
+ * Where a notification came from, in words: the other host's name when it
+ * came from one, then the project's name and the worktree's. Never an id — a project id is a sha256, and one that names no
  * registered project is dropped rather than printed.
  */
 export function useNotificationSource(context: NotificationContext): string {
@@ -30,7 +30,8 @@ export function useNotificationSource(context: NotificationContext): string {
   return (
     formatNotificationSource(
       projectName ?? (projectId ? UNKNOWN_PROJECT_LABEL : undefined),
-      worktreeId ? worktreeName?.trim() || worktreeNameFromId(worktreeId) : undefined
+      worktreeId ? worktreeName?.trim() || worktreeNameFromId(worktreeId) : undefined,
+      context?.hostName
     ) ?? APP_SOURCE_LABEL
   );
 }

@@ -5,7 +5,10 @@ import type {
   ProjectMatchCandidate,
 } from "../../../shared/types/ipc/projectMatch.js";
 import type { Project } from "../../../shared/types/project.js";
-import { normalizeGitRemoteUrls } from "../../../shared/utils/gitRemoteUrl.js";
+import {
+  normalizeGitRemoteUrls,
+  stripRemoteListCredentials,
+} from "../../../shared/utils/gitRemoteUrl.js";
 import { gitServiceCache } from "../GitServiceCache.js";
 import { parseConfigRemotes } from "./gitOps.js";
 import type { ProjectAcrossHostsDeps } from "./types.js";
@@ -72,7 +75,8 @@ export async function findRegisteredMatches(
     projects,
     REMOTE_READ_CONCURRENCY,
     async (project: Project): Promise<ProjectMatchCandidate | null> => {
-      const remotes = await listRemotes(project.path).catch(() => []);
+      // Candidates go to the Shell and its dialog: never a remote's embedded credentials.
+      const remotes = stripRemoteListCredentials(await listRemotes(project.path).catch(() => []));
       const base = {
         projectId: project.id,
         path: project.path,
@@ -125,7 +129,7 @@ export async function scanForClones(
     const config = depth > 0 ? await readRepoConfig(dir) : null;
     if (config !== null) {
       if (!exclude.has(path.resolve(dir))) {
-        const remotes = parseConfigRemotes(config);
+        const remotes = stripRemoteListCredentials(parseConfigRemotes(config));
         if (sharesRemote(wanted, remotes)) {
           const stat = await fs.stat(dir).catch(() => null);
           found.push({

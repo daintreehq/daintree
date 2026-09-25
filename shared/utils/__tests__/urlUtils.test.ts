@@ -9,7 +9,7 @@ import {
   stripAnsiAndOscCodes,
   isImplicitlyAllowedHost,
   isLoopbackHostname,
-  isForwardedLoopbackUrl,
+  isBoundLoopbackUrl,
 } from "../urlUtils.js";
 
 describe("urlUtils", () => {
@@ -605,27 +605,47 @@ describe("urlUtils", () => {
   });
 });
 
-describe("isForwardedLoopbackUrl", () => {
-  const forwarded = new Set([5173, 80]);
+describe("isBoundLoopbackUrl", () => {
+  const bound = [
+    { address: "127.0.0.1", port: 5173 },
+    { address: "::1", port: 5173 },
+    { address: "127.0.0.1", port: 80 },
+  ];
 
-  it("accepts loopback URLs on a forwarded port", () => {
-    expect(isForwardedLoopbackUrl("http://localhost:5173/", forwarded)).toBe(true);
-    expect(isForwardedLoopbackUrl("https://127.0.0.1:5173/app", forwarded)).toBe(true);
-    expect(isForwardedLoopbackUrl("http://[::1]:5173", forwarded)).toBe(true);
-    expect(isForwardedLoopbackUrl("http://localhost/", forwarded)).toBe(true);
+  it("accepts the addresses and ports a forward holds, in every spelling of them", () => {
+    expect(isBoundLoopbackUrl("http://localhost:5173/", bound)).toBe(true);
+    expect(isBoundLoopbackUrl("https://127.0.0.1:5173/app", bound)).toBe(true);
+    expect(isBoundLoopbackUrl("http://[::1]:5173", bound)).toBe(true);
+    expect(isBoundLoopbackUrl("http://[0:0:0:0:0:0:0:1]:5173/", bound)).toBe(true);
+    expect(isBoundLoopbackUrl("http://[::ffff:127.0.0.1]:5173/", bound)).toBe(true);
+    expect(isBoundLoopbackUrl("http://[::ffff:7f00:1]:5173/", bound)).toBe(true);
+    expect(isBoundLoopbackUrl("http://2130706433:5173/", bound)).toBe(true);
+    expect(isBoundLoopbackUrl("http://localhost./", bound)).toBe(true);
+    expect(isBoundLoopbackUrl("ws://localhost:5173/hmr", bound)).toBe(true);
+    expect(isBoundLoopbackUrl("wss://127.0.0.1:5173/hmr", bound)).toBe(true);
+  });
+
+  it("rejects loopback addresses no forward binds", () => {
+    expect(isBoundLoopbackUrl("http://127.0.0.2:5173/", bound)).toBe(false);
+    expect(isBoundLoopbackUrl("http://127.1.2.3:5173/", bound)).toBe(false);
+    expect(isBoundLoopbackUrl("http://[::ffff:127.0.0.2]:5173/", bound)).toBe(false);
+    // Port 80 is held on IPv4 only.
+    expect(isBoundLoopbackUrl("http://[::1]/", bound)).toBe(false);
+    expect(isBoundLoopbackUrl("http://0.0.0.0:5173/", bound)).toBe(false);
+    expect(isBoundLoopbackUrl("http://[::]:5173/", bound)).toBe(false);
   });
 
   it("rejects other local ports, other hosts, other schemes and credentials", () => {
-    expect(isForwardedLoopbackUrl("http://localhost:3000/", forwarded)).toBe(false);
-    expect(isForwardedLoopbackUrl("https://localhost/", forwarded)).toBe(false);
-    expect(isForwardedLoopbackUrl("http://example.com:5173/", forwarded)).toBe(false);
-    expect(isForwardedLoopbackUrl("http://dp-a-b.localhost:5173/", forwarded)).toBe(false);
-    expect(isForwardedLoopbackUrl("ws://localhost:5173/", forwarded)).toBe(false);
-    expect(isForwardedLoopbackUrl("http://user:pw@localhost:5173/", forwarded)).toBe(false);
-    expect(isForwardedLoopbackUrl("not a url", forwarded)).toBe(false);
+    expect(isBoundLoopbackUrl("http://localhost:3000/", bound)).toBe(false);
+    expect(isBoundLoopbackUrl("https://localhost/", bound)).toBe(false);
+    expect(isBoundLoopbackUrl("http://example.com:5173/", bound)).toBe(false);
+    expect(isBoundLoopbackUrl("http://dp-a-b.localhost:5173/", bound)).toBe(false);
+    expect(isBoundLoopbackUrl("ftp://localhost:5173/", bound)).toBe(false);
+    expect(isBoundLoopbackUrl("http://user:pw@localhost:5173/", bound)).toBe(false);
+    expect(isBoundLoopbackUrl("not a url", bound)).toBe(false);
   });
 
-  it("accepts nothing when no port is forwarded", () => {
-    expect(isForwardedLoopbackUrl("http://localhost:5173/", new Set())).toBe(false);
+  it("accepts nothing when nothing is bound", () => {
+    expect(isBoundLoopbackUrl("http://localhost:5173/", [])).toBe(false);
   });
 });
