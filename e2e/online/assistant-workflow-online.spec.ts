@@ -15,6 +15,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { getTerminalTextById } from "../helpers/terminal";
+import { planChoice } from "../../shared/utils/terminalChoice";
 
 /**
  * The Daintree Assistant running real workflows end to end. Every agent is the
@@ -45,8 +46,9 @@ const QUIET_MS = 45_000;
  * project every CLI already trusts.
  */
 const AUTO_TRUST = process.env.DAINTREE_E2E_AUTO_TRUST === "1";
+const TRUST_LABELS = ["Yes, I trust this folder", "Trust and continue", "Yes, proceed"];
 const TRUST_DIALOG =
-  /Trust this folder\?|Trust and continue|do you trust|trust the files in this folder|Is this a project you created or one you trust/i;
+  /Trust this folder\?|Trust and continue|do you trust|trust the files in this folder|Yes, I trust this folder/i;
 
 interface ScenarioContext {
   page: Page;
@@ -617,9 +619,19 @@ for (const scenario of SCENARIOS) {
           if (t.id === assistantId ? assistantBusy : !AUTO_TRUST) continue;
           const text = await getTerminalTextById(page, t.id).catch(() => "");
           if (!TRUST_DIALOG.test(text.split("\n").slice(-30).join("\n"))) continue;
+          // Each CLI highlights a different default (Claude's is "No, exit"),
+          // so pick the trusting option by its label, as a user would.
+          const plan = TRUST_LABELS.map((label) => planChoice(text, label)).find((p) => p.ok);
+          if (plan === undefined || !plan.ok) continue;
           trusted.add(t.id);
           log(`trust dialog in ${t.launchAgentId ?? "shell"} ${t.id.slice(-8)}; accepting`);
-          await page.evaluate((id) => (window as any).electron.terminal.write(id, "\r"), t.id);
+          for (const key of plan.keys) {
+            await page.evaluate(([id, data]) => (window as any).electron.terminal.write(id, data), [
+              t.id,
+              key === "Enter" ? "\r" : key === "Down" ? "\x1b[B" : "\x1b[A",
+            ] as const);
+            await page.waitForTimeout(150);
+          }
         }
       };
 

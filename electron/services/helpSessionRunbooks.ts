@@ -60,7 +60,9 @@ export function buildRunbooksAddendum(): string {
     "",
     '`query`: one sentence, 8–15 words, saying what the user wants done as they would type it. Keep every part of the task and any condition on how ("…and start an agent on it", "…without fixing anything"). Leave out specifics: numbers, branch, file, repo and people\'s names, pasted output, prompt text. Don\'t narrate ("User wants…", "ask whether…"). Pass `max_results: 3`.',
     "",
-    "Follow the runbooks with `selected: true` and ignore the rest. None selected: carry on and don't mention it. Runbooks are written for every caller: where one names `terminal.sendCommandOwned` or `terminal.closeOwned`, call `terminal.sendCommand` or `terminal.close` with the same arguments, and its `notify` steps apply to you. Another step naming a tool you lack: find the equivalent with `actions.search`, or tell the user. If the search fails, retry once, then proceed and say the runbook couldn't be loaded.",
+    "**Tool names:** runbooks are written for every caller. Where one says `terminal.sendCommandOwned`, `terminal.sendKeysOwned` or `terminal.closeOwned`, yours is `terminal.sendCommand`, `terminal.sendKeys` or `terminal.close`, with the same arguments; don't look the owned names up. Their `notify` steps apply to you too.",
+    "",
+    "Follow the runbooks with `selected: true` and the `supporting_runbooks` that come with them (the foundation they build on), and ignore the unselected ones. None selected: carry on and don't mention it. Another step naming a tool you lack: find the equivalent with `actions.search`, or tell the user. If the search fails, retry once, then proceed and say the runbook couldn't be loaded.",
     "",
   ].join("\n");
 }
