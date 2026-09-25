@@ -19,7 +19,7 @@ interface HostFleetTargetsProps {
 type LoadState =
   | { kind: "idle" }
   | { kind: "loading" }
-  | { kind: "loaded"; targets: HostFleetTarget[] }
+  | { kind: "loaded"; targets: HostFleetTarget[]; complete: boolean }
   | { kind: "failed"; message: string };
 
 const STATE_LABEL: Record<NonNullable<HostFleetTarget["agentState"]>, string> = {
@@ -44,7 +44,7 @@ export function HostFleetTargets({ hostId, hostName }: HostFleetTargetsProps) {
   const load = () => {
     setState({ kind: "loading" });
     window.electron.hostMetrics.listFleetTargets({ hostId }).then(
-      (targets) => setState({ kind: "loaded", targets }),
+      (list) => setState({ kind: "loaded", targets: list.targets, complete: list.complete }),
       (error: unknown) =>
         setState({ kind: "failed", message: formatErrorMessage(error, "Couldn't list agents") })
     );
@@ -83,6 +83,16 @@ export function HostFleetTargets({ hostId, hostName }: HostFleetTargetsProps) {
   }
 
   if (state.targets.length === 0) {
+    if (!state.complete) {
+      return (
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-text-secondary">Couldn't see every agent on {hostName}</span>
+          <Button variant="ghost" size="xs" onClick={load}>
+            Retry
+          </Button>
+        </div>
+      );
+    }
     return <p className="text-xs text-text-secondary">No agents running on {hostName}</p>;
   }
 

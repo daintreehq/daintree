@@ -12,12 +12,16 @@ import {
 import {
   _resetCrossHostFleetForTesting,
   armCrossHostTarget,
+  confirmCrossHostResend,
+  crossHostSafeRetryDeadline,
   crossHostTargetKey,
+  needsCrossHostResendConfirmation,
   getArmedCrossHostTargets,
   retainCrossHostTargetsFor,
   submitCrossHostTarget,
 } from "../crossHostFleet";
 import { sendDraftToFleet, tryFleetBroadcastFromEditor } from "../fleetEnterBroadcast";
+import { FLEET_SAFE_RETRY_MS } from "@shared/config/fleetSubmitRetention";
 
 const localSubmit = vi.hoisted(() => vi.fn<(id: string, text: string) => Promise<void>>());
 const notifyUserInput = vi.hoisted(() => vi.fn());
@@ -237,5 +241,61 @@ describe("cross-host fleet targets", () => {
     await expect(submitCrossHostTarget(key, "go")).rejects.toBeTruthy();
     await submitCrossHostTarget(key, "go", { retry: true });
     expect(submitFleet.mock.calls[1]![0].opId).not.toBe(submitFleet.mock.calls[0]![0].opId);
+  });
+
+  it("reuses the opId only while the host still holds the record, timed from the first send", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(1_000_000);
+      const key = crossHostTargetKey("studio-01", "t1");
+      const lost = () =>
+        submitFleet.mockRejectedValueOnce(
+          new Error("[AppError|OUTCOME_UNKNOWN] Couldn't confirm fleet submit")
+        );
+      lost();
+      await expect(submitCrossHostTarget(key, "go")).rejects.toBeTruthy();
+      const first = submitFleet.mock.calls[0]![0].opId;
+      expect(crossHostSafeRetryDeadline(key, "go")).toBe(1_000_000 + FLEET_SAFE_RETRY_MS);
+
+      // Inside the window: same opId, and a second lost answer keeps the first send's clock.
+      vi.setSystemTime(1_000_000 + FLEET_SAFE_RETRY_MS - 1);
+      lost();
+      await expect(submitCrossHostTarget(key, "go", { retry: true })).rejects.toBeTruthy();
+      expect(submitFleet.mock.calls[1]![0].opId).toBe(first);
+      expect(crossHostSafeRetryDeadline(key, "go")).toBe(1_000_000 + FLEET_SAFE_RETRY_MS);
+
+      // Past it: the outcome is unknown and a retry sends nothing on its own.
+      vi.setSystemTime(1_000_000 + FLEET_SAFE_RETRY_MS);
+      expect(needsCrossHostResendConfirmation(key, "go")).toBe(true);
+      await expect(submitCrossHostTarget(key, "go", { retry: true })).rejects.toThrow(
+        /needs confirmation/
+      );
+      expect(submitFleet).toHaveBeenCalledTimes(2);
+
+      // Once the person confirms, it is a fresh send under a new opId.
+      confirmCrossHostResend([key]);
+      expect(needsCrossHostResendConfirmation(key, "go")).toBe(false);
+      await submitCrossHostTarget(key, "go", { retry: true });
+      expect(submitFleet).toHaveBeenCalledTimes(3);
+      expect(submitFleet.mock.calls[2]![0].opId).not.toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a newer unconfirmed submit's record when an older submit to the same target settles late", async () => {
+    const key = crossHostTargetKey("studio-01", "t1");
+    let releaseOld!: () => void;
+    submitFleet.mockImplementationOnce(() => new Promise<void>((r) => (releaseOld = r)));
+    const old = submitCrossHostTarget(key, "go");
+    submitFleet.mockRejectedValueOnce(
+      new Error("[AppError|OUTCOME_UNKNOWN] Couldn't confirm fleet submit")
+    );
+    await expect(submitCrossHostTarget(key, "go")).rejects.toBeTruthy();
+    const newer = submitFleet.mock.calls[1]![0].opId;
+    releaseOld();
+    await old;
+    await submitCrossHostTarget(key, "go", { retry: true });
+    expect(submitFleet.mock.calls[2]![0].opId).toBe(newer);
   });
 });

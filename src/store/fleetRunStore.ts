@@ -611,13 +611,14 @@ function subscribeFleetHostObservation(): () => void {
       if (inFlight.has(hostId)) continue;
       inFlight.add(hostId);
       list({ hostId })
-        .then((targets) => {
+        .then(({ targets, complete }) => {
           if (useFleetRunStore.getState().run?.runId !== runId) return;
+          // A degraded or capped read can omit a live agent: only a complete one says it's gone.
           useFleetRunStore.getState().observeHost(
             hostId,
             targets.map((t) => ({ terminalId: t.terminalId, agentState: t.agentState })),
             Date.now(),
-            targets.length < FLEET_HOST_LIST_LIMIT
+            complete && targets.length < FLEET_HOST_LIST_LIMIT
           );
         })
         .catch(() => {

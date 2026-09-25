@@ -23,6 +23,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { projectClient, terminalClient } from "@/clients";
 import { filterEligibleIds } from "@/components/Fleet/fleetExecution";
+import { needsCrossHostResendConfirmation } from "@/components/Fleet/crossHostFleet";
 import { runManagedFleetBroadcast } from "@/components/Fleet/fleetEnterBroadcast";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { notify } from "@/lib/notify";
@@ -371,7 +372,15 @@ export function registerFleetActions(actions: ActionRegistry): void {
       // since the failure was recorded must not receive bytes. The primary
       // broadcast gates this in its caller (tryFleetBroadcastFromEditor), not
       // inside executeFleetBroadcast — so the retry path owns the filter too.
-      const eligibleTargets = filterEligibleIds(targets);
+      // Another host's agent whose first send is too old for the host to still
+      // hold its record could get the prompt twice: it stays failed until the
+      // person confirms sending again from the banner.
+      const awaitingConfirmation = new Set(
+        targets.filter((id) => needsCrossHostResendConfirmation(id, payload))
+      );
+      const eligibleTargets = filterEligibleIds(targets).filter(
+        (id) => !awaitingConfirmation.has(id)
+      );
       if (eligibleTargets.length === 0) return;
       retryInFlight = true;
       try {
@@ -400,7 +409,9 @@ export function registerFleetActions(actions: ActionRegistry): void {
         }
         const stillFailed = new Set(result.transientlyFailedIds);
         for (const id of targets) {
-          if (!stillFailed.has(id)) useFleetFailureStore.getState().dismissId(id);
+          if (!stillFailed.has(id) && !awaitingConfirmation.has(id)) {
+            useFleetFailureStore.getState().dismissId(id);
+          }
         }
       } finally {
         retryInFlight = false;

@@ -82,7 +82,7 @@ function harness(hosts: HostDescriptor[]) {
     down: Set<string>;
   } = { call: null, down: new Set() };
   const local = {
-    listFleetTargets: vi.fn(async () => []),
+    listFleetTargets: vi.fn(async () => ({ targets: [], complete: true })),
     submitFleet: vi.fn(async () => {}),
     listWorktrees: vi.fn(async () => []),
   };
@@ -96,16 +96,19 @@ function harness(hosts: HostDescriptor[]) {
                 calls.push({ hostId, method, payload });
                 if (hook.call) return hook.call(hostId, method, payload);
                 return method === MetricsLinkMethod.LIST_FLEET_TARGETS
-                  ? [
-                      {
-                        terminalId: "t1",
-                        title: "Claude",
-                        projectId: null,
-                        projectName: null,
-                        agentId: "claude",
-                        agentState: "working",
-                      },
-                    ]
+                  ? {
+                      targets: [
+                        {
+                          terminalId: "t1",
+                          title: "Claude",
+                          projectId: null,
+                          projectName: null,
+                          agentId: "claude",
+                          agentState: "working",
+                        },
+                      ],
+                      complete: false,
+                    }
                   : null;
               },
             }
@@ -269,8 +272,12 @@ describe("HostMetricsClient", () => {
   it("routes fleet reads and submits to the named host, or to this machine for local", async () => {
     const h = harness([descriptor("studio-01")]);
     h.client.start();
-    const targets = await h.client.listFleetTargets({ hostId: "studio-01" });
-    expect(targets).toEqual([expect.objectContaining({ hostId: "studio-01", terminalId: "t1" })]);
+    const list = await h.client.listFleetTargets({ hostId: "studio-01" });
+    expect(list.targets).toEqual([
+      expect.objectContaining({ hostId: "studio-01", terminalId: "t1" }),
+    ]);
+    // The host's own word on completeness crosses the link unchanged.
+    expect(list.complete).toBe(false);
     await h.client.submitFleet({ hostId: "studio-01", terminalId: "t1", text: "hello" });
     expect(h.calls.at(-1)).toEqual({
       hostId: "studio-01",
@@ -319,6 +326,33 @@ describe("HostMetricsClient", () => {
       { terminalId: "t1", text: "hello", opId: "op-1" },
       { terminalId: "t1", text: "hello", opId: "op-1" },
     ]);
+    h.client.dispose();
+  });
+
+  it("keeps the outcome unknown when the re-ask fails on this side of the link", async () => {
+    const h = harness([descriptor("studio-01")]);
+    h.client.start();
+    let attempts = 0;
+    h.hook.call = async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        h.hook.down.add("studio-01");
+        setTimeout(() => {
+          h.hook.down.delete("studio-01");
+          h.openSession("studio-01", {
+            on: () => () => {},
+            registerCallHandler: () => {},
+          } as unknown as LinkSession);
+        }, 10);
+        throw Object.assign(new Error("Link closed"), { code: "OUTCOME_UNKNOWN" });
+      }
+      // A full send queue never reached the host: it says nothing about the first send.
+      throw Object.assign(new Error("Link send queue is full"), { code: "RATE_LIMITED" });
+    };
+    await expect(
+      h.client.submitFleet({ hostId: "studio-01", terminalId: "t1", text: "x", opId: "op-4" })
+    ).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+    expect(attempts).toBe(2);
     h.client.dispose();
   });
 

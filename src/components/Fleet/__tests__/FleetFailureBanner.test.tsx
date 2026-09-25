@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 
 // jsdom omits matchMedia; InlineStatusBanner reads it for prefers-reduced-motion.
 vi.stubGlobal(
@@ -36,6 +36,15 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
+const unconfirmed = vi.hoisted(() => new Map<string, number>());
+const confirmCrossHostResend = vi.hoisted(() => vi.fn());
+vi.mock("../crossHostFleet", () => ({
+  crossHostSafeRetryDeadline: (id: string) => unconfirmed.get(id) ?? null,
+  confirmCrossHostResend,
+  getCrossHostTarget: (id: string) =>
+    unconfirmed.has(id) ? { key: id, hostName: "studio-01", hostId: "h1", terminalId: "t" } : null,
+}));
+
 import { FleetFailureBanner } from "../FleetFailureBanner";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { actionService } from "@/services/ActionService";
@@ -51,6 +60,7 @@ function resetStore() {
 describe("FleetFailureBanner", () => {
   beforeEach(() => {
     resetStore();
+    unconfirmed.clear();
     vi.clearAllMocks();
   });
 
@@ -141,5 +151,59 @@ describe("FleetFailureBanner", () => {
     useFleetFailureStore.getState().recordFailure("ls\r", ["t1"], 3);
     useFleetFailureStore.getState().dismissId("t1");
     expect(useFleetFailureStore.getState().disarmedCount).toBe(0);
+  });
+
+  it("offers a plain retry while another host's unconfirmed submit is still safe to resend", () => {
+    unconfirmed.set("host-fleet:h1:t", Date.now() + 60_000);
+    useFleetFailureStore.getState().recordFailure("go\r", ["host-fleet:h1:t"]);
+    render(<FleetFailureBanner />);
+    expect(screen.getByText("1 terminal rejected the write.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("stops offering a safe retry once the window closes, and resends only after confirmation", () => {
+    vi.useFakeTimers();
+    try {
+      unconfirmed.set("host-fleet:h1:t", Date.now() + 1_000);
+      useFleetFailureStore.getState().recordFailure("go\r", ["host-fleet:h1:t"]);
+      render(<FleetFailureBanner />);
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      expect(screen.getByText("Broadcast unconfirmed")).toBeTruthy();
+      expect(
+        screen.getByText(
+          "Couldn't confirm whether 1 agent on studio-01 received the prompt. Sending it again may deliver it twice."
+        )
+      ).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Send again…" }));
+      expect(actionService.dispatch).not.toHaveBeenCalled();
+      expect(screen.getByText("Send the prompt to studio-01 again?")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Send prompt" }));
+      expect(confirmCrossHostResend).toHaveBeenCalledWith(["host-fleet:h1:t"]);
+      expect(actionService.dispatch).toHaveBeenCalledWith("fleet.retryFailures", undefined, {
+        source: "user",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries the safe targets first when a broadcast mixes both", () => {
+    unconfirmed.set("host-fleet:h1:t", Date.now() - 1);
+    useFleetFailureStore.getState().recordFailure("go\r", ["t1", "host-fleet:h1:t"]);
+    render(<FleetFailureBanner />);
+    expect(
+      screen.getByText(
+        "1 terminal rejected the write. Couldn't confirm whether 1 agent on studio-01 received the prompt. Sending it again may deliver it twice."
+      )
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    // The unconfirmed agent stays reachable even while the other target keeps failing.
+    fireEvent.click(screen.getByRole("button", { name: "Send again…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send prompt" }));
+    expect(confirmCrossHostResend).toHaveBeenCalledWith(["host-fleet:h1:t"]);
   });
 });

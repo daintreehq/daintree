@@ -721,7 +721,7 @@ describe("remote session wiring", () => {
     };
     const disposeHost = installHostMetricsHostWith(h.server, {
       loop: { subscribe: () => () => {}, latest: () => summary },
-      listFleetTargets: async () => [],
+      listFleetTargets: async () => ({ targets: [], complete: true }),
       submitFleet: async () => {},
       listWorktrees: async () => [],
       onAgentWaiting: () => () => {},
