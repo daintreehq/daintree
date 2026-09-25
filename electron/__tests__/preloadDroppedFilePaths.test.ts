@@ -54,7 +54,36 @@ describe("native path recovery for dropped files", () => {
     const end = code.indexOf("\n    },", start);
     expect(end, "files namespace closing not found in preload.cts").toBeGreaterThan(start);
     expect(code.slice(start, end)).toMatch(
-      /getDroppedFilePaths:\s*buildDroppedFilePathsBinding<File>\(\(file\)\s*=>\s*webUtils\.getPathForFile\(file\)\s*\)/
+      /getDroppedFilePaths:\s*buildDroppedFilePathsBinding<File>\(\s*\(file\)\s*=>\s*webUtils\.getPathForFile\(file\),/
     );
+  });
+
+  it("tells the grant only the paths that resolved, and nothing for none", () => {
+    const grant = vi.fn();
+    const known = new Map<string, string>([["a.txt", "/work/a.txt"]]);
+    const getDroppedFilePaths = buildDroppedFilePathsBinding<File>(
+      (file) => known.get(file.name) ?? "",
+      grant
+    );
+    expect(
+      getDroppedFilePaths([new File(["a"], "a.txt"), new File(["b"], "synthetic.bin")])
+    ).toEqual(["/work/a.txt", ""]);
+    expect(grant).toHaveBeenCalledTimes(1);
+    expect(grant).toHaveBeenCalledWith(["/work/a.txt"]);
+    getDroppedFilePaths([new File(["b"], "synthetic.bin")]);
+    expect(grant).toHaveBeenCalledTimes(1);
+  });
+
+  it("records resolved paths in main only for a view attached to a remote host", async () => {
+    const code = await preloadCode();
+    const start = code.indexOf("    files: {");
+    const end = code.indexOf("\n    },", start);
+    // The grant rides a preload-only send, gated on the view's host argument;
+    // a local view passes no grant and so sends nothing.
+    expect(code.slice(start, end)).toMatch(
+      /viewHostId\s*\?\s*\(paths\)\s*=>\s*ipcRenderer\.send\(CHANNELS\.FILE_TRANSFER_GRANT_LOCAL_SOURCES,\s*paths\)\s*:\s*undefined/
+    );
+    // Never exposed on the page's bridge.
+    expect(code.match(/FILE_TRANSFER_GRANT_LOCAL_SOURCES/g) ?? []).toHaveLength(1);
   });
 });

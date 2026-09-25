@@ -144,3 +144,32 @@ export async function probeFreeLoopbackPort(preferredPort: number): Promise<numb
   await listener.close();
   return port;
 }
+
+/**
+ * Hold `[::1]:port` and relay each connection to `127.0.0.1:port`, beside a
+ * forward something else (ssh) binds on IPv4 alone: `localhost` then reaches
+ * the forward on either family, and no other process can take the IPv6 side.
+ * Null on a machine without IPv6 loopback; rejects when the port is taken.
+ */
+export async function listenIpv6Relay(port: number): Promise<LoopbackListener | null> {
+  const server = makeServer((inbound) => {
+    const outbound = net.connect({ port, host: IPV4 });
+    const fail = () => {
+      inbound.destroy();
+      outbound.destroy();
+    };
+    inbound.on("error", fail);
+    outbound.on("error", fail);
+    inbound.pipe(outbound);
+    outbound.pipe(inbound);
+    inbound.resume();
+  });
+  try {
+    await listen(server, port, IPV6);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EADDRNOTAVAIL" || code === "EAFNOSUPPORT") return null;
+    throw error;
+  }
+  return { port, servers: [server], close: () => close(server) };
+}

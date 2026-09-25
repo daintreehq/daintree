@@ -30,14 +30,20 @@ import {
   ProjectLinkMethod,
   PushOutcomeSchema,
   SourceDescriptionSchema,
+  type LinkPushBranchPayload,
+  type LinkStartClonePayload,
 } from "./linkMethods.js";
+
+/** Longer than the host's own push timeout, so the host reports a stuck push first. */
+const PUSH_CALL_TIMEOUT_MS = 11 * 60_000;
 
 /** One host's side of a switch, whether it is this machine or one across a link. */
 export interface HostGateway {
   readonly hostId: HostId;
   readonly kind: "local" | "remote";
   describeSource(payload: DescribeSourcePayload): Promise<SourceProjectDescription>;
-  pushBranch(payload: PushBranchPayload): Promise<PushBranchOutcome>;
+  /** Aborting `signal` kills the push; it then rejects with CANCELLED. */
+  pushBranch(payload: LinkPushBranchPayload, signal?: AbortSignal): Promise<PushBranchOutcome>;
   environment(): Promise<HostCloneEnvironment>;
   match(payload: FindProjectMatchPayload): Promise<ProjectMatchCandidate[]>;
   checkDestination(payload: CheckDestinationPayload): Promise<DestinationCheck>;
@@ -63,8 +69,8 @@ export class LocalHostGateway implements HostGateway {
   describeSource(payload: DescribeSourcePayload) {
     return this.service.describeSource(payload);
   }
-  pushBranch(payload: PushBranchPayload) {
-    return this.service.pushBranch(payload);
+  pushBranch(payload: PushBranchPayload, signal?: AbortSignal) {
+    return this.service.pushBranch(payload, signal);
   }
   environment() {
     return this.service.environment();
@@ -142,9 +148,30 @@ export class RemoteHostGateway implements HostGateway {
   describeSource(payload: DescribeSourcePayload) {
     return this.call(ProjectLinkMethod.DESCRIBE_SOURCE, payload, SourceDescriptionSchema);
   }
-  pushBranch(payload: PushBranchPayload) {
-    // A push can outlast the default call timeout on a slow link or a large branch.
-    return this.call(ProjectLinkMethod.PUSH_BRANCH, payload, PushOutcomeSchema, 0);
+  async pushBranch(payload: LinkPushBranchPayload, signal?: AbortSignal) {
+    if (signal?.aborted) throw new AppError({ code: "CANCELLED", message: "Push cancelled" });
+    const opId = payload.opId;
+    const onAbort = () => {
+      if (opId === undefined) return;
+      void this.session()
+        .then((session) => session.call(ProjectLinkMethod.PUSH_CANCEL, { opId }))
+        .catch(() => {});
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      // A push can outlast the default call timeout on a slow link or a large branch.
+      return await this.call(
+        ProjectLinkMethod.PUSH_BRANCH,
+        payload,
+        PushOutcomeSchema,
+        PUSH_CALL_TIMEOUT_MS
+      );
+    } catch (error) {
+      if (signal?.aborted) throw new AppError({ code: "CANCELLED", message: "Push cancelled" });
+      throw error;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+    }
   }
   environment() {
     return this.call(ProjectLinkMethod.ENVIRONMENT, null, EnvironmentSchema);
@@ -158,9 +185,33 @@ export class RemoteHostGateway implements HostGateway {
   suggestDestination(payload: SuggestDestinationPayload) {
     return this.call(ProjectLinkMethod.SUGGEST_DESTINATION, payload, DestinationSchema);
   }
+  /**
+   * The host clones only into a folder it granted this session, so ask it to
+   * check the destination (again, right now) and grant it first.
+   */
   async startClone(payload: CloneAndOpenPayload): Promise<void> {
+    // One session for both: a grant belongs to the session it was minted on.
     const session = await this.session();
-    await session.call(ProjectLinkMethod.START_CLONE, payload);
+    const parsed = DestinationSchema.safeParse(
+      await session.call(ProjectLinkMethod.CHECK_DESTINATION, {
+        path: payload.destination,
+        remoteUrls: payload.source.kind === "remote" ? [payload.source.url] : [],
+        mintGrant: true,
+      })
+    );
+    if (!parsed.success) {
+      throw new AppError({
+        code: "INTERNAL",
+        message: `Host ${this.hostId} sent an invalid answer to ${ProjectLinkMethod.CHECK_DESTINATION}`,
+      });
+    }
+    const check = parsed.data;
+    if (check.status !== "free" || !check.grant) {
+      const detail = check.detail ?? "That folder can't take the clone.";
+      throw new AppError({ code: "VALIDATION", message: detail, userMessage: detail });
+    }
+    const start: LinkStartClonePayload = { ...payload, destinationGrant: check.grant };
+    await session.call(ProjectLinkMethod.START_CLONE, start);
   }
   operationStatus(opId: string) {
     return this.call(ProjectLinkMethod.OPERATION_STATUS, { opId }, OperationOutcomeSchema);

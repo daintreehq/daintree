@@ -90,6 +90,7 @@ describe.each([
       bytesTransferSource(new Uint8Array(Buffer.from("notes"))),
       {
         webContentsId: 7,
+        opId: "op-notes",
         hostLabel: "studio-01",
         name: "notes.txt",
         destination: { kind: "inbox", bucket: "files" },

@@ -397,3 +397,172 @@ describe("source side", () => {
     if (!refused.ok) expect(refused.message).toMatch(/rejected|non-fast-forward|fetch first/);
   });
 });
+
+describe("clones racing for one folder", () => {
+  const stagingLeft = (parent: string) =>
+    fs.readdirSync(parent).filter((name) => name.includes(".daintree-clone-"));
+
+  it("refuses a second clone into a folder another clone is filling, whatever its source", async () => {
+    const host = createTestHost(root, "race-a");
+    const destination = path.join(root, "race-a-home", "daintree");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    host.clone.mockImplementation(async (options: ExecuteCloneOptions) => {
+      await plainClone(options);
+      await gate;
+    });
+    const first = host.service.cloneAndOpen({
+      opId: nextOpId(),
+      source: { kind: "remote", url: URL },
+      destination,
+      branch: null,
+      options: { submodules: false, depth: "full" },
+      setupRecipeId: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const second = host.service.cloneAndOpen({
+      opId: nextOpId(),
+      source: { kind: "remote", url: "git@example.test:someone-else/fork.git" },
+      destination,
+      branch: null,
+      options: { submodules: false, depth: "full" },
+      setupRecipeId: null,
+    });
+    await expect(second).rejects.toMatchObject({
+      code: "VALIDATION",
+      message: "Another clone is already going into this folder.",
+    });
+    release();
+    await expect(first).resolves.toMatchObject({ ok: true, projectPath: destination });
+    expect(fs.existsSync(path.join(destination, ".git"))).toBe(true);
+    expect(stagingLeft(path.dirname(destination))).toEqual([]);
+  });
+
+  it("never replaces what appeared in the folder mid-clone, and removes only its own staging", async () => {
+    const host = createTestHost(root, "race-b");
+    const destination = path.join(root, "race-b-home", "daintree");
+    host.clone.mockImplementation(async (options: ExecuteCloneOptions) => {
+      await plainClone(options);
+      // Another process (a clone from elsewhere, a person) fills the folder meanwhile.
+      fs.mkdirSync(destination, { recursive: true });
+      fs.writeFileSync(path.join(destination, "theirs.txt"), "keep me");
+    });
+    await expect(
+      host.service.cloneAndOpen({
+        opId: nextOpId(),
+        source: { kind: "remote", url: URL },
+        destination,
+        branch: null,
+        options: { submodules: false, depth: "full" },
+        setupRecipeId: null,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(fs.readdirSync(destination)).toEqual(["theirs.txt"]);
+    expect(fs.readFileSync(path.join(destination, "theirs.txt"), "utf8")).toBe("keep me");
+    expect(stagingLeft(path.dirname(destination))).toEqual([]);
+    expect(host.projects).toEqual([]);
+  });
+
+  it("leaves a folder another clone published alone when its own clone fails", async () => {
+    const host = createTestHost(root, "race-c");
+    const destination = path.join(root, "race-c-home", "daintree");
+    host.clone.mockImplementation(async () => {
+      fs.mkdirSync(destination, { recursive: true });
+      fs.writeFileSync(path.join(destination, "theirs.txt"), "keep me");
+      throw new GitOperationError("unknown", "fatal: something broke", { op: "clone" });
+    });
+    await expect(
+      host.service.cloneAndOpen({
+        opId: nextOpId(),
+        source: { kind: "remote", url: URL },
+        destination,
+        branch: null,
+        options: { submodules: false, depth: "full" },
+        setupRecipeId: null,
+      })
+    ).rejects.toBeInstanceOf(GitOperationError);
+    expect(fs.readdirSync(destination)).toEqual(["theirs.txt"]);
+    expect(stagingLeft(path.dirname(destination))).toEqual([]);
+  });
+});
+
+describe("remotes with credentials in them", () => {
+  const SECRET_URL = "https://greg:ghp_s3cret@example.test/daintreehq/daintree.git";
+
+  it("never describes or matches a remote with its user info", async () => {
+    const host = createTestHost(root, "creds-a");
+    const clone = path.join(root, "creds-a-clone");
+    git(root, ["clone", "-q", URL, clone]);
+    git(clone, ["remote", "set-url", "origin", SECRET_URL]);
+    const project = host.addProject(clone);
+    const described = await host.service.describeSource({
+      projectId: project.id,
+      worktreePath: null,
+    });
+    expect(JSON.stringify(described)).not.toMatch(/s3cret|greg@/);
+    expect(described.cloneUrl).toBe("https://example.test/daintreehq/daintree.git");
+    expect(described.remotes).toEqual([
+      { name: "origin", url: "https://example.test/daintreehq/daintree.git" },
+    ]);
+
+    const matches = await host.service.find({ remoteUrls: [URL], committedProjectId: null });
+    expect(matches.map((m) => m.path)).toEqual([clone]);
+    expect(JSON.stringify(matches)).not.toMatch(/s3cret|greg@/);
+  });
+});
+
+describe("a push that doesn't finish", () => {
+  function slowRemote(name: string): { clone: string; payload: Parameters<typeof pushOf>[1] } {
+    const slowBare = makeBare(root, name);
+    const hook = path.join(slowBare, "hooks", "pre-receive");
+    fs.writeFileSync(hook, "#!/bin/sh\nsleep 20\n");
+    fs.chmodSync(hook, 0o755);
+    const clone = makeRepo(root, `${name}-clone`, slowBare);
+    return {
+      clone,
+      payload: {
+        projectId: "",
+        worktreePath: clone,
+        branch: "main",
+        remote: "origin",
+        remoteBranch: "main",
+      },
+    };
+  }
+  const pushOf = (
+    host: ReturnType<typeof createTestHost>,
+    payload: {
+      projectId: string;
+      worktreePath: string;
+      branch: string;
+      remote: string;
+      remoteBranch: string;
+    },
+    signal?: AbortSignal,
+    timeoutMs?: number
+  ) => host.service.pushBranch(payload, signal, timeoutMs);
+
+  it("is cancelled on request, killing git", async () => {
+    const host = createTestHost(root, "push-cancel");
+    const { clone, payload } = slowRemote("push-cancel-origin");
+    const project = host.addProject(clone);
+    const controller = new AbortController();
+    const started = Date.now();
+    const pushing = pushOf(host, { ...payload, projectId: project.id }, controller.signal);
+    setTimeout(() => controller.abort(), 200);
+    await expect(pushing).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("is stopped and reported once it runs past its timeout", async () => {
+    const host = createTestHost(root, "push-timeout");
+    const { clone, payload } = slowRemote("push-timeout-origin");
+    const project = host.addProject(clone);
+    const outcome = await pushOf(host, { ...payload, projectId: project.id }, undefined, 300);
+    expect(outcome).toEqual({
+      ok: false,
+      reason: "timeout",
+      message: "git push took too long and was stopped.",
+    });
+  });
+});

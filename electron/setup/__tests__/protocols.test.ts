@@ -1120,8 +1120,10 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
     beforeEach(() => {
       // The port client's gate: views on a host reach only its forwarded port 5173.
-      disposeGate = setRemoteWebviewSrcGate((webContentsId, src) =>
-        webContentsId === REMOTE_EMBEDDER ? src.startsWith("http://localhost:5173/") : null
+      disposeGate = setRemoteWebviewSrcGate(
+        (webContentsId, src) =>
+          webContentsId === REMOTE_EMBEDDER ? src.startsWith("http://localhost:5173/") : null,
+        (webContentsId) => webContentsId === REMOTE_EMBEDDER
       );
     });
 
@@ -1175,6 +1177,47 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
         expect(blocks(contents, event, "http://[::ffff:0.0.0.0]:3000/")).toBe(true);
       }
     );
+
+    it("keeps a remote view's popups off this machine's localhost, and local views' as before", async () => {
+      const { openExternalUrl } = await import("../../utils/openExternal.js");
+      vi.mocked(openExternalUrl).mockResolvedValue(undefined as never);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const open = (embedder: number, url: string) => {
+        const contents = guest(embedder, "persist:browser-proj-a");
+        const handler = contents.setWindowOpenHandler.mock.calls[0]![0] as (d: { url: string }) => {
+          action: string;
+        };
+        return handler({ url });
+      };
+      expect(open(REMOTE_EMBEDDER, "http://localhost:3000/admin")).toEqual({ action: "deny" });
+      expect(openExternalUrl).not.toHaveBeenCalled();
+      open(REMOTE_EMBEDDER, "http://localhost:5173/");
+      expect(openExternalUrl).toHaveBeenCalledWith("http://localhost:5173/");
+      open(LOCAL_EMBEDDER, "http://localhost:3000/admin");
+      expect(openExternalUrl).toHaveBeenCalledWith("http://localhost:3000/admin");
+      warn.mockRestore();
+    });
+
+    it("puts every request of a remote view's guest session through the gate, and none of a local one's", () => {
+      const onBeforeRequest = vi.fn();
+      const embedder = createMockWebContents("window");
+      embedder.id = REMOTE_EMBEDDER;
+      simulateWebContentsCreated(embedder);
+      const attach = getEventHandlers(embedder, "did-attach-webview")[0]!;
+      attach({}, { session: { webRequest: { onBeforeRequest } } });
+      expect(onBeforeRequest).toHaveBeenCalledTimes(1);
+      expect(onBeforeRequest.mock.calls[0]![0]).toEqual({ urls: ["<all_urls>"] });
+
+      const local = createMockWebContents("window");
+      local.id = LOCAL_EMBEDDER;
+      simulateWebContentsCreated(local);
+      const localOnBeforeRequest = vi.fn();
+      getEventHandlers(local, "did-attach-webview")[0]!(
+        {},
+        { session: { webRequest: { onBeforeRequest: localOnBeforeRequest } } }
+      );
+      expect(localOnBeforeRequest).not.toHaveBeenCalled();
+    });
 
     it("leaves guests in a local view on today's rules", () => {
       const preview = guest(LOCAL_EMBEDDER);

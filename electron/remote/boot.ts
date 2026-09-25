@@ -157,8 +157,8 @@ function startClient(): void {
       onEndpointOpened: client.onEndpointOpened,
       hostForView: (webContentsId) => hostForView(webContentsId),
       isKnownHost: (hostId) => hostEntry(hostId) !== undefined,
+      onSessionOpened: (listener) => client.manager.onSessionOpened(listener),
       sessionFor: client.sessionFor,
-      hostIds: () => client.client.list().map((entry) => entry.descriptor.id),
       sshTargetFor: (hostId) => hostEntry(hostId)?.descriptor.sshTarget ?? null,
       clientDir: path.join(app.getPath("userData"), "rh"),
     })

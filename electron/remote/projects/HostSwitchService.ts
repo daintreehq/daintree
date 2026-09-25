@@ -22,6 +22,10 @@ import {
   type OperationOutcome,
 } from "../../../shared/types/remoteHosts.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import {
+  stripGitRemoteCredentials,
+  stripRemoteListCredentials,
+} from "../../../shared/utils/gitRemoteUrl.js";
 import type { IpcContext } from "../../ipc/types.js";
 import { normalizeOperationId } from "../../services/operations/OperationRegistry.js";
 import type { ProjectAcrossHostsService } from "../../services/projectAcrossHosts/index.js";
@@ -138,12 +142,18 @@ export class HostSwitchService {
 
   async prepare(ctx: IpcContext, payload: HostSwitchPlanPayload): Promise<HostSwitchPreparation> {
     const { from, to } = this.endpoints(ctx, payload?.fromHostId, payload?.toHostId);
-    const source = await from.describeSource({
+    const described = await from.describeSource({
       projectId: payload.projectId,
       worktreePath: payload.worktreePath ?? null,
     });
+    // Neither the other host nor the dialog ever sees a remote's embedded credentials.
+    const source = {
+      ...described,
+      remotes: stripRemoteListCredentials(described.remotes),
+      cloneUrl: described.cloneUrl === null ? null : stripGitRemoteCredentials(described.cloneUrl),
+    };
     const remoteUrls = source.remotes.map((remote) => remote.url);
-    const [candidates, environment, destination] = await Promise.all([
+    const [found, environment, destination] = await Promise.all([
       to.match({ remoteUrls, committedProjectId: source.committedProjectId }),
       to.environment(),
       to
@@ -154,6 +164,10 @@ export class HostSwitchService {
         })
         .catch((): DestinationCheck | null => null),
     ]);
+    const candidates = found.map((candidate) => ({
+      ...candidate,
+      remotes: stripRemoteListCredentials(candidate.remotes),
+    }));
     return {
       fromHostId: from.hostId,
       toHostId: to.hostId,
@@ -169,7 +183,7 @@ export class HostSwitchService {
       remotes: source.remotes,
       committedProjectId: source.committedProjectId,
       candidates,
-      destination,
+      destination: destination && withoutGrant(destination),
       usesLfs: source.usesLfs,
       hasSubmodules: source.hasSubmodules,
       targetGitLfsAvailable: environment.gitLfsAvailable,
@@ -198,10 +212,14 @@ export class HostSwitchService {
 
   checkDestination(payload: HostSwitchCheckDestinationPayload): Promise<DestinationCheck> {
     if (typeof payload?.toHostId !== "string") throw invalid("toHostId is required");
-    return this.gateway(payload.toHostId).checkDestination({
-      path: payload.path,
-      remoteUrls: Array.isArray(payload.remoteUrls) ? payload.remoteUrls : [],
-    });
+    return this.gateway(payload.toHostId)
+      .checkDestination({
+        path: payload.path,
+        remoteUrls: Array.isArray(payload.remoteUrls)
+          ? payload.remoteUrls.map(stripGitRemoteCredentials)
+          : [],
+      })
+      .then(withoutGrant);
   }
 
   execute(ctx: IpcContext, payload: HostSwitchExecutePayload): Promise<HostSwitchExecuteResult> {
@@ -237,9 +255,9 @@ export class HostSwitchService {
             await to.open({
               projectId: payload.candidate.projectId,
               path: payload.candidate.path,
-              remoteUrls: payload.remoteUrls,
+              remoteUrls: payload.remoteUrls.map(stripGitRemoteCredentials),
               branch: payload.branch,
-              branchRemoteUrl: payload.branchRemoteUrl,
+              branchRemoteUrl: stripOptional(payload.branchRemoteUrl),
             })
           );
         };
@@ -254,7 +272,7 @@ export class HostSwitchService {
             await to.checkOut({
               projectId: payload.projectId,
               branch: payload.branch,
-              branchRemoteUrl: payload.branchRemoteUrl,
+              branchRemoteUrl: stripOptional(payload.branchRemoteUrl),
             })
           );
         };
@@ -340,13 +358,23 @@ export class HostSwitchService {
     track: Tracked
   ): Promise<HostSwitchExecuteResult> {
     this.stage(track, "pushing", `Pushing ${payload.branch}`);
-    const outcome = await from.pushBranch({
-      projectId: payload.projectId,
-      worktreePath: payload.worktreePath,
-      branch: payload.branch,
-      remote: payload.remote,
-      remoteBranch: payload.remoteBranch,
-    });
+    // Cancel kills git on the source host; the push then settles as cancelled.
+    const controller = new AbortController();
+    track.cancel = async () => {
+      controller.abort();
+      return true;
+    };
+    const outcome = await from.pushBranch(
+      {
+        opId: payload.opId,
+        projectId: payload.projectId,
+        worktreePath: payload.worktreePath,
+        branch: payload.branch,
+        remote: payload.remote,
+        remoteBranch: payload.remoteBranch,
+      },
+      controller.signal
+    );
     if (outcome.ok) return { kind: "pushed" };
     return {
       kind: "git-failed",
@@ -390,7 +418,7 @@ export class HostSwitchService {
         unclaimedTargetBundle = await this.moveBundle(from, to, bundle.token);
         source = { kind: "bundle", token: unclaimedTargetBundle };
       } else {
-        source = { kind: "remote", url: payload.source.url };
+        source = { kind: "remote", url: stripGitRemoteCredentials(payload.source.url) };
       }
       stopIfCancelled();
 
@@ -600,6 +628,16 @@ export class HostSwitchService {
       release();
     }
   }
+}
+
+function stripOptional(url: string | null | undefined): string | null {
+  return typeof url === "string" ? stripGitRemoteCredentials(url) : null;
+}
+
+/** A destination grant is between the Shell's main process and the host; renderers never hold one. */
+function withoutGrant(check: DestinationCheck & { grant?: unknown }): DestinationCheck {
+  const { grant: _grant, ...rest } = check;
+  return rest;
 }
 
 function opened(hostId: HostId, result: HostProjectOpened): HostSwitchExecuteResult {

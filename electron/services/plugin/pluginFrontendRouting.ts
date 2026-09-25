@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { ClientEndpoint } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
 
@@ -6,13 +7,15 @@ import { AppError } from "../../utils/errorTypes.js";
  * clipboard write, an open-file request) should reach.
  *
  * - `local`: a view of this process, found the way it always was.
- * - `remote`: the renderer on another machine that drives the project.
+ * - `remote`: the renderer on another machine that drives the project, under
+ *   drive lease `leaseId` when the project has a holder. A prompt shown there
+ *   belongs to that lease: a takeover makes it someone else's.
  * - `none`: nobody is attached who could answer. `reserved` means the driver
  *   stepped away inside its lease's grace; `vacant` means nobody drives at all.
  */
 export type PluginFrontend =
   | { kind: "local" }
-  | { kind: "remote"; endpoint: ClientEndpoint }
+  | { kind: "remote"; endpoint: ClientEndpoint; leaseId?: number }
   | { kind: "none"; reason: "vacant" | "reserved" | "lookup-failed" };
 
 /**
@@ -31,7 +34,21 @@ const LOCAL: PluginFrontend = { kind: "local" };
 let router: PluginFrontendRouter | null = null;
 let routerChangeCleanup: (() => void) | null = null;
 const changeListeners = new Set<() => void>();
-const invokeOrigins = new Map<string, { endpoint: ClientEndpoint; release: () => void }>();
+
+/**
+ * Who a plugin invocation came from, carried with the invocation itself. An
+ * app-global plugin has no project of its own, so its prompts and clipboard
+ * calls follow the frontend and project of the call they happen inside, never
+ * a per-plugin "last caller" that a concurrent call from another project could
+ * overwrite. `projectId` is the caller's project when the call was made.
+ */
+export interface PluginInvocationScope {
+  readonly pluginId: string;
+  readonly endpoint: ClientEndpoint;
+  readonly projectId: string | null;
+}
+
+const invocationScope = new AsyncLocalStorage<PluginInvocationScope>();
 
 function notifyChange(): void {
   for (const listener of [...changeListeners]) {
@@ -48,14 +65,12 @@ export function setPluginFrontendRouter(next: PluginFrontendRouter | null): () =
   routerChangeCleanup = null;
   router = next;
   if (next) routerChangeCleanup = next.onChange(notifyChange);
-  if (next === null) clearInvokeOrigins();
   notifyChange();
   return () => {
     if (router !== next) return;
     routerChangeCleanup?.();
     routerChangeCleanup = null;
     router = null;
-    clearInvokeOrigins();
     notifyChange();
   };
 }
@@ -98,35 +113,45 @@ export function onPluginFrontendChange(listener: () => void): () => void {
 }
 
 /**
- * Remember which frontend last called a plugin, so an app-global plugin's
- * prompt lands in front of the person who just used it rather than whichever
- * window is focused on this machine. Only kept while routing is on.
+ * Run a plugin invocation from `endpoint` so an app-global plugin's prompt or
+ * clipboard call made while it runs (including across its awaits) reaches the
+ * person who made this call. Only while routing is on: off, `fn` runs as it
+ * always did.
  */
-export function notePluginInvokeOrigin(pluginId: string, endpoint: ClientEndpoint): void {
-  if (router === null || endpoint.isClosed()) return;
-  const existing = invokeOrigins.get(pluginId);
-  if (existing?.endpoint === endpoint) return;
-  existing?.release();
-  const subscription = endpoint.onClose(() => {
-    if (invokeOrigins.get(pluginId)?.endpoint === endpoint) invokeOrigins.delete(pluginId);
-  });
-  invokeOrigins.set(pluginId, { endpoint, release: () => subscription.dispose() });
+export function runInPluginInvocation<T>(
+  pluginId: string,
+  endpoint: ClientEndpoint,
+  fn: () => T
+): T {
+  if (router === null) return fn();
+  return invocationScope.run({ pluginId, endpoint, projectId: endpoint.projectId }, fn);
 }
 
-export function getPluginInvokeOrigin(pluginId: string): ClientEndpoint | null {
-  const entry = invokeOrigins.get(pluginId);
-  if (!entry) return null;
-  if (entry.endpoint.isClosed()) {
-    entry.release();
-    invokeOrigins.delete(pluginId);
-    return null;
-  }
-  return entry.endpoint;
+/** The invocation the current async context belongs to, if any. */
+export function currentPluginInvocation(): PluginInvocationScope | null {
+  return invocationScope.getStore() ?? null;
 }
 
-function clearInvokeOrigins(): void {
-  for (const entry of invokeOrigins.values()) entry.release();
-  invokeOrigins.clear();
+/**
+ * Re-enter a captured invocation for work that lost its async context (a
+ * worker's callback, a prompt re-routed later). `null` runs `fn` outside any
+ * invocation, so it can never inherit an unrelated caller's.
+ */
+export function runWithPluginInvocation<T>(scope: PluginInvocationScope | null, fn: () => T): T {
+  return scope === null ? invocationScope.exit(fn) : invocationScope.run(scope, fn);
+}
+
+/**
+ * The invocation `pluginId` is running inside, or null when the current work
+ * belongs to no call of that plugin (background work, or a call of another
+ * plugin). Kept after the caller's endpoint closes: the call still belongs to
+ * the caller's project, whose current driver answers for it, and must never
+ * fall through to whatever window happens to be open.
+ */
+export function getPluginInvokeOrigin(pluginId: string): PluginInvocationScope | null {
+  const scope = invocationScope.getStore();
+  if (!scope || scope.pluginId !== pluginId) return null;
+  return scope;
 }
 
 /** Message prefix a plugin can match without importing anything. */
@@ -157,5 +182,4 @@ export function _resetPluginFrontendRoutingForTesting(): void {
   routerChangeCleanup = null;
   router = null;
   changeListeners.clear();
-  clearInvokeOrigins();
 }

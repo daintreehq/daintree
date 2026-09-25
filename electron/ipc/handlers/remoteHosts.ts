@@ -2,9 +2,11 @@ import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
 import os from "node:os";
 import { store } from "../../store.js";
+import { AppError } from "../../utils/errorTypes.js";
 import { getRemoteService, requireRemoteService } from "../../remote/runtime.js";
 import { REMOTE_HOSTS_METHOD_CHANNELS } from "./remoteHosts.preload.js";
 import { getLocalHandshakeInfo } from "../../remote/handshakeInfo.js";
+import { persistedClipboardGrants } from "../../remote/plugins/clipboardGrants.js";
 import {
   LOCAL_HOST_ID,
   type HostConnectionState,
@@ -24,11 +26,21 @@ import type {
   InstallHostPayload,
   ListHostProjectsPayload,
   InstallHostResult,
+  HostPluginClipboardGrant,
   PlanInstallPayload,
+  ResetClipboardGrantsPayload,
   SwitchWindowHostPayload,
   UpdateHostPayload,
   WindowHostInfo,
 } from "../../../shared/types/ipc/remoteHosts.js";
+
+function requireHostId(payload: unknown): string {
+  const hostId = (payload as { hostId?: unknown } | null)?.hostId;
+  if (typeof hostId !== "string" || hostId.length === 0) {
+    throw new AppError({ code: "VALIDATION", message: "hostId is required" });
+  }
+  return hostId;
+}
 
 /** This machine as a window's host: what a window that never attached anywhere reports. */
 function localWindowHost(): WindowHostInfo {
@@ -151,6 +163,22 @@ export const remoteHostsNamespace = defineIpcNamespace({
         const hostId = (payload as Partial<ListHostProjectsPayload> | null)?.hostId;
         if (typeof hostId === "string" && isLocalHostId(hostId)) return listLocalProjects();
         return requireRemoteService("remoteHostsClient").listHostProjects(payload);
+      }
+    ),
+    // This machine's own answers about a host's plugins and its clipboard.
+    listClipboardGrants: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.listClipboardGrants,
+      async (payload: ListHostProjectsPayload): Promise<HostPluginClipboardGrant[]> =>
+        persistedClipboardGrants.list(requireHostId(payload))
+    ),
+    resetClipboardGrants: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.resetClipboardGrants,
+      async (payload: ResetClipboardGrantsPayload): Promise<void> => {
+        const pluginId = (payload as Partial<ResetClipboardGrantsPayload> | null)?.pluginId;
+        if (pluginId !== undefined && typeof pluginId !== "string") {
+          throw new AppError({ code: "VALIDATION", message: "pluginId must be a string" });
+        }
+        persistedClipboardGrants.reset(requireHostId(payload), pluginId);
       }
     ),
     isInUse: op(REMOTE_HOSTS_METHOD_CHANNELS.isInUse, (): boolean => remoteHostsInUse()),

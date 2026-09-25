@@ -10,6 +10,8 @@ vi.mock("@/clients/remoteHostsClient", () => ({
     update,
     connect: vi.fn(async () => undefined),
     forget: vi.fn(async () => undefined),
+    listClipboardGrants: vi.fn(async () => []),
+    resetClipboardGrants: vi.fn(async () => undefined),
   },
 }));
 

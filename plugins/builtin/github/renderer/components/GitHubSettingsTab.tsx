@@ -22,6 +22,7 @@ import {
 } from "./GitHubCliImport";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
+import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { logError } from "@/utils/logger";
 
 type ValidationResult = "success" | "error" | "test-success" | "test-error" | null;
@@ -43,6 +44,8 @@ const SCOPE_DESCRIPTIONS: Record<(typeof GITHUB_REQUIRED_SCOPES)[number], string
 };
 
 export function GitHubSettingsTab() {
+  // The token is the host's own sign-in in a window attached to another host.
+  const remoteHostName = useRemoteHostName();
   const {
     config: githubConfig,
     error: storeError,
@@ -304,10 +307,14 @@ export function GitHubSettingsTab() {
                 <span className="flex items-center gap-1 text-xs text-text-secondary">
                   {githubConfig.hasToken && <Icon name="check" className="w-3 h-3" />}
                   {!githubConfig.hasToken
-                    ? "No token saved"
-                    : githubConfig.username
-                      ? `Token saved for @${githubConfig.username}`
-                      : "Token saved"}
+                    ? remoteHostName === null
+                      ? "No token saved"
+                      : forgeNotConnectedLabel("GitHub", remoteHostName)
+                    : `${
+                        githubConfig.username
+                          ? `Token saved for @${githubConfig.username}`
+                          : "Token saved"
+                      }${remoteHostName === null ? "" : ` on ${remoteHostName}`}`}
                 </span>
               }
             />

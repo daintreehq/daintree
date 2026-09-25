@@ -8,6 +8,8 @@ import type { RemoteHostManager } from "../RemoteHostManager.js";
 import { RemoteHostsClient, type WindowControl } from "../RemoteHostsClient.js";
 import { RemoteRouterImpl } from "../RemoteRouter.js";
 import { WindowHostBinding } from "../WindowHostBinding.js";
+import { _resetRemoteServicesForTest, registerRemoteService } from "../../runtime.js";
+import type { HostMetricsClient } from "../../metrics/client.js";
 
 function memoryStore(): RemoteHostsStore {
   let value: { hosts: HostDescriptor[] } | undefined;
@@ -291,6 +293,18 @@ describe("RemoteHostsClient", () => {
       hostId: "studio-01",
       connection: { status: "unreachable", lastSeenAt: 5, detail: "refused" },
     });
+  });
+
+  it("fills each host's summary from the last frame host metrics holds", () => {
+    const summary = { agentsObserved: { working: 2 } };
+    registerRemoteService("hostMetrics", {
+      latest: (hostId: string) => (hostId === "studio-01" ? summary : null),
+    } as unknown as HostMetricsClient);
+    try {
+      expect(client.list()).toEqual([expect.objectContaining({ summary })]);
+    } finally {
+      _resetRemoteServicesForTest();
+    }
   });
 
   it("runs the first-use wiring once, and never for a user who only reads", async () => {

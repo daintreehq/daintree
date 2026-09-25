@@ -45,12 +45,21 @@ let remoteMaterializer: MaterializeFn | null = null;
 let viewMaterializer: MaterializeFn | null = null;
 let loadingViewMaterializer: Promise<MaterializeFn> | null = null;
 
+function importRemoteMaterializer(): Promise<typeof import("./remoteMaterializer")> {
+  // The define must be tested directly here: only then does a build without
+  // Remote Hosts (Windows) drop the upload modules from its output.
+  if (__DAINTREE_REMOTE_HOSTS__) {
+    return import("./remoteMaterializer");
+  }
+  return Promise.reject(new Error("Remote hosts aren't part of this build"));
+}
+
 /**
  * A view belongs to one host for its whole life, so a remote view loads its
  * materializer once, on first use. A local view never loads it at all.
  */
 function loadViewMaterializer(): Promise<MaterializeFn> {
-  loadingViewMaterializer ??= import("./remoteMaterializer").then(
+  loadingViewMaterializer ??= importRemoteMaterializer().then(
     (module) => {
       viewMaterializer = module.createViewRemoteMaterializer(currentHostId());
       return viewMaterializer;

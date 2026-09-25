@@ -471,6 +471,7 @@ function probeDefinitions(): unknown[] {
  */
 export const HOST_GATED_ACTION_IDS: ReadonlySet<string> = new Set([
   "host.switch",
+  "host.overview.open",
   "project.openOnHost",
   "host.forwardPort",
 ]);

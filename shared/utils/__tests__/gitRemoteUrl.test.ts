@@ -4,6 +4,7 @@ import {
   normalizeGitRemoteUrls,
   repositoryNameFromRemote,
   sharedGitRemotes,
+  stripGitRemoteCredentials,
 } from "../gitRemoteUrl.js";
 
 describe("normalizeGitRemoteUrl", () => {
@@ -100,5 +101,33 @@ describe("repositoryNameFromRemote", () => {
     expect(repositoryNameFromRemote("git@github.com:Owner/MyRepo.git")).toBe("MyRepo");
     expect(repositoryNameFromRemote("https://gitlab.com/a/b/c/deep")).toBe("deep");
     expect(repositoryNameFromRemote("/local/path")).toBeNull();
+  });
+});
+
+describe("stripGitRemoteCredentials", () => {
+  it.each([
+    [
+      "https://greg:ghp_s3cret@github.com/daintreehq/daintree.git",
+      "https://github.com/daintreehq/daintree.git",
+    ],
+    [
+      "https://ghp_s3cret@github.com/daintreehq/daintree.git",
+      "https://github.com/daintreehq/daintree.git",
+    ],
+    ["http://user:pw@git.example.com:8080/a/b.git", "http://git.example.com:8080/a/b.git"],
+    ["ssh://git:pw@example.com/repo.git", "ssh://git@example.com/repo.git"],
+    ["https://user:token@bad host/repo.git", "https://bad host/repo.git"],
+  ])("strips the credentials from %s", (input, expected) => {
+    expect(stripGitRemoteCredentials(input)).toBe(expected);
+  });
+
+  it.each([
+    "git@github.com:daintreehq/daintree.git",
+    "ssh://git@example.com:2222/repo.git",
+    "https://github.com/daintreehq/daintree",
+    "/srv/repo.git",
+    "not a url @ all",
+  ])("leaves %s as it is", (input) => {
+    expect(stripGitRemoteCredentials(input)).toBe(input);
   });
 });

@@ -10,6 +10,15 @@ import { z } from "zod";
  * a byte moves and answers with a token; the bytes then arrive as one verified
  * bulk transfer whose destination is that token. A transfer naming a token the
  * host never issued to this session is refused.
+ *
+ * Every prepare carries the Shell's operation id. The host remembers what an
+ * operation placed, so a Shell that lost the acknowledgement asks again with
+ * the same id and is told where the file went, rather than placing it twice.
+ *
+ * Replacing a file in the project is never a flag the Shell sets. The host
+ * answers a clash with a conflict naming a single-use replace token, bound to
+ * the file it found there, the asking endpoint and its drive lease; only a
+ * prepare carrying that token, for that unchanged file, replaces it.
  */
 export const UploadLinkMethod = {
   /** Shell → Host: admit an upload, or reuse an identical inbox file. */
@@ -28,9 +37,16 @@ export const UploadPreparePayloadSchema = z.object({
   name: z.string().min(1).max(1024),
   size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  /** The Shell's operation id: a retry with the same id gets the recorded outcome. */
+  opId: z.string().min(1).max(128),
   destination: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("inbox"), bucket: z.enum(["clipboard", "files"]) }),
-    z.object({ kind: z.literal("worktree"), directory: hostPath, overwrite: z.boolean() }),
+    z.object({
+      kind: z.literal("worktree"),
+      directory: hostPath,
+      /** From the conflict the host reported, once the user chose to replace. */
+      replaceToken: hexId.optional(),
+    }),
   ]),
 });
 export type UploadPreparePayload = z.infer<typeof UploadPreparePayloadSchema>;
@@ -49,8 +65,13 @@ export const UploadPrepareResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("ready"), token: hexId }),
   /** An identical file is already in the inbox; nothing needs to be sent. */
   z.object({ status: z.literal("duplicate"), hostPath }),
-  /** Add to project without `overwrite`, and a file of that name is there. */
-  z.object({ status: z.literal("conflict"), hostPath }),
+  /**
+   * Add to project, and a file of that name is there. `replaceToken` replaces
+   * exactly that file, once, for this endpoint.
+   */
+  z.object({ status: z.literal("conflict"), hostPath, replaceToken: hexId }),
+  /** This operation already placed its file (an earlier attempt's answer was lost). */
+  z.object({ status: z.literal("done"), hostPath, bytes: z.number().int().min(0) }),
   z.object({ status: z.literal("refused"), reason: z.enum(UPLOAD_REFUSAL_REASONS) }),
 ]);
 export type UploadPrepareResult = z.infer<typeof UploadPrepareResultSchema>;

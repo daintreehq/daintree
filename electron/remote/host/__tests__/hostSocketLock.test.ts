@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HostSocketLockTimeoutError,
   hostSocketLockPath,
+  processStartTime,
   withHostSocketLock,
 } from "../hostSocketLock.js";
 import {
@@ -98,14 +99,53 @@ describe("withHostSocketLock", () => {
     expect(existsSync(lockPath)).toBe(true);
   });
 
-  it("takes over a lock that has outlived any real holder", async () => {
+  it("never breaks a live owner's lock however old it is", async () => {
     const lockPath = hostSocketLockPath(socketPath);
     await fs.writeFile(lockPath, JSON.stringify({ pid: process.ppid }));
+    const past = new Date(Date.now() - 60 * 60_000);
+    await fs.utimes(lockPath, past, past);
+    const fn = vi.fn(async () => "ran");
+    await expect(
+      withHostSocketLock(socketPath, fn, { staleMs: 30_000, timeoutMs: 150, retryMs: 10 })
+    ).rejects.toBeInstanceOf(HostSocketLockTimeoutError);
+    expect(fn).not.toHaveBeenCalled();
+    expect(existsSync(lockPath)).toBe(true);
+  });
+
+  it("takes over an old lock that names no readable owner", async () => {
+    const lockPath = hostSocketLockPath(socketPath);
+    await fs.writeFile(lockPath, "");
     const past = new Date(Date.now() - 60_000);
     await fs.utimes(lockPath, past, past);
     await expect(
-      withHostSocketLock(socketPath, async () => "ran", { staleMs: 30_000 })
+      withHostSocketLock(socketPath, async () => "ran", { staleMs: 30_000, retryMs: 10 })
     ).resolves.toBe("ran");
+  });
+
+  it("waits out a fresh lock that names no readable owner", async () => {
+    await fs.writeFile(hostSocketLockPath(socketPath), "");
+    await expect(
+      withHostSocketLock(socketPath, async () => "ran", { timeoutMs: 100, retryMs: 10 })
+    ).rejects.toBeInstanceOf(HostSocketLockTimeoutError);
+  });
+
+  it.runIf(process.platform === "linux")(
+    "breaks a lock whose pid now belongs to a later process",
+    async () => {
+      await fs.writeFile(
+        hostSocketLockPath(socketPath),
+        JSON.stringify({ pid: process.ppid, start: "0" })
+      );
+      await expect(withHostSocketLock(socketPath, async () => "ran")).resolves.toBe("ran");
+    }
+  );
+
+  it("records its own pid and start time in the lock it holds", async () => {
+    const seen = await withHostSocketLock(socketPath, async () =>
+      JSON.parse(await fs.readFile(hostSocketLockPath(socketPath), "utf8"))
+    );
+    expect(seen.pid).toBe(process.pid);
+    expect(seen.start).toBe(processStartTime(process.pid));
   });
 });
 

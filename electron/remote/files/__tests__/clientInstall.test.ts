@@ -74,13 +74,26 @@ describe("createHostFileClient.download", () => {
     expect(download).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels by operation id", async () => {
+  it("cancels by operation id, only for the view that started it", async () => {
     const { client, release } = setup();
     const pending = client.download(7, payload);
-    expect(client.cancel("op-1")).toBe(true);
+    expect(client.cancel("op-1", 8)).toBe(false);
+    expect(client.cancel("op-1", 7)).toBe(true);
     release();
     await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
-    expect(client.cancel("op-1")).toBe(false);
+    expect(client.cancel("op-1", 7)).toBe(false);
+  });
+
+  it("refuses another view's operation id, or the same id for another file", async () => {
+    const { client, download, release } = setup();
+    const first = client.download(7, payload);
+    await expect(client.download(8, payload)).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(
+      client.download(7, { ...payload, hostPath: `${payload.hostPath}.other` })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    release();
+    await first;
+    expect(download).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a file on a host the view isn't attached to", async () => {

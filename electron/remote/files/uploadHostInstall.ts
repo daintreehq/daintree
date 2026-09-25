@@ -26,6 +26,7 @@ export function installHostUploadService(options: { inbox?: HostInbox } = {}): {
   const service = new HostUploadService({
     rootsFor: projectFileRoots,
     isDriving: (projectId, endpoint) => lease.isDriving(projectId, endpoint),
+    leaseIdFor: (projectId) => lease.getHolder(projectId)?.leaseId ?? null,
     inbox,
   });
   void inbox
@@ -35,12 +36,14 @@ export function installHostUploadService(options: { inbox?: HostInbox } = {}): {
       console.warn("[RemoteHosts] Couldn't prepare the host inbox:", error);
     });
   const unregister = registerRemoteService("hostUploadService", service);
+  const unwatchLease = lease.onChange((state) => service.onLeaseChanged(state.projectId));
   // Thumbnails for host inbox paths are built here, on the host, for remote windows.
   const releaseThumbnailRoot = setThumbnailInboxRoot(inbox.root);
   return {
     service,
     dispose() {
       releaseThumbnailRoot();
+      unwatchLease();
       unregister();
       service.dispose();
     },

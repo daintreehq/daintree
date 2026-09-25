@@ -19,6 +19,8 @@ export const REMOTE_HOSTS_METHOD_CHANNELS = {
   cancelInstall: "remote-hosts:cancel-install",
   startHostMode: "remote-hosts:start-host-mode",
   listHostProjects: "remote-hosts:list-host-projects",
+  listClipboardGrants: "remote-hosts:list-clipboard-grants",
+  resetClipboardGrants: "remote-hosts:reset-clipboard-grants",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof REMOTE_HOSTS_METHOD_CHANNELS;
