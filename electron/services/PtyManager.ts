@@ -581,7 +581,6 @@ export class PtyManager extends EventEmitter {
         dataHandoff
       );
     } catch (error) {
-      this.constructionOutput = null;
       logError(`TerminalProcess constructor failed for ${id}, killing orphaned PTY`, error);
       try {
         dataHandoff?.dispose();
@@ -594,12 +593,13 @@ export class PtyManager extends EventEmitter {
         // Process may already be dead
       }
       throw error;
+    } finally {
+      this.constructionOutput = null;
     }
 
     const consumedPendingResize = this.pendingResizes.has(id);
     this.pendingResizes.delete(id);
     this.registry.add(id, terminalProcess);
-    this.constructionOutput = null;
     for (const chunk of constructionOutput.chunks) {
       this.emitData(id, chunk);
     }
