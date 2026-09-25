@@ -6,6 +6,7 @@ import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore"
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logWarn } from "@/utils/logger";
 import { resolveFleetBroadcastTargetIds } from "./fleetBroadcast";
+import { disarmCrossHostTarget, getArmedCrossHostTargets } from "./crossHostFleet";
 import {
   executeFleetBroadcast,
   filterEligibleIds,
@@ -165,7 +166,7 @@ export function tryFleetBroadcastFromEditor(
   onSent: () => void
 ): boolean {
   const armed = useFleetArmingStore.getState().armedIds;
-  if (!armed.has(terminalId) || armed.size < 2) return false;
+  if (!armed.has(terminalId) || armed.size + getArmedCrossHostTargets().length < 2) return false;
 
   const targets = resolveFleetBroadcastTargetIds();
   if (targets.length === 0) return false;
@@ -251,6 +252,7 @@ export function tryFleetBroadcastFromEditor(
           const arming = useFleetArmingStore.getState();
           for (const id of result.permanentlyFailedIds) {
             arming.disarmId(id);
+            disarmCrossHostTarget(id);
             // `executeFleetBroadcast` already calls `clearDirectingState` on
             // every rejected target, so we don't repeat it here.
             useFleetFailureStore.getState().dismissId(id);

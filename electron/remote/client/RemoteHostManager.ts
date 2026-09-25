@@ -84,6 +84,9 @@ export type EndpointClosedListener = (info: EndpointClosedInfo) => void;
 
 export type SessionAttachedListener = (info: SessionAttachedInfo) => void;
 
+/** A session (fresh or resumed) is live on the connection, whether or not any view uses it. */
+export type SessionOpenedListener = (session: LinkSession) => void;
+
 /** A host asked one of this Shell's views something (MCP dispatch, a notification to show). */
 export interface ViewReverseRequest {
   hostId: HostId;
@@ -127,6 +130,7 @@ export class HostConnection {
   private readonly openedListeners = new Set<EndpointOpenedListener>();
   private readonly closedListeners = new Set<EndpointClosedListener>();
   private readonly attachedListeners = new Set<SessionAttachedListener>();
+  private readonly sessionListeners = new Set<SessionOpenedListener>();
   private hadSession = false;
   /**
    * Endpoints closed while the link was down. The host keeps a dropped
@@ -204,6 +208,16 @@ export class HostConnection {
     return () => this.attachedListeners.delete(listener);
   }
 
+  /**
+   * Told of every session as it attaches, before any view has called
+   * through it: host summaries and session-level services ride here, so a
+   * host no window is bound to still reports.
+   */
+  onSessionOpened(listener: SessionOpenedListener): () => void {
+    this.sessionListeners.add(listener);
+    return () => this.sessionListeners.delete(listener);
+  }
+
   start(): void {
     this.started = true;
     this.link.start();
@@ -263,6 +277,7 @@ export class HostConnection {
     this.openedListeners.clear();
     this.closedListeners.clear();
     this.attachedListeners.clear();
+    this.sessionListeners.clear();
     this.hadSession = false;
   }
 
@@ -366,6 +381,22 @@ export class HostConnection {
     return parsed.data;
   }
 
+  /**
+   * A session-level method on the host, needing no view bound to it. Rejects
+   * while the host can't be reached.
+   */
+  async callHost(method: string, payload: unknown): Promise<unknown> {
+    const session = this.session;
+    if (this.unavailableEnvelope() || !session) {
+      throw new AppError({
+        code: "HOST_DISCONNECTED",
+        message: `Host ${this.hostId} is not connected`,
+        userMessage: "Couldn't reach this host. Check that it is on and try again.",
+      });
+    }
+    return session.call(method, payload);
+  }
+
   /** Local views that have an endpoint on the host right now. */
   boundViews(): number[] {
     return [...this.endpoints.keys()];
@@ -390,6 +421,13 @@ export class HostConnection {
       this.pendingCloses.clear();
     }
     this.session = session;
+    for (const listener of [...this.sessionListeners]) {
+      try {
+        listener(session);
+      } catch (error) {
+        console.error("[RemoteHostManager] session-opened listener failed:", error);
+      }
+    }
     session.on(Lane.EVENTS, EventKind.EVENT, (body) => this.deliver(body));
     // Every session, fresh or resumed: a resume is a new LinkSession, and one
     // without a handler answers the host UNSUPPORTED.
@@ -632,6 +670,7 @@ export class RemoteHostManager {
   private readonly attachedListeners = new Set<
     (hostId: HostId, info: SessionAttachedInfo) => void
   >();
+  private readonly sessionListeners = new Set<(hostId: HostId, session: LinkSession) => void>();
   private readonly now: () => number;
 
   constructor(private readonly options: RemoteHostManagerOptions) {
@@ -674,6 +713,12 @@ export class RemoteHostManager {
     return () => this.attachedListeners.delete(listener);
   }
 
+  /** {@link HostConnection.onSessionOpened} across every connection, including later ones. */
+  onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void {
+    this.sessionListeners.add(listener);
+    return () => this.sessionListeners.delete(listener);
+  }
+
   /** Start (or nudge) the host's link. Resolves once the attempt is under way, not connected. */
   connect(hostId: HostId): HostConnection {
     const descriptor = this.options.registry.require(hostId);
@@ -707,6 +752,16 @@ export class RemoteHostManager {
             listener(hostId, info);
           } catch (error) {
             console.error("[RemoteHostManager] endpoint-opened listener failed:", error);
+          }
+        }
+      });
+      conn.onSessionOpened((session) => {
+        if (this.connections.get(hostId) !== conn) return;
+        for (const listener of [...this.sessionListeners]) {
+          try {
+            listener(hostId, session);
+          } catch (error) {
+            console.error("[RemoteHostManager] session-opened listener failed:", error);
           }
         }
       });

@@ -496,6 +496,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | --- | --- | --- | --- |
 | `host.add` | Add host… | safe | — |
 | `host.forwardPort` | Forward port… | safe | `port`, `hostId?`, `label?` |
+| `host.overview.open` | Hosts overview… | safe | — |
 | `host.switch` | Switch host… | safe | `hostId?`, `newWindow?` |
 | `workspace.list` | List workspaces | safe | — |
 

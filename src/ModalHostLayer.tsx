@@ -32,6 +32,7 @@ import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialog
 import { PostHydrationListeners } from "./components/PostHydrationListeners";
 import { HostFilePickerMount } from "./components/HostFilePicker/HostFilePickerMount";
 import { HostSwitchMount } from "./components/HostSwitch/HostSwitchMount";
+import { HostsOverviewMount } from "./components/Hosts/Overview/HostsOverviewMount";
 import { PanelTransitionOverlay } from "./components/Panel";
 import { usePluginManagerStore } from "./store";
 import { actionService } from "./services/ActionService";
@@ -876,6 +877,7 @@ export function ModalHostLayer({
 
       {isStateLoaded && <HostFilePickerMount />}
       {isStateLoaded && <HostSwitchMount />}
+      {isStateLoaded && <HostsOverviewMount />}
 
       {isStateLoaded && (
         <ErrorBoundary

@@ -384,6 +384,15 @@ export interface GeneratedElectronAPI {
     getSnapshots(
       ...args: IpcInvokeMap["host-metrics:get-snapshots"]["args"]
     ): Promise<IpcInvokeMap["host-metrics:get-snapshots"]["result"]>;
+    listFleetTargets(
+      ...args: IpcInvokeMap["host-metrics:list-fleet-targets"]["args"]
+    ): Promise<IpcInvokeMap["host-metrics:list-fleet-targets"]["result"]>;
+    listWorktrees(
+      ...args: IpcInvokeMap["host-metrics:list-worktrees"]["args"]
+    ): Promise<IpcInvokeMap["host-metrics:list-worktrees"]["result"]>;
+    submitFleet(
+      ...args: IpcInvokeMap["host-metrics:submit-fleet"]["args"]
+    ): Promise<IpcInvokeMap["host-metrics:submit-fleet"]["result"]>;
   };
   hostMode: {
     getStatus(

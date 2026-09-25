@@ -309,6 +309,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- hostActions (registered only where Remote Hosts is supported) --
   "host.switch",
   "host.add",
+  "host.overview.open",
   "project.openOnHost",
   "host.forwardPort",
 

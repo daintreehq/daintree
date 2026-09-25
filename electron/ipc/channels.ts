@@ -1297,6 +1297,9 @@ export const CHANNELS = {
 
   // Remote Hosts: hostMetrics (shell).
   HOST_METRICS_GET_SNAPSHOTS: "host-metrics:get-snapshots",
+  HOST_METRICS_LIST_FLEET_TARGETS: "host-metrics:list-fleet-targets",
+  HOST_METRICS_SUBMIT_FLEET: "host-metrics:submit-fleet",
+  HOST_METRICS_LIST_WORKTREES: "host-metrics:list-worktrees",
   HOST_METRICS_EVENT: "host-metrics:event",
 
   // Remote Hosts: portForwards (shell).

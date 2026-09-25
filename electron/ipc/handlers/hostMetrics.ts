@@ -1,7 +1,12 @@
 import { defineIpcNamespace, op } from "../define.js";
-import { pendingRemoteHostsHandler } from "../../remote/pendingHandler.js";
+import { getRemoteService, requireRemoteService } from "../../remote/runtime.js";
 import { HOST_METRICS_METHOD_CHANNELS } from "./hostMetrics.preload.js";
-import type { HostMetricsSnapshot } from "../../../shared/types/ipc/hostMetrics.js";
+import type {
+  HostFleetSubmitPayload,
+  HostFleetTarget,
+  HostMetricsSnapshot,
+  HostWorktreeEntry,
+} from "../../../shared/types/ipc/hostMetrics.js";
 
 export const hostMetricsNamespace = defineIpcNamespace({
   name: "hostMetrics",
@@ -9,7 +14,22 @@ export const hostMetricsNamespace = defineIpcNamespace({
     getSnapshots: op(
       HOST_METRICS_METHOD_CHANNELS.getSnapshots,
       async (): Promise<HostMetricsSnapshot[]> =>
-        pendingRemoteHostsHandler(HOST_METRICS_METHOD_CHANNELS.getSnapshots)
+        getRemoteService("hostMetrics")?.getSnapshots() ?? []
+    ),
+    listFleetTargets: op(
+      HOST_METRICS_METHOD_CHANNELS.listFleetTargets,
+      async (payload: { hostId: string }): Promise<HostFleetTarget[]> =>
+        requireRemoteService("hostMetrics").listFleetTargets(payload)
+    ),
+    submitFleet: op(
+      HOST_METRICS_METHOD_CHANNELS.submitFleet,
+      async (payload: HostFleetSubmitPayload): Promise<void> =>
+        requireRemoteService("hostMetrics").submitFleet(payload)
+    ),
+    listWorktrees: op(
+      HOST_METRICS_METHOD_CHANNELS.listWorktrees,
+      async (payload: { hostId: string }): Promise<HostWorktreeEntry[]> =>
+        requireRemoteService("hostMetrics").listWorktrees(payload)
     ),
   },
 });

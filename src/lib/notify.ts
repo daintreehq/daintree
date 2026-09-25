@@ -316,6 +316,11 @@ interface NotifyPayloadBase {
     panelId?: string;
     /** When set, per-kind silence affordances are surfaced on the toast and notification center kebab. */
     eventKind?: NotificationEventKind;
+    /**
+     * The other machine this came from, for a host the window isn't showing.
+     * Its project ids mean nothing here, so the host's name is the source.
+     */
+    hostName?: string;
   };
 }
 

@@ -904,6 +904,18 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./hostMetrics.js").HostMetricsSnapshot[];
   };
+  "host-metrics:list-fleet-targets": {
+    args: [payload: { hostId: string }];
+    result: import("./hostMetrics.js").HostFleetTarget[];
+  };
+  "host-metrics:list-worktrees": {
+    args: [payload: { hostId: string }];
+    result: import("./hostMetrics.js").HostWorktreeEntry[];
+  };
+  "host-metrics:submit-fleet": {
+    args: [payload: import("./hostMetrics.js").HostFleetSubmitPayload];
+    result: void;
+  };
   "host-mode:get-status": {
     args: [];
     result: import("./hostMode.js").HostModeStatus;
