@@ -49,6 +49,7 @@ import {
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
 import { resolveAgentLaunchKind, sanitizeTerminalName } from "@/utils/agentLaunchValidation";
+import { hostShellDialect, resolveHostTmpDir } from "@/hooks/useHostPlatform";
 
 export { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 // Re-exported so the hook stays the canonical import site for launch-path
@@ -565,7 +566,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           let clipboardDirectory: string | undefined;
           if (agentId === "gemini" && effectiveEntry.shareClipboardDirectory !== false) {
             try {
-              const tmpDir = await systemClient.getTmpDir();
+              const tmpDir = await resolveHostTmpDir(() => systemClient.getTmpDir());
               clipboardDirectory = `${tmpDir}/${CLIPBOARD_DIR_NAME}`;
             } catch {
               // Non-critical: Gemini will work without clipboard access
@@ -613,7 +614,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             const appendedTokens: string[] = [];
             for (const flag of extraFlags) {
               if (!flag) continue;
-              appendedTokens.push(flag.startsWith("-") ? flag : escapeShellArgOptional(flag));
+              appendedTokens.push(
+                flag.startsWith("-") ? flag : escapeShellArgOptional(flag, hostShellDialect())
+              );
             }
             if (appendedTokens.length) {
               command = `${command} ${appendedTokens.join(" ")}`;

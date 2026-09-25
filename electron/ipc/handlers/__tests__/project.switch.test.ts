@@ -2835,3 +2835,95 @@ describe("project switch/reopen redirects to the window that owns the project (#
     });
   });
 });
+
+describe("project switch/reopen from a view on a remote Shell", () => {
+  const OLD_ID = "b".repeat(64);
+  const PROJECT_ID = "c".repeat(64);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    projectStoreMock.getProjectState.mockResolvedValue(null);
+    projectStoreMock.saveProjectState.mockResolvedValue(undefined);
+  });
+
+  async function invokeOverLink(channel: string, args: unknown[]) {
+    const { getIpcDispatcher, _resetIpcDispatcherForTesting } = await import("../../dispatcher.js");
+    const { wrapError, wrapSuccess } =
+      await import("../../../../shared/utils/ipcErrorSerialization.js");
+    _resetIpcDispatcherForTesting();
+    const dispatcher = getIpcDispatcher();
+    dispatcher.setInvokeEnveloper(async (_channel, _args, call) => {
+      try {
+        return wrapSuccess(await call());
+      } catch (error) {
+        return wrapError(error);
+      }
+    });
+    const release = dispatcher.allowHybridOverLink(channel);
+    const pvm = { switchTo: vi.fn(), getProjectIdForWebContents: vi.fn() };
+    const worktreeService = { resumeProject: vi.fn(), loadProject: vi.fn() };
+    const deps = {
+      projectViewManager: pvm,
+      worktreeService,
+    } as unknown as HandlerDependencies;
+    const cleanup = registerProjectCrudHandlers(deps);
+    const endpoint = {
+      endpointId: "s1:view-1",
+      clientId: "client-1",
+      projectId: OLD_ID,
+      kind: "remote-view" as const,
+      handle: -7,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: vi.fn(() => ({ dispose: () => undefined })),
+      isClosed: () => false,
+    };
+    const envelope = await dispatcher.invokeForEndpoint(
+      { endpoint, client: { clientId: "client-1", kind: "remote" } as never },
+      channel,
+      args
+    );
+    release();
+    cleanup?.();
+    _resetIpcDispatcherForTesting();
+    return { envelope, pvm, worktreeService };
+  }
+
+  it("saves the layout the view leaves and wakes the project, without swapping views here", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: PROJECT_ID,
+      name: "Remote",
+      path: "/home/greg/remote",
+    });
+
+    const { envelope, pvm, worktreeService } = await invokeOverLink(CHANNELS.PROJECT_SWITCH, [
+      PROJECT_ID,
+      { activeWorktreeId: "wt-left" },
+    ]);
+
+    expect(envelope).toMatchObject({ ok: true, data: { outcome: "switched" } });
+    expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith(
+      OLD_ID,
+      expect.objectContaining({ projectId: OLD_ID, activeWorktreeId: "wt-left" })
+    );
+    expect(worktreeService.resumeProject).toHaveBeenCalledWith("/home/greg/remote");
+    expect(pvm.switchTo).not.toHaveBeenCalled();
+    expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+    expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+  });
+
+  it("marks a reopened project active", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: PROJECT_ID,
+      name: "Remote",
+      path: "/home/greg/remote",
+      status: "background",
+    });
+
+    const { envelope } = await invokeOverLink(CHANNELS.PROJECT_REOPEN, [PROJECT_ID]);
+
+    expect(envelope).toMatchObject({ ok: true, data: { outcome: "switched" } });
+    expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith(PROJECT_ID, "active");
+    expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+  });
+});

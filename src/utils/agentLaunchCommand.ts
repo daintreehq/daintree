@@ -1,6 +1,7 @@
 import type { AgentCliDetail } from "@shared/types/ipc";
 import { escapeShellArgOptional, isWindows } from "@shared/utils/shellEscape";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { hostShellDialect } from "@/hooks/useHostPlatform";
 
 export async function getCurrentLaunchCliDetail(
   agentId: string,
@@ -42,7 +43,9 @@ export function resolveAgentLaunchBaseCommand(
   const isPathLike = effective.includes("/") || effective.includes("\\");
   if (!resolvedPath && !isPathLike) return registryCommand;
 
-  const useWindows = platform ? platform === "windows" : isWindows();
+  // The command runs on the project's host, whose shell may differ from this client's.
+  const dialect = platform ?? hostShellDialect();
+  const useWindows = dialect ? dialect === "windows" : isWindows();
   if (useWindows) {
     return `& '${effective.replace(/'/g, "''")}'`;
   }

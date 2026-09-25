@@ -49,6 +49,140 @@ import { getValidatedOverrides } from "../keybinding.js";
 import { loadSanitizedUserAgentRegistry } from "../../../services/UserAgentRegistryService.js";
 import type { Project } from "../../../types/index.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
+import type { BootResult, HydrateResult } from "../../../../shared/types/ipc/app.js";
+
+type HostPlatformFields = Required<
+  Pick<HydrateResult, "hostPlatform" | "hostHomeDir" | "hostTmpDir">
+>;
+
+/** This machine, as the host of whatever the view shows. */
+export function readHostPlatformFields(): HostPlatformFields {
+  const platform = process.platform;
+  return {
+    hostPlatform:
+      platform === "darwin" || platform === "win32" || platform === "linux" ? platform : "linux",
+    hostHomeDir: os.homedir(),
+    hostTmpDir: os.tmpdir(),
+  };
+}
+
+/** Hydrate fields that describe the machine the window is drawn on, never the host. */
+export type ShellHydrateFields = Pick<
+  HydrateResult,
+  | "gpuWebGLHardware"
+  | "gpuHardwareAccelerationDisabled"
+  | "gpuDisabledReason"
+  | "gpuAngleFallbackActive"
+  | "safeMode"
+  | "isWindowsStore"
+  | "runningUnderRosetta"
+  | "rosettaWarningDismissed"
+  | "crashCount"
+  | "lastCrashAt"
+  | "settingsRecovery"
+  | "databaseRecovery"
+  | "crashLoopStateRecovery"
+  | "systemTmpDir"
+  | "keybindingOverrides"
+>;
+
+/**
+ * The Shell half of a hydrate. `consumeOneShots: false` leaves the settings
+ * and database recovery notices for this machine's own windows: a hydrate
+ * answered for a remote Shell must not swallow them.
+ */
+export function readShellHydrateFields(options: { consumeOneShots: boolean }): ShellHydrateFields {
+  const gpuStatus = getGpuFeatureStatus();
+  const gpuWebGLHardware = isWebGLHardwareAccelerated(gpuStatus.webgl2);
+  if (!gpuWebGLHardware) {
+    console.warn(
+      `[AppHydrate] Software-only WebGL2 detected (status: ${gpuStatus.webgl2}). WebGL terminal renderer will be disabled.`
+    );
+  }
+  const guard = getCrashLoopGuard();
+  const inSafeMode = guard.isSafeMode();
+  const userData = app.getPath("userData");
+  return {
+    gpuWebGLHardware,
+    gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(userData),
+    gpuDisabledReason: readGpuDisabledFlagData(userData)?.reason ?? null,
+    gpuAngleFallbackActive: isGpuAngleFallbackApplied(userData),
+    safeMode: inSafeMode,
+    isWindowsStore: (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
+    runningUnderRosetta: isRunningUnderRosetta(),
+    rosettaWarningDismissed: store.get("rosettaWarningDismissed") === true,
+    crashCount: guard.getCrashCount(),
+    lastCrashAt: guard.getLastCrashTimestamp(),
+    settingsRecovery: options.consumeOneShots ? consumePendingSettingsRecovery() : null,
+    databaseRecovery: options.consumeOneShots
+      ? getDatabaseMaintenanceService().consumeRecovery()
+      : null,
+    // Surface the crash-loop quarantine only when safe mode is also active —
+    // a silent reset on the happy path would be more noise than signal.
+    crashLoopStateRecovery:
+      inSafeMode && guard.getQuarantinedStatePath()
+        ? { quarantinedPath: guard.getQuarantinedStatePath()! }
+        : null,
+    // Folded into the payload so the renderer skips a standalone
+    // `system:get-tmp-dir` round-trip on boot (matches `handleSystemGetTmpDir`).
+    systemTmpDir: os.tmpdir(),
+    keybindingOverrides: getValidatedOverrides(),
+  };
+}
+
+/**
+ * Batched cold-start boot payload. Collapses what was three separate renderer
+ * round-trips (`crash-recovery:get-pending`, `crash-recovery:get-config`,
+ * `app:hydrate`) into one. The destructive one-shot consumers
+ * (`consumePanelFilter`, `consumePendingSettingsRecovery`, `consumeRecovery`)
+ * and the prefetch fast path stay in the hydrate — boot appends this
+ * machine's crash gate fields onto its result.
+ */
+export function composeBootResult(hydrate: HydrateResult): BootResult {
+  const crashService = getCrashRecoveryService();
+  const guard = getCrashLoopGuard();
+  // Mirror crash-recovery:get-pending: suppress in safe mode and inject the
+  // live crash count so the renderer's auto-restore heuristic matches the
+  // standalone path.
+  let crashPending: import("../../../../shared/types/ipc/crashRecovery.js").PendingCrash | null;
+  if (guard.isSafeMode()) {
+    crashPending = null;
+  } else {
+    const pending = crashService.getPendingCrash();
+    crashPending = pending ? { ...pending, crashCount: guard.getCrashCount() } : null;
+  }
+  // Ride-along app theme: only when the stored config is already in its
+  // fully-migrated shape. First-run defaulting and legacy customSchemes
+  // migration stay in the `app-theme:get` handler, which the renderer falls
+  // back to whenever this field is undefined.
+  const rawAppTheme = store.get("appTheme");
+  const appTheme =
+    rawAppTheme &&
+    typeof rawAppTheme === "object" &&
+    !Array.isArray(rawAppTheme) &&
+    typeof rawAppTheme.colorSchemeId === "string" &&
+    rawAppTheme.colorSchemeId &&
+    typeof (rawAppTheme.customSchemes as unknown) !== "string"
+      ? (rawAppTheme as import("../../../../shared/types/appTheme.js").AppThemeConfig)
+      : undefined;
+  // `useAppBootstrap` throws this whole payload away and re-runs `app:hydrate`
+  // once the crash gate resolves (`hadPendingCrash ? null : bootResult`), so a
+  // destructive one-shot consumed above would never reach the user. An unclean
+  // exit is also exactly how the database gets corrupted — hand the recovery
+  // back so the live hydrate that follows delivers it.
+  const droppedRecovery = crashPending !== null ? hydrate.databaseRecovery : null;
+  if (droppedRecovery) {
+    getDatabaseMaintenanceService().restoreRecovery(droppedRecovery);
+  }
+
+  return {
+    ...hydrate,
+    databaseRecovery: droppedRecovery ? null : hydrate.databaseRecovery,
+    crashPending,
+    crashConfig: crashService.getConfig(),
+    appTheme,
+  };
+}
 
 interface HydrationWorkspace {
   project: Project | null;
@@ -75,6 +209,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
 
   const handleAppHydrate = async (ctx?: IpcContext) => {
     const { project: currentProject, workspaceId } = resolveWorkspaceForHydration(ctx);
+    // A remote Shell merges only this machine's host half of the answer, so
+    // nothing addressed to this machine's own windows may be consumed for it.
+    const forRemoteShell = ctx?.endpoint?.kind === "remote-view";
 
     // Until the legacy global record has an owner, the prefetch cache cannot
     // stand in for this handler: `buildSwitchHydrateResult` performs no writes,
@@ -100,9 +237,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // likely to be waiting.
     const crashService = getCrashRecoveryService();
     const canUseCrashPanelFilter =
-      !workspaceId ||
-      (currentProject !== null &&
-        (persistedLegacyOwnerId === undefined || persistedLegacyOwnerId === workspaceId));
+      !forRemoteShell &&
+      (!workspaceId ||
+        (currentProject !== null &&
+          (persistedLegacyOwnerId === undefined || persistedLegacyOwnerId === workspaceId)));
     const panelFilter = canUseCrashPanelFilter ? crashService.consumePanelFilter() : null;
     const crashPanelFilterWithheld =
       !canUseCrashPanelFilter && crashService.hasPendingPanelFilter();
@@ -149,10 +287,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         skippedPanelCount: 0,
         crashCount: cacheGuard.getCrashCount(),
         lastCrashAt: cacheGuard.getLastCrashTimestamp(),
-        settingsRecovery: consumePendingSettingsRecovery(),
+        settingsRecovery: forRemoteShell ? null : consumePendingSettingsRecovery(),
         // Boot-time DB recovery is one-shot and predates the prefetch, so it is
         // consumed live here — the cached payload always carries a null for it.
-        databaseRecovery: getDatabaseMaintenanceService().consumeRecovery(),
+        databaseRecovery: forRemoteShell ? null : getDatabaseMaintenanceService().consumeRecovery(),
         // Crash-loop quarantine notifications are gated on safe mode; the
         // fast path runs only when safe mode is inactive, so clear the field.
         crashLoopStateRecovery: null,
@@ -162,6 +300,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         projects: projectStore.getAllProjects(),
         keybindingOverrides: getValidatedOverrides(),
         userAgentRegistry: loadSanitizedUserAgentRegistry(),
+        ...readHostPlatformFields(),
       };
     }
 
@@ -200,7 +339,14 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // intact when `app:boot`'s payload is discarded behind a pending crash and
     // the renderer hydrates again.
     let legacyWorkspaceStateOwnerId = persistedLegacyOwnerId;
-    if (hasProjectRow && workspaceId && legacyWorkspaceStateOwnerId === undefined) {
+    // A remote Shell's view never claims it: the heir is whichever of this
+    // machine's own projects opens first here.
+    if (
+      hasProjectRow &&
+      workspaceId &&
+      legacyWorkspaceStateOwnerId === undefined &&
+      !forRemoteShell
+    ) {
       legacyWorkspaceStateOwnerId = workspaceId;
       store.set("legacyWorkspaceStateOwnerId", workspaceId);
       console.log(
@@ -549,47 +695,19 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       `[AppHydrate] Project: ${currentProject?.name ?? (workspaceId ? "scratch" : "none")} - terminals from ${terminalsSource} (${terminalsToUse.length} valid), focusMode: ${focusModeToUse}`
     );
 
-    const gpuStatus = getGpuFeatureStatus();
-    const gpuWebGLHardware = isWebGLHardwareAccelerated(gpuStatus.webgl2);
-    if (!gpuWebGLHardware) {
-      console.warn(
-        `[AppHydrate] Software-only WebGL2 detected (status: ${gpuStatus.webgl2}). WebGL terminal renderer will be disabled.`
-      );
-    }
-
     return {
+      ...readShellHydrateFields({ consumeOneShots: !forRemoteShell }),
+      ...readHostPlatformFields(),
       appState: appState as import("../../../../shared/types/ipc/app.js").AppState,
       terminalConfig: readHydrateTerminalConfig(),
       project: currentProject,
       workspaceId,
       agentSettings: store.get("agentSettings"),
-      gpuWebGLHardware,
-      gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
-      gpuDisabledReason: readGpuDisabledFlagData(app.getPath("userData"))?.reason ?? null,
-      gpuAngleFallbackActive: isGpuAngleFallbackApplied(app.getPath("userData")),
-      safeMode: inSafeMode,
-      isWindowsStore:
-        (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
-      runningUnderRosetta: isRunningUnderRosetta(),
-      rosettaWarningDismissed: store.get("rosettaWarningDismissed") === true,
       skippedPanelCount,
       quarantinedPanels,
-      crashCount: guard.getCrashCount(),
-      lastCrashAt: guard.getLastCrashTimestamp(),
-      settingsRecovery: consumePendingSettingsRecovery(),
-      databaseRecovery: getDatabaseMaintenanceService().consumeRecovery(),
       projectStateRecovery: projectStateQuarantinedPath
         ? { quarantinedPath: projectStateQuarantinedPath }
         : null,
-      // Surface the crash-loop quarantine only when safe mode is also active —
-      // a silent reset on the happy path would be more noise than signal.
-      crashLoopStateRecovery:
-        inSafeMode && guard.getQuarantinedStatePath()
-          ? { quarantinedPath: guard.getQuarantinedStatePath()! }
-          : null,
-      // Folded into the payload so the renderer skips a standalone
-      // `system:get-tmp-dir` round-trip on boot (matches `handleSystemGetTmpDir`).
-      systemTmpDir: os.tmpdir(),
       tabGroups: tabGroupsToUse,
       terminalSizes: terminalSizesToUse,
       draftInputs: draftInputsToUse,
@@ -599,64 +717,12 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       // (project:get-all / project:get-current, keybinding:get-overrides,
       // user-agent-registry:get). All three are synchronous reads.
       projects: projectStore.getAllProjects(),
-      keybindingOverrides: getValidatedOverrides(),
       userAgentRegistry: loadSanitizedUserAgentRegistry(),
     };
   };
   handlers.push(typedHandleWithContext(CHANNELS.APP_HYDRATE, handleAppHydrate));
 
-  // Batched cold-start boot payload. Collapses what was three separate renderer
-  // round-trips (`crash-recovery:get-pending`, `crash-recovery:get-config`,
-  // `app:hydrate`) into one. The destructive one-shot consumers
-  // (`consumePanelFilter`, `consumePendingSettingsRecovery`, `consumeRecovery`) and the prefetch
-  // fast path remain inside `handleAppHydrate` — boot just appends the crash
-  // gate fields onto the same result.
-  const handleAppBoot = async (ctx: IpcContext) => {
-    const hydrate = await handleAppHydrate(ctx);
-    const crashService = getCrashRecoveryService();
-    const guard = getCrashLoopGuard();
-    // Mirror crash-recovery:get-pending: suppress in safe mode and inject the
-    // live crash count so the renderer's auto-restore heuristic matches the
-    // standalone path.
-    let crashPending: import("../../../../shared/types/ipc/crashRecovery.js").PendingCrash | null;
-    if (guard.isSafeMode()) {
-      crashPending = null;
-    } else {
-      const pending = crashService.getPendingCrash();
-      crashPending = pending ? { ...pending, crashCount: guard.getCrashCount() } : null;
-    }
-    // Ride-along app theme: only when the stored config is already in its
-    // fully-migrated shape. First-run defaulting and legacy customSchemes
-    // migration stay in the `app-theme:get` handler, which the renderer falls
-    // back to whenever this field is undefined.
-    const rawAppTheme = store.get("appTheme");
-    const appTheme =
-      rawAppTheme &&
-      typeof rawAppTheme === "object" &&
-      !Array.isArray(rawAppTheme) &&
-      typeof rawAppTheme.colorSchemeId === "string" &&
-      rawAppTheme.colorSchemeId &&
-      typeof (rawAppTheme.customSchemes as unknown) !== "string"
-        ? (rawAppTheme as import("../../../../shared/types/appTheme.js").AppThemeConfig)
-        : undefined;
-    // `useAppBootstrap` throws this whole payload away and re-runs `app:hydrate`
-    // once the crash gate resolves (`hadPendingCrash ? null : bootResult`), so a
-    // destructive one-shot consumed above would never reach the user. An unclean
-    // exit is also exactly how the database gets corrupted — hand the recovery
-    // back so the live hydrate that follows delivers it.
-    const droppedRecovery = crashPending !== null ? hydrate.databaseRecovery : null;
-    if (droppedRecovery) {
-      getDatabaseMaintenanceService().restoreRecovery(droppedRecovery);
-    }
-
-    return {
-      ...hydrate,
-      databaseRecovery: droppedRecovery ? null : hydrate.databaseRecovery,
-      crashPending,
-      crashConfig: crashService.getConfig(),
-      appTheme,
-    };
-  };
+  const handleAppBoot = async (ctx: IpcContext) => composeBootResult(await handleAppHydrate(ctx));
   handlers.push(typedHandleWithContext(CHANNELS.APP_BOOT, handleAppBoot));
 
   const handleAppGetState = async () => {

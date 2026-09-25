@@ -1220,7 +1220,7 @@ describe("app:boot handler", () => {
         terminals: [{ id: "legacy-panel", title: "Legacy", location: "grid", cwd: "/old/project" }],
       };
       crashService.consumePanelFilter.mockReturnValue(["legacy-panel"] as unknown as null);
-      crashService.hasPendingPanelFilter.mockReturnValue(true);
+      crashService.hasPendingPanelFilter.mockReturnValueOnce(true);
       vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
         state: {
           projectId: REAL_PROJECT.id,
@@ -1783,5 +1783,117 @@ describe("app:set-state handler", () => {
 
     await invokeSetState({ focusMode: true });
     expect(crashService.scheduleBackup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("app:hydrate host fields", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    globalAppStateRef.current = { ...DEFAULT_GLOBAL_APP_STATE };
+    legacyOwnerRef.current = undefined;
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation(
+      defaultStoreGet as typeof storeModule.store.get
+    );
+  });
+
+  it("names this machine as the host of a local window", async () => {
+    const os = await import("os");
+    const result = await invokeBoot();
+    expect(result.hostPlatform).toBe(process.platform);
+    expect(result.hostHomeDir).toBe(os.homedir());
+    expect(result.hostTmpDir).toBe(os.tmpdir());
+    expect(result.systemTmpDir).toBe(os.tmpdir());
+  });
+
+  it("leaves this machine's one-shot notices alone when answering a remote Shell", async () => {
+    const { getIpcDispatcher, _resetIpcDispatcherForTesting } = await import("../dispatcher.js");
+    const { wrapError, wrapSuccess } =
+      await import("../../../shared/utils/ipcErrorSerialization.js");
+    const storeModule = await import("../../store.js");
+    _resetIpcDispatcherForTesting();
+    const dispatcher = getIpcDispatcher();
+    dispatcher.setInvokeEnveloper(async (_channel, _args, call) => {
+      try {
+        return wrapSuccess(await call());
+      } catch (error) {
+        return wrapError(error);
+      }
+    });
+    const release = dispatcher.allowHybridOverLink("app:hydrate");
+    ipcHandlers.clear();
+    const cleanup = registerAppStateHandlers();
+    const endpoint = {
+      endpointId: "s1:view-1",
+      clientId: "client-1",
+      projectId: null,
+      kind: "remote-view" as const,
+      handle: -4,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: vi.fn(() => ({ dispose: () => undefined })),
+      isClosed: () => false,
+    };
+    const client = { clientId: "client-1", clientName: "mbp", kind: "remote" } as never;
+    crashService.hasPendingPanelFilter.mockReturnValueOnce(true);
+
+    const envelope = await dispatcher.invokeForEndpoint({ endpoint, client }, "app:hydrate", []);
+
+    cleanup();
+    release();
+    _resetIpcDispatcherForTesting();
+    expect(envelope.ok).toBe(true);
+    expect(storeModule.consumePendingSettingsRecovery).not.toHaveBeenCalled();
+    expect(consumeDatabaseRecovery).not.toHaveBeenCalled();
+    expect(crashService.consumePanelFilter).not.toHaveBeenCalled();
+    const data = (envelope as { data: Record<string, unknown> }).data;
+    expect(data.hostPlatform).toBe(process.platform);
+    expect(data.settingsRecovery).toBeNull();
+    expect(data.databaseRecovery).toBeNull();
+  });
+
+  it("never lets a remote Shell's view claim the legacy global layout", async () => {
+    const { getIpcDispatcher, _resetIpcDispatcherForTesting } = await import("../dispatcher.js");
+    const { wrapSuccess } = await import("../../../shared/utils/ipcErrorSerialization.js");
+    const storeModule = await import("../../store.js");
+    vi.mocked(projectStore.getProjectById).mockReturnValueOnce({
+      id: "p-remote",
+      name: "R",
+      path: "/r",
+    } as never);
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValueOnce({
+      state: null,
+    } as never);
+    _resetIpcDispatcherForTesting();
+    const dispatcher = getIpcDispatcher();
+    dispatcher.setInvokeEnveloper(async (_c, _a, call) => wrapSuccess(await call()));
+    const release = dispatcher.allowHybridOverLink("app:hydrate");
+    const cleanup = registerAppStateHandlers();
+    const endpoint = {
+      endpointId: "s1:view-2",
+      clientId: "client-1",
+      projectId: "p-remote",
+      kind: "remote-view" as const,
+      handle: -5,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: vi.fn(() => ({ dispose: () => undefined })),
+      isClosed: () => false,
+    };
+
+    await dispatcher.invokeForEndpoint(
+      { endpoint, client: { clientId: "client-1", kind: "remote" } as never },
+      "app:hydrate",
+      []
+    );
+
+    cleanup();
+    release();
+    _resetIpcDispatcherForTesting();
+    expect(legacyOwnerRef.current).toBeUndefined();
+    expect(vi.mocked(storeModule.store.set)).not.toHaveBeenCalledWith(
+      "legacyWorkspaceStateOwnerId",
+      expect.anything()
+    );
   });
 });
