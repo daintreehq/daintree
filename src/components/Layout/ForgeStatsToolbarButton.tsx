@@ -43,6 +43,7 @@ import {
   msUntilNextLabelChange,
   RateLimitDetailsPanel,
 } from "./RateLimitDetails";
+import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { ForgeStatPill } from "./ForgeStatPill";
 import { LocalCommitsDropdown } from "./LocalCommitsDropdown";
 
@@ -155,6 +156,13 @@ export const ForgeStatsToolbarButton = memo(
         : `Configure ${providerName} token`;
     const [tokenCalloutOpen, setTokenCalloutOpen] = useState(false);
     const tokenCalloutId = useId();
+    // A remote window's forge data comes from the host's own sign-in, so the missing
+    // token is named as the host's; clicking still opens the connect flow, which saves there.
+    const remoteHostName = useRemoteHostName();
+    const tokenMissingLabel = (items: string) =>
+      remoteHostName === null
+        ? `${tokenVerb} to see ${items}`
+        : `${forgeNotConnectedLabel(providerEntry?.contribution.name ?? "Your code forge", remoteHostName)}. Connect it to see ${items}`;
     const menuProviderName = forgeMode ? providerName : null;
     const { canOpenRepo, recheck: recheckRepoLink } = useCanOpenForgeRepo(
       currentProject?.path,
@@ -1028,12 +1036,12 @@ export const ForgeStatsToolbarButton = memo(
             testId="forge-stat-pill-issues"
             ariaLabel={
               isTokenError
-                ? `${tokenVerb} to see issues`
+                ? tokenMissingLabel("issues")
                 : `${formatExactCount(issueDisplayCount)} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
             }
             tooltipContent={
               isTokenError
-                ? `${tokenVerb} to see issues`
+                ? tokenMissingLabel("issues")
                 : freshnessLevel === "fresh"
                   ? `Browse ${providerName} issues${exactSuffix(issueDisplayCount, "open")}${issuesStatusSuffix}`
                   : `${formatExactCount(issueDisplayCount)} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
@@ -1130,12 +1138,12 @@ export const ForgeStatsToolbarButton = memo(
             testId="forge-stat-pill-prs"
             ariaLabel={
               isTokenError
-                ? `${tokenVerb} to see pull requests`
+                ? tokenMissingLabel("pull requests")
                 : `${formatExactCount(prDisplayCount)} open pull requests${freshnessSuffix(freshnessLevel, lastUpdated, now)}${prsStatusSuffix}`
             }
             tooltipContent={
               isTokenError
-                ? `${tokenVerb} to see pull requests`
+                ? tokenMissingLabel("pull requests")
                 : freshnessLevel === "fresh"
                   ? `Browse ${providerName} pull requests${exactSuffix(prDisplayCount, "open")}${prsStatusSuffix}`
                   : `${formatExactCount(prDisplayCount)} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}${prsStatusSuffix}`
