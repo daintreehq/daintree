@@ -32,11 +32,22 @@ const SWAP_UNIT_MB: Record<string, number> = {
   T: 1024 * 1024,
 };
 
+/**
+ * `kern.memorystatus_vm_pressure_level` as XNU defines it: 1 normal, 2 warn,
+ * 4 critical. Nothing else is a valid reading.
+ */
+export type KernelPressureLevel = 1 | 2 | 4;
+
+export const KERNEL_PRESSURE_WARN: KernelPressureLevel = 2;
+export const KERNEL_PRESSURE_CRITICAL: KernelPressureLevel = 4;
+
 export interface SystemMemorySample {
   /** Null when the reading failed. */
   swap: SwapUsage | null;
   /** Null when the reading failed, or off Darwin where it does not apply. */
   fseventsdRssMb: number | null;
+  /** Null when the reading failed, or off Darwin where it does not apply. */
+  kernelPressureLevel: KernelPressureLevel | null;
 }
 
 export interface SystemMemoryPressureMonitorDeps {
@@ -44,6 +55,7 @@ export interface SystemMemoryPressureMonitorDeps {
   swapKind: SystemMemoryPressurePayload["swapKind"];
   readSwap: () => Promise<SwapUsage | null>;
   readFseventsdRssMb: () => Promise<number | null>;
+  readKernelPressureLevel: () => Promise<KernelPressureLevel | null>;
   publish: (payload: SystemMemoryPressurePayload) => void;
   now?: () => number;
 }
@@ -76,6 +88,26 @@ export function parseDarwinSwapUsage(stdout: string): SwapUsage | null {
 }
 
 /**
+ * Parses `sysctl -n kern.memorystatus_vm_pressure_level`. Anything but an exact
+ * 1, 2 or 4 is an unreadable sample, not a pressure level.
+ */
+export function parseKernelPressureLevel(stdout: string): KernelPressureLevel | null {
+  const text = stdout.trim();
+  if (text === "1") return 1;
+  if (text === "2") return 2;
+  if (text === "4") return 4;
+  return null;
+}
+
+export function describeKernelPressureLevel(
+  level: KernelPressureLevel | null
+): SystemMemoryPressurePayload["kernelPressureLevel"] {
+  if (level === KERNEL_PRESSURE_CRITICAL) return "critical";
+  if (level === KERNEL_PRESSURE_WARN) return "warn";
+  return null;
+}
+
+/**
  * Largest resident size (MB) of a process named exactly `fseventsd` in
  * `ps -axo rss=,ucomm=` output, or 0 when none is running. RSS leads the line
  * because `ucomm` can itself contain spaces; `ucomm` rather than `comm`
@@ -96,7 +128,8 @@ export function parseFseventsdRssMb(stdout: string): number {
 
 /**
  * Observes whether the machine itself is degraded — swap nearly full, or on
- * Darwin an `fseventsd` grown to many gigabytes — so a slow Mac is not read as
+ * Darwin an `fseventsd` grown to many gigabytes or the kernel reporting memory
+ * pressure (#12799) — so a slow Mac is not read as
  * a slow Daintree (#12462). Numbers only: it never infers a cause.
  *
  * Every over-threshold sample logs a `system-health` record. An episode opens
@@ -122,20 +155,22 @@ export function createSystemMemoryPressureMonitor(
   let episodeOpen = false;
 
   function record(sample: SystemMemorySample): void {
-    const { swap, fseventsdRssMb } = sample;
+    const { swap, fseventsdRssMb, kernelPressureLevel } = sample;
     const swapUsedPercent =
       swap === null ? null : swap.totalMb > 0 ? (swap.usedMb / swap.totalMb) * 100 : 0;
     const swapOver = swapUsedPercent !== null && swapUsedPercent > SWAP_USED_PERCENT_THRESHOLD;
     const fseventsdOver = fseventsdRssMb !== null && fseventsdRssMb > FSEVENTSD_RSS_THRESHOLD_MB;
+    const kernelOver = kernelPressureLevel !== null && kernelPressureLevel >= KERNEL_PRESSURE_WARN;
     const figures = {
       swapUsedPercent: swapUsedPercent === null ? null : Math.round(swapUsedPercent),
       swapUsedMb: swap === null ? null : Math.round(swap.usedMb),
       swapTotalMb: swap === null ? null : Math.round(swap.totalMb),
       swapKind: deps.swapKind,
       fseventsdRssMb: fseventsdRssMb === null ? null : Math.round(fseventsdRssMb),
+      kernelPressureLevel,
     };
 
-    if (swapOver || fseventsdOver) {
+    if (swapOver || fseventsdOver || kernelOver) {
       overStreak++;
       clearStreak = 0;
       elevated = true;
@@ -147,12 +182,15 @@ export function createSystemMemoryPressureMonitor(
           swapUsedPercent: swapOver ? figures.swapUsedPercent : null,
           swapKind: deps.swapKind,
           fseventsdRssMb: fseventsdOver ? figures.fseventsdRssMb : null,
+          kernelPressureLevel: describeKernelPressureLevel(kernelPressureLevel),
         });
       }
       return;
     }
 
-    const fullyObserved = swap !== null && (!deps.isDarwin || fseventsdRssMb !== null);
+    const fullyObserved =
+      swap !== null &&
+      (!deps.isDarwin || (fseventsdRssMb !== null && kernelPressureLevel !== null));
     if (!fullyObserved) {
       // Breaks both runs: "consecutive" means consecutive observations. An
       // open episode stays open — only observed clear samples close it.
@@ -177,16 +215,18 @@ export function createSystemMemoryPressureMonitor(
         swapUsedPercent: null,
         swapKind: deps.swapKind,
         fseventsdRssMb: null,
+        kernelPressureLevel: null,
       });
     }
   }
 
   async function takeSample(): Promise<void> {
-    const [swap, fseventsdRssMb] = await Promise.all([
+    const [swap, fseventsdRssMb, kernelPressureLevel] = await Promise.all([
       deps.readSwap().catch(() => null),
       deps.isDarwin ? deps.readFseventsdRssMb().catch(() => null) : Promise.resolve(null),
+      deps.isDarwin ? deps.readKernelPressureLevel().catch(() => null) : Promise.resolve(null),
     ]);
-    record({ swap, fseventsdRssMb });
+    record({ swap, fseventsdRssMb, kernelPressureLevel });
   }
 
   return {
@@ -231,6 +271,21 @@ function execText(file: string, args: string[], maxBuffer: number): Promise<stri
 }
 
 /**
+ * Reads the kernel's own memory-pressure level (#12799). Darwin only; the
+ * sysctl is world-readable and needs no entitlement. Rejects on a failed
+ * spawn, which callers treat as no reading.
+ */
+export async function readDarwinKernelPressureLevel(): Promise<KernelPressureLevel | null> {
+  return parseKernelPressureLevel(
+    await execText(
+      "/usr/sbin/sysctl",
+      ["-n", "kern.memorystatus_vm_pressure_level"],
+      SYSCTL_MAX_BUFFER
+    )
+  );
+}
+
+/**
  * The production probes. Windows and Linux read swap from the Electron memory
  * call the other memory monitors already make, so they spawn nothing; Darwin
  * has no swap figure there and spawns `sysctl` plus a narrow `ps` per sample.
@@ -252,6 +307,7 @@ export function createDefaultSystemMemoryPressureMonitor(
       : async () => readElectronSwapUsage(),
     readFseventsdRssMb: async () =>
       parseFseventsdRssMb(await execText("/bin/ps", ["-axo", "rss=,ucomm="], PS_MAX_BUFFER)),
+    readKernelPressureLevel: readDarwinKernelPressureLevel,
     publish,
   });
 }

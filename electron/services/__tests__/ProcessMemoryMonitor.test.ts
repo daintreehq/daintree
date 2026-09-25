@@ -55,6 +55,8 @@ import {
   TIER1_REPRIEVE_MS,
   TIER1_MITIGATION_COOLDOWN_MS,
   MITIGATION_BACKOFF_MAX_MS,
+  KERNEL_PRESSURE_WINDOW,
+  KERNEL_WARN_RECLAIM_COOLDOWN_MS,
   recordBlinkSample,
   forgetBlinkSample,
   getBlinkSamples,
@@ -894,6 +896,169 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
       expect(mockActions.evictCachedProjectViews).toHaveBeenCalledTimes(1);
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("kernel memory pressure (#12799)", () => {
+    let mockActions: MemoryPressureActions;
+    let level: 1 | 2 | 4 | null;
+    let readKernelPressureLevel: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      level = 1;
+      readKernelPressureLevel = vi.fn(async () => {
+        if (level === null) throw new Error("spawn ENOMEM");
+        return level;
+      });
+      mockActions = {
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(0),
+        evictCachedProjectViews: vi.fn().mockResolvedValue(0),
+        releaseRendererMemory: vi.fn(),
+        readKernelPressureLevel,
+      };
+      // Neither footprint nor available memory reports anything: the kernel
+      // level is the only signal in play.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+    });
+
+    async function advancePolls(n: number): Promise<void> {
+      for (let i = 0; i < n; i++) {
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
+    }
+
+    it("runs the ladder on a critical level with healthy footprint and available memory", async () => {
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(1);
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+
+      await advancePolls(PRESSURE_COUNT_TIER2 - 1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
+      expect(mockActions.evictCachedProjectViews).toHaveBeenCalledTimes(1);
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+    });
+
+    it("pulls only the cheap lever on a warning, on its own cooldown", async () => {
+      level = 2;
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(1);
+
+      const pollsPerCooldown = KERNEL_WARN_RECLAIM_COOLDOWN_MS / 30_000;
+      await advancePolls(pollsPerCooldown - 1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(1);
+      await advancePolls(1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(2);
+
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+      expect(mockActions.evictCachedProjectViews).not.toHaveBeenCalled();
+    });
+
+    it("ignores a normal level however full swap is", async () => {
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 5);
+
+      expect(readKernelPressureLevel).toHaveBeenCalled();
+      expect(mockActions.releaseRendererMemory).not.toHaveBeenCalled();
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+    });
+
+    it("does not re-run tier 1 on every dip of a flapping level", async () => {
+      let reads = 0;
+      readKernelPressureLevel.mockImplementation(async () => (reads++ % 2 === 0 ? 4 : 1));
+      stop = startAppMetricsMonitor(mockActions);
+
+      // Stays inside tier 1's cooldown; without the window each normal reading
+      // would clear the episode and re-arm tier 1 for the next critical one.
+      await advancePolls(WARMUP_INTERVALS + 8);
+
+      const tier1Calls = vi
+        .mocked(mockActions.destroyHiddenWebviews)
+        .mock.calls.filter(([tier]) => tier === 1);
+      expect(tier1Calls).toHaveLength(1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(1);
+    });
+
+    it("stands down only after a full window of lower readings", async () => {
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + 1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledTimes(1);
+
+      level = 1;
+      // The critical readings already in keep the episode open until the
+      // window has turned over, so tier 2's count keeps building meanwhile.
+      await advancePolls(KERNEL_PRESSURE_WINDOW + 2);
+      const hibernations = vi.mocked(mockActions.hibernateIdleProjects).mock.calls.length;
+
+      await advancePolls(PRESSURE_COUNT_TIER2 + 3);
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(hibernations);
+    });
+
+    it("lets a failed read neither engage pressure nor count toward recovery", async () => {
+      level = null;
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + 2);
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+      expect(mockActions.releaseRendererMemory).not.toHaveBeenCalled();
+
+      level = 4;
+      await advancePolls(2);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
+
+      // One failed read inside the window leaves the critical readings standing.
+      level = null;
+      await advancePolls(1);
+      expect(vi.mocked(logInfo).mock.calls.map(([event]) => event)).not.toContain(
+        "memory-pressure-backoff-cleared"
+      );
+    });
+
+    it("rechecks the kernel after tier 1, overriding a reprieve its reclaim earned", async () => {
+      // Footprint pressure that tier 1 visibly eases but does not clear: on its
+      // own that earns a reprieve from tier 2 (see the mitigation suite).
+      let postTier1 = false;
+      mockGetAppMetrics.mockImplementation(() => {
+        const mb = postTier1 ? 330 : 400;
+        return [makeMetric("Browser", mb * 1024, 100)];
+      });
+      vi.mocked(mockActions.destroyHiddenWebviews).mockImplementation(async (tier) => {
+        if (tier === 1) postTier1 = true;
+        return 0;
+      });
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
+    });
+
+    it("keeps the reprieve when the kernel reads normal after tier 1", async () => {
+      let postTier1 = false;
+      mockGetAppMetrics.mockImplementation(() => {
+        const mb = postTier1 ? 330 : 400;
+        return [makeMetric("Browser", mb * 1024, 100)];
+      });
+      vi.mocked(mockActions.destroyHiddenWebviews).mockImplementation(async (tier) => {
+        if (tier === 1) postTier1 = true;
+        return 0;
+      });
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalledWith(2);
     });
   });
 

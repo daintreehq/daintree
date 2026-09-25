@@ -26,6 +26,13 @@ export function formatSystemMemoryPressureMessage(
   mac: boolean
 ): string | null {
   const observed: string[] = [];
+  if (payload.kernelPressureLevel !== null) {
+    observed.push(
+      `macOS reports memory pressure at its ${
+        payload.kernelPressureLevel === "critical" ? "critical" : "warning"
+      } level`
+    );
+  }
   if (payload.swapUsedPercent !== null) {
     observed.push(
       payload.swapKind === "commit"
@@ -38,9 +45,14 @@ export function formatSystemMemoryPressureMessage(
   }
   if (observed.length === 0) return null;
   const sentence = observed.join(" and ");
-  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}. Restarting your ${
-    mac ? "Mac" : "computer"
-  } clears this.`;
+  // "macOS" keeps its own casing at the start of a sentence.
+  const text = sentence.startsWith("macOS")
+    ? `${sentence}.`
+    : `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.`;
+  // The restart advice covers what a reboot resets — swap and a grown
+  // fseventsd — not a pressure level, which reflects whatever is running now.
+  if (payload.swapUsedPercent === null && payload.fseventsdRssMb === null) return text;
+  return `${text} Restarting your ${mac ? "Mac" : "computer"} clears this.`;
 }
 
 export function handleSystemMemoryPressure(payload: SystemMemoryPressurePayload): void {

@@ -39,6 +39,8 @@ export interface SystemMemoryPressurePayload {
   swapKind: "swap" | "commit";
   /** Resident memory of the macOS `fseventsd` daemon, in MB. Darwin only. */
   fseventsdRssMb: number | null;
+  /** The level `kern.memorystatus_vm_pressure_level` reported. Darwin only. */
+  kernelPressureLevel: "warn" | "critical" | null;
 }
 
 /**

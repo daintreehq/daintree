@@ -12,6 +12,11 @@ import { getWritesSuppressed } from "./diskPressureState.js";
 import { getIsE2EFaultMode, getIsE2EMode } from "../setup/runtimeFlags.js";
 import { getSystemMemoryThresholds, readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import type { TrimStateSummary } from "../../shared/types/pty-host.js";
+import {
+  KERNEL_PRESSURE_CRITICAL,
+  KERNEL_PRESSURE_WARN,
+  type KernelPressureLevel,
+} from "./SystemMemoryPressureMonitor.js";
 
 const POLL_INTERVAL_MS = 30_000;
 const SNAPSHOT_COOLDOWN_MS = 5 * 60 * 1000;
@@ -105,6 +110,23 @@ export const TIER1_REPRIEVE_MS = 3 * POLL_INTERVAL_MS;
  * now. A productive pass or the end of the episode restores the base cooldown.
  */
 export const MITIGATION_BACKOFF_MAX_MS = 60 * 60 * 1000;
+
+/**
+ * Kernel pressure readings the effective level is taken over (#12799). The
+ * effective level is the highest of them, so an elevated reading engages at
+ * once and only this many consecutive lower readings stand it down — a level
+ * flapping between normal and critical cannot clear the backoff or re-arm
+ * tier 1 on every dip. A failed read adds nothing, so it neither engages nor
+ * counts toward recovery.
+ */
+export const KERNEL_PRESSURE_WINDOW = 3;
+
+/**
+ * Cooldown on the non-destructive lever a kernel warning pulls. Its own clock,
+ * not tier 1's: a warning must never spend (or wait on) the destructive tier's
+ * eligibility, and a flapping warning must not re-broadcast every poll.
+ */
+export const KERNEL_WARN_RECLAIM_COOLDOWN_MS = 5 * 60 * 1000;
 
 /**
  * What a completed mitigation pass showed. `unknown` covers a pass whose
@@ -424,6 +446,19 @@ export interface MemoryPressureActions {
    * cadence and runs its probes asynchronously, so it never delays this poll.
    */
   sampleSystemHealth?: () => void;
+  /**
+   * Optional reader for the kernel's own pressure level (#12799): on Darwin,
+   * `kern.memorystatus_vm_pressure_level`. Started once per poll without
+   * blocking it, so a poll acts on the readings already in; the post-settle
+   * re-measure awaits a fresh one. Resolves null (or rejects) when unreadable.
+   */
+  readKernelPressureLevel?: () => Promise<KernelPressureLevel | null>;
+  /**
+   * The non-destructive lever a kernel warning pulls: asks renderers to give
+   * back what they can without losing anything. Fire-and-forget; its effect is
+   * not measured and it never gates escalation.
+   */
+  releaseRendererMemory?: () => void;
 }
 
 // workingSetSize is the only memory field Electron guarantees on all three
@@ -505,6 +540,47 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
   let backoffEpoch = 0;
   const thresholdExceededPids = new Set<number>();
   const trendWarnedPids = new Set<number>();
+  /** Newest last; at most {@link KERNEL_PRESSURE_WINDOW} valid readings. */
+  const kernelReadings: Array<{ level: KernelPressureLevel; at: number }> = [];
+  let kernelReadInFlight = false;
+  /** Bumped on suspend so a read that straddles sleep cannot land after it. */
+  let kernelReadEpoch = 0;
+  let lastKernelWarnReclaimAt = 0;
+
+  /**
+   * The highest recent reading, or null with none. A reading older than the
+   * window at the current cadence is dropped: it no longer describes the
+   * machine, and it must not hold a pressure episode open on its own.
+   */
+  const effectiveKernelLevel = (): KernelPressureLevel | null => {
+    const maxAgeMs = (KERNEL_PRESSURE_WINDOW + 1) * currentAppMetricsPollIntervalMs;
+    const now = Date.now();
+    while (kernelReadings.length > 0 && now - kernelReadings[0]!.at > maxAgeMs) {
+      kernelReadings.shift();
+    }
+    let level: KernelPressureLevel | null = null;
+    for (const reading of kernelReadings) {
+      if (level === null || reading.level > level) level = reading.level;
+    }
+    return level;
+  };
+
+  const sampleKernelPressure = (): void => {
+    const read = actions?.readKernelPressureLevel;
+    if (!read || kernelReadInFlight) return;
+    kernelReadInFlight = true;
+    const epoch = kernelReadEpoch;
+    void read()
+      .catch(() => null)
+      .then((level) => {
+        if (epoch !== kernelReadEpoch || level === null) return;
+        kernelReadings.push({ level, at: Date.now() });
+        if (kernelReadings.length > KERNEL_PRESSURE_WINDOW) kernelReadings.shift();
+      })
+      .finally(() => {
+        if (epoch === kernelReadEpoch) kernelReadInFlight = false;
+      });
+  };
 
   const clearBackoff = (reason: "pressure-cleared" | "suspend"): void => {
     backoffEpoch++;
@@ -587,6 +663,14 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       }
       try {
         actions?.sampleSystemHealth?.();
+      } catch {
+        /* non-critical */
+      }
+      // Judged on the readings already in; the read started below lands for
+      // the next poll, so a slow spawn under pressure never stalls this one.
+      const kernelLevel = effectiveKernelLevel();
+      try {
+        sampleKernelPressure();
       } catch {
         /* non-critical */
       }
@@ -751,8 +835,16 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       // tier 2 a collapse, and `availableMb` counts Darwin's file cache
       // (#12363), so on a large Mac it is crossed only once that cache is
       // spent. See `getSystemMemoryThresholds`.
+      //
+      // The kernel's own level is the signal that fires first on a Mac (#12799):
+      // it reacts to compression and swap long before file cache runs out, so
+      // `availableMb` alone could sit healthy through days of thrashing. Only
+      // critical joins the destructive ladder; a warning pulls the cheap lever
+      // below and nothing else.
       const availableMb = readAvailableSystemMemoryMb();
-      const systemPressureActive = availableMb !== null && availableMb < systemLowMemoryThresholdMb;
+      const kernelCritical = kernelLevel === KERNEL_PRESSURE_CRITICAL;
+      const systemPressureActive =
+        (availableMb !== null && availableMb < systemLowMemoryThresholdMb) || kernelCritical;
       if (systemPressureActive) {
         hasPressure = true;
       }
@@ -773,6 +865,22 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       if (pollCount <= WARMUP_INTERVALS || !actions) {
         consecutivePressureCount = 0;
         return;
+      }
+
+      if (
+        kernelLevel !== null &&
+        kernelLevel >= KERNEL_PRESSURE_WARN &&
+        actions.releaseRendererMemory &&
+        (lastKernelWarnReclaimAt === 0 ||
+          Date.now() - lastKernelWarnReclaimAt >= KERNEL_WARN_RECLAIM_COOLDOWN_MS)
+      ) {
+        lastKernelWarnReclaimAt = Date.now();
+        logInfo("memory-pressure-kernel-reclaim", { kernelPressureLevel: kernelLevel });
+        try {
+          actions.releaseRendererMemory();
+        } catch (err) {
+          logWarn("memory-pressure-kernel-reclaim-failed", { error: String(err) });
+        }
       }
 
       if (hasPressure) {
@@ -818,11 +926,11 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             return total;
           };
 
-          const measurePressure = (): {
+          const measurePressure = async (): Promise<{
             totalMb: number;
             pressureRemains: boolean;
             systemPressureRemains: boolean;
-          } => {
+          }> => {
             let totalMb = 0;
             let remains = false;
             let systemRemains = false;
@@ -848,6 +956,19 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             if (availableMb !== null && availableMb < systemLowMemoryThresholdMb) {
               remains = true;
               systemRemains = true;
+            }
+            // Recheck the kernel too, or a critical episode reads as resolved
+            // from footprint and file cache alone (#11092's masking shape). A
+            // fresh reading is the present tense; without one, the recent
+            // readings stand. Kept out of the window so a re-measure cannot
+            // hurry the recovery the window exists to slow down.
+            const readKernel = actions.readKernelPressureLevel;
+            if (readKernel) {
+              const fresh = await readKernel().catch(() => null);
+              if ((fresh ?? effectiveKernelLevel()) === KERNEL_PRESSURE_CRITICAL) {
+                remains = true;
+                systemRemains = true;
+              }
             }
             return { totalMb, pressureRemains: remains, systemPressureRemains: systemRemains };
           };
@@ -878,6 +999,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               pollCount,
               consecutivePressureCount,
               beforeMb: Math.round(beforeMb),
+              kernelPressureLevel: kernelLevel,
             });
 
             tier1TabsEvicted = await actions.destroyHiddenWebviews(1);
@@ -902,7 +1024,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           let systemPressureRemains = false;
           let resampleFailed = false;
           try {
-            const measured = measurePressure();
+            const measured = await measurePressure();
             afterMb = measured.totalMb;
             pressureRemains = measured.pressureRemains;
             systemPressureRemains = measured.systemPressureRemains;
@@ -1011,6 +1133,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               pollCount,
               consecutivePressureCount,
               systemPressureRemains,
+              kernelPressureLevel: kernelLevel,
             });
 
             // `afterMb` is this tier's baseline: sampled after tier 1 settled
@@ -1091,7 +1214,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             let tier2AfterMb = tier2BeforeMb;
             let tier2PressureRemains = true;
             try {
-              const measured = measurePressure();
+              const measured = await measurePressure();
               tier2AfterMb = measured.totalMb;
               tier2PressureRemains = measured.pressureRemains;
             } catch {
@@ -1166,6 +1289,11 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       lastTier2At = 0;
       clearBackoff("suspend");
       mitigationInFlight = false;
+      // Pre-sleep readings say nothing about the machine that wakes.
+      kernelReadEpoch++;
+      kernelReadings.length = 0;
+      kernelReadInFlight = false;
+      lastKernelWarnReclaimAt = 0;
     });
     removeWakeListener = getSystemSleepService().onWake(() => {
       if (clearAlignedInterval !== null) return;

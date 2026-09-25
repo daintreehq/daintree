@@ -36,7 +36,10 @@ import {
   startAppMetricsMonitor,
   hasSustainedRendererSaturation,
 } from "../services/ProcessMemoryMonitor.js";
-import { createDefaultSystemMemoryPressureMonitor } from "../services/SystemMemoryPressureMonitor.js";
+import {
+  createDefaultSystemMemoryPressureMonitor,
+  readDarwinKernelPressureLevel,
+} from "../services/SystemMemoryPressureMonitor.js";
 import { publishSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
@@ -680,6 +683,18 @@ export async function initGlobalServices(
                 void systemMemoryPressure.sample();
               }
             : undefined,
+          // Off under E2E for the same reason as the health monitor: the
+          // runner's own pressure must not reclaim inside an unrelated spec.
+          readKernelPressureLevel:
+            process.platform === "darwin" && !isE2EMode ? readDarwinKernelPressureLevel : undefined,
+          // Every view, cached ones included: a hidden renderer is exactly the
+          // one that can give memory back without anyone seeing a difference.
+          releaseRendererMemory: () => {
+            broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+              name: "window:reclaim-memory",
+              payload: { reason: "system-memory-pressure" },
+            });
+          },
           sampleRendererElu: () => {
             if (!windowRegistry) return;
             const requestId = `elu-${Date.now().toString(36)}`;
