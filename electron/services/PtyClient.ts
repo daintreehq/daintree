@@ -1772,7 +1772,8 @@ export class PtyClient extends EventEmitter {
     text: string,
     submissionToken?: string,
     handbackCode?: string,
-    guard?: TerminalSubmitGuard
+    guard?: TerminalSubmitGuard,
+    imagePaths?: readonly string[]
   ): void {
     this.shardForTerminal(id).send({
       type: "submit",
@@ -1781,6 +1782,7 @@ export class PtyClient extends EventEmitter {
       submissionToken,
       handbackCode,
       ...(guard !== undefined ? { guard } : {}),
+      ...(imagePaths !== undefined && imagePaths.length > 0 ? { imagePaths: [...imagePaths] } : {}),
     });
   }
 

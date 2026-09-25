@@ -73,6 +73,7 @@ import { useAutocompleteApply } from "./hooks/useAutocompleteApply";
 import { useFleetMirror } from "./hooks/useFleetMirror";
 import { useEditorDomHandlers } from "./hooks/useEditorDomHandlers";
 import { useEditorFactory } from "./hooks/useEditorFactory";
+import { readImageChipPaths } from "./inputEditorExtensions";
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
@@ -106,7 +107,13 @@ export interface HybridInputBarHandle {
 
 export interface HybridInputBarProps {
   terminalId: string;
-  onSend: (payload: { data: string; trackerData: string; text: string }) => void;
+  onSend: (payload: {
+    data: string;
+    trackerData: string;
+    text: string;
+    /** The draft's image chips, in order, each also present in `text` (#12792). */
+    imagePaths?: string[];
+  }) => void;
   onSendKey?: (key: string) => void;
   onActivate?: () => void;
   cwd: string;
@@ -610,7 +617,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (intercepted) return;
       }
 
-      sendText(text);
+      sendText(text, { imagePaths: readImageChipPaths(view) });
     };
 
     const { startVoiceWaitSubmit, cancelVoiceWaitSubmit } = useVoiceWaitSubmit({

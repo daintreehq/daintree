@@ -767,13 +767,205 @@ describe("useTerminalFileTransfer hook", () => {
       fileAt("my file.ts", "/Users/test/my file.ts"),
     ]);
 
-    // Images take the same @ token as any other path — the terminal has no
-    // thumbnail-chip surface to justify the hybrid input's image branch.
+    // With bracketed-paste mode off, images take the same @ token as any other
+    // path: a lone raw-path paste, the only form that attaches, is unavailable.
     expect(lastWrittenPayload()).toBe(
       `${formatAtFileToken("/Users/test/notes.md")} ${formatAtFileToken("/Users/test/shot.png")} ${formatAtFileToken("/Users/test/my file.ts")} `
     );
     expect(terminalClient.write).toHaveBeenCalledTimes(1);
     expect(terminalInstanceService.notifyUserInput).toHaveBeenCalledTimes(1);
+  });
+
+  // --- Image attachments (#12792) ---
+
+  describe("images to an agent that attaches them", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      instanceState.bracketedPasteMode = true;
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const payloads = () => vi.mocked(terminalClient.write).mock.calls.map((call) => call[1]);
+
+    it.each(["claude", "codex"])(
+      "pastes each image alone as its raw path, in drop order, for %s",
+      async (agentId) => {
+        renderFileTransferHook({ detectedAgentId: agentId });
+
+        dropFiles([
+          fileAt("notes.md", "/Users/test/notes.md"),
+          fileAt("Screen Shot.png", "/Users/test/Screen Shot.png"),
+          fileAt("b.jpg", "/Users/test/b.jpg"),
+        ]);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2000);
+        });
+
+        expect(payloads()).toEqual([
+          formatWithBracketedPaste(`${formatAtFileToken("/Users/test/notes.md")} `),
+          formatWithBracketedPaste("/Users/test/Screen Shot.png"),
+          formatWithBracketedPaste(" "),
+          formatWithBracketedPaste("/Users/test/b.jpg"),
+          formatWithBracketedPaste(" "),
+        ]);
+      }
+    );
+
+    it("spaces the pastes rather than writing them in one tick", async () => {
+      renderFileTransferHook({ detectedAgentId: "claude" });
+
+      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(payloads()).toEqual([formatWithBracketedPaste("/Users/test/a.png")]);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(payloads()).toEqual([
+        formatWithBracketedPaste("/Users/test/a.png"),
+        formatWithBracketedPaste(" "),
+      ]);
+    });
+
+    it("pastes a clipboard screenshot as its raw path", async () => {
+      renderFileTransferHook({ detectedAgentId: "claude" });
+      await pasteImage();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+
+      expect(payloads()[0]).toBe(
+        formatWithBracketedPaste("/tmp/daintree-clipboard/clipboard-123-abc.png")
+      );
+    });
+
+    it("keeps the @ token for an agent without a verified image protocol", async () => {
+      renderFileTransferHook({ detectedAgentId: "gemini" });
+      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+
+      expect(payloads()).toEqual([
+        formatWithBracketedPaste(`${formatAtFileToken("/Users/test/a.png")} `),
+      ]);
+    });
+
+    it("keeps the @ token when bracketed-paste mode is off or unknown", async () => {
+      instanceState.bracketedPasteMode = false;
+      renderFileTransferHook({ detectedAgentId: "claude" });
+      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      instanceState.hasManagedInstance = false;
+      dropFiles([fileAt("b.png", "/Users/test/b.png")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+
+      expect(payloads()).toEqual([
+        `${formatAtFileToken("/Users/test/a.png")} `,
+        formatWithBracketedPaste(`${formatAtFileToken("/Users/test/b.png")} `),
+      ]);
+    });
+
+    it("keeps a remote-share image as a text reference", async () => {
+      renderFileTransferHook({ detectedAgentId: "claude" });
+      dropFiles([fileAt("a.png", "//server/share/a.png")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+
+      expect(payloads()).toEqual([
+        formatWithBracketedPaste(`${formatAtFileToken("//server/share/a.png")} `),
+      ]);
+    });
+
+    it("queues a second drop behind images still being paced", async () => {
+      renderFileTransferHook({ detectedAgentId: "claude" });
+      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      dropFiles([fileAt("b.ts", "/Users/test/b.ts")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+
+      expect(payloads()).toEqual([
+        formatWithBracketedPaste("/Users/test/a.png"),
+        formatWithBracketedPaste(" "),
+        formatWithBracketedPaste(`${formatAtFileToken("/Users/test/b.ts")} `),
+      ]);
+    });
+
+    it("waits a gap before a queued image drop's first paste", async () => {
+      renderFileTransferHook({ detectedAgentId: "claude" });
+      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      dropFiles([fileAt("b.png", "/Users/test/b.png")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      // a.png, then its trailing space one gap later — b.png must not share that tick.
+      expect(payloads()).toEqual([
+        formatWithBracketedPaste("/Users/test/a.png"),
+        formatWithBracketedPaste(" "),
+      ]);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(payloads()[2]).toBe(formatWithBracketedPaste("/Users/test/b.png"));
+    });
+
+    it("keeps three queued drops in order across a plain-file drop", async () => {
+      renderFileTransferHook({ detectedAgentId: "claude" });
+      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      dropFiles([fileAt("b.ts", "/Users/test/b.ts")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      // a.png has finished pacing; b.ts is still waiting its gap.
+      dropFiles([fileAt("c.png", "/Users/test/c.png")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(payloads()).toEqual([
+        formatWithBracketedPaste("/Users/test/a.png"),
+        formatWithBracketedPaste(" "),
+        formatWithBracketedPaste(`${formatAtFileToken("/Users/test/b.ts")} `),
+        formatWithBracketedPaste("/Users/test/c.png"),
+        formatWithBracketedPaste(" "),
+      ]);
+    });
+
+    it("drops the rest of a paced drop once input locks, even if it unlocks again", async () => {
+      const { rerender } = renderFileTransferHook({ detectedAgentId: "claude" });
+      dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      rerender({ detectedAgentId: "claude", isInputLocked: true });
+      rerender({ detectedAgentId: "claude", isInputLocked: false });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(payloads()).toEqual([formatWithBracketedPaste("/Users/test/a.png")]);
+    });
+
+    it("stops pacing once the pane unmounts", async () => {
+      const { unmount } = renderFileTransferHook({ detectedAgentId: "claude" });
+      dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      unmount();
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(payloads()).toEqual([formatWithBracketedPaste("/Users/test/a.png")]);
+    });
   });
 
   // --- Drag event tests ---

@@ -240,6 +240,8 @@ export type PtyHostRequest =
       handbackCode?: string;
       /** Admission check run when the submission reaches the lane (#12491). */
       guard?: TerminalSubmitGuard;
+      /** Absolute paths of images attached in the composer, in order (#12792). */
+      imagePaths?: string[];
     }
   | { type: "stage"; id: string; text: string }
   /** Take back a guarded submission before its Enter (#12491). Ordinary ones are unaffected. */

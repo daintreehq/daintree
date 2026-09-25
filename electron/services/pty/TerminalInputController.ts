@@ -1,3 +1,4 @@
+import { stat } from "fs/promises";
 import type { TerminalInfo } from "./types.js";
 import type { TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
 import { evaluateWakeGate, type WakeGateSnapshot } from "../../../shared/utils/terminalWakeGate.js";
@@ -9,6 +10,7 @@ import {
   normalizeSubmitText,
   splitTrailingNewlines,
   supportsBracketedPaste,
+  supportsImagePathInput,
   getSoftNewlineSequence,
   getSubmitEnterDelay,
   isBracketedPaste,
@@ -21,6 +23,41 @@ import {
   OUTPUT_SETTLE_POLL_INTERVAL_MS,
 } from "./terminalInput.js";
 import { formatWithBracketedPaste } from "../../../shared/utils/terminalInputProtocol.js";
+import {
+  isImageAttachmentPath,
+  splitImageInputSegments,
+  type ImageInputSegment,
+} from "../../../shared/utils/imageAttachmentInput.js";
+
+const IMAGE_STAT_TIMEOUT_MS = 1000;
+
+/**
+ * Whether `filePath` is a regular file, answered `false` rather than awaited
+ * forever: a stat on a dead network mount can hang, and this runs inside the
+ * submit lane every terminal on the host shares a process with.
+ */
+async function isRegularFile(filePath: string): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), IMAGE_STAT_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([
+      stat(filePath).then(
+        (stats) => stats.isFile(),
+        () => false
+      ),
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+interface AgentOwner {
+  agentId: string | undefined;
+  incarnation: number;
+}
 
 export interface TerminalInputControllerHost {
   readonly id: string;
@@ -281,7 +318,8 @@ export class TerminalInputController {
     text: string,
     token?: string,
     onPtyWritten?: () => void,
-    guard?: TerminalSubmitGuard
+    guard?: TerminalSubmitGuard,
+    imagePaths?: readonly string[]
   ): void {
     if (this.isInputLocked || this.host.terminalInfo.isExited) {
       // Refused before the lane sees it, so `WriteQueue` never mints a record.
@@ -308,7 +346,7 @@ export class TerminalInputController {
             !this.isInputLocked &&
             evaluateWakeGate(wakeGateSnapshot(this.host.terminalInfo)).kind === "ready"
         : undefined;
-    this.host.writeQueue.submit(text, token, onPtyWritten, admit);
+    this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths);
   }
 
   /**
@@ -391,9 +429,31 @@ export class TerminalInputController {
 
     const useBracketedPaste = body.includes("\n") || body.length > PASTE_THRESHOLD_CHARS;
     const useOutputSettle = !supportsBracketedPaste(terminal);
+    // Only a submission carrying images pays the await: every other body is
+    // still written in the same tick it reached the lane. Both the typing
+    // baseline and the recipient are taken before it, so input or an agent
+    // exit during the stat or between pastes is seen rather than absorbed.
+    const carriesImages = ctx?.imagePaths !== undefined && ctx.imagePaths.length > 0;
+    const owner = this.captureOwner();
+    const typedBeforeBody = terminal.lastTypedInputAt;
+    const imageSegments = carriesImages
+      ? await this.resolveImageSegments(body, ctx?.imagePaths ?? [])
+      : null;
+    if (carriesImages) {
+      if (!this.isStillOwnedBy(generation, owner)) return;
+      // A guarded line whose composer was typed into while the stat ran is
+      // abandoned before any of it is written, as it would be before its Enter.
+      if (ctx?.abandonEnterOnInput === true && terminal.lastTypedInputAt !== typedBeforeBody) {
+        return;
+      }
+    }
 
     let bodyWritten: boolean;
-    if (useBracketedPaste && supportsBracketedPaste(terminal)) {
+    if (imageSegments) {
+      const outcome = await this.writeImageSegments(imageSegments, generation, owner);
+      if (outcome === "abandoned") return;
+      bodyWritten = outcome === "written";
+    } else if (useBracketedPaste && supportsBracketedPaste(terminal)) {
       // See `stage`: an unsanitised body could close the paste itself, and
       // whatever follows would reach the agent as keystrokes, submits included.
       // Page-derived text (DOM ids, labels) reaches here from SvelteKit Tools.
@@ -412,7 +472,7 @@ export class TerminalInputController {
     if (!bodyWritten) {
       return;
     }
-    const typedAtBodyWrite = terminal.lastTypedInputAt;
+    const typedAtBodyWrite = carriesImages ? typedBeforeBody : terminal.lastTypedInputAt;
 
     if (this.isInputLocked || this.inputGeneration !== generation) {
       return;
@@ -451,9 +511,95 @@ export class TerminalInputController {
       return;
     }
 
+    if (carriesImages && !this.isStillOwnedBy(generation, owner)) {
+      return;
+    }
+
     identityWatcher.armSuppressSignal();
     identityWatcher.onShellSubmit(body);
     if (this.writeStrict(enterSuffix)) ctx?.markPtyWritten();
+  }
+
+  /**
+   * The body split into text and image segments when this submission carries
+   * images the live agent can take as attachments (#12792), else `null` and
+   * the body goes out through the ordinary single write.
+   *
+   * An image only becomes an attachment when its path is a local absolute
+   * image path that exists as a regular file right now; anything else stays in
+   * the text exactly as the composer wrote it, so a missing or remote file is
+   * never announced as attached.
+   */
+  private async resolveImageSegments(
+    body: string,
+    imagePaths: readonly string[]
+  ): Promise<ImageInputSegment[] | null> {
+    if (!supportsImagePathInput(this.host.terminalInfo)) return null;
+    const candidates = [...new Set(imagePaths.filter(isImageAttachmentPath))];
+    if (candidates.length === 0) return null;
+    const exists = await Promise.all(candidates.map(isRegularFile));
+    const existing = new Set(candidates.filter((_, index) => exists[index]));
+    // Filtered from the original list, not the deduplicated one: two chips for
+    // the same image are two attachments.
+    const deliverable = imagePaths.filter((imagePath) => existing.has(imagePath));
+    if (deliverable.length === 0) return null;
+    const segments = splitImageInputSegments(body, deliverable);
+    return segments.some((segment) => segment.kind === "image") ? segments : null;
+  }
+
+  /**
+   * Write the body as separate pastes, in order: each image as a bracketed
+   * paste whose whole payload is its raw path — the only shape the CLIs turn
+   * into an attachment — and the text between them as bracketed pastes of
+   * their own. Text is wrapped even when short so a segment starting with `/`
+   * or `@` cannot open the CLI's command or file picker.
+   *
+   * Consecutive writes are spaced by the agent's submit delay: an Ink CLI
+   * drops input written in the same tick as the last, and a Ratatui CLI would
+   * fold back-to-back pastes into one burst, burying the path in text again.
+   */
+  private async writeImageSegments(
+    segments: readonly ImageInputSegment[],
+    generation: number,
+    owner: AgentOwner
+  ): Promise<"written" | "declined" | "abandoned"> {
+    const gapMs = getSubmitEnterDelay(this.host.terminalInfo);
+    let first = true;
+    for (const segment of segments) {
+      const payload = segment.kind === "image" ? segment.path : segment.text.replace(/\n/g, "\r");
+      if (payload.length === 0) continue;
+      if (!first) {
+        await delay(gapMs);
+        if (!this.isStillOwnedBy(generation, owner)) return "abandoned";
+      }
+      if (!this.writeStrict(formatWithBracketedPaste(payload))) {
+        return first ? "declined" : "abandoned";
+      }
+      first = false;
+    }
+    return first ? "declined" : "written";
+  }
+
+  /**
+   * Whether a paced image submission may keep writing: the pty is still there,
+   * no shutdown or newer generation has taken the input, and the agent it was
+   * addressed to still owns the terminal. An agent that exited into its shell
+   * mid-sequence must not receive the rest of the pastes, let alone the Enter.
+   */
+  private isStillOwnedBy(generation: number, owner: AgentOwner): boolean {
+    const terminal = this.host.terminalInfo;
+    if (!terminal.ptyProcess || terminal.isExited) return false;
+    if (this.isInputLocked || this.inputGeneration !== generation) return false;
+    // The incarnation as well as the id: the same agent relaunched in this pty
+    // is a new session that did not ask for the rest of these pastes.
+    return (
+      terminal.detectedAgentId === owner.agentId && terminal.agentIncarnation === owner.incarnation
+    );
+  }
+
+  private captureOwner(): AgentOwner {
+    const terminal = this.host.terminalInfo;
+    return { agentId: terminal.detectedAgentId, incarnation: terminal.agentIncarnation };
   }
 
   // Side-effects shared by both PTY write paths when xterm forwards a CSI I/O

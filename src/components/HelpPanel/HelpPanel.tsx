@@ -1604,13 +1604,17 @@ export function HelpPanel({
                     agentHasLifecycleEvent={terminalPty?.stateChangeTrigger !== undefined}
                     agentState={terminalPty?.agentState}
                     disabled={terminalPty?.isInputLocked === true}
-                    onSend={({ text }) => {
+                    onSend={({ text, imagePaths }) => {
                       if (terminalPty?.isInputLocked === true) return;
                       terminalInstanceService.notifyUserInput(terminalId);
                       // submit can now reject for dead PTYs (#8706); swallow
                       // to log so the unhandled rejection doesn't leak — the
                       // help panel is a one-shot send with no recovery UI.
-                      terminalClient.submit(terminalId, text).catch((err) => {
+                      const submission =
+                        imagePaths !== undefined && imagePaths.length > 0
+                          ? terminalClient.submitWithImages(terminalId, text, imagePaths)
+                          : terminalClient.submit(terminalId, text);
+                      submission.catch((err) => {
                         logWarn("[HelpPanel] submit failed", { terminalId, error: err });
                       });
                     }}

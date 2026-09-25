@@ -41,6 +41,9 @@ import {
   createChipBackspaceKeymap,
   isChipSelected,
   createSlashChipField,
+  imageChipField,
+  addImageChip,
+  readImageChipPaths,
 } from "../inputEditorExtensions";
 import type { SlashCommand } from "@shared/types";
 
@@ -717,6 +720,43 @@ describe("createCustomKeymap", () => {
     expect(onEnter).not.toHaveBeenCalled();
     expect(view.state.doc.toString()).toContain("\n");
     view.destroy();
+  });
+});
+
+describe("readImageChipPaths (#12792)", () => {
+  function makeEditor(doc: string) {
+    return new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({ doc, extensions: [imageChipField] }),
+    });
+  }
+
+  it("returns chip paths in document order, whatever order they were added in", () => {
+    const view = makeEditor("/a/one.png and /a/two.png");
+    view.dispatch({
+      effects: [
+        addImageChip.of({ from: 15, to: 25, filePath: "/a/two.png", thumbnailUrl: "" }),
+        addImageChip.of({ from: 0, to: 10, filePath: "/a/one.png", thumbnailUrl: "" }),
+      ],
+    });
+
+    expect(readImageChipPaths(view)).toEqual(["/a/one.png", "/a/two.png"]);
+    view.destroy();
+  });
+
+  it("drops a chip once an edit inside it removes it", () => {
+    const view = makeEditor("/a/one.png ");
+    view.dispatch({
+      effects: addImageChip.of({ from: 0, to: 10, filePath: "/a/one.png", thumbnailUrl: "" }),
+    });
+    view.dispatch({ changes: { from: 3, to: 4, insert: "x" } });
+
+    expect(readImageChipPaths(view)).toEqual([]);
+    view.destroy();
+  });
+
+  it("returns nothing without a view", () => {
+    expect(readImageChipPaths(null)).toEqual([]);
   });
 });
 

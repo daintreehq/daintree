@@ -2026,6 +2026,7 @@ export interface GeneratedIpcInvokeMap {
       text: string,
       submissionToken?: string | undefined,
       handbackCode?: string | undefined,
+      imagePaths?: string[] | undefined,
     ];
     result: void;
   };

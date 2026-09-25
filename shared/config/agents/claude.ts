@@ -104,6 +104,8 @@ export const config: AgentConfig = {
     scrollback: 10000,
     resizeStrategy: "default",
     supportsBracketedPaste: true,
+    // Composer shows `[Image #N]` for a lone bracketed-pasted image path (#12792).
+    imageInput: "bracketed-path",
     softNewlineSequence: "\x1b\r",
     ignoredInputSequences: ["\x1b\r"],
     quitSubmitMode: "single-write",

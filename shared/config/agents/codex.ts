@@ -97,6 +97,8 @@ export const config: AgentConfig = {
         "Codex's ambient animation behind the prompt. Off keeps idle panes from repainting continuously.",
     },
     supportsBracketedPaste: true,
+    // Composer shows `[Image #N]` for a lone bracketed-pasted image path (#12792).
+    imageInput: "bracketed-path",
     softNewlineSequence: "\n",
     ignoredInputSequences: ["\n", "\x1b\r"],
     // Advertises "esc to interrupt" while working. Distinct from the Ctrl-C

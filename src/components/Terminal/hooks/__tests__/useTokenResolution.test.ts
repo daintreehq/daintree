@@ -112,6 +112,26 @@ describe("useTokenResolution.sendText", () => {
     expect(getWorkingDiff).not.toHaveBeenCalled();
     expect(onSend.mock.calls[0]![0].text).toBe("just $neo and @file.ts");
   });
+
+  it("hands the draft's image paths to onSend alongside the text (#12792)", async () => {
+    const { sendText, onSend } = setup();
+    await act(async () => {
+      await sendText("see /a/one.png and /a/two.png", {
+        imagePaths: ["/a/one.png", "/a/two.png"],
+      });
+    });
+
+    expect(onSend.mock.calls[0]![0].imagePaths).toEqual(["/a/one.png", "/a/two.png"]);
+  });
+
+  it("sends no image paths for a draft without any", async () => {
+    const { sendText, onSend } = setup();
+    await act(async () => {
+      await sendText("plain", { imagePaths: [] });
+    });
+
+    expect(onSend.mock.calls[0]![0]).not.toHaveProperty("imagePaths");
+  });
 });
 
 /**

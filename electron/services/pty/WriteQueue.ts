@@ -56,6 +56,11 @@ export interface SubmitExecutionContext {
    * Checked before the Enter, so a withdrawn line is never submitted.
    */
   isWithdrawn?: () => boolean;
+  /**
+   * Image paths the composer attached, in document order (#12792). Whether
+   * they are delivered as attachments is `performSubmit`'s decision.
+   */
+  imagePaths?: readonly string[];
 }
 
 /** One queued submission plus the caller's optional correlation token. */
@@ -70,6 +75,7 @@ interface SubmitJob {
    * be stale by the time the lane is free.
    */
   admit?: () => boolean;
+  imagePaths?: readonly string[];
 }
 
 export interface WriteQueueOptions {
@@ -189,7 +195,13 @@ export class WriteQueue {
    * drain in FIFO order. The in-flight flag is set synchronously before the
    * first await so two callers cannot both pass the guard.
    */
-  submit(text: string, token?: string, onPtyWritten?: () => void, admit?: () => boolean): void {
+  submit(
+    text: string,
+    token?: string,
+    onPtyWritten?: () => void,
+    admit?: () => boolean,
+    imagePaths?: readonly string[]
+  ): void {
     if (this.disposed) {
       // A tracked submit into a disposed queue is answered rather than
       // forgotten: `cancelled` says Daintree dropped it, where silence would
@@ -212,7 +224,7 @@ export class WriteQueue {
     if (token !== undefined && !this.pendingSubmissions.has(token)) {
       this.pendingSubmissions.set(token, { token, phase: "queued", at: Date.now() });
     }
-    this.submitQueue.push({ text, token, onPtyWritten, admit });
+    this.submitQueue.push({ text, token, onPtyWritten, admit, imagePaths });
     if (this.submitInFlight) return;
     this.submitInFlight = true;
     void this.drainSubmitQueue();
@@ -491,6 +503,9 @@ export class WriteQueue {
                   isWithdrawn: () =>
                     this.inFlightGuardedToken === token && this.inFlightGuardedWithdrawn,
                 }
+              : {}),
+            ...(next.imagePaths !== undefined && next.imagePaths.length > 0
+              ? { imagePaths: next.imagePaths }
               : {}),
           });
           this.armSlowSubmitReporting(startedAt);

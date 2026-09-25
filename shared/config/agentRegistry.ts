@@ -684,6 +684,14 @@ export interface AgentConfig {
     appendSystemPrompt?: { flag: string; configKey?: string };
     /** Whether the agent CLI supports bracketed paste input (default: true) */
     supportsBracketedPaste?: boolean;
+    /**
+     * How the CLI turns an image file into an attachment, as verified against
+     * the CLI itself. `bracketed-path`: one bracketed paste whose whole payload
+     * is the image's raw absolute path — a path inside prose, or behind `@`,
+     * stays literal text. Omitted means unverified: images are sent as the
+     * text reference every other file gets (#12792).
+     */
+    imageInput?: "bracketed-path";
     /** Escape sequence sent for Shift+Enter / soft newline (default: "\x1b\r") */
     softNewlineSequence?: string;
     /** Input sequences the activity monitor should ignore (default: ["\x1b\r"]) */
