@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { app, type WebContents } from "electron";
 import type { RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
-import type { HostId } from "../../../shared/types/remoteHosts.js";
+import type { HostDescriptor, HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import { store } from "../../store.js";
@@ -31,6 +31,7 @@ import { RemoteHostsClient, type WindowControl } from "./RemoteHostsClient.js";
 import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
 import { answerReverseRequest } from "./reverseRequests.js";
 import { SshTransport } from "./sshTransport.js";
+import type { LinkTransport } from "./transport.js";
 import { WindowHostBinding } from "./WindowHostBinding.js";
 import { defaultCommandRunner } from "./commandRunner.js";
 import { detectClientBundle, downloadArtifact } from "./clientBuild.js";
@@ -133,6 +134,8 @@ function managerFor(windowId: number) {
 }
 
 export interface RemoteHostsClientHooks {
+  /** How each host is reached; system ssh unless given. */
+  createTransport?: (descriptor: HostDescriptor) => LinkTransport;
   /** The first time a host is actually used (see RemoteHostsClientOptions.onFirstUse). */
   onFirstUse?: () => void;
   /** A window now shows a remote project view: newly created, or a cached one reactivated. */
@@ -208,7 +211,9 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const hostForView = (webContentsId: number) => router?.hostForSender(webContentsId) ?? null;
   const manager = new RemoteHostManager({
     registry,
-    createTransport: (descriptor) => new SshTransport({ target: descriptor.sshTarget, clientDir }),
+    createTransport:
+      hooks.createTransport ??
+      ((descriptor) => new SshTransport({ target: descriptor.sshTarget, clientDir })),
     handshake: getLocalHandshakeInfo,
     client: {
       // Per launch: a session only resumes within one run of this app.

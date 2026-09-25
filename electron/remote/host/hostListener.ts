@@ -103,7 +103,7 @@ async function runTeardowns(teardowns: Teardown[]): Promise<void> {
  * failure anywhere in setup undoes whatever was already registered.
  */
 export async function startHostListener(
-  options: { signal?: AbortSignal; now?: () => number } = {}
+  options: { signal?: AbortSignal; now?: () => number; location?: HostSocketLocation } = {}
 ): Promise<HostListener> {
   const teardowns: Teardown[] = [];
   try {
@@ -115,7 +115,7 @@ export async function startHostListener(
 }
 
 async function buildHostListener(
-  options: { signal?: AbortSignal; now?: () => number },
+  options: { signal?: AbortSignal; now?: () => number; location?: HostSocketLocation },
   teardowns: Teardown[]
 ): Promise<HostListener> {
   const now = options.now ?? Date.now;
@@ -132,7 +132,7 @@ async function buildHostListener(
     }
   };
 
-  const location = hostLocation();
+  const location = options.location ?? hostLocation();
   const server = new HostServer({
     location,
     handshake: getLocalHandshakeInfo(),
