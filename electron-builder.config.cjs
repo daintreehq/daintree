@@ -264,6 +264,12 @@ module.exports = async function () {
         NSPrefersDisplaySafeAreaCompatibilityMode: false,
         NSMicrophoneUsageDescription:
           "Daintree uses the microphone for voice dictation into terminal inputs.",
+        // macOS 15+ gates local-network traffic, including an `ssh` Daintree
+        // spawns to reach another machine, behind this prompt; the Bonjour type
+        // is the one Remote Hosts browses and advertises.
+        NSLocalNetworkUsageDescription:
+          "Daintree connects to your other computers on the local network over SSH so you can work with their projects, and looks for Daintree hosts nearby.",
+        NSBonjourServices: ["_daintree._tcp"],
         // Accept folders dropped on the Dock icon / "Open With" so macOS Launch
         // Services delivers them to the `open-file` handler, which opens them as
         // projects (#10976). `public.folder` is the Finder-facing folder UTI (not

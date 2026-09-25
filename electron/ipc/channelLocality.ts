@@ -372,6 +372,7 @@ export const CHANNEL_LOCALITY = {
   "host-metrics:get-snapshots": "shell",
   "host-mode:event": "shell",
   "host-mode:get-status": "shell",
+  "host-mode:run-keychain-preflight": "shell",
   "host-mode:set-enabled": "shell",
   "host-switch:plan": "shell",
   "idle-background:closed": "host",

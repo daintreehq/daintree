@@ -888,8 +888,12 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./hostMode.js").HostModeStatus;
   };
+  "host-mode:run-keychain-preflight": {
+    args: [];
+    result: import("./hostMode.js").HostModeStatus;
+  };
   "host-mode:set-enabled": {
-    args: [_payload: import("./hostMode.js").SetHostModePayload];
+    args: [payload: import("./hostMode.js").SetHostModePayload];
     result: import("./hostMode.js").HostModeStatus;
   };
   "host-switch:plan": {

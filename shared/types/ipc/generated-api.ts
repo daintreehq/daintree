@@ -374,6 +374,9 @@ export interface GeneratedElectronAPI {
     getStatus(
       ...args: IpcInvokeMap["host-mode:get-status"]["args"]
     ): Promise<IpcInvokeMap["host-mode:get-status"]["result"]>;
+    runKeychainPreflight(
+      ...args: IpcInvokeMap["host-mode:run-keychain-preflight"]["args"]
+    ): Promise<IpcInvokeMap["host-mode:run-keychain-preflight"]["result"]>;
     setEnabled(
       ...args: IpcInvokeMap["host-mode:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["host-mode:set-enabled"]["result"]>;
