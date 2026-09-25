@@ -27,6 +27,10 @@ describe("PERF-080 heavy migration fixture", () => {
     expect("checklist" in fixture.onboarding).toBe(false);
     expect(fixture.notificationSettings.soundFile).toBe("ping.wav");
     expect(fixture.agentSettings.agents["agent-0"]!.flavorId).toBe("preset-0");
+    // 029 moves the single tour record into `tours` and `tourMuted`.
+    expect(fixture.onboarding.tour).toBeDefined();
+    expect("tours" in fixture.onboarding).toBe(false);
+    expect("tourMuted" in fixture.onboarding).toBe(false);
   });
 
   it("carries every legacy key a later migration is written to consume", () => {
