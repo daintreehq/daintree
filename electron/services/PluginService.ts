@@ -5223,7 +5223,8 @@ export class PluginService {
         "warn"
       );
       // Never registered, so no unload will come to drain its window.
-      this.fileLogLimiter.drain(instanceKey);
+      const suppressed = this.fileLogLimiter.drain(instanceKey);
+      if (suppressed) this.writePluginFileLogSummary(instanceKey, suppressed);
       return false;
     }
 
