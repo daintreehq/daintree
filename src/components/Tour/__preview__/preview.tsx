@@ -7,6 +7,7 @@ import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TOUR_CHAPTERS } from "../tourChapters";
 import { TourDialog } from "../TourDialog";
+import { TOUR_KEYBOARDS, type TourKeyboard } from "../tourKeys";
 import type { TourPlayer } from "../TourPlayer";
 import "@/index.css";
 
@@ -17,6 +18,7 @@ import "@/index.css";
  *   ?chapter=<id>             open on a chapter (default: the first)
  *   ?t=<seconds>              freeze the scene at a moment (no playback)
  *   ?muted=1                  start muted (captions show)
+ *   ?keyboard=mac|pc          narrate and draw that keyboard's shortcuts
  *
  * `window.__tour` is the live player, for specs that step through cues.
  */
@@ -28,6 +30,8 @@ const chapterIndex = Math.max(
   TOUR_CHAPTERS.findIndex((c) => c.id === params.get("chapter"))
 );
 const freezeAt = params.get("t");
+const keyboardParam = params.get("keyboard");
+const keyboard = TOUR_KEYBOARDS.find((k): k is TourKeyboard => k === keyboardParam);
 
 applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
 document.body.style.background = "var(--color-surface-canvas)";
@@ -70,6 +74,7 @@ createRoot(document.getElementById("root")!).render(
         onCompleted={() => {}}
         onMutedChange={() => {}}
         onPlayer={onPlayer}
+        keyboard={keyboard}
       />
     </TooltipProvider>
   </StrictMode>

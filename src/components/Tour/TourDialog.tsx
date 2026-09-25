@@ -5,8 +5,9 @@ import { TourControls } from "./TourControls";
 import { TourPlayer, type TourAudio } from "./TourPlayer";
 import { TourCaption, TourStage } from "./TourStage";
 import { TOUR_CHAPTERS } from "./tourChapters";
+import { currentTourKeyboard, type TourKeyboard } from "./tourKeys";
 import { resolveTourTimings } from "./tourTiming";
-import { TourPlayerContext, useTourPlayerState } from "./useTourPlayer";
+import { TourKeyboardContext, TourPlayerContext, useTourPlayerState } from "./useTourPlayer";
 
 export interface TourDialogProps {
   isOpen: boolean;
@@ -18,11 +19,13 @@ export interface TourDialogProps {
   onMutedChange: (muted: boolean) => void;
   /** Harness seam: receives each player as it is created. */
   onPlayer?: (player: TourPlayer) => void;
+  /** Harness seam: the keyboard to narrate and draw. Defaults to this platform's. */
+  keyboard?: TourKeyboard;
 }
 
-function createBrowserPlayer(muted: boolean): TourPlayer {
+function createBrowserPlayer(muted: boolean, keyboard: TourKeyboard): TourPlayer {
   return new TourPlayer(
-    resolveTourTimings(),
+    resolveTourTimings(keyboard),
     {
       createAudio: (url) => new Audio(url) as TourAudio,
       now: () => performance.now(),
@@ -46,7 +49,7 @@ function TourBody({
   onChapterReached,
   onCompleted,
   onMutedChange,
-}: Omit<TourDialogProps, "isOpen" | "initialChapter" | "initialMuted" | "onPlayer"> & {
+}: Omit<TourDialogProps, "isOpen" | "initialChapter" | "initialMuted" | "onPlayer" | "keyboard"> & {
   player: TourPlayer;
 }) {
   const state = useTourPlayerState(player);
@@ -211,6 +214,7 @@ export function TourDialog({
   onCompleted,
   onMutedChange,
   onPlayer,
+  keyboard = currentTourKeyboard(),
 }: TourDialogProps) {
   const [player, setPlayer] = useState<TourPlayer | null>(null);
   // The player is built once per opening from these; afterwards chapter and
@@ -223,7 +227,7 @@ export function TourDialog({
   useEffect(() => {
     if (!isOpen) return;
     const opening = openingRef.current;
-    const next = createBrowserPlayer(opening.initialMuted);
+    const next = createBrowserPlayer(opening.initialMuted, keyboard);
     const chapter = Math.min(Math.max(0, opening.initialChapter), TOUR_CHAPTERS.length - 1);
     next.goTo(chapter, { autoplay: true });
     opening.onPlayer?.(next);
@@ -232,7 +236,7 @@ export function TourDialog({
       next.dispose();
       setPlayer(null);
     };
-  }, [isOpen]);
+  }, [isOpen, keyboard]);
 
   return (
     <AppDialog
@@ -245,13 +249,15 @@ export function TourDialog({
     >
       {player && (
         <TourPlayerContext.Provider value={player}>
-          <TourBody
-            player={player}
-            onClose={onClose}
-            onChapterReached={onChapterReached}
-            onCompleted={onCompleted}
-            onMutedChange={onMutedChange}
-          />
+          <TourKeyboardContext.Provider value={keyboard}>
+            <TourBody
+              player={player}
+              onClose={onClose}
+              onChapterReached={onChapterReached}
+              onCompleted={onCompleted}
+              onMutedChange={onMutedChange}
+            />
+          </TourKeyboardContext.Provider>
         </TourPlayerContext.Provider>
       )}
     </AppDialog>

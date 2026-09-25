@@ -4,8 +4,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { TOUR_SCENES } from "../TourStage";
 import { TOUR_CHAPTERS } from "../tourChapters";
 import { TourPlayer, type TourAudio } from "../TourPlayer";
+import type { TourKeyboard } from "../tourKeys";
 import { resolveChapterTiming } from "../tourTiming";
-import { TourPlayerContext } from "../useTourPlayer";
+import { TourKeyboardContext, TourPlayerContext } from "../useTourPlayer";
 
 class SilentAudio implements TourAudio {
   src: string;
@@ -31,9 +32,9 @@ function momentsOf(cues: Record<string, number>): number[] {
 }
 
 /** Mount a chapter's scene frozen at `t` and return the rendered canvas. */
-function sceneAt(chapterId: string, t: number): HTMLElement {
+function sceneAt(chapterId: string, t: number, keyboard: TourKeyboard = "mac"): HTMLElement {
   const chapter = TOUR_CHAPTERS.find((c) => c.id === chapterId)!;
-  const player = new TourPlayer([resolveChapterTiming(chapter)], {
+  const player = new TourPlayer([resolveChapterTiming(chapter, keyboard)], {
     createAudio: (url) => new SilentAudio(url),
     now: () => 0,
     requestFrame: () => 0,
@@ -43,9 +44,11 @@ function sceneAt(chapterId: string, t: number): HTMLElement {
   const Scene = TOUR_SCENES[chapterId]!;
   const { container } = render(
     <TourPlayerContext.Provider value={player}>
-      <div data-tour-canvas="">
-        <Scene />
-      </div>
+      <TourKeyboardContext.Provider value={keyboard}>
+        <div data-tour-canvas="">
+          <Scene />
+        </div>
+      </TourKeyboardContext.Provider>
     </TourPlayerContext.Provider>
   );
   return container;
@@ -68,7 +71,7 @@ describe("tour scenes", () => {
   // thing in the frame.
   it.each(APP_CHAPTERS)("%s: a spotlight never lands in a dimmed region", (id) => {
     const chapter = TOUR_CHAPTERS.find((c) => c.id === id)!;
-    for (const t of momentsOf(resolveChapterTiming(chapter).cues)) {
+    for (const t of momentsOf(resolveChapterTiming(chapter, "mac").cues)) {
       const canvas = sceneAt(id, t);
       const spot = canvas.querySelector<SVGElement>("[data-tour-spotlight]");
       const targets = spot?.dataset.tourSpotlight?.split("|").filter(Boolean) ?? [];
@@ -88,7 +91,7 @@ describe("tour scenes", () => {
   // where they disagree teaches the wrong model of what a worktree is.
   it.each(APP_CHAPTERS)("%s: the toolbar branch is the selected worktree's branch", (id) => {
     const chapter = TOUR_CHAPTERS.find((c) => c.id === id)!;
-    for (const t of momentsOf(resolveChapterTiming(chapter).cues)) {
+    for (const t of momentsOf(resolveChapterTiming(chapter, "mac").cues)) {
       const canvas = sceneAt(id, t);
       const selected = canvas.querySelector<HTMLElement>("[data-tour-selected]");
       if (selected) {
@@ -106,7 +109,7 @@ describe("tour scenes", () => {
   it("keeps every chapter's sidebar in one order", () => {
     const orders = APP_CHAPTERS.map((id) => {
       const chapter = TOUR_CHAPTERS.find((c) => c.id === id)!;
-      const canvas = sceneAt(id, resolveChapterTiming(chapter).duration);
+      const canvas = sceneAt(id, resolveChapterTiming(chapter, "mac").duration);
       const names = worktreeNames(canvas);
       cleanup();
       return [id, names] as const;
@@ -120,4 +123,54 @@ describe("tour scenes", () => {
       expect(names, id).toEqual(expected);
     }
   });
+});
+
+describe("tour scenes on each keyboard", () => {
+  const keycapsAt = (id: string, cue: string, keyboard: TourKeyboard) => {
+    const chapter = TOUR_CHAPTERS.find((c) => c.id === id)!;
+    const canvas = sceneAt(id, resolveChapterTiming(chapter, keyboard).cues[cue]! + 0.05, keyboard);
+    // The scene's first keycap group is the one this cue shows.
+    const group = canvas.querySelector("kbd")?.parentElement;
+    const caps = [...(group?.querySelectorAll("kbd") ?? [])].map((kbd) => kbd.textContent);
+    cleanup();
+    return caps;
+  };
+
+  it("draws the keys the narration names", () => {
+    expect(keycapsAt("palette", "palette", "mac")).toEqual(["⌘", "⇧", "P"]);
+    expect(keycapsAt("palette", "palette", "pc")).toEqual(["Ctrl", "Shift", "P"]);
+    expect(keycapsAt("pilot", "open", "mac")).toEqual(["⌘", "⌥", "O"]);
+    expect(keycapsAt("pilot", "open", "pc")).toEqual(["Ctrl", "Alt", "O"]);
+  });
+
+  it("draws the park keys the narration names, on the keycaps and the footer", () => {
+    for (const [keyboard, caps, footer] of [
+      ["mac", ["⌥", "↵"], "⌥↵ Park"],
+      ["pc", ["Alt", "↵"], "Alt+↵ Park"],
+    ] as const) {
+      const chapter = TOUR_CHAPTERS.find((c) => c.id === "pilot")!;
+      const at = resolveChapterTiming(chapter, keyboard).cues.park! + 0.3;
+      const canvas = sceneAt("pilot", at, keyboard);
+      const groups = [...canvas.querySelectorAll("kbd")]
+        .map((kbd) => kbd.parentElement!)
+        .filter((group, i, all) => all.indexOf(group) === i)
+        .map((group) => [...group.querySelectorAll("kbd")].map((kbd) => kbd.textContent));
+      expect(groups, keyboard).toContainEqual([...caps]);
+      const hint = canvas.querySelector('[data-tour-anchor="pilot-park"]');
+      expect(hint?.textContent?.replace(/\s+/g, " ").trim(), keyboard).toBe(footer);
+      cleanup();
+    }
+  });
+
+  it.each(TOUR_CHAPTERS.map((c) => c.id))(
+    "%s: shows no Mac key glyph on Windows or Linux",
+    (id) => {
+      const chapter = TOUR_CHAPTERS.find((c) => c.id === id)!;
+      for (const t of momentsOf(resolveChapterTiming(chapter, "pc").cues)) {
+        const canvas = sceneAt(id, t, "pc");
+        expect(canvas.textContent, `${id}@${t.toFixed(2)}`).not.toMatch(/[⌘⌥⌃⇧]/);
+        cleanup();
+      }
+    }
+  );
 });

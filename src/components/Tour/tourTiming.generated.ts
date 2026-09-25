@@ -405,39 +405,6 @@ export const TOUR_TIMING_MANIFEST: TourTimingManifest = {
       narrationHash: "18f5d2b2",
       voice: "inworld-simon",
     },
-    pilot: {
-      duration: 19.647,
-      cues: {
-        open: 2.94,
-        sort: 8.16,
-        park: 10.9,
-      },
-      captions: [
-        {
-          start: 0,
-          end: 6.47,
-          text: "Once you have agents running in more than one project, press Command Option O to see all your agents at once.",
-        },
-        {
-          start: 6.47,
-          end: 10.9,
-          text: "They're grouped by project, with whatever is waiting on you at the top of each group.",
-        },
-        {
-          start: 10.9,
-          end: 14.44,
-          text: "If something can wait, press Option Enter to park it.",
-        },
-        {
-          start: 14.44,
-          end: 19.647,
-          text: "The agent keeps running, but it stops asking for your attention until you're ready.",
-        },
-      ],
-      audioUrl: "https://cdn.daintree.org/tour/inworld-simon/pilot-8b1da895dafa.ogg",
-      narrationHash: "63850fed",
-      voice: "inworld-simon",
-    },
     assistant: {
       duration: 27.587,
       cues: {
@@ -480,34 +447,6 @@ export const TOUR_TIMING_MANIFEST: TourTimingManifest = {
       narrationHash: "c3cc547f",
       voice: "inworld-simon",
     },
-    palette: {
-      duration: 14.766,
-      cues: {
-        palette: 2.19,
-        type: 4.19,
-        help: 8.36,
-      },
-      captions: [
-        {
-          start: 0.06,
-          end: 4.19,
-          text: "When you can't remember where something lives, press Command Shift P.",
-        },
-        {
-          start: 4.19,
-          end: 8.36,
-          text: "Type what you want to do, and every action in Daintree is right there.",
-        },
-        {
-          start: 8.36,
-          end: 14.766,
-          text: "The Help menu has this tour, the Getting Started checklist, and all the keyboard shortcuts.",
-        },
-      ],
-      audioUrl: "https://cdn.daintree.org/tour/inworld-simon/palette-4da818618bb4.ogg",
-      narrationHash: "c9b12358",
-      voice: "inworld-simon",
-    },
     outro: {
       duration: 16.587,
       cues: {
@@ -537,6 +476,128 @@ export const TOUR_TIMING_MANIFEST: TourTimingManifest = {
       ],
       audioUrl: "https://cdn.daintree.org/tour/inworld-simon/outro-54a66c117161.ogg",
       narrationHash: "f1e91cc7",
+      voice: "inworld-simon",
+    },
+    "pilot.mac": {
+      duration: 20.707,
+      cues: {
+        open: 3.09,
+        sort: 9.06,
+        park: 11.89,
+      },
+      captions: [
+        {
+          start: 0,
+          end: 7.28,
+          text: "Once you have agents running in more than one project, press Command Option O to see all your agents at once.",
+        },
+        {
+          start: 7.28,
+          end: 11.89,
+          text: "They're grouped by project, with whatever is waiting on you at the top of each group.",
+        },
+        {
+          start: 11.89,
+          end: 15.57,
+          text: "If something can wait, press Option Return to park it.",
+        },
+        {
+          start: 15.57,
+          end: 20.707,
+          text: "The agent keeps running, but it stops asking for your attention until you're ready.",
+        },
+      ],
+      audioUrl: "https://cdn.daintree.org/tour/inworld-simon/pilot.mac-b96924a75fdb.ogg",
+      narrationHash: "b5c393ab",
+      voice: "inworld-simon",
+    },
+    "pilot.pc": {
+      duration: 19.447,
+      cues: {
+        open: 2.71,
+        sort: 8.23,
+        park: 10.96,
+      },
+      captions: [
+        {
+          start: 0,
+          end: 6.5,
+          text: "Once you have agents running in more than one project, press Control Alt O to see all your agents at once.",
+        },
+        {
+          start: 6.5,
+          end: 10.96,
+          text: "They're grouped by project, with whatever is waiting on you at the top of each group.",
+        },
+        {
+          start: 10.96,
+          end: 14.29,
+          text: "If something can wait, press Alt Enter to park it.",
+        },
+        {
+          start: 14.29,
+          end: 19.447,
+          text: "The agent keeps running, but it stops asking for your attention until you're ready.",
+        },
+      ],
+      audioUrl: "https://cdn.daintree.org/tour/inworld-simon/pilot.pc-7dddf4d44eb5.ogg",
+      narrationHash: "0309b4c1",
+      voice: "inworld-simon",
+    },
+    "palette.mac": {
+      duration: 14.766,
+      cues: {
+        palette: 2.19,
+        type: 4.19,
+        help: 8.36,
+      },
+      captions: [
+        {
+          start: 0.06,
+          end: 4.19,
+          text: "When you can't remember where something lives, press Command Shift P.",
+        },
+        {
+          start: 4.19,
+          end: 8.36,
+          text: "Type what you want to do, and every action in Daintree is right there.",
+        },
+        {
+          start: 8.36,
+          end: 14.766,
+          text: "The Help menu has this tour, the Getting Started checklist, and all the keyboard shortcuts.",
+        },
+      ],
+      audioUrl: "https://cdn.daintree.org/tour/inworld-simon/palette-4da818618bb4.ogg",
+      narrationHash: "c9b12358",
+      voice: "inworld-simon",
+    },
+    "palette.pc": {
+      duration: 15.127,
+      cues: {
+        palette: 2.3,
+        type: 4.56,
+        help: 8.7,
+      },
+      captions: [
+        {
+          start: 0,
+          end: 4.56,
+          text: "When you can't remember where something lives, press Control Shift P.",
+        },
+        {
+          start: 4.56,
+          end: 8.7,
+          text: "Type what you want to do, and every action in Daintree is right there.",
+        },
+        {
+          start: 8.7,
+          end: 15.127,
+          text: "The Help menu has this tour, the Getting Started checklist, and all the keyboard shortcuts.",
+        },
+      ],
+      audioUrl: "https://cdn.daintree.org/tour/inworld-simon/palette.pc-551da97eb9a7.ogg",
+      narrationHash: "8165b4b4",
       voice: "inworld-simon",
     },
   },

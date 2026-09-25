@@ -1,8 +1,16 @@
 import { createContext, useCallback, useContext, useSyncExternalStore } from "react";
 import type { TourPlayer } from "./TourPlayer";
+import { currentTourKeyboard, type TourKeyboard } from "./tourKeys";
 import type { TourPlayerState } from "./tourTypes";
 
 export const TourPlayerContext = createContext<TourPlayer | null>(null);
+
+/** Which keyboard the narration speaks, so scenes draw the keys it names. */
+export const TourKeyboardContext = createContext<TourKeyboard>(currentTourKeyboard());
+
+export function useTourKeyboard(): TourKeyboard {
+  return useContext(TourKeyboardContext);
+}
 
 export function useTourPlayer(): TourPlayer {
   const player = useContext(TourPlayerContext);

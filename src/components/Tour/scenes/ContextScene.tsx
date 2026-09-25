@@ -9,7 +9,8 @@ import {
   useMockCursor,
   type CursorStep,
 } from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
+import { tourShortcutHint } from "../tourKeys";
+import { useCue, useTourKeyboard } from "../useTourPlayer";
 import { MockMenu, MockSpotlight, MockTooltip } from "./sceneParts";
 
 const COPY = ANCHOR["copy-context"];
@@ -79,6 +80,7 @@ export function ContextScene() {
   const portalCue = useCue("portal");
   const portalOpen = useCue("portal", 0.6);
   const pasted = useCue("paste", 0.3);
+  const keyboard = useTourKeyboard();
   const cursor = useMockCursor({ x: 420, y: 200 }, CURSOR);
 
   return (
@@ -108,7 +110,11 @@ export function ContextScene() {
         y={MENU.y}
         width={MENU.width}
         items={[
-          { icon: <Folders />, label: "Copy full context", hint: "⌘⇧C" },
+          {
+            icon: <Folders />,
+            label: "Copy full context",
+            hint: tourShortcutHint("worktree.copyTree", keyboard),
+          },
           { icon: <History />, label: "Recent", muted: true },
           { icon: <Settings2 />, label: "Context settings", muted: true, separator: true },
         ]}
