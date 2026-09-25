@@ -15,6 +15,8 @@ const notificationServiceMock = vi.hoisted(() => ({
   showWatchNotification: vi.fn(),
   showNativeNotification: vi.fn(),
   isWindowFocused: vi.fn(() => false),
+  getUserPresence: vi.fn<() => "present" | "away" | "unknown">(() => "present"),
+  closeNotificationsForPanel: vi.fn(),
 }));
 
 const osDndServiceMock = vi.hoisted(() => ({

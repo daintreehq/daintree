@@ -9,6 +9,7 @@ import {
   resolveWindowProjectName,
   type ProjectTitleLookup,
 } from "../window/windowTitle.js";
+import { readUserPresence, type UserPresence } from "./userPresence.js";
 
 export interface NotificationState {
   waitingCount: number;
@@ -40,6 +41,12 @@ export interface WatchNotificationOptions {
   silent?: boolean;
   /** Renderer that owns the panel — decides which window a click focuses. */
   ownerWebContentsId?: NotificationOwnerId;
+  /**
+   * Panels this banner is about. `closeNotificationsForPanel` removes it once
+   * every one of them has been dealt with, so a grouped banner outlives the
+   * first member to be handled. Omit it and the banner is never closed early.
+   */
+  closeWithPanels?: readonly string[];
 }
 
 export interface NativeNotificationOptions extends WatchNotificationOptions {
@@ -63,6 +70,8 @@ class NotificationService {
   private focusedWindows = new Set<number>();
   private trackedWindows = new Map<number, TrackedWindow>();
   private activeNotifications = new Set<Notification>();
+  /** Panels still outstanding for each banner that asked to close with them. */
+  private pendingPanelsByNotification = new Map<Notification, Set<string>>();
 
   detachWindowListeners(windowId: number): void {
     const tracked = this.trackedWindows.get(windowId);
@@ -291,6 +300,36 @@ class NotificationService {
     return this.focusedWindows.size > 0;
   }
 
+  getUserPresence(): UserPresence {
+    return readUserPresence();
+  }
+
+  /**
+   * The panel has been dealt with — acknowledged, or its agent stopped waiting.
+   * Banners that were only about it leave Notification Center; grouped banners
+   * just drop it and stay until their last member goes the same way.
+   *
+   * `close()` is a no-op for a banner the user already dismissed, and on
+   * unsigned macOS builds, so the tracking is cleared here rather than relying
+   * on the "close" event to arrive.
+   */
+  closeNotificationsForPanel(panelId: string): void {
+    for (const [notification, pending] of [...this.pendingPanelsByNotification]) {
+      if (!pending.delete(panelId) || pending.size > 0) continue;
+      this.forgetNotification(notification);
+      try {
+        notification.close();
+      } catch (err) {
+        console.warn("[NotificationService] failed to close native notification:", err);
+      }
+    }
+  }
+
+  private forgetNotification(notification: Notification): void {
+    this.activeNotifications.delete(notification);
+    this.pendingPanelsByNotification.delete(notification);
+  }
+
   showNativeNotification(
     title: string,
     body: string,
@@ -315,12 +354,15 @@ class NotificationService {
   private showNotification(title: string, body: string, options: NativeNotificationOptions): void {
     if (!Notification.isSupported()) return;
 
-    const { silent = true, ownerWebContentsId, navigation } = options;
+    const { silent = true, ownerWebContentsId, navigation, closeWithPanels } = options;
     const notification = new Notification({ title, body, silent });
     this.activeNotifications.add(notification);
+    if (closeWithPanels && closeWithPanels.length > 0) {
+      this.pendingPanelsByNotification.set(notification, new Set(closeWithPanels));
+    }
 
     const cleanup = () => {
-      this.activeNotifications.delete(notification);
+      this.forgetNotification(notification);
     };
     notification.once("close", cleanup);
     notification.once("failed", (_event, error) => {
@@ -417,6 +459,7 @@ class NotificationService {
       notification.removeAllListeners();
     }
     this.activeNotifications.clear();
+    this.pendingPanelsByNotification.clear();
 
     this.registry = null;
     this.projectLookup = null;
