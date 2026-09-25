@@ -1,19 +1,19 @@
-import type { AgentState } from "@/types";
-import { cn } from "@/lib/utils";
-import { MockApp, MockGrid, MockWaitingPill, MockWorktreeCard } from "../mockup/MockApp";
+import { cn, MockLines, MockStreamingLines, reveal } from "@daintreehq/tour/kit";
 import {
-  MockLines,
-  MockPane,
-  MockStreamingLines,
-  reveal,
   type MockAgentId,
-} from "../mockup/TourMock";
+  MockApp,
+  MockEmptyGrid,
+  MockGrid,
+  MockPane,
+  MockWaitingPill,
+  MockWorktreeCard,
+  type MockStateId,
+} from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
-import { MockEmptyGrid } from "./sceneParts";
 
 const PANES: ReadonlyArray<{
   agent: MockAgentId;
-  state: AgentState;
+  state: MockStateId;
   lines: number[];
   /** The cue this pane arrives on; a working pane streams output from it. */
   cue: string;

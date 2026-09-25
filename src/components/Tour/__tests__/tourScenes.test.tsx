@@ -3,8 +3,8 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { DAINTREE_TOUR_SCENES } from "../daintreeTour";
 import { DAINTREE_MOCK_KIT } from "../daintreeMockKit";
-import { MockKitContext } from "../mockup/MockKitContext";
-import type { CursorStep } from "../mockup/TourMock";
+import { TourShortcutsContext, type CursorStep } from "@daintreehq/tour/kit";
+import { MockKitContext } from "@daintreehq/tour/mock-app";
 import { CURSOR as AGENTS_CURSOR } from "../scenes/AgentsScene";
 import { CURSOR as ASSISTANT_CURSOR } from "../scenes/AssistantScene";
 import { CURSOR as CONTEXT_CURSOR } from "../scenes/ContextScene";
@@ -18,7 +18,7 @@ import { CURSOR as WORKTREES_CURSOR } from "../scenes/WorktreesScene";
 import { TOUR_CHAPTERS } from "../tourChapters";
 import { TourPlayer, type TourAudio } from "@daintreehq/tour";
 import { TourPlayerContext } from "@daintreehq/tour/react";
-import { TourKeyboardContext } from "../tourKeyboardContext";
+import { daintreeTourShortcuts } from "../daintreeTourShortcuts";
 import type { TourKeyboard } from "../tourKeys";
 import { resolveChapterTiming } from "../tourTiming";
 
@@ -59,11 +59,11 @@ function sceneAt(chapterId: string, t: number, keyboard: TourKeyboard = "mac"): 
   const { container } = render(
     <MockKitContext.Provider value={DAINTREE_MOCK_KIT}>
       <TourPlayerContext.Provider value={player}>
-        <TourKeyboardContext.Provider value={keyboard}>
+        <TourShortcutsContext.Provider value={daintreeTourShortcuts(keyboard)}>
           <div data-tour-canvas="">
             <Scene />
           </div>
-        </TourKeyboardContext.Provider>
+        </TourShortcutsContext.Provider>
       </TourPlayerContext.Provider>
     </MockKitContext.Provider>
   );

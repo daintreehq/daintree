@@ -3,8 +3,8 @@ import { ArrowRight, Check, Pause, Play, RotateCcw } from "lucide-react";
 import { ErrorBoundary } from "@/components/ErrorBoundary/ErrorBoundary";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { TOUR_CANVAS } from "./mockup/TourMock";
 import { useTourPlayer, useTourPlayerState, useTourTime } from "@daintreehq/tour/react";
+import { TourCanvas } from "@daintreehq/tour/kit";
 
 /**
  * The narration line, in a band of its own under the stage rather than over
@@ -309,7 +309,6 @@ export function TourStage({
   const ref = useRef<HTMLDivElement>(null);
   const playRef = useRef<HTMLButtonElement>(null);
   const restoreToStageRef = useRef(false);
-  const [scale, setScale] = useState(1);
   const covered = endCard !== null;
 
   // Focus follows the stage's controls as the end card comes and goes. Both
@@ -326,54 +325,40 @@ export function TourStage({
     }
   }, [covered]);
 
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => setScale(el.clientWidth / TOUR_CANVAS.width);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
   return (
-    <div
+    <TourCanvas
       ref={ref}
-      className="relative aspect-video w-full select-none overflow-hidden bg-surface-canvas"
-    >
-      {/* Scenes are third-party code: one that throws fails its chapter, not the
-          dialog. The boundary sits outside the aria-hidden canvas and takes the
-          play surface with it, so its fallback stays reachable; captions,
-          controls and navigation live outside it and keep working. */}
-      <div className="absolute inset-0 flex items-center justify-center">
-        <ErrorBoundary
-          variant="component"
-          componentName="TourScene"
-          displayName={chapterTitle}
-          resetKeys={[tourId, chapterId]}
-          onError={(error) => onSceneError?.(error)}
-        >
-          {/* The mockup is illustration; the chapter title and captions carry the content. */}
-          <div
-            key={chapterId}
-            aria-hidden="true"
-            data-tour-canvas=""
-            className="absolute left-0 top-0 origin-top-left motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]"
-            style={{ width: TOUR_CANVAS.width, height: TOUR_CANVAS.height, scale: String(scale) }}
+      canvasKey={chapterId}
+      // Scenes are third-party code: one that throws fails its chapter, not the
+      // dialog. The boundary sits outside the aria-hidden canvas and takes the
+      // play surface with it, so its fallback stays reachable; captions,
+      // controls and navigation live outside it and keep working.
+      wrapStage={(canvas) => (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <ErrorBoundary
+            variant="component"
+            componentName="TourScene"
+            displayName={chapterTitle}
+            resetKeys={[tourId, chapterId]}
+            onError={(error) => onSceneError?.(error)}
           >
-            <Scene />
-          </div>
-          <PlaySurface buttonRef={playRef} covered={endCard !== null} />
-        </ErrorBoundary>
-      </div>
-      {endCard && (
-        <EndCard
-          {...endCard}
-          onUnmountWithFocus={() => {
-            restoreToStageRef.current = true;
-          }}
-        />
+            {canvas}
+            <PlaySurface buttonRef={playRef} covered={endCard !== null} />
+          </ErrorBoundary>
+        </div>
       )}
-    </div>
+      overlay={
+        endCard && (
+          <EndCard
+            {...endCard}
+            onUnmountWithFocus={() => {
+              restoreToStageRef.current = true;
+            }}
+          />
+        )
+      }
+    >
+      <Scene />
+    </TourCanvas>
   );
 }

@@ -5,21 +5,29 @@ import {
   ExternalLink,
   GitPullRequest,
   MoreHorizontal,
+  FolderGit2,
 } from "lucide-react";
-import { FolderGit2 } from "@/components/icons";
-import { cn } from "@/lib/utils";
-import { ANCHOR, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
-import { MockCIGlyph } from "../mockup/MockCIGlyph";
 import {
+  cn,
+  type CursorStep,
   MockCursor,
   MockLines,
-  MockPane,
+  MockMenu,
+  MockSearchField,
+  MockSpotlight,
   reveal,
   useMockCursor,
-  type CursorStep,
-} from "../mockup/TourMock";
+} from "@daintreehq/tour/kit";
+import {
+  ANCHOR,
+  MockApp,
+  MockCIGlyph,
+  MockEmptyGrid,
+  MockGrid,
+  MockPane,
+  MockWorktreeCard,
+} from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
-import { MockEmptyGrid, MockMenu, MockSearchField, MockSpotlight } from "./sceneParts";
 
 const ISSUES = ANCHOR["forge-issues"];
 const LIST = { x: 290, y: ISSUES.y + 14, width: 216 };

@@ -5,10 +5,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import { STATE_COLORS, STATE_PRIORITY } from "@/components/Worktree/terminalStateConfig";
 import { getAgentConfig } from "@/config/agents";
 import { DAINTREE_MOCK_KIT } from "../daintreeMockKit";
-import { MockApp, MockWaitingPill, MockWorktreeCard } from "../mockup/MockApp";
-import { MockCIGlyph } from "../mockup/MockCIGlyph";
-import { MockKitContext, type MockAgent, type MockKit } from "../mockup/MockKitContext";
-import { MockAgentIcon, MockPane, MockStateGlyph } from "../mockup/TourMock";
+import {
+  MockAgentIcon,
+  MockApp,
+  MockCIGlyph,
+  MockKitContext,
+  MockPane,
+  MockStateGlyph,
+  MockWaitingPill,
+  MockWorktreeCard,
+  type MockAgent,
+  type MockKit,
+} from "@daintreehq/tour/mock-app";
 
 function Glyph({ className, name }: { className?: string; name: string }) {
   return <svg data-glyph={name} className={className} />;

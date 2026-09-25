@@ -1,7 +1,6 @@
 import { Eye, GitBranch, GitCommitHorizontal, LayoutGrid } from "lucide-react";
-import { DaintreeIcon } from "@/components/icons";
-import { cn } from "@/lib/utils";
-import { reveal } from "../mockup/TourMock";
+import { cn, reveal } from "@daintreehq/tour/kit";
+import { MockAppMark } from "@daintreehq/tour/mock-app";
 import { useCue, useTimelineIndex, type TimelinePoint } from "@daintreehq/tour/react";
 
 // Each idea lands as it's spoken.
@@ -23,7 +22,7 @@ export function OutroScene() {
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 bg-surface-canvas">
       <div className={cn("flex flex-col items-center gap-3", reveal(logo, "none"))}>
-        <DaintreeIcon className="size-16 text-text-primary" />
+        <MockAppMark className="size-16 text-text-primary" />
         <span className="text-2xl font-semibold tracking-tight text-text-primary">Daintree</span>
       </div>
       <div className="flex items-center gap-2">

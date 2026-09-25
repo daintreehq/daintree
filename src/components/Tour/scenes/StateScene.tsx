@@ -1,26 +1,28 @@
-import { cn } from "@/lib/utils";
-import type { AgentState } from "@/types";
 import {
-  APP_LAYOUT,
-  GRID_RECT,
-  MockApp,
-  MockGrid,
-  MockWaitingPill,
-  MockWorktreeCard,
-} from "../mockup/MockApp";
-import {
+  cn,
+  type CursorStep,
   MockCursor,
+  MockLegend,
   MockLines,
-  MockPane,
-  MockStateGlyph,
+  MockMenu,
+  MockSpotlight,
   MockTyping,
   reveal,
   useMockCursor,
-  type CursorStep,
+} from "@daintreehq/tour/kit";
+import {
+  APP_LAYOUT,
+  GRID_RECT,
   type MockAgentId,
-} from "../mockup/TourMock";
+  MockApp,
+  MockGrid,
+  MockPane,
+  MockStateGlyph,
+  MockWaitingPill,
+  MockWorktreeCard,
+  type MockStateId,
+} from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
-import { MockLegend, MockMenu, MockSpotlight } from "./sceneParts";
 
 // Claude holds the check: Antigravity never reports finishing (its config has
 // no completion patterns), so it can only ever show working or waiting.
@@ -56,12 +58,12 @@ export function StateScene() {
   const answered = useCue("answer", 2.2);
   const cursor = useMockCursor({ x: 470, y: 250 }, CURSOR);
 
-  const states: (AgentState | null)[] = [
+  const states: (MockStateId | null)[] = [
     working ? "working" : null,
     answered ? "working" : waiting ? "waiting" : working ? "working" : null,
     done ? "completed" : working ? "working" : null,
   ];
-  const live = states.filter((s): s is AgentState => s !== null);
+  const live = states.filter((s): s is MockStateId => s !== null);
 
   return (
     <MockApp

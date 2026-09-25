@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { typingRate } from "../mockup/TourMock";
+import { typingRate } from "@daintreehq/tour/kit";
 
 describe("typingRate", () => {
   it("keeps the floor pace when there is time to spare", () => {

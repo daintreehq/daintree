@@ -2,8 +2,7 @@
 import { StrictMode } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MockCursor, type CursorTarget } from "../mockup/TourMock";
-import { measureAnchor } from "../mockup/tourAnchors";
+import { MockCursor, measureAnchor, type CursorTarget } from "@daintreehq/tour/kit";
 import { TOUR_CHAPTERS } from "../tourChapters";
 import { TourPlayer, type TourAudio } from "@daintreehq/tour";
 import { resolveChapterTiming } from "../tourTiming";

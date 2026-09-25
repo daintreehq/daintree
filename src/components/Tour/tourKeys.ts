@@ -2,13 +2,14 @@ import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 import { describeChord, parseChord } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
 import type { TourChapter } from "@daintreehq/tour";
+import type { TourKeyboard } from "@daintreehq/tour/kit";
 
 /**
  * The two keyboards the tour is voiced for. Windows and Linux share every
  * default the tour mentions (the Windows-only rows are Ctrl+F4 additions), and
  * their keys are named the same aloud, so one reading serves both.
  */
-export type TourKeyboard = "mac" | "pc";
+export type { TourKeyboard };
 
 export const TOUR_KEYBOARDS: readonly TourKeyboard[] = ["mac", "pc"];
 

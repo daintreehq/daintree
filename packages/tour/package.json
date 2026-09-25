@@ -1,7 +1,7 @@
 {
   "name": "@daintreehq/tour",
   "version": "0.1.0",
-  "description": "The Daintree welcome-tour engine — narration cues, timing, a playback clock with a silent fallback, and React bindings for scenes.",
+  "description": "The Daintree welcome-tour engine — narration cues, timing, a playback clock with a silent fallback, React bindings for scenes, and the mockup kit scenes are drawn with.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -31,6 +31,16 @@
       "types": "./dist/react.d.ts",
       "import": "./dist/react.js",
       "default": "./dist/react.js"
+    },
+    "./kit": {
+      "types": "./dist/kit.d.ts",
+      "import": "./dist/kit.js",
+      "default": "./dist/kit.js"
+    },
+    "./mock-app": {
+      "types": "./dist/mock-app.d.ts",
+      "import": "./dist/mock-app.js",
+      "default": "./dist/mock-app.js"
     }
   },
   "files": [
@@ -48,16 +58,25 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepare": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsup"
   },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.7.0"
+  },
   "peerDependencies": {
+    "lucide-react": "^1.47.0",
     "react": "^19.0.0"
   },
   "peerDependenciesMeta": {
+    "lucide-react": {
+      "optional": true
+    },
     "react": {
       "optional": true
     }
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
+    "lucide-react": "^1.47.0",
     "react": "^19.3.0",
     "tsup": "^8.5.1"
   }

@@ -1,18 +1,21 @@
 import { ChevronDown, RadioTower, X } from "lucide-react";
-import { MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
+  type CursorStep,
   MockCursor,
-  MockPane,
+  MockSpotlight,
   MockStreamingLines,
   MockTyping,
   useMockCursor,
-  type CursorStep,
+  useTourShortcuts,
+} from "@daintreehq/tour/kit";
+import {
   type MockAgentId,
-} from "../mockup/TourMock";
-import { fleetExitChordLabel } from "@/components/Fleet/fleetKeys";
+  MockApp,
+  MockGrid,
+  MockPane,
+  MockWorktreeCard,
+} from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
-import { useTourKeyboard } from "../tourKeyboardContext";
-import { MockSpotlight } from "./sceneParts";
 
 const PANES: readonly MockAgentId[] = ["claude", "codex", "antigravity"];
 const PROMPT = "Run the tests";
@@ -40,7 +43,7 @@ export const CURSOR: readonly CursorStep[] = [
 ];
 
 /** The fleet ribbon as the app draws it: amber tint, a left stripe, the count, and Exit. */
-function FleetRibbon({ count, mac }: { count: number; mac: boolean }) {
+function FleetRibbon({ count, exitHint }: { count: number; exitHint: string }) {
   return (
     <div className="relative mb-1.5 flex h-6 shrink-0 items-center gap-2 rounded-sm border-b border-border-default bg-category-amber-subtle px-2 text-3xs text-text-primary before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-category-amber-text">
       <X className="size-2.5 text-text-secondary" aria-hidden="true" />
@@ -50,7 +53,7 @@ function FleetRibbon({ count, mac }: { count: number; mac: boolean }) {
       </span>
       <span className="flex-1" />
       <span className="rounded-sm bg-overlay-subtle px-1.5 py-px text-text-secondary">
-        Exit {fleetExitChordLabel(mac)}
+        Exit {exitHint}
       </span>
     </div>
   );
@@ -68,7 +71,8 @@ export function FleetScene() {
   const sent = useCue("send");
   const left = useCue("exit", 0.55);
   const cursor = useMockCursor({ x: 420, y: 300 }, CURSOR);
-  const mac = useTourKeyboard() === "mac";
+  const shortcuts = useTourShortcuts();
+  const mac = shortcuts.keyboard === "mac";
 
   const antigravityIn = third && (!outAgain || backIn);
   const armed = [firstPair && !left, firstPair && !left, antigravityIn && !left];
@@ -93,7 +97,7 @@ export function FleetScene() {
         // No reserved space: the ribbon appears only once two panels are armed,
         // and the panels give up the room it takes.
         <div className="flex size-full flex-col">
-          {count >= 2 && <FleetRibbon count={count} mac={mac} />}
+          {count >= 2 && <FleetRibbon count={count} exitHint={shortcuts.hint("fleet.exit")} />}
           <MockGrid columns={3} className="min-h-0 flex-1">
             {PANES.map((agent, i) => {
               const mirrored = typing && !sent && i > 0 && armed[i];

@@ -44,6 +44,8 @@ const TOUR_PACKAGE_SRC = join(REPO_ROOT, "packages", "tour", "src");
 const PACKAGE_ENTRIES: Record<string, string> = {
   "@daintreehq/tour": join(TOUR_PACKAGE_SRC, "index.ts"),
   "@daintreehq/tour/react": join(TOUR_PACKAGE_SRC, "react.ts"),
+  "@daintreehq/tour/kit": join(TOUR_PACKAGE_SRC, "kit.ts"),
+  "@daintreehq/tour/mock-app": join(TOUR_PACKAGE_SRC, "mock-app.ts"),
 };
 
 function resolveSource(specifier: string, from: string): string | null {

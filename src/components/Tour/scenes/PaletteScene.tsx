@@ -1,30 +1,36 @@
 import { CirclePlay, Keyboard, ListChecks, Sparkles } from "lucide-react";
-import { MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
-import { MockLines, MockPane, MockTyping } from "../mockup/TourMock";
+import {
+  MockKeys,
+  MockLines,
+  MockMenu,
+  type MockMenuItem,
+  MockSearchField,
+  MockTyping,
+  type TourShortcuts,
+  useTourShortcuts,
+} from "@daintreehq/tour/kit";
+import { MockApp, MockGrid, MockPane, MockWorktreeCard } from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
-import { useTourKeyboard } from "../tourKeyboardContext";
-import { tourKeycaps, tourShortcutHint, type TourKeyboard } from "../tourKeys";
-import { MockKeys, MockMenu, MockSearchField, type MockMenuItem } from "./sceneParts";
 
 const PALETTE = { x: 170, y: 48, width: 300 } as const;
 
 // Real palette rows: the action's title, its summary, and its shortcut — no icons.
-function results(keyboard: TourKeyboard): MockMenuItem[] {
+function results(shortcuts: TourShortcuts): MockMenuItem[] {
   return [
     {
       label: "New worktree",
       detail: "Create a worktree for a new task",
-      hint: tourShortcutHint("worktree.createDialog.open", keyboard),
+      hint: shortcuts.hint("worktree.createDialog.open"),
     },
     {
       label: "New terminal",
       detail: "Open a shell in this worktree",
-      hint: tourShortcutHint("terminal.new", keyboard),
+      hint: shortcuts.hint("terminal.new"),
     },
     {
       label: "New window",
       detail: "Open another Daintree window",
-      hint: tourShortcutHint("app.newWindow", keyboard),
+      hint: shortcuts.hint("app.newWindow"),
     },
   ];
 }
@@ -37,7 +43,7 @@ export function PaletteScene() {
   const typed = useCue("type", 0.9);
   const stepped = useCue("type", 2.5);
   const help = useCue("help");
-  const keyboard = useTourKeyboard();
+  const shortcuts = useTourShortcuts();
 
   return (
     <MockApp
@@ -61,7 +67,7 @@ export function PaletteScene() {
       }
     >
       <MockKeys
-        keys={tourKeycaps("action.palette.open", keyboard)}
+        keys={shortcuts.keycaps("action.palette.open")}
         x={320}
         y={180}
         visible={keys && !palette}
@@ -77,7 +83,7 @@ export function PaletteScene() {
             <TypedQuery />
           </MockSearchField>
         }
-        items={typed ? results(keyboard) : []}
+        items={typed ? results(shortcuts) : []}
       />
       <MockMenu
         visible={help}
@@ -94,12 +100,12 @@ export function PaletteScene() {
           {
             icon: <Keyboard />,
             label: "Keyboard Shortcuts",
-            hint: tourShortcutHint("help.shortcutsAlt", keyboard),
+            hint: shortcuts.hint("help.shortcutsAlt"),
           },
           {
             icon: <Sparkles />,
             label: "Launch Help Agent",
-            hint: tourShortcutHint("help.launchAgent", keyboard),
+            hint: shortcuts.hint("help.launchAgent"),
             separator: true,
           },
         ]}

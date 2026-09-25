@@ -1,18 +1,24 @@
-import { ClaudeIcon, DaintreeIcon } from "@/components/icons";
-import { cn } from "@/lib/utils";
-import { MockApp, MockGrid, MockWaitingPill, MockWorktreeCard } from "../mockup/MockApp";
 import {
+  cn,
+  type CursorStep,
   MockCursor,
   MockLines,
-  MockPane,
+  MockSpotlight,
   MockStreamingLines,
   MockTyping,
   reveal,
   useMockCursor,
-  type CursorStep,
-} from "../mockup/TourMock";
+} from "@daintreehq/tour/kit";
+import {
+  MockApp,
+  MockGrid,
+  MockPane,
+  MockWaitingPill,
+  MockWorktreeCard,
+  MockAgentGlyph,
+  MockAppMark,
+} from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
-import { MockSpotlight } from "./sceneParts";
 
 const BUTTON = { anchor: "assistant" };
 const REQUEST = "Start issue #52 with Codex";
@@ -41,7 +47,7 @@ function Step({ children, visible }: { children: string; visible: boolean }) {
 function IdlePanel() {
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-3 text-center">
-      <DaintreeIcon className="size-5 text-text-secondary" />
+      <MockAppMark className="size-5 text-text-secondary" />
       <span className="text-3xs text-text-secondary">
         Use Daintree Assistant to configure and navigate Daintree.
       </span>
@@ -72,7 +78,7 @@ function AssistantPanel({
   return (
     <div className="flex size-full flex-col">
       <div className="flex h-7 shrink-0 items-center gap-1.5 border-b border-border-subtle px-2">
-        <DaintreeIcon className="size-3 text-text-primary" />
+        <MockAppMark className="size-3 text-text-primary" />
         <span className="text-2xs font-semibold text-text-primary">Daintree Assistant</span>
       </div>
       {started ? (
@@ -105,7 +111,7 @@ function AssistantPanel({
               data-tour-anchor="assistant-runs-on"
               className="mt-1 flex items-center gap-1 px-0.5 text-3xs text-text-secondary"
             >
-              <ClaudeIcon className="size-2.5" />
+              <MockAgentGlyph agent="claude" className="size-2.5" />
               Claude
             </div>
           </div>

@@ -1,17 +1,23 @@
 import { Check, FileCode, GitBranch, GitCommitHorizontal } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { GRID_RECT, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
+  cn,
+  type CursorStep,
   MockCursor,
   MockLines,
-  MockPane,
+  MockSpotlight,
+  MockTooltip,
   MockTyping,
   reveal,
   useMockCursor,
-  type CursorStep,
-} from "../mockup/TourMock";
+} from "@daintreehq/tour/kit";
+import {
+  GRID_RECT,
+  MockApp,
+  MockGrid,
+  MockPane,
+  MockWorktreeCard,
+} from "@daintreehq/tour/mock-app";
 import { useCue, useTimelineIndex, type TimelinePoint } from "@daintreehq/tour/react";
-import { MockSpotlight, MockTooltip } from "./sceneParts";
 
 const FILES = [
   { name: "Header.tsx", added: 24, removed: 3 },

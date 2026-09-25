@@ -1,5 +1,5 @@
-import { cn } from "./cn";
-import { resolveMockCI, useMockKit, type MockCIVisual } from "./MockKitContext";
+import { cn } from "../kit/cn.js";
+import { resolveMockCI, useMockKit, type MockCIVisual } from "./MockKitContext.js";
 
 /** A pull request's checks mark: a status the kit knows (e.g. "pending"), or a visual. */
 export function MockCIGlyph({ status }: { status: string | MockCIVisual }) {

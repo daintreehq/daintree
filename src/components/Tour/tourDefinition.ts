@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { TourChapterTiming } from "@daintreehq/tour";
-import type { MockKit } from "./mockup/MockKitContext";
+import type { MockKit } from "@daintreehq/tour/mock-app";
 import type { TourKeyboard } from "./tourKeys";
 
 /**
