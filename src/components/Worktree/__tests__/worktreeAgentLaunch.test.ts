@@ -10,9 +10,14 @@ interface NotifyPayloadShape {
   title: string;
   message: string;
   placement?: string;
+  urgent?: boolean;
   action: { label: string; onClick: () => void };
 }
-const mockNotify = vi.fn<(payload: NotifyPayloadShape) => void>();
+const mockNotify = vi.fn<(payload: NotifyPayloadShape) => string>(() => "bar-1");
+const mockDismissNotification = vi.fn();
+vi.mock("@/store/notificationStore", () => ({
+  useNotificationStore: { getState: () => ({ dismissNotification: mockDismissNotification }) },
+}));
 vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
 
 type PanelState = { panelsById: Record<string, { spawnStatus?: string }> };
@@ -104,6 +109,8 @@ function lastNotifyPayload(): NotifyPayloadShape {
 beforeEach(() => {
   mockDispatch.mockReset();
   mockNotify.mockReset();
+  mockNotify.mockReturnValue("bar-1");
+  mockDismissNotification.mockReset();
   panelStore.set({ panelsById: {} });
 });
 
@@ -193,6 +200,7 @@ describe("startFirstAgentWhenReady", () => {
       // Grid-bar, not inbox: a blurred window would otherwise drop the
       // callback action that carries the prompt.
       expect(payload.placement).toBe("grid-bar");
+      expect(payload.urgent).toBe(true);
     }
   );
 
@@ -228,6 +236,8 @@ describe("startFirstAgentWhenReady", () => {
     action.onClick();
     await vi.waitFor(() => expect(launchCalls()).toHaveLength(2));
     expect(launchCalls()[1]?.[1]).toMatchObject({ prompt: PROMPT });
+    expect(mockDismissNotification).toHaveBeenCalledTimes(1);
+    expect(mockDismissNotification).toHaveBeenCalledWith("bar-1");
   });
 });
 

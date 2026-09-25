@@ -1,6 +1,7 @@
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { usePanelStore } from "@/store/panelStore";
+import { useNotificationStore } from "@/store/notificationStore";
 import type { WorktreeSetupState } from "@shared/types";
 
 /**
@@ -151,19 +152,26 @@ export function notifyAgentNotStarted(
   reason: AgentNotStartedReason
 ): void {
   let fired = false;
-  notify({
+  const bar = { id: "" };
+  bar.id = notify({
     type: "warning",
     title: "Agent not started",
     message: `${describeReason(reason, launch.agentName)} Your prompt is kept for when you start it.`,
     correlationId: launch.worktreeId,
     context: { eventKind: "agent" },
     placement: "grid-bar",
+    // Quiet hours would otherwise leave only an inbox row, which can't carry
+    // the prompt back.
+    urgent: true,
     duration: 0,
     action: {
       label: `Start ${launch.agentName}`,
       onClick: () => {
         if (fired) return;
         fired = true;
+        // The grid bar persists after a click; clear it so a repeat failure's
+        // fresh bar isn't hidden behind a spent one.
+        if (bar.id) useNotificationStore.getState().dismissNotification(bar.id);
         void (REWAIT_REASONS.has(reason)
           ? startFirstAgentWhenReady(launch)
           : launchOrNotify(launch));
