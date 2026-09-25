@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin, type HtmlTagDescriptor } from "vite";
+import { defineConfig, type Plugin, type HtmlTagDescriptor, type Rolldown } from "vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
@@ -284,15 +284,32 @@ function renderFanoutProbePlugin(state: ImportMapBuildState): Plugin {
 
 const HOST_APP_ORIGIN = "app://daintree";
 
-type HostReactSpecifier = (typeof HOST_IMPORTMAP_SPECIFIERS)[number];
+type HostFacadeSpecifier = (typeof HOST_IMPORTMAP_SPECIFIERS)[number];
 
-// Prefix for the virtual facade modules that re-export the host's React. Shared
-// by the production emitter (hostReactFacadePlugin) and the dev server
+// Prefix for the virtual facade modules that re-export host modules. Shared
+// by the production emitter (hostFacadePlugin) and the dev server
 // (hostImportMapDevPlugin) — the two apply to disjoint modes but must generate
 // byte-identical module source, which is the whole point of #11208: dev built a
 // real facade while production mapped to a raw chunk, so the ABI plugins compile
 // against silently differed between `npm run dev` and a packaged build.
-const HOST_REACT_VIRTUAL_PREFIX = "virtual:daintree-host-react/";
+const HOST_FACADE_VIRTUAL_PREFIX = "virtual:daintree-host/";
+
+// The host compiles the tour from source (see the `@daintreehq/tour` aliases).
+function isTourSourceModule(id: string): boolean {
+  return id.split(path.sep).join("/").includes("/packages/tour/src/");
+}
+
+// The tour's public subpaths. Everything else in HOST_IMPORTMAP_SPECIFIERS is
+// React, which differs in how its facade is generated (CJS, see
+// renderHostFacade) and which shared chunk backs it.
+function isHostTourSpecifier(specifier: string): boolean {
+  return specifier === "@daintreehq/tour" || specifier.startsWith("@daintreehq/tour/");
+}
+
+// The codeSplitting group that holds the tour engine. One chunk shared by the
+// host's lazy TourDialog and the tour facades is what makes a plugin scene's
+// `useCue` see the host's `TourPlayerContext`.
+const TOUR_CHUNK_NAME = "tour";
 
 // Resolution anchor for reading the installed React packages. Anchored on cwd
 // rather than `import.meta.url` because Vite may load this config as either ESM
@@ -350,15 +367,21 @@ function hostReactExportNames(specifier: string): string[] {
 // `default` — silently, with a clean build. (Dev got away with `export *` only
 // because Vite pre-bundles React into real ESM first, which is precisely the
 // dev/prod divergence behind #11208.) Naming each export is what makes the
-// production chunk's signature real; hostReactFacadePlugin's generateBundle
+// production chunk's signature real; hostFacadePlugin's generateBundle
 // then proves it against the built output.
 //
 // The star form also never re-exports `default` (ESM semantics), so the
 // computed default below keeps `import React from "react"` working without a
 // direct `export { default }`, which would throw for subpaths (e.g.
 // jsx-runtime) that have no own default export.
-function renderHostReactFacade(specifier: string): string {
+//
+// Tour specifiers take the star form: the tour package is ESM source (aliased to
+// packages/tour/src), so its export names are statically known and `export *`
+// carries all of them — no config-time require of a package that ships no CJS
+// and whose `dist/` may not be built. It has no default export to synthesize.
+function renderHostFacade(specifier: string): string {
   const target = JSON.stringify(specifier);
+  if (isHostTourSpecifier(specifier)) return `export * from ${target};\n`;
   const named = hostReactExportNames(specifier);
   const lines = [`import * as m from ${target};`];
   if (named.length > 0) lines.push(`export { ${named.join(", ")} } from ${target};`);
@@ -370,7 +393,8 @@ function renderHostReactFacade(specifier: string): string {
 // name can't be read as a directory path. The hashed `.fileName` is resolved
 // from the bundle by this name — never predicted — because only Rolldown knows
 // the final hash.
-function hostReactFacadeChunkName(specifier: string): string {
+function hostFacadeChunkName(specifier: string): string {
+  if (isHostTourSpecifier(specifier)) return `host-${specifier.slice(1).replaceAll("/", "-")}`;
   return `host-react-${specifier.replaceAll("/", "-")}`;
 }
 
@@ -378,26 +402,26 @@ function hostReactFacadeChunkName(specifier: string): string {
 // set decides which chunks are excluded from entry selection and compile hints,
 // and a real app chunk that happened to share the prefix would be silently
 // dropped from those gates.
-const HOST_REACT_FACADE_CHUNK_NAMES: ReadonlyMap<string, HostReactSpecifier> = new Map(
-  HOST_IMPORTMAP_SPECIFIERS.map((specifier) => [hostReactFacadeChunkName(specifier), specifier])
+const HOST_FACADE_CHUNK_NAMES: ReadonlyMap<string, HostFacadeSpecifier> = new Map(
+  HOST_IMPORTMAP_SPECIFIERS.map((specifier) => [hostFacadeChunkName(specifier), specifier])
 );
 
 // Flattening `/` to `-` is not injective, so prove the derived names are
 // distinct. Throwing at module scope fails config load — loud and immediate —
 // rather than letting two specifiers collide onto one chunk.
-if (HOST_REACT_FACADE_CHUNK_NAMES.size !== HOST_IMPORTMAP_SPECIFIERS.length) {
+if (HOST_FACADE_CHUNK_NAMES.size !== HOST_IMPORTMAP_SPECIFIERS.length) {
   throw new Error(
-    "[host-react-facade] two HOST_IMPORTMAP_SPECIFIERS entries flatten to the same chunk name: " +
-      HOST_IMPORTMAP_SPECIFIERS.map((s) => `${s} -> ${hostReactFacadeChunkName(s)}`).join(", ")
+    "[host-facade] two HOST_IMPORTMAP_SPECIFIERS entries flatten to the same chunk name: " +
+      HOST_IMPORTMAP_SPECIFIERS.map((s) => `${s} -> ${hostFacadeChunkName(s)}`).join(", ")
   );
 }
 
-function isHostReactFacadeChunkName(name: string): boolean {
-  return HOST_REACT_FACADE_CHUNK_NAMES.has(name);
+function isHostFacadeChunkName(name: string): boolean {
+  return HOST_FACADE_CHUNK_NAMES.has(name);
 }
 
 // A MINIMUM public API per specifier, verified against the built chunk's real
-// export list (see hostReactFacadePlugin's generateBundle).
+// export list (see hostFacadePlugin's generateBundle).
 //
 // This is the second of two independent checks, and it exists to catch what the
 // first one structurally cannot. The first check asserts every name
@@ -408,9 +432,9 @@ function isHostReactFacadeChunkName(name: string): boolean {
 // names, the built chunk would still match what it asked for and the check would
 // pass vacuously. This hand-written list is the fixed point that catches that —
 // the names third-party plugins are promised, independent of what any code
-// derives. Keyed by HostReactSpecifier so adding a specifier to the shared
+// derives. Keyed by HostFacadeSpecifier so adding a specifier to the shared
 // constant fails typecheck until its contract is declared here.
-const HOST_REACT_REQUIRED_EXPORTS: Record<HostReactSpecifier, readonly string[]> = {
+const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[]> = {
   react: [
     "default",
     "Fragment",
@@ -438,6 +462,32 @@ const HOST_REACT_REQUIRED_EXPORTS: Record<HostReactSpecifier, readonly string[]>
   "react/jsx-dev-runtime": ["Fragment", "jsxDEV"],
   "react-dom": ["createPortal", "flushSync", "version"],
   "react-dom/client": ["createRoot", "hydrateRoot", "version"],
+  // The tour's whole runtime surface today. Its facades are `export *`, so this
+  // list is the only check with a fixed point: dropping or renaming a public
+  // tour export fails the host build instead of breaking plugin scenes.
+  "@daintreehq/tour": [
+    "TourPlayer",
+    "alignWordStarts",
+    "buildCaptions",
+    "buildTiming",
+    "estimateTiming",
+    "estimateWordStarts",
+    "narrationFingerprint",
+    "parseNarration",
+    "resolveChapterTiming",
+    "resolveTourTimings",
+    "stripDirectionTags",
+    "tourMinutes",
+  ],
+  "@daintreehq/tour/react": [
+    "TourPlayerContext",
+    "useCue",
+    "useSecondsSinceCue",
+    "useTimelineIndex",
+    "useTourPlayer",
+    "useTourPlayerState",
+    "useTourTime",
+  ],
 };
 
 interface FacadeLookupChunk {
@@ -450,34 +500,33 @@ interface FacadeLookupChunk {
 // Rolldown assigns and the browser must load. Throws rather than falling back:
 // a missing facade means the emitter didn't run, and silently mapping to
 // something else is how #11208 shipped in the first place.
-function findHostReactFacadePaths(
-  bundle: Record<string, FacadeLookupChunk>
-): Record<string, string> {
+function findHostFacadePaths(bundle: Record<string, FacadeLookupChunk>): Record<string, string> {
   const byName = new Map<string, string>();
   for (const output of Object.values(bundle)) {
     if (output.type === "chunk" && output.name && output.fileName) {
-      if (isHostReactFacadeChunkName(output.name)) byName.set(output.name, output.fileName);
+      if (isHostFacadeChunkName(output.name)) byName.set(output.name, output.fileName);
     }
   }
 
   const paths: Record<string, string> = {};
   const missing: string[] = [];
   for (const specifier of HOST_IMPORTMAP_SPECIFIERS) {
-    const fileName = byName.get(hostReactFacadeChunkName(specifier));
+    const fileName = byName.get(hostFacadeChunkName(specifier));
     if (fileName) paths[specifier] = fileName;
     else missing.push(specifier);
   }
   if (missing.length > 0) {
     throw new Error(
       `[host-import-map] no facade chunk emitted for: ${missing.join(", ")}. ` +
-        "Check hostReactFacadePlugin's buildStart emitFile calls in vite.config.ts."
+        "Check hostFacadePlugin's buildStart emitFile calls in vite.config.ts."
     );
   }
   return paths;
 }
 
 // Emits one facade entry chunk per host specifier and verifies the built result
-// actually carries React's public API (#11208).
+// actually carries each specifier's public API (#11208), backed by one shared
+// instance of React and of the tour.
 //
 // Why entry chunks: only an ENTRY has a preserved, meaningful export signature.
 // `vendor-react` is a code-split chunk, so its exports are whatever other chunks
@@ -486,19 +535,27 @@ function findHostReactFacadePaths(
 // as its own entry (`preserveSignature: "exports-only"`) makes Rolldown emit a
 // chunk whose export list IS react's public surface, while the actual runtime
 // modules stay captured by the untouched `vendor-react` group (priority 80) —
-// so all five facades import that same one chunk and the single-React-instance
+// so all five React facades import that same one chunk and the single-React-instance
 // guarantee holds. Do NOT add `entriesAware` to the vendor-react group to
 // "help": it fragments a group per unique importing-entry-set, which would give
 // each facade its own React copy and reintroduce `Invalid hook call`.
-function hostReactFacadePlugin(): Plugin {
+//
+// The tour facades follow the same shape against the `tour` group's chunk. The
+// catch is that a facade is an entry, and anything an entry reaches statically
+// is `$initial` — which the `boot` group would sweep into the eager first-render
+// chunk. The `tour` group claims the tour source first, so it stays one chunk
+// that only the lazy TourDialog and the facades import; generateBundle proves
+// that the chunk exists, that both facades use it, and that nothing on the
+// startup path reaches it statically.
+function hostFacadePlugin(): Plugin {
   return {
-    name: "host-react-facade",
+    name: "host-facade",
     apply: "build",
     buildStart() {
-      for (const [name, specifier] of HOST_REACT_FACADE_CHUNK_NAMES) {
+      for (const [name, specifier] of HOST_FACADE_CHUNK_NAMES) {
         this.emitFile({
           type: "chunk",
-          id: `${HOST_REACT_VIRTUAL_PREFIX}${specifier}`,
+          id: `${HOST_FACADE_VIRTUAL_PREFIX}${specifier}`,
           name,
           // Explicit rather than relying on the `'exports-only'` global default:
           // this is the property the whole contract rests on, and Vite's
@@ -509,13 +566,13 @@ function hostReactFacadePlugin(): Plugin {
       }
     },
     resolveId(id) {
-      if (id.startsWith(HOST_REACT_VIRTUAL_PREFIX)) return `\0${id}`;
+      if (id.startsWith(HOST_FACADE_VIRTUAL_PREFIX)) return `\0${id}`;
       return null;
     },
     load(id) {
-      const resolvedPrefix = `\0${HOST_REACT_VIRTUAL_PREFIX}`;
+      const resolvedPrefix = `\0${HOST_FACADE_VIRTUAL_PREFIX}`;
       if (!id.startsWith(resolvedPrefix)) return null;
-      return renderHostReactFacade(id.slice(resolvedPrefix.length));
+      return renderHostFacade(id.slice(resolvedPrefix.length));
     },
     // Runs against the FINAL bundle, so `chunk.exports` is the post-tree-shake
     // export list — the only thing that proves the facade survived. Source-level
@@ -525,11 +582,15 @@ function hostReactFacadePlugin(): Plugin {
       const chunksByName = new Map<string, { fileName: string; exports: string[] }>();
       let vendorReactFileName: string | null = null;
       const facadeImports = new Map<string, readonly string[]>();
+      const chunksByFileName = new Map<string, Rolldown.OutputChunk>();
+      const tourSourceChunks: Rolldown.OutputChunk[] = [];
 
       for (const output of Object.values(bundle)) {
         if (output.type !== "chunk") continue;
+        chunksByFileName.set(output.fileName, output);
+        if (output.moduleIds.some(isTourSourceModule)) tourSourceChunks.push(output);
         if (output.name === "vendor-react") vendorReactFileName = output.fileName;
-        if (!output.name || !isHostReactFacadeChunkName(output.name)) continue;
+        if (!output.name || !isHostFacadeChunkName(output.name)) continue;
         chunksByName.set(output.name, { fileName: output.fileName, exports: output.exports });
         facadeImports.set(output.name, output.imports);
       }
@@ -546,28 +607,45 @@ function hostReactFacadePlugin(): Plugin {
         );
       }
 
-      for (const [name, specifier] of HOST_REACT_FACADE_CHUNK_NAMES) {
+      // Same for the tour: its source must live in exactly one chunk, the
+      // `tour` group's. A second chunk holding tour source is a second
+      // TourPlayerContext, and a plugin scene bound to the other one never sees
+      // the host's player.
+      const tourChunk = tourSourceChunks.find((chunk) => chunk.name === TOUR_CHUNK_NAME) ?? null;
+      if (!tourChunk || tourSourceChunks.length !== 1) {
+        problems.push(
+          `tour source must be in exactly one chunk named \`${TOUR_CHUNK_NAME}\`; found it in: ` +
+            (tourSourceChunks.map((chunk) => chunk.name || chunk.fileName).join(", ") || "(none)")
+        );
+      }
+
+      for (const [name, specifier] of HOST_FACADE_CHUNK_NAMES) {
         const chunk = chunksByName.get(name);
         if (!chunk) {
           problems.push(`"${specifier}": no facade chunk named "${name}" in the bundle`);
           continue;
         }
         const actual = new Set(chunk.exports);
+        const isTour = isHostTourSpecifier(specifier);
 
-        // Check 1 — nothing the generator asked for got tree-shaken away.
-        const elided = [...hostReactExportNames(specifier), "default"].filter(
-          (n) => !actual.has(n)
-        );
-        if (elided.length > 0) {
-          problems.push(
-            `"${specifier}" (${chunk.fileName}) lost ${elided.length} export(s) the facade ` +
-              `re-exported: ${elided.join(", ")}`
+        // Check 1 — nothing the generator asked for got tree-shaken away. The
+        // tour facades are `export *`, so they have no generator list and rely
+        // on check 2 alone.
+        if (!isTour) {
+          const elided = [...hostReactExportNames(specifier), "default"].filter(
+            (n) => !actual.has(n)
           );
+          if (elided.length > 0) {
+            problems.push(
+              `"${specifier}" (${chunk.fileName}) lost ${elided.length} export(s) the facade ` +
+                `re-exported: ${elided.join(", ")}`
+            );
+          }
         }
 
         // Check 2 — the promised minimum is present regardless of what the
-        // generator derived (see HOST_REACT_REQUIRED_EXPORTS).
-        const missing = HOST_REACT_REQUIRED_EXPORTS[specifier].filter((n) => !actual.has(n));
+        // generator derived (see HOST_FACADE_REQUIRED_EXPORTS).
+        const missing = HOST_FACADE_REQUIRED_EXPORTS[specifier].filter((n) => !actual.has(n));
         if (missing.length > 0) {
           problems.push(
             `"${specifier}" (${chunk.fileName}) is missing: ${missing.join(", ")}. ` +
@@ -575,21 +653,57 @@ function hostReactFacadePlugin(): Plugin {
           );
         }
 
-        // Every facade must reach React through the one shared chunk. If a
-        // facade stopped importing vendor-react, React got inlined into it —
-        // i.e. a second copy — which breaks hooks at the first render.
-        if (vendorReactFileName && !facadeImports.get(name)?.includes(vendorReactFileName)) {
+        // Every facade must reach its module through the one shared chunk. If a
+        // facade stopped importing it, the module got inlined into the facade —
+        // i.e. a second copy — which breaks hooks (React) or context (tour).
+        const sharedFileName = isTour ? (tourChunk?.fileName ?? null) : vendorReactFileName;
+        if (sharedFileName && !facadeImports.get(name)?.includes(sharedFileName)) {
           problems.push(
-            `"${specifier}" (${chunk.fileName}) does not import the shared vendor-react chunk ` +
-              `(${vendorReactFileName}) — React may have been duplicated into the facade.`
+            `"${specifier}" (${chunk.fileName}) does not import the shared ` +
+              `${isTour ? TOUR_CHUNK_NAME : "vendor-react"} chunk (${sharedFileName}) — the ` +
+              "module may have been duplicated into the facade."
           );
+        }
+      }
+
+      // Serving the tour to plugins must not load it at startup. Walk the
+      // static imports of the app entry and of every first-render seed chunk
+      // (App.tsx is a dynamic import but loads on first render all the same);
+      // none may reach the tour chunk.
+      if (tourChunk) {
+        const seeds = new Set(getFirstRenderPreloadSeeds());
+        const root = process.cwd();
+        const startupRoots = [...chunksByFileName.values()].filter((chunk) => {
+          if (chunk.name && isHostFacadeChunkName(chunk.name)) return false;
+          if (chunk.isEntry) return true;
+          const facade = chunk.facadeModuleId;
+          if (!facade || facade.startsWith("\0")) return false;
+          return seeds.has(path.relative(root, facade).split(path.sep).join("/"));
+        });
+        for (const startup of startupRoots) {
+          const seen = new Set<string>();
+          const queue = [startup.fileName];
+          while (queue.length > 0) {
+            const fileName = queue.pop()!;
+            if (seen.has(fileName)) continue;
+            seen.add(fileName);
+            queue.push(...(chunksByFileName.get(fileName)?.imports ?? []));
+          }
+          if (seen.has(tourChunk.fileName)) {
+            problems.push(
+              `startup chunk ${startup.name || startup.fileName} statically imports the ` +
+                `${TOUR_CHUNK_NAME} chunk (${tourChunk.fileName}) — the tour would load on ` +
+                "first render instead of when a tour opens."
+            );
+          }
         }
       }
 
       if (problems.length > 0) {
         throw new Error(
-          "[host-react-facade] the production import map would serve modules that do not " +
-            "expose React's public API — third-party plugins would fail to load (#11208):\n" +
+          "[host-facade] the production import map would serve modules that do not " +
+            "expose their public API from one shared instance — third-party plugins would " +
+            "fail to load or silently misbehave (#11208, #12771):\n" +
             problems.map((p) => `  - ${p}`).join("\n")
         );
       }
@@ -626,10 +740,10 @@ function hostImportMapPlugin(state: ImportMapBuildState): Plugin {
       // that won't be emitted would be a runtime 404.
       if (!ctx.bundle) return;
 
-      const facadePaths = findHostReactFacadePaths(ctx.bundle as Record<string, FacadeLookupChunk>);
+      const facadePaths = findHostFacadePaths(ctx.bundle as Record<string, FacadeLookupChunk>);
 
       // One distinct target per specifier — each facade exposes only that
-      // specifier's public surface. hostReactFacadePlugin has already verified
+      // specifier's public surface. hostFacadePlugin has already verified
       // those surfaces against the built chunks, so a map emitted here is a map
       // that actually resolves.
       const importMapPayload = {
@@ -644,7 +758,7 @@ function hostImportMapPlugin(state: ImportMapBuildState): Plugin {
       // Pin the shape of the map itself, not just the facades it points at.
       // The facade guard proves the CHUNKS are good; it cannot see this HTML, so
       // a refactor that collapsed every specifier back onto one target (#11208's
-      // original shape) would leave five valid-but-unused facades and still
+      // original shape) would leave valid-but-unused facades and still
       // build clean. This is the assertion that makes that regression loud.
       const targets = Object.values(importMapPayload.imports);
       if (new Set(targets).size !== HOST_IMPORTMAP_SPECIFIERS.length) {
@@ -690,7 +804,7 @@ function hostImportMapPlugin(state: ImportMapBuildState): Plugin {
 }
 
 // Dev counterpart to hostImportMapPlugin. Production maps each specifier to a
-// hashed facade chunk emitted by hostReactFacadePlugin; in dev those chunks
+// hashed facade chunk emitted by hostFacadePlugin; in dev those chunks
 // don't exist (Vite serves React from the module graph), so a sideloaded plugin
 // view that externalizes React has nothing to resolve `react` against and fails
 // to mount (#10514). This plugin closes that gap: it injects an import map into
@@ -712,13 +826,13 @@ function hostImportMapDevPlugin(): Plugin {
     name: "host-import-map-dev",
     apply: "serve",
     resolveId(id) {
-      if (id.startsWith(HOST_REACT_VIRTUAL_PREFIX)) return id;
+      if (id.startsWith(HOST_FACADE_VIRTUAL_PREFIX)) return id;
       return null;
     },
     load(id) {
-      if (!id.startsWith(HOST_REACT_VIRTUAL_PREFIX)) return null;
+      if (!id.startsWith(HOST_FACADE_VIRTUAL_PREFIX)) return null;
       // Same generator as production — dev/prod ABI parity by construction.
-      return renderHostReactFacade(id.slice(HOST_REACT_VIRTUAL_PREFIX.length));
+      return renderHostFacade(id.slice(HOST_FACADE_VIRTUAL_PREFIX.length));
     },
     transformIndexHtml(_html, ctx) {
       if (!ctx.server) return;
@@ -726,7 +840,7 @@ function hostImportMapDevPlugin(): Plugin {
         imports: Object.fromEntries(
           HOST_IMPORTMAP_SPECIFIERS.map((specifier) => [
             specifier,
-            `/@id/${HOST_REACT_VIRTUAL_PREFIX}${specifier}`,
+            `/@id/${HOST_FACADE_VIRTUAL_PREFIX}${specifier}`,
           ])
         ),
       };
@@ -791,9 +905,9 @@ function rendererBundleSizePlugin(): Plugin {
           totalJsRaw += raw;
           totalJsGzip += gz;
           // The app entry specifically, not merely the first `isEntry` chunk:
-          // hostReactFacadePlugin emits five React facades as additional
+          // hostFacadePlugin emits the import-map facades as additional
           // entries, and bundle order does not guarantee the app comes first.
-          if (output.isEntry && !isHostReactFacadeChunkName(name)) {
+          if (output.isEntry && !isHostFacadeChunkName(name)) {
             entryChunkName ??= name;
           }
         } else if (output.type === "asset" && output.fileName.endsWith(".css")) {
@@ -945,10 +1059,10 @@ function compileHintsPlugin(): Plugin {
     facadeModuleId?: string | null;
   }): boolean => {
     const facade = chunk.facadeModuleId?.split(path.sep).join("/");
-    // The React facades are entries but not boot-hot: they're re-export shims a
+    // The host facades are entries but not boot-hot: they're re-export shims a
     // plugin pulls in on demand, so eager-compiling them costs startup time for
     // code the app itself never calls.
-    if (isHostReactFacadeChunkName(chunk.name)) return false;
+    if (isHostFacadeChunkName(chunk.name)) return false;
     return (
       chunk.isEntry ||
       hintedChunkNames.has(chunk.name) ||
@@ -1037,14 +1151,14 @@ function firstRenderModulePreloadPlugin(): Plugin {
       // Populated only for production builds — the dev server has no bundle.
       if (!ctx.bundle) return;
 
-      // Drop the React facades before the closure math. computeFirstRenderPreloadFiles
+      // Drop the host facades before the closure math. computeFirstRenderPreloadFiles
       // subtracts every `isEntry` chunk's closure as "what Vite already
       // auto-preloads" — true for the HTML entry, false for the facades, which
       // index.html never references (a plugin imports them at runtime through
       // the import map). Leaving them in would subtract a closure the browser
       // was never given, silently dropping preload tags a first-render seed needs.
       const chunks = Object.values(ctx.bundle as unknown as Record<string, BundleChunkLike>).filter(
-        (chunk) => !isHostReactFacadeChunkName(chunk.name ?? "")
+        (chunk) => !isHostFacadeChunkName(chunk.name ?? "")
       );
       const { files, matchedSeedCount } = computeFirstRenderPreloadFiles(
         chunks,
@@ -1158,7 +1272,7 @@ export default defineConfig(({ command, mode }) => {
       tailwindcss(),
       // Must precede hostImportMapPlugin: it emits (and validates) the facade
       // chunks that plugin's transformIndexHtml resolves the map targets from.
-      hostReactFacadePlugin(),
+      hostFacadePlugin(),
       hostImportMapPlugin(importMapState),
       hostImportMapDevPlugin(),
       // Must precede cspTransformPlugin: both use default-order
@@ -1371,6 +1485,19 @@ export default defineConfig(({ command, mode }) => {
                 entriesAware: true,
                 entriesAwareMergeThreshold: 0,
                 priority: 10,
+              },
+              {
+                // The tour engine as one chunk, claimed ahead of `boot`. The
+                // tour facades (hostFacadePlugin) are entries that import it
+                // statically, which tags it `$initial`; without this group
+                // `boot` would sweep it into the eager first-render closure,
+                // though only the lazy TourDialog and plugin scenes use it.
+                // One chunk is also the single-instance guarantee: host and
+                // plugin scenes share one TourPlayerContext. No
+                // `entriesAware` — that splits per importing-entry set.
+                name: TOUR_CHUNK_NAME,
+                test: (id: string) => isTourSourceModule(id),
+                priority: 5,
               },
               {
                 // Collapse the automatic-chunking tail of the entry's static

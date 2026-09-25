@@ -5,16 +5,18 @@ import { build } from "vite";
 import type { Plugin, UserConfig } from "vite";
 
 /**
- * The exact React specifiers the Daintree host import map serves. This is the
- * single source of truth for the host/plugin contract: `vite.config.ts` imports
- * this list to emit one facade chunk per specifier and to build the `<script
+ * The exact specifiers the Daintree host import map serves: React's public
+ * entrypoints and the public subpaths of `@daintreehq/tour`. This is the single
+ * source of truth for the host/plugin contract: `vite.config.ts` imports this
+ * list to emit one facade chunk per specifier and to build the `<script
  * type="importmap">` it injects, and the plugin build (below) errors at build
- * time on any React subpath outside it. Keeping the two sides on one constant is
- * what stops the "externalized but unresolved at runtime" drift (e.g.
- * `react-dom/server`) that this list previously had to be hand-synced against.
+ * time on any React or tour subpath outside it. Keeping the two sides on one
+ * constant is what stops the "externalized but unresolved at runtime" drift
+ * (e.g. `react-dom/server`) that this list previously had to be hand-synced
+ * against.
  *
  * Adding an entry here is a real change on the host side: it must also declare
- * the specifier's expected public exports in `HOST_REACT_REQUIRED_EXPORTS`
+ * the specifier's expected public exports in `HOST_FACADE_REQUIRED_EXPORTS`
  * (vite.config.ts), which is typed against this list and will fail typecheck
  * until it does.
  */
@@ -24,6 +26,8 @@ export const HOST_IMPORTMAP_SPECIFIERS = [
   "react/jsx-dev-runtime",
   "react-dom",
   "react-dom/client",
+  "@daintreehq/tour",
+  "@daintreehq/tour/react",
 ] as const;
 
 /**
@@ -52,17 +56,29 @@ export const HOST_IMPORTMAP_SPECIFIERS = [
  */
 export const reactExternals: readonly RegExp[] = [/^react($|\/)/, /^react-dom($|\/)/] as const;
 
-function isReactSpecifier(id: string): boolean {
-  return reactExternals.some((re) => re.test(id));
+/**
+ * External pattern for `@daintreehq/tour` and every subpath of it. A scene that
+ * bundles its own copy of the tour's React bindings gets its own
+ * `TourPlayerContext`, so `useCue` never sees the host's player and the scene
+ * renders without ever animating. Externalized, the imports resolve through the
+ * host import map to the same tour module instance the host's tour uses. The
+ * same unmapped-subpath guard as {@link reactExternals} applies.
+ */
+export const tourExternals: readonly RegExp[] = [/^@daintreehq\/tour($|\/)/] as const;
+
+const hostExternals: readonly RegExp[] = [...reactExternals, ...tourExternals];
+
+function isHostModuleSpecifier(id: string): boolean {
+  return hostExternals.some((re) => re.test(id));
 }
 
 function isHostMappedSpecifier(id: string): boolean {
   return (HOST_IMPORTMAP_SPECIFIERS as readonly string[]).includes(id);
 }
 
-function unmappedReactError(id: string): Error {
+function unmappedHostSpecifierError(id: string): Error {
   return new Error(
-    `[daintree-plugin-vite] "${id}" is externalized as React but the Daintree host ` +
+    `[daintree-plugin-vite] "${id}" is externalized as a host module but the Daintree host ` +
       `import map does not serve it, so it would fail at runtime as an unresolved bare ` +
       `specifier. Supported specifiers: ${HOST_IMPORTMAP_SPECIFIERS.join(", ")}.`
   );
@@ -89,7 +105,7 @@ function matchesExternal(pattern: string | RegExp, id: string): boolean {
  * Rolldown never runs `resolveId` for an id an `external` pattern already
  * matched, so a `resolveId` guard alone lets `react-dom/server` through to a
  * bundle that only fails at load. Deciding here is the one place every React
- * import is guaranteed to pass through. Any `external` the author already set
+ * or tour import is guaranteed to pass through. Any `external` the author already set
  * is folded in, because Vite's config merge would otherwise concatenate their
  * array with this function into a shape Rolldown rejects.
  */
@@ -98,8 +114,8 @@ function browserExternal(
   inherited: ExternalOption | undefined
 ): (id: string, importer: string | undefined, isResolved: boolean) => boolean {
   return (id, importer, isResolved) => {
-    if (isReactSpecifier(id)) {
-      if (!isHostMappedSpecifier(id)) throw unmappedReactError(id);
+    if (isHostModuleSpecifier(id)) {
+      if (!isHostMappedSpecifier(id)) throw unmappedHostSpecifierError(id);
       return true;
     }
     if (extras.some((pattern) => matchesExternal(pattern, id))) return true;
@@ -262,7 +278,7 @@ export interface DaintreePluginOptions {
    */
   readonly externals?: ReadonlyArray<string | RegExp>;
   /**
-   * Build target. `"browser"` (default) wires the React externals + host
+   * Build target. `"browser"` (default) wires the React and tour externals + host
    * import-map guard for renderer/panel bundles. `"node"` configures a
    * Node-targeting build for stdio MCP servers: Node built-ins are externalized
    * (not browser-shimmed), node resolve conditions are preferred, and React is
@@ -393,7 +409,7 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
             chunk.dynamicImports.some((id) => id !== chunk.fileName && !isHostMappedSpecifier(id)))
         ) {
           this.error(
-            `Document package ${name} must be one self-contained JavaScript bundle (only host React imports are allowed). Keep CSS in the view build.`
+            `Document package ${name} must be one self-contained JavaScript bundle (only host import-map imports are allowed). Keep CSS in the view build.`
           );
         }
         if (!chunk || chunk.type !== "chunk") this.error(`No JavaScript emitted for ${name}`);
@@ -473,10 +489,10 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
         return null;
       },
     },
-    // The React branch is a second line behind `browserExternal`: it fires for
-    // an id that reaches resolution some other way, such as a plugin calling
-    // `this.resolve` directly. Returns `null` for mapped specifiers so
-    // `external` still owns them, and for non-React ids so normal resolution
+    // The host-module branch is a second line behind `browserExternal`: it
+    // fires for an id that reaches resolution some other way, such as a plugin
+    // calling `this.resolve` directly. Returns `null` for mapped specifiers so
+    // `external` still owns them, and for everything else so normal resolution
     // proceeds.
     resolveId(id) {
       if (id.startsWith(packagePrefix)) {
@@ -485,7 +501,8 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
           this.error(`Undeclared document package: ${name}`);
         return `\0${id}`;
       }
-      if (isReactSpecifier(id) && !isHostMappedSpecifier(id)) throw unmappedReactError(id);
+      if (isHostModuleSpecifier(id) && !isHostMappedSpecifier(id))
+        throw unmappedHostSpecifierError(id);
       return null;
     },
   };
