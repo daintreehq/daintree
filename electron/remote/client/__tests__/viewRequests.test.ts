@@ -12,6 +12,12 @@ vi.mock("../../../services/McpServerService.js", () => ({
     requestManifestForHost: m.requestManifestForHost,
   },
 }));
+vi.mock("../../runtime.js", () => ({
+  getRemoteService: (key: string) =>
+    key === "remoteHostsClient"
+      ? { list: () => [{ descriptor: { id: "studio", name: "Studio Mac" } }] }
+      : undefined,
+}));
 vi.mock("../../hybrid/notifications.js", () => ({
   NOTIFICATION_SHOW_METHOD: "notification.show",
   showHostNotification: m.showHostNotification,
@@ -22,7 +28,7 @@ import {
   answerReverseRequest,
   registerReverseRequestMethod,
 } from "../reverseRequests.js";
-import { installViewReverseRequests } from "../viewRequests.js";
+import { HOST_DISPATCHABLE_ACTION_IDS, installViewReverseRequests } from "../viewRequests.js";
 
 function ask(method: string, payload: unknown = {}) {
   return answerReverseRequest({ hostId: "studio", webContentsId: 11, method, payload });
@@ -59,7 +65,7 @@ describe("reverse request registry", () => {
 });
 
 describe("view reverse requests", () => {
-  it("runs a host's MCP dispatch in the addressed view and returns only what the host reads", async () => {
+  it("runs a host's MCP dispatch in the addressed view under this Shell's own approval", async () => {
     installViewReverseRequests();
     m.dispatchActionForHost.mockResolvedValue({
       result: { ok: true, result: 1 },
@@ -69,29 +75,79 @@ describe("view reverse requests", () => {
     });
 
     const answer = await ask("mcp:dispatch-action", {
-      actionId: "terminal.new",
-      args: { cwd: "/srv" },
+      actionId: "worktree.delete",
+      args: { worktreeId: "/srv/wt", force: true },
       confirmed: true,
-      context: { projectId: "p1" },
+      context: { projectId: "someone-elses-project" },
       callerInfo: { name: "ignored" },
-      sessionOrigin: "external",
+      sessionOrigin: "help",
       offerSessionApproval: true,
     });
 
+    // Never pre-confirmed, never the host's context or origin: the view's own
+    // binding decides the project, and a confirm-gated action raises this
+    // Shell's dialog naming the host that asked.
     expect(m.dispatchActionForHost).toHaveBeenCalledWith(
       11,
-      "terminal.new",
-      { cwd: "/srv" },
-      true,
-      { projectId: "p1" },
+      "worktree.delete",
+      { worktreeId: "/srv/wt", force: true },
+      false,
+      undefined,
       "external",
-      { offerSessionApproval: true }
+      undefined,
+      { userAgent: 'Agent on host "Studio Mac"', token4LastChars: "udio" }
     );
+    // No reusable approval goes back to the host.
     expect(answer).toEqual({
       result: { ok: true, result: 1 },
       confirmationDecision: "approved",
-      approvalScope: "session",
     });
+  });
+
+  it("passes an approval-only request through, still unconfirmed", async () => {
+    installViewReverseRequests();
+    m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: null } });
+    await ask("mcp:dispatch-action", {
+      actionId: "terminal.new",
+      args: {},
+      confirmed: true,
+      sessionOrigin: "external",
+      approvalOnly: true,
+    });
+    expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
+    expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({ approvalOnly: true });
+  });
+
+  it.each([
+    "terminal.paste",
+    "terminal.copy",
+    "worktree.copyContext",
+    "copyTree.generateAndCopyFile",
+    "system.openExternal",
+    "worktree.openEditor",
+    "worktree.openPR",
+    "app.settings.open",
+    "plugin.install",
+    "acme.plugin.doThing",
+    "workspace.list",
+  ])("refuses %s from a host without touching the view", async (actionId) => {
+    installViewReverseRequests();
+    const answer = await ask("mcp:dispatch-action", {
+      actionId,
+      args: {},
+      confirmed: true,
+      sessionOrigin: "external",
+    });
+    expect(answer).toMatchObject({ result: { ok: false, error: { code: "NOT_FOUND" } } });
+    expect(m.dispatchActionForHost).not.toHaveBeenCalled();
+  });
+
+  it("allows no clipboard, external-URL, settings or plugin action", () => {
+    for (const id of HOST_DISPATCHABLE_ACTION_IDS) {
+      expect(id).not.toMatch(
+        /paste|copy|clipboard|openExternal|openEditor|openPR|openIssue|settings|plugin/i
+      );
+    }
   });
 
   it("refuses a malformed dispatch without touching the view", async () => {
@@ -102,10 +158,14 @@ describe("view reverse requests", () => {
     expect(m.dispatchActionForHost).not.toHaveBeenCalled();
   });
 
-  it("reads the addressed view's manifest", async () => {
+  it("describes only what a host may run from the addressed view's manifest", async () => {
     installViewReverseRequests();
-    m.requestManifestForHost.mockResolvedValue([{ id: "a" }]);
-    await expect(ask("mcp:get-manifest")).resolves.toEqual([{ id: "a" }]);
+    m.requestManifestForHost.mockResolvedValue([
+      { id: "terminal.new" },
+      { id: "terminal.paste" },
+      { id: "acme.plugin.doThing" },
+    ]);
+    await expect(ask("mcp:get-manifest")).resolves.toEqual([{ id: "terminal.new" }]);
     expect(m.requestManifestForHost).toHaveBeenCalledWith(11);
   });
 

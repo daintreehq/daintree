@@ -32,6 +32,14 @@ const mocks = vi.hoisted(() => ({
     switchWindowHost: vi.fn(async () => undefined),
   },
   hasClient: true,
+  cached: false,
+  viewSend: vi.fn(),
+  pvm: {
+    activeKey: null as string | null,
+    setPendingFocusIntent: vi.fn(),
+    getActiveProjectId: vi.fn((): string | null => null),
+    getActiveView: vi.fn(),
+  },
 }));
 
 vi.mock("electron", () => ({
@@ -46,6 +54,18 @@ vi.mock("../../../services/AppHydrationService.js", () => ({
   readHydrateTerminalConfig: mocks.readHydrateTerminalConfig,
 }));
 vi.mock("../../../store.js", () => ({ store: { get: mocks.storeGet } }));
+vi.mock("../../../window/projectOwnership.js", () => ({
+  hasLiveProjectView: vi.fn(() => mocks.cached),
+}));
+vi.mock("../../../window/webContentsRegistry.js", () => ({
+  resolveLiveWebContents: vi.fn((id: number) => ({ id })),
+  getWindowForWebContents: vi.fn(() => ({ id: 1, isDestroyed: () => false })),
+}));
+vi.mock("../../../window/windowRef.js", () => ({
+  getWindowRegistry: () => ({
+    getByWindowId: () => ({ services: { projectViewManager: mocks.pvm } }),
+  }),
+}));
 vi.mock("../../runtime.js", () => ({
   getRemoteService: vi.fn((key: string) =>
     key === "remoteHostsClient" && mocks.hasClient ? mocks.client : undefined
@@ -111,6 +131,9 @@ function setup(forward: Forward, local: (...args: unknown[]) => unknown) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.hasClient = true;
+  mocks.cached = false;
+  mocks.pvm.getActiveProjectId.mockReturnValue(null);
+  mocks.pvm.getActiveView.mockReturnValue(null);
 });
 
 describe("hybrid split registry", () => {
@@ -353,6 +376,51 @@ describe("project activation", () => {
     );
   });
 
+  it("tells only the view it lands on that it switched, with the focus intent recorded first", async () => {
+    const order: string[] = [];
+    mocks.pvm.setPendingFocusIntent.mockImplementation(() => order.push("focus"));
+    mocks.client.switchWindowHost.mockImplementationOnce(async () => {
+      order.push("swap");
+      mocks.pvm.getActiveProjectId.mockReturnValue("studio:p2");
+      mocks.pvm.getActiveView.mockReturnValue({
+        webContents: { isDestroyed: () => false, send: mocks.viewSend },
+      });
+    });
+    mocks.cached = true;
+    const { invoke } = setup(
+      () => ({ outcome: "switched", project: { id: "p2", name: "Two" } }),
+      () => "local"
+    );
+    const focusIntent = { intent: "focus-panel", panelId: "t1" };
+
+    await invoke(CHANNELS.PROJECT_SWITCH, [
+      "p2",
+      undefined,
+      { focusIntent, trace: { switchId: "sw-1", entryPoint: "palette" } },
+    ]);
+
+    expect(order).toEqual(["focus", "swap"]);
+    expect(mocks.pvm.setPendingFocusIntent).toHaveBeenCalledWith("studio:p2", focusIntent);
+    expect(mocks.viewSend).toHaveBeenCalledWith(CHANNELS.PROJECT_ON_SWITCH, {
+      project: { id: "p2", name: "Two" },
+      switchId: "sw-1",
+      entryPoint: "palette",
+      cacheHit: true,
+    });
+  });
+
+  it("sends no switch event when the window ended up somewhere else", async () => {
+    mocks.pvm.getActiveProjectId.mockReturnValue("studio:other");
+    const { invoke } = setup(
+      () => ({ outcome: "switched", project: { id: "p2" } }),
+      () => "local"
+    );
+    await invoke(CHANNELS.PROJECT_REOPEN, ["p2"]);
+    expect(mocks.client.switchWindowHost).toHaveBeenCalled();
+    expect(mocks.pvm.getActiveView).not.toHaveBeenCalled();
+    expect(mocks.viewSend).not.toHaveBeenCalled();
+  });
+
   it("shows nothing when the host did not switch", async () => {
     const { invoke } = setup(
       () => ({ outcome: "redirected" }),
@@ -451,5 +519,23 @@ describe("opening host files", () => {
       "vscode://vscode-remote/ssh-remote+studio/srv/a%3Fb%23c.ts"
     );
     expect(buildRemoteEditorUrl({ ...base, editorId: "vscode", line: 0 })).toBeNull();
+  });
+
+  it("opens every target the SSH transport accepts, hex-encoding the ones a URI would mangle", () => {
+    const hexAuthority = (hostName: string) =>
+      `ssh-remote+${Buffer.from(JSON.stringify({ hostName }), "utf8").toString("hex")}`;
+    for (const sshTarget of ["dev+prod", "box%1", "me@[bastion]", "user@dev+prod"]) {
+      const url = buildRemoteEditorUrl({ editorId: "cursor", sshTarget, path: "/srv/x.ts" });
+      expect(url).toBe(`cursor://vscode-remote/${hexAuthority(sshTarget)}/srv/x.ts`);
+      const hex = url!.split("ssh-remote+")[1]!.split("/")[0]!;
+      expect(JSON.parse(Buffer.from(hex, "hex").toString("utf8"))).toEqual({ hostName: sshTarget });
+    }
+    expect(
+      buildRemoteEditorUrl({ editorId: "windsurf", sshTarget: "me@studio.lan", path: "/a" })
+    ).toBe("windsurf://vscode-remote/ssh-remote+me@studio.lan/a");
+    // What the transport refuses, the editor never sees either.
+    for (const sshTarget of ["-oProxyCommand=x", "host:22", "a b", ""]) {
+      expect(buildRemoteEditorUrl({ editorId: "vscode", sshTarget, path: "/a" })).toBeNull();
+    }
   });
 });

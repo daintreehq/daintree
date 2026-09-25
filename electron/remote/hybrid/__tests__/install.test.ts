@@ -4,6 +4,10 @@ const mocks = vi.hoisted(() => ({
   relay: null as null | ((id: number, channel: string, args: unknown[]) => boolean),
   sink: null as null | ((notification: Record<string, unknown>) => void),
   showNativeNotification: vi.fn(),
+  playFile: vi.fn(),
+  isSessionMuted: vi.fn(() => false),
+  notificationSettings: {} as Record<string, unknown>,
+  residencyDispose: vi.fn(),
   endpoints: new Map<number, Record<string, unknown>>(),
 }));
 
@@ -26,8 +30,25 @@ vi.mock("../../../services/NotificationService.js", () => ({
     }),
   },
 }));
+vi.mock("../../../services/AgentNotificationService.js", () => ({
+  agentNotificationService: { isSessionMuted: mocks.isSessionMuted },
+}));
+vi.mock("../../../services/SoundService.js", () => ({
+  soundService: { playFile: mocks.playFile },
+}));
+vi.mock("../../../store.js", () => ({
+  store: { get: () => mocks.notificationSettings },
+}));
+vi.mock("../residency.js", () => ({
+  installRemoteProjectResidency: vi.fn(() => mocks.residencyDispose),
+}));
 vi.mock("../../../ipc/endpointRegistry.js", () => ({
-  getEndpointRegistry: () => ({ getByHandle: (handle: number) => mocks.endpoints.get(handle) }),
+  getEndpointRegistry: () => ({
+    getByHandle: (handle: number) => mocks.endpoints.get(handle),
+    get: () => undefined,
+    getRemote: () => [],
+    onChange: () => () => undefined,
+  }),
 }));
 vi.mock("../splits.js", () => ({
   HYBRID_SPLITS: { "app:hydrate": vi.fn(), "keep-awake:get-state": vi.fn() },
@@ -66,6 +87,8 @@ beforeEach(() => {
   mocks.relay = null;
   mocks.sink = null;
   mocks.endpoints.clear();
+  mocks.notificationSettings = {};
+  mocks.isSessionMuted.mockReturnValue(false);
 });
 
 describe("installHybridSplits", () => {
@@ -108,6 +131,7 @@ describe("admitHybridHostLegs", () => {
     dispose();
     expect(dispatcher.admitted.get("app:hydrate")).toBe(0);
     expect(mocks.sink).toBeNull();
+    expect(mocks.residencyDispose).toHaveBeenCalledTimes(1);
   });
 
   it("sends a remote owner's notification to its Shell", () => {
@@ -119,33 +143,70 @@ describe("admitHybridHostLegs", () => {
       context: { panelId: "t1", panelTitle: "Claude" },
     };
 
-    mocks.sink!({ ownerHandle: -3, title: "Agent waiting", body: "b", silent: true, navigation });
-    mocks.sink!({ ownerHandle: -9, title: "gone", body: "b", silent: true });
+    mocks.sink!({
+      ownerHandle: -3,
+      title: "Agent waiting",
+      body: "b",
+      category: "waiting",
+      navigation,
+    });
+    mocks.sink!({ ownerHandle: -9, title: "gone", body: "b", category: "info" });
 
     expect(request).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledWith(NOTIFICATION_SHOW_METHOD, {
       title: "Agent waiting",
       body: "b",
-      silent: true,
+      category: "waiting",
       navigation,
     });
   });
 });
 
 describe("showHostNotification", () => {
-  it("displays a valid host notification as the local view's own", () => {
+  it("displays a valid host notification as the local view's own, with this device's sound", () => {
+    mocks.notificationSettings = {
+      soundEnabled: true,
+      waitingSoundFile: "ping.wav",
+      completedSoundFile: "chime.wav",
+    };
     const navigation = {
       channel: CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
       context: { panelId: "t1", panelTitle: "Claude" },
     };
-    expect(showHostNotification(12, { title: "t", body: "b", silent: false, navigation })).toBe(
-      true
-    );
+    expect(
+      showHostNotification(12, { title: "t", body: "b", category: "waiting", navigation })
+    ).toBe(true);
+    expect(mocks.playFile).toHaveBeenCalledWith("ping.wav");
     expect(mocks.showNativeNotification).toHaveBeenCalledWith("t", "b", {
-      silent: false,
+      silent: true,
       ownerWebContentsId: 12,
       navigation,
     });
+  });
+
+  it("plays nothing when this device has sound off, and no sound for an info notification", () => {
+    mocks.notificationSettings = { soundEnabled: false, waitingSoundFile: "ping.wav" };
+    showHostNotification(12, { title: "t", body: "b", category: "waiting" });
+    mocks.notificationSettings = { soundEnabled: true, waitingSoundFile: "ping.wav" };
+    showHostNotification(12, { title: "t", body: "b", category: "info" });
+    expect(mocks.playFile).not.toHaveBeenCalled();
+    expect(mocks.showNativeNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it("holds back a completion while this screen's session is muted, but not a waiting agent", () => {
+    mocks.isSessionMuted.mockReturnValue(true);
+    mocks.notificationSettings = { soundEnabled: true, waitingSoundFile: "ping.wav" };
+    expect(showHostNotification(12, { title: "done", body: "b", category: "completed" })).toBe(
+      true
+    );
+    expect(mocks.showNativeNotification).not.toHaveBeenCalled();
+    showHostNotification(12, { title: "waiting", body: "b", category: "waiting" });
+    expect(mocks.showNativeNotification).toHaveBeenCalledTimes(1);
+    expect(mocks.playFile).toHaveBeenCalledWith("ping.wav");
+  });
+
+  it("rejects a presentation instead of a category", () => {
+    expect(showHostNotification(12, { title: "t", body: "b", silent: false })).toBe(false);
   });
 
   it("rejects a host that names another renderer channel", () => {
@@ -153,7 +214,7 @@ describe("showHostNotification", () => {
       showHostNotification(12, {
         title: "t",
         body: "b",
-        silent: true,
+        category: "waiting",
         navigation: { channel: "window:new", context: { panelId: "x", panelTitle: "x" } },
       })
     ).toBe(false);

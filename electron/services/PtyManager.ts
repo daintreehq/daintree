@@ -10,6 +10,7 @@ import type { DetectionResult } from "./ProcessDetector.js";
 import type { ImagePathProbe } from "./pty/ImagePathProbe.js";
 import type { AnalysisWorkerPool } from "./pty/analysis/AnalysisWorkerPool.js";
 import type { PanelTitleMode } from "../../shared/types/panel.js";
+import type { PtyHostDriveLease } from "../../shared/types/pty-host.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
 import { createLogger } from "../utils/logger.js";
 
@@ -114,8 +115,8 @@ export class PtyManager extends EventEmitter {
     string,
     { cols: number; rows: number; generation: number | null }
   >();
-  // Projects whose drive lease another client holds (pushed by Main).
-  private resizeHeldElsewhere = new Set<string>();
+  // Drive leases a remote client is party to, by project (pushed by Main).
+  private driveLeases = new Map<string, PtyHostDriveLease>();
   // Output the TerminalProcess constructor emits before `registry.add` — the
   // pooled-shell prelude and any chunks the data handoff buffered while the
   // shell sat in the pool. `emitData` routes by registry entry, so without this
@@ -732,6 +733,42 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Replace the drive lease table. Only projects a remote client is party to
+   * appear; every other terminal keeps today's unarbitrated behaviour.
+   */
+  setDriveLeases(leases: Iterable<PtyHostDriveLease>): void {
+    const next = new Map<string, PtyHostDriveLease>();
+    for (const lease of leases) next.set(lease.projectId, lease);
+    this.driveLeases = next;
+  }
+
+  /**
+   * Whether input or a resize arriving on port connection `connectionId` may
+   * reach terminal `id`. Checked when the message is applied, not when it was
+   * sent, so work queued behind a takeover is refused.
+   *
+   * `leaseId` is the lease main checked a remote endpoint's message against.
+   * Older than the table's, it is stale; newer, the table has yet to hear of a
+   * grant main already made, so main's check stands. Without one (a local
+   * window's port) the table alone decides. A terminal with no known project
+   * has nothing to arbitrate.
+   */
+  mayDriveFrom(id: string, connectionId: number, leaseId?: number): boolean {
+    if (this.driveLeases.size === 0) return true;
+    const projectId = this.registry.get(id)?.getInfo().projectId;
+    if (projectId === undefined || projectId === null) return true;
+    const lease = this.driveLeases.get(projectId);
+    if (!lease) return true;
+    if (leaseId !== undefined) {
+      if (leaseId < lease.leaseId) return false;
+      if (leaseId > lease.leaseId) return true;
+    }
+    return lease.holderConnection === null
+      ? connectionId > 0
+      : connectionId === lease.holderConnection;
+  }
+
+  /**
    * Resize terminal.
    *
    * Emits `resize-result` for every request that reached a live terminal so the
@@ -767,25 +804,6 @@ export class PtyManager extends EventEmitter {
    * its own call site before sending, so between the two the next occurrence
    * names its origin.
    */
-  /**
-   * Replace the set of projects another client drives (the drive lease). Their
-   * terminals keep the driver's grid: see {@link isResizeHeldElsewhere}.
-   */
-  setResizeHeldElsewhere(projectIds: Iterable<string>): void {
-    this.resizeHeldElsewhere = new Set(projectIds);
-  }
-
-  /**
-   * True when a resize from one of this machine's own windows must be ignored
-   * because another client holds the terminal's project lease. A terminal not
-   * yet spawned has no known project and is never held.
-   */
-  isResizeHeldElsewhere(id: string): boolean {
-    if (this.resizeHeldElsewhere.size === 0) return false;
-    const projectId = this.registry.get(id)?.getInfo().projectId;
-    return projectId !== undefined && projectId !== null && this.resizeHeldElsewhere.has(projectId);
-  }
-
   resize(id: string, cols: number, rows: number, transport = "unknown"): void {
     const terminal = this.registry.get(id);
     if (!isUsableTerminalGeometry({ cols, rows })) {

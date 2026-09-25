@@ -137,6 +137,28 @@ export class NoFrontendAttachedError extends WorkspaceBindingError {
   }
 }
 
+/**
+ * The workspace has a driver, but it cannot be reached right now: its link
+ * dropped or its view went, and the drive lease is holding its place for it,
+ * or the lease itself could not be read. Retriable — the holder can come back,
+ * or the reservation runs out — and never answered by routing to another
+ * renderer or running the call in main, which would act for someone who is
+ * not driving.
+ */
+export class DriveHolderUnavailableError extends McpRouteBindingError {
+  readonly workspaceId: string;
+  readonly retriable = true;
+
+  constructor(workspaceId: string) {
+    super(
+      `Workspace ${workspaceId} is driven from a Daintree window that is not reachable right now. ` +
+        `The call was not routed anywhere else. Retry shortly.`
+    );
+    this.name = "DriveHolderUnavailableError";
+    this.workspaceId = workspaceId;
+  }
+}
+
 // Thrown when an unpinned dispatch can't reach any live renderer to route a
 // tool call through. For confirm-gated tools this is the "no confirmation
 // channel reachable" case: a headless conductor with no Daintree window open
@@ -925,7 +947,8 @@ export function createRendererBridge(
     approval?: Pick<
       WorkspaceDispatchOptions,
       "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization"
-    >
+    >,
+    callerInfo?: McpBearerIdentity
   ): Promise<DispatchEnvelope> {
     return sendDispatchRequest(
       () => getPinnedWebContents(id),
@@ -934,30 +957,34 @@ export function createRendererBridge(
       confirmed,
       sessionOrigin,
       contextOverride,
-      undefined,
+      callerInfo,
       { kind: "pinned", webContentsId: id },
       approval
     );
   }
 
   /**
-   * Who drives a workspace, according to the drive lease.
+   * Who drives a workspace, according to the drive lease, or `null` when no
+   * lease is installed and routing is exactly what it was before leases
+   * existed.
    *
    * A remote driver is the only answer that bypasses local resolution: its
    * renderer is on another machine and is reached through its endpoint, never
    * through "the focused window". A local driver is a preference — the view the
    * lease names wins over the pane's launch view and settles a workspace that
    * is open in more than one local view — but it is still resolved as a local
-   * view, so a lease that names a view that has since gone falls back to the
-   * rules below. With no lease installed, or nobody driving, routing is what it
-   * was before leases existed.
+   * view. A driver the lease is holding a place for, but that cannot be reached,
+   * throws: routing around it would act for someone who is not driving.
    */
   function resolveDriver(workspaceId: string): {
     remote?: ClientEndpoint;
     localWebContentsId?: number;
-  } {
-    const driver = resolveMcpDriveTarget(workspaceId);
-    if (!driver) return {};
+  } | null {
+    const target = resolveMcpDriveTarget(workspaceId);
+    if (target === null) return null;
+    if (target.state === "unavailable") throw new DriveHolderUnavailableError(workspaceId);
+    if (target.state === "vacant") return {};
+    const driver = target.endpoint;
     if (driver.kind === "remote-view") return { remote: driver };
     const wc = electronWebContents.fromId(driver.handle);
     return wc && !wc.isDestroyed() ? { localWebContentsId: wc.id } : {};
@@ -1093,6 +1120,7 @@ export function createRendererBridge(
     actionId: string,
     args: unknown,
     confirmed: boolean,
+    sessionOrigin: McpSessionOrigin,
     options: WorkspaceDispatchOptions
   ): Promise<DispatchEnvelope> {
     if (options.approvalOnly) throw new WorkspaceBindingError(workspaceId, "not-found");
@@ -1104,6 +1132,7 @@ export function createRendererBridge(
       actionId,
       args,
       confirmed,
+      sessionOrigin,
       ...(options.contextOverride ? { context: options.contextOverride } : {}),
     });
     if (result === null) throw new NoFrontendAttachedError(workspaceId, actionId);
@@ -1122,19 +1151,24 @@ export function createRendererBridge(
     workspaceId: string,
     preferredWebContentsId?: number
   ): Promise<ActionManifestEntry[]> {
-    const driver = resolveDriver(workspaceId);
-    if (driver.remote) return requestManifestFromEndpoint(driver.remote, workspaceId);
+    let driver: ReturnType<typeof resolveDriver>;
+    try {
+      driver = resolveDriver(workspaceId);
+    } catch (err) {
+      return Promise.reject(err);
+    }
+    if (driver?.remote) return requestManifestFromEndpoint(driver.remote, workspaceId);
     let id: number;
     try {
       id = getWorkspaceWebContents(
         workspaceId,
-        driver.localWebContentsId ?? preferredWebContentsId
+        driver?.localWebContentsId ?? preferredWebContentsId
       ).id;
     } catch (err) {
-      // Nothing is attached to the workspace at all, which callers answer
-      // differently from a route they lost: discovery falls back to the base
-      // surface either way, but a call can still run in main.
-      if (err instanceof WorkspaceBindingError && err.reason === "not-found") {
+      // With Host-mode routing, nothing attached at all is answered differently
+      // from a route that was lost: discovery falls back to the base surface
+      // either way, but a call can still run in main.
+      if (driver && err instanceof WorkspaceBindingError && err.reason === "not-found") {
         return Promise.reject(new NoFrontendAttachedError(workspaceId));
       }
       return Promise.reject(normalizeError(err, "MCP workspace binding unavailable"));
@@ -1171,6 +1205,19 @@ export function createRendererBridge(
     options: WorkspaceDispatchOptions = {}
   ): Promise<DispatchEnvelope> {
     const driver = resolveDriver(workspaceId);
+    if (driver === null) {
+      return sendDispatchRequest(
+        () => getWorkspaceWebContents(workspaceId, options.preferredWebContentsId),
+        actionId,
+        args,
+        confirmed,
+        sessionOrigin,
+        options.contextOverride,
+        undefined,
+        { kind: "workspace", workspaceId },
+        options
+      );
+    }
     if (driver.remote) {
       return dispatchToEndpoint(
         driver.remote,
@@ -1190,7 +1237,14 @@ export function createRendererBridge(
       );
     } catch (err) {
       if (err instanceof WorkspaceBindingError && err.reason === "not-found") {
-        return dispatchWithoutFrontend(workspaceId, actionId, args, confirmed, options);
+        return dispatchWithoutFrontend(
+          workspaceId,
+          actionId,
+          args,
+          confirmed,
+          sessionOrigin,
+          options
+        );
       }
       throw err;
     }
@@ -1319,16 +1373,16 @@ export function createRendererBridge(
       workspaceId: string,
       preferredWebContentsId?: number
     ): ActionManifestEntry[] | null => {
-      const driver = resolveDriver(workspaceId);
-      if (driver.remote) {
-        return remoteManifestCache.get(remoteManifestKey(driver.remote, workspaceId)) ?? null;
-      }
       try {
+        const driver = resolveDriver(workspaceId);
+        if (driver?.remote) {
+          return remoteManifestCache.get(remoteManifestKey(driver.remote, workspaceId)) ?? null;
+        }
         return (
           perWebContentsCache.get(
             getWorkspaceWebContents(
               workspaceId,
-              driver.localWebContentsId ?? preferredWebContentsId
+              driver?.localWebContentsId ?? preferredWebContentsId
             ).id
           ) ?? null
         );

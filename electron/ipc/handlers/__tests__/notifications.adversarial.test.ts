@@ -471,8 +471,10 @@ describe("notifications IPC adversarial", () => {
       await drainMicrotasks();
       release();
       expect(relay).toHaveBeenCalledWith(5, CHANNELS.NOTIFICATION_SESSION_MUTE_SET, [payload]);
+      // This machine's own mute: no client scope.
       expect(agentNotificationServiceMock.setSessionMuteUntil).toHaveBeenCalledWith(
-        1_700_000_000_000
+        1_700_000_000_000,
+        undefined
       );
     });
 
@@ -489,12 +491,13 @@ describe("notifications IPC adversarial", () => {
       expect(agentNotificationServiceMock.setSessionMuteUntil).not.toHaveBeenCalled();
     });
 
-    it("applies a session mute a remote Shell relayed over the link", async () => {
+    it("scopes a remote Shell's session mute to that Shell's client, never host-wide", async () => {
       linkListener(CHANNELS.NOTIFICATION_SESSION_MUTE_SET)(remoteContext(-3).ctx, {
         timestampMs: 42,
       });
       await drainMicrotasks();
-      expect(agentNotificationServiceMock.setSessionMuteUntil).toHaveBeenCalledWith(42);
+      expect(agentNotificationServiceMock.setSessionMuteUntil).toHaveBeenCalledTimes(1);
+      expect(agentNotificationServiceMock.setSessionMuteUntil).toHaveBeenCalledWith(42, "c");
     });
   });
 });

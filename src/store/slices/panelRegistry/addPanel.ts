@@ -50,6 +50,7 @@ import {
 } from "./worktreeIndex";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
+import { mergeTerminalLaunchEnv } from "@shared/utils/terminalLaunchOptions";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { buildAgentLaunchContext } from "./agentLaunchContext";
 import { countPanelsTowardLimit } from "./panelCount";
@@ -1025,14 +1026,8 @@ export const createAddPanelActions = (
               )
             : Promise.resolve({} as Record<string, string>),
         ]).then(
-          ([globalEnvVars, projectEnvVars]) => {
-            const hasGlobal = Object.keys(globalEnvVars).length > 0;
-            const hasProject = Object.keys(projectEnvVars).length > 0;
-            if (hasGlobal || hasProject) {
-              return { ...globalEnvVars, ...projectEnvVars, ...options.env };
-            }
-            return options.env;
-          },
+          ([globalEnvVars, projectEnvVars]) =>
+            mergeTerminalLaunchEnv(globalEnvVars, projectEnvVars, options.env),
           (error: unknown) => {
             logWarn("[TerminalStore] Failed to fetch environment variables", { error });
             return options.env;

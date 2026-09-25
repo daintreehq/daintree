@@ -13,8 +13,9 @@ function makeCtx(stateRef: {
     setSabMode: vi.fn(),
     isSabMode: vi.fn(() => true),
     resize: vi.fn(),
-    isResizeHeldElsewhere: vi.fn(() => false),
-    setResizeHeldElsewhere: vi.fn(),
+    write: vi.fn(),
+    mayDriveFrom: vi.fn(() => true),
+    setDriveLeases: vi.fn(),
   } as unknown as HostContext["ptyManager"];
 
   return {
@@ -896,9 +897,12 @@ describe("resize transport attribution (#12442)", () => {
     return ctx;
   }
 
-  it("drops a local window's resize while another client drives the terminal's project", () => {
+  it("asks the drive lease about every port's input and resize, with the bridge's stamp", () => {
     const ctx = makeResizeCtx();
-    vi.mocked(ctx.ptyManager.isResizeHeldElsewhere).mockReturnValue(true);
+    // Only the remote holder's connection drives.
+    vi.mocked(ctx.ptyManager.mayDriveFrom).mockImplementation(
+      (_id, connectionId) => connectionId === -3
+    );
     const handlers = createConnectionHandlers(ctx);
     const local = makeNodePort();
     const remote = makeNodePort();
@@ -906,23 +910,45 @@ describe("resize transport attribution (#12442)", () => {
     handlers["connect-port"]({ windowId: 1 }, [local] as never);
     handlers["connect-port"]({ windowId: -3 }, [remote] as never);
     local.emit("message", { data: { type: "resize", id: "term-1", cols: 100, rows: 30 } });
+    local.emit("message", { data: { type: "write", id: "term-1", data: "ls\r" } });
     expect(ctx.ptyManager.resize).not.toHaveBeenCalled();
+    expect(ctx.ptyManager.write).not.toHaveBeenCalled();
+    expect(ctx.ptyManager.mayDriveFrom).toHaveBeenCalledWith("term-1", 1, undefined);
 
-    // A remote endpoint's port is gated by its own bridge before it gets here.
-    remote.emit("message", { data: { type: "resize", id: "term-1", cols: 90, rows: 20 } });
+    remote.emit("message", {
+      data: { type: "resize", id: "term-1", cols: 90, rows: 20, leaseId: 4 },
+    });
+    remote.emit("message", { data: { type: "write", id: "term-1", data: "x", leaseId: 4 } });
+    expect(ctx.ptyManager.mayDriveFrom).toHaveBeenCalledWith("term-1", -3, 4);
     expect(ctx.ptyManager.resize).toHaveBeenCalledWith("term-1", 90, 20, "renderer-message-port");
+    expect(ctx.ptyManager.write).toHaveBeenCalledWith("term-1", "x", undefined);
+
+    // A stamp that is not a lease id is no stamp at all.
+    remote.emit("message", { data: { type: "write", id: "term-1", data: "y", leaseId: "4" } });
+    expect(ctx.ptyManager.mayDriveFrom).toHaveBeenLastCalledWith("term-1", -3, undefined);
   });
 
-  it("applies the lease set from Main and refuses a malformed one", () => {
+  it("applies the lease table from Main and refuses a malformed one", () => {
     const ctx = makeResizeCtx();
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const handlers = createConnectionHandlers(ctx);
+    const leases = [
+      { projectId: "p1", leaseId: 3, holderConnection: -4 },
+      { projectId: "p2", leaseId: 5, holderConnection: null },
+    ];
 
-    handlers["set-resize-held-elsewhere"]({ projectIds: ["p1", "p2"] }, undefined as never);
-    expect(ctx.ptyManager.setResizeHeldElsewhere).toHaveBeenCalledWith(["p1", "p2"]);
+    handlers["set-drive-leases"]({ leases }, undefined as never);
+    expect(ctx.ptyManager.setDriveLeases).toHaveBeenCalledWith(leases);
 
-    handlers["set-resize-held-elsewhere"]({ projectIds: ["p1", 3] }, undefined as never);
-    handlers["set-resize-held-elsewhere"]({ projectIds: "p1" }, undefined as never);
-    expect(ctx.ptyManager.setResizeHeldElsewhere).toHaveBeenCalledTimes(1);
+    handlers["set-drive-leases"](
+      { leases: [{ projectId: "p1", leaseId: "3", holderConnection: -4 }] },
+      undefined as never
+    );
+    handlers["set-drive-leases"](
+      { leases: [{ projectId: "", leaseId: 3, holderConnection: null }] },
+      undefined as never
+    );
+    handlers["set-drive-leases"]({ leases: "p1" }, undefined as never);
+    expect(ctx.ptyManager.setDriveLeases).toHaveBeenCalledTimes(1);
   });
 });

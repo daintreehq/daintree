@@ -113,6 +113,7 @@ import type {
   TrimStateScope,
   TrimStateSummary,
   TerminalSubmitGuard,
+  PtyHostDriveLease,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
@@ -415,8 +416,8 @@ export class PtyClient extends EventEmitter {
   private lastResourceProfile: ResourceProfile | null = null;
   /** Last fallback-eligible project set pushed to the shards (#12557); replayed on shard boot. */
   private fallbackEligibleProjects: string[] = [];
-  /** Projects another client drives (the drive lease); replayed on shard boot. */
-  private resizeHeldElsewhere: string[] = [];
+  /** Drive leases a remote client is party to; replayed on shard boot. */
+  private driveLeases: PtyHostDriveLease[] = [];
   /** Per-connection holder identity, echoed to the host on every (re)connect (#12557). */
   private windowPortHolders = new Map<number, number>();
   private lastProcessTreePollIntervalMs: number | null = null;
@@ -1155,10 +1156,10 @@ export class PtyClient extends EventEmitter {
       });
     }
 
-    // Without it a restarted shard lets this machine's windows resize terminals
-    // another client is driving.
-    if (this.resizeHeldElsewhere.length > 0) {
-      shard.send({ type: "set-resize-held-elsewhere", projectIds: this.resizeHeldElsewhere });
+    // Without it a restarted shard lets any port type into or resize terminals
+    // another endpoint is driving.
+    if (this.driveLeases.length > 0) {
+      shard.send({ type: "set-drive-leases", leases: this.driveLeases });
     }
   }
 
@@ -2034,15 +2035,15 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
-   * Projects whose drive lease another client holds: resizes arriving on this
-   * machine's own window ports are dropped for their terminals, so the driver's
-   * grid is the one the PTY keeps. An authoritative replace, sent to every
-   * shard because a project's terminals can span them.
+   * The drive leases a remote client is party to: input and resizes arriving on
+   * any port but the holder's are dropped for their terminals, so the driver is
+   * the only one typing and its grid is the one the PTY keeps. An authoritative
+   * replace, sent to every shard because a project's terminals can span them.
    */
-  setResizeHeldElsewhere(projectIds: string[]): void {
-    this.resizeHeldElsewhere = [...projectIds];
+  setDriveLeases(leases: PtyHostDriveLease[]): void {
+    this.driveLeases = leases.map((lease) => ({ ...lease }));
     for (const shard of this.shards.values()) {
-      shard.send({ type: "set-resize-held-elsewhere", projectIds: this.resizeHeldElsewhere });
+      shard.send({ type: "set-drive-leases", leases: this.driveLeases });
     }
   }
 

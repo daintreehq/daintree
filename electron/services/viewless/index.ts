@@ -16,14 +16,23 @@ export type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecut
  * along for a path most dispatches never take.
  */
 async function loadLiveDeps(): Promise<ViewlessDeps> {
-  const [{ projectStore }, { getPtyClient, getWorkspaceClientRef }, { invokeHostChannel }] =
-    await Promise.all([
-      import("../ProjectStore.js"),
-      import("../../window/serviceRefs.js"),
-      import("./viewlessInvoke.js"),
-    ]);
+  const [
+    { projectStore },
+    { getPtyClient, getWorkspaceClientRef },
+    { invokeHostChannel },
+    { store },
+  ] = await Promise.all([
+    import("../ProjectStore.js"),
+    import("../../window/serviceRefs.js"),
+    import("./viewlessInvoke.js"),
+    import("../../store.js"),
+  ]);
   return {
     getProject: (projectId) => projectStore.getProjectById(projectId),
+    getLaunchEnvLayers: async (projectId) => ({
+      global: store.get("globalEnvironmentVariables") ?? {},
+      project: (await projectStore.getProjectSettings(projectId))?.environmentVariables ?? {},
+    }),
     getProjectState: (projectId) => projectStore.getProjectState(projectId),
     stateWriter: projectStore,
     getPtyReader: () => getPtyClient(),

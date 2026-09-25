@@ -18,6 +18,11 @@ import {
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
 import { buildTerminalSendCommandReceipt } from "../../../shared/utils/terminalSendCommandResult.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import {
+  mergeTerminalLaunchEnv,
+  spawnSourceForMcpOrigin,
+} from "../../../shared/utils/terminalLaunchOptions.js";
+import type { McpSessionOrigin } from "../../../shared/types/ipc/mcpServer.js";
 import { recordViewlessTerminal, type ProjectStateWriter } from "./projectStateAuthoring.js";
 
 const TERMINAL_SEND_COMMAND_ACTION_ID = "terminal.sendCommand";
@@ -69,8 +74,16 @@ export interface ViewlessWorkspaceHosts {
   ): Promise<boolean | null>;
 }
 
+/** The ambient environment layers a terminal launch merges under its own. */
+export interface ViewlessLaunchEnvLayers {
+  global: Record<string, string>;
+  project: Record<string, string>;
+}
+
 export interface ViewlessDeps {
   getProject(projectId: string): Project | null;
+  /** Global and project environment variables, as the renderer's launch reads them. */
+  getLaunchEnvLayers(projectId: string): Promise<ViewlessLaunchEnvLayers>;
   getProjectState(projectId: string): Promise<ProjectState | null>;
   stateWriter: ProjectStateWriter;
   getPtyReader(): ViewlessPtyReader | null;
@@ -91,6 +104,8 @@ export interface ViewlessActionRequest {
   confirmed: boolean;
   /** An agent pane's launch-time context, which names its own worktree. */
   context?: ActionContext;
+  /** How the dispatching MCP session authenticated; decides the spawn's provenance. */
+  sessionOrigin?: McpSessionOrigin;
 }
 
 function failure(code: ActionErrorCode, message: string, details?: unknown): ActionDispatchResult {
@@ -183,6 +198,15 @@ async function runTerminalNew(
     project.path;
   const title = getDefaultPanelTitle("terminal");
   const id = randomUUID();
+  // The dispatch source is authoritative, never the caller's `spawnedBy`, as
+  // the renderer's bridge stamps it.
+  const spawnedBy = spawnSourceForMcpOrigin(request.sessionOrigin);
+  // A failed read spawns with what is known, as the renderer does.
+  const layers = await deps.getLaunchEnvLayers(project.id).catch((err: unknown) => {
+    console.warn("[Viewless] Could not read environment variables for a launch:", err);
+    return null;
+  });
+  const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, undefined);
 
   try {
     await deps.invoke<string>(project.id, CHANNELS.TERMINAL_SPAWN, [
@@ -196,6 +220,7 @@ async function runTerminalNew(
         title,
         ...(worktreeId !== undefined ? { worktreeId } : {}),
         ...(command !== undefined ? { command } : {}),
+        ...(env !== undefined ? { env } : {}),
       },
     ]);
   } catch (err) {
@@ -213,6 +238,7 @@ async function runTerminalNew(
     title,
     cwd,
     location: "grid",
+    spawnedBy,
     ...(worktreeId !== undefined ? { worktreeId } : {}),
   };
   try {

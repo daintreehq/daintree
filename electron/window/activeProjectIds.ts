@@ -5,6 +5,22 @@ import { logError } from "../utils/logger.js";
 export type ProjectViewManagersProvider = () => ProjectViewManager[];
 
 /**
+ * Projects a remote Shell is displaying from this machine. Installed by Host
+ * mode (core code never imports remote modules), so a local-only app never
+ * has one and the active set is exactly what its own windows show.
+ */
+let remoteVisibleProjectIds: (() => Iterable<string>) | null = null;
+
+export function setRemoteVisibleProjectIdsProvider(
+  provider: (() => Iterable<string>) | null
+): () => void {
+  remoteVisibleProjectIds = provider;
+  return () => {
+    if (remoteVisibleProjectIds === provider) remoteVisibleProjectIds = null;
+  };
+}
+
+/**
  * Adapt a WindowRegistry into the lazy provider shape above. Callers that hold
  * a registry directly (the IPC handlers, via `HandlerDependencies`) use this
  * instead of the `setProjectViewManagersProvider` closure the long-lived global
@@ -37,6 +53,9 @@ export function projectViewManagersFrom(
  * the sole check — it covers the early-startup window before the provider is
  * wired, so a first sweep still skips the active project (#6016).
  *
+ * Projects a remote Shell is displaying from this machine (Host mode) count too:
+ * their views live in another app, so no local manager knows about them.
+ *
  * @param source Short identifier for the calling site, attached to error logs.
  */
 export function collectActiveProjectIds(
@@ -67,6 +86,14 @@ export function collectActiveProjectIds(
         // failure doesn't drop the rest of the active set (#8607).
         logError("active-project-ids-manager-failed", error, { source });
       }
+    }
+  }
+
+  if (remoteVisibleProjectIds) {
+    try {
+      for (const id of remoteVisibleProjectIds()) activeIds.add(id);
+    } catch (error) {
+      logError("active-project-ids-remote-failed", error, { source });
     }
   }
 

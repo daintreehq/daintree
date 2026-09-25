@@ -7,10 +7,27 @@ import {
 } from "../../services/pty/ptyPoolEnvHash.js";
 import { markPerformance } from "../../utils/performance.js";
 import { PortBatcher, type PortBatcherFailedBatch } from "../index.js";
+import type { PtyHostDriveLease } from "../../../shared/types/pty-host.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
 function batchDataToString(data: Uint8Array): string {
   return Buffer.from(data).toString("utf8");
+}
+
+/** The lease a remote endpoint's bridge checked a message against, when it stamped one. */
+function leaseStamp(portMsg: { leaseId?: unknown }): number | undefined {
+  return Number.isSafeInteger(portMsg.leaseId) ? (portMsg.leaseId as number) : undefined;
+}
+
+function isDriveLease(value: unknown): value is PtyHostDriveLease {
+  if (!value || typeof value !== "object") return false;
+  const lease = value as Record<string, unknown>;
+  return (
+    typeof lease.projectId === "string" &&
+    lease.projectId !== "" &&
+    Number.isSafeInteger(lease.leaseId) &&
+    (lease.holderConnection === null || Number.isSafeInteger(lease.holderConnection))
+  );
 }
 
 export function createConnectionHandlers(ctx: HostContext): HandlerMap {
@@ -126,6 +143,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
             typeof portMsg.id === "string" &&
             typeof portMsg.data === "string"
           ) {
+            if (!ptyManager.mayDriveFrom(portMsg.id, windowId, leaseStamp(portMsg))) return;
             ptyManager.write(portMsg.id, portMsg.data, portMsg.traceId);
             // PERF-120 T2 attribution mark (no-op unless DAINTREE_PERF_CAPTURE):
             // paired with terminal_interactive_echo_dispatched to expose the
@@ -140,9 +158,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
             typeof portMsg.cols === "number" &&
             typeof portMsg.rows === "number"
           ) {
-            // A remote endpoint's port (negative id) is gated by its own
-            // bridge; this machine's windows yield to another client's lease.
-            if (windowId > 0 && ptyManager.isResizeHeldElsewhere(portMsg.id)) return;
+            if (!ptyManager.mayDriveFrom(portMsg.id, windowId, leaseStamp(portMsg))) return;
             ptyManager.resize(portMsg.id, portMsg.cols, portMsg.rows, "renderer-message-port");
           } else if (
             portMsg.type === "ack" &&
@@ -401,17 +417,17 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
     },
 
     // Authoritative replace from Main's drive lease; validated before it is applied.
-    "set-resize-held-elsewhere": (msg) => {
-      const projectIds: unknown = msg.projectIds;
+    "set-drive-leases": (msg) => {
+      const leases: unknown = msg.leases;
       if (
-        !Array.isArray(projectIds) ||
-        projectIds.length !== Object.keys(projectIds).length ||
-        projectIds.some((projectId) => typeof projectId !== "string" || !projectId)
+        !Array.isArray(leases) ||
+        leases.length !== Object.keys(leases).length ||
+        !leases.every(isDriveLease)
       ) {
-        console.warn("[PtyHost] set-resize-held-elsewhere payload is not a list of project ids");
+        console.warn("[PtyHost] set-drive-leases payload is not a list of drive leases");
         return;
       }
-      ptyManager.setResizeHeldElsewhere(projectIds as string[]);
+      ptyManager.setDriveLeases(leases);
     },
 
     "disconnect-port": (msg) => {

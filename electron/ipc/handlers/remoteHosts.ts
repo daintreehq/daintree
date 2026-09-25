@@ -1,6 +1,7 @@
 import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
 import os from "node:os";
+import { store } from "../../store.js";
 import { pendingRemoteHostsHandler } from "../../remote/pendingHandler.js";
 import { getRemoteService, requireRemoteService } from "../../remote/runtime.js";
 import { REMOTE_HOSTS_METHOD_CHANNELS } from "./remoteHosts.preload.js";
@@ -31,6 +32,19 @@ function localWindowHost(): WindowHostInfo {
     hostHomeDir: os.homedir(),
     hostTmpDir: os.tmpdir(),
   };
+}
+
+/**
+ * Whether anything here could make a view on this machine be driven from
+ * elsewhere: a configured host, Host mode switched on, or a Host server
+ * running for this launch (`--host-mode`). Reads settings and the service
+ * table only, so it is safe to ask from every view as it opens.
+ */
+function remoteHostsInUse(): boolean {
+  const hosts = store.get("remoteHosts")?.hosts;
+  if (Array.isArray(hosts) && hosts.length > 0) return true;
+  if (store.get("hostMode")?.enabled === true) return true;
+  return getRemoteService("hostServer") !== undefined;
 }
 
 export const remoteHostsNamespace = defineIpcNamespace({
@@ -87,6 +101,7 @@ export const remoteHostsNamespace = defineIpcNamespace({
       async (_payload: { sshTarget: string }): Promise<HostProbeResult> =>
         pendingRemoteHostsHandler(REMOTE_HOSTS_METHOD_CHANNELS.probe)
     ),
+    isInUse: op(REMOTE_HOSTS_METHOD_CHANNELS.isInUse, (): boolean => remoteHostsInUse()),
     getLocalHandshake: op(REMOTE_HOSTS_METHOD_CHANNELS.getLocalHandshake, (): HostHandshakeInfo =>
       getLocalHandshakeInfo()
     ),

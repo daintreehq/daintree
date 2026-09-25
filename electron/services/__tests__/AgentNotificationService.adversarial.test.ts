@@ -185,7 +185,7 @@ describe("AgentNotificationService adversarial", () => {
       "agent-1 is waiting for input",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"], category: "waiting" }
     );
     expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
   });
@@ -204,7 +204,7 @@ describe("AgentNotificationService adversarial", () => {
       "agent-1 finished its task",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      { silent: true, ownerWebContentsId: OWNER }
+      { silent: true, ownerWebContentsId: OWNER, category: "completed" }
     );
     expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
   });
@@ -274,7 +274,7 @@ describe("AgentNotificationService adversarial", () => {
       "agent-1 is waiting for input",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"], category: "waiting" }
     );
     expect(notificationServiceMock.showWatchNotification).toHaveBeenNthCalledWith(
       2,
@@ -282,7 +282,7 @@ describe("AgentNotificationService adversarial", () => {
       "agent-1 finished its task",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      { silent: true, ownerWebContentsId: OWNER }
+      { silent: true, ownerWebContentsId: OWNER, category: "completed" }
     );
   });
 });

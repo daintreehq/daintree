@@ -6,13 +6,13 @@ import { getLocalClientRef } from "../ipc/localEndpoint.js";
 import { AppError } from "../utils/errorTypes.js";
 import { getPtyClient } from "../window/serviceRefs.js";
 import type { DriveLeaseHolder, DriveLeaseState } from "../../shared/types/remoteHosts.js";
+import type { PtyHostDriveLease } from "../../shared/types/pty-host.js";
 import type { DriveLeaseEvent, DriveLeaseView } from "../../shared/types/ipc/driveLease.js";
 
 /**
- * How long a lease stays reserved for its client after the holder's endpoint
- * closes. A dropped link already keeps its endpoints through the session's
- * resume window, so this only has to cover a view that reopens under a new
- * endpoint (a reload, a re-attached session).
+ * How long a lease stays reserved for its client after the holder's link drops
+ * or its endpoint closes: long enough for a resume or a reloaded view to take
+ * it back, short enough that nobody else waits long on a machine that went.
  */
 export const DEFAULT_DRIVE_LEASE_RELEASE_GRACE_MS = 15_000;
 
@@ -23,48 +23,62 @@ export interface DriveLeaseServiceOptions {
   releaseGraceMs?: number;
   now?: () => number;
   /**
-   * Receives the projects this machine's own windows may not resize (another
-   * client drives them). Defaults to the pty-host through PtyClient.
+   * Receives the leases a remote client is party to, for the pty-host to
+   * enforce on port input and resizes. Defaults to the pty-host through
+   * PtyClient.
    */
-  applyResizeLease?: (projectIds: string[]) => void;
+  applyDriveLeases?: (leases: PtyHostDriveLease[]) => void;
 }
 
 interface ProjectLease {
   holder: DriveLeaseHolder;
-  /** Set while the holder's endpoint is gone and the lease waits for its client to come back. */
+  /** The holder endpoint's handle, which is its pty-host port connection id. */
+  holderHandle: number;
+  /** Set while the holder is away and the lease waits for it, or its client, to come back. */
   releaseTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /**
+ * Who MCP dispatch should reach for a project. `reserved` is a holder that is
+ * away (its link dropped, its view closed or moved) inside its grace window:
+ * nobody else may act in its place until the grace runs out.
+ */
+export type DriveTarget =
+  | { kind: "vacant" }
+  | { kind: "reserved"; holder: DriveLeaseHolder }
+  | { kind: "live"; holder: DriveLeaseHolder; endpoint: ClientEndpoint };
+
+/**
  * One frontend drives a host project at a time; this is the Host's arbiter.
  *
- * The lease is enforced between clients, never within one: every window of the
- * holder's client keeps driving (two local windows behave exactly as they did
- * before), while another client's windows are driven elsewhere until they take
- * over. The holder endpoint is the single renderer that MCP dispatch and plugin
- * prompts target. The terminal resize lease follows it.
+ * Exactly one endpoint drives: the holder. The one exception is this machine's
+ * own windows, which are one driver among themselves whenever the local client
+ * holds — two local windows behave exactly as they did before any lease
+ * existed. The holder endpoint is the single renderer that MCP dispatch and
+ * plugin prompts target; terminal input and resizes follow it.
  */
 export class DriveLeaseService {
   private readonly registry: LeaseRegistry;
   private readonly releaseGraceMs: number;
   private readonly now: () => number;
-  private readonly applyResizeLease: (projectIds: string[]) => void;
+  private readonly applyDriveLeases: (leases: PtyHostDriveLease[]) => void;
   private readonly leases = new Map<string, ProjectLease>();
   private readonly clients = new Map<string, ClientRef>();
+  /** Remote endpoints whose link is down: kept by the session, but nobody is there. */
+  private readonly detached = new Set<string>();
   private readonly listeners = new Set<(state: DriveLeaseState) => void>();
   private readonly offRegistry: () => void;
   private nextLeaseId = 1;
   private reconcileQueued = false;
-  private publishedResizeLease = "";
+  private publishedDriveLeases = "";
   private disposed = false;
 
   constructor(options: DriveLeaseServiceOptions = {}) {
     this.registry = options.registry ?? getEndpointRegistry();
     this.releaseGraceMs = options.releaseGraceMs ?? DEFAULT_DRIVE_LEASE_RELEASE_GRACE_MS;
     this.now = options.now ?? Date.now;
-    this.applyResizeLease =
-      options.applyResizeLease ??
-      ((projectIds) => getPtyClient()?.setResizeHeldElsewhere(projectIds));
+    this.applyDriveLeases =
+      options.applyDriveLeases ?? ((leases) => getPtyClient()?.setDriveLeases(leases));
     this.offRegistry = this.registry.onChange(() => this.queueReconcile());
     this.queueReconcile();
   }
@@ -84,6 +98,26 @@ export class DriveLeaseService {
       lease.holder = { ...holder, clientName: client.clientName };
       this.publish(projectId, lease.holder);
     }
+  }
+
+  /**
+   * The remote session layer reports a link dropping (`attached` false) or
+   * resuming for its endpoints. A dropped holder starts the release grace at
+   * once rather than when its session finally expires; a valid resume inside
+   * the grace keeps the lease. Both are applied against whoever holds the lease
+   * when they land, so neither can undo a takeover made in between.
+   */
+  noteEndpointTransport(endpointIds: Iterable<string>, attached: boolean): void {
+    if (this.disposed) return;
+    let changed = false;
+    for (const endpointId of endpointIds) {
+      if (attached ? this.detached.delete(endpointId) : !this.detached.has(endpointId)) {
+        if (!attached) this.detached.add(endpointId);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    for (const projectId of [...this.leases.keys()]) this.reconcileProject(projectId);
   }
 
   /** Every holder change, for the remote session layer's LEASE_CHANGED frames. */
@@ -108,13 +142,21 @@ export class DriveLeaseService {
     return { projectId, holder: this.getHolder(projectId) };
   }
 
-  /** The live renderer that drives the project, or null when there is none attached. */
-  getHolderEndpoint(projectId: string): ClientEndpoint | null {
+  /** Who drives the project right now, telling a holder that is away from nobody at all. */
+  getDriveTarget(projectId: string): DriveTarget {
     const holder = this.getHolder(projectId);
-    if (!holder) return null;
+    if (!holder) return { kind: "vacant" };
     const endpoint = this.registry.get(holder.endpointId);
     // During a reservation the holder may have moved to another project.
-    return endpoint && !endpoint.isClosed() && endpoint.projectId === projectId ? endpoint : null;
+    return endpoint && this.isPresent(endpoint, projectId)
+      ? { kind: "live", holder, endpoint }
+      : { kind: "reserved", holder };
+  }
+
+  /** The live renderer that drives the project, or null when there is none attached. */
+  getHolderEndpoint(projectId: string): ClientEndpoint | null {
+    const target = this.getDriveTarget(projectId);
+    return target.kind === "live" ? target.endpoint : null;
   }
 
   /** The project's lease as one endpoint sees it. */
@@ -123,12 +165,27 @@ export class DriveLeaseService {
   }
 
   /**
-   * Whether `endpoint` drives the project: its client holds the lease, or
-   * nobody does. Resize, and later terminal input, are gated on this.
+   * Whether `endpoint` drives the project: it is the holder, nobody holds it,
+   * or it and the holder are both this machine's own windows. Terminal input
+   * and resizes are gated on this.
    */
-  isDriving(projectId: string, endpoint: Pick<ClientEndpoint, "clientId">): boolean {
+  isDriving(projectId: string, endpoint: Pick<ClientEndpoint, "endpointId" | "clientId">): boolean {
+    return drives(this.getHolder(projectId), endpoint);
+  }
+
+  /**
+   * The lease `endpoint` drives the project under, for stamping the work it
+   * sends so the pty-host can refuse it once a takeover has made it stale:
+   * the lease id, null when nobody holds the project, or false when the
+   * endpoint does not drive it.
+   */
+  drivingLeaseId(
+    projectId: string,
+    endpoint: Pick<ClientEndpoint, "endpointId" | "clientId">
+  ): number | null | false {
     const holder = this.getHolder(projectId);
-    return holder === null || holder.clientId === endpoint.clientId;
+    if (!drives(holder, endpoint)) return false;
+    return holder?.leaseId ?? null;
   }
 
   /**
@@ -160,8 +217,9 @@ export class DriveLeaseService {
     }
     this.leases.clear();
     this.clients.clear();
+    this.detached.clear();
     this.listeners.clear();
-    this.publishResizeLease();
+    this.publishDriveLeases();
   }
 
   /**
@@ -179,13 +237,34 @@ export class DriveLeaseService {
 
   private reconcileAll(): void {
     if (this.disposed) return;
-    for (const [endpointId] of this.clients) {
+    for (const endpointId of [...this.clients.keys(), ...this.detached]) {
       const endpoint = this.registry.get(endpointId);
-      if (!endpoint || endpoint.isClosed()) this.clients.delete(endpointId);
+      if (!endpoint || endpoint.isClosed()) {
+        this.clients.delete(endpointId);
+        this.detached.delete(endpointId);
+      }
     }
     const projects = new Set(this.leases.keys());
     for (const projectId of this.attachedProjects()) projects.add(projectId);
     for (const projectId of projects) this.reconcileProject(projectId);
+    // A remote view joining or leaving a locally held project changes whether
+    // the pty-host must arbitrate it, with no holder change to publish.
+    this.publishDriveLeases();
+  }
+
+  /** Attached to the project with someone there: open, bound to it, and its link up. */
+  private isPresent(endpoint: ClientEndpoint, projectId: string): boolean {
+    return (
+      !endpoint.isClosed() &&
+      endpoint.projectId === projectId &&
+      !this.detached.has(endpoint.endpointId)
+    );
+  }
+
+  private presentFor(projectId: string): ClientEndpoint[] {
+    return this.registry
+      .getForProject(projectId)
+      .filter((endpoint) => this.isPresent(endpoint, projectId));
   }
 
   /**
@@ -204,18 +283,13 @@ export class DriveLeaseService {
   private reconcileProject(projectId: string): void {
     if (this.disposed) return;
     const lease = this.leases.get(projectId);
-    const attached = this.registry.getForProject(projectId);
+    const attached = this.presentFor(projectId);
     if (!lease) {
       const first = attached[0];
       if (first) this.grant(projectId, first);
       return;
     }
-    const holderEndpoint = this.registry.get(lease.holder.endpointId);
-    const holderAttached =
-      holderEndpoint !== undefined &&
-      !holderEndpoint.isClosed() &&
-      holderEndpoint.projectId === projectId;
-    if (holderAttached) {
+    if (this.holderIsPresent(projectId, lease)) {
       if (lease.releaseTimer) {
         clearTimeout(lease.releaseTimer);
         lease.releaseTimer = null;
@@ -229,14 +303,23 @@ export class DriveLeaseService {
       return;
     }
     if (lease.releaseTimer) return;
-    lease.releaseTimer = setTimeout(() => this.release(projectId, lease), this.releaseGraceMs);
+    const { leaseId } = lease.holder;
+    lease.releaseTimer = setTimeout(() => this.release(projectId, leaseId), this.releaseGraceMs);
     lease.releaseTimer.unref?.();
   }
 
-  private release(projectId: string, lease: ProjectLease): void {
-    if (this.leases.get(projectId) !== lease) return;
+  private holderIsPresent(projectId: string, lease: ProjectLease): boolean {
+    const endpoint = this.registry.get(lease.holder.endpointId);
+    return endpoint !== undefined && this.isPresent(endpoint, projectId);
+  }
+
+  /** Fenced on the lease id: a grace that outlived a takeover, or a resume, releases nothing. */
+  private release(projectId: string, leaseId: number): void {
+    const lease = this.leases.get(projectId);
+    if (!lease || lease.holder.leaseId !== leaseId) return;
     lease.releaseTimer = null;
-    const next = this.registry.getForProject(projectId)[0];
+    if (this.holderIsPresent(projectId, lease)) return;
+    const next = this.presentFor(projectId)[0];
     if (next) {
       this.grant(projectId, next);
       return;
@@ -257,7 +340,7 @@ export class DriveLeaseService {
       isHostLocal: endpoint.kind === "local-view",
       acquiredAt: this.now(),
     };
-    this.leases.set(projectId, { holder, releaseTimer: null });
+    this.leases.set(projectId, { holder, holderHandle: endpoint.handle, releaseTimer: null });
     this.publish(projectId, holder);
     return holder;
   }
@@ -278,14 +361,14 @@ export class DriveLeaseService {
     return {
       projectId,
       holder,
-      drivingHere: holder === null || holder.clientId === clientId,
+      drivingHere: drives(holder, { endpointId: endpoint?.endpointId ?? "", clientId }),
       isHolderEndpoint: holder !== null && endpoint?.endpointId === holder.endpointId,
       viewerIsHostLocal: endpoint ? endpoint.kind === "local-view" : true,
     };
   }
 
   private publish(projectId: string, holder: DriveLeaseHolder | null): void {
-    this.publishResizeLease();
+    this.publishDriveLeases();
     for (const endpoint of this.registry.getForProject(projectId)) {
       const event: DriveLeaseEvent = {
         type: "changed",
@@ -307,26 +390,50 @@ export class DriveLeaseService {
     }
   }
 
-  /** Projects another client drives: this machine's own windows must not resize their terminals. */
-  private publishResizeLease(): void {
-    const heldElsewhere: string[] = [];
+  /**
+   * The leases a remote client is party to — it holds the lease, or it has a
+   * view on a project this machine's windows hold — for the pty-host to enforce
+   * on port input and resizes. A project only this machine's windows show is
+   * left out, so they arbitrate nothing among themselves.
+   */
+  private publishDriveLeases(): void {
+    const table: PtyHostDriveLease[] = [];
     if (!this.disposed) {
       for (const [projectId, lease] of this.leases) {
-        if (lease.holder.clientId !== LOCAL_CLIENT_ID) heldElsewhere.push(projectId);
+        const remoteHolds = lease.holder.clientId !== LOCAL_CLIENT_ID;
+        if (
+          !remoteHolds &&
+          !this.registry.getForProject(projectId).some((e) => e.kind === "remote-view")
+        ) {
+          continue;
+        }
+        table.push({
+          projectId,
+          leaseId: lease.holder.leaseId,
+          holderConnection: remoteHolds ? lease.holderHandle : null,
+        });
       }
     }
-    heldElsewhere.sort();
-    const serialized = JSON.stringify(heldElsewhere);
-    if (serialized === this.publishedResizeLease) return;
+    table.sort((a, b) => (a.projectId < b.projectId ? -1 : a.projectId > b.projectId ? 1 : 0));
+    const serialized = JSON.stringify(table);
+    if (serialized === this.publishedDriveLeases) return;
     // Nothing to tell a pty-host that has never heard of a lease.
-    if (this.publishedResizeLease === "" && heldElsewhere.length === 0) return;
-    this.publishedResizeLease = serialized;
+    if (this.publishedDriveLeases === "" && table.length === 0) return;
+    this.publishedDriveLeases = serialized;
     try {
-      this.applyResizeLease(heldElsewhere);
+      this.applyDriveLeases(table);
     } catch (error) {
-      console.error("[DriveLease] Failed to publish the resize lease:", error);
+      console.error("[DriveLease] Failed to publish the drive leases:", error);
     }
   }
+}
+
+function drives(
+  holder: DriveLeaseHolder | null,
+  endpoint: Pick<ClientEndpoint, "endpointId" | "clientId">
+): boolean {
+  if (holder === null || holder.endpointId === endpoint.endpointId) return true;
+  return holder.clientId === LOCAL_CLIENT_ID && endpoint.clientId === LOCAL_CLIENT_ID;
 }
 
 let service: DriveLeaseService | null = null;

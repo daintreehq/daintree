@@ -10,7 +10,10 @@ vi.mock("electron", () => ({
   nativeTheme: { on: vi.fn(), shouldUseDarkColors: false },
 }));
 
-vi.mock("../../ipc/handlers.js", () => ({ sendToRenderer: vi.fn() }));
+// The real helper, so its origin filter is what these pushes go through.
+vi.mock("../../ipc/handlers.js", async () => ({
+  sendToRenderer: (await import("../../ipc/utils.js")).sendToRenderer,
+}));
 vi.mock("../../menu.js", () => ({ createApplicationMenu: vi.fn() }));
 vi.mock("../../setup/environment.js", () => ({ isDemoMode: false }));
 vi.mock("../../services/PtyClient.js", () => ({ PtyClient: class {} }));
@@ -41,6 +44,7 @@ import {
   _resetEndpointRegistryForTesting,
 } from "../../ipc/endpointRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { setRemoteBoundViewFilter } from "../../ipc/utils.js";
 import type { ClientEndpoint } from "../../ipc/endpoint.js";
 import type { MainProcessWatchdogClient } from "../../services/MainProcessWatchdogClient.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
@@ -90,6 +94,25 @@ describe("watchdog:disabled push", () => {
       channel: CHANNELS.EVENTS_PUSH,
       args: [event],
     });
+  });
+
+  it("never reaches a window here that is attached to a remote host", () => {
+    const remoteBound = { id: 1, isDestroyed: () => false, send: vi.fn() };
+    const local = { id: 2, isDestroyed: () => false, send: vi.fn() };
+    const registry = {
+      all: () => [
+        { browserWindow: { isDestroyed: () => false, wc: remoteBound } },
+        { browserWindow: { isDestroyed: () => false, wc: local } },
+      ],
+    } as unknown as WindowRegistry;
+    const uninstall = setRemoteBoundViewFilter((webContentsId) => webContentsId !== 1);
+    wireWatchdogDisabledBroadcast(client, registry);
+
+    fire({ reason: "cap" });
+    uninstall();
+
+    expect(remoteBound.send).not.toHaveBeenCalled();
+    expect(local.send).toHaveBeenCalledTimes(1);
   });
 
   it("still reaches remote views on a host with no window registry", () => {
