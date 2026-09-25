@@ -1014,7 +1014,7 @@ const text = await host.clipboard.readText(); // clipboard:read
 
 **Reads stay text-only.** There is no `readImage`/`readHtml`/`readFiles`: the read side is where richer payload types would let a plugin pull out more than it declared. Writes carry no such risk, since you already have the bytes.
 
-**Whose clipboard.** When the project is driven from a window on another machine, the clipboard is that machine's: writes land there and reads come from there (a read is refused unless that window is focused). An image for another machine's clipboard is capped at 8 MiB. With nobody attached, or a window on this machine driving, it's this machine's clipboard as always.
+**Whose clipboard.** When the project is driven from a window on another machine, the clipboard is that machine's: writes land there and reads come from there (a read is refused unless that window is focused). That machine also asks the person once per host, plugin and access (read or write) before your plugin touches its clipboard, even when `clipboard:read`/`clipboard:write` was already granted on the host; the answer, allow or deny, is remembered there and can be reset in Settings → Hosts → _host_. While that first question is open your call waits; a call that outlives the host's wait is refused and the next one goes through. An image for another machine's clipboard is capped at 8 MiB. With nobody attached, or a window on this machine driving, it's this machine's clipboard as always.
 
 ## `system` — open and reveal files in your own scope
 

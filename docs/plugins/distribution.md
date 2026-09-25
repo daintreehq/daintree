@@ -230,7 +230,7 @@ Settings → Hosts → _host_ → Plugins compares the two machines and groups t
 
 Plugin settings and secrets are per host and aren't copied. On a Linux host with no desktop session there is no keyring, so secret fields say that secrets can't be saved there; use environment variables or the tool's own login on that host instead.
 
-When a window switches to a host that lacks some of this machine's plugins, one notice says how many, with **Review** to open this comparison. A saved panel whose plugin the host doesn't have shows a placeholder naming the plugin and the host, with **Install on _host_** when this machine has the plugin; if the host removes a plugin while its panel is open, the panel switches to that placeholder and one toast says so. Calls to a plugin the host doesn't have are refused with a `PLUGIN_NOT_ON_HOST` error.
+When a window switches to a host that lacks some of this machine's plugins, one notice says how many, with **Review** to open this comparison. A saved panel whose plugin the host doesn't have shows a placeholder naming the plugin and the host, with **Install on _host_** when this machine has the plugin; if the host removes a plugin while its panel is open, the panel switches to that placeholder and one toast says so. Calls to a plugin the host doesn't have are refused with a `PLUGIN_NOT_ON_HOST` error, and calls to one that can't run there with `PLUGIN_INCOMPATIBLE`, whose details name the reason: `platform`, `remote-unsupported`, `untrusted` (blocklisted on the host) or `unconfigured` (a missing user-scope secret). An `engine` mismatch is reported in the comparison but the plugin still loads.
 
 ## Uninstalling
 
