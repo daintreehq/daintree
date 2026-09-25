@@ -3,6 +3,7 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { logDebug } from "@/utils/logger";
 import { yieldToScheduler } from "@/lib/schedulerYield";
+import type { StreamRange } from "./streamFence";
 
 // Renderer-side backpressure layer that throttles xterm consumption. The
 // IPC-layer counterparts (the burst absorber between PTY host and renderer) live
@@ -49,6 +50,8 @@ const DENSE_OUTPUT_GAP_MS = 60;
 
 type TerminalIngestQueue = {
   chunks: Array<string | Uint8Array>;
+  // Parallel to `chunks`: each chunk's place in the host stream, when known.
+  ranges: Array<StreamRange | undefined>;
   queuedBytes: number;
   inFlightBytes: number;
   recentChars: string;
@@ -72,6 +75,7 @@ type TerminalIngestQueue = {
 type CoalescedBatch = {
   data: string | Uint8Array;
   chunkCount: number;
+  range: StreamRange | undefined;
 };
 
 export class TerminalOutputIngestService {
@@ -86,7 +90,8 @@ export class TerminalOutputIngestService {
     private readonly writeToTerminal: (
       id: string,
       data: string | Uint8Array,
-      chunkCount: number
+      chunkCount: number,
+      range?: StreamRange
     ) => void,
     // Which terminal is currently focused, or null when focus is unknown.
     // Defaults to () => null so a bare `new TerminalOutputIngestService(write)`
@@ -136,10 +141,10 @@ export class TerminalOutputIngestService {
     return this.pollingActive;
   }
 
-  public bufferData(id: string, data: string | Uint8Array): void {
+  public bufferData(id: string, data: string | Uint8Array, range?: StreamRange): void {
     if (this.pollingActive) return;
     this.markTerminalDataReceived(id, data);
-    this.enqueueChunk(id, data);
+    this.enqueueChunk(id, data, range);
   }
 
   public notifyWriteComplete(id: string, bytes: number): void {
@@ -247,6 +252,7 @@ export class TerminalOutputIngestService {
     if (!queue) {
       queue = {
         chunks: [],
+        ranges: [],
         queuedBytes: 0,
         inFlightBytes: 0,
         recentChars: "",
@@ -266,7 +272,7 @@ export class TerminalOutputIngestService {
     return typeof data === "string" ? data.length : data.byteLength;
   }
 
-  private enqueueChunk(id: string, data: string | Uint8Array): void {
+  private enqueueChunk(id: string, data: string | Uint8Array, range?: StreamRange): void {
     const queue = this.getOrCreateQueue(id);
     const now = performance.now();
     queue.denseOutput =
@@ -274,6 +280,7 @@ export class TerminalOutputIngestService {
     queue.lastChunkAt = now;
     const bytes = this.chunkByteSize(data);
     queue.chunks.push(data);
+    queue.ranges.push(range);
     queue.queuedBytes += bytes;
 
     const stringData = typeof data === "string" ? data : "";
@@ -420,8 +427,13 @@ export class TerminalOutputIngestService {
       const batch = this.coalesceBatch(queue, batchCap);
       const batchBytes = this.chunkByteSize(batch.data);
       queue.inFlightBytes += batchBytes;
-      this.writeToTerminal(id, batch.data, batch.chunkCount);
+      this.writeBatch(id, batch);
     }
+  }
+
+  private writeBatch(id: string, batch: CoalescedBatch): void {
+    if (batch.range) this.writeToTerminal(id, batch.data, batch.chunkCount, batch.range);
+    else this.writeToTerminal(id, batch.data, batch.chunkCount);
   }
 
   // Merge the longest same-type chunk prefix into one write, capped at
@@ -437,37 +449,53 @@ export class TerminalOutputIngestService {
   ): CoalescedBatch {
     if (queue.chunks.length === 1) {
       const chunk = queue.chunks[0]!;
+      const range = queue.ranges[0];
       queue.chunks.length = 0;
+      queue.ranges.length = 0;
       queue.queuedBytes = 0;
-      return { data: chunk, chunkCount: 1 };
+      return { data: chunk, chunkCount: 1, range };
     }
 
     const first = queue.chunks[0]!;
     const firstIsString = typeof first === "string";
     let taken = this.chunkByteSize(first);
     let count = 1;
+    let range = queue.ranges[0];
     while (count < queue.chunks.length) {
       const next = queue.chunks[count]!;
       if ((typeof next === "string") !== firstIsString) break;
+      // A merged batch carries one range, so it may only span a contiguous
+      // run of the stream (or chunks that carry no offsets at all).
+      const nextRange = queue.ranges[count];
+      if (
+        range === undefined
+          ? nextRange !== undefined
+          : nextRange?.start !== range.end || nextRange.epoch !== range.epoch
+      ) {
+        break;
+      }
       const size = this.chunkByteSize(next);
       if (taken + size > batchCap) break;
       taken += size;
+      if (range && nextRange) range = { ...range, end: nextRange.end };
       count++;
     }
 
     if (count === 1) {
       queue.chunks.shift();
+      queue.ranges.shift();
       queue.queuedBytes -= taken;
-      return { data: first, chunkCount: 1 };
+      return { data: first, chunkCount: 1, range };
     }
 
     const merged = queue.chunks.splice(0, count);
+    queue.ranges.splice(0, count);
     queue.queuedBytes -= taken;
     if (queue.chunks.length === 0) {
       queue.queuedBytes = 0;
     }
     if (firstIsString) {
-      return { data: (merged as string[]).join(""), chunkCount: count };
+      return { data: (merged as string[]).join(""), chunkCount: count, range };
     }
     const out = new Uint8Array(taken);
     let offset = 0;
@@ -475,7 +503,7 @@ export class TerminalOutputIngestService {
       out.set(chunk, offset);
       offset += chunk.byteLength;
     }
-    return { data: out, chunkCount: count };
+    return { data: out, chunkCount: count, range };
   }
 
   private clearQueue(id: string): void {
@@ -500,7 +528,7 @@ export class TerminalOutputIngestService {
 
     while (queue.chunks.length > 0) {
       const batch = this.coalesceBatch(queue);
-      this.writeToTerminal(id, batch.data, batch.chunkCount);
+      this.writeBatch(id, batch);
     }
 
     this.queues.delete(id);

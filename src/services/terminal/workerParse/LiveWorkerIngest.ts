@@ -18,6 +18,8 @@ export interface LiveWorkerIngestDeps {
   /** The live xterm instance, written directly — never via TerminalWriteController. */
   mirror: MirrorTarget;
   serializeMirror(): string;
+  /** The mirror's pending escape sequence, read alongside serializeMirror(). */
+  mirrorEscapeTail?(): string | null;
   getGeometry(): { cols: number; rows: number; scrollback: number };
   /**
    * Quiesce the NORMAL ingest pipeline (TerminalOutputIngestService queue +
@@ -236,6 +238,7 @@ export class LiveWorkerIngest {
           scrollback: geometry.scrollback,
           cadenceMs: this.deps.cadenceMs,
           initialSerializedState: this.deps.serializeMirror(),
+          initialEscapeTail: this.deps.mirrorEscapeTail?.(),
         });
         this.unsubTransport = transport.onResponse(this.onTransportResponse);
         transport.attachIngestPort(port);
@@ -252,7 +255,7 @@ export class LiveWorkerIngest {
         }
         await this.drainMirror();
         if (this.disposedFlag) return;
-        this.session.demoteToWorker(this.deps.serializeMirror());
+        this.session.demoteToWorker(this.deps.serializeMirror(), this.deps.mirrorEscapeTail?.());
       }
     } finally {
       this.engaging = false;

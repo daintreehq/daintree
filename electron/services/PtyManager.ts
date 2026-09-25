@@ -119,7 +119,10 @@ export class PtyManager extends EventEmitter {
   // shell sat in the pool. `emitData` routes by registry entry, so without this
   // those bytes were dropped and a shell blocked on a prompt stayed blank
   // (#12753). Flushed in order right after registration.
-  private constructionOutput: { id: string; chunks: Array<string | Uint8Array> } | null = null;
+  private constructionOutput: {
+    id: string;
+    chunks: Array<{ data: string; streamEnd: number }>;
+  } | null = null;
   // Host-local lifecycle ledger. Adopts the generation Main stamped on spawn
   // options so both processes key each incarnation identically; guards the
   // pendingResizes buffer across same-id respawns and provides the audit
@@ -354,9 +357,9 @@ export class PtyManager extends EventEmitter {
    * Emit terminal data with project-based filtering.
    * Accepts both string and Uint8Array data for binary optimization.
    */
-  private emitData(id: string, data: string | Uint8Array): void {
+  private emitData(id: string, data: string, streamEnd: number): void {
     if (this.constructionOutput?.id === id) {
-      this.constructionOutput.chunks.push(data);
+      this.constructionOutput.chunks.push({ data, streamEnd });
       return;
     }
 
@@ -366,12 +369,12 @@ export class PtyManager extends EventEmitter {
     }
 
     if (!this.activeProjectId) {
-      this.emit("data", id, data);
+      this.emit("data", id, data, undefined, streamEnd);
       return;
     }
 
     if (this.registry.terminalBelongsToProject(terminalProcess, this.activeProjectId)) {
-      this.emit("data", id, data);
+      this.emit("data", id, data, undefined, streamEnd);
     }
   }
 
@@ -521,14 +524,17 @@ export class PtyManager extends EventEmitter {
     const { ptyProcess, prelude, dataHandoff } = acquired;
 
     let terminalProcess: TerminalProcess;
-    const constructionOutput = { id, chunks: [] as Array<string | Uint8Array> };
+    const constructionOutput = {
+      id,
+      chunks: [] as Array<{ data: string; streamEnd: number }>,
+    };
     this.constructionOutput = constructionOutput;
     try {
       terminalProcess = new TerminalProcess(
         id,
         options,
         {
-          emitData: (termId, data) => this.emitData(termId, data),
+          emitData: (termId, data, streamEnd) => this.emitData(termId, data, streamEnd),
           onExit: (termId, exitCode, signal) => {
             // Guard against stale exit events from previous terminal with same ID
             if (this.registry.get(termId) !== terminalProcess) {
@@ -601,7 +607,7 @@ export class PtyManager extends EventEmitter {
     this.pendingResizes.delete(id);
     this.registry.add(id, terminalProcess);
     for (const chunk of constructionOutput.chunks) {
-      this.emitData(id, chunk);
+      this.emitData(id, chunk.data, chunk.streamEnd);
     }
 
     if (consumedPendingResize) {

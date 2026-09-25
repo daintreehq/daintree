@@ -27,6 +27,8 @@ import {
   createWebLinksAddon,
 } from "./TerminalAddonManager";
 import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
+import { receiveStreamChunk, type StreamRange } from "./streamFence";
+import { PartialEscapeTracker } from "@shared/utils/terminalPartialEscapeTail";
 import { TerminalParserHandler } from "./TerminalParserHandler";
 import { TerminalUnseenOutputTracker, UnseenOutputSnapshot } from "./TerminalUnseenOutputTracker";
 import { TerminalOffscreenManager } from "./TerminalOffscreenManager";
@@ -127,6 +129,14 @@ const SUPPRESSED_VIEW_WEBGL_RELEASE_DELAY_MS = 20_000;
 // these terminals, so no foreground tier, burst or WebGL context is earned.
 const isViewSuppressed = (): boolean => !isProjectViewObservable();
 
+// Daintree's own writes into the pane, outside the PTY stream. The parser
+// tracker has to see them too, or it disagrees with xterm about the sequence
+// the pane is in when it is next serialized.
+function writeLocal(managed: ManagedTerminal, data: string): void {
+  managed.parserTail?.feed(data);
+  managed.terminal.write(data);
+}
+
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
 
@@ -145,7 +155,7 @@ class TerminalInstanceService {
   // never publishes a stale instance/onData listener for a dead id.
   private cancelledCreations = new Set<string>();
   private dataBuffer = new TerminalOutputIngestService(
-    (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
+    (id, data, chunkCount, range) => this.writeToTerminal(id, data, chunkCount, range),
     // Cached views retain their local focus id, but no pane there can receive
     // input. Keeping that stale exemption defeats batching for single-pane projects.
     () => (isProjectViewCached() ? null : usePanelStore.getState().focusedId),
@@ -247,7 +257,7 @@ class TerminalInstanceService {
 
     this.restoreController = new TerminalRestoreController({
       getInstance: (id) => this.instances.get(id),
-      writeData: (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
+      writeData: (id, data, chunkCount, range) => this.writeToTerminal(id, data, chunkCount, range),
     });
 
     this.burstController = new TerminalBurstController({
@@ -821,8 +831,14 @@ class TerminalInstanceService {
    * service for the existing test fixtures that cast the service to a
    * structural type containing this method.
    */
-  private writeToTerminal(id: string, data: string | Uint8Array, chunkCount = 1): void {
-    this.writeController.write(id, data, chunkCount);
+  private writeToTerminal(
+    id: string,
+    data: string | Uint8Array,
+    chunkCount = 1,
+    range?: StreamRange
+  ): void {
+    if (range) this.writeController.write(id, data, chunkCount, range);
+    else this.writeController.write(id, data, chunkCount);
   }
 
   setVisible(id: string, isVisible: boolean, expectedGeneration?: number): void {
@@ -1071,7 +1087,7 @@ class TerminalInstanceService {
   injectDataLossMarker(id: string, droppedBytes: number): void {
     const managed = this.instances.get(id);
     if (!managed) return;
-    managed.terminal.write(`\x18\x1b]57301;${droppedBytes};backpressure\x07`);
+    writeLocal(managed, `\x18\x1b]57301;${droppedBytes};backpressure\x07`);
   }
 
   /**
@@ -1086,7 +1102,7 @@ class TerminalInstanceService {
       const managed = this.instances.get(id);
       if (!managed) return;
       const label = droppedBytes > 0 ? `~${droppedBytes} bytes` : "output";
-      managed.terminal.write(`\r\n\x1b[33m⚠ Output dropped (${label})\x1b[0m\r\n`);
+      writeLocal(managed, `\r\n\x1b[33m⚠ Output dropped (${label})\x1b[0m\r\n`);
     });
   }
 
@@ -1233,7 +1249,7 @@ class TerminalInstanceService {
     // Wire the host→renderer tier reconciliation on first terminal creation.
     this.ensureHostTierSubscription();
 
-    const unsubData = terminalClient.onData(id, (data: string | Uint8Array) => {
+    const unsubData = terminalClient.onData(id, (data: string | Uint8Array, streamEnd?: number) => {
       this.burstController.onEchoData(id);
       if (this.dataBuffer.isPolling()) return;
       // Receipt is stamped at ingress, not at paint: a chunk still held in the
@@ -1244,6 +1260,7 @@ class TerminalInstanceService {
       if (receiving && (typeof data === "string" ? data.length : data.byteLength) > 0) {
         receiving.hasReceivedOutput = true;
       }
+      const range = receiving ? receiveStreamChunk(receiving, data, streamEnd) : undefined;
       // Worker-ingest diversion (issue #10960): while a terminal is in (or
       // transitioning through) worker mode, main-thread chunks route into the
       // controller — it acks them immediately and lands them on the mirror
@@ -1254,7 +1271,8 @@ class TerminalInstanceService {
         ingest.feedDiverted(data);
         return;
       }
-      this.dataBuffer.bufferData(id, data);
+      if (range) this.dataBuffer.bufferData(id, data, range);
+      else this.dataBuffer.bufferData(id, data);
     });
     listeners.push(unsubData);
 
@@ -1271,7 +1289,7 @@ class TerminalInstanceService {
         return;
       }
       if (current) {
-        current.terminal.write(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
+        writeLocal(current, `\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
       }
       exitSubscribers.forEach((cb) => cb(exitCode));
     });
@@ -1311,6 +1329,7 @@ class TerminalInstanceService {
       isSerializedRestoreInProgress: false,
       restoreWindowToken: 0,
       deferredOutput: [],
+      parserTail: new PartialEscapeTracker(),
       scrollbackRestoreState: "none",
       attachGeneration: 0,
       attachRevealToken: 0,
@@ -3296,14 +3315,12 @@ class TerminalInstanceService {
   handleBackendRecovery(): void {
     this.instances.forEach((managed, id) => {
       try {
-        managed.terminal.write("\x1b[!p");
+        writeLocal(managed, "\x1b[!p");
 
         this.resetRenderer(id);
 
         const timestamp = new Date().toLocaleTimeString();
-        managed.terminal.write(
-          `\r\n\x1b[33m[${timestamp}] Terminal backend reconnected\x1b[0m\r\n`
-        );
+        writeLocal(managed, `\r\n\x1b[33m[${timestamp}] Terminal backend reconnected\x1b[0m\r\n`);
       } catch (error) {
         logError(`Failed to recover terminal ${id}`, error);
       }

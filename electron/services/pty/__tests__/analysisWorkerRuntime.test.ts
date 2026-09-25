@@ -89,6 +89,34 @@ describe("AnalysisWorkerRuntime", () => {
     }
   });
 
+  // A live snapshot hands over the sequence the mirror is still inside, so the
+  // renderer can put its own parser in the same state before the next chunk
+  // finishes it (#12791). Persistence and preserved snapshots outlive the
+  // process that was mid-sequence and must not carry it.
+  it("carries the pending escape sequence on a live serialize only", async () => {
+    sendData("hello \x1b]0;ti");
+    const request = (
+      requestId: number,
+      op: "serialize" | "serialize-persistence" | "final-snapshot"
+    ) => {
+      runtime.handleMessage({ type: "request", requestId, terminalId: "t1", op, generation: 1 });
+      return waitFor(() => emitted.find((m) => m.type === "response" && m.requestId === requestId));
+    };
+
+    const live = await request(11, "serialize");
+    expect(live.type === "response" && live.result).toMatchObject({
+      continuation: { pendingEscapeTail: "\x1b]0;ti" },
+    });
+
+    const persisted = await request(12, "serialize-persistence");
+    expect(persisted.type === "response" && persisted.result).not.toHaveProperty("continuation");
+
+    const final = await request(13, "final-snapshot");
+    const finalSnapshot =
+      final.type === "response" ? (final.result as AnalysisFinalSnapshot) : null;
+    expect(finalSnapshot?.snapshot).not.toHaveProperty("continuation");
+  });
+
   // The grid a serialize was produced at is the worker's to report, because the
   // mirror can move off the grid the host knows about without the host posting
   // anything: replaying a persisted session sizes the mirror to the SNAPSHOT's

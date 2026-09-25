@@ -77,6 +77,27 @@ export interface TerminalGeometry {
  */
 export interface SerializedTerminalSnapshot extends TerminalGeometry {
   data: string;
+  /** Live snapshots only; persisted and preserved snapshots never carry it. */
+  continuation?: SnapshotContinuation;
+}
+
+/**
+ * What a live snapshot needs to hand over mid-stream without garbling the
+ * output that follows it (#12791).
+ */
+export interface SnapshotContinuation {
+  /**
+   * The escape sequence the source parser was inside when `data` was
+   * serialized, which `data` cannot represent. `""` means the parser was in
+   * ground; `null` means the sequence outgrew the tracker and cannot be
+   * reproduced.
+   */
+  pendingEscapeTail: string | null;
+  /**
+   * UTF-8 offset, in the terminal's renderer-bound output stream, that `data`
+   * covers up to. Chunks ending at or before it are already in the snapshot.
+   */
+  streamOffset?: number;
 }
 
 /** Upper bound for a plausible terminal grid; guards replay against a corrupt or hostile geometry. */
