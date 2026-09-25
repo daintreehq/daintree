@@ -45,6 +45,10 @@ vi.mock("@/components/Fleet/fleetExecution", () => ({
   filterEligibleIds: vi.fn((ids: string[]) => ids),
 }));
 
+vi.mock("@/components/Fleet/crossHostFleet", () => ({
+  needsCrossHostResendConfirmation: vi.fn(() => false),
+}));
+
 vi.mock("@/components/Fleet/fleetEnterBroadcast", () => ({
   runManagedFleetBroadcast: vi.fn().mockResolvedValue({
     total: 0,
@@ -66,6 +70,7 @@ const { usePanelStore } = await import("@/store/panelStore");
 const { terminalClient } = await import("@/clients");
 const { filterEligibleIds } = await import("@/components/Fleet/fleetExecution");
 const { runManagedFleetBroadcast } = await import("@/components/Fleet/fleetEnterBroadcast");
+const { needsCrossHostResendConfirmation } = await import("@/components/Fleet/crossHostFleet");
 const { registerFleetActions } = await import("../fleetActions");
 const { useFleetRunStore } = await import("@/store/fleetRunStore");
 
@@ -652,6 +657,35 @@ describe("fleet.retryFailures", () => {
     const [, targets, overrides] = call as [string, string[], Record<string, string>];
     expect(targets).toEqual(["t1"]);
     expect(overrides).toEqual({ t1: "ls\r" });
+  });
+
+  it("leaves out, and keeps failed, another host's agent whose safe retry window has passed", async () => {
+    vi.mocked(needsCrossHostResendConfirmation).mockImplementation(
+      (id) => id === "host-fleet:h:t2"
+    );
+    vi.mocked(runManagedFleetBroadcast).mockResolvedValueOnce({
+      total: 1,
+      successCount: 1,
+      failureCount: 0,
+      perTarget: [],
+      failedIds: [],
+      transientlyFailedIds: [],
+      permanentlyFailedIds: [],
+      cancelled: false,
+      skippedCount: 0,
+    });
+    useFleetFailureStore.setState({
+      failedIds: new Set(["t1", "host-fleet:h:t2"]),
+      payload: "ls\r",
+    });
+    try {
+      const registry = await buildRegistry();
+      await run(registry, "fleet.retryFailures");
+      expect(vi.mocked(runManagedFleetBroadcast).mock.calls[0]?.[1]).toEqual(["t1"]);
+      expect(Array.from(useFleetFailureStore.getState().failedIds)).toEqual(["host-fleet:h:t2"]);
+    } finally {
+      vi.mocked(needsCrossHostResendConfirmation).mockImplementation(() => false);
+    }
   });
 
   it("no-ops when every target is filtered out as ineligible", async () => {

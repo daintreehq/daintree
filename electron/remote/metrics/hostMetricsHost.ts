@@ -1,4 +1,7 @@
-import type { HostFleetTarget, HostWorktreeEntry } from "../../../shared/types/ipc/hostMetrics.js";
+import type {
+  HostFleetTargetList,
+  HostWorktreeEntry,
+} from "../../../shared/types/ipc/hostMetrics.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
 import type { HostMetricsSummary } from "../../../shared/types/remoteHosts.js";
 import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
@@ -31,7 +34,7 @@ export interface MetricsHostDeps {
     subscribe(listener: (summary: HostMetricsSummary) => void): () => void;
     latest(): HostMetricsSummary | null;
   };
-  listFleetTargets(): Promise<HostFleetTarget[]>;
+  listFleetTargets(): Promise<HostFleetTargetList>;
   submitFleet(
     terminalId: string,
     text: string,
@@ -108,7 +111,10 @@ export function installHostMetricsHostWith(
     session.registerCallHandler(
       MetricsLinkMethod.LIST_FLEET_TARGETS,
       EmptyPayloadSchema,
-      async () => (await deps.listFleetTargets()).map(stripHostId)
+      async () => {
+        const { targets, complete } = await deps.listFleetTargets();
+        return { targets: targets.map(stripHostId), complete };
+      }
     );
     session.registerCallHandler(
       MetricsLinkMethod.SUBMIT_FLEET,

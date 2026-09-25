@@ -51,19 +51,24 @@ export const SubmitFleetPayloadSchema = z.object({
 const agentState = z.enum(["idle", "working", "waiting", "directing", "completed", "exited"]);
 
 export const FleetTargetListSchema = z
-  .array(
-    z
-      .object({
-        terminalId: id,
-        title: name,
-        projectId: id.nullable(),
-        projectName: name.nullable(),
-        agentId: id.nullable(),
-        agentState: agentState.nullable(),
-      })
-      .strip()
-  )
-  .max(MAX_FLEET_TARGETS);
+  .object({
+    targets: z
+      .array(
+        z
+          .object({
+            terminalId: id,
+            title: name,
+            projectId: id.nullable(),
+            projectName: name.nullable(),
+            agentId: id.nullable(),
+            agentState: agentState.nullable(),
+          })
+          .strip()
+      )
+      .max(MAX_FLEET_TARGETS),
+    complete: z.boolean(),
+  })
+  .strip();
 
 const hostPath = z.string().min(1).max(4096);
 

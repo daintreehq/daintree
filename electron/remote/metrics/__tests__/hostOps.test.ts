@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const pty = vi.hoisted(() => ({
   getTerminalAsync: vi.fn(),
+  getAllTerminalsWithCompletenessAsync: vi.fn(),
   submit: vi.fn(),
 }));
 const lease = vi.hoisted(() => ({ holder: null as null | Record<string, unknown> }));
@@ -23,7 +24,18 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 vi.mock("../../../services/projectAgentCounts.js", () => ({ classifyRun: () => null }));
 vi.mock("../hostSources.js", () => ({ openProjects: () => [] }));
 
-import { FleetSubmitLedger, callerDrives, submitLocalFleet } from "../hostOps.js";
+import {
+  FLEET_SUBMIT_MAX_RETAINED,
+  FleetSubmitLedger,
+  callerDrives,
+  listLocalFleetTargets,
+  submitLocalFleet,
+} from "../hostOps.js";
+import { MAX_FLEET_TARGETS } from "../linkMethods.js";
+import {
+  FLEET_SAFE_RETRY_MS,
+  FLEET_SUBMIT_RETENTION_MS,
+} from "../../../../shared/config/fleetSubmitRetention.js";
 
 function holder(endpointId: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -112,7 +124,7 @@ describe("fleet submit opIds", () => {
 
   it("never drops a submit still running, so its resend joins it", async () => {
     let now = 0;
-    const ledger = new FleetSubmitLedger(() => now, 1_000, 1);
+    const ledger = new FleetSubmitLedger(() => now, 1_000, 2);
     let release!: () => void;
     const slow = vi.fn(() => new Promise<void>((resolve) => (release = resolve)));
     const pending = ledger.run("slow", "t1", "x", slow);
@@ -124,20 +136,65 @@ describe("fleet submit opIds", () => {
     await Promise.all([pending, again]);
   });
 
-  it("keeps outcomes bounded and for a limited time", async () => {
+  it("keeps every outcome for its retention, refusing new submits at the cap rather than evicting", async () => {
     let now = 0;
     const ledger = new FleetSubmitLedger(() => now, 1_000, 2);
     const work = vi.fn(async () => {});
     await ledger.run("a", "t1", "x", work);
     await ledger.run("b", "t1", "x", work);
-    await ledger.run("c", "t1", "x", work);
-    expect(ledger.size).toBe(2);
-    // "a" was evicted, so it runs again.
+    await expect(ledger.run("c", "t1", "x", work)).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+    });
+    expect(work).toHaveBeenCalledTimes(2);
+    // "a" is still on record, so its resend inside the retention types nothing.
+    now = 999;
     await ledger.run("a", "t1", "x", work);
-    expect(work).toHaveBeenCalledTimes(4);
+    expect(work).toHaveBeenCalledTimes(2);
+    // Once the retention runs out the records go and new submits run again.
     now = 5_000;
     await ledger.run("c", "t1", "x", work);
-    expect(work).toHaveBeenCalledTimes(5);
+    expect(work).toHaveBeenCalledTimes(3);
     expect(ledger.size).toBe(1);
+  });
+
+  it("keeps outcomes well past the Shell's safe-retry window, with a cap no realistic fleet reaches", () => {
+    expect(FLEET_SAFE_RETRY_MS).toBeLessThan(FLEET_SUBMIT_RETENTION_MS);
+    expect(FLEET_SUBMIT_RETENTION_MS - FLEET_SAFE_RETRY_MS).toBeGreaterThanOrEqual(60_000);
+    expect(FLEET_SUBMIT_MAX_RETAINED).toBeGreaterThanOrEqual(10 * MAX_FLEET_TARGETS);
+  });
+});
+
+describe("fleet target listing", () => {
+  const agent = (id: string) => ({ id, projectId: "p1", agentState: "working", hasPty: true });
+
+  it("reports a read with a shard that didn't answer as incomplete", async () => {
+    pty.getAllTerminalsWithCompletenessAsync.mockResolvedValue({
+      terminals: [agent("t1")],
+      degraded: true,
+      shardsTotal: 2,
+      shardsFailed: 1,
+    });
+    const list = await listLocalFleetTargets();
+    expect(list.complete).toBe(false);
+    expect(list.targets.map((t) => t.terminalId)).toEqual(["t1"]);
+  });
+
+  it("reports a full read as complete, and one cut at the cap as incomplete", async () => {
+    pty.getAllTerminalsWithCompletenessAsync.mockResolvedValue({
+      terminals: [agent("t1")],
+      degraded: false,
+      shardsTotal: 1,
+      shardsFailed: 0,
+    });
+    expect(await listLocalFleetTargets()).toMatchObject({ complete: true });
+    pty.getAllTerminalsWithCompletenessAsync.mockResolvedValue({
+      terminals: Array.from({ length: MAX_FLEET_TARGETS + 1 }, (_, i) => agent(`t${i}`)),
+      degraded: false,
+      shardsTotal: 1,
+      shardsFailed: 0,
+    });
+    const capped = await listLocalFleetTargets();
+    expect(capped.targets).toHaveLength(MAX_FLEET_TARGETS);
+    expect(capped.complete).toBe(false);
   });
 });
