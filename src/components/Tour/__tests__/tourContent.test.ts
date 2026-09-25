@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TOUR_CHAPTERS } from "../tourChapters";
 import { narrationFingerprint, parseNarration } from "../tourNarration";
@@ -26,6 +26,49 @@ const SCENE_FILES: Record<string, string> = {
   palette: "PaletteScene.tsx",
   outro: "OutroScene.tsx",
 };
+
+const REPO_ROOT = join(TOUR_DIR, "..", "..", "..");
+const ALIASES: Record<string, string> = {
+  "@/": join(REPO_ROOT, "src"),
+  "@shared/": join(REPO_ROOT, "shared"),
+};
+
+function resolveSource(specifier: string, from: string): string | null {
+  const alias = Object.keys(ALIASES).find((prefix) => specifier.startsWith(prefix));
+  const base = alias
+    ? join(ALIASES[alias]!, specifier.slice(alias.length))
+    : specifier.startsWith(".")
+      ? join(dirname(from), specifier)
+      : null;
+  if (!base) return null;
+  const candidates = ["", ".ts", ".tsx", "/index.ts", "/index.tsx"].map((ext) => base + ext);
+  return candidates.find((path) => existsSync(path) && statSync(path).isFile()) ?? null;
+}
+
+/** Every source file a module reaches through runtime static imports; `import()` is not an edge. */
+function staticImportGraph(entry: string): Set<string> {
+  const seen = new Set<string>();
+  const pending = [entry];
+  while (pending.length > 0) {
+    const file = pending.pop()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const source = readFileSync(file, "utf8");
+    for (const match of source.matchAll(
+      /^\s*(?:import|export)\s+(?!type\b)(?:[^"';]*?\sfrom\s+)?"([^"]+)"/gm
+    )) {
+      const resolved = resolveSource(match[1]!, file);
+      if (resolved) pending.push(resolved);
+    }
+  }
+  return seen;
+}
+
+function heavyModulesReachedFrom(file: string): string[] {
+  return [...staticImportGraph(join(TOUR_DIR, file))].filter((path) =>
+    /\/Tour\/(tourChapters|tourTiming|tourTiming\.generated|tourNarration)\.ts$/.test(path)
+  );
+}
 
 /** Every cue id a scene reads, by the two shapes scenes use to name one. */
 function cuesReadBy(source: string): Set<string> {
@@ -89,22 +132,24 @@ describe("tour summary", () => {
   });
 
   it("lists the chapter titles in play order", () => {
-    expect(TOUR_CHAPTER_TITLES, "the tour summary is stale — run npm run tour:audio").toEqual(
-      TOUR_CHAPTERS.map((chapter) => chapter.title)
-    );
+    expect(
+      TOUR_CHAPTER_TITLES,
+      "the tour summary is stale — run npm run tour:audio -- --no-upload for a title-only change"
+    ).toEqual(TOUR_CHAPTERS.map((chapter) => chapter.title));
   });
 
-  // One static import of these from a startup module pulls the narration, the
-  // cue manifest and the parser back into the first-render graph.
-  it.each(["TourInviteCard.tsx", "DaintreeTourHost.tsx", "tourSummary.generated.ts"])(
-    "%s stays off the narration, timing and parser modules",
+  // One static import of these anywhere below a startup module pulls the
+  // narration, the cue manifest and the parser back into the first-render graph.
+  it.each(["TourInviteCard.tsx", "DaintreeTourHost.tsx"])(
+    "%s reaches no narration, timing or parser module statically",
     (file) => {
-      const source = readFileSync(join(TOUR_DIR, file), "utf8");
-      expect(source).not.toMatch(
-        /from "\.\/(tourChapters|tourTiming|tourTiming\.generated|tourNarration)"/
-      );
+      expect(heavyModulesReachedFrom(file)).toEqual([]);
     }
   );
+
+  it("sees the heavy modules from the lazily loaded player", () => {
+    expect(heavyModulesReachedFrom("TourDialog.tsx")).toHaveLength(4);
+  });
 });
 
 describe("resolveChapterTiming", () => {
