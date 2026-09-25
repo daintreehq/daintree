@@ -239,6 +239,13 @@ const REPLY_CHROME_SLACK_LINES = 24;
 const HANDBACK_END_LINE = /\bEND-[a-z0-9]{6}\b/;
 
 /**
+ * Terminal-query replies a CLI echoed as caret text before it took raw input
+ * (`^[_Gi=31;OK^[\` for the graphics probe, `^[[?62;4c` for device
+ * attributes). They say nothing about the reply and read as garbage.
+ */
+const ECHOED_QUERY_REPLIES = /\^\[_G[^^\n]*\^\[\\|\^\[\[\?[0-9;]*c/g;
+
+/**
  * The reply a notice quotes: the last `lines` screen lines of `serialized`,
  * ANSI stripped. When the agent printed the handback it was asked for, the
  * quote ends at that marker, which drops the composer and status rows an agent
@@ -251,7 +258,7 @@ export function extractNoticeReply(
 ): NoticeReply | null {
   if (lines <= 0) return null;
   const tail = tailCapturedOutput(serialized, lines + REPLY_CHROME_SLACK_LINES, true);
-  let rows = tail.content.split("\n");
+  let rows = tail.content.replace(ECHOED_QUERY_REPLIES, "").split("\n");
   let truncated = tail.truncated;
   if (endAtHandback) {
     let marker = -1;

@@ -1106,6 +1106,14 @@ describe("TerminalNotifyService", () => {
       expect(reply!.text.endsWith(`149 ${"y".repeat(60)}`)).toBe(true);
     });
 
+    it("drops terminal-query replies a CLI echoed as caret text", () => {
+      const screen =
+        "^[_Gi=31;OK^[\\^[[?62;4;9;22cAccessing workspace:\n> Yes, I trust this folder";
+      expect(extractNoticeReply(screen, 40, false)?.text).toBe(
+        "Accessing workspace:\n> Yes, I trust this folder"
+      );
+    });
+
     it("returns nothing for a blank screen or zero lines", () => {
       expect(extractNoticeReply("\n\n  \n", 40, false)).toBeNull();
       expect(extractNoticeReply("text", 0, false)).toBeNull();
