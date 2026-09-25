@@ -5,7 +5,7 @@ import {
   type ProjectAcrossHostsService,
 } from "../../services/projectAcrossHosts/index.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { hostBundleSinkFactory } from "./bundleSinks.js";
+import { hostBundleSinkFor } from "./bundleSinks.js";
 import {
   BUNDLE_SINK_PREFIX,
   BundleCreateSchema,
@@ -81,7 +81,8 @@ export function attachProjectsHost(session: LinkSession, service: ProjectAcrossH
       await service.bundles.discard(token);
     }
   });
-  session.transfers.setSinkFactory(hostBundleSinkFactory(service.bundles));
+  // Beside the upload inbox's provider on the same session, never instead of it.
+  session.transfers.addSinkProvider(hostBundleSinkFor(service.bundles, new Set()));
 }
 
 /** Host mode: serve project calls on every session the server accepts. */
