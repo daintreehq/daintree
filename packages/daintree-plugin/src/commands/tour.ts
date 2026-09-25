@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -292,7 +291,15 @@ async function writeManifest(ctx: TourContext, chapters: ChapterEntry[]): Promis
     await writeAtomic(ctx.manifestPath, text);
     ctx.written = text;
   }
-  const referenced = new Set(chapters.map((chapter) => chapter.audioUrl));
+  // Any tour in the manifest may point at a take, not just this one.
+  const referenced = new Set<unknown>();
+  const tours = isRecord(ctx.manifest.contributes) ? ctx.manifest.contributes.tours : undefined;
+  for (const tour of Array.isArray(tours) ? tours : []) {
+    if (!isRecord(tour) || !Array.isArray(tour.chapters)) continue;
+    for (const chapter of tour.chapters) {
+      if (isRecord(chapter)) referenced.add(chapter.audioUrl);
+    }
+  }
   for (const audioPath of ctx.superseded) {
     if (referenced.has(audioPath) || !isGeneratedAudio(ctx.tour.id, audioPath)) continue;
     await fs.rm(path.join(ctx.dir, audioPath), { force: true });
@@ -354,13 +361,27 @@ function isGeneratedAudio(tourId: string, audioPath: string): boolean {
   );
 }
 
-function isTake(tourId: string, chapterId: string, variant: string, audioPath: unknown): boolean {
-  return (
-    typeof audioPath === "string" &&
-    new RegExp(
-      `^tours/${escapeRegExp(tourId)}/${escapeRegExp(chapterId)}\\.${escapeRegExp(variant)}\\.[0-9a-f]{12}\\.ogg$`
-    ).test(audioPath)
-  );
+/**
+ * Whether `audioPath` is this chapter's take in this voice and is still the
+ * audio it was named for: a regular file whose bytes match the hash in its name.
+ */
+async function isIntactTake(
+  ctx: TourContext,
+  chapterId: string,
+  variant: string,
+  audioPath: unknown
+): Promise<boolean> {
+  if (typeof audioPath !== "string") return false;
+  const match = new RegExp(
+    `^tours/${escapeRegExp(ctx.tour.id)}/${escapeRegExp(chapterId)}\\.${escapeRegExp(variant)}\\.([0-9a-f]{12})\\.ogg$`
+  ).exec(audioPath);
+  if (!match) return false;
+  try {
+    const bytes = await fs.readFile(path.join(ctx.dir, audioPath));
+    return createHash("sha256").update(bytes).digest("hex").slice(0, 12) === match[1];
+  } catch {
+    return false;
+  }
 }
 
 function report(
@@ -440,8 +461,7 @@ export async function runTourVoice(opts: TourVoiceOptions = {}): Promise<TourCom
     const existing = ctx.entries.get(chapter.id);
     const upToDate =
       existing?.narrationHash === chapter.hash &&
-      isTake(ctx.tour.id, chapter.id, variant, existing.audioUrl) &&
-      existsSync(path.join(ctx.dir, existing.audioUrl as string));
+      (await isIntactTake(ctx, chapter.id, variant, existing.audioUrl));
     if (upToDate && !opts.force) {
       log(`· ${chapter.id}: up to date`);
       reports.push(report(ctx, chapter, "up-to-date", { audioPath: existing!.audioUrl as string }));

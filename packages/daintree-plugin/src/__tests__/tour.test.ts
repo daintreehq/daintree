@@ -233,6 +233,40 @@ describe("runTourVoice", () => {
     expect(result.chapters.map((c) => c.outcome)).toEqual(["up-to-date", "voiced"]);
   });
 
+  it("re-voices a chapter whose audio file was replaced or removed", async () => {
+    await writePlugin([TOUR]);
+    await runTourVoice({ dir: tmpDir, apiKey: API_KEY, fetch: ttsFetch() });
+    const [intro, wrap] = (await readTour()).chapters;
+    await fs.writeFile(path.join(tmpDir, intro.audioUrl), oggOpus(9));
+    await fs.rm(path.join(tmpDir, wrap.audioUrl));
+    const fetch = ttsFetch();
+    const result = await runTourVoice({ dir: tmpDir, apiKey: API_KEY, fetch });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(result.chapters.map((c) => c.outcome)).toEqual(["voiced", "voiced"]);
+  });
+
+  it("keeps a replaced take that another tour still references", async () => {
+    await writePlugin([TOUR]);
+    await runTourVoice({ dir: tmpDir, apiKey: API_KEY, fetch: ttsFetch() });
+    const manifestPath = path.join(tmpDir, "plugin.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    const shared = manifest.contributes.tours[0].chapters[0].audioUrl;
+    manifest.contributes.tours.push({
+      ...TOUR,
+      id: "reprise",
+      chapters: [manifest.contributes.tours[0].chapters[0]],
+    });
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+    await runTourVoice({
+      dir: tmpDir,
+      apiKey: API_KEY,
+      fetch: ttsFetch(),
+      tour: "welcome",
+      voice: "Ashley",
+    });
+    expect(existsSync(path.join(tmpDir, shared))).toBe(true);
+  });
+
   it("re-voices when the voice changes, and with --force", async () => {
     await writePlugin([TOUR]);
     await runTourVoice({ dir: tmpDir, apiKey: API_KEY, fetch: ttsFetch() });
