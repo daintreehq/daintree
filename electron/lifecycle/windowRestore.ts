@@ -12,6 +12,13 @@ import type { OpenWindowRecord } from "../services/persistence/windowManifest.js
 /** What `createWindow` reports back. Anything but "ok" means: stop. */
 export type CreateWindowResult = "ok" | "exit-requested" | "not-registered";
 
+/**
+ * How long a restoring window may hold up the next one while its renderer
+ * hydrates. Pacing, not a correctness gate: past this the next window starts
+ * anyway, so one stuck renderer cannot strand the rest of the fleet.
+ */
+export const RESTORE_HYDRATION_WAIT_MS = 30_000;
+
 export interface RestoreWindowFleetDeps {
   /** Windows to restore, most-recently-focused first. Empty means one window. */
   records: OpenWindowRecord[];
@@ -33,6 +40,11 @@ export interface RestoreWindowFleetDeps {
       revealMode?: "show" | "showInactive";
       /** Further projects this window had live, most-recently-used first (#12320). */
       backgroundProjectIds?: readonly string[];
+      /**
+       * Resolve only once the window's renderer reports it has hydrated, or
+       * this many ms pass. Set for every window another one is queued behind.
+       */
+      awaitHydrationMs?: number;
     }
   ) => Promise<CreateWindowResult>;
   suppressSaves: () => void;
@@ -150,19 +162,21 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
     // the ones the user was closest to, and the queue that consumes these is
     // global and ordered, so handing them over first is what makes "the project
     // I was in paints first, the rest fill in behind it" hold across windows.
+    const background = records.slice(1);
     const primaryResult = await deps.createWindow(primaryProjectId, {
       backgroundProjectIds: records[0]?.backgroundProjectIds,
+      ...(background.length > 0 ? { awaitHydrationMs: RESTORE_HYDRATION_WAIT_MS } : {}),
     });
     if (primaryResult !== "ok") return;
 
     let backgroundClean = true;
     // Background windows come up one at a time, each waiting for the last to
-    // finish its services (workspace host, worktree scan). Starting them all at
+    // finish its services and hydrate its renderer. Starting them all at
     // once put every window's host fork, git scan and terminal restore in the
     // same burst, competing with the window the user is actually looking at
     // (#12800). Every window still restores without waiting on focus — only
     // the overlap is gone.
-    for (const record of records.slice(1)) {
+    for (const [index, record] of background.entries()) {
       // Checked per window, not once up front: a window whose project is live
       // already is one the user has since opened, and the longer a sequential
       // restore runs the more likely that becomes.
@@ -174,6 +188,7 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
         result = await deps.createWindow(record.projectId ?? undefined, {
           revealMode: "showInactive",
           backgroundProjectIds: record.backgroundProjectIds,
+          ...(index < background.length - 1 ? { awaitHydrationMs: RESTORE_HYDRATION_WAIT_MS } : {}),
         });
       } catch (error) {
         deps.onBackgroundWindowFailed(error);

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  RESTORE_HYDRATION_WAIT_MS,
   normalizeWindowRecords,
   resolvePrimaryRestoreProjectId,
   restoreWindowFleet,
@@ -231,6 +232,21 @@ describe("restoreWindowFleet", () => {
         "end:d",
       ]);
       expect(peakOf()).toBe(1);
+    });
+
+    it("holds each window until it hydrates, except the last, which nothing waits behind", async () => {
+      const h = harness({ records: [record("a"), record("b"), record("c")], hadManifest: true });
+      await restoreWindowFleet(h.deps);
+      const waits = h.createWindow.mock.calls.map(
+        (c) => (c[1] as { awaitHydrationMs?: number } | undefined)?.awaitHydrationMs
+      );
+      expect(waits).toEqual([RESTORE_HYDRATION_WAIT_MS, RESTORE_HYDRATION_WAIT_MS, undefined]);
+    });
+
+    it("never holds a lone primary window for hydration", async () => {
+      const h = harness({ records: [record("a")], hadManifest: true });
+      await restoreWindowFleet(h.deps);
+      expect(h.createWindow.mock.calls[0][1]?.awaitHydrationMs).toBeUndefined();
     });
 
     it("never overlaps anything with the primary when it is the only window", async () => {

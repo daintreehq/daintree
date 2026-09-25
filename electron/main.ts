@@ -393,6 +393,8 @@ if (!gotTheLock) {
     opts?: {
       revealMode?: "show" | "showInactive";
       backgroundProjectIds?: readonly string[];
+      /** Hold the result until the renderer reports hydration, at most this long (#12800). */
+      awaitHydrationMs?: number;
       /** Told the window's id as soon as it is registered, before setup awaits anything. */
       onRegistered?: (windowId: number) => void;
     }
@@ -758,6 +760,17 @@ if (!gotTheLock) {
           app.exit(1);
         }
       );
+    }
+
+    // Paces a multi-window restore: the next window starts once this one's
+    // renderer has restored its panels and respawned its agents, rather than
+    // while that work is still in flight. Pacing only — a timeout, a close or
+    // a failed hydration all just let the next window go.
+    if (opts?.awaitHydrationMs !== undefined && !appView.webContents.isDestroyed()) {
+      await pvm.waitForViewHydrated(appView.webContents.id, {
+        timeoutMs: opts.awaitHydrationMs,
+        signal: ctx.abortController.signal,
+      });
     }
 
     return "ok";
