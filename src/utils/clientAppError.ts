@@ -1,4 +1,5 @@
 import type { AppErrorCode, AppErrorDetails } from "../../shared/types/appError";
+import { pickAppErrorDetails } from "@shared/utils/ipcErrorSerialization";
 
 /**
  * Renderer-side mirror of the main-process `AppError`. Reconstructed by the
@@ -43,20 +44,10 @@ export class ClientAppError extends Error {
 const ENCODED_APP_ERROR_PATTERN =
   /^\[AppError\|([A-Z_]+)(?:\|(?!#)([^\]]*?))?(?:\|#([^\]|]*))?\] (.*)$/s;
 
-function isAppErrorDetails(value: unknown): value is AppErrorDetails {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    "code" in value &&
-    typeof value.code === "string"
-  );
-}
-
 function decodeDetails(encoded: string): AppErrorDetails | undefined {
   try {
     const parsed: unknown = JSON.parse(decodeURIComponent(encoded));
-    return isAppErrorDetails(parsed) ? parsed : undefined;
+    return pickAppErrorDetails(parsed);
   } catch {
     return undefined;
   }

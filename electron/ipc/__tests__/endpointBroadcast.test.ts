@@ -135,6 +135,23 @@ describe("broadcast helpers with remote endpoints", () => {
     expect(otherProject.send).not.toHaveBeenCalled();
   });
 
+  it("scope remote endpoints by project on a windowless host with no local views", () => {
+    const a = endpoint(-1, "proj-a");
+    const b = endpoint(-2, "proj-b");
+    getEndpointRegistry().add(a);
+    getEndpointRegistry().add(b);
+
+    broadcastToProjectRenderers("proj-a", "terminal:data", "a-bytes");
+    broadcastToProjectRenderersExcept("proj-b", new Set([9]), "terminal:data", "b-bytes");
+
+    expect(a.send.mock.calls).toEqual([
+      [{ type: "event", channel: "terminal:data", args: ["a-bytes"] }],
+    ]);
+    expect(b.send.mock.calls).toEqual([
+      [{ type: "event", channel: "terminal:data", args: ["b-bytes"] }],
+    ]);
+  });
+
   it("fall back to every remote endpoint when the project is unknown", () => {
     hasProjectViewsMock.mockReturnValue(true);
     const a = endpoint(-1, "proj-1");

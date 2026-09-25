@@ -37,6 +37,20 @@ describe("isClientAppError", () => {
     expect(withoutUser.message).toBe("missing");
   });
 
+  it("strips fields outside the PluginHostError allowlist when decoding", () => {
+    const e = decoded(
+      encode("PLUGIN_NOT_ON_HOST", "missing", undefined, {
+        code: "PLUGIN_NOT_ON_HOST",
+        pluginId: "acme.x",
+        hostId: "box",
+        token: "secret",
+      })
+    );
+    expect(e.details).toEqual({ code: "PLUGIN_NOT_ON_HOST", pluginId: "acme.x", hostId: "box" });
+    const bogus = decoded(encode("INTERNAL", "boom", undefined, { code: "ANYTHING", x: 1 }));
+    expect(bogus.details).toBeUndefined();
+  });
+
   it("ignores undecodable details without failing the guard", () => {
     const e = decoded(new Error("[AppError|INTERNAL|#%7Bnot-json] boom"));
     expect(e.details).toBeUndefined();

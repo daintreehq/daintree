@@ -60,6 +60,10 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
   private readonly invokeListeners = new Map<string, InvokeListener<IpcContext>>();
   private readonly sendListeners = new Map<string, Set<SendListener<IpcContext>>>();
   private readonly hybridSplits = new Map<string, HybridSplit>();
+  // Hybrid channels a link may call on this host. Opt-in: a hybrid handler
+  // reads Shell-side state too, so answering it wholesale for a remote Shell
+  // would leak this machine's half of the merge.
+  private readonly linkHybrids = new Map<string, number>();
   private router: RemoteRouter | null = null;
   private enveloper: InvokeEnveloper = unconfiguredEnveloper;
   // Several ipcMain.on listeners can share one channel; a forwarded send must
@@ -108,10 +112,27 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
   }
 
   /**
+   * Admit a hybrid channel for link calls: the host-side leg of a split. The
+   * returned disposer drops the admission once every caller has released it.
+   */
+  allowHybridOverLink(channel: string): () => void {
+    this.linkHybrids.set(channel, (this.linkHybrids.get(channel) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const count = (this.linkHybrids.get(channel) ?? 0) - 1;
+      if (count > 0) this.linkHybrids.set(channel, count);
+      else this.linkHybrids.delete(channel);
+    };
+  }
+
+  /**
    * A call that arrived over a link. Only handlers registered with a context
    * signature can serve it: a raw `ipcMain.handle` listener needs a real
    * `IpcMainInvokeEvent`, which a remote endpoint cannot provide. Shell and
-   * unclassified channels have no meaning on a host and are refused.
+   * unclassified channels have no meaning on a host and are refused, as are
+   * hybrid channels no split has admitted via {@link allowHybridOverLink}.
    */
   invokeForEndpoint(
     invocation: EndpointInvocation,
@@ -150,6 +171,9 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     const locality = getChannelLocality(channel);
     if (locality === null) return notRemotable(channel, "is not classified");
     if (locality === "shell") return notRemotable(channel, "is answered by the Shell, not a host");
+    if (locality === "hybrid" && !this.linkHybrids.has(channel)) {
+      return notRemotable(channel, "is hybrid and not admitted for link calls");
+    }
     if (!registered) return notRemotable(channel, "has no context handler on this host");
     return null;
   }

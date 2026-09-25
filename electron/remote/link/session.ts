@@ -61,8 +61,16 @@ export interface LinkSessionOptions {
   handshakeTimeoutMs?: number;
   /** Default timeout for CALL and REVERSE_REQUEST; 0 disables. */
   requestTimeoutMs?: number;
-  /** Default timeout for INVOKE; 0 (the default) leaves long mutations to the session's lifetime. */
+  /**
+   * Default timeout for INVOKE; 0 (the default) leaves long mutations to the
+   * session's lifetime. Deliberately unbounded: operation-backed mutations
+   * resolve through the operation's status, and a disconnect settles the
+   * invoke as OUTCOME_UNKNOWN, so a timer would only invent an unknown outcome
+   * for a mutation that is still making progress.
+   */
   invokeTimeoutMs?: number;
+  /** Outbound INVOKE/CALL/REVERSE_REQUEST awaiting an answer; beyond it new ones are RATE_LIMITED. */
+  maxPendingRequests?: number;
   /** Inbound INVOKE/CALL/REVERSE_REQUEST handlers allowed to run at once. */
   maxInboundRequests?: number;
   transfers?: LinkTransfersOptions;
@@ -85,7 +93,10 @@ type Body<L extends Lane, K extends number> = Extract<LinkMessage, { lane: L; ki
 type Listener = (body: unknown) => void;
 
 interface Pending {
+  kind: PendingKind;
   resolve: (envelope: IpcEnvelope) => void;
+  /** The request frame reached the socket, so the peer may have acted on it. */
+  written: boolean;
 }
 
 type PendingKind = typeof RpcKind.INVOKE | typeof RpcKind.CALL | typeof RpcKind.REVERSE_REQUEST;
@@ -108,6 +119,10 @@ const HANDSHAKE_KINDS: Record<LinkRole, ReadonlySet<number>> = {
 
 const MAX_REQUEST_ID = 0xffffffff;
 const END_GRACE_MS = 2_000;
+const DEFAULT_MAX_PENDING_REQUESTS = 4096;
+// Messages that follow WELCOME before the client has attached its handlers
+// are only the rest of the read that carried it; a peer filling this is broken.
+const MAX_HELD_MESSAGES = 4096;
 
 function listenerKey(lane: number, kind: number): number {
   return lane * 256 + kind;
@@ -135,7 +150,10 @@ export class LinkSession {
     [RpcKind.CALL, new Map()],
     [RpcKind.REVERSE_REQUEST, new Map()],
   ]);
+  private pendingCount = 0;
+  private readonly requestFrames = new WeakMap<LinkFrame, Pending>();
   private inboundInFlight = 0;
+  private held: LinkMessage[] | null = null;
 
   private readonly listeners = new Map<number, Set<Listener>>();
   private handshakeListener: ((message: LinkMessage) => void) | null = null;
@@ -225,10 +243,17 @@ export class LinkSession {
     this.handshakeListener = listener;
   }
 
-  /** The handshake succeeded: accept all traffic and start liveness checks. */
-  open(): void {
+  /**
+   * The handshake succeeded: accept all traffic and start liveness checks.
+   * With `holdInbound`, application messages that arrive before
+   * {@link LinkSession.releaseInbound} are queued rather than dispatched, so
+   * frames the peer sent right behind its WELCOME are not dropped (or answered
+   * UNSUPPORTED) before the owner has attached its subscribers and handlers.
+   */
+  open(options: { holdInbound?: boolean } = {}): void {
     if (this.state !== "handshake") return;
     this.state = "open";
+    if (options.holdInbound) this.held = [];
     this.clearHandshakeTimer();
     this._lastReceivedAt = this.now();
     const pingMs = this.opts.pingIntervalMs ?? 5_000;
@@ -245,6 +270,17 @@ export class LinkSession {
         Math.max(10, Math.floor(idleMs / 4))
       );
       this.idleTimer.unref?.();
+    }
+  }
+
+  /** Dispatch, in arrival order, whatever was held since `open({ holdInbound: true })`. */
+  releaseInbound(): void {
+    const held = this.held;
+    if (!held) return;
+    this.held = null;
+    for (const message of held) {
+      if (this.isClosed) return;
+      this.dispatch(message);
     }
   }
 
@@ -331,8 +367,14 @@ export class LinkSession {
    * be sent (unencodable, or larger than a frame).
    */
   post(message: LinkMessage): EnqueueResult {
-    if (this.state === "closed") return "refused";
-    if (this.state === "handshake" && message.lane !== Lane.CONTROL) return "refused";
+    return this.enqueue(message).result;
+  }
+
+  private enqueue(message: LinkMessage): { result: EnqueueResult; frame: LinkFrame | null } {
+    if (this.state === "closed") return { result: "refused", frame: null };
+    if (this.state === "handshake" && message.lane !== Lane.CONTROL) {
+      return { result: "refused", frame: null };
+    }
     // Anything the peer would reject as malformed would end the session, so
     // catch it here and fail only this message.
     assertOutboundMessage(message);
@@ -340,7 +382,7 @@ export class LinkSession {
     this.assertFrameSize(frame);
     const result = this.scheduler.enqueue(frame);
     if (result !== "refused") this.scheduleFlush();
-    return result;
+    return { result, frame };
   }
 
   invoke(
@@ -423,6 +465,13 @@ export class LinkSession {
     if (signal?.aborted) {
       return Promise.resolve(appErrorEnvelope("CANCELLED", "Request aborted"));
     }
+    // Scheduler caps bound queued bytes, not requests whose frames were written
+    // and are still waiting on the peer; this bounds the correlation state.
+    if (this.pendingCount >= (this.opts.maxPendingRequests ?? DEFAULT_MAX_PENDING_REQUESTS)) {
+      return Promise.resolve(
+        appErrorEnvelope("RATE_LIMITED", "Too many requests awaiting the peer")
+      );
+    }
     const table = this.pending.get(kind)!;
     const requestId = this.allocateRequestId(table);
     return new Promise<IpcEnvelope>((resolve) => {
@@ -438,12 +487,14 @@ export class LinkSession {
       const settle = (envelope: IpcEnvelope) => {
         if (table.get(requestId) !== entry) return;
         table.delete(requestId);
+        this.pendingCount--;
         if (timer) clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
         resolve(envelope);
       };
-      const entry: Pending = { resolve: settle };
+      const entry: Pending = { kind, resolve: settle, written: false };
       table.set(requestId, entry);
+      this.pendingCount++;
       if (timeoutMs > 0) {
         timer = setTimeout(
           () =>
@@ -458,15 +509,17 @@ export class LinkSession {
         );
       }
       signal?.addEventListener("abort", onAbort, { once: true });
-      let result: EnqueueResult;
+      let queued: { result: EnqueueResult; frame: LinkFrame | null };
       try {
-        result = this.post(build(requestId));
+        queued = this.enqueue(build(requestId));
       } catch (err) {
         settle(linkErrorEnvelope(err));
         return;
       }
-      if (result === "refused") {
+      if (queued.result === "refused") {
         settle(appErrorEnvelope("RATE_LIMITED", "Link send queue is full"));
+      } else if (queued.frame) {
+        this.requestFrames.set(queued.frame, entry);
       }
     });
   }
@@ -500,7 +553,14 @@ export class LinkSession {
   private flush(): void {
     if (this.state === "closed" || this.waitingForDrain) return;
     for (let frame = this.scheduler.next(); frame; frame = this.scheduler.next()) {
-      if (!this.socket.write(encodeFrame(frame, this.maxFrameBytes))) {
+      const written = this.socket.write(encodeFrame(frame, this.maxFrameBytes));
+      // A false return still took the bytes; only frames left in the scheduler
+      // are known never to have reached the peer.
+      if (frame.lane === Lane.RPC) {
+        const request = this.requestFrames.get(frame);
+        if (request) request.written = true;
+      }
+      if (!written) {
         this.waitingForDrain = true;
         break;
       }
@@ -529,7 +589,13 @@ export class LinkSession {
         return;
       }
       if (this.state === "handshake") this.dispatchHandshake(message);
-      else this.dispatch(message);
+      else if (this.held) {
+        if (this.held.length >= MAX_HELD_MESSAGES) {
+          this.protocolError("too many messages before the session was ready");
+          return;
+        }
+        this.held.push(message);
+      } else this.dispatch(message);
     }
   }
 
@@ -743,11 +809,25 @@ export class LinkSession {
     this.pingTimer = this.idleTimer = null;
     this.scheduler.clear();
     this.tickListeners.clear();
-    const envelope = hostDisconnectedEnvelope(info.reason);
+    this.held = null;
+    const disconnected = hostDisconnectedEnvelope(info.reason);
+    // An INVOKE or CALL that reached the socket may have run on the peer, so it
+    // must be reconciled (operation status) rather than reported as not done.
+    // Reverse requests only ask this side's peer a question and are simply off.
+    const unknown = appErrorEnvelope(
+      "OUTCOME_UNKNOWN",
+      `Link closed before the peer answered: ${info.reason}`,
+      "The host may have completed this; check before retrying."
+    );
     for (const table of this.pending.values()) {
-      for (const entry of [...table.values()]) entry.resolve(envelope);
+      for (const entry of [...table.values()]) {
+        entry.resolve(
+          entry.written && entry.kind !== RpcKind.REVERSE_REQUEST ? unknown : disconnected
+        );
+      }
       table.clear();
     }
+    this.pendingCount = 0;
     this.transfers.closeAll(info.reason);
     const listeners = [...this.closeListeners];
     this.closeListeners.clear();

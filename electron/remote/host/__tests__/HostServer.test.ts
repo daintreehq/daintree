@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeFrame, FrameDecoder, Lane, type LinkFrame } from "../../link/frames.js";
 import { ControlKind, frameToMessage, messageToFrame } from "../../link/messages.js";
 import { LinkClient, type LinkClientState } from "../../client/LinkClient.js";
@@ -33,6 +33,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const c of clients.splice(0)) await c.stop();
   for (const s of servers.splice(0)) await s.close();
   await removeTempDir(root);
@@ -76,6 +77,25 @@ async function rawConnect(): Promise<{ socket: net.Socket; frames: LinkFrame[] }
   const frames: LinkFrame[] = [];
   socket.on("data", (chunk: Buffer) => frames.push(...decoder.push(chunk)));
   return { socket, frames };
+}
+
+async function rawHello(token: string, clientId: string) {
+  const raw = await rawConnect();
+  raw.socket.write(
+    encodeFrame(
+      messageToFrame({
+        lane: Lane.CONTROL,
+        kind: ControlKind.HELLO,
+        body: {
+          handshake: TEST_HANDSHAKE,
+          token,
+          client: { clientId, clientName: "n", platform: "linux" },
+          resumeSessionId: null,
+        },
+      })
+    )
+  );
+  return raw;
 }
 
 function closedSocket(socket: net.Socket): Promise<void> {
@@ -381,5 +401,103 @@ describe("HostServer session resume", () => {
     const closed = new Promise((r) => session.onClose(r));
     await server.close();
     await expect(closed).resolves.toEqual({ reason: "shutting-down", by: "remote" });
+  });
+});
+
+describe("HostServer listen/close serialization", () => {
+  it("shares one start between concurrent listen() calls", async () => {
+    const server = new HostServer({ location, handshake: TEST_HANDSHAKE, hostName: "h" });
+    servers.push(server);
+    const a = server.listen();
+    const b = server.listen();
+    expect(b).toBe(a);
+    await Promise.all([a, b]);
+    expect(server.isListening).toBe(true);
+    await expect(server.listen()).resolves.toBeUndefined();
+  });
+
+  it("waits for a start in flight on close and removes its listener and discovery file", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const rename = fs.rename.bind(fs);
+    const reached = vi.fn();
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (to === location.discoveryPath) {
+        reached();
+        await gate;
+      }
+    });
+    const server = new HostServer({ location, handshake: TEST_HANDSHAKE, hostName: "h" });
+    servers.push(server);
+    const listening = server.listen();
+    const settled = listening.catch((err: unknown) => err);
+    await waitFor(() => reached.mock.calls.length === 1);
+    expect(existsSync(location.discoveryPath)).toBe(true);
+
+    let closed = false;
+    const closing = server.close().then(() => (closed = true));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(closed).toBe(false);
+    release();
+    await closing;
+    expect(await settled).toBeInstanceOf(Error);
+    expect(server.isListening).toBe(false);
+    expect(existsSync(location.discoveryPath)).toBe(false);
+    expect(existsSync(location.socketPath)).toBe(false);
+
+    vi.restoreAllMocks();
+    await server.listen();
+    expect(server.isListening).toBe(true);
+  });
+
+  it("starts again cleanly when listen() follows close() before it finished", async () => {
+    const server = await startServer();
+    const closing = server.close();
+    const relisten = server.listen();
+    await closing;
+    await relisten;
+    expect(server.isListening).toBe(true);
+    expect((await readDiscoveryFile(location.discoveryPath))?.token).toBe(server.token);
+  });
+});
+
+describe("HostServer session cap", () => {
+  it("counts parked sessions against maxSessions and expires the oldest parked first", async () => {
+    const server = await startServer({ maxSessions: 2 });
+    const seen: HostSessionContext[] = [];
+    const expired: string[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    server.onSessionExpired((info) => expired.push(info.sessionId));
+    const resumable = (server as unknown as { resumable: Map<string, object> }).resumable;
+
+    const one = await rawHello(server.token, "c1");
+    await waitFor(() => seen.length === 1);
+    const two = await rawHello(server.token, "c2");
+    await waitFor(() => seen.length === 2);
+    one.socket.destroy();
+    await waitFor(() => resumable.size === 1);
+    // Only what a resume must match is parked, never the dropped session.
+    expect(Object.keys(resumable.get(seen[0]!.sessionId)!).sort()).toEqual([
+      "clientId",
+      "sessionId",
+      "timer",
+    ]);
+
+    const three = await rawHello(server.token, "c3");
+    await waitFor(() => seen.length === 3);
+    expect(expired).toEqual([seen[0]!.sessionId]);
+    expect(resumable.size).toBe(0);
+
+    const four = await rawHello(server.token, "c4");
+    await closedSocket(four.socket);
+    expect(four.frames.map((f) => frameToMessage(f).body)).toContainEqual({
+      reason: "busy",
+      handshake: null,
+      detail: null,
+    });
+    expect(seen).toHaveLength(3);
+    two.socket.destroy();
+    three.socket.destroy();
   });
 });

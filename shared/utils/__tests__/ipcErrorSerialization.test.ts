@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   serializeError,
   deserializeError,
+  pickAppErrorDetails,
   wrapSuccess,
   wrapError,
 } from "../ipcErrorSerialization.js";
@@ -524,5 +525,88 @@ describe("isIpcEnvelope", () => {
   it("returns false for domain result objects", () => {
     expect(isIpcEnvelope({ ok: false, code: "BINARY_FILE" })).toBe(false);
     expect(isIpcEnvelope({ success: false, error: "something" })).toBe(false);
+  });
+});
+
+describe("AppError details allowlist", () => {
+  it("rebuilds each PluginHostError variant and strips extra fields", () => {
+    const serialized = serializeError(
+      Object.assign(new Error("x"), {
+        details: {
+          code: "PLUGIN_INCOMPATIBLE",
+          pluginId: "acme.x",
+          hostId: "box",
+          token: "secret",
+          reason: { kind: "engine", required: "^2", hostVersion: "1.0.0", path: "/Users/me" },
+        },
+      })
+    );
+    expect(serialized.details).toEqual({
+      code: "PLUGIN_INCOMPATIBLE",
+      pluginId: "acme.x",
+      hostId: "box",
+      reason: { kind: "engine", required: "^2", hostVersion: "1.0.0" },
+    });
+
+    const notOnHost = serializeError(
+      Object.assign(new Error("x"), {
+        details: { code: "PLUGIN_NOT_ON_HOST", pluginId: "p", hostId: "h", extra: { a: 1 } },
+      })
+    );
+    expect(notOnHost.details).toEqual({ code: "PLUGIN_NOT_ON_HOST", pluginId: "p", hostId: "h" });
+  });
+
+  it("keeps only the permitted fields of every reason variant", () => {
+    const pick = (reason: unknown) => {
+      const details = pickAppErrorDetails({
+        code: "PLUGIN_INCOMPATIBLE",
+        pluginId: "p",
+        hostId: "h",
+        reason,
+      });
+      return details?.code === "PLUGIN_INCOMPATIBLE" ? details : undefined;
+    };
+    expect(
+      pick({ kind: "platform", hostPlatform: "linux", supported: ["darwin"], x: 1 })?.reason
+    ).toEqual({ kind: "platform", hostPlatform: "linux", supported: ["darwin"] });
+    expect(pick({ kind: "remote-unsupported", why: "/secret" })?.reason).toEqual({
+      kind: "remote-unsupported",
+    });
+    expect(pick({ kind: "untrusted", by: "someone" })?.reason).toEqual({ kind: "untrusted" });
+    const missing = Array.from({ length: 100 }, (_, i) => `KEY_${i}`);
+    const unconfigured = pick({ kind: "unconfigured", missing, value: "tok" })?.reason;
+    expect(unconfigured).toEqual({ kind: "unconfigured", missing: missing.slice(0, 32) });
+  });
+
+  it("drops anything that is not exactly a recognised variant", () => {
+    const base = { code: "PLUGIN_INCOMPATIBLE", pluginId: "p", hostId: "h" };
+    expect(pickAppErrorDetails({ ...base, reason: { kind: "mystery" } })).toBeUndefined();
+    expect(
+      pickAppErrorDetails({ ...base, reason: { kind: "engine", required: 2 } })
+    ).toBeUndefined();
+    expect(
+      pickAppErrorDetails({
+        ...base,
+        reason: { kind: "platform", hostPlatform: "win32", supported: [] },
+      })
+    ).toBeUndefined();
+    expect(
+      pickAppErrorDetails({ ...base, reason: { kind: "unconfigured", missing: [1] } })
+    ).toBeUndefined();
+    expect(pickAppErrorDetails({ code: "OTHER", pluginId: "p", hostId: "h" })).toBeUndefined();
+    expect(pickAppErrorDetails(["PLUGIN_NOT_ON_HOST"])).toBeUndefined();
+  });
+
+  it("revalidates details on deserialization", () => {
+    const error = deserializeError({
+      name: "Error",
+      message: "x",
+      details: { code: "PLUGIN_NOT_ON_HOST", pluginId: "p", hostId: "h", leak: "/tmp/a" },
+    } as unknown as Parameters<typeof deserializeError>[0]);
+    expect((error as unknown as { details: unknown }).details).toEqual({
+      code: "PLUGIN_NOT_ON_HOST",
+      pluginId: "p",
+      hostId: "h",
+    });
   });
 });

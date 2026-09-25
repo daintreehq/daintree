@@ -210,9 +210,27 @@ export interface TransferEndMessage {
   transferId: number;
 }
 
+/**
+ * Why a transfer stopped, as it crosses the link. A fixed vocabulary rather
+ * than exception text: messages from the far side's filesystem can name its
+ * paths, and the diagnostic is logged where it happened instead.
+ */
+export const TRANSFER_REASONS = [
+  "cancelled",
+  "source-failed",
+  "sink-failed",
+  "checksum-mismatch",
+  "invalid-data",
+  "timeout",
+  "too-large",
+  "busy",
+  "not-accepted",
+] as const;
+export type TransferReason = (typeof TRANSFER_REASONS)[number];
+
 export interface TransferAbortMessage {
   transferId: number;
-  reason: string;
+  reason: TransferReason;
 }
 
 export interface TransferAckMessage {
@@ -220,7 +238,7 @@ export interface TransferAckMessage {
   receivedBytes: number;
   /** Set once the receiver has verified and placed the file. */
   path: string | null;
-  error: string | null;
+  error: TransferReason | null;
 }
 
 export type LinkMessage =

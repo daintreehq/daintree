@@ -408,11 +408,19 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
 
   async function register(overrides?: Partial<AppLifecycleOptions>) {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    const opts = makeOpts(overrides);
+    const opts = makeOpts({ isHostModeActive: () => true, ...overrides });
     const handle = registerAppLifecycleHandlers(opts);
     const call = appMock.on.mock.calls.find(([event]: string[]) => event === "second-instance");
     return { opts, handle, handler: call![1] as SecondInstanceHandler };
   }
+
+  it("keeps today's behaviour without Host mode: no window is opened", async () => {
+    const { opts, handler } = await register({ isHostModeActive: () => false });
+
+    handler({}, ["daintree"], "/");
+
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
 
   function makeWindow() {
     return {
@@ -515,6 +523,19 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
     handler({}, ["daintree"], "/");
 
     expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("answers a relaunch that arrived before ready during a --host-mode start on settle", async () => {
+    appMock.isReady.mockReturnValue(false);
+    let settled = false;
+    const { opts, handle, handler } = await register({ isLaunchSettled: () => settled });
+
+    handler({}, ["daintree"], "/");
+    appMock.isReady.mockReturnValue(true);
+    settled = true;
+    handle.onLaunchSettled();
+
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
   });
 
   it("brings a live window forward for a plain relaunch instead of opening another", async () => {
@@ -806,6 +827,44 @@ describe("registerAppLifecycleHandlers – activate", () => {
     registerAppLifecycleHandlers(opts);
 
     expect(() => getActivateHandler()()).not.toThrow();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("replays a Dock click that arrived during a windowless Host start once it settles", async () => {
+    appMock.isReady.mockReturnValue(false);
+    let settled = false;
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const opts = makeOpts({
+      isHostModeActive: () => true,
+      isLaunchSettled: () => settled,
+    });
+    const handle = registerAppLifecycleHandlers(opts);
+
+    getActivateHandler()();
+    appMock.isReady.mockReturnValue(true);
+    getActivateHandler()();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+
+    settled = true;
+    handle.onLaunchSettled();
+    handle.onLaunchSettled();
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("still drops a pre-ready Dock click without Host mode", async () => {
+    appMock.isReady.mockReturnValue(false);
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const opts = makeOpts({
+      windowRegistry: makeRegistry(0),
+      isHostModeActive: () => false,
+      isLaunchSettled: () => false,
+    });
+    const handle = registerAppLifecycleHandlers(opts);
+
+    getActivateHandler()();
+    appMock.isReady.mockReturnValue(true);
+    handle.onLaunchSettled();
+
     expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
 

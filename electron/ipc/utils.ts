@@ -465,34 +465,37 @@ export function broadcastToProjectRenderersExcept(
   channel: string,
   ...args: unknown[]
 ): void {
-  if (projectId !== null && hasRegisteredProjectViews()) {
-    for (const wc of getWebContentsForProject(projectId)) {
-      if (exclude?.has(wc.id)) continue;
-      try {
-        wc.send(channel, ...args);
-      } catch {
-        // Silently ignore send failures during window initialization/disposal.
-      }
+  deliverToLocalProjectViews(projectId, exclude, channel, args);
+  // Remote endpoints are always bound to one project, so a known project
+  // scopes them regardless of local views: a windowless host has none, and
+  // falling back there would push one project's events to every Shell.
+  const registry = getEndpointRegistry();
+  if (!registry.hasRemote()) return;
+  sendToEndpoints(
+    projectId !== null ? registry.getForProject(projectId) : registry.getRemote(),
+    exclude,
+    channel,
+    args
+  );
+}
+
+function deliverToLocalProjectViews(
+  projectId: string | null,
+  exclude: ReadonlySet<number> | null,
+  channel: string,
+  args: unknown[]
+): void {
+  const scoped = projectId !== null && hasRegisteredProjectViews();
+  const targets = scoped ? getWebContentsForProject(projectId) : getAllAppWebContents();
+  for (const wc of targets) {
+    // getWebContentsForProject already drops destroyed views.
+    if (exclude?.has(wc.id) || (!scoped && wc.isDestroyed())) continue;
+    try {
+      wc.send(channel, ...args);
+    } catch {
+      // Silently ignore send failures during window initialization/disposal.
     }
-    const registry = getEndpointRegistry();
-    if (registry.hasRemote()) {
-      sendToEndpoints(registry.getForProject(projectId), exclude, channel, args);
-    }
-    return;
   }
-  if (exclude && exclude.size > 0) {
-    for (const wc of getAllAppWebContents()) {
-      if (exclude.has(wc.id) || wc.isDestroyed()) continue;
-      try {
-        wc.send(channel, ...args);
-      } catch {
-        // Silently ignore send failures during window initialization/disposal.
-      }
-    }
-    broadcastToRemoteEndpoints(exclude, channel, args);
-    return;
-  }
-  broadcastToRenderer(channel, ...args);
 }
 
 /**
