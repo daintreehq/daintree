@@ -7,6 +7,7 @@ import { isPluginRecipe } from "@shared/types/project";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import { useRecipeStore } from "@/store/recipeStore";
+import { useProjectStore } from "@/store/projectStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { getWorktreePathIndex } from "@/store/storeAccessors";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
@@ -150,6 +151,15 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       }),
       run: async (args) => {
         const worktreeId = args?.worktreeId;
+        // Read from disk first: a view can hold a store that never loaded this
+        // project (a live run listed nothing while .daintree/recipes held one).
+        const projectId = useProjectStore.getState().currentProject?.id;
+        if (projectId) {
+          await useRecipeStore
+            .getState()
+            .loadRecipes(projectId)
+            .catch(() => undefined);
+        }
         const recipeState = useRecipeStore.getState();
         const recipes = recipeState.recipes;
 

@@ -12,8 +12,13 @@ const createWorktreeStoreMock = vi.hoisted(() => ({
 
 const notifySpawnFailuresMock = vi.hoisted(() => vi.fn());
 
+const projectStoreMock = vi.hoisted(() => ({
+  getState: vi.fn(() => ({ currentProject: null as { id: string } | null })),
+}));
+
 vi.mock("@/store/recipeStore", () => ({ useRecipeStore: recipeStoreMock }));
 vi.mock("@/store/createWorktreeStore", () => createWorktreeStoreMock);
+vi.mock("@/store/projectStore", () => ({ useProjectStore: projectStoreMock }));
 vi.mock("@/utils/recipeNotify", () => ({
   notifyRecipeSpawnFailures: notifySpawnFailuresMock,
 }));
@@ -412,6 +417,23 @@ describe("recipeActions adversarial", () => {
 
     expect(result.recipes).toHaveLength(2);
     expect(result.recipes.find((r) => r.id === "g")?.worktreeId).toBeNull();
+  });
+
+  it("recipe.list reads the open project's recipes from disk before answering", async () => {
+    // A live run listed nothing while .daintree/recipes held a recipe: the
+    // view's store had never loaded that project.
+    const state = { recipes: [] as Array<{ id: string; terminals: unknown[] }>, isLoading: false };
+    const loadRecipes = vi.fn(async () => {
+      state.recipes = [{ id: "inrepo-pair", terminals: [{}, {}] }];
+    });
+    recipeStoreMock.getState.mockImplementation(() => ({ ...state, loadRecipes }));
+    projectStoreMock.getState.mockReturnValueOnce({ currentProject: { id: "p1" } });
+
+    const run = setupActions();
+    const result = (await run("recipe.list")) as { recipes: Array<{ id: string }> };
+
+    expect(loadRecipes).toHaveBeenCalledWith("p1");
+    expect(result.recipes.map((r) => r.id)).toEqual(["inrepo-pair"]);
   });
 
   it("recipe.saveToRepo rejects when no project is open, before mutating", async () => {
