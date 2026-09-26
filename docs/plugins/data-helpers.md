@@ -21,15 +21,15 @@ A zero-build plugin (hand-written `dist/index.mjs`, see the [agent brief](./agen
 
 - **Your own copy wins.** If the plugin bundles the SDK or has it installed where Node finds it, that copy is used. The shipped copy is only the fallback when normal resolution fails — including when your installed SDK is too old to have the entry.
 - **The shipped copy tracks the app, not your lockfile.** It is the SDK version Daintree was built with. Pin a version by installing and bundling it instead.
-- **`/data` is newer than the published SDK.** npm 0.1.0 does not have it; a worker gets it from the shipped copy (an installed 0.1.0 falls back to it too) until the next SDK release.
+- **`/data` is newer than the published SDK.** npm 0.1.0 does not have it. An un-bundled worker gets it from the shipped copy (an installed 0.1.0 falls back to it too), but a plugin or view you _bundle_ against `@daintreehq/plugin-sdk@0.1.0` cannot resolve `@daintreehq/plugin-sdk/data` at build time. Bundled code needs the SDK from this repository (the workspace package, or `npm pack` of it) or a release after 0.1.0.
 - **`/react` and `/testing` are not served.** `@daintreehq/plugin-sdk/react` belongs in a view built with `@daintreehq/plugin-vite`; `/testing` is a mock host for unit tests. Importing either from an un-bundled worker fails with an error that says so.
-- **Views are not covered.** A hand-written `dist/panel.js` still gets only `react` and its own relative modules. Everything in this entry also runs in a browser, so a bundled view can use it; a raw view keeps its data work in the worker and asks for results over a channel.
+- **Views are not covered.** A hand-written `dist/panel.js` still gets only `react` and its own relative modules. Everything in this entry also runs in a browser, so a bundled view can use it (with the SDK caveat above); a raw view keeps its data work in the worker and asks for results over a channel.
 
 ## Frontmatter
 
 `parseFrontmatter(text)` returns `{ data, body, hasFrontmatter }`. Frontmatter is a block that opens with `---` on the very first line and closes at the next line that is exactly `---`; a document without it has `data: {}` and its whole text as `body`. The body is returned byte-for-byte. YAML is read with the 1.2 core schema, so `yes` stays the string `"yes"` and `2026-09-26` stays a string rather than becoming a `Date`.
 
-Invalid YAML, a block that is opened but never closed, and YAML that is not a mapping throw a `FrontmatterError` whose `line` and `column` are positions in the whole file, so a listing can report "card 12: line 4" and carry on with the rest.
+Invalid YAML (including an alias whose anchor is missing), a block that is opened but never closed, and YAML that is not a mapping throw a `FrontmatterError` whose `line` and `column` are positions in the whole file, so a listing can report "card 12: line 4" and carry on with the rest.
 
 `stringifyFrontmatter(data, body)` writes a fresh block (omitting `undefined` values) ahead of the body.
 
@@ -43,11 +43,11 @@ Invalid YAML, a block that is opened but never closed, and YAML that is not a ma
 // ---                              ---
 ```
 
-A value of `undefined` deletes the key (and only its own lines — a comment above the next key stays). A key that is not present is appended at the end of the block. An edited scalar keeps its trailing comment; an entry that becomes, or was, a list, a map or a multi-line string has just its own lines rewritten. A document with no frontmatter gains a block. CRLF files stay CRLF.
+A value of `undefined` deletes the key (and only its own lines — a comment above the next key stays). A key that is not present is appended at the end of the block. An edited scalar keeps its trailing comment; an entry that becomes, or was, a list, a map or a multi-line string has just its own lines rewritten. A value with an explicit tag (`!!str 1`) is rewritten without it, so the new value reads back as the type you passed. A value carrying an anchor keeps it, and an edit that would leave an alias pointing at nothing — deleting the anchored key while another key still uses `*alias` — throws a `FrontmatterError` rather than writing a file nothing can read. An indented root mapping stays indented. A document with no frontmatter gains a block. CRLF files stay CRLF, including a new block added to one. An empty patch returns the text untouched.
 
 ## JSON Lines
 
-`parseJsonl(text)` returns `{ records, errors }`. Blank lines are skipped, `\r\n` is accepted, and each unparseable line becomes `{ line, message, text }` instead of an exception, so one corrupt entry does not hide the log. An unparseable final line with no line break is reported as **truncated** — the mark of a write that was cut off rather than a malformed record.
+`parseJsonl(text)` returns `{ records, errors }`. Blank lines are skipped, `\r\n` is accepted, and each unparseable line becomes `{ line, message, text }` instead of an exception, so one corrupt entry does not hide the log. An unparseable final line with no line break is reported as **possibly truncated**: that is what an interrupted append looks like, though it can also be an ordinary malformed record that happens to be last.
 
 `stringifyJsonlLine(value)` is one record with its trailing `\n`, ready to append. JSON escapes line breaks inside strings, so it is always one line.
 

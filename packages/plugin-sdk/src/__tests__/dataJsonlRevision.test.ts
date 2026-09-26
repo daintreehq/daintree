@@ -16,14 +16,14 @@ describe("parseJsonl", () => {
     expect(errors[0].message).not.toMatch(/truncated/);
   });
 
-  it("reports an unterminated, unparseable final line as truncated", () => {
+  it("reports an unterminated, unparseable final line as possibly truncated", () => {
     const { records, errors } = parseJsonl('{"a":1}\n{"b":');
     expect(records).toEqual([{ a: 1 }]);
     expect(errors).toEqual([
       expect.objectContaining({
         line: 2,
         text: '{"b":',
-        message: expect.stringMatching(/^truncated/),
+        message: expect.stringMatching(/^possibly truncated/),
       }),
     ]);
   });

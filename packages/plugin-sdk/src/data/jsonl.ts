@@ -17,8 +17,9 @@ export interface ParsedJsonl {
  * Parse JSON Lines text, collecting a bad line as an error rather than
  * throwing, so one corrupt entry in an append-only log does not hide the rest.
  * Blank lines are skipped and `\r\n` endings are accepted. A final line with
- * no line break that fails to parse is reported as truncated: that is the
- * signature of a write that was cut off, not of a malformed record.
+ * no line break that fails to parse is reported as possibly truncated: that
+ * is what an interrupted append looks like, though it may just be a malformed
+ * last record.
  */
 export function parseJsonl(text: string): ParsedJsonl {
   const records: unknown[] = [];
@@ -36,7 +37,7 @@ export function parseJsonl(text: string): ParsedJsonl {
       const unterminated = index === lines.length - 1;
       errors.push({
         line: index + 1,
-        message: unterminated ? `truncated final line (no line break): ${reason}` : reason,
+        message: unterminated ? `possibly truncated final line (no line break): ${reason}` : reason,
         text: line,
       });
     }

@@ -3,9 +3,11 @@
 // Run `npm run api-surface:update` after an intentional public API change and commit the result.
 
 /**
- * Thrown for frontmatter that cannot be read: invalid YAML, a block that is
- * opened but never closed, or YAML that is not a mapping. `line` and `column`
- * are 1-based positions in the whole file, not in the YAML block.
+ * Thrown for frontmatter that cannot be read: invalid YAML (an alias with no
+ * anchor included), a block that is opened but never closed, or YAML that is
+ * not a mapping — and by `updateFrontmatter` for an edit that would produce
+ * one of those. `line` and `column` are 1-based positions in the whole file,
+ * not in the YAML block.
  */
 declare class FrontmatterError extends Error {
     readonly code = "FRONTMATTER_INVALID";
@@ -27,9 +29,9 @@ interface ParsedFrontmatter {
  * line that is exactly `---`. A document that does not open with `---` has no
  * frontmatter, and its whole text is the body.
  *
- * Throws {@link FrontmatterError} for invalid YAML, an unclosed block, or YAML
- * that is not a mapping, so a malformed file is reported rather than read as
- * empty.
+ * Throws {@link FrontmatterError} for invalid YAML (including an alias with no
+ * anchor), an unclosed block, or YAML that is not a mapping, so a malformed
+ * file is reported rather than read as empty.
  */
 declare function parseFrontmatter(text: string): ParsedFrontmatter;
 /**
@@ -50,9 +52,14 @@ declare function stringifyFrontmatter(data: Record<string, unknown>, body: strin
  * itself is also conflict-checked.
  *
  * An edited scalar keeps its trailing comment. A value that becomes (or was)
- * a collection or multi-line string rewrites that entry's lines in the
- * library's default style. A top-level flow mapping (`{ a: 1 }`) cannot be
- * edited in place, so it is re-serialised as a whole.
+ * a collection, a multi-line string or an explicitly tagged scalar rewrites
+ * that entry's lines in the library's default style, keeping its anchor. A
+ * top-level flow mapping (`{ a: 1 }`) cannot be edited in place, so a
+ * non-empty patch re-serialises it as a whole.
+ *
+ * Throws {@link FrontmatterError} when the existing frontmatter is invalid,
+ * and when the edit would leave it unreadable — deleting or replacing a value
+ * whose anchor another key still refers to.
  */
 declare function updateFrontmatter(text: string, patch: Record<string, unknown>): string;
 
@@ -73,8 +80,9 @@ interface ParsedJsonl {
  * Parse JSON Lines text, collecting a bad line as an error rather than
  * throwing, so one corrupt entry in an append-only log does not hide the rest.
  * Blank lines are skipped and `\r\n` endings are accepted. A final line with
- * no line break that fails to parse is reported as truncated: that is the
- * signature of a write that was cut off, not of a malformed record.
+ * no line break that fails to parse is reported as possibly truncated: that
+ * is what an interrupted append looks like, though it may just be a malformed
+ * last record.
  */
 declare function parseJsonl(text: string): ParsedJsonl;
 /**
