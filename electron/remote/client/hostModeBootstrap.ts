@@ -8,6 +8,7 @@ import {
   HOST_MODE_HANDOFF_FLAG,
   HOST_MODE_HANDOFF_NOBODY_EXIT_CODE,
 } from "../../boot/hostModeLaunch.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { APPIMAGE_EXTRACT_AND_RUN_ENV, systemdUnitFor } from "../host/startAtLogin.js";
 import type { CommandResult } from "./commandRunner.js";
@@ -99,8 +100,61 @@ export function writeUnitScript(): string {
 }
 
 export const START_UNIT_SCRIPT = `systemctl --user start ${LINUX_UNIT_NAME}`;
+
+const UNIT_DIR = "$HOME/.config/systemd/user";
+const UNIT_FILE = `"${UNIT_DIR}/${LINUX_UNIT_NAME}"`;
+/** Where a failed setup's copy of the earlier unit is left when it can't be put back. */
+export const UNIT_BACKUP_PATH = `~/.config/systemd/user/${LINUX_UNIT_NAME}.daintree-setup-backup`;
+const UNIT_BACKUP = `"${UNIT_DIR}/${LINUX_UNIT_NAME}.daintree-setup-backup"`;
+/** The one link `systemctl --user enable` makes for the unit (it is `WantedBy=default.target`). */
+const WANTS_LINK = `"${UNIT_DIR}/default.target.wants/${LINUX_UNIT_NAME}"`;
+const RUNNING_STATES = new Set(["active", "activating", "reloading", "refreshing"]);
+const STOPPED_STATES = new Set(["inactive", "failed", "deactivating", "maintenance"]);
+
+/**
+ * Before setup touches the unit: keep a copy of any that is there (a symlink,
+ * such as a mask, stays a symlink), and note whether it was already enabled
+ * through the link setup's enable makes and whether it was running, so a
+ * failed setup puts back exactly what it found. A copy left by an earlier
+ * setup whose undo never ran is moved aside, never overwritten.
+ */
+export const SAVE_UNIT_SCRIPT = `k=ok; if [ -e ${UNIT_BACKUP} ] || [ -L ${UNIT_BACKUP} ]; then mv -f ${UNIT_BACKUP} "${UNIT_DIR}/${LINUX_UNIT_NAME}.daintree-setup-backup.$(date +%s).$$" || k=no; fi; if [ "$k" != ok ]; then echo "${MARK}unitsaved failed"; elif [ -e ${UNIT_FILE} ] || [ -L ${UNIT_FILE} ]; then if cp -P -p ${UNIT_FILE} ${UNIT_BACKUP}; then echo "${MARK}unitsaved yes"; else echo "${MARK}unitsaved failed"; fi; if [ -e ${WANTS_LINK} ] || [ -L ${WANTS_LINK} ]; then echo "${MARK}unitwanted yes"; else echo "${MARK}unitwanted no"; fi; echo "${MARK}unitactive $(systemctl --user is-active ${LINUX_UNIT_NAME} 2>/dev/null)"; else echo "${MARK}unitsaved no"; fi`;
+
+export interface PreviousUnit {
+  existed: boolean;
+  /** The `default.target.wants` link was there already, so setup's enable added nothing. */
+  wanted: boolean;
+  active: boolean;
+}
+
+/** What {@link SAVE_UNIT_SCRIPT} found; null when anything about it couldn't be read. */
+export function parseSavedUnit(stdout: string): PreviousUnit | null {
+  const saved = markerValue(stdout, "unitsaved");
+  if (saved === "no") return { existed: false, wanted: false, active: false };
+  if (saved !== "yes") return null;
+  const wanted = markerValue(stdout, "unitwanted");
+  const active = markerValue(stdout, "unitactive") ?? "";
+  if (wanted !== "yes" && wanted !== "no") return null;
+  if (!RUNNING_STATES.has(active) && !STOPPED_STATES.has(active)) return null;
+  return { existed: true, wanted: wanted === "yes", active: RUNNING_STATES.has(active) };
+}
+
+/**
+ * Put back the unit that was there before setup: its contents, then only the
+ * enable setup did undone (every other link is left as it was), then running
+ * or stopped. Prints nothing; fails if the unit couldn't be put back or started.
+ */
+export function restoreUnitScript(previous: PreviousUnit): string {
+  const unlink = previous.wanted ? "" : `rm -f ${WANTS_LINK} && `;
+  const run = previous.active
+    ? `systemctl --user start ${LINUX_UNIT_NAME}`
+    : `{ systemctl --user stop ${LINUX_UNIT_NAME} >/dev/null 2>&1; true; }`;
+  return `${unlink}mv -f ${UNIT_BACKUP} ${UNIT_FILE} && systemctl --user daemon-reload && ${run}`;
+}
+
+export const DROP_UNIT_BACKUP_SCRIPT = `rm -f ${UNIT_BACKUP}`;
 export const ENABLE_LINGER_SCRIPT = "loginctl enable-linger";
-/** Undo a unit this setup wrote: nothing is left to start at the next login after a failure. */
+/** Undo a unit this setup wrote where there was none: nothing is left to start at the next login after a failure. */
 export const REMOVE_UNIT_SCRIPT = `systemctl --user disable --now ${LINUX_UNIT_NAME} >/dev/null 2>&1; rm -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}"; systemctl --user daemon-reload >/dev/null 2>&1; true`;
 
 /** Hand `--enable-host-mode` to the Daintree running on a Linux host; prints its exit status. */
@@ -199,8 +253,8 @@ export async function bootstrapHostMode(
   };
 
   let lingerRefused: string | null = null;
-  // Set once this setup wrote a unit where there was none: undone if setup fails.
-  let wroteUnit = false;
+  // What the unit was before this setup touched it: put back if setup fails.
+  let previousUnit: PreviousUnit | null = null;
   let confirmed: ProbeOutcome;
   try {
     if (probe.platform === "darwin") {
@@ -221,7 +275,18 @@ export async function bootstrapHostMode(
       }
       const running = probe.hostModeListening || probe.appRunning;
       if (!running) {
-        wroteUnit = probe.advice.hostModeUnit !== true;
+        const saved = await run(
+          deps.channel,
+          SAVE_UNIT_SCRIPT,
+          "Couldn't read the Host mode service already there"
+        );
+        previousUnit = parseSavedUnit(saved.stdout);
+        if (!previousUnit) {
+          throw failed(
+            `Couldn't keep a copy of the Host mode service already on ${sshTarget}`,
+            `~/.config/systemd/user/${LINUX_UNIT_NAME}`
+          );
+        }
         await run(
           deps.channel,
           writeUnitScript(),
@@ -262,12 +327,28 @@ export async function bootstrapHostMode(
     confirmed = await pollUntil(hostModeConfirmed, CONFIRM_TIMEOUT_MS);
     if (!hostModeConfirmed(confirmed)) throw failed(unconfirmedReason(confirmed, sshTarget));
   } catch (error) {
-    if (wroteUnit) {
+    if (previousUnit && !previousUnit.existed) {
       await deps.channel
         .exec(REMOVE_UNIT_SCRIPT, { timeoutMs: 60_000, signal })
         .catch(() => undefined);
+    } else if (previousUnit) {
+      const undone = await deps.channel
+        .exec(restoreUnitScript(previousUnit), { timeoutMs: 60_000, signal })
+        .catch(() => null);
+      if (undone?.code !== 0) {
+        const why = formatErrorMessage(error, "Host mode setup failed");
+        throw failed(
+          `${why}. Setup couldn't put back the Host mode service that was already on ${sshTarget}`,
+          `its copy is at ${UNIT_BACKUP_PATH} there${undone ? ` (${failureDetail(undone, "ssh failed")})` : ""}`
+        );
+      }
     }
     throw error;
+  }
+  if (previousUnit?.existed) {
+    await deps.channel
+      .exec(DROP_UNIT_BACKUP_SCRIPT, { timeoutMs: 30_000, signal })
+      .catch(() => undefined);
   }
   let after = confirmed;
   // The keychain check runs there right after; its answer belongs in the advice.
