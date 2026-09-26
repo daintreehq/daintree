@@ -11,10 +11,7 @@ import {
 import { usePanelStore } from "@/store/panelStore";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { useProjectStore } from "@/store/projectStore";
-import {
-  pluginHasSettings,
-  resolvePluginSettingsTarget,
-} from "@/services/plugin/pluginSettingsHome";
+import { resolvePluginSettingsTarget } from "@/services/plugin/pluginSettingsHome";
 import { usePluginPanelReloadConfirmStore } from "@/store/pluginPanelReloadConfirmStore";
 import { isBuiltInPanelKind } from "@shared/types/panel";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
@@ -341,20 +338,24 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
       id: "plugin.openSettings",
       title: "Open plugin settings",
       description:
-        "Show a plugin's settings where they live: the plugin manager for an installed plugin, Project settings for a project plugin or a project-scoped setting. A declared key is scrolled to and highlighted; an undeclared one is ignored.",
+        "Show a plugin's settings in the one place they live: the plugin manager for an installed plugin's own settings, Project settings → Plugins for a project plugin or a project-scoped setting. A declared key is requested for landing; an undeclared one is ignored.",
       category: "plugins",
       kind: "command",
       danger: "safe",
       nonRepeatable: true,
       // Needs a plugin id, and there is no focused-plugin fallback to act on.
       palette: { mode: "hidden" },
+      // UI navigation for the plugin's own menus and `host.settings.open`. It is
+      // in no assistant or external tier, and hidden from tool listings too: an
+      // agent has nothing to gain from moving the user's settings dialog.
+      mcpVisibility: "hidden",
       scope: "renderer",
       argsSchema: z.object({
         pluginId: z
           .string()
           .min(1)
           .describe(
-            "Manifest id (publisher.name). In a project, its own plugin wins over an installed one with the same id."
+            "An instance key (exact; an installed plugin's is its manifest id), or the manifest id of this project's own plugin."
           ),
         key: z
           .string()
@@ -362,37 +363,32 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
           .optional()
           .describe("A setting id from the plugin's contributes.settings to land on."),
       }),
-      examples: [
-        {
-          args: { pluginId: "acme.linear", key: "apiToken" },
-          description: "Take the user straight to a plugin's API token field.",
-        },
-      ],
       resultSchema: z.object({
         pluginId: z.string(),
+        /** Where the request was sent. The home lands on it once it renders. */
         home: z.enum(["plugin-manager", "project-settings"]),
-        /** The setting landed on, or null when none was named or it isn't declared. */
-        key: z.string().nullable(),
+        /** The declared setting the request asked to land on, or null. */
+        requestedKey: z.string().nullable(),
       }),
-      mcpOutputSchema: true,
-      mcpAnnotations: {
-        readOnlyHint: false,
-        idempotentHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
-      },
       run: async ({ pluginId, key }, ctx) => {
         const projectId = ctx?.projectId ?? useProjectStore.getState().currentProject?.id ?? null;
-        const target = resolvePluginSettingsTarget(
+        const resolution = resolvePluginSettingsTarget(
           pluginId,
           key,
           await pluginClient.list(),
           projectId
         );
-        if (!target) throw new Error(`No plugin "${pluginId}" is running here`);
-        if (!pluginHasSettings(target.plugin)) {
-          throw new Error(`Plugin "${pluginId}" has no settings`);
+        if (!resolution.ok) {
+          throw new Error(
+            {
+              "not-found": `No plugin "${pluginId}" is loaded here`,
+              ambiguous: `"${pluginId}" names more than one plugin here — pass its instance key`,
+              "no-settings": `Plugin "${pluginId}" has no settings`,
+              "needs-project": `Plugin "${pluginId}" keeps ${key === undefined ? "its settings" : `"${key}"`} in Project settings, and no project is open`,
+            }[resolution.reason]
+          );
         }
+        const { target } = resolution;
         usePluginManagerStore.getState().requestSettings({
           pluginId: target.plugin.instanceId,
           home: target.home,
@@ -402,7 +398,7 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
         return {
           pluginId,
           home: target.home === "project" ? "project-settings" : "plugin-manager",
-          key: target.key ?? null,
+          requestedKey: target.key ?? null,
         };
       },
     })

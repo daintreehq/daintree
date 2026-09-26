@@ -3287,10 +3287,10 @@ describe("cross-project plugin control", () => {
   it("reads missing required settings only for the sender's own project", async () => {
     mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
     await expect(
-      getHandler("plugin:settings-missing-required")({ sender: { id: 1 } }, INSTANCE_A, PROJECT_A)
+      getHandler("plugin:settings-required-status")({ sender: { id: 1 } }, INSTANCE_A, PROJECT_A)
     ).rejects.toThrow(/different project/);
     await expect(
-      getHandler("plugin:settings-missing-required")({ sender: { id: 1 } }, "../evil", null)
+      getHandler("plugin:settings-required-status")({ sender: { id: 1 } }, "../evil", null)
     ).rejects.toThrow(/invalid plugin id/);
   });
 

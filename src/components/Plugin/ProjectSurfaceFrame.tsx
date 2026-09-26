@@ -2,6 +2,7 @@ import { useRef, type ReactNode } from "react";
 import { Puzzle, Search } from "lucide-react";
 import type { ProjectSurfaceChoice } from "@shared/types/plugin";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { Button } from "@/components/ui/button";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
@@ -259,6 +260,10 @@ export function ProjectSurfaceFrame({ children }: { children: ReactNode }) {
           />
         )
       )}
+      {/* The surface's plugin still needs setting up: said here, in the host's
+          own chrome above the region, never inside the plugin's box. Only while
+          the surface is what's showing — the launcher needs no plugin set up. */}
+      {showing === "surface" && <PluginKindSetupStrip kind={config.id} />}
       <div className="relative min-h-0 min-w-0 flex-1" data-testid="project-surface-region">
         {children}
       </div>

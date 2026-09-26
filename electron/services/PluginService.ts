@@ -260,7 +260,7 @@ import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../ipc/utils.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
-import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
+import type { LoadedPluginInfo, PluginRequiredSettingsStatus } from "../../shared/types/plugin.js";
 import type { PluginRecipeMetadataPatch, TerminalRecipe } from "../../shared/types/project.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 import { getPluginActionAuditService } from "./PluginActionAuditService.js";
@@ -4881,12 +4881,12 @@ export class PluginService {
     broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
   }
 
-  /** {@link PluginSettingsManager.missingRequiredForUi}, for the renderer bridge. */
-  async getMissingRequiredSettingsForUi(
+  /** {@link PluginSettingsManager.requiredStatusForUi}, for the renderer bridge. */
+  async getRequiredSettingsStatusForUi(
     pluginId: string,
     projectId: string | null
-  ): Promise<string[]> {
-    return this.settings.missingRequiredForUi(pluginId, projectId);
+  ): Promise<PluginRequiredSettingsStatus> {
+    return this.settings.requiredStatusForUi(pluginId, projectId);
   }
 
   private setDevSessionDetail(pluginId: string, detail: string | null): void {

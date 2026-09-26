@@ -584,19 +584,32 @@ describe("PluginDetailPane settings deep link", () => {
     return onSettingsRequestHandled;
   }
 
-  it("opens the Settings tab and reports a key-less request handled", () => {
+  it("opens the Settings tab, focuses it, and reports a key-less request handled", () => {
     const handled = renderWithRequest(withSettings(), { nonce: 4 });
-    expect(screen.getByRole("tab", { name: "Settings" }).getAttribute("aria-selected")).toBe(
-      "true"
-    );
+    const tab = screen.getByRole("tab", { name: "Settings" });
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    // The destination holds focus — not the manager's search box.
+    expect(document.activeElement).toBe(tab);
     expect(handled).toHaveBeenCalledWith(4);
   });
 
-  it("offers a Settings tab to a plugin whose only settings are its custom view", () => {
-    renderWithRequest(makePlugin({ settingsViewPath: "plugin://acme/settings.js" }), null);
-    expect(screen.getByRole("tab", { name: "Settings" })).toBeTruthy();
+  it("offers Settings to a stopped plugin whose only settings are its custom view", () => {
+    const base = makePlugin({ disabled: true });
+    const viewOnly: LoadedPluginInfo = {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        contributes: {
+          ...base.manifest.contributes,
+          views: [{ id: "prefs", componentPath: "dist/prefs.js", location: "settings" }],
+        },
+      },
+    };
+    renderWithRequest(viewOnly, null);
     expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
       "true"
     );
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(screen.getByText("Available when the plugin is enabled")).toBeTruthy();
   });
 });

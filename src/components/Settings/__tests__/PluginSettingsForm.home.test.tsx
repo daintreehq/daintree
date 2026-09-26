@@ -38,7 +38,10 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
 }));
 
 import { PluginSettingsForm } from "../PluginSettingsForm";
-import { _resetPluginSettingsViewRuntimesForTest } from "@/components/Plugin/PluginSettingsView";
+import {
+  _resetPluginSettingsViewRuntimesForTest,
+  pruneSettingsViewRuntimes,
+} from "@/components/Plugin/PluginSettingsView";
 
 const pluginApi = {
   getSettingValues: vi.fn(),
@@ -49,7 +52,12 @@ const pluginApi = {
   pathExists: vi.fn(),
 };
 
-function makePlugin(settings: SettingDefinition[], settingsViewPath?: string): LoadedPluginInfo {
+function makePlugin(
+  settings: SettingDefinition[],
+  settingsViewPath?: string,
+  overrides: { declaresView?: boolean; disabled?: boolean } = {}
+): LoadedPluginInfo {
+  const declaresView = overrides.declaresView ?? settingsViewPath !== undefined;
   return {
     manifest: {
       name: "acme.test",
@@ -59,7 +67,9 @@ function makePlugin(settings: SettingDefinition[], settingsViewPath?: string): L
         toolbarButtons: [],
         menuItems: [],
         commands: [],
-        views: [],
+        views: declaresView
+          ? [{ id: "prefs", componentPath: "dist/prefs.js", location: "settings" }]
+          : [],
         mcpServers: [],
         skills: [],
         keybindings: [],
@@ -84,7 +94,7 @@ function makePlugin(settings: SettingDefinition[], settingsViewPath?: string): L
     archiveHash: null,
     originalUrl: null,
     loadError: null,
-    disabled: false,
+    disabled: overrides.disabled ?? false,
     updateAvailable: null,
     devMode: false,
     pluginDanger: "safe",
@@ -153,6 +163,58 @@ describe("PluginSettingsForm custom settings section", () => {
     expect(document.querySelectorAll(".settings-card")).toHaveLength(1);
   });
 
+  it("contains the view so it can't paint over the page around it", () => {
+    render(
+      <PluginSettingsForm plugin={makePlugin([], "plugin://a/settings.js")} viewScope="user" />
+    );
+    const box = screen.getByTestId("plugin-settings-view");
+    expect(box.style.contain).toBe("layout paint");
+    expect(box.classList.contains("overflow-hidden")).toBe(true);
+    expect(box.classList.contains("isolate")).toBe(true);
+  });
+
+  it("says a stopped plugin's section needs it enabled, instead of dropping it", () => {
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([], undefined, { declaresView: true, disabled: true })}
+        viewScope="user"
+      />
+    );
+    expect(screen.queryByTestId("fake-settings-view")).toBeNull();
+    expect(screen.getByText("Available when the plugin is enabled")).toBeTruthy();
+  });
+
+  it("unmounts a running section the home knows has stopped, before its list catches up", () => {
+    currentProjectId = "proj-1";
+    const plugin = makePlugin([], "plugin://a/settings.js");
+    const { rerender } = render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
+    expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
+
+    rerender(<PluginSettingsForm plugin={plugin} viewScope="project" viewRunning={false} />);
+    expect(screen.queryByTestId("fake-settings-view")).toBeNull();
+    expect(screen.getByText("Available while the plugin is running")).toBeTruthy();
+  });
+
+  it("retires a cached runtime when its plugin leaves the list or reloads", () => {
+    const first = makePlugin([], "plugin://a/gen1/settings.js");
+    const { unmount } = render(<PluginSettingsForm plugin={first} viewScope="user" />);
+    unmount();
+    // Same module: the factory is reused.
+    render(<PluginSettingsForm plugin={first} viewScope="user" />);
+    expect(madeFor).toHaveLength(1);
+    cleanup();
+
+    // Reloaded onto a new generation: the list sweep retires the old factory
+    // and the next mount mints one for the new module.
+    const reloaded = makePlugin([], "plugin://a/gen2/settings.js");
+    pruneSettingsViewRuntimes([reloaded]);
+    render(<PluginSettingsForm plugin={reloaded} viewScope="user" />);
+    expect(madeFor.map((c) => c.componentPath)).toEqual([
+      "plugin://a/gen1/settings.js",
+      "plugin://a/gen2/settings.js",
+    ]);
+  });
+
   it("renders nothing for a plugin with neither fields nor a view", () => {
     const { container } = render(<PluginSettingsForm plugin={makePlugin([])} viewScope="user" />);
     expect(container.innerHTML).toBe("");
@@ -180,6 +242,29 @@ describe("PluginSettingsForm deep-link landing", () => {
     expect(row.scrollIntoView).toHaveBeenCalled();
     expect(row.contains(document.activeElement)).toBe(true);
     expect(row.textContent).toContain("Required");
+  });
+
+  it("waits for a hidden settings tab to show before landing", async () => {
+    const onFocusHandled = vi.fn();
+    const { container } = render(
+      <div className="hidden" data-testid="tab">
+        <PluginSettingsForm
+          plugin={makePlugin([{ id: "apiKey", type: "string" }])}
+          viewScope="user"
+          focusRequest={{ key: "apiKey", nonce: 9 }}
+          onFocusHandled={onFocusHandled}
+        />
+      </div>
+    );
+    const row = await waitFor(() => document.getElementById("plugin-setting-acme.test-apiKey")!);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(onFocusHandled).not.toHaveBeenCalled();
+    expect(row.classList.contains("settings-highlight")).toBe(false);
+
+    // The dialog switches to the tab: the next retry lands.
+    container.querySelector('[data-testid="tab"]')!.classList.remove("hidden");
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(9));
+    expect(row.classList.contains("settings-highlight")).toBe(true);
   });
 
   it("still reports a request for a key it doesn't declare, so it isn't left pending", async () => {

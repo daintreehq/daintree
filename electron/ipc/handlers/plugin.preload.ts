@@ -59,7 +59,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   setSettingValue: "plugin:settings-set-value",
   deleteSettingValue: "plugin:settings-delete-value",
   revealSecretSetting: "plugin:settings-reveal-secret",
-  getMissingRequiredSettings: "plugin:settings-missing-required",
+  getRequiredSettingsStatus: "plugin:settings-required-status",
   pickPath: "plugin:pick-path",
   pathExists: "plugin:path-exists",
   getBackgroundUpdateCheckSettings: "plugin:bg-update-check-settings-get",

@@ -178,6 +178,8 @@ interface SettingsDialogProps {
   defaultTab?: SettingsTab;
   defaultSubtab?: string;
   defaultSectionId?: string;
+  /** Changes on every targeted open, so a repeat of the same target navigates again. */
+  navNonce?: number;
   onSettingsChange?: () => void;
   projectId?: string | null;
 }
@@ -205,6 +207,7 @@ function SettingsDialogInner({
   defaultTab,
   defaultSubtab,
   defaultSectionId,
+  navNonce,
   onSettingsChange,
   projectId,
 }: SettingsDialogProps) {
@@ -313,8 +316,9 @@ function SettingsDialogInner({
     void defaultTab;
     void defaultSubtab;
     void defaultSectionId;
+    void navNonce;
     handleOpenChange();
-  }, [isOpen, defaultTab, defaultSubtab, defaultSectionId]);
+  }, [isOpen, defaultTab, defaultSubtab, defaultSectionId, navNonce]);
 
   useEffect(() => {
     if (isOpen && cachedVersionInfo === null) {

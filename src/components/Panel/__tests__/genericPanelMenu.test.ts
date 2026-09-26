@@ -9,7 +9,6 @@ import {
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import {
   GENERIC_PANEL_MENU_ACTION_IDS,
-  GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
   GENERIC_PANEL_RELOAD_ACTION_ID,
   canReloadPanelKind,
   getGenericPanelMenuGroups,
@@ -331,9 +330,8 @@ describe("getGenericPanelMenuGroups", () => {
     const item = groups({ hasPluginSettings: true })
       .flat()
       .find((command) => command.id === "plugin-settings")!;
-    expect(item.label).toBe("Plugin settings…");
     expect(item.destructive).toBeUndefined();
-    expect(GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID).toBe("plugin.openSettings");
+    expect(item.disabled).toBeUndefined();
   });
 
   it("still ends on its one destructive command with a tour offered", () => {

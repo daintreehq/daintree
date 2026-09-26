@@ -24,9 +24,10 @@ vi.mock("@/store/pluginRuntimeStore", () => ({
     }),
 }));
 
-import { PluginSetupStrip } from "../PluginSetupStrip";
+import { PluginKindSetupStrip, PluginSetupStrip } from "../PluginSetupStrip";
+import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 
-const getMissingRequiredSettings = vi.fn();
+const getRequiredSettingsStatus = vi.fn();
 let settingsListeners: Array<(payload: { pluginId: string }) => void> = [];
 
 function announce(pluginId: string) {
@@ -42,7 +43,7 @@ beforeEach(() => {
     writable: true,
     value: {
       plugin: {
-        getMissingRequiredSettings,
+        getRequiredSettingsStatus,
         onSettingsChanged: (cb: (payload: { pluginId: string }) => void) => {
           settingsListeners.push(cb);
           return () => {
@@ -60,14 +61,14 @@ afterEach(() => {
 
 describe("PluginSetupStrip", () => {
   it("names the plugin and opens the first missing setting", async () => {
-    getMissingRequiredSettings.mockResolvedValue(["apiKey", "team"]);
+    getRequiredSettingsStatus.mockResolvedValue({ missing: ["apiKey", "team"], unreadable: [] });
     render(<PluginSetupStrip pluginId="acme.linear" />);
 
     const strip = await screen.findByTestId("plugin-setup-strip");
     expect(strip.textContent).toContain("Linear needs setup");
-    expect(getMissingRequiredSettings).toHaveBeenCalledWith("acme.linear", "proj-1");
+    expect(getRequiredSettingsStatus).toHaveBeenCalledWith("acme.linear", "proj-1");
 
-    fireEvent.click(screen.getByRole("button", { name: "Configure…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open plugin settings" }));
     expect(dispatch).toHaveBeenCalledWith(
       "plugin.openSettings",
       { pluginId: "acme.linear", key: "apiKey" },
@@ -76,32 +77,75 @@ describe("PluginSetupStrip", () => {
   });
 
   it("goes away once the required setting is stored, and comes back if it is cleared", async () => {
-    getMissingRequiredSettings.mockResolvedValue(["apiKey"]);
+    getRequiredSettingsStatus.mockResolvedValue({ missing: ["apiKey"], unreadable: [] });
     render(<PluginSetupStrip pluginId="acme.linear" />);
     await screen.findByTestId("plugin-setup-strip");
 
-    getMissingRequiredSettings.mockResolvedValue([]);
+    getRequiredSettingsStatus.mockResolvedValue({ missing: [], unreadable: [] });
     await act(async () => announce("acme.linear"));
     await waitFor(() => expect(screen.queryByTestId("plugin-setup-strip")).toBeNull());
 
-    getMissingRequiredSettings.mockResolvedValue(["apiKey"]);
+    getRequiredSettingsStatus.mockResolvedValue({ missing: ["apiKey"], unreadable: [] });
     await act(async () => announce("acme.linear"));
     expect(await screen.findByTestId("plugin-setup-strip")).toBeTruthy();
   });
 
   it("ignores another plugin's settings changes", async () => {
-    getMissingRequiredSettings.mockResolvedValue(["apiKey"]);
+    getRequiredSettingsStatus.mockResolvedValue({ missing: ["apiKey"], unreadable: [] });
     render(<PluginSetupStrip pluginId="acme.linear" />);
     await screen.findByTestId("plugin-setup-strip");
 
     await act(async () => announce("acme.other"));
-    expect(getMissingRequiredSettings).toHaveBeenCalledTimes(1);
+    expect(getRequiredSettingsStatus).toHaveBeenCalledTimes(1);
   });
 
   it("shows nothing when nothing is missing or the read fails", async () => {
-    getMissingRequiredSettings.mockRejectedValue(new Error("boom"));
+    getRequiredSettingsStatus.mockRejectedValue(new Error("boom"));
     render(<PluginSetupStrip pluginId="acme.linear" />);
-    await waitFor(() => expect(getMissingRequiredSettings).toHaveBeenCalled());
+    await waitFor(() => expect(getRequiredSettingsStatus).toHaveBeenCalled());
     expect(screen.queryByTestId("plugin-setup-strip")).toBeNull();
+  });
+
+  it("doesn't prompt for a key it couldn't read — that is the form's error to show", async () => {
+    getRequiredSettingsStatus.mockResolvedValue({ missing: [], unreadable: ["apiKey"] });
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+    await waitFor(() => expect(getRequiredSettingsStatus).toHaveBeenCalled());
+    expect(screen.queryByTestId("plugin-setup-strip")).toBeNull();
+  });
+});
+
+describe("PluginKindSetupStrip", () => {
+  afterEach(() => {
+    unregisterPanelKind("acme.linear.shell");
+  });
+
+  function registerKind(hasRequiredSettings: boolean) {
+    registerPanelKind({
+      id: "acme.linear.shell",
+      name: "Linear shell",
+      iconId: "terminal",
+      color: "#abcdef",
+      hasPty: true,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme.linear",
+      ...(hasRequiredSettings ? { hasRequiredSettings: true } : {}),
+    });
+  }
+
+  it("draws the strip for a kind whose plugin requires settings", async () => {
+    getRequiredSettingsStatus.mockResolvedValue({ missing: ["apiKey"], unreadable: [] });
+    registerKind(true);
+    render(<PluginKindSetupStrip kind="acme.linear.shell" />);
+    expect(await screen.findByTestId("plugin-setup-strip")).toBeTruthy();
+    expect(getRequiredSettingsStatus).toHaveBeenCalledWith("acme.linear", "proj-1");
+  });
+
+  it("draws nothing, and reads nothing, for a built-in or unrequired kind", () => {
+    registerKind(false);
+    render(<PluginKindSetupStrip kind="acme.linear.shell" />);
+    render(<PluginKindSetupStrip kind="terminal" />);
+    expect(screen.queryByTestId("plugin-setup-strip")).toBeNull();
+    expect(getRequiredSettingsStatus).not.toHaveBeenCalled();
   });
 });

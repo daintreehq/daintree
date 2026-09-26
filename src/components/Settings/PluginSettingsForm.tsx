@@ -9,6 +9,8 @@ import {
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { landOnSettingsElement } from "@/components/Settings/settingsLanding";
 import { PluginSettingsView } from "@/components/Plugin/PluginSettingsView";
+import { pluginDeclaresSettingsView, settingsForHome } from "@/services/plugin/pluginSettingsHome";
+import { actionService } from "@/services/ActionService";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -477,10 +479,43 @@ function SettingField({
   // "Required" rides beside the scope badge rather than in the label: the plugin
   // can't work without it, which is what the panel's setup strip sent the user
   // here to fix.
+  // A required field shows its default but has nothing stored, and a default
+  // never satisfies it — so accepting the default has to be an action of its
+  // own. Without one, the displayed default can't be saved: committing an
+  // unchanged draft is (rightly) a no-op for every other field.
+  const canAcceptDefault =
+    def.required === true &&
+    def.default !== undefined &&
+    !isSecret &&
+    !overridden &&
+    loaded &&
+    scopeReady &&
+    !failed;
+  const acceptDefault = async () => {
+    if (!(await writeValue(def.default))) return;
+    if (type === "boolean") {
+      setBoolValue(def.default === true);
+    } else {
+      const accepted = toDraft(def.default, type);
+      setDraft(accepted);
+      setCommitted(accepted);
+    }
+  };
   const scopeBadge = (
     <>
       <Badge size="xs">{SCOPE_BADGE_LABEL[scope]}</Badge>
       {def.required === true && <Badge size="xs">Required</Badge>}
+      {canAcceptDefault && (
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          disabled={saving}
+          onClick={() => void acceptDefault()}
+        >
+          Use default
+        </Button>
+      )}
     </>
   );
   const isModified = (isSecret ? hasStored : overridden) && loaded && scopeReady;
@@ -686,10 +721,11 @@ function SettingField({
         ? "Secure storage unavailable — secrets can't be saved on this device"
         : hasStored && secretIsPlaintext && !migratedToKeychain
           ? "Stored as plaintext — re-save to move it into the OS keychain"
-          : // Nothing stored yet is not "stored": say where a value will go.
+          : // Nothing stored yet is not "stored": say where a new value goes,
+            // without implying it saves as it is typed.
             hasStored
             ? "Stored in OS keychain"
-            : "Saved to the OS keychain when you enter it";
+            : "New secrets are stored in the OS keychain";
     return (
       <>
         <SettingsRow
@@ -792,6 +828,12 @@ interface PluginSettingsFormProps {
   focusRequest?: PluginSettingsFocusRequest | null;
   /** Told once `focusRequest` has been handled, landed or not. */
   onFocusHandled?: (nonce: number) => void;
+  /**
+   * Whether the plugin is running as far as this home knows. A project plugin
+   * that was muted or stopped keeps its fields but unmounts its custom section,
+   * even before the plugin list catches up.
+   */
+  viewRunning?: boolean;
 }
 
 /** The DOM id of a generated field's row — what a settings deep link lands on. */
@@ -814,12 +856,18 @@ export function PluginSettingsForm({
   viewScope = "user",
   focusRequest = null,
   onFocusHandled,
+  viewRunning = true,
 }: PluginSettingsFormProps) {
   // The registry key, not the manifest name: they are the same for an installed
   // plugin, but a project plugin is addressed by its instance key everywhere on
   // the settings bridge — which is also what pins its files to its own project.
   const pluginId = plugin.instanceId;
-  const settings = plugin.manifest.contributes.settings ?? [];
+  // Only this home's fields. Each scope has one home, so an installed plugin's
+  // `user` fields render in the plugin manager and its `project` / `local`
+  // fields in Project settings — never both, with a pointer row to the other.
+  const home = viewScope === "user" ? "manager" : "project";
+  const settings = settingsForHome(plugin, home);
+  const elsewhere = settingsForHome(plugin, home === "manager" ? "project" : "manager");
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
 
   const [reloadKey, setReloadKey] = useState(0);
@@ -857,7 +905,9 @@ export function PluginSettingsForm({
   }, [pluginId, hasLocalScope, projectId, reloadKey]);
 
   // A deep link lands once the target's scope has resolved: before that the row
-  // is disabled, and focus would skip its control for whatever comes next.
+  // is disabled, and focus would skip its control for whatever comes next. It
+  // also waits for the row to be on screen — the settings dialog can still be
+  // switching to this tab — trying a few frames before giving up quietly.
   const focusNonce = focusRequest?.nonce;
   const focusKey = focusRequest?.key;
   const focusDef = settings.find((def) => def.id === focusKey);
@@ -865,14 +915,37 @@ export function PluginSettingsForm({
   const focusReady = focusScope === null || focusScope.values !== null || !!focusScope.failed;
   useEffect(() => {
     if (focusNonce === undefined || focusKey === undefined || !focusReady) return;
-    const row = document.getElementById(pluginSettingFieldId(pluginId, focusKey));
-    if (row) landOnSettingsElement(row);
-    onFocusHandled?.(focusNonce);
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = () => {
+      const row = document.getElementById(pluginSettingFieldId(pluginId, focusKey));
+      if (row && isOnScreen(row)) {
+        landOnSettingsElement(row);
+      } else if (row && attempts++ < LANDING_ATTEMPTS) {
+        timer = setTimeout(attempt, LANDING_RETRY_MS);
+        return;
+      }
+      onFocusHandled?.(focusNonce);
+    };
+    attempt();
+    return () => {
+      if (timer !== undefined) clearTimeout(timer);
+    };
   }, [focusNonce, focusKey, focusReady, pluginId, onFocusHandled]);
 
-  if (settings.length === 0 && !plugin.settingsViewPath) return null;
+  const hasView = pluginDeclaresSettingsView(plugin);
+  if (settings.length === 0 && elsewhere.length === 0 && !hasView) return null;
 
   const anyFailed = userScope.failed || projectScope.failed || localScope.failed;
+  const elsewhereRow =
+    elsewhere.length === 0 ? null : (
+      <SettingsElsewhereRow
+        pluginId={pluginId}
+        firstKey={elsewhere[0]!.id}
+        home={home === "manager" ? "project" : "manager"}
+        projectOpen={projectId !== null}
+      />
+    );
 
   // The caller owns the heading (a section, or the tab that already names it):
   // the declared fields are one group, and a custom settings view is a second
@@ -885,7 +958,7 @@ export function PluginSettingsForm({
           onRetry={() => setReloadKey((k) => k + 1)}
         />
       )}
-      {settings.length > 0 && (
+      {(settings.length > 0 || elsewhereRow) && (
         <SettingsGroup>
           {settings.map((def) => {
             const scope = settingScope(def);
@@ -912,12 +985,69 @@ export function PluginSettingsForm({
               />
             );
           })}
+          {elsewhereRow}
         </SettingsGroup>
       )}
       <PluginSettingsView
         plugin={plugin}
         context={{ scope: viewScope, projectId: viewScope === "project" ? projectId : null }}
+        running={viewRunning}
       />
     </div>
+  );
+}
+
+/** How many times a deep link retries a row that is in the DOM but not yet shown. */
+const LANDING_ATTEMPTS = 20;
+const LANDING_RETRY_MS = 50;
+
+/** Whether an element is actually shown — not inside a hidden settings tab panel. */
+function isOnScreen(el: HTMLElement): boolean {
+  return el.closest(".hidden, [hidden]") === null;
+}
+
+/**
+ * The one row that says where this plugin's other settings live. It links there
+ * rather than repeating the fields, so each value still has exactly one home.
+ */
+function SettingsElsewhereRow({
+  pluginId,
+  firstKey,
+  home,
+  projectOpen,
+}: {
+  pluginId: string;
+  firstKey: string;
+  home: "manager" | "project";
+  projectOpen: boolean;
+}) {
+  const toProject = home === "project";
+  return (
+    <SettingsRow
+      label={toProject ? "Project settings" : "Settings for every project"}
+      description={
+        toProject
+          ? "Values that differ per project are set in each project's settings"
+          : "Values shared by every project are set in the plugin manager"
+      }
+      disabled={toProject && !projectOpen}
+      disabledReason="Open a project to change its settings"
+      control={({ disabled }) => (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          onClick={() =>
+            void actionService.dispatch(
+              "plugin.openSettings",
+              { pluginId, key: firstKey },
+              { source: "user" }
+            )
+          }
+        >
+          {toProject ? "Open project settings" : "Open plugin manager"}
+        </Button>
+      )}
+    />
   );
 }

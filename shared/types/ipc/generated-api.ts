@@ -587,9 +587,6 @@ export interface GeneratedElectronAPI {
     getLatestBackgroundUpdateCheck(
       ...args: IpcInvokeMap["plugin:bg-update-check-latest"]["args"]
     ): Promise<IpcInvokeMap["plugin:bg-update-check-latest"]["result"]>;
-    getMissingRequiredSettings(
-      ...args: IpcInvokeMap["plugin:settings-missing-required"]["args"]
-    ): Promise<IpcInvokeMap["plugin:settings-missing-required"]["result"]>;
     getPanelKinds(
       ...args: IpcInvokeMap["plugin:panel-kinds-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:panel-kinds-get"]["result"]>;
@@ -608,6 +605,9 @@ export interface GeneratedElectronAPI {
     getRecipes(
       ...args: IpcInvokeMap["plugin:recipes-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:recipes-get"]["result"]>;
+    getRequiredSettingsStatus(
+      ...args: IpcInvokeMap["plugin:settings-required-status"]["args"]
+    ): Promise<IpcInvokeMap["plugin:settings-required-status"]["result"]>;
     getRuntimeStatuses(
       ...args: IpcInvokeMap["plugin:runtime-statuses-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:runtime-statuses-get"]["result"]>;

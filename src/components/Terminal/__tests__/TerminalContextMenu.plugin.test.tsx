@@ -11,6 +11,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { act, render, screen, cleanup } from "@testing-library/react";
 
+const menuCloseHook = vi.hoisted(() => ({
+  current: undefined as ((event: Event) => void) | undefined,
+}));
+
 // Render menu content synchronously. Radix only mounts it behind a real
 // right-click into a portal, which tells us nothing about which branch ran —
 // the branch choice is the whole contract under test here.
@@ -38,9 +42,17 @@ vi.mock("@/components/ui/context-menu", () => {
   return {
     ContextMenu: Passthrough,
     ContextMenuTrigger: Passthrough,
-    ContextMenuContent: ({ children }: { children?: React.ReactNode }) => (
-      <div data-testid="context-menu-content">{children}</div>
-    ),
+    ContextMenuContent: ({
+      children,
+      onCloseAutoFocus,
+    }: {
+      children?: React.ReactNode;
+      onCloseAutoFocus?: (event: Event) => void;
+    }) => {
+      // Captured so a test can play the close Radix runs once the menu is gone.
+      menuCloseHook.current = onCloseAutoFocus;
+      return <div data-testid="context-menu-content">{children}</div>;
+    },
     ContextMenuItem: Item,
     ContextMenuActionItem: Item,
     ContextMenuCheckboxItem: Item,
@@ -252,9 +264,16 @@ function renderMenuFor(panel: Record<string, unknown>, forceLocation?: PanelLoca
 
 function registerPluginKind(
   id: string,
-  options: { hasPty?: boolean; dockable?: boolean; name?: string; tourId?: string } = {}
+  options: {
+    hasPty?: boolean;
+    dockable?: boolean;
+    name?: string;
+    tourId?: string;
+    hasPluginSettings?: boolean;
+  } = {}
 ) {
   registerPanelKind({
+    ...(options.hasPluginSettings ? { hasPluginSettings: true } : {}),
     id,
     name: options.name ?? id,
     iconId: "terminal",
@@ -610,5 +629,54 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
       { tourId: "acme.shell-intro" },
       expect.anything()
     );
+  });
+
+  /** Plays the close Radix runs once the menu is gone, then the next task turn. */
+  async function closeMenu(): Promise<Event> {
+    const event = new Event("closeAutoFocus", { cancelable: true });
+    act(() => menuCloseHook.current?.(event));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    return event;
+  }
+
+  it.each([
+    ["a view panel's generic menu", VIEW_PLUGIN_KIND, false],
+    ["a PTY-backed panel's terminal menu", PTY_PLUGIN_KIND, true],
+  ] as const)(
+    "opens the plugin's settings from %s after focus is back on the pane",
+    async (_label, kind, hasPty) => {
+      registerPluginKind(kind, { hasPty, hasPluginSettings: true });
+      renderMenuFor({
+        id: "panel-1",
+        title: "Acme",
+        kind,
+        pluginId: "acme",
+        worktreeId: "wt-1",
+      });
+
+      findRow("Plugin settings…")!.click();
+      expect(dispatch).not.toHaveBeenCalledWith(
+        "plugin.openSettings",
+        expect.anything(),
+        expect.anything()
+      );
+      const event = await closeMenu();
+
+      // Restoration was left to the primitive, and the settings home opened after.
+      expect(event.defaultPrevented).toBe(false);
+      expect(dispatch).toHaveBeenCalledWith(
+        "plugin.openSettings",
+        { pluginId: "acme" },
+        expect.anything()
+      );
+    }
+  );
+
+  it("offers no settings entry for a kind whose plugin has none", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND);
+    renderMenuFor({ id: "panel-1", title: "Acme", kind: VIEW_PLUGIN_KIND, worktreeId: "wt-1" });
+    expect(findRow("Plugin settings…")).toBeUndefined();
   });
 });

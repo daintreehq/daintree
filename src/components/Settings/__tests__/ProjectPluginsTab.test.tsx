@@ -12,6 +12,7 @@ import {
   _resetPluginProjectSurfacesStoreForTest,
   usePluginProjectSurfacesStore,
 } from "@/store/pluginProjectSurfacesStore";
+import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 import type {
   LoadedPluginInfo,
@@ -628,5 +629,72 @@ describe("ProjectPluginsTab", () => {
 
     await waitFor(() => expect(screen.queryByTestId("project-plugin-detail")).toBeNull());
     expect(screen.getByTestId("project-plugins-overview")).toBeTruthy();
+  });
+});
+
+describe("ProjectPluginsTab settings deep link and lifecycle", () => {
+  const INSTANCE = `project__${PROJECT_ID}__acme.dashboard`;
+
+  function loadedProjectPlugin(): LoadedPluginInfo {
+    return installed({
+      manifest: {
+        name: "acme.dashboard",
+        version: "1.2.0",
+        displayName: "Acme Dashboard",
+        contributes: {
+          ...EMPTY_CONTRIBUTES,
+          settings: [{ id: "apiKey", type: "string", label: "API key", scope: "project" }],
+        },
+      },
+      instanceId: INSTANCE,
+      origin: "project",
+      projectId: PROJECT_ID,
+    });
+  }
+
+  afterEach(() => {
+    usePluginManagerStore.setState({ settingsRequest: null });
+  });
+
+  it("selects the plugin a link names and lands on the requested field", async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    pluginApi.list.mockResolvedValue([loadedProjectPlugin()]);
+    seed([projectPlugin()]);
+    act(() =>
+      usePluginManagerStore
+        .getState()
+        .requestSettings({ pluginId: INSTANCE, key: "apiKey", home: "project" })
+    );
+    render(<ProjectPluginsTab />);
+
+    const field = await screen.findByLabelText("API key");
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    await waitFor(() => expect(usePluginManagerStore.getState().settingsRequest).toBeNull());
+  });
+
+  it("puts a key-less link on the plugin's Settings heading", async () => {
+    pluginApi.list.mockResolvedValue([loadedProjectPlugin()]);
+    seed([projectPlugin()]);
+    act(() =>
+      usePluginManagerStore.getState().requestSettings({ pluginId: INSTANCE, home: "project" })
+    );
+    render(<ProjectPluginsTab />);
+
+    await waitFor(() =>
+      expect(document.activeElement?.hasAttribute("data-settings-section-title")).toBe(true)
+    );
+    expect(document.activeElement?.textContent).toBe("Settings");
+    expect(usePluginManagerStore.getState().settingsRequest).toBeNull();
+  });
+
+  it("re-reads the running plugins when a project plugin is muted, not only on provenance", async () => {
+    pluginApi.list.mockResolvedValue([loadedProjectPlugin()]);
+    seed([projectPlugin()]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalledTimes(1));
+
+    seed([projectPlugin({ muted: true })]);
+
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalledTimes(2));
   });
 });

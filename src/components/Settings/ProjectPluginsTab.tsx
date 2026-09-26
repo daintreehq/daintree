@@ -25,6 +25,7 @@ import {
 } from "@/components/Settings/PluginSettingsForm";
 import { pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
+import { pruneSettingsViewRuntimes } from "@/components/Plugin/PluginSettingsView";
 import { ProjectAgentToolsSection } from "@/components/Settings/ProjectAgentToolsSection";
 import {
   PROJECT_PLUGINS_OVERVIEW_ID,
@@ -284,6 +285,9 @@ function hasPluginSettings(plugin: LoadedPluginInfo | undefined): plugin is Load
   return plugin !== undefined && pluginHasSettings(plugin);
 }
 
+/** The DOM id of a plugin pane's Settings section, where a key-less deep link lands. */
+const PLUGIN_SETTINGS_HOME_ID = "project-plugin-settings-home";
+
 /** A settings deep link aimed at the pane showing it, and how to report it handled. */
 interface PaneSettingsFocus {
   request: PluginSettingsFocusRequest | null;
@@ -511,12 +515,16 @@ function ProjectPluginPane({
       </SettingsSection>
 
       {hasPluginSettings(loaded) && (
-        <SettingsSection title="Settings">
+        <SettingsSection title="Settings" id={PLUGIN_SETTINGS_HOME_ID}>
           <PluginSettingsForm
             plugin={loaded}
             viewScope="project"
             focusRequest={settingsFocus.request}
             onFocusHandled={settingsFocus.onHandled}
+            // Read off the live project-plugin state rather than the loaded
+            // list, which only catches up on the next pull: a muted or stopped
+            // plugin's custom section unmounts the moment it stops.
+            viewRunning={folderTrusted && !plugin.muted && plugin.state === "active"}
           />
         </SettingsSection>
       )}
@@ -655,7 +663,7 @@ function InstalledPluginPane({
 
       {hasPluginSettings(plugin) &&
         (forgeSettingsProvider ? (
-          <SettingsSection title="Settings">
+          <SettingsSection title="Settings" id={PLUGIN_SETTINGS_HOME_ID}>
             <SettingsGroup>
               <SettingsRow
                 label={`Configured in Code forge → ${forgeSettingsProvider.name}`}
@@ -682,7 +690,7 @@ function InstalledPluginPane({
             </SettingsGroup>
           </SettingsSection>
         ) : (
-          <SettingsSection title="Settings">
+          <SettingsSection title="Settings" id={PLUGIN_SETTINGS_HOME_ID}>
             <PluginSettingsForm
               plugin={plugin}
               viewScope="project"
@@ -721,7 +729,10 @@ export function ProjectPluginsTab() {
 
   // Same pull-and-resubscribe shape as the global Plugins tab: `list()` is the
   // only source for installed plugins, and provenance changes (install,
-  // uninstall, enable) are what invalidate it.
+  // uninstall, enable) are what invalidate it. A project plugin's own lifecycle
+  // — muted, activated, reloaded onto a new module — arrives as a project-plugin
+  // change instead, so the store's list is a second trigger: without it a
+  // stopped plugin's custom section, or a reloaded one's old module, would stay.
   useEffect(() => {
     let cancelled = false;
     const load = () => {
@@ -731,6 +742,7 @@ export function ProjectPluginsTab() {
           if (cancelled) return;
           setInstalled(list);
           setInstalledFailed(false);
+          pruneSettingsViewRuntimes(list);
         })
         .catch((err) => {
           if (cancelled) return;
@@ -745,7 +757,7 @@ export function ProjectPluginsTab() {
       cancelled = true;
       unsubscribe();
     };
-  }, [installedAttempt]);
+  }, [installedAttempt, projectPlugins]);
 
   // A project plugin loads under an instance key, so it appears in `list()`
   // alongside the installed ones. Split on `instanceId`, NOT on `manifest.name`
@@ -801,22 +813,56 @@ export function ProjectPluginsTab() {
   );
   const consumeSettingsRequest = usePluginManagerStore((s) => s.consumeSettingsRequest);
   const requestTargetId = useMemo(() => {
-    if (settingsRequest === null) return null;
+    // Not until the running list is in: before it, a pane can't tell whether it
+    // has a form to land in, and would settle for its heading.
+    if (settingsRequest === null || installed === null) return null;
     const project = projectPlugins.find((p) => p.instanceId === settingsRequest.pluginId);
     if (project) return `${PROJECT_OPTION_PREFIX}${project.id}`;
     const installedMatch = installedOnly.find((p) => p.instanceId === settingsRequest.pluginId);
     return installedMatch ? `${INSTALLED_OPTION_PREFIX}${installedMatch.instanceId}` : null;
-  }, [settingsRequest, projectPlugins, installedOnly]);
+  }, [settingsRequest, installed, projectPlugins, installedOnly]);
   const requestNonce = settingsRequest?.nonce;
   const requestKey = settingsRequest?.key;
   // Whether the target pane will render a settings form to land in at all.
   const requestTargetHasForm =
     settingsRequest !== null && hasPluginSettings(loadedByInstanceId.get(settingsRequest.pluginId));
+  const [headingFocusNonce, setHeadingFocusNonce] = useState<number | null>(null);
   useEffect(() => {
     if (requestTargetId === null || requestNonce === undefined) return;
     setSelectedId(requestTargetId);
-    if (requestKey === undefined || !requestTargetHasForm) consumeSettingsRequest(requestNonce);
-  }, [requestTargetId, requestNonce, requestKey, requestTargetHasForm, consumeSettingsRequest]);
+    if (requestKey === undefined || !requestTargetHasForm) setHeadingFocusNonce(requestNonce);
+  }, [requestTargetId, requestNonce, requestKey, requestTargetHasForm]);
+  // With no field to land on, focus goes to the plugin's Settings heading — or
+  // its pane, when it has nothing to configure here — once that pane shows and
+  // the dialog has switched to this tab.
+  useEffect(() => {
+    if (headingFocusNonce === null || selectedId !== requestTargetId) return;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = () => {
+      const target =
+        document.querySelector<HTMLElement>(
+          `#${PLUGIN_SETTINGS_HOME_ID} [data-settings-section-title]`
+        ) ??
+        document.querySelector<HTMLElement>(
+          '[data-testid="project-plugin-detail"], [data-testid="installed-plugin-detail"]'
+        );
+      if (target && target.closest(".hidden, [hidden]") !== null && attempts++ < 20) {
+        timer = setTimeout(attempt, 50);
+        return;
+      }
+      if (target) {
+        if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+        target.focus({ preventScroll: false });
+      }
+      setHeadingFocusNonce(null);
+      consumeSettingsRequest(headingFocusNonce);
+    };
+    attempt();
+    return () => {
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [headingFocusNonce, selectedId, requestTargetId, consumeSettingsRequest]);
   // Handed only to the pane the request names, and only once it is the one
   // showing — a pane being replaced must not answer for the one replacing it.
   const paneSettingsFocus: PaneSettingsFocus = {

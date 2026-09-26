@@ -88,6 +88,7 @@ import type {
   PluginBackgroundUpdateCheckSettings,
   PluginSettingsScope,
   PluginSettingsUiValues,
+  PluginRequiredSettingsStatus,
   PluginPickPathRequest,
   PluginWorktreeStatus,
   PluginActivationResult,
@@ -1642,20 +1643,20 @@ async function handleSettingsRevealSecret(
 }
 
 /**
- * The declared `required` settings `pluginId` still has unset, read against the
- * sender's own project. Ids only — never a value — so this is safe to poll from
- * every open panel of the plugin.
+ * Which declared `required` settings `pluginId` still has unset (and which
+ * couldn't be read), against the sender's own project. Ids only — never a value
+ * — so this is safe to poll from every open panel of the plugin.
  */
-async function handleSettingsMissingRequired(
+async function handleSettingsRequiredStatus(
   ctx: IpcContext,
   pluginId: string,
   projectId: string | null
-): Promise<string[]> {
+): Promise<PluginRequiredSettingsStatus> {
   if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
     throw new Error("plugin settings rejected: invalid plugin id");
   }
   assertSenderOwnsSettingsTarget(ctx, pluginId, projectId);
-  return (await getPluginService()).getMissingRequiredSettingsForUi(pluginId, projectId);
+  return (await getPluginService()).getRequiredSettingsStatusForUi(pluginId, projectId);
 }
 
 /**
@@ -1993,9 +1994,9 @@ export const pluginNamespace = defineIpcNamespace({
       handleSettingsRevealSecret,
       { withContext: true }
     ),
-    getMissingRequiredSettings: op(
-      PLUGIN_METHOD_CHANNELS.getMissingRequiredSettings,
-      handleSettingsMissingRequired,
+    getRequiredSettingsStatus: op(
+      PLUGIN_METHOD_CHANNELS.getRequiredSettingsStatus,
+      handleSettingsRequiredStatus,
       { withContext: true }
     ),
     pickPath: op(PLUGIN_METHOD_CHANNELS.pickPath, handlePickPath, { withContext: true }),

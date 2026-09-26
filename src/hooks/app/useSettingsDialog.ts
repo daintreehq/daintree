@@ -8,6 +8,10 @@ export function useSettingsDialog() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab | undefined>(undefined);
   const [settingsSubtab, setSettingsSubtab] = useState<string | undefined>();
   const [settingsSectionId, setSettingsSectionId] = useState<string | undefined>();
+  // Bumped on every targeted open. A repeat of the same target (the user has
+  // since moved to another tab) changes no other value, so without this the
+  // dialog would never hear that it was asked to navigate again.
+  const [settingsNavNonce, setSettingsNavNonce] = useState(0);
 
   const handleSettings = useCallback(() => {
     setSettingsTab(undefined);
@@ -56,6 +60,7 @@ export function useSettingsDialog() {
         : normalized.subtab;
     setSettingsSubtab(subtab);
     setSettingsSectionId(normalized.sectionId);
+    setSettingsNavNonce((n) => n + 1);
     setIsSettingsOpen(true);
   }, []);
 
@@ -82,6 +87,7 @@ export function useSettingsDialog() {
     settingsTab,
     settingsSubtab,
     settingsSectionId,
+    settingsNavNonce,
     handleSettings,
     handleOpenSettingsTab,
     setIsSettingsOpen,
