@@ -62,7 +62,7 @@ Broadcast and targeted pushes are disjoint: `on` never receives a targeted push 
 
 ## Watch a folder, refresh, badge the tab
 
-`host.fs.watch` is a plain `fs.watch`: non-recursive, best-effort, one callback per changed path. Treat a callback as an invalidation hint that prompts a re-read of the thing that changed, never as an event log, and watch the directories you care about explicitly rather than assuming a tree.
+`host.fs.watch` is a plain `fs.watch` by default: non-recursive, best-effort, one callback per changed path. Treat a callback as an invalidation hint that prompts a re-read of the thing that changed, never as an event log. Pass `{ recursive: true }` to watch a whole data tree, including subdirectories created later, and `{ debounceMs }` to collapse an agent's burst of edits into one refresh — but keep a recursive watch to your own data directory rather than a whole worktree (see [`fs` in the host API](./host-api.md#fs--host-mediated-scope-contained-filesystem) for the Linux cost).
 
 ```js
 const dispose = await host.fs.watch([`${projectRoot}/videos`], (changedPath) => {

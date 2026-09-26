@@ -20,8 +20,12 @@ const {
 // tears the watcher down instead of cascading shared state into later cases.
 const activeDisposers = new Set<() => void>();
 
-function watchShared(resolvedPath: string, listener: (changedPath: string) => void): () => void {
-  const release = watchSharedImpl(resolvedPath, listener);
+function watchShared(
+  resolvedPath: string,
+  listener: (changedPath: string) => void,
+  options?: { recursive?: boolean }
+): () => void {
+  const release = watchSharedImpl(resolvedPath, listener, options);
   let disposed = false;
   const dispose = () => {
     if (disposed) return;
@@ -341,6 +345,47 @@ describe("FileObservationService", () => {
 
       disposeOne();
       disposeTwo();
+      expect(sharedWatcherCount()).toBe(0);
+    });
+
+    it("never shares one native watcher between recursive and plain subscribers", () => {
+      fsWatch.mockImplementation(() => makeWatcherStub());
+
+      const plain = vi.fn();
+      const deep = vi.fn();
+      const disposePlain = watchShared("/root/dir", plain);
+      const disposeDeep = watchShared("/root/dir", deep, { recursive: true });
+      const disposeDeepToo = watchShared("/root/dir", vi.fn(), { recursive: true });
+
+      expect(fsWatch).toHaveBeenCalledTimes(2);
+      expect(fsWatch.mock.calls[0]?.[1]).toEqual({ persistent: false, recursive: false });
+      expect(fsWatch.mock.calls[1]?.[1]).toEqual({ persistent: false, recursive: true });
+      expect(sharedWatcherCount()).toBe(2);
+
+      // A recursive watcher reports a path relative to the root at any depth.
+      emitFor(1, "change", path.join("sub", "deep.txt"));
+      expect(deep).toHaveBeenCalledExactlyOnceWith(path.join("/root/dir", "sub", "deep.txt"));
+      expect(plain).not.toHaveBeenCalled();
+
+      disposePlain();
+      expect(sharedWatcherCount()).toBe(1);
+      disposeDeep();
+      disposeDeepToo();
+      expect(sharedWatcherCount()).toBe(0);
+    });
+
+    it("rebinds a recursive watcher as recursive", () => {
+      const failing = makeWatcherStub();
+      const replacement = makeWatcherStub();
+      fsWatch.mockReturnValueOnce(failing).mockReturnValueOnce(replacement);
+
+      const dispose = watchShared("/root/dir", vi.fn(), { recursive: true });
+      failing.handlers.get("error")?.(new Error("watch died"));
+
+      expect(fsWatch.mock.calls[1]?.[1]).toEqual({ persistent: false, recursive: true });
+      expect(sharedWatcherCount()).toBe(1);
+      dispose();
+      expect(replacement.close).toHaveBeenCalledTimes(1);
       expect(sharedWatcherCount()).toBe(0);
     });
 

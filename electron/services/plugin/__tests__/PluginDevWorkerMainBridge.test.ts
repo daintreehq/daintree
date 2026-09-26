@@ -90,7 +90,10 @@ function makeHost() {
     },
     fs: {
       readFile: vi.fn(async () => ""),
+      readFileWithRevision: vi.fn(async () => ({ contents: "", revision: "0".repeat(64) })),
       writeFile: vi.fn(async () => {}),
+      mkdir: vi.fn(async () => {}),
+      appendFile: vi.fn(async () => {}),
       readdir: vi.fn(async () => []),
       stat: vi.fn(async () => ({})),
       watch: vi.fn(async (_paths: string[], _cb: (p: string) => void) => vi.fn()),
@@ -1687,6 +1690,27 @@ describe("PluginDevWorkerMainBridge", () => {
       expect(dispose).toHaveBeenCalled();
     });
 
+    it("forwards recursive and debounceMs only when the worker sent them", async () => {
+      const { host, workerHost } = makeBridge();
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "w4",
+        method: "fs.watch",
+        params: { subscriptionId: "fs4", paths: ["/repo"], recursive: true, debounceMs: 200 },
+      });
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "w5",
+        method: "fs.watch",
+        params: { subscriptionId: "fs5", paths: ["/repo"] },
+      });
+      await flush();
+      const optionsOf = (call: number) => (host.fs.watch.mock.calls[call] as unknown[])[2];
+      expect(optionsOf(0)).toMatchObject({ recursive: true, debounceMs: 200 });
+      expect(optionsOf(1)).not.toHaveProperty("recursive");
+      expect(optionsOf(1)).not.toHaveProperty("debounceMs");
+    });
+
     it("replies with an error when the host watch rejects", async () => {
       const { host, workerHost } = makeBridge();
       host.fs.watch.mockRejectedValueOnce(new Error("PERMISSION_REQUIRED: fs:project-read"));
@@ -1702,6 +1726,73 @@ describe("PluginDevWorkerMainBridge", () => {
       );
       expect(res).toMatchObject({ ok: false });
       expect(res.error).toMatch(/PERMISSION_REQUIRED/);
+    });
+  });
+
+  describe("host.fs revision, mkdir and append relay", () => {
+    it("relays readFileWithRevision with the call's signal and returns the host result", async () => {
+      const { host, workerHost } = makeBridge();
+      const result = { contents: "rows", revision: "a".repeat(64) };
+      host.fs.readFileWithRevision.mockResolvedValueOnce(result);
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "r1",
+        method: "fs.readFileWithRevision",
+        params: { path: "/repo/ledger.json" },
+      });
+      await flush();
+      expect(host.fs.readFileWithRevision).toHaveBeenCalledWith(
+        "/repo/ledger.json",
+        expect.objectContaining({ signal: expect.anything() })
+      );
+      const res = workerHost.sent.find(
+        (m: any) => m.type === "host-result" && m.requestId === "r1"
+      );
+      expect(res).toMatchObject({ ok: true, result });
+    });
+
+    it("relays mkdir and appendFile and resolves them void", async () => {
+      const { host, workerHost } = makeBridge();
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "m1",
+        method: "fs.mkdir",
+        params: { path: "/repo/data" },
+      });
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "a1",
+        method: "fs.appendFile",
+        params: { path: "/repo/data/log.jsonl", contents: "{}\n" },
+      });
+      await flush();
+      expect(host.fs.mkdir).toHaveBeenCalledWith("/repo/data");
+      expect(host.fs.appendFile).toHaveBeenCalledWith("/repo/data/log.jsonl", "{}\n");
+      for (const requestId of ["m1", "a1"]) {
+        const res = workerHost.sent.find(
+          (m: any) => m.type === "host-result" && m.requestId === requestId
+        );
+        expect(res).toMatchObject({ ok: true, result: undefined });
+      }
+    });
+
+    it("replies with the host's error when an append is refused", async () => {
+      const { host, workerHost } = makeBridge();
+      host.fs.appendFile.mockRejectedValueOnce(
+        new Error("TARGET_IS_SYMLINK: refusing to write through a symlink")
+      );
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "a2",
+        method: "fs.appendFile",
+        params: { path: "/repo/link.jsonl", contents: "x" },
+      });
+      await flush();
+      const res = workerHost.sent.find(
+        (m: any) => m.type === "host-result" && m.requestId === "a2"
+      );
+      expect(res).toMatchObject({ ok: false });
+      expect(res.error).toMatch(/^TARGET_IS_SYMLINK/);
     });
   });
 

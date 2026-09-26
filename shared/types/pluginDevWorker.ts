@@ -58,7 +58,10 @@ export type PluginHostCallMethod =
   | "db.resolve"
   | "fs.readFile"
   | "fs.readFileBytes"
+  | "fs.readFileWithRevision"
   | "fs.writeFile"
+  | "fs.mkdir"
+  | "fs.appendFile"
   | "fs.readdir"
   | "fs.stat"
   | "fs.watch"
@@ -512,7 +515,10 @@ export interface ShowConfirmParams {
   options: PluginConfirmOptions;
 }
 
-/** Params for `fs.readFile` / `fs.readFileBytes` / `fs.readdir` / `fs.stat` (`host-call`). */
+/**
+ * Params for `fs.readFile` / `fs.readFileBytes` / `fs.readFileWithRevision` /
+ * `fs.readdir` / `fs.stat` / `fs.mkdir` (`host-call`).
+ */
 export interface FsPathParams {
   path: string;
   /**
@@ -529,6 +535,12 @@ export interface FsWriteFileParams {
   contents: string;
   /** Absent is the same write as `{}` (#12618); forwarded exactly as sent. */
   options?: PluginFsWriteOptions;
+}
+
+/** Params for `fs.appendFile` (`host-call`). */
+export interface FsAppendFileParams {
+  path: string;
+  contents: string;
 }
 
 /** Params for `git.status` / `git.diff` / `git.add` / `git.commit` (`host-call`). */
@@ -609,6 +621,10 @@ export interface ProcessResizeParams {
 export interface FsWatchParams {
   subscriptionId: string;
   paths: string[];
+  /** Absent means a plain, non-recursive watch, so older worker builds keep their behaviour. */
+  recursive?: boolean;
+  /** Applied in main, so a coalesced burst crosses the port as one event. */
+  debounceMs?: number;
 }
 
 /**

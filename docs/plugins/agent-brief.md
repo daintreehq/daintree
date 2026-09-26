@@ -342,7 +342,7 @@ The plugin loaded, the panel renders, a command or a button does nothing, or the
 2. **`dist/` is stale.** The host runs what is on disk. Check the file's mtime against your edit; if you build, check the watcher is running.
 3. **The `actionId` in the manifest is wrong.** It is `{manifestId}.{commandId}`, and the host rewrites it to the instance namespace. `{commandId}` alone or the instance key by hand both resolve to nothing.
 4. **The action threw.** A thrown error from a command surfaces as a toast; a thrown render error shows the panel's diagnostics pane, whose "Copy diagnostics" carries the stack. `host.logger` lines are in the plugin manager's detail pane for the plugin.
-5. **A capability is missing.** `host.fs`, `host.git`, `host.process` and `sendToActiveAgent` reject with a `PERMISSION_REQUIRED:` prefix when the manifest does not declare the token; `host.process`, `fs.writeFile`, `git` writes and `sendToActiveAgent` also raise a one-time consent dialog on first use, which is easy to miss behind a terminal.
+5. **A capability is missing.** `host.fs`, `host.git`, `host.process` and `sendToActiveAgent` reject with a `PERMISSION_REQUIRED:` prefix when the manifest does not declare the token; `host.process`, `fs` writes (`writeFile`, `appendFile`, `mkdir`), `git` writes and `sendToActiveAgent` also raise a one-time consent dialog on first use, which is easy to miss behind a terminal.
 
 Edits to `plugin.json` or `dist/` reload the plugin live, per plugin directory, about 200 ms after writes stop. Settings and `host.storage` survive a reload; module-scope state in the worker and React state in the views do not. No restart is ever required — anything that genuinely needed one is not offered to project plugins.
 

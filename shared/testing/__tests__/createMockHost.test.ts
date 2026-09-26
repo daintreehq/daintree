@@ -1267,6 +1267,46 @@ describe("createMockHost production-parity validation (#10617)", () => {
     });
   });
 
+  describe("fs.readFileWithRevision, mkdir and appendFile", () => {
+    it("reads a revision that writeFile accepts as expectedRevision", async () => {
+      const host = createMockHost();
+      const { revision: written } = await host.fs.writeFile("/repo/doc.md", "v1");
+      const read = await host.fs.readFileWithRevision("/repo/doc.md");
+      expect(read).toEqual({ contents: "v1", revision: written });
+      await expect(
+        host.fs.writeFile("/repo/doc.md", "v2", { expectedRevision: read.revision })
+      ).resolves.toMatchObject({ revision: expect.stringMatching(/^[0-9a-f]{64}$/) });
+      await expect(host.fs.readFileWithRevision("/repo/missing.md")).rejects.toThrow(/ENOENT/);
+    });
+
+    it("appends to a file, creating it, and records each append", async () => {
+      const host = createMockHost();
+      await host.fs.appendFile("/repo/log.jsonl", "a\n");
+      await host.fs.appendFile("/repo/log.jsonl", "b\n");
+      expect(await host.fs.readFile("/repo/log.jsonl")).toBe("a\nb\n");
+      expect(host.fsAppendCalls).toEqual([
+        { path: "/repo/log.jsonl", contents: "a\n" },
+        { path: "/repo/log.jsonl", contents: "b\n" },
+      ]);
+      expect(host.fsWriteCalls).toEqual([]);
+      await expect(host.fs.appendFile("/repo/log.jsonl", 1 as unknown as string)).rejects.toThrow(
+        /contents must be a string/
+      );
+    });
+
+    it("records mkdir and lists the directory it made", async () => {
+      const host = createMockHost();
+      await host.fs.mkdir("/repo/data/2026");
+      expect(host.fsMkdirCalls).toEqual(["/repo/data/2026"]);
+      expect((await host.fs.stat("/repo/data/2026")).isDirectory).toBe(true);
+      expect(await host.fs.readdir("/repo/data")).toEqual([
+        { name: "2026", isDirectory: true, isFile: false, isSymbolicLink: false },
+      ]);
+      await host.fs.writeFile("/repo/taken", "x");
+      await expect(host.fs.mkdir("/repo/taken")).rejects.toMatchObject({ code: "TARGET_EXISTS" });
+    });
+  });
+
   describe("fs.readdir", () => {
     it("lists files and subdirectories previously written under the directory", async () => {
       const host = createMockHost();

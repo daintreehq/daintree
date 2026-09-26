@@ -1494,3 +1494,299 @@ describe("host.fs.writeFile checked path (#12323)", () => {
     expect(writeAudits.length).toBe(1);
   });
 });
+
+function fsWriteAudits(): Array<{ actionId: string }> {
+  return appendSpy.mock.calls
+    .map((c) => c[0] as { channel: string; actionId: string })
+    .filter((record) => record.channel === "plugin:fs-write");
+}
+
+describe("host.fs.readFileWithRevision", () => {
+  const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+
+  it("returns the text and the revision writeFile accepts as expectedRevision", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "ledger.json");
+    await fs.writeFile(target, '﻿{"rows":[]}');
+
+    const read = await host.fs.readFileWithRevision(target);
+    expect(read.contents).toBe(await host.fs.readFile(target));
+    expect(read.revision).toBe(
+      createHash("sha256")
+        .update(await fs.readFile(target))
+        .digest("hex")
+    );
+
+    const written = await host.fs.writeFile(target, '{"rows":[1]}', {
+      expectedRevision: read.revision,
+    });
+    expect(written.revision).toBe(sha('{"rows":[1]}'));
+    expect((await host.fs.readFileWithRevision(target)).revision).toBe(written.revision);
+  });
+
+  it("hands back a revision that goes stale when the file changes underneath", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "board.md");
+    await fs.writeFile(target, "v1");
+    const { revision } = await host.fs.readFileWithRevision(target);
+    await fs.writeFile(target, "agent edit");
+    await expect(
+      host.fs.writeFile(target, "mine", { expectedRevision: revision })
+    ).rejects.toMatchObject({ code: "REVISION_MISMATCH", currentRevision: sha("agent edit") });
+  });
+
+  it("keeps the read gates: capability, containment and an aborted signal", async () => {
+    const writeOnly = registerPlugin(["fs:project-write"], [allowed]);
+    const target = join(allowed, "x.txt");
+    await fs.writeFile(target, "x");
+    await expect(writeOnly.fs.readFileWithRevision(target)).rejects.toThrow(/PERMISSION_REQUIRED/);
+
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.writeFile(join(baseDir, "secret.txt"), "TOPSECRET");
+    await fs.symlink(join(baseDir, "secret.txt"), join(allowed, "link.txt"));
+    await expect(host.fs.readFileWithRevision(join(allowed, "link.txt"))).rejects.toThrow(
+      /PATH_NOT_ALLOWED/
+    );
+    await expect(
+      host.fs.readFileWithRevision(target, { signal: AbortSignal.abort() })
+    ).rejects.toThrow();
+  });
+});
+
+describe("host.fs.mkdir", () => {
+  it("creates missing ancestors, audits the creation, and is a no-op on an existing directory", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "data", "2026", "09");
+
+    await host.fs.mkdir(target);
+    expect((await fs.stat(target)).isDirectory()).toBe(true);
+    expect(fsWriteAudits().map((a) => a.actionId)).toEqual([
+      `fs.mkdir:${await fs.realpath(target)}`,
+    ]);
+
+    await expect(host.fs.mkdir(target)).resolves.toBeUndefined();
+    await expect(host.fs.mkdir(join(allowed, "data"))).resolves.toBeUndefined();
+    expect(fsWriteAudits().length).toBe(1);
+  });
+
+  it("refuses a path whose existing ancestor is a symlink out of scope, creating nothing", async () => {
+    if (process.platform === "win32") return;
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const outside = join(baseDir, "outside");
+    await fs.mkdir(outside);
+    await fs.symlink(outside, join(allowed, "escape"));
+
+    await expect(host.fs.mkdir(join(allowed, "escape", "new", "deeper"))).rejects.toThrow(
+      /PATH_NOT_ALLOWED/
+    );
+    expect(existsSync(join(outside, "new"))).toBe(false);
+    expect(fsWriteAudits().length).toBe(0);
+  });
+
+  it("refuses a traversal out of the root", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await expect(host.fs.mkdir(join(allowed, "..", "sibling"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+    expect(existsSync(join(baseDir, "sibling"))).toBe(false);
+  });
+
+  it("requires a write capability for the path's root class", async () => {
+    const readOnly = registerPlugin(["fs:project-read"], [allowed]);
+    await expect(readOnly.fs.mkdir(join(allowed, "nope"))).rejects.toThrow(/PERMISSION_REQUIRED/);
+
+    const userDataOnly = registerPlugin(["fs:user-data-read", "fs:user-data-write"], [allowed]);
+    await expect(userDataOnly.fs.mkdir(join(allowed, "nope"))).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(existsSync(join(allowed, "nope"))).toBe(false);
+  });
+
+  it("does not create anything when the user denies consent", async () => {
+    getPluginCapabilityConsentService().setConsentBridge(async () => "rejected");
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await expect(host.fs.mkdir(join(allowed, "denied"))).rejects.toThrow(/PERMISSION_REQUIRED/);
+    expect(existsSync(join(allowed, "denied"))).toBe(false);
+  });
+
+  it("refuses a file standing at the target", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await fs.writeFile(join(allowed, "taken"), "file");
+    await expect(host.fs.mkdir(join(allowed, "taken"))).rejects.toMatchObject({
+      code: "TARGET_EXISTS",
+    });
+  });
+
+  it("creates directories inside the implicit data dir before it exists", async () => {
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], []);
+    await host.fs.mkdir(join(dataDir(), "cache", "thumbs"));
+    expect((await fs.stat(join(dataDir(), "cache", "thumbs"))).isDirectory()).toBe(true);
+  });
+});
+
+describe("host.fs.appendFile", () => {
+  it("creates a missing file, appends to an existing one, and audits each append", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const log = join(allowed, "habits.jsonl");
+
+    await host.fs.appendFile(log, '{"day":1}\n');
+    await host.fs.appendFile(log, '{"day":2}\n');
+    expect(await fs.readFile(log, "utf-8")).toBe('{"day":1}\n{"day":2}\n');
+
+    const audits = fsWriteAudits();
+    expect(audits.length).toBe(2);
+    expect(audits[0]?.actionId).toBe(`fs.appendFile:${await fs.realpath(log)}`);
+  });
+
+  it("lands every concurrent append whole", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const log = join(allowed, "inbox.jsonl");
+    const lines = Array.from({ length: 25 }, (_, i) => `{"n":${i}}\n`);
+    await Promise.all(lines.map((line) => host.fs.appendFile(log, line)));
+    const written = (await fs.readFile(log, "utf-8")).split("\n").filter(Boolean);
+    expect(written.sort()).toEqual(lines.map((line) => line.trim()).sort());
+  });
+
+  it("keeps an existing file's inode rather than replacing it", async () => {
+    if (process.platform === "win32") return;
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const log = join(allowed, "ledger.jsonl");
+    await fs.writeFile(log, "a\n");
+    const before = await fs.stat(log);
+    await host.fs.appendFile(log, "b\n");
+    expect((await fs.stat(log)).ino).toBe(before.ino);
+  });
+
+  it("refuses a symlink leaf, even one pointing inside scope", async () => {
+    if (process.platform === "win32") return;
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const real = join(allowed, "real.jsonl");
+    await fs.writeFile(real, "keep\n");
+    const link = join(allowed, "link.jsonl");
+    await fs.symlink(real, link);
+
+    await expect(host.fs.appendFile(link, "sneak\n")).rejects.toMatchObject({
+      code: "TARGET_IS_SYMLINK",
+    });
+    expect(await fs.readFile(real, "utf-8")).toBe("keep\n");
+  });
+
+  it("refuses a symlink leaf pointing out of scope", async () => {
+    if (process.platform === "win32") return;
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const secret = join(baseDir, "secret.jsonl");
+    await fs.writeFile(secret, "outside\n");
+    await fs.symlink(secret, join(allowed, "escape.jsonl"));
+    await expect(host.fs.appendFile(join(allowed, "escape.jsonl"), "x\n")).rejects.toThrow(
+      /PATH_NOT_ALLOWED/
+    );
+    expect(await fs.readFile(secret, "utf-8")).toBe("outside\n");
+  });
+
+  it("requires a write capability and a string", async () => {
+    const readOnly = registerPlugin(["fs:project-read"], [allowed]);
+    await expect(readOnly.fs.appendFile(join(allowed, "log.jsonl"), "x")).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(existsSync(join(allowed, "log.jsonl"))).toBe(false);
+
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await expect(
+      host.fs.appendFile(join(allowed, "log.jsonl"), 42 as unknown as string)
+    ).rejects.toThrow(/contents must be a string/);
+  });
+
+  it("needs the parent directory to exist outside the data dir", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await expect(host.fs.appendFile(join(allowed, "missing", "log.jsonl"), "x")).rejects.toThrow(
+      /ENOENT/
+    );
+  });
+
+  it("refuses a directory at the target", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await fs.mkdir(join(allowed, "dir.jsonl"));
+    await expect(host.fs.appendFile(join(allowed, "dir.jsonl"), "x")).rejects.toThrow();
+  });
+});
+
+describe("host.fs.watch recursive and debounced", () => {
+  async function waitFor(check: () => boolean, timeoutMs = 3000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!check()) {
+      if (Date.now() > deadline) throw new Error("waitFor timed out");
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+
+  it("reports a nested change and a file in a subdirectory created after subscribing", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const nested = join(allowed, "cards", "todo");
+    await fs.mkdir(nested, { recursive: true });
+    await fs.writeFile(join(nested, "a.md"), "a");
+    const realAllowed = await fs.realpath(allowed);
+
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([allowed], (p) => changes.push(p), { recursive: true });
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(nested, "a.md"), "changed");
+      await waitFor(() => changes.includes(join(realAllowed, "cards", "todo", "a.md")));
+
+      await fs.mkdir(join(allowed, "cards", "done"));
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(allowed, "cards", "done", "b.md"), "b");
+      await waitFor(() => changes.includes(join(realAllowed, "cards", "done", "b.md")));
+    } finally {
+      dispose();
+    }
+  });
+
+  it("keeps a plain watch to immediate children while a recursive one shares the directory", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.mkdir(join(allowed, "sub"));
+    const realAllowed = await fs.realpath(allowed);
+
+    const plain: string[] = [];
+    const deep: string[] = [];
+    const disposePlain = await host.fs.watch([allowed], (p) => plain.push(p));
+    const disposeDeep = await host.fs.watch([allowed], (p) => deep.push(p), { recursive: true });
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(allowed, "sub", "deep.txt"), "x");
+      await waitFor(() => deep.includes(join(realAllowed, "sub", "deep.txt")));
+      expect(plain).not.toContain(join(realAllowed, "sub", "deep.txt"));
+    } finally {
+      disposePlain();
+      disposeDeep();
+    }
+  });
+
+  it("coalesces a burst into one trailing callback", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([allowed], (p) => changes.push(p), { debounceMs: 250 });
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      for (let i = 0; i < 8; i++) {
+        await fs.writeFile(join(allowed, `burst-${i}.txt`), String(i));
+      }
+      await waitFor(() => changes.length > 0);
+      await new Promise((r) => setTimeout(r, 600));
+      expect(changes.length).toBe(1);
+      expect(changes[0]).toMatch(/burst-\d\.txt$/);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("drops a pending debounced callback when disposed", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([allowed], (p) => changes.push(p), { debounceMs: 400 });
+    await new Promise((r) => setTimeout(r, 100));
+    await fs.writeFile(join(allowed, "late.txt"), "x");
+    await new Promise((r) => setTimeout(r, 150));
+    dispose();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(changes).toEqual([]);
+  });
+});
