@@ -93,6 +93,8 @@ function hostIdOf(payload: unknown): HostId {
 export class RemoteHostsClient {
   private routerInstalled = false;
   private readonly watchedWindows = new Set<number>();
+  private readonly switchSeq = new Map<number, number>();
+  private readonly switchChains = new Map<number, Promise<void>>();
   private readonly unsubscribe: Array<() => void> = [];
   private readonly detached: DetachedViewRegistry;
 
@@ -248,11 +250,16 @@ export class RemoteHostsClient {
     }
 
     const remote = !isLocalHostId(hostId);
+    if (remote) this.options.registry.require(hostId);
     const sourceWindowId = newWindow ? null : this.windowOf(ctx);
+    // The latest request for a window wins: one still waiting on its host when
+    // a newer one arrives resolves as superseded and never moves the window.
+    const ticket = sourceWindowId === null ? null : this.takeSwitchTicket(sourceWindowId);
+    const superseded = (): SwitchWindowHostResult | null =>
+      ticket !== null && !ticket.isCurrent() ? { outcome: "superseded", hostId } : null;
     let projectPath: string | null = null;
     let connection: ReturnType<RemoteHostManager["connect"]> | null = null;
     if (remote) {
-      this.options.registry.require(hostId);
       this.ensureRouter();
       connection = this.options.manager.connect(hostId);
       if (connection.linkState.status === "version-mismatch") throw versionMismatch(hostId);
@@ -262,6 +269,8 @@ export class RemoteHostsClient {
       const readiness = await connection.whenReady(
         this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS
       );
+      const stale = superseded();
+      if (stale) return stale;
       if (readiness === "version-mismatch") throw versionMismatch(hostId);
       if (readiness !== "ready") {
         // A new window can show the host's project list while it connects;
@@ -281,6 +290,8 @@ export class RemoteHostsClient {
         }
       } else {
         const description = await connection.describeProject(projectId).catch(() => null);
+        const staleLookup = superseded();
+        if (staleLookup) return staleLookup;
         if (!description?.path) {
           throw new AppError({
             code: "NOT_FOUND",
@@ -294,6 +305,8 @@ export class RemoteHostsClient {
       projectId = this.options.windows.lastLocalProjectId(sourceWindowId) ?? undefined;
     }
 
+    const stale = superseded();
+    if (stale) return stale;
     // Nothing to return to, and no new window to show the host's project list
     // in: leave this window as it is and let the caller offer the list.
     if (projectId === undefined && !newWindow) return { outcome: "choose-project", hostId };
@@ -302,27 +315,76 @@ export class RemoteHostsClient {
     if (windowId === null) {
       throw new AppError({ code: "INTERNAL", message: "No window to attach to the host" });
     }
-    this.options.bindings.set(windowId, remote ? hostId : LOCAL_HOST_ID);
-    if (!this.watchedWindows.has(windowId)) {
-      this.watchedWindows.add(windowId);
-      this.options.windows.watchWindow(windowId, () => {
-        this.watchedWindows.delete(windowId);
-        this.options.bindings.release(windowId);
-      });
-    }
+    const targetProjectId = projectId;
+    const targetPath = projectPath;
+    return this.inSwitchTurn(windowId, async (): Promise<SwitchWindowHostResult> => {
+      // Checked again in turn: a newer request may have arrived while this
+      // one waited behind the window's previous switch.
+      const late = superseded();
+      if (late) return late;
+      const previousHost = this.options.bindings.get(windowId);
+      const nextHost = remote ? hostId : LOCAL_HOST_ID;
+      this.options.bindings.set(windowId, nextHost);
+      if (!this.watchedWindows.has(windowId)) {
+        this.watchedWindows.add(windowId);
+        this.options.windows.watchWindow(windowId, () => {
+          this.watchedWindows.delete(windowId);
+          this.switchSeq.delete(windowId);
+          this.options.bindings.release(windowId);
+        });
+      }
 
-    // Only a new window reaches here without a project: its unbound view
-    // follows the binding and lists the host's projects.
-    if (projectId === undefined) return { outcome: "window-opened", hostId };
-    if (!remote) {
-      await this.options.windows.openLocalProject(windowId, projectId);
-      return { outcome: "switched", hostId: LOCAL_HOST_ID, projectId };
-    }
-    // Set above for every remote switch that names a project; never open a pathless view.
-    if (projectPath === null) throw new AppError({ code: "INTERNAL", message: "No host path" });
-    await this.options.windows.openRemoteProject(windowId, hostId, projectId, projectPath);
-    connection?.noteActiveProject(projectId);
-    return { outcome: "switched", hostId, projectId };
+      // Only a new window reaches here without a project: its unbound view
+      // follows the binding and lists the host's projects.
+      if (targetProjectId === undefined) return { outcome: "window-opened", hostId };
+      try {
+        if (!remote) {
+          await this.options.windows.openLocalProject(windowId, targetProjectId);
+          return { outcome: "switched", hostId: LOCAL_HOST_ID, projectId: targetProjectId };
+        }
+        // Set above for every remote switch that names a project; never open a pathless view.
+        if (targetPath === null) {
+          throw new AppError({ code: "INTERNAL", message: "No host path" });
+        }
+        await this.options.windows.openRemoteProject(windowId, hostId, targetProjectId, targetPath);
+      } catch (error) {
+        // The view didn't move, so neither does the binding: they never name
+        // different hosts.
+        // Only while the window is still open, and never back onto a host
+        // that was forgotten meanwhile.
+        if (
+          this.options.bindings.get(windowId) === nextHost &&
+          this.watchedWindows.has(windowId) &&
+          (isLocalHostId(previousHost) || this.options.registry.get(previousHost) !== null)
+        ) {
+          this.options.bindings.set(windowId, previousHost);
+        }
+        throw error;
+      }
+      connection?.noteActiveProject(targetProjectId);
+      return { outcome: "switched", hostId, projectId: targetProjectId };
+    });
+  }
+
+  /** A window's newest switch request; any earlier one still in flight is superseded. */
+  private takeSwitchTicket(windowId: number): { isCurrent(): boolean } {
+    const seq = (this.switchSeq.get(windowId) ?? 0) + 1;
+    this.switchSeq.set(windowId, seq);
+    return { isCurrent: () => this.switchSeq.get(windowId) === seq };
+  }
+
+  /** A window's binding and view change one switch at a time, in the order requests were made. */
+  private inSwitchTurn<T>(windowId: number, task: () => Promise<T>): Promise<T> {
+    const run = (this.switchChains.get(windowId) ?? Promise.resolve()).then(task, task);
+    const settled = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.switchChains.set(windowId, settled);
+    void settled.then(() => {
+      if (this.switchChains.get(windowId) === settled) this.switchChains.delete(windowId);
+    });
+    return run;
   }
 
   async dispose(): Promise<void> {

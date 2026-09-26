@@ -195,6 +195,89 @@ describe("RemoteHostsClient", () => {
     expect(router.hostForSender(8)).toBeNull();
   });
 
+  it("puts the binding back when the view can't be moved, so the two never name different hosts", async () => {
+    vi.mocked(windows.openRemoteProject).mockRejectedValueOnce(new Error("view failed"));
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      })
+    ).rejects.toThrow("view failed");
+    expect(bindings.get(1)).toBe("local");
+    expect(manager.get("studio-01")?.noteActiveProject).not.toHaveBeenCalled();
+  });
+
+  it("doesn't put back a binding to a host forgotten while the view failed to move", async () => {
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    vi.mocked(windows.openLocalProject).mockImplementationOnce(async () => {
+      await client.forget({ hostId: "studio-01" });
+      throw new Error("view failed");
+    });
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "local",
+        newWindow: false,
+        projectId: "proj-local",
+      })
+    ).rejects.toThrow("view failed");
+    expect(bindings.get(1)).toBe("local");
+  });
+
+  it("ignores a stale host lookup's failure once a newer switch was asked for", async () => {
+    registry.add({ name: "studio-02", sshTarget: "studio2.example" });
+    let failLookup!: () => void;
+    manager
+      .connect("studio-01")
+      .describeProject.mockImplementationOnce(
+        () => new Promise((_resolve, reject) => (failLookup = () => reject(new Error("gone"))))
+      );
+    const slow = client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    await vi.waitFor(() => expect(failLookup).toBeTypeOf("function"));
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-02",
+      newWindow: false,
+      projectId: "proj-2",
+    });
+    failLookup();
+    await expect(slow).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+  });
+
+  it("moves the window for the latest request only, whatever order the hosts answer in", async () => {
+    registry.add({ name: "studio-02", sshTarget: "studio2.example" });
+    let releaseSlow!: (value: string) => void;
+    manager
+      .connect("studio-01")
+      .whenReady.mockImplementationOnce(
+        () => new Promise<string>((resolve) => (releaseSlow = resolve))
+      );
+    const slow = client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-02",
+        newWindow: false,
+        projectId: "proj-2",
+      })
+    ).resolves.toEqual({ outcome: "switched", hostId: "studio-02", projectId: "proj-2" });
+    releaseSlow("ready");
+    await expect(slow).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+    expect(windows.openRemoteProject).toHaveBeenCalledTimes(1);
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(1, "studio-02", "proj-2", "/srv/proj-2");
+    expect(bindings.get(1)).toBe("studio-02");
+  });
+
   describe("a switch that names no project", () => {
     it("returns the window to the project the host remembers for this machine", async () => {
       manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };

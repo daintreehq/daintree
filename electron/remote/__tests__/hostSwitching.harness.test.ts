@@ -122,12 +122,15 @@ const shellWindow = vi.hoisted(() => ({ id: 1, isDestroyed: () => false, once: (
 const pvmState = vi.hoisted(() => ({
   active: null as string | null,
   views: new Map<string, { webContents: unknown }>(),
+  /** Every key the window was asked to show, in order, before it landed. */
+  requested: [] as string[],
   create: null as null | ((key: string) => { webContents: unknown }),
 }));
 const fakePvm = vi.hoisted(() => {
   // Serialized and slow to land, as the real manager's switch chain is.
   let chain: Promise<unknown> = Promise.resolve();
   function show(key: string) {
+    pvmState.requested.push(key);
     const next = chain.then(async () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
       return land(key);
@@ -223,6 +226,7 @@ afterEach(async () => {
   h = null;
   pvmState.active = null;
   pvmState.views.clear();
+  pvmState.requested.length = 0;
   pvmState.create = null;
   mcp.dispatched.length = 0;
   scratches.clear();
@@ -336,12 +340,16 @@ describe("switching hosts (integration harness)", () => {
     async () => {
       const { local } = await startWindowOnLocalProject();
       const client = harnessState.client!;
+      const first = client.client.switchWindowHost(from(local), {
+        hostId: HOST_ID,
+        newWindow: false,
+        projectId: "proj-1",
+      });
+      // The second is asked for while the first is landing, past the point a
+      // newer request could supersede it: both land, one after the other.
+      await vi.waitFor(() => expect(pvmState.requested).toContain(REMOTE_KEY));
       await Promise.all([
-        client.client.switchWindowHost(from(local), {
-          hostId: HOST_ID,
-          newWindow: false,
-          projectId: "proj-1",
-        }),
+        first,
         client.client.switchWindowHost(from(local), {
           hostId: HOST_ID,
           newWindow: false,
