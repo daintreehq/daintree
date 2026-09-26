@@ -1,4 +1,8 @@
-export { ProjectAcrossHostsService } from "./service.js";
+export {
+  localPlacementAuthority,
+  ProjectAcrossHostsService,
+  type PlacementAuthority,
+} from "./service.js";
 export {
   getProjectAcrossHostsService,
   createDefaultProjectAcrossHostsDeps,
