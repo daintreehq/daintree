@@ -135,6 +135,12 @@ const MAX_FILE_DECORATION_PATHS = 1000;
  * omitted disables debouncing entirely (fire on every change).
  */
 const MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS = 50;
+/**
+ * Ceiling for a `host.fs.watch` `debounceMs`. Node clamps any timer delay past
+ * 2^31-1 ms to 1 ms, so an unbounded value would turn "almost never" into
+ * "immediately"; a minute is already far past any useful coalescing window.
+ */
+const MAX_PLUGIN_FS_WATCH_DEBOUNCE_MS = 60_000;
 
 /**
  * The slice of a `WorkspaceClient` worktree event a plugin subscription reads.
@@ -2249,18 +2255,24 @@ async function withVerifiedReadHandle<T>(
 
 /**
  * Create `resolved` and every missing ancestor, one component at a time, and
- * report whether anything was created. Containment has already proven the
- * deepest existing ancestor is a real directory inside scope; walking the
- * missing tail with non-recursive `mkdir` means a component that appears in
- * the meantime is inspected rather than silently followed — only a real
- * directory is accepted, never a symlink to one.
+ * return the directories this call created, outermost first, so each can be
+ * audited. Containment has already proven the deepest existing ancestor is a
+ * real directory inside scope; walking the missing tail with non-recursive
+ * `mkdir` means a component that appears in the meantime is inspected rather
+ * than silently followed — only a real directory is accepted, never a symlink
+ * to one.
  *
  * The final realpath compare catches an ancestor swapped for a symlink while
  * the chain was being built. It cannot un-create what landed elsewhere, but it
  * refuses to report success for a directory that is not where containment
- * said it would be.
+ * said it would be. The walk is by pathname, so the window is shrunk, not
+ * closed — the same limit every host.fs write documents.
  */
-async function createDirectoryChain(pluginId: string, resolved: string): Promise<boolean> {
+async function createDirectoryChain(
+  pluginId: string,
+  op: string,
+  resolved: string
+): Promise<string[]> {
   const lstatOrNull = (target: string) =>
     fs.lstat(target).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return null;
@@ -2269,7 +2281,7 @@ async function createDirectoryChain(pluginId: string, resolved: string): Promise
   const moved = () =>
     fsTargetError(
       "TARGET_UNAVAILABLE",
-      `Plugin "${pluginId}" fs.mkdir: the target moved while the directory was being created`
+      `Plugin "${pluginId}" fs.${op}: the target moved while the directory was being created`
     );
 
   const missing: string[] = [];
@@ -2281,7 +2293,7 @@ async function createDirectoryChain(pluginId: string, resolved: string): Promise
       if (current === resolved) {
         throw fsTargetError(
           "TARGET_EXISTS",
-          `Plugin "${pluginId}" fs.mkdir: something other than a directory exists at the target`
+          `Plugin "${pluginId}" fs.${op}: something other than a directory exists at the target`
         );
       }
       throw moved();
@@ -2291,11 +2303,13 @@ async function createDirectoryChain(pluginId: string, resolved: string): Promise
     if (parent === current) throw moved();
     current = parent;
   }
-  if (missing.length === 0) return false;
+  if (missing.length === 0) return [];
 
+  const created: string[] = [];
   for (const dir of missing.reverse()) {
     try {
       await fs.mkdir(dir);
+      created.push(dir);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       // A concurrent creator is fine as long as what it made is a directory.
@@ -2304,7 +2318,7 @@ async function createDirectoryChain(pluginId: string, resolved: string): Promise
     }
   }
   if ((await fs.realpath(resolved)) !== resolved) throw moved();
-  return true;
+  return created;
 }
 
 /**
@@ -2312,6 +2326,9 @@ async function createDirectoryChain(pluginId: string, resolved: string): Promise
  * creating the file when absent. O_NOFOLLOW refuses a leaf swapped for a
  * symlink on POSIX, and the descriptor is compared with the entry at the path
  * before anything is written, exactly as reads are.
+ *
+ * A failure after some bytes landed carries `bytesWritten` on the error so the
+ * caller can audit the partial append rather than report it as nothing.
  */
 async function appendToContainedFile(
   pluginId: string,
@@ -2320,12 +2337,17 @@ async function appendToContainedFile(
 ): Promise<void> {
   let handle: FileHandle;
   try {
+    // O_NONBLOCK (undefined on Windows): the caller already refused a
+    // non-regular leaf, but a FIFO swapped in afterwards would otherwise hold
+    // the open — and this path's write lock — until some reader appeared. On
+    // a regular file the flag changes nothing.
     handle = await fs.open(
       resolved,
       fs.constants.O_WRONLY |
         fs.constants.O_APPEND |
         fs.constants.O_CREAT |
-        (fs.constants.O_NOFOLLOW ?? 0),
+        (fs.constants.O_NOFOLLOW ?? 0) |
+        (fs.constants.O_NONBLOCK ?? 0),
       0o666
     );
   } catch (error) {
@@ -2347,11 +2369,18 @@ async function appendToContainedFile(
     }
     // A regular file takes the whole buffer in one write; the loop only
     // matters for a short write, where each O_APPEND write still lands at
-    // the end.
+    // the end but another appender can interleave between the pieces.
     let written = 0;
-    while (written < bytes.byteLength) {
-      const { bytesWritten } = await handle.write(bytes, written, bytes.byteLength - written);
-      written += bytesWritten;
+    try {
+      while (written < bytes.byteLength) {
+        const { bytesWritten } = await handle.write(bytes, written, bytes.byteLength - written);
+        written += bytesWritten;
+      }
+    } catch (error) {
+      if (written > 0 && error instanceof Error) {
+        Object.assign(error, { bytesWritten: written });
+      }
+      throw error;
     }
   } catch (error) {
     await handle.close().catch(() => undefined);
@@ -2430,29 +2459,52 @@ function buildFsApi(
   };
   const containWithClass = (targetPath: string) =>
     containToDeclaredRoots(deps, pluginId, targetPath, workspaceScope);
-  // Lazily materialize the implicit per-plugin data dir before containment
-  // when the target (lexically) lands inside it — resolveContainedPath
-  // realpaths every root and skips ones that don't exist, so a first mutation
-  // into a not-yet-created data dir would otherwise fail containment. The
-  // lexical check only gates the mkdir; realpath containment afterwards stays
-  // the security authority.
+  // Every gate a mutation passes before it may touch the disk: the root-class
+  // capability, containment, and JIT consent — taken exactly once, and always
+  // before anything is created.
   //
-  // Identify a data-dir target from the (lexical) request path, not the
+  // Consent normally fires after validation + containment so a call that would
+  // fail anyway never banks a grant (#10524). The implicit per-plugin data dir
+  // is the exception: resolveContainedPath realpaths every root and skips ones
+  // that don't exist, so a first mutation into a not-yet-created data dir must
+  // create it before containment can succeed — and nothing may be created
+  // before consent. There the lexical match stands in for containment until
+  // the dir exists; realpath containment afterwards stays the authority.
+  //
+  // A data-dir target is identified from the (lexical) request path, not the
   // realpath-resolved one: on macOS the resolved path picks up the /private
   // prefix while `dataDir` does not, so comparing against `resolved` would
   // wrongly miss the match.
-  const materializeDataDirFor = async (op: string, targetPath: string): Promise<boolean> => {
+  const gateMutation = async (
+    op: string,
+    targetPath: string,
+    writeCap: BuiltInPluginCapability
+  ): Promise<{ resolved: string; isDataDirTarget: boolean }> => {
     const dataDir = deps.pluginDataDir(pluginId);
     const isDataDirTarget =
       path.isAbsolute(targetPath) && deps.isPathUnder(dataDir, path.normalize(targetPath));
     if (isDataDirTarget) {
-      // A data-dir target is always user-data class — gate before the mkdir
-      // so a plugin lacking the cap doesn't materialize the dir as a side
-      // effect (the post-containment check re-asserts it).
       requireWriteCapForClass(op, "user-data");
-      await fs.mkdir(dataDir, { recursive: true });
+      await ensureCapabilityConsent(deps, pluginId, writeCap);
+      requireLoaded(op);
+      const firstCreated = await fs.mkdir(dataDir, { recursive: true });
+      if (firstCreated !== undefined) auditMutation("mkdir", dataDir);
     }
-    return isDataDirTarget;
+    const { resolved, rootClass } = await containWithClass(targetPath);
+    requireLoaded(op);
+    requireWriteCapForClass(op, rootClass);
+    if (!isDataDirTarget) {
+      await ensureCapabilityConsent(deps, pluginId, writeCap);
+      requireLoaded(op);
+    }
+    return { resolved, isDataDirTarget };
+  };
+  // A nested target inside the data dir grows its parents implicitly, so a
+  // plugin can lay out its own subtree; everywhere else the parent must exist.
+  const createDataDirParents = async (op: string, resolved: string): Promise<void> => {
+    for (const dir of await createDirectoryChain(pluginId, op, path.dirname(resolved))) {
+      auditMutation("mkdir", dir);
+    }
   };
   // Containment resolved before the consent prompt and the per-path queue
   // wait; both can take long enough for the path to change underneath, so a
@@ -2635,20 +2687,8 @@ function buildFsApi(
           `Plugin "${pluginId}" fs.writeFile: expectedRevision must be a sha256 hex string or null`
         );
       }
-      const isDataDirWrite = await materializeDataDirFor("writeFile", filePath);
-      requireLoaded("writeFile");
-      const { resolved, rootClass } = await containWithClass(filePath);
-      requireLoaded("writeFile");
-      requireWriteCapForClass("writeFile", rootClass);
-      // Create intermediate dirs for a nested write inside the data dir so a
-      // plugin can lay out its own subtree without a separate mkdir API.
-      if (isDataDirWrite) {
-        await fs.mkdir(path.dirname(resolved), { recursive: true });
-      }
-      // Consent fires after validation + containment so a call that would fail
-      // anyway never banks a grant (#10524). Re-check liveness after the await.
-      await ensureCapabilityConsent(deps, pluginId, writeCap);
-      requireLoaded("writeFile");
+      const { resolved, isDataDirTarget } = await gateMutation("writeFile", filePath, writeCap);
+      if (isDataDirTarget) await createDataDirParents("writeFile", resolved);
       // One writer per resolved path at a time, so a hash-compare-and-replace
       // cannot interleave with any other host-mediated writer to the same
       // file. Distinct paths never wait on each other.
@@ -2739,23 +2779,18 @@ function buildFsApi(
     mkdir: async (dirPath) => {
       requireLoaded("mkdir");
       const writeCap = requireWriteCap("mkdir");
-      await materializeDataDirFor("mkdir", dirPath);
-      requireLoaded("mkdir");
       // Containment realpaths the deepest existing ancestor and re-appends the
       // missing tail, so an existing ancestor that is a symlink out of every
       // root is refused here, before anything is created.
-      const { resolved, rootClass } = await containWithClass(dirPath);
-      requireLoaded("mkdir");
-      requireWriteCapForClass("mkdir", rootClass);
-      await ensureCapabilityConsent(deps, pluginId, writeCap);
-      requireLoaded("mkdir");
+      const { resolved } = await gateMutation("mkdir", dirPath, writeCap);
       const created = await runExclusive(resolved, async () => {
         requireLoaded("mkdir");
         await recheckContained("mkdir", dirPath, resolved);
-        return createDirectoryChain(pluginId, resolved);
+        return createDirectoryChain(pluginId, "mkdir", resolved);
       });
-      // A no-op on an existing directory changed nothing worth auditing.
-      if (created) auditMutation("mkdir", resolved);
+      // Only what this call made is audited; an existing directory changed
+      // nothing.
+      for (const dir of created) auditMutation("mkdir", dir);
     },
     appendFile: async (filePath, contents) => {
       requireLoaded("appendFile");
@@ -2763,27 +2798,42 @@ function buildFsApi(
       if (typeof contents !== "string") {
         throw new Error(`Plugin "${pluginId}" fs.appendFile: contents must be a string`);
       }
-      const isDataDirTarget = await materializeDataDirFor("appendFile", filePath);
-      requireLoaded("appendFile");
-      const { resolved, rootClass } = await containWithClass(filePath);
-      requireLoaded("appendFile");
-      requireWriteCapForClass("appendFile", rootClass);
-      // Same parent rule as writeFile: only the plugin's own data dir grows
-      // intermediate directories implicitly.
-      if (isDataDirTarget) {
-        await fs.mkdir(path.dirname(resolved), { recursive: true });
-      }
-      await ensureCapabilityConsent(deps, pluginId, writeCap);
-      requireLoaded("appendFile");
+      const { resolved, isDataDirTarget } = await gateMutation("appendFile", filePath, writeCap);
+      if (isDataDirTarget) await createDataDirParents("appendFile", resolved);
       const bytes = Buffer.from(contents, "utf-8");
       // Serialised with writeFile on the same path, so an append can never
       // land between a checked write's hash compare and its rename.
       await runExclusive(resolved, async () => {
         requireLoaded("appendFile");
         await recheckContained("appendFile", filePath, resolved);
-        await refuseSymlinkLeaf("appendFile", filePath);
+        const leafStat = await refuseSymlinkLeaf("appendFile", filePath);
+        // A FIFO or device is refused before the open, which on a FIFO with
+        // no reader would otherwise block.
+        if (leafStat !== null && !leafStat.isFile()) {
+          throw fsTargetError(
+            "TARGET_UNAVAILABLE",
+            `Plugin "${pluginId}" fs.appendFile: the target is not a regular file`
+          );
+        }
         requireLoaded("appendFile");
-        await appendToContainedFile(pluginId, resolved, bytes);
+        try {
+          await appendToContainedFile(pluginId, resolved, bytes);
+        } catch (error) {
+          const partial = (error as { bytesWritten?: unknown }).bytesWritten;
+          if (typeof partial === "number" && partial > 0) {
+            deps.safeAppendAudit({
+              pluginId,
+              actionId: `fs.appendFile:${resolved}`,
+              recordType: "ipc-invoke",
+              channel: "plugin:fs-write",
+              result: "error",
+              errorMessage: formatErrorMessage(error, "append failed"),
+              argsHash: deps.safeArgsHash([{ path: resolved, bytes: partial }]),
+              durationMs: 0,
+            });
+          }
+          throw error;
+        }
       });
       auditMutation("appendFile", resolved, bytes.byteLength);
     },
@@ -2876,12 +2926,31 @@ function buildFsApi(
       if (typeof callback !== "function") {
         throw new Error(`Plugin "${pluginId}" fs.watch: callback must be a function`);
       }
-      const recursive = options?.recursive === true;
-      // Same floor and off-switch as onDidChangeWorktrees' debounce.
+      // Validated here, not trusted from the worker port: a malformed option
+      // is an authoring error, never read as "off".
+      const rawRecursive = options?.recursive;
+      if (rawRecursive !== undefined && typeof rawRecursive !== "boolean") {
+        throw new Error(`Plugin "${pluginId}" fs.watch: recursive must be a boolean`);
+      }
+      const recursive = rawRecursive === true;
+      const rawDebounce = options?.debounceMs;
+      if (
+        rawDebounce !== undefined &&
+        (typeof rawDebounce !== "number" || !Number.isFinite(rawDebounce) || rawDebounce < 0)
+      ) {
+        throw new Error(
+          `Plugin "${pluginId}" fs.watch: debounceMs must be a finite, non-negative number`
+        );
+      }
+      // Same floor and off-switch as onDidChangeWorktrees' debounce, plus a
+      // ceiling so a huge value cannot wrap to Node's 1 ms overflow delay.
       const debounceMs =
-        typeof options?.debounceMs === "number" && options.debounceMs > 0
-          ? Math.max(options.debounceMs, MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS)
-          : 0;
+        rawDebounce === undefined || rawDebounce === 0
+          ? 0
+          : Math.min(
+              Math.max(rawDebounce, MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS),
+              MAX_PLUGIN_FS_WATCH_DEBOUNCE_MS
+            );
       const targets = Array.isArray(paths) ? paths : [];
       if (targets.length === 0) {
         throw new Error(`Plugin "${pluginId}" fs.watch: paths must be a non-empty array`);
@@ -2946,7 +3015,16 @@ function buildFsApi(
 
       try {
         for (const resolved of resolvedTargets) {
-          releases.push(watchShared(resolved, onChange, { recursive }));
+          // Node's Linux recursive watcher follows static symlink targets, so
+          // its reports are not proof of containment. The path it reports is
+          // always joined onto the watched root; anything that does not stay
+          // lexically inside that root is dropped rather than handed on.
+          const withinRoot = (changed: string): void => {
+            const rel = path.relative(resolved, changed);
+            if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return;
+            onChange(changed);
+          };
+          releases.push(watchShared(resolved, withinRoot, { recursive }));
         }
       } catch (err) {
         // A later path's watch threw (e.g. ENOENT) after earlier subscriptions

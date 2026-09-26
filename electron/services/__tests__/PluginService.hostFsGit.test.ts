@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os, { tmpdir } from "node:os";
@@ -1554,19 +1555,22 @@ describe("host.fs.readFileWithRevision", () => {
 });
 
 describe("host.fs.mkdir", () => {
-  it("creates missing ancestors, audits the creation, and is a no-op on an existing directory", async () => {
+  it("creates missing ancestors, audits each one, and is a no-op on an existing directory", async () => {
     const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
     const target = join(allowed, "data", "2026", "09");
 
     await host.fs.mkdir(target);
     expect((await fs.stat(target)).isDirectory()).toBe(true);
+    const real = await fs.realpath(allowed);
     expect(fsWriteAudits().map((a) => a.actionId)).toEqual([
-      `fs.mkdir:${await fs.realpath(target)}`,
+      `fs.mkdir:${join(real, "data")}`,
+      `fs.mkdir:${join(real, "data", "2026")}`,
+      `fs.mkdir:${join(real, "data", "2026", "09")}`,
     ]);
 
     await expect(host.fs.mkdir(target)).resolves.toBeUndefined();
     await expect(host.fs.mkdir(join(allowed, "data"))).resolves.toBeUndefined();
-    expect(fsWriteAudits().length).toBe(1);
+    expect(fsWriteAudits().length).toBe(3);
   });
 
   it("refuses a path whose existing ancestor is a symlink out of scope, creating nothing", async () => {
@@ -1788,5 +1792,101 @@ describe("host.fs.watch recursive and debounced", () => {
     dispose();
     await new Promise((r) => setTimeout(r, 500));
     expect(changes).toEqual([]);
+  });
+});
+
+describe("host.fs mutation gating before any directory is created", () => {
+  it("creates no data dir when consent to a data-dir mkdir or append is denied", async () => {
+    getPluginCapabilityConsentService().setConsentBridge(async () => "rejected");
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], []);
+    await expect(host.fs.mkdir(join(dataDir(), "cache"))).rejects.toThrow(/PERMISSION_REQUIRED/);
+    await expect(host.fs.appendFile(join(dataDir(), "logs", "a.jsonl"), "x")).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    await expect(host.fs.writeFile(join(dataDir(), "notes", "a.md"), "x")).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(existsSync(dataDir())).toBe(false);
+    expect(fsWriteAudits()).toEqual([]);
+  });
+
+  it("asks for consent once per call, even when the data dir is bootstrapped", async () => {
+    const bridge = vi.fn(async () => "approved-once" as const);
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], []);
+    await host.fs.appendFile(join(dataDir(), "log.jsonl"), "x\n");
+    expect(bridge).toHaveBeenCalledTimes(1);
+  });
+
+  it("audits every directory it creates, including the data dir bootstrap", async () => {
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], []);
+    await host.fs.mkdir(dataDir());
+    expect(fsWriteAudits().map((a) => a.actionId)).toEqual([`fs.mkdir:${dataDir()}`]);
+
+    appendSpy.mockClear();
+    await host.fs.appendFile(join(dataDir(), "2026", "09", "log.jsonl"), "x\n");
+    const realData = await fs.realpath(dataDir());
+    expect(fsWriteAudits().map((a) => a.actionId)).toEqual([
+      `fs.mkdir:${join(realData, "2026")}`,
+      `fs.mkdir:${join(realData, "2026", "09")}`,
+      `fs.appendFile:${join(realData, "2026", "09", "log.jsonl")}`,
+    ]);
+  });
+
+  it("audits each ancestor a project mkdir creates", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await host.fs.mkdir(join(allowed, "a", "b"));
+    const real = await fs.realpath(allowed);
+    expect(fsWriteAudits().map((a) => a.actionId)).toEqual([
+      `fs.mkdir:${join(real, "a")}`,
+      `fs.mkdir:${join(real, "a", "b")}`,
+    ]);
+  });
+});
+
+describe("host.fs.appendFile special files", () => {
+  it("refuses a FIFO at the target without blocking on it", async () => {
+    if (process.platform === "win32") return;
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const fifo = join(allowed, "pipe.jsonl");
+    execFileSync("mkfifo", [fifo]);
+    await expect(host.fs.appendFile(fifo, "x\n")).rejects.toMatchObject({
+      code: "TARGET_UNAVAILABLE",
+    });
+    // The path lock was released: a regular append on another path still runs.
+    await host.fs.appendFile(join(allowed, "after.jsonl"), "ok\n");
+    expect(await fs.readFile(join(allowed, "after.jsonl"), "utf-8")).toBe("ok\n");
+  });
+});
+
+describe("host.fs.watch option validation", () => {
+  it("rejects a non-boolean recursive and a non-finite or negative debounceMs", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const cb = () => {};
+    await expect(
+      host.fs.watch([allowed], cb, { recursive: "yes" as unknown as boolean })
+    ).rejects.toThrow(/recursive must be a boolean/);
+    for (const debounceMs of [Infinity, Number.NaN, -1, "100" as unknown as number]) {
+      await expect(host.fs.watch([allowed], cb, { debounceMs })).rejects.toThrow(/debounceMs/);
+    }
+    const watchers = (svc as unknown as { pluginFsWatchers: Map<string, Set<unknown>> })
+      .pluginFsWatchers;
+    expect(watchers.get("acme.fsgit")?.size ?? 0).toBe(0);
+  });
+
+  it("clamps an oversized debounceMs instead of letting it overflow to an immediate fire", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([allowed], (p) => changes.push(p), {
+      debounceMs: 1e12,
+    });
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(allowed, "slow.txt"), "x");
+      await new Promise((r) => setTimeout(r, 400));
+      expect(changes).toEqual([]);
+    } finally {
+      dispose();
+    }
   });
 });

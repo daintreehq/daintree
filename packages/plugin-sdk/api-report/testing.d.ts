@@ -1971,10 +1971,12 @@ interface PluginDatabaseOpenOptions {
      */
     migrations?: readonly string[];
     /**
-     * SQL re-applied on every open, after `migrations`, in one transaction —
-     * views and triggers, which should change without a numbered migration.
-     * Must be idempotent (`DROP VIEW IF EXISTS v; CREATE VIEW v AS …`). A failure
-     * rolls back and rejects with `DB_DEFINITIONS_FAILED`.
+     * SQL applied after `migrations`, in one transaction, whenever its text
+     * differs from the last applied — views and triggers, which should change
+     * without a numbered migration. Must be idempotent
+     * (`DROP VIEW IF EXISTS v; CREATE VIEW v AS …`). The applied hash is kept in
+     * a host-owned `_daintree_meta` table. A failure rolls back and rejects with
+     * `DB_DEFINITIONS_FAILED`.
      */
     definitions?: string;
 }
@@ -2679,13 +2681,19 @@ interface PluginFsWatchOptions extends PluginHostCallOptions {
      * Watch every directory beneath each path, including subdirectories created
      * after the subscription. The callback then receives the absolute path of
      * whatever changed at any depth. Off by default: a plain watch reports only
-     * a directory's immediate children.
+     * a directory's immediate children. A non-boolean value rejects the watch.
+     *
+     * On Linux, Node implements this in JavaScript with one inotify watch per
+     * file and directory, it can report names under symlinked subdirectories,
+     * and it can stop reporting a file that is replaced by rename — see the
+     * host API docs before relying on it there.
      */
     recursive?: boolean;
     /**
      * Coalesce a burst of changes into one trailing callback fired `debounceMs`
-     * after the last change, carrying the most recent changed path. Values
-     * below ~50ms are clamped up; `0` / omitted delivers every event.
+     * after the last change, carrying the most recent changed path. `0` /
+     * omitted delivers every event; any other value is clamped to 50–60000ms.
+     * A value that is not a finite, non-negative number rejects the watch.
      */
     debounceMs?: number;
 }
@@ -2749,20 +2757,24 @@ interface PluginFsApi {
     readFileWithRevision(filePath: string, options?: PluginHostCallOptions): Promise<PluginFsReadWithRevisionResult>;
     /**
      * Create a directory and any missing ancestors. Creating a directory that
-     * already exists is a no-op; a non-directory at the path rejects. Gated,
-     * consented and audited like {@link writeFile}: containment is proven before
-     * anything is created, so a symlinked ancestor that resolves outside every
-     * allowed root is refused, and each missing component is created one at a
-     * time and refused if something other than a real directory appears there.
+     * already exists is a no-op; a non-directory at the path rejects. Gated and
+     * consented like {@link writeFile}, and both happen before anything is
+     * created: containment is proven first, so a symlinked ancestor that
+     * resolves outside every allowed root is refused. Each missing component is
+     * then created one at a time, refused if something other than a real
+     * directory appears there, and audited individually.
      */
     mkdir(dirPath: string): Promise<void>;
     /**
      * Append UTF-8 text to a file, creating it if absent (the parent directory
      * must already exist). Gated, consented, serialised and audited like
-     * {@link writeFile}, and a symlink leaf is refused with `TARGET_IS_SYMLINK`.
-     * The bytes land through one `O_APPEND` descriptor, so concurrent appenders
-     * — an agent adding a line to the same JSONL file — each land whole at the
-     * end instead of racing a read-and-rewrite. No revision is returned: an
+     * {@link writeFile}; a symlink leaf is refused with `TARGET_IS_SYMLINK`, and
+     * a FIFO, device or directory with `TARGET_UNAVAILABLE`.
+     * The bytes land through one `O_APPEND` descriptor in one `write()` per call
+     * (a short write is completed by more), so concurrent appenders — an agent
+     * adding a line to the same JSONL file — each land at the end instead of
+     * racing a read-and-rewrite. Whole-line atomicity against another writer is
+     * a practical outcome for small lines, not a guarantee. No revision is returned: an
      * append is meaningful without one, and computing it would mean reading the
      * whole file back.
      */
@@ -3914,11 +3926,13 @@ interface MockHostState {
      */
     seedActionCatalog(entries: PluginActionManifestEntry[]): void;
     /**
-     * Fire every active `host.fs.watch` callback with `changedPath`, simulating a
-     * filesystem change the watcher would observe. Like the other `simulate*`
-     * helpers it notifies every registered watcher without path filtering
-     * (containment is a production concern, not modeled here) and lets callback
-     * errors propagate so a test sees them.
+     * Fire the active `host.fs.watch` callbacks that would observe a change at
+     * `changedPath`: a watcher sees its watched path itself and that path's
+     * direct children, and — registered with `recursive: true` — anything
+     * beneath it. A watcher registered with `debounceMs` coalesces a burst into
+     * one trailing callback with the latest path after that delay (drive it with
+     * fake timers). Callback errors propagate so a test sees them; a debounced
+     * callback's error surfaces from the timer instead.
      */
     simulateFsWatch(changedPath: string): void;
     /**

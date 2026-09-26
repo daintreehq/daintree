@@ -1069,15 +1069,75 @@ describe("createMockHost", () => {
       expect(cb).toHaveBeenCalledWith("/tmp/repo/file.ts");
     });
 
-    it("fires every active watcher", async () => {
+    it("fires every watcher covering the change, and only those", async () => {
       const host = createMockHost();
       const a = vi.fn();
       const b = vi.fn();
-      await host.fs.watch(["/a"], a);
-      await host.fs.watch(["/b"], b);
-      host.simulateFsWatch("/changed");
-      expect(a).toHaveBeenCalledWith("/changed");
-      expect(b).toHaveBeenCalledWith("/changed");
+      const other = vi.fn();
+      await host.fs.watch(["/repo"], a);
+      await host.fs.watch(["/elsewhere", "/repo/"], b);
+      await host.fs.watch(["/other"], other);
+      host.simulateFsWatch("/repo/changed");
+      expect(a).toHaveBeenCalledWith("/repo/changed");
+      expect(b).toHaveBeenCalledWith("/repo/changed");
+      expect(other).not.toHaveBeenCalled();
+    });
+
+    it("reaches a nested path only through a recursive watch", async () => {
+      const host = createMockHost();
+      const plain = vi.fn();
+      const deep = vi.fn();
+      await host.fs.watch(["/repo"], plain);
+      await host.fs.watch(["/repo"], deep, { recursive: true });
+      host.simulateFsWatch("/repo/cards/todo/a.md");
+      expect(plain).not.toHaveBeenCalled();
+      expect(deep).toHaveBeenCalledExactlyOnceWith("/repo/cards/todo/a.md");
+    });
+
+    it("coalesces a burst into one trailing callback with debounceMs", async () => {
+      vi.useFakeTimers();
+      try {
+        const host = createMockHost();
+        const cb = vi.fn();
+        await host.fs.watch(["/repo"], cb, { debounceMs: 100 });
+        host.simulateFsWatch("/repo/a");
+        host.simulateFsWatch("/repo/b");
+        vi.advanceTimersByTime(99);
+        host.simulateFsWatch("/repo/c");
+        expect(cb).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(100);
+        expect(cb).toHaveBeenCalledExactlyOnceWith("/repo/c");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("drops a pending debounced callback on dispose", async () => {
+      vi.useFakeTimers();
+      try {
+        const host = createMockHost();
+        const cb = vi.fn();
+        const dispose = await host.fs.watch(["/repo"], cb, { debounceMs: 100 });
+        host.simulateFsWatch("/repo/a");
+        dispose();
+        vi.advanceTimersByTime(500);
+        expect(cb).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("rejects malformed watch options, as the host does", async () => {
+      const host = createMockHost();
+      await expect(
+        host.fs.watch(["/repo"], vi.fn(), { recursive: "yes" as unknown as boolean })
+      ).rejects.toThrow(/recursive must be a boolean/);
+      await expect(host.fs.watch(["/repo"], vi.fn(), { debounceMs: Infinity })).rejects.toThrow(
+        /debounceMs/
+      );
+      await expect(host.fs.watch(["/repo"], vi.fn(), { debounceMs: -1 })).rejects.toThrow(
+        /debounceMs/
+      );
     });
 
     it("stops firing after the disposer runs, and is idempotent", async () => {
@@ -1281,6 +1341,7 @@ describe("createMockHost production-parity validation (#10617)", () => {
 
     it("appends to a file, creating it, and records each append", async () => {
       const host = createMockHost();
+      await host.fs.mkdir("/repo");
       await host.fs.appendFile("/repo/log.jsonl", "a\n");
       await host.fs.appendFile("/repo/log.jsonl", "b\n");
       expect(await host.fs.readFile("/repo/log.jsonl")).toBe("a\nb\n");
@@ -1304,6 +1365,40 @@ describe("createMockHost production-parity validation (#10617)", () => {
       ]);
       await host.fs.writeFile("/repo/taken", "x");
       await expect(host.fs.mkdir("/repo/taken")).rejects.toMatchObject({ code: "TARGET_EXISTS" });
+      await expect(host.fs.mkdir("/repo/taken/inner")).rejects.toThrow(/ENOTDIR/);
+    });
+
+    it("creates every missing ancestor on mkdir, like the host", async () => {
+      const host = createMockHost();
+      await host.fs.mkdir("/repo/data/2026/09");
+      for (const dir of ["/repo", "/repo/data", "/repo/data/2026", "/repo/data/2026/09"]) {
+        expect((await host.fs.stat(dir)).isDirectory).toBe(true);
+      }
+    });
+
+    it("refuses an append to a directory or under a missing parent", async () => {
+      const host = createMockHost();
+      await host.fs.mkdir("/repo/logs");
+      await expect(host.fs.appendFile("/repo/logs", "x")).rejects.toThrow(/EISDIR/);
+      await expect(host.fs.appendFile("/repo/missing/log.jsonl", "x")).rejects.toThrow(/ENOENT/);
+      expect(host.fsAppendCalls).toEqual([]);
+    });
+
+    it("treats a worktree root as an existing parent", async () => {
+      const host = createMockHost({
+        activeWorktree: { path: "/wt/main" } as unknown as PluginWorktreeSnapshot,
+      });
+      await host.fs.appendFile("/wt/main/log.jsonl", "x");
+      expect(await host.fs.readFile("/wt/main/log.jsonl")).toBe("x");
+    });
+
+    it("grows missing parents inside the plugin data dir, as writeFile does there", async () => {
+      const host = createMockHost({ pluginId: "acme.habits" });
+      const log = "/home/me/.daintree/plugin-data/acme.habits/2026/log.jsonl";
+      await host.fs.appendFile(log, "x");
+      expect(
+        (await host.fs.stat("/home/me/.daintree/plugin-data/acme.habits/2026")).isDirectory
+      ).toBe(true);
     });
   });
 
