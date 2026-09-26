@@ -885,6 +885,112 @@ describe("terminal notices", () => {
     return { deps, terminalNotify, pending, dispatchAction, start };
   }
 
+  describe("batch tools", () => {
+    it("launches each named agent as its own agent.launch, each with its own notice", async () => {
+      const dispatchAction = vi.fn().mockImplementation(async (_id: string, args: unknown) => ({
+        result: {
+          ok: true,
+          result: {
+            launched: true,
+            terminalId: `t-${(args as { agentId: string }).agentId}`,
+            spawnStatus: null,
+          },
+        },
+      }));
+      const { terminalNotify, start } = notifyDeps({ origin: "help" }, { dispatchAction });
+      const server = await start("session-launch-many");
+
+      const result = await callTool(server, {
+        name: "agent.launchMany",
+        arguments: {
+          agentIds: ["claude", "codex"],
+          prompt: "one fact",
+          name: "Fact",
+          notify: true,
+          handback: true,
+        },
+      });
+
+      expect(dispatchAction.mock.calls.map((c) => [c[0], c[1]])).toEqual([
+        [
+          "agent.launch",
+          {
+            agentId: "claude",
+            prompt: "one fact",
+            name: "Fact: claude",
+            notify: true,
+            handback: true,
+          },
+        ],
+        [
+          "agent.launch",
+          {
+            agentId: "codex",
+            prompt: "one fact",
+            name: "Fact: codex",
+            notify: true,
+            handback: true,
+          },
+        ],
+      ]);
+      expect(terminalNotify.prepareLaunch).toHaveBeenCalledTimes(2);
+      expect(result.structuredContent).toMatchObject({
+        results: [
+          { target: "claude", ok: true, result: { terminalId: "t-claude" } },
+          { target: "codex", ok: true, result: { terminalId: "t-codex" } },
+        ],
+      });
+    });
+
+    it("sends each terminal its own message through the assistant's send", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-send-many");
+
+      await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: {
+          sends: [
+            { terminalId: "t-a", command: "ballot A" },
+            { terminalId: "t-b", command: "ballot B" },
+          ],
+          notify: true,
+        },
+      });
+
+      expect(dispatchAction.mock.calls.map((c) => [c[0], c[1]])).toEqual([
+        ["terminal.sendCommand", { terminalId: "t-a", command: "ballot A" }],
+        ["terminal.sendCommand", { terminalId: "t-b", command: "ballot B" }],
+      ]);
+      expect(terminalNotify.prepareSend.mock.calls.map((c) => c[1])).toEqual(["t-a", "t-b"]);
+    });
+
+    it("sends through the owned tool from an agent pane, which refuses what it did not create", async () => {
+      const { deps, dispatchAction, start } = notifyDeps({ origin: "external" });
+      Object.assign(deps.sessionStore, { terminalAdoption: { get: () => undefined } });
+      const server = await start("session-send-many-pane");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: { sends: [{ terminalId: "t-foreign", command: "hi" }] },
+      });
+
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(result.structuredContent).toMatchObject({
+        results: [{ target: "t-foreign", ok: false }],
+      });
+    });
+
+    it("rejects malformed batch arguments before any item runs", async () => {
+      const { dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-batch-invalid");
+
+      await expect(
+        callTool(server, { name: "agent.launchMany", arguments: { agentIds: [], prompt: "x" } })
+      ).rejects.toThrow(/agent\.launchMany/);
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+
   describe("terminal.notifyWhenIdle", () => {
     it("arms in main for the caller's own pane, never through a renderer", async () => {
       const { terminalNotify, dispatchAction, deps, start } = notifyDeps();

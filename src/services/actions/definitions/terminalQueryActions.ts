@@ -47,6 +47,10 @@ import {
 import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
 import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
 import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
+import {
+  TerminalCloseManyArgsSchema,
+  TerminalSendCommandManyArgsSchema,
+} from "@shared/types/mcpBatch";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 
@@ -305,6 +309,48 @@ export function registerTerminalQueryActions(
       return fitTerminalOutputResult(
         { terminalId, content, lineCount, truncated },
         MCP_RESPONSE_TEXT_MAX_BYTES
+      );
+    },
+  }));
+
+  // Manifest metadata only: main submits each item as `terminal.sendCommand`
+  // (the owned form for an agent pane) under the single call's gate.
+  actions.set("terminal.sendCommandMany", () => ({
+    id: "terminal.sendCommandMany",
+    title: "Submit to several terminals",
+    description:
+      "Submit a different message to each of several terminals in one call, such as one ballot per voter. Each runs as a single send, with its own notice; results come back in order.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["send", "several", "many", "batch", "broadcast", "each"],
+    palette: { mode: "hidden" },
+    argsSchema: TerminalSendCommandManyArgsSchema,
+    run: async () => {
+      throw new Error(
+        "terminal.sendCommandMany must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
+  actions.set("terminal.closeMany", () => ({
+    id: "terminal.closeMany",
+    title: "Close several terminals",
+    description:
+      "Close several terminals in one call, each as a single close (owned for an agent pane), to the trash. Results come back in order.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["close", "several", "many", "batch", "cleanup"],
+    palette: { mode: "hidden" },
+    argsSchema: TerminalCloseManyArgsSchema,
+    run: async () => {
+      throw new Error(
+        "terminal.closeMany must be invoked through the MCP main-process path, not renderer dispatch."
       );
     },
   }));

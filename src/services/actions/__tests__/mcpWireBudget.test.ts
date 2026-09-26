@@ -663,7 +663,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // place are `terminal.notifyWhenIdle` on core and a `notify` argument on the
   // three submit paths. The external ceiling above does not move: an api-key
   // client has no pane to notify, so `notify` is not advertised to it.
-  const MAX_COHORT_PAYLOAD_BYTES = 129_800;
+  // 129_800 → 132_000 for the three batch tools, measured at 131_984 B. As
+  // with the description total, `terminal.sendKeys(Owned)` and `replyLines`
+  // were fitted under the old ceiling by trimming; the batch tools replace a
+  // call per participant per round, so a four-agent vote costs 4 calls
+  // instead of 12. They carry no output schema, which keeps each near 700 B.
+  // The external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 132_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

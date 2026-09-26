@@ -1056,6 +1056,21 @@ describe("McpServerService", () => {
         description: "Answer a dialog in a terminal",
       }),
       createManifestEntry({
+        id: "agent.launchMany" as ActionId,
+        title: "Launch Several Agents",
+        description: "Launch several agents with one prompt",
+      }),
+      createManifestEntry({
+        id: "terminal.sendCommandMany" as ActionId,
+        title: "Submit to Several Terminals",
+        description: "Send each terminal its own message",
+      }),
+      createManifestEntry({
+        id: "terminal.closeMany" as ActionId,
+        title: "Close Several Terminals",
+        description: "Close several terminals",
+      }),
+      createManifestEntry({
         id: "terminal.readLastMessageOwned" as ActionId,
         title: "Read Owned Agent's Last Message",
         description: "Read the last reply an agent this MCP session created wrote",

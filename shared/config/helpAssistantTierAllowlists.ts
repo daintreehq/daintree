@@ -72,6 +72,8 @@ export const CORE_TIER_TOOLS = [
   "recipe.list",
 
   "agent.launch",
+  // One prompt to every named agent in one call, each run as `agent.launch`.
+  "agent.launchMany",
   // `agent.launch` accepts user- and plugin-contributed agent ids; only Daintree
   // knows the effective registry and live launchability.
   "agent.listAvailable",
@@ -88,6 +90,9 @@ export const CORE_TIER_TOOLS = [
   // Reaches any panel, so sessions that are not Daintree's own assistant get
   // `terminal.sendCommandOwned` in its place — see `OWNED_TWIN_TOOLS`.
   "terminal.sendCommand",
+  // A message per terminal in one call; each item runs as the send (owned
+  // for a pane), so it reaches exactly what the single call would.
+  "terminal.sendCommandMany",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
   // The asynchronous twin of the waits: returns at once, and types one line
@@ -102,6 +107,8 @@ export const CORE_TIER_TOOLS = [
   "terminal.sendKeys",
   // Swapped for `terminal.closeOwned` outside the assistant, like the send.
   "terminal.close",
+  // Several closes in one call, each run as the close above (owned for a pane).
+  "terminal.closeMany",
   "terminal.moveToWorktree",
   // Brings a panel this session created into view (#12315).
   "terminal.revealOwned",

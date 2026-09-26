@@ -37,6 +37,7 @@ import {
 } from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
 import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
+import { AgentLaunchManyArgsSchema } from "@shared/types/mcpBatch";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import {
   hasSystemPromptOverride,
@@ -326,6 +327,28 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   /** Launch ids the launcher always turns into a panel, never an agent. */
   const HANDBACK_PANEL_LAUNCH_IDS: ReadonlySet<string> = new Set(["browser", "dev-preview"]);
+
+  // Manifest metadata only: main runs each agent through `agent.launch` under
+  // the same gate, notice and audit as a single call (see `sessionServer`).
+  actions.set("agent.launchMany", () => ({
+    id: "agent.launchMany",
+    title: "Launch several agents",
+    description:
+      "Launch several agents with one shared prompt in one call, each in its own terminal as a single launch with its own notice. Results come back in order, one per agent.",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["several", "many", "batch", "fleet"],
+    palette: { mode: "hidden" },
+    argsSchema: AgentLaunchManyArgsSchema,
+    run: async () => {
+      throw new Error(
+        "agent.launchMany must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
 
   actions.set("agent.launch", () => ({
     id: "agent.launch",

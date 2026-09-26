@@ -463,7 +463,14 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // 27_484 → 26_723 for terminal notices: the four watch descriptions (1_101 B)
   // left MCP and `terminal.notifyWhenIdle` (340 B) took their place on core.
   // Lowered to the measured total, as above. The external total does not move.
-  const MAX_COHORT_TOTAL_BYTES = 26_723;
+  // 26_723 → 27_154 for the batch tools (`agent.launchMany`,
+  // `terminal.sendCommandMany`, `terminal.closeMany`), the measured total. The
+  // `terminal.sendKeys` pair and quoted replies had already been fitted by
+  // trimming other descriptions; these three are a new shape of call, and each
+  // replaces one call per participant in every orchestration round — a live
+  // four-agent vote went from 12 MCP calls to 4 — so the bytes buy far more
+  // than they cost. The external total does not move: none is external.
+  const MAX_COHORT_TOTAL_BYTES = 27_154;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1396,6 +1403,9 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "terminal.setClientMetadata": { terminalId: "t-placeholder", clientMetadata: null },
       "terminal.sendKeys": { terminalId: "t-placeholder", keys: ["Enter"] },
       "terminal.sendKeysOwned": { terminalId: "t-placeholder", keys: ["Enter"] },
+      "agent.launchMany": { agentIds: ["claude"], prompt: "p" },
+      "terminal.sendCommandMany": { sends: [{ terminalId: "t-placeholder", command: "c" }] },
+      "terminal.closeMany": { terminalIds: ["t-placeholder"] },
     };
 
     const failures: string[] = [];

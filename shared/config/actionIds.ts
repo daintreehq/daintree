@@ -12,6 +12,8 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.getStatus",
   "terminal.sendCommand",
   "terminal.sendCommandOwned",
+  "terminal.sendCommandMany",
+  "terminal.closeMany",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
   "terminal.readLastMessageOwned",
@@ -361,6 +363,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- agentActions --
   "agent.launch",
+  "agent.launchMany",
   "agent.terminal",
   "agent.focusNextWaiting",
   "agent.focusNextWorking",
@@ -594,6 +597,9 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.interruptOwned",
   "terminal.sendKeys",
   "terminal.sendKeysOwned",
+  "terminal.sendCommandMany",
+  "terminal.closeMany",
+  "agent.launchMany",
   "terminal.readLastMessageOwned",
   // Main-process only, keyed on the caller's MCP credential: a plugin dispatch
   // has no pane to notify.

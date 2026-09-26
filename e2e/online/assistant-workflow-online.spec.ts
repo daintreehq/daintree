@@ -663,7 +663,9 @@ for (const scenario of SCENARIOS) {
       // agent state alone reads a dialog as waiting.
       let lastUnready = "";
       const composer =
-        ASSISTANT_AGENT === "claude" ? /\? for shortcuts|shift\+tab to cycle|^❯ /m : /Ask Codex|›/;
+        ASSISTANT_AGENT === "claude"
+          ? /\? for shortcuts|shift\+tab to cycle|^\s*❯/m
+          : /Ask Codex|›/;
       await expect
         .poll(
           async () => {

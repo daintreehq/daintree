@@ -13,7 +13,18 @@ import {
   GetPromptRequestSchema,
   McpError,
   ErrorCode,
+  type CallToolRequest,
+  type CallToolResult,
+  type ServerNotification,
+  type ServerRequest,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import {
+  AgentLaunchManyArgsSchema,
+  TerminalCloseManyArgsSchema,
+  TerminalSendCommandManyArgsSchema,
+  type BatchItemOutcome,
+} from "../../../shared/types/mcpBatch.js";
 import { dispatchCarriesRecipeId } from "../../../shared/utils/dispatchRecipeId.js";
 import {
   readDispatchTerminalCommand,
@@ -438,6 +449,97 @@ function prepareTerminalListDispatch(
   const { owned, ...rest } = args as Record<string, unknown>;
   if (typeof owned !== "boolean") return { dispatchArgs: args, ownedOnly: false };
   return { dispatchArgs: rest, ownedOnly: owned };
+}
+
+interface BatchItem {
+  target: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+interface BatchTool<T> {
+  schema: {
+    safeParse(
+      value: unknown
+    ):
+      | { success: true; data: T }
+      | { success: false; error: { issues: Array<{ message: string; path: PropertyKey[] }> } };
+  };
+  expand: (args: T, rendererOwnedOrigin: boolean) => BatchItem[];
+}
+
+function batchTool<T>(tool: BatchTool<T>): BatchTool<unknown> {
+  return tool as unknown as BatchTool<unknown>;
+}
+
+function notifyArgs(args: { notify?: boolean; handback?: boolean; replyLines?: number }) {
+  return {
+    ...(args.notify !== undefined ? { notify: args.notify } : {}),
+    ...(args.handback !== undefined ? { handback: args.handback } : {}),
+    ...(args.replyLines !== undefined ? { replyLines: args.replyLines } : {}),
+  };
+}
+
+/**
+ * The batch tools, and the single calls each item becomes. Items run in
+ * order: launches of one agent kind must follow each other, and a caller
+ * reading the results expects them in the order it gave.
+ */
+const BATCH_TOOLS: Record<string, BatchTool<unknown>> = {
+  "agent.launchMany": batchTool({
+    schema: AgentLaunchManyArgsSchema,
+    expand: (args) =>
+      [...new Set(args.agentIds)].map((agentId) => ({
+        target: agentId,
+        tool: AGENT_LAUNCH_TOOL,
+        args: {
+          agentId,
+          prompt: args.prompt,
+          name: `${args.name ?? "Agent"}: ${agentId}`,
+          ...(args.worktreeId !== undefined ? { worktreeId: args.worktreeId } : {}),
+          ...notifyArgs(args),
+        },
+      })),
+  }),
+  "terminal.sendCommandMany": batchTool({
+    schema: TerminalSendCommandManyArgsSchema,
+    // The assistant sends through the unscoped tool; every other session
+    // through the owned one, which reaches only what it created or was handed.
+    expand: (args, rendererOwnedOrigin) =>
+      args.sends.map((send) => ({
+        target: send.terminalId,
+        tool: rendererOwnedOrigin ? "terminal.sendCommand" : "terminal.sendCommandOwned",
+        args: { terminalId: send.terminalId, command: send.command, ...notifyArgs(args) },
+      })),
+  }),
+  "terminal.closeMany": batchTool({
+    schema: TerminalCloseManyArgsSchema,
+    expand: (args, rendererOwnedOrigin) =>
+      [...new Set(args.terminalIds)].map((terminalId) => ({
+        target: terminalId,
+        tool: rendererOwnedOrigin ? "terminal.close" : "terminal.closeOwned",
+        args: { terminalId },
+      })),
+  }),
+};
+
+/** One item's result, as structured content when the call carried it. */
+function batchItemOutcome(target: string, result: CallToolResult): BatchItemOutcome {
+  let value: unknown = result.structuredContent;
+  if (value === undefined) {
+    const first = result.content?.[0];
+    const text = first !== undefined && first.type === "text" ? first.text : undefined;
+    if (text !== undefined) {
+      try {
+        value = JSON.parse(text);
+      } catch {
+        value = text;
+      }
+    }
+  }
+  return result.isError === true
+    ? { target, ok: false, error: value }
+    : { target, ok: true, result: value };
 }
 
 /**
@@ -1082,7 +1184,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     return { tools };
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  // Named so a batch tool can run each item through this same gate.
+  const handleCallTool = async (
+    request: CallToolRequest,
+    extra: RequestHandlerExtra<ServerRequest, ServerNotification>
+  ): Promise<CallToolResult> => {
     const actionId = request.params.name;
     const { args, requestKey } = parseToolArguments(request.params.arguments);
     const startedAt = Date.now();
@@ -2264,6 +2370,38 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
+        // A batch is its items: each runs through this handler again as its
+        // single call, so tier, ownership, notices and audit apply per item
+        // exactly as one at a time. The batch itself is admitted and audited
+        // above like any call, and adds no authority of its own.
+        const batch = BATCH_TOOLS[actionId];
+        if (batch !== undefined) {
+          const parsed = batch.schema.safeParse(args ?? {});
+          if (!parsed.success) {
+            const issue = parsed.error.issues[0];
+            throw new McpError(
+              ErrorCode.InvalidParams,
+              `${actionId}: ${issue?.message ?? "invalid arguments"}${
+                issue && issue.path.length > 0 ? ` at '${issue.path.map(String).join(".")}'` : ""
+              }.`
+            );
+          }
+          emitToolCallStarted(false);
+          const results: BatchItemOutcome[] = [];
+          for (const item of batch.expand(parsed.data, rendererOwnedOrigin)) {
+            const itemResult = await handleCallTool(
+              { method: "tools/call", params: { name: item.tool, arguments: item.args } },
+              extra
+            );
+            results.push(batchItemOutcome(item.target, itemResult));
+          }
+          const value = { results };
+          outcome = { kind: "result", value: { ok: true, result: value } };
+          return buildToolCallResult(value, {
+            structuredContent: value as unknown as Record<string, unknown>,
+          }) as CallToolResult;
+        }
+
         // `notify: true` on a send or launch: the notice is set up here, before
         // the prompt goes out, so none of the target's state changes can slip
         // past it. Refused before anything reaches a renderer when there is no
@@ -3100,7 +3238,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     }
 
     return await dispatchPromise;
-  });
+  };
+  server.setRequestHandler(CallToolRequestSchema, handleCallTool);
 
   // Each resource handler resolves the tier once at entry and threads it down
   // (#11799). One capture per request: the listing helpers await dispatches
