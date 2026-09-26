@@ -630,7 +630,7 @@ export function registerTerminalLifecycleActions(
         );
       }
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
-      if (!targetId) return;
+      if (!targetId) return undefined;
 
       if (name !== undefined) {
         // Programmatic renames (MCP, assistant, plugins) are automation-tier:
@@ -649,6 +649,7 @@ export function registerTerminalLifecycleActions(
             new CustomEvent("daintree:rename-terminal", { detail: { id: targetId } })
           );
         }, 0);
+        return undefined;
       }
     },
   }));
