@@ -506,6 +506,11 @@ export type ActionErrorCode =
   | "ELICITATION_FAILED"
   | "BINDING_STALE"
   | "PLUGIN_UNLOADED"
+  /**
+   * A window attached to a remote host dispatched an action of a plugin that
+   * host doesn't have. `details` carries `{ code, pluginId, hostId }`.
+   */
+  | "PLUGIN_NOT_ON_HOST"
   | "TIER_NOT_PERMITTED"
   /**
    * An `*Owned` MCP cleanup tool was called with a resource the calling session
