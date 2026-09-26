@@ -6,18 +6,25 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HostServer } from "../../host/HostServer.js";
 import { hostSocketLocation } from "../../host/hostSocketPath.js";
 import { LinkClient, type LinkClientState } from "../LinkClient.js";
+import { bridgeChild, type BridgeChild } from "../../__tests__/harness/bridgeChild.js";
 import {
   PROBE_COMMAND,
   SshTransport,
+  attachCommandFor,
+  buildAttachArgs,
   buildCatArgs,
+  closeSshMasters,
+  isStreamLocalRefusal,
   buildForwardArgs,
   buildMuxForwardArgs,
   buildProbeArgs,
+  buildStreamLocalCheckArgs,
   controlPathFor,
   isValidSshTarget,
   parseProbeOutput,
   type SshChild,
   type SshSpawner,
+  type SshStreamSpawner,
 } from "../sshTransport.js";
 import { TransportError } from "../transport.js";
 import {
@@ -230,14 +237,22 @@ describe("SshTransport with an injected ssh", () => {
     expect(calls[0]).toEqual(
       buildProbeArgs("greg@studio", controlPathFor(clientDir, "greg@studio"))
     );
-    expect(calls[2]!.slice(0, 5)).toEqual([
+    // One channel to the host socket first: the server's answer decides the route.
+    expect(calls[2]).toEqual(
+      buildStreamLocalCheckArgs(
+        "greg@studio",
+        controlPathFor(clientDir, "greg@studio"),
+        hostLoc.socketPath
+      )
+    );
+    expect(calls[3]!.slice(0, 5)).toEqual([
       "-o",
       `ControlPath=${controlPathFor(clientDir, "greg@studio")}`,
       "-O",
       "forward",
       "-L",
     ]);
-    expect(calls[2]![5]).toMatch(new RegExp(`^${clientDir}/l-[0-9a-f]{8}-[0-9a-f]{8}\\.sock:`));
+    expect(calls[3]![5]).toMatch(new RegExp(`^${clientDir}/l-[0-9a-f]{8}-[0-9a-f]{8}\\.sock:`));
 
     await client.stop();
     client = null;
@@ -353,5 +368,183 @@ describe("SshTransport with an injected ssh", () => {
     await expect(transport.open(new AbortController().signal)).rejects.toMatchObject({
       detail: "cat: /run/user/1000/daintree/host.json: No such file or directory",
     });
+  });
+});
+
+describe("when the ssh server refuses socket forwarding", () => {
+  const REFUSED_VIA_MASTER = "Stdio forwarding request failed: Session open refused by peer\n";
+
+  it("recognises ssh's refusal wording, with and without a master", () => {
+    expect(isStreamLocalRefusal(REFUSED_VIA_MASTER)).toBe(true);
+    expect(
+      isStreamLocalRefusal(
+        "channel 0: open failed: administratively prohibited: open failed\nstdio forwarding failed"
+      )
+    ).toBe(true);
+    expect(isStreamLocalRefusal("Bad stdio forwarding specification '/x/host.sock'")).toBe(false);
+    expect(isStreamLocalRefusal("ssh: connect to host studio port 22: Connection refused")).toBe(
+      false
+    );
+  });
+
+  it("starts the bridge from the command the host published, quoted", () => {
+    const info = { version: 1 as const, socketPath: "/s", token: "a".repeat(64), pid: 1 };
+    expect(attachCommandFor({ ...info, command: ["/opt/Daintree/daintree"] })).toBe(
+      "'/opt/Daintree/daintree' --attach-stdio"
+    );
+    expect(attachCommandFor({ ...info, command: ["/usr/bin/electron", "/home/g/it's/app"] })).toBe(
+      "'/usr/bin/electron' '/home/g/it'\\''s/app' --attach-stdio"
+    );
+    expect(attachCommandFor(info)).toBeNull();
+    expect(attachCommandFor({ ...info, command: ["daintree"] })).toBeNull();
+    expect(attachCommandFor({ ...info, command: ["/bin/x\nrm"] })).toBeNull();
+  });
+
+  async function refusingHost(options: { publishCommand?: boolean; checkStderr?: string } = {}) {
+    const hostLoc = hostSocketLocation({ platform: "darwin", userDataDir: path.join(root, "h") });
+    server = new HostServer({ location: hostLoc, handshake: TEST_HANDSHAKE, hostName: "studio" });
+    await server.listen();
+    const calls: string[][] = [];
+    const spawner: SshSpawner = (args) => {
+      calls.push(args);
+      const child = new FakeChild();
+      const command = args.at(-1)!;
+      if (command === PROBE_COMMAND) child.finish(0, "Darwin\n501\n/Users/g\n");
+      else if (command.startsWith("cat -- "))
+        child.finish(
+          0,
+          JSON.stringify({
+            version: 1,
+            socketPath: hostLoc.socketPath,
+            token: server!.token,
+            pid: 1,
+            ...(options.publishCommand !== false && {
+              command: ["/Applications/Daintree.app/Contents/MacOS/Daintree"],
+            }),
+          })
+        );
+      else if (args.includes("-W"))
+        child.finish(255, "", options.checkStderr ?? REFUSED_VIA_MASTER);
+      else child.finish(0);
+      return child;
+    };
+    const streams: string[][] = [];
+    const bridges: BridgeChild[] = [];
+    const spawnStream: SshStreamSpawner = (args) => {
+      streams.push(args);
+      const child = bridgeChild(hostLoc.discoveryPath);
+      bridges.push(child);
+      return child;
+    };
+    return { hostLoc, calls, spawner, streams, bridges, spawnStream };
+  }
+
+  it("carries the link over `ssh <target> -- <daintree> --attach-stdio` through the master", async () => {
+    const host = await refusingHost();
+    const clientDir = path.join(root, "c");
+    const controlPath = controlPathFor(clientDir, "greg@studio");
+    const transport = new SshTransport({
+      target: "greg@studio",
+      clientDir,
+      spawn: host.spawner,
+      spawnStream: host.spawnStream,
+    });
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c1", clientName: "mbp", platform: "darwin" },
+      session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+      backoff: { initialMs: 10 },
+    });
+    client.start();
+    await waitFor(() => client!.getState().status === "connected");
+    expect(transport.route).toBe("attach-stdio");
+    expect(host.streams).toEqual([
+      buildAttachArgs(
+        "greg@studio",
+        controlPath,
+        "'/Applications/Daintree.app/Contents/MacOS/Daintree' --attach-stdio"
+      ),
+    ]);
+    // No socket forward was ever asked of the master.
+    expect(host.calls.some((args) => args.includes("forward"))).toBe(false);
+    expect(host.calls.filter((args) => args.includes("-W"))).toHaveLength(1);
+
+    // A dropped bridge reconnects the same way, without asking the server again.
+    host.bridges[0]!.kill();
+    await waitFor(() => host.streams.length === 2);
+    await waitFor(() => client!.getState().status === "connected");
+    expect(host.calls.filter((args) => args.includes("-W"))).toHaveLength(1);
+    expect(transport.route).toBe("attach-stdio");
+  });
+
+  it("keeps the socket forward when the check failed for some other reason", async () => {
+    const host = await refusingHost({
+      checkStderr: "Bad stdio forwarding specification '/x/host.sock'\n",
+    });
+    const proxies: net.Server[] = [];
+    const spawner: SshSpawner = (args) => {
+      if (args.includes("forward")) {
+        proxies.push(fakeForward(args));
+        const child = new FakeChild();
+        child.finish(0);
+        return child;
+      }
+      return host.spawner(args);
+    };
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+      spawnStream: host.spawnStream,
+    });
+    const conn = await transport.open(new AbortController().signal);
+    expect(transport.route).toBe("forward");
+    expect(host.streams).toEqual([]);
+    await conn.dispose();
+    for (const p of proxies) p.close();
+  });
+
+  it("says so when the host didn't publish how to start its bridge", async () => {
+    const host = await refusingHost({ publishCommand: false });
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: host.spawner,
+      spawnStream: host.spawnStream,
+    });
+    await expect(transport.open(new AbortController().signal)).rejects.toMatchObject({
+      message: expect.stringContaining("refuses socket forwarding"),
+    });
+    expect(host.streams).toEqual([]);
+  });
+});
+
+describe("closing masters when the app quits", () => {
+  it("tells every master this process used to exit, once", async () => {
+    await closeSshMasters();
+    const exits: string[][] = [];
+    const spawner: SshSpawner = (args) => {
+      const child = new FakeChild();
+      if (args.includes("exit")) exits.push(args);
+      if (args.at(-1) === PROBE_COMMAND) child.finish(0, "Darwin\n501\n/Users/g\n");
+      else child.finish(1, "", "cat: no such file\n");
+      return child;
+    };
+    const clientDir = path.join(root, "c");
+    for (const target of ["studio", "bigbox", "studio"]) {
+      const transport = new SshTransport({ target, clientDir, spawn: spawner });
+      await expect(transport.open(new AbortController().signal)).rejects.toBeInstanceOf(
+        TransportError
+      );
+    }
+    expect(exits).toEqual([]);
+    await closeSshMasters(1_000);
+    expect(exits).toEqual([
+      ["-o", `ControlPath=${controlPathFor(clientDir, "studio")}`, "-O", "exit", "--", "studio"],
+      ["-o", `ControlPath=${controlPathFor(clientDir, "bigbox")}`, "-O", "exit", "--", "bigbox"],
+    ]);
+    await closeSshMasters(1_000);
+    expect(exits).toHaveLength(2);
   });
 });

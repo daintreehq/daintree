@@ -60,7 +60,7 @@ describe("host platform on a local window", () => {
       homeDir: null,
       tmpDir: null,
       hostName: null,
-      sshTarget: null,
+      connection: null,
     });
   });
 
@@ -140,7 +140,12 @@ describe("a remote window", () => {
   it("carries @<host> on terminal titles once the host is named", () => {
     const { container } = render(<TerminalHostSuffix />);
     expect(container.textContent).toBe("");
-    act(() => setHostPlatformInfo({ hostName: "studio-01", sshTarget: "greg@studio-01" }));
+    act(() =>
+      setHostPlatformInfo({
+        hostName: "studio-01",
+        connection: { kind: "ssh", target: "greg@studio-01" },
+      })
+    );
     expect(container.textContent).toBe("@studio-01");
   });
 

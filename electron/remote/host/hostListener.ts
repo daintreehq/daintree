@@ -1,5 +1,4 @@
 import os from "node:os";
-import { app } from "electron";
 import {
   getFleetSnapshotService,
   getProjectStatsService,
@@ -28,7 +27,8 @@ import {
 } from "../terminal/hostAttach.js";
 import { attachWorktreePortBridge, detachWorktreePortBridge } from "../worktreePort/attach.js";
 import { HostServer } from "./HostServer.js";
-import { hostSocketLocation, type HostSocketLocation } from "./hostSocketPath.js";
+import { hostLaunchCommand, hostLocation } from "./hostLocation.js";
+import type { HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
 import { installHostMetricsHost } from "../metrics/hostMetricsHost.js";
 import { observeAgents } from "../metrics/hostSources.js";
@@ -57,17 +57,7 @@ export interface HostListener {
   stop(): Promise<void>;
 }
 
-export function hostLocation(): HostSocketLocation {
-  if (process.platform === "darwin") {
-    return hostSocketLocation({ platform: "darwin", userDataDir: app.getPath("userData") });
-  }
-  return hostSocketLocation({
-    platform: "linux",
-    uid: process.getuid!(),
-    // Dev and packaged builds must not fight over one socket.
-    dirName: app.isPackaged ? "daintree" : "daintree-dev",
-  });
-}
+export { hostLocation } from "./hostLocation.js";
 
 function attachHostStreams(session: LinkSession, endpoint: RemoteViewEndpoint): void {
   attachTerminalBridge(session, endpoint);
@@ -140,6 +130,7 @@ async function buildHostListener(
     location,
     handshake: getLocalHandshakeInfo(),
     hostName: os.hostname(),
+    launchCommand: hostLaunchCommand(),
     observeWorkingAgents: async () => (await observeAgents())?.working ?? null,
   });
   teardowns.push(() => server.close());

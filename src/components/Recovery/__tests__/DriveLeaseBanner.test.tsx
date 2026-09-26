@@ -9,7 +9,11 @@ const { supported, notify } = vi.hoisted(() => ({
   notify: vi.fn(),
 }));
 
-vi.mock("@/lib/remoteHosts", () => ({ isRemoteHostsSupported: () => supported.value }));
+vi.mock("@/lib/remoteHosts", () => ({
+  isRemoteShellSupported: () => supported.value,
+  isRemoteHostSupported: () => supported.value,
+  isEitherRemoteRoleSupported: () => supported.value,
+}));
 vi.mock("@/lib/notify", () => ({ notify }));
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),

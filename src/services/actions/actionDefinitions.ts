@@ -41,7 +41,7 @@ import { registerPluginActions } from "./definitions/pluginActions";
 import { registerSkillActions } from "./definitions/skillActions";
 import { registerHostActions } from "./definitions/hostActions";
 import { registerPortActions } from "./definitions/portActions";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 
 export type { ActionCallbacks, ActionRegistry } from "./actionTypes";
 
@@ -91,7 +91,7 @@ export function createActionDefinitions(
   registerFileActions(actions, callbacks);
   registerVoiceActions(actions);
   registerActionActions(actions);
-  if (isRemoteHostsSupported()) {
+  if (isRemoteShellSupported()) {
     registerHostActions(actions, callbacks);
     registerPortActions(actions, callbacks);
   }

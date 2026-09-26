@@ -104,7 +104,7 @@ describe("installPortForwardClient", () => {
       projectForView: (webContentsId) =>
         webContentsId === 9 ? { hostId: HOST, projectId: "proj" } : null,
       isKnownHost: (hostId) => hostId === HOST,
-      sshTargetFor: () => null,
+      connectionFor: () => null,
       clientDir: dir,
     });
     cleanups.push(uninstall);
@@ -158,7 +158,7 @@ describe("installPortForwardClient", () => {
         hostForView: () => null,
         isKnownHost: (hostId) => hostId === HOST,
         sessionFor: (hostId) => (hostId === HOST ? current : null),
-        sshTargetFor: () => null,
+        connectionFor: () => null,
         clientDir: dir,
       })
     );
@@ -197,7 +197,7 @@ describe("installPortForwardClient", () => {
         projectForView: (webContentsId) => views[webContentsId] ?? null,
         isKnownHost: (hostId) => hostId === HOST || hostId === OTHER,
         sessionFor: (hostId) => (hostId === HOST || hostId === OTHER ? client : null),
-        sshTargetFor: () => null,
+        connectionFor: () => null,
         clientDir: dir,
       })
     );
@@ -241,7 +241,7 @@ describe("installPortForwardClient", () => {
         projectForView: (webContentsId) => views[webContentsId] ?? null,
         isKnownHost: (hostId) => hostId === HOST || hostId === OTHER,
         sessionFor: (hostId) => (hostId === HOST || hostId === OTHER ? client : null),
-        sshTargetFor: () => null,
+        connectionFor: () => null,
         clientDir: dir,
       })
     );

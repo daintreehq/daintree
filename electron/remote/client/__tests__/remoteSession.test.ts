@@ -209,7 +209,7 @@ async function startHarness(
   });
 
   const registry = new HostRegistry(memoryStore());
-  registry.add({ name: HOST_ID, sshTarget: "studio.example" });
+  registry.add({ name: HOST_ID, connection: { kind: "ssh", target: "studio.example" } });
   const sink = recordingSink();
   const sockets: net.Socket[] = [];
   const allowConnect = { value: true };
@@ -218,7 +218,7 @@ async function startHarness(
     async open(signal) {
       if (!allowConnect.value) throw new Error("host unreachable");
       const connection = await direct.open(signal);
-      sockets.push(connection.socket);
+      sockets.push(connection.socket as net.Socket);
       return connection;
     },
   };
@@ -549,7 +549,7 @@ describe("remote session wiring", () => {
   it("routes nothing to a host running a different build", async () => {
     await startHarness();
     const registry = new HostRegistry(memoryStore());
-    registry.add({ name: HOST_ID, sshTarget: "studio.example" });
+    registry.add({ name: HOST_ID, connection: { kind: "ssh", target: "studio.example" } });
     const mismatched = new RemoteHostManager({
       registry,
       createTransport: () =>

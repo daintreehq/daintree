@@ -44,7 +44,9 @@ const m = vi.hoisted(() => {
       onRemoteViewActivated?: (windowId: number, wc: unknown, isNew: boolean) => void;
     };
   } = { current: {} };
-  const hostEntries: Array<{ descriptor: { id: string; sshTarget: string } }> = [];
+  const hostEntries: Array<{
+    descriptor: { id: string; connection: { kind: "ssh"; target: string } };
+  }> = [];
   const client = {
     client: { connect: vi.fn(), list: vi.fn(() => hostEntries) },
     sessionFor: vi.fn((_hostId: string) => null as unknown),
@@ -574,7 +576,7 @@ describe("startRemoteHosts", () => {
       isKnownHost(hostId: string): boolean;
       sessionFor(hostId: string): unknown;
       onSessionOpened(listener: unknown): () => void;
-      sshTargetFor(hostId: string): string | null;
+      connectionFor(hostId: string): { kind: string; target: string } | null;
       clientDir: string;
     };
     expect(deps.onEndpointOpened).toBe(m.client.onEndpointOpened);
@@ -583,14 +585,16 @@ describe("startRemoteHosts", () => {
     m.viewHosts.set(11, "studio-01");
     expect(deps.hostForView(11)).toBe("studio-01");
     expect(deps.hostForView(12)).toBeNull();
-    m.hostEntries.push({ descriptor: { id: "studio-01", sshTarget: "greg@studio" } });
+    m.hostEntries.push({
+      descriptor: { id: "studio-01", connection: { kind: "ssh", target: "greg@studio" } },
+    });
     expect(deps.isKnownHost("studio-01")).toBe(true);
     expect(deps.isKnownHost("studio-02")).toBe(false);
     const onSession = () => {};
     deps.onSessionOpened(onSession);
     expect(m.client.manager.onSessionOpened).toHaveBeenCalledWith(onSession);
-    expect(deps.sshTargetFor("studio-01")).toBe("greg@studio");
-    expect(deps.sshTargetFor("studio-02")).toBeNull();
+    expect(deps.connectionFor("studio-01")).toEqual({ kind: "ssh", target: "greg@studio" });
+    expect(deps.connectionFor("studio-02")).toBeNull();
 
     await stopRemoteHosts();
     expect(m.uninstallPortForwardClient).toHaveBeenCalledTimes(1);

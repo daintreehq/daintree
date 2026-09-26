@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useRemoteHosts } from "@/hooks/useRemoteHosts";
-import type { HostId } from "@shared/types/remoteHosts";
+import { formatHostConnection, type HostId } from "@shared/types/remoteHosts";
 import HostModeGroup from "../HostModeGroup";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
@@ -110,8 +110,8 @@ export default function HostsSettingsTab() {
                 label={descriptor.name}
                 description={
                   <>
-                    {descriptor.sshTarget} · {platformLabel(descriptor.platform, descriptor.arch)} ·{" "}
-                    {buildLabel(descriptor)}
+                    {formatHostConnection(descriptor.connection)} ·{" "}
+                    {platformLabel(descriptor.platform, descriptor.arch)} · {buildLabel(descriptor)}
                     <br />
                     {connectionLabel(connection)}
                   </>

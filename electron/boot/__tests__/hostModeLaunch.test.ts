@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isHostModeRequested,
   resolveHostModeLaunch,
+  isAttachStdioRequested,
   shouldUseHeadlessOzone,
 } from "../hostModeLaunch.js";
 
@@ -58,6 +59,17 @@ describe("hostModeLaunch", () => {
 
     it("applies on Linux in Host mode with no display server", () => {
       expect(shouldUseHeadlessOzone({ platform: "linux", argv: hostArgv, env: {} })).toBe(true);
+    });
+
+    it("applies to an --attach-stdio launch from an ssh session with no display server", () => {
+      const argv = ["daintree", "--attach-stdio"];
+      expect(isAttachStdioRequested(argv)).toBe(true);
+      expect(isAttachStdioRequested(["daintree"])).toBe(false);
+      expect(shouldUseHeadlessOzone({ platform: "linux", argv, env: {} })).toBe(true);
+      expect(shouldUseHeadlessOzone({ platform: "linux", argv, env: { DISPLAY: ":0" } })).toBe(
+        false
+      );
+      expect(shouldUseHeadlessOzone({ platform: "darwin", argv, env: {} })).toBe(false);
     });
 
     it("keeps auto-detection when X11 or Wayland is reachable", () => {

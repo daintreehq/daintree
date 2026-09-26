@@ -9,7 +9,11 @@ const { supported, menuAnswers } = vi.hoisted(() => ({
   menuAnswers: { value: false },
 }));
 
-vi.mock("@/lib/remoteHosts", () => ({ isRemoteHostsSupported: () => supported.value }));
+vi.mock("@/lib/remoteHosts", () => ({
+  isRemoteShellSupported: () => supported.value,
+  isRemoteHostSupported: () => supported.value,
+  isEitherRemoteRoleSupported: () => supported.value,
+}));
 vi.mock("@/components/Hosts/hostMenuRequests", () => ({
   requestHostMenu: vi.fn(() => menuAnswers.value),
 }));
@@ -75,7 +79,7 @@ function host(id: string): HostListEntry {
     descriptor: {
       id,
       name: id,
-      sshTarget: id,
+      connection: { kind: "ssh", target: id },
       platform: "linux",
       arch: "x64",
       lastHandshake: null,

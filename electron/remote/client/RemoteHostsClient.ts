@@ -3,6 +3,7 @@ import {
   LOCAL_HOST_ID,
   isLocalHostId,
   parseHostScopedKey,
+  sameHostConnection,
   type HostConnectionState,
   type HostDescriptor,
   type HostId,
@@ -140,7 +141,10 @@ export class RemoteHostsClient {
   async update(payload: UpdateHostPayload): Promise<HostDescriptor> {
     const before = this.options.registry.require(hostIdOf(payload));
     const after = this.options.registry.update(payload);
-    if (after.sshTarget !== before.sshTarget && this.options.manager.get(after.id)) {
+    if (
+      !sameHostConnection(after.connection, before.connection) &&
+      this.options.manager.get(after.id)
+    ) {
       // The link was built for the old target; dial the new one.
       this.rememberBoundViews(after.id);
       await this.options.manager.disconnect(after.id);

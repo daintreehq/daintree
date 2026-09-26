@@ -1,4 +1,5 @@
 import type {
+  HostConnection,
   HostDescriptor,
   HostListEntry,
   OperationId,
@@ -28,8 +29,8 @@ export const remoteHostsClient = {
   forget: (hostId: string): Promise<void> => window.electron.remoteHosts.forget({ hostId }),
   connect: (hostId: string) => window.electron.remoteHosts.connect({ hostId }),
   discover: (): Promise<DiscoveredHost[]> => window.electron.remoteHosts.discover(),
-  probe: (sshTarget: string): Promise<HostProbeResult> =>
-    window.electron.remoteHosts.probe({ sshTarget }),
+  probe: (connection: HostConnection): Promise<HostProbeResult> =>
+    window.electron.remoteHosts.probe({ connection }),
   planInstall: (payload: PlanInstallPayload): Promise<HostInstallPlan> =>
     window.electron.remoteHosts.planInstall(payload),
   install: (payload: InstallHostPayload): Promise<InstallHostResult> =>
@@ -38,8 +39,8 @@ export const remoteHostsClient = {
     window.electron.remoteHosts.getInstallStatus({ opId }),
   cancelInstall: (opId: OperationId): Promise<boolean> =>
     window.electron.remoteHosts.cancelInstall({ opId }),
-  startHostMode: (sshTarget: string): Promise<StartHostModeResult> =>
-    window.electron.remoteHosts.startHostMode({ sshTarget }),
+  startHostMode: (connection: HostConnection): Promise<StartHostModeResult> =>
+    window.electron.remoteHosts.startHostMode({ connection }),
   listClipboardGrants: (hostId: string): Promise<HostPluginClipboardGrant[]> =>
     window.electron.remoteHosts.listClipboardGrants({ hostId }),
   resetClipboardGrants: (hostId: string, pluginId?: string): Promise<void> =>

@@ -27,6 +27,7 @@ import {
   normalizeFleetOpId,
 } from "./linkMethods.js";
 import { HOST_METRICS_INTERVAL_MS } from "./sampler.js";
+import { connectionKey } from "../client/connection.js";
 
 /** ~15 minutes of summaries at the sample cadence. */
 export const HOST_METRICS_RING_SIZE = Math.ceil((15 * 60_000) / HOST_METRICS_INTERVAL_MS);
@@ -109,7 +110,7 @@ function requireString(value: unknown, field: string, max: number): string {
  */
 export class HostMetricsClient {
   private readonly rings = new Map<HostId, HostMetricsSummary[]>();
-  /** Each dialled host's SSH target: a new target is another machine, whose history starts empty. */
+  /** Each dialled host's address: a new address is another machine, whose history starts empty. */
   private readonly dialled = new Map<HostId, string>();
   private readonly disposers: Array<() => void> = [];
   private stopLocal: (() => void) | null = null;
@@ -317,16 +318,17 @@ export class HostMetricsClient {
       this.rings.delete(hostId);
     }
     for (const host of hosts) {
-      const target = this.dialled.get(host.id);
-      if (target !== undefined) {
-        // The host list's own update re-dials a changed target; only the history is ours to drop.
-        if (target !== host.sshTarget) {
-          this.dialled.set(host.id, host.sshTarget);
+      const dialledAs = this.dialled.get(host.id);
+      const address = connectionKey(host.connection);
+      if (dialledAs !== undefined) {
+        // The host list's own update re-dials a changed address; only the history is ours to drop.
+        if (dialledAs !== address) {
+          this.dialled.set(host.id, address);
           this.rings.delete(host.id);
         }
         continue;
       }
-      this.dialled.set(host.id, host.sshTarget);
+      this.dialled.set(host.id, address);
       try {
         this.options.manager.connect(host.id);
       } catch (error) {

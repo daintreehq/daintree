@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { HostId } from "../../../shared/types/remoteHosts.js";
+import { formatHostConnection, type HostId } from "../../../shared/types/remoteHosts.js";
 import type {
   HostInstallPlan,
   InstallHostPayload,
@@ -437,7 +437,7 @@ export async function runHostInstall(
   if (!before.parsed) {
     throw new AppError({
       code: "HOST_DISCONNECTED",
-      message: `Couldn't reach ${payload.sshTarget}: ${before.result.sshError ?? "ssh failed"}`,
+      message: `Couldn't reach ${formatHostConnection(payload.connection)}: ${before.result.sshError ?? "ssh failed"}`,
       userMessage: before.result.sshError ?? "Couldn't reach the host over SSH.",
     });
   }

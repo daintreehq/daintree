@@ -21,7 +21,7 @@ const macClient: ClientBuild = {
 
 function probe(overrides: Partial<HostProbeResult> = {}): HostProbeResult {
   return {
-    sshTarget: "studio",
+    connection: { kind: "ssh", target: "studio" },
     reachable: true,
     sshError: null,
     platform: "darwin",

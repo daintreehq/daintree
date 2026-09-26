@@ -30,7 +30,7 @@ function descriptor(id: string, name: string, extra: Partial<HostDescriptor> = {
   return {
     id,
     name,
-    sshTarget: `greg@${name}`,
+    connection: { kind: "ssh", target: `greg@${name}` },
     platform: "linux",
     arch: "x64",
     lastHandshake: null,

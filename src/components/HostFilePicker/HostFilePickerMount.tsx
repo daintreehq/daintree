@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { LazyHostFilePickerHost } from "@/lazyPanels";
 
 /**
@@ -8,7 +8,7 @@ import { LazyHostFilePickerHost } from "@/lazyPanels";
  * picker's chunk is never loaded, so a Windows build fetches nothing extra.
  */
 export function HostFilePickerMount() {
-  if (!isRemoteHostsSupported()) return null;
+  if (!isRemoteShellSupported()) return null;
   return (
     <ErrorBoundary variant="component" componentName="HostFilePickerHost">
       <Suspense fallback={null}>

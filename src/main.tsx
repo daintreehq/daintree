@@ -41,7 +41,7 @@ import { installPluginDocumentRuntime } from "./services/plugin/pluginDocumentRu
 import { installProjectSwitchStatusTiming } from "./services/projectSwitchStatusTiming";
 import { installRunningPluginActions } from "./services/plugin/runningPluginActions";
 import { getSafeBootPromise } from "./lib/bootPromise";
-import { isRemoteHostsSupported } from "./lib/remoteHosts";
+import { isRemoteShellSupported } from "./lib/remoteHosts";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupScrollbarGutterWatch: (() => void) | undefined;
@@ -106,7 +106,7 @@ async function bootstrap() {
   installRunningPluginActions();
 
   // Off the entry chunk, and never loaded where remote hosts can't exist.
-  if (isRemoteHostsSupported()) {
+  if (isRemoteShellSupported()) {
     void import("./components/Hosts/installHostProjectsLoader")
       .then((m) => m.installHostProjectsLoader())
       .catch((error: unknown) => {

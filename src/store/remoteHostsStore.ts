@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type {
+  HostConnection,
   HostListEntry,
   OperationId,
   OperationOutcome,
@@ -8,7 +9,7 @@ import type {
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 
 export interface HostInstallState {
-  sshTarget: string;
+  connection: HostConnection;
   progress: OperationProgress | null;
   /** Null while running. */
   outcome: OperationOutcome | null;
@@ -23,7 +24,7 @@ interface RemoteHostsStoreState {
 
   setHosts: (hosts: HostListEntry[]) => void;
   setLoadError: (message: string | null) => void;
-  trackInstall: (opId: OperationId, sshTarget: string) => void;
+  trackInstall: (opId: OperationId, connection: HostConnection) => void;
   applyEvent: (event: RemoteHostsEvent) => void;
   reset: () => void;
 }
@@ -40,9 +41,9 @@ export const useRemoteHostsStore = create<RemoteHostsStoreState>((set) => ({
 
   setLoadError: (loadError) => set({ loadError, loaded: true }),
 
-  trackInstall: (opId, sshTarget) =>
+  trackInstall: (opId, connection) =>
     set((state) => ({
-      installs: { ...state.installs, [opId]: { sshTarget, progress: null, outcome: null } },
+      installs: { ...state.installs, [opId]: { connection, progress: null, outcome: null } },
     })),
 
   applyEvent: (event) =>
@@ -64,7 +65,7 @@ export const useRemoteHostsStore = create<RemoteHostsStoreState>((set) => ({
             installs: {
               ...state.installs,
               [event.opId]: {
-                sshTarget: current?.sshTarget ?? event.sshTarget,
+                connection: current?.connection ?? event.connection,
                 progress: event.progress,
                 outcome: current?.outcome ?? null,
               },
@@ -77,7 +78,7 @@ export const useRemoteHostsStore = create<RemoteHostsStoreState>((set) => ({
             installs: {
               ...state.installs,
               [event.opId]: {
-                sshTarget: current?.sshTarget ?? event.sshTarget,
+                connection: current?.connection ?? event.connection,
                 progress: current?.progress ?? null,
                 outcome: event.outcome,
               },

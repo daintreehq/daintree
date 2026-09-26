@@ -38,7 +38,7 @@ function studio(connection: HostListEntry["connection"]): HostListEntry {
     descriptor: {
       id: "h1",
       name: "studio-01",
-      sshTarget: "greg@studio",
+      connection: { kind: "ssh", target: "greg@studio" },
       platform: "linux",
       arch: "x64",
       lastHandshake: null,

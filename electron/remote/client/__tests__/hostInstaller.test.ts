@@ -128,7 +128,11 @@ function makeDeps(params: {
         execWithInput: async () => ok(stdout),
         sendFile: async () => ok(),
       };
-      return probeHost({ sshTarget: "studio", shell: probeShell, client: CLIENT });
+      return probeHost({
+        connection: { kind: "ssh", target: "studio" },
+        shell: probeShell,
+        client: CLIENT,
+      });
     },
     workingAgents: async () => (working.length > 1 ? working.shift()! : working[0]!),
     download: async (_url, destination) => fs.writeFile(destination, "artifact"),
@@ -148,8 +152,11 @@ async function install(
   payload: Partial<Parameters<typeof runHostInstall>[0]> = {},
   signal = new AbortController().signal
 ) {
-  return runHostInstall({ opId: "op-1", sshTarget: "studio", ...payload }, deps, signal, (p) =>
-    deps.progress.push(p)
+  return runHostInstall(
+    { opId: "op-1", connection: { kind: "ssh", target: "studio" }, ...payload },
+    deps,
+    signal,
+    (p) => deps.progress.push(p)
   );
 }
 

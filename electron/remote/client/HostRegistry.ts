@@ -1,12 +1,16 @@
 import crypto from "node:crypto";
 import {
+  formatHostConnection,
   isValidRemoteHostId,
+  readStoredHostConnection,
+  sameHostConnection,
+  type HostConnection,
   type HostDescriptor,
   type HostId,
 } from "../../../shared/types/remoteHosts.js";
 import type { AddHostPayload, UpdateHostPayload } from "../../../shared/types/ipc/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { isValidSshTarget } from "./sshTransport.js";
+import { parseHostConnection } from "./connection.js";
 
 /**
  * The hosts this client can attach to, in the device-owned `remoteHosts`
@@ -44,11 +48,12 @@ function normalizeName(name: unknown): string {
   return trimmed;
 }
 
-function normalizeTarget(target: unknown): string {
-  if (typeof target !== "string" || !isValidSshTarget(target.trim())) {
+function normalizeConnection(value: unknown): HostConnection {
+  const connection = parseHostConnection(value);
+  if (!connection) {
     throw invalid("SSH target must look like user@host, a host name, or an ~/.ssh/config alias.");
   }
-  return target.trim();
+  return connection;
 }
 
 /** A readable id from the name, falling back to random when nothing usable is left. */
@@ -71,15 +76,17 @@ function sanitize(raw: unknown): HostDescriptor[] {
   const out: HostDescriptor[] = [];
   for (const entry of hosts) {
     if (!entry || typeof entry !== "object") continue;
-    const host = entry as Partial<HostDescriptor>;
+    const host = entry as Partial<HostDescriptor> & { sshTarget?: unknown };
     if (typeof host.id !== "string" || !isValidRemoteHostId(host.id) || seen.has(host.id)) continue;
-    if (typeof host.name !== "string" || typeof host.sshTarget !== "string") continue;
-    if (!isValidSshTarget(host.sshTarget)) continue;
+    if (typeof host.name !== "string") continue;
+    // Development builds saved `sshTarget: string`; read either shape.
+    const connection = parseHostConnection(readStoredHostConnection(host));
+    if (!connection) continue;
     seen.add(host.id);
     out.push({
       id: host.id,
       name: host.name,
-      sshTarget: host.sshTarget,
+      connection,
       platform: host.platform === "darwin" || host.platform === "linux" ? host.platform : null,
       arch: host.arch === "x64" || host.arch === "arm64" ? host.arch : null,
       lastHandshake: host.lastHandshake ?? null,
@@ -121,11 +128,11 @@ export class HostRegistry {
 
   add(payload: AddHostPayload): HostDescriptor {
     const name = normalizeName(payload?.name);
-    const sshTarget = normalizeTarget(payload?.sshTarget);
+    const connection = normalizeConnection(payload?.connection);
     const hosts = this.list();
     if (hosts.length >= MAX_HOSTS) throw invalid(`At most ${MAX_HOSTS} hosts can be added.`);
-    if (hosts.some((host) => host.sshTarget === sshTarget)) {
-      throw invalid(`${sshTarget} is already in your host list.`);
+    if (hosts.some((host) => sameHostConnection(host.connection, connection))) {
+      throw invalid(`${formatHostConnection(connection)} is already in your host list.`);
     }
     const base = slugFor(name);
     let id = base;
@@ -135,7 +142,7 @@ export class HostRegistry {
     const descriptor: HostDescriptor = {
       id,
       name,
-      sshTarget,
+      connection,
       platform: null,
       arch: null,
       lastHandshake: null,
@@ -151,13 +158,17 @@ export class HostRegistry {
     const current = this.require(payload?.hostId);
     const next: HostDescriptor = { ...current };
     if (payload.name !== undefined) next.name = normalizeName(payload.name);
-    if (payload.sshTarget !== undefined) {
-      next.sshTarget = normalizeTarget(payload.sshTarget);
+    if (payload.connection !== undefined) {
+      next.connection = normalizeConnection(payload.connection);
       const hosts = this.list();
-      if (hosts.some((host) => host.id !== current.id && host.sshTarget === next.sshTarget)) {
-        throw invalid(`${next.sshTarget} is already in your host list.`);
+      if (
+        hosts.some(
+          (host) => host.id !== current.id && sameHostConnection(host.connection, next.connection)
+        )
+      ) {
+        throw invalid(`${formatHostConnection(next.connection)} is already in your host list.`);
       }
-      if (next.sshTarget !== current.sshTarget) {
+      if (!sameHostConnection(next.connection, current.connection)) {
         // A different machine may answer now; what we saw of the old one is not about it.
         next.platform = null;
         next.arch = null;

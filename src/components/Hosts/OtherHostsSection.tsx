@@ -1,5 +1,5 @@
 import type { HostId, HostPlatform } from "@shared/types/remoteHosts";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PlatformGlyph } from "./PlatformGlyph";
@@ -37,7 +37,7 @@ export function otherHostOptionId(index: number): string {
  * Empty for anyone with no remote host, or where Remote Hosts doesn't exist.
  */
 export function useOtherHostProjectOptions(query: string): OtherHostProjectOption[] {
-  const supported = isRemoteHostsSupported();
+  const supported = isRemoteShellSupported();
   const targets = useOtherHostTargets(clientPlatform());
   if (!supported) return [];
   const trimmed = query.trim();

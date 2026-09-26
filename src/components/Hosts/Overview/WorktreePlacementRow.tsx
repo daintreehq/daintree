@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/select";
 import { FormRow } from "@/components/Worktree/views/WorktreeFormLayout";
 import { getViewHostId } from "@/hooks/useHostConnection";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { actionService } from "@/services/ActionService";
 import { useHostMetricsStore, type HostMetricsHistory } from "@/store/hostMetricsStore";
 import { logWarn } from "@/utils/logger";
@@ -102,7 +102,7 @@ export function WorktreePlacementRow({
   const [handoff, setHandoff] = useState<
     { status: "idle" } | { status: "pending" } | { status: "failed"; hostName: string }
   >({ status: "idle" });
-  const visible = isRemoteHostsSupported() && hasRemoteHosts(hostList);
+  const visible = isRemoteShellSupported() && hasRemoteHosts(hostList);
 
   useEffect(() => (visible ? startHostMetricsFeed() : undefined), [visible]);
   const elsewhere = visible && chosen !== windowHostId;

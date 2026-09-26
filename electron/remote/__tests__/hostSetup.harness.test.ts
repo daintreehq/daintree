@@ -219,7 +219,8 @@ describe("host setup over the harness", () => {
         void hostMode.enableFromSetup();
       });
       const client = getLocalHandshakeInfo();
-      const probe = () => probeHost({ sshTarget: "studio", shell: channel, client });
+      const probe = () =>
+        probeHost({ connection: { kind: "ssh", target: "studio" }, shell: channel, client });
 
       const before = await probe();
       expect(before.result).toMatchObject({ reachable: true, hostModeListening: true });
@@ -227,7 +228,7 @@ describe("host setup over the harness", () => {
       expect(hostModeConfirmed(before)).toBe(false);
       expect(memoryStore.get("hostMode")).toBeUndefined();
 
-      const result = await bootstrapHostMode("studio", before, {
+      const result = await bootstrapHostMode({ kind: "ssh", target: "studio" }, before, {
         channel,
         probe,
         sleep: () => new Promise((resolve) => setTimeout(resolve, 20)),
@@ -281,7 +282,11 @@ describe("host setup over the harness", () => {
     // The metrics link is refused, so the count comes from the refusal itself.
     const setup = requireRemoteService("hostSetup");
     await expect(
-      setup.install({ opId: "op-idle-1", sshTarget: "studio.example", hostId: HOST_ID })
+      setup.install({
+        opId: "op-idle-1",
+        connection: { kind: "ssh", target: "studio.example" },
+        hostId: HOST_ID,
+      })
     ).resolves.toEqual({ status: "agents-working", working: 2 });
 
     // Waiting for idle asks again with a fresh handshake each time.

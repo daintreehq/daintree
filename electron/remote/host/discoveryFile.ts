@@ -16,6 +16,12 @@ export interface HostDiscoveryInfo {
   socketPath: string;
   token: string;
   pid: number;
+  /**
+   * The argv that runs the host's build (its executable, and its app folder
+   * when unpackaged), so a Shell whose ssh server refuses socket forwarding
+   * can start `<command> --attach-stdio` there instead.
+   */
+  command?: string[];
 }
 
 const DiscoverySchema = z.object({
@@ -23,6 +29,7 @@ const DiscoverySchema = z.object({
   socketPath: z.string().min(1).max(1024),
   token: z.string().regex(/^[0-9a-f]{64}$/),
   pid: z.number().int().min(0),
+  command: z.array(z.string().min(1).max(4096)).min(1).max(4).optional(),
 });
 
 /** Parse discovery file text; null for anything that is not a well-formed file. */

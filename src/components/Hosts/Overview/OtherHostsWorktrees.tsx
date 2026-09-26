@@ -4,7 +4,7 @@ import type { HostWorktreeEntry } from "@shared/types/ipc/hostMetrics";
 import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { getViewHostId } from "@/hooks/useHostConnection";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { cn } from "@/lib/utils";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { hasRemoteHosts, useHostList } from "../hostList";
@@ -62,7 +62,7 @@ export function OtherHostsWorktrees({ onNavigate }: OtherHostsWorktreesProps) {
   const hostList = useHostList();
   const [expanded, setExpanded] = useState(false);
   const [hosts, setHosts] = useState<HostWorktrees[] | null>(null);
-  if (!isRemoteHostsSupported() || !hasRemoteHosts(hostList)) return null;
+  if (!isRemoteShellSupported() || !hasRemoteHosts(hostList)) return null;
 
   const windowHostId = getViewHostId() ?? LOCAL_HOST_ID;
   const rows = buildHostMenuRows(hostList.hosts, {

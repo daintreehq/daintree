@@ -1,6 +1,6 @@
 import { lazy, Suspense } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 
 function loadHostsOverviewHost() {
   // Tested directly so a build without Remote Hosts (Windows) drops the overview.
@@ -17,7 +17,7 @@ const LazyHostsOverviewHost = lazy(loadHostsOverviewHost);
  * it. Where Remote Hosts can't exist its chunk is never loaded.
  */
 export function HostsOverviewMount() {
-  if (!isRemoteHostsSupported()) return null;
+  if (!isRemoteShellSupported()) return null;
   return (
     <ErrorBoundary variant="component" componentName="HostsOverviewHost">
       <Suspense fallback={null}>

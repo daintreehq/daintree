@@ -1,6 +1,6 @@
 import { lazy, Suspense } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 
 const LazyHostSwitchDialogHost = lazy(() =>
   import("./HostSwitchDialogHost").then((m) => ({ default: m.HostSwitchDialogHost }))
@@ -11,7 +11,7 @@ const LazyHostSwitchDialogHost = lazy(() =>
  * exist its chunk is never loaded.
  */
 export function HostSwitchMount() {
-  if (!isRemoteHostsSupported()) return null;
+  if (!isRemoteShellSupported()) return null;
   return (
     <ErrorBoundary variant="component" componentName="HostSwitchDialogHost">
       <Suspense fallback={null}>
