@@ -4,6 +4,11 @@ import { app } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { store, type StoreSchema, consumePendingSettingsRecovery } from "../../../store.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import {
+  mayWriteProjectState,
+  peekDriveLeaseService,
+} from "../../../services/DriveLeaseService.js";
+import { APP_STATE_FIELD_OWNERSHIP } from "../../../storeOwnership.js";
 import { AppStateTerminalEntrySchema, filterValidTerminalEntries } from "../../../schemas/ipc.js";
 import { filterRestorableTerminalSnapshots } from "../../../services/projectStateRestore.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
@@ -192,6 +197,32 @@ interface HydrationWorkspace {
    * null because scratches deliberately have no Project row (#11484).
    */
   workspaceId: string | null;
+}
+
+/**
+ * A local view's write mixes this screen's own fields (sidebar and panel
+ * sizes, palette habits) with the project's host-owned ones (layout, terminal
+ * list, active worktree), so the dispatcher lets it through whole. While
+ * another screen drives the view's project, only the device fields land; the
+ * host-owned ones are the driver's. With no lease service running, as for
+ * anyone who never turned on Host mode, everything lands as before.
+ */
+function withoutUndrivenHostFields(
+  ctx: IpcContext,
+  incoming: object,
+  resolveWorkspaceId: () => string | null
+): object {
+  if (peekDriveLeaseService() === null) return incoming;
+  // A view that writes before its binding lands still writes a workspace's
+  // fields: the same one its MRU write below resolves to.
+  const projectId = ctx.projectId ?? resolveWorkspaceId();
+  if (projectId && mayWriteProjectState(projectId, () => ctx.endpoint)) return incoming;
+  const ownership: Readonly<Record<string, string>> = APP_STATE_FIELD_OWNERSHIP;
+  return Object.fromEntries(
+    Object.entries(incoming).filter(
+      ([field]) => Object.hasOwn(ownership, field) && ownership[field] === "device"
+    )
+  );
 }
 
 export function registerAppStateHandlers(deps?: HandlerDependencies): () => void {
@@ -742,7 +773,11 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
 
       // Handler performs its own structural validation before writing; cast to the
       // store schema to keep the `updates` object compatible with persistence types.
-      const partialState = incoming as Partial<typeof store.store.appState>;
+      const partialState = withoutUndrivenHostFields(
+        ctx,
+        incoming,
+        () => resolveWorkspaceForHydration(ctx).workspaceId
+      ) as Partial<typeof store.store.appState>;
 
       const updates: Partial<typeof store.store.appState> = {};
 

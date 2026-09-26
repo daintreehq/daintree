@@ -27,7 +27,7 @@ import type {
   SuggestDestinationPayload,
   WorktreeForBranch,
 } from "../../../shared/types/ipc/projectMatch.js";
-import type { OperationOutcome } from "../../../shared/types/remoteHosts.js";
+import type { DriveLeaseHolder, OperationOutcome } from "../../../shared/types/remoteHosts.js";
 import type { BranchCheck } from "../../../shared/types/ipc/hostSwitch.js";
 import type { Project } from "../../../shared/types/project.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -42,6 +42,7 @@ import { safeRecipeFilename } from "../../../shared/utils/recipeFilename.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { validateBranchName } from "../../../shared/utils/pathPattern.js";
 import { AppError, GitOperationError } from "../../utils/errorTypes.js";
+import { LOCAL_CLIENT_ID } from "../../ipc/endpoint.js";
 import { findWorktreeForBranch } from "../../workspace-host/worktreeUtils.js";
 import { normalizeOperationId } from "../operations/OperationRegistry.js";
 import { readRemoteBranchTip } from "../../utils/remoteBranchTip.js";
@@ -150,6 +151,39 @@ async function publishClone(staged: string, destination: string): Promise<void> 
     }
     throw error;
   }
+}
+
+/**
+ * Who asks to place a worktree, and whether they may change the destination
+ * project: it throws to refuse. Required on every placement, so this
+ * machine's own windows and a remote Shell's link both go through one.
+ */
+export interface PlacementAuthority {
+  assertMayPlace(projectId: string): void;
+}
+
+/**
+ * This machine's own windows: one driver among themselves, so they may place
+ * into a project nobody holds or this machine holds, never one a remote
+ * Shell is driving. With no lease service running (Host mode off) nobody else
+ * can be driving it.
+ */
+export function localPlacementAuthority(
+  lease: { getHolder(projectId: string): DriveLeaseHolder | null } | null
+): PlacementAuthority {
+  return {
+    assertMayPlace(projectId) {
+      const holder = lease?.getHolder(projectId) ?? null;
+      if (holder !== null && holder.clientId !== LOCAL_CLIENT_ID) {
+        throw new AppError({
+          code: "DRIVEN_ELSEWHERE",
+          message: "Another screen drives this project",
+          userMessage: `This project is being driven from ${holder.clientName}. Take it over first.`,
+          context: { projectId },
+        });
+      }
+    },
+  };
 }
 
 /**
@@ -939,12 +973,20 @@ export class ProjectAcrossHostsService {
    * Create the worktree another host's new-worktree dialog asked for, as one
    * operation with its own id and a retained outcome, so a Shell whose link
    * dropped learns how it ended instead of asking twice. A worktree that
-   * already has the branch checked out is reused, never suffixed.
+   * already has the branch checked out is reused, never suffixed. Refused
+   * before anything is recorded unless `authority` lets the asker change the
+   * project.
    */
-  placeWorktree(payload: PlaceWorktreePayload): Promise<CloneAndOpenOutcome> {
+  placeWorktree(
+    payload: PlaceWorktreePayload,
+    authority: PlacementAuthority
+  ): Promise<CloneAndOpenOutcome> {
     const opId = normalizeOperationId(payload?.opId);
     if (!opId) throw invalid("Invalid operation id");
     const project = this.requireProject(payload.projectId);
+    // Placing changes the project (a worktree, and its saved active worktree),
+    // so whoever asks must be allowed to drive it, whichever side asked.
+    authority.assertMayPlace(project.id);
     const worktree = validatePlacedWorktree(payload.worktree);
     return this.deps.operations().run(
       {

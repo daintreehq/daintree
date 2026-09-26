@@ -2968,3 +2968,100 @@ describe("project switch/reopen from a view on a remote Shell", () => {
     });
   });
 });
+
+describe("project:switch and project:reopen leave a driven project's saved state alone", () => {
+  let leaseModule: typeof import("../../../services/DriveLeaseService.js");
+  const isDriving = vi.fn<(projectId: string, endpoint: { clientId: string }) => boolean>();
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockGetProjectForWebContents.mockReturnValue("proj-old");
+    mockGetWindowForWebContents.mockReturnValue(null);
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+    projectStoreMock.getProjectState.mockResolvedValue({
+      projectId: "proj-old",
+      sidebarWidth: 350,
+      terminals: [{ id: "driver-pane", kind: "browser", title: "Driver", location: "grid" }],
+      activeWorktreeId: "wt-driver",
+    });
+    projectStoreMock.saveProjectState.mockResolvedValue(undefined);
+    leaseModule = await import("../../../services/DriveLeaseService.js");
+    leaseModule._resetDriveLeaseServiceForTesting({
+      isDriving,
+      dispose: () => undefined,
+    } as unknown as InstanceType<typeof leaseModule.DriveLeaseService>);
+  });
+
+  afterEach(() => {
+    leaseModule._resetDriveLeaseServiceForTesting(null);
+  });
+
+  function handlers() {
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({
+        view: { webContents: { id: 100, isDestroyed: () => false, send: vi.fn() } },
+        isNew: false,
+      }),
+      getProjectIdForWebContents: vi.fn(),
+    };
+    registerProjectCrudHandlers({
+      mainWindow: { id: 1 } as unknown,
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies);
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+    return { handleMap, pvm };
+  }
+
+  const stale = {
+    terminals: [],
+    draftInputs: { "driver-pane": "a displaced draft" },
+    activeWorktreeId: "wt-stale",
+  };
+
+  for (const [channel, status] of [
+    [CHANNELS.PROJECT_SWITCH, undefined],
+    [CHANNELS.PROJECT_REOPEN, "background"],
+  ] as const) {
+    it(`${channel}: navigates, but skips the outgoing save while another screen drives it`, async () => {
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "proj-new",
+        name: "New",
+        path: "/projects/new",
+        ...(status ? { status } : {}),
+      });
+      isDriving.mockReturnValue(false);
+      const { handleMap, pvm } = handlers();
+
+      await handleMap.get(channel)!({ sender: { id: 99 } }, "proj-new", stale);
+
+      expect(pvm.switchTo).toHaveBeenCalled();
+      expect(isDriving).toHaveBeenCalledWith(
+        "proj-old",
+        expect.objectContaining({ clientId: "local" })
+      );
+      expect(projectStoreMock.saveProjectState).not.toHaveBeenCalled();
+    });
+
+    it(`${channel}: saves the outgoing state while this screen drives it`, async () => {
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "proj-new",
+        name: "New",
+        path: "/projects/new",
+        ...(status ? { status } : {}),
+      });
+      isDriving.mockReturnValue(true);
+      const { handleMap } = handlers();
+
+      await handleMap.get(channel)!({ sender: { id: 99 } }, "proj-new", stale);
+
+      expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith(
+        "proj-old",
+        expect.objectContaining({ activeWorktreeId: "wt-stale" })
+      );
+    });
+  }
+});

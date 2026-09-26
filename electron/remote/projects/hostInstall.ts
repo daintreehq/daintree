@@ -421,18 +421,23 @@ export function attachProjectsHost(
     // Like a checkout: a view of the project this session drives, or the
     // placement this host offered when the session opened the project —
     // and then only while no other window holds the project's lease.
-    const bound = boundTo(p.projectId);
-    if (bound.length > 0) {
-      requireDriving(p.projectId, bound);
-    } else {
-      const holder = authority.holderEndpointId(p.projectId);
-      if (holder !== null && (sessionId === null || !isSessionEndpoint(sessionId, holder))) {
-        throw drivenElsewhere();
-      }
-      if (!grants.usePlacement(p.projectId, p.opId)) throw notAttached();
-    }
-    // Registered synchronously, so a status call right after this answer finds the record.
-    void service.placeWorktree(p).catch(() => {});
+    const sessionPlacement = {
+      assertMayPlace(projectId: string): void {
+        const bound = boundTo(projectId);
+        if (bound.length > 0) {
+          requireDriving(projectId, bound);
+          return;
+        }
+        const holder = authority.holderEndpointId(projectId);
+        if (holder !== null && (sessionId === null || !isSessionEndpoint(sessionId, holder))) {
+          throw drivenElsewhere();
+        }
+        if (!grants.usePlacement(projectId, p.opId)) throw notAttached();
+      },
+    };
+    // Registered synchronously, so a status call right after this answer finds
+    // the record; a refusal throws before anything is recorded.
+    void service.placeWorktree(p, sessionPlacement).catch(() => {});
     return null;
   });
   on(ProjectLinkMethod.IDENTIFY, IdentifySchema, (p) => service.identify(p));

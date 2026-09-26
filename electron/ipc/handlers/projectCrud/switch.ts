@@ -15,6 +15,7 @@ import {
   type ProjectOwner,
 } from "../../../window/projectOwnership.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { mayWriteProjectState } from "../../../services/DriveLeaseService.js";
 import { probeGitMarker } from "../../../services/projectOpenPreflight.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
@@ -110,7 +111,11 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       // Started concurrently with the view swap — the incoming view never reads
       // the outgoing project's state file — and awaited before returning so the
       // IPC contract (state persisted before resolve) is preserved.
-      const persistOutgoing = persistOutgoingProjectState(outgoingState, operation);
+      const persistOutgoing = persistOutgoingProjectState(
+        outgoingState,
+        operation,
+        () => ctx.endpoint
+      );
       trackOutgoingPersist(outgoingProjectId, persistOutgoing);
 
       if (pvm) {
@@ -223,7 +228,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       // sender still has its own outgoing layout to save (#11101).
       let persistOutgoing: Promise<void> = Promise.resolve();
       if (outgoingProjectId !== projectId) {
-        persistOutgoing = persistOutgoingProjectState(outgoingState, operation);
+        persistOutgoing = persistOutgoingProjectState(outgoingState, operation, () => ctx.endpoint);
         trackOutgoingPersist(outgoingProjectId, persistOutgoing);
       }
 
@@ -516,7 +521,11 @@ async function activateForRemoteShell(
     projectViewManager: undefined,
   });
   if (operation.outgoingProjectId !== project.id) {
-    const persistOutgoing = persistOutgoingProjectState(outgoingState, operation);
+    const persistOutgoing = persistOutgoingProjectState(
+      outgoingState,
+      operation,
+      () => ctx.endpoint
+    );
     trackOutgoingPersist(operation.outgoingProjectId, persistOutgoing);
     await persistOutgoing;
   }
@@ -540,13 +549,26 @@ async function activateForRemoteShell(
   return { outcome: "switched", project: projectStore.getProjectById(project.id) ?? project };
 }
 
+/**
+ * Save the layout, drafts and active worktree the sender is leaving. Leaving is
+ * navigation and always allowed, but the saved state is the project's own: a
+ * view that doesn't drive the outgoing project (another screen took it over)
+ * leaves it as the driver has it, just as the dedicated setters would refuse.
+ */
 async function persistOutgoingProjectState(
   outgoingState: ProjectSwitchOutgoingState | undefined,
-  operation: SwitchOperation
+  operation: SwitchOperation,
+  writer: () => IpcContext["endpoint"] | undefined
 ): Promise<void> {
   const previousProjectId = operation.outgoingProjectId;
   const logLabel = operation.action;
   if (!outgoingState || !previousProjectId) return;
+  if (!mayWriteProjectState(previousProjectId, writer)) {
+    logInfo(`[${logLabel}] Leaving the outgoing project's saved state to its driver`, {
+      projectId: previousProjectId,
+    });
+    return;
+  }
 
   const validTerminals = outgoingState.terminals
     ? sanitizeTerminals(outgoingState.terminals, `${logLabel}/pre-apply(${previousProjectId})`)

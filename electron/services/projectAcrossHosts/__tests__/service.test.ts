@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ExecuteCloneOptions } from "../../../ipc/handlers/projectCrud/gitClone.js";
 import { AppError, GitOperationError } from "../../../utils/errorTypes.js";
+import { localPlacementAuthority } from "../service.js";
 import { aliasRemote, commit, git, makeBare, makeRepo, tempRoot } from "./gitFixtures.js";
 import { createTestHost, plainClone, settled } from "./testService.js";
 
@@ -35,6 +36,8 @@ afterAll(() => {
 const branch = { name: "feature/host-chip", remoteBranch: "feature/host-chip" };
 let opCounter = 0;
 const nextOpId = () => `op-${++opCounter}`;
+
+const ALLOW_PLACEMENT = { assertMayPlace: () => undefined };
 
 describe("cloneAndOpen", () => {
   it("clones, registers, creates the branch's worktree and keeps the outcome", async () => {
@@ -628,11 +631,14 @@ describe("placing a worktree asked for on another host", () => {
   it("creates the exact branch at the carried path, keeps the outcome and leaves the recipe for the first view", async () => {
     const { host, clone, project } = hostWithClone("place-a");
     const opId = nextOpId();
-    const outcome = await host.service.placeWorktree({
-      opId,
-      projectId: project.id,
-      worktree: placed,
-    });
+    const outcome = await host.service.placeWorktree(
+      {
+        opId,
+        projectId: project.id,
+        worktree: placed,
+      },
+      ALLOW_PLACEMENT
+    );
     const expected = path.join(
       root,
       "place-a-home",
@@ -669,22 +675,71 @@ describe("placing a worktree asked for on another host", () => {
     });
 
     // Asking again for the same branch finds that worktree rather than suffixing a new one.
-    const again = await host.service.placeWorktree({
-      opId: nextOpId(),
-      projectId: project.id,
-      worktree: { ...placed, recipeId: null },
-    });
+    const again = await host.service.placeWorktree(
+      {
+        opId: nextOpId(),
+        projectId: project.id,
+        worktree: { ...placed, recipeId: null },
+      },
+      ALLOW_PLACEMENT
+    );
     expect(again).toMatchObject({ ok: true, worktreePath: expected });
     expect(host.createWorktree).toHaveBeenCalledTimes(1);
   });
 
+  it("asks the caller's authority before it records or creates anything", async () => {
+    const { host, project } = hostWithClone("place-refused");
+    const opId = nextOpId();
+    const refuse = {
+      assertMayPlace: (projectId: string) => {
+        expect(projectId).toBe(project.id);
+        throw new AppError({ code: "DRIVEN_ELSEWHERE", message: "driven elsewhere" });
+      },
+    };
+    expect(() =>
+      host.service.placeWorktree({ opId, projectId: project.id, worktree: placed }, refuse)
+    ).toThrow(/driven elsewhere/);
+    expect(host.service.operationStatus(opId)).toEqual({ status: "unknown" });
+    expect(host.createWorktree).not.toHaveBeenCalled();
+    expect(host.focusWorktree).not.toHaveBeenCalled();
+  });
+
+  it("lets this machine's windows place only where no remote Shell drives", () => {
+    const holder = (clientId: string) => ({
+      leaseId: 1,
+      endpointId: `${clientId}:1`,
+      clientId,
+      clientName: clientId === "local" ? "this-mac" : "greg-mbp",
+      isHostLocal: clientId === "local",
+      acquiredAt: 0,
+    });
+    expect(() => localPlacementAuthority(null).assertMayPlace("p")).not.toThrow();
+    expect(() =>
+      localPlacementAuthority({ getHolder: () => null }).assertMayPlace("p")
+    ).not.toThrow();
+    expect(() =>
+      localPlacementAuthority({ getHolder: () => holder("local") }).assertMayPlace("p")
+    ).not.toThrow();
+    expect(() =>
+      localPlacementAuthority({ getHolder: () => holder("client-b") }).assertMayPlace("p")
+    ).toThrow(expect.objectContaining({ code: "DRIVEN_ELSEWHERE" }));
+  });
+
   it("says a recipe the host's copy lacks won't run, and refuses an occupied or escaping path", async () => {
     const { host, clone, project } = hostWithClone("place-b");
-    const noRecipe = await host.service.placeWorktree({
-      opId: nextOpId(),
-      projectId: project.id,
-      worktree: { ...placed, newBranch: "feature/b1", relativePath: null, recipeId: "local-only" },
-    });
+    const noRecipe = await host.service.placeWorktree(
+      {
+        opId: nextOpId(),
+        projectId: project.id,
+        worktree: {
+          ...placed,
+          newBranch: "feature/b1",
+          relativePath: null,
+          recipeId: "local-only",
+        },
+      },
+      ALLOW_PLACEMENT
+    );
     expect(noRecipe).toMatchObject({ ok: true, setupRecipeId: null });
     expect((noRecipe as { branchNote: string | null }).branchNote).toMatch(/won't run/);
 
@@ -693,32 +748,46 @@ describe("placing a worktree asked for on another host", () => {
     fs.writeFileSync(path.join(occupied, "x"), "x");
     const opId = nextOpId();
     await expect(
-      host.service.placeWorktree({
-        opId,
-        projectId: project.id,
-        worktree: { ...placed, newBranch: "feature/b2", relativePath: "../taken", recipeId: null },
-      })
+      host.service.placeWorktree(
+        {
+          opId,
+          projectId: project.id,
+          worktree: {
+            ...placed,
+            newBranch: "feature/b2",
+            relativePath: "../taken",
+            recipeId: null,
+          },
+        },
+        ALLOW_PLACEMENT
+      )
     ).rejects.toMatchObject({ code: "VALIDATION" });
     expect(host.service.operationStatus(opId)).toMatchObject({ status: "failed" });
 
     await expect(
-      host.service.placeWorktree({
-        opId: nextOpId(),
-        projectId: project.id,
-        worktree: {
-          ...placed,
-          newBranch: "feature/b3",
-          relativePath: ".git/hooks",
-          recipeId: null,
+      host.service.placeWorktree(
+        {
+          opId: nextOpId(),
+          projectId: project.id,
+          worktree: {
+            ...placed,
+            newBranch: "feature/b3",
+            relativePath: ".git/hooks",
+            recipeId: null,
+          },
         },
-      })
+        ALLOW_PLACEMENT
+      )
     ).rejects.toMatchObject({ code: "VALIDATION" });
     expect(() =>
-      host.service.placeWorktree({
-        opId: nextOpId(),
-        projectId: project.id,
-        worktree: { ...placed, relativePath: `${clone}/abs` },
-      })
+      host.service.placeWorktree(
+        {
+          opId: nextOpId(),
+          projectId: project.id,
+          worktree: { ...placed, relativePath: `${clone}/abs` },
+        },
+        ALLOW_PLACEMENT
+      )
     ).toThrow(/relative/);
   });
 });
