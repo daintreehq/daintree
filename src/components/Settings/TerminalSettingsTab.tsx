@@ -47,7 +47,7 @@ import {
 import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
 import { computeDefaultCachedViews } from "@shared/config/cachedProjectViews";
 import type { HardwareInfo } from "@shared/types/ipc/system";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import {
   refreshUploadPreferences,
   setInterceptCtrlVImages,
@@ -62,7 +62,7 @@ function RemoteClipboardImagesRow() {
   const [inUse, setInUse] = useState(false);
   const [enabled, setEnabled] = useState(shouldInterceptCtrlVImages);
   useEffect(() => {
-    if (!isRemoteHostsSupported()) return;
+    if (!isRemoteShellSupported()) return;
     let cancelled = false;
     const check = async () => {
       if (!(await window.electron.remoteHosts.isInUse()) || cancelled) return;

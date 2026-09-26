@@ -6,7 +6,7 @@ import {
 } from "@shared/types/remoteHosts";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import type { HostMetricsEvent } from "@shared/types/ipc/hostMetrics";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { logWarn } from "@/utils/logger";
 
 export interface HostListSnapshot {
@@ -75,7 +75,7 @@ function applyMetricsEvent(event: HostMetricsEvent): void {
  * Remote Hosts doesn't exist, so nothing changes for a Windows build.
  */
 function start(): () => void {
-  if (!isRemoteHostsSupported()) return () => {};
+  if (!isRemoteShellSupported()) return () => {};
   const api = window.electron?.remoteHosts;
   if (!api) return () => {};
   const current = ++generation;

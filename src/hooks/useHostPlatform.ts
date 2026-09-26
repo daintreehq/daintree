@@ -1,5 +1,10 @@
 import { useSyncExternalStore } from "react";
-import { LOCAL_HOST_ID, isValidRemoteHostId, toHostScopedKey } from "@shared/types/remoteHosts";
+import {
+  LOCAL_HOST_ID,
+  isValidRemoteHostId,
+  toHostScopedKey,
+  type HostConnection,
+} from "@shared/types/remoteHosts";
 import { isLinux, isMac, isWindows } from "@/lib/platform";
 
 export type HostPlatformName = "darwin" | "linux" | "win32";
@@ -11,7 +16,8 @@ export interface HostPlatformInfo {
   tmpDir: string | null;
   /** Display name of a remote host; null for this machine. */
   hostName: string | null;
-  sshTarget: string | null;
+  /** How a remote host is reached; null for this machine. */
+  connection: HostConnection | null;
 }
 
 /**
@@ -35,7 +41,7 @@ function snapshot(): HostPlatformInfo {
     homeDir: null,
     tmpDir: null,
     hostName: null,
-    sshTarget: null,
+    connection: null,
   };
   return info;
 }

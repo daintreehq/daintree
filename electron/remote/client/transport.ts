@@ -1,14 +1,18 @@
 import net from "node:net";
+import type { Duplex } from "node:stream";
 import { readDiscoveryFile } from "../host/discoveryFile.js";
 
 /**
- * How a link client reaches a host socket. The SSH transport forwards a
- * local socket to the remote one; the direct transport dials a socket on
- * this machine (tests, and attaching to this machine's own host).
+ * How a link client reaches a host. The SSH transport forwards a local socket
+ * to the remote one (or, where the server refuses that, carries the stream
+ * over a command's stdio); the direct transport dials a socket on this machine
+ * (tests, and attaching to this machine's own host); the command stream
+ * transport runs a program whose stdio is the link.
  */
 
 export interface LinkTransportConnection {
-  socket: net.Socket;
+  /** The link's byte stream: a socket, or a command's stdio. Its write() return value is its backpressure. */
+  socket: Duplex;
   /** The host's per-launch token, read from its discovery file. */
   token: string;
   /** Release whatever the transport started (ssh forward, local socket file). */

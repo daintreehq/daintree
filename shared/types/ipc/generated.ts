@@ -1872,7 +1872,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./remoteHosts.js").HostInstallPlan;
   };
   "remote-hosts:probe": {
-    args: [payload: { sshTarget: string }];
+    args: [payload: import("./remoteHosts.js").HostSetupTarget];
     result: import("./remoteHosts.js").HostProbeResult;
   };
   "remote-hosts:reset-clipboard-grants": {
@@ -1880,7 +1880,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "remote-hosts:start-host-mode": {
-    args: [payload: { sshTarget: string }];
+    args: [payload: import("./remoteHosts.js").HostSetupTarget];
     result: import("./remoteHosts.js").StartHostModeResult;
   };
   "remote-hosts:switch-window-host": {

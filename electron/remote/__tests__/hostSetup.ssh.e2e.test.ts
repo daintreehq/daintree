@@ -211,7 +211,7 @@ describe.skipIf(!ENABLED)(
           return {
             parsed,
             result: {
-              sshTarget: SSH_ALIAS,
+              connection: { kind: "ssh", target: SSH_ALIAS },
               reachable: true,
               sshError: null,
               platform: parsed.platform,
@@ -253,11 +253,15 @@ describe.skipIf(!ENABLED)(
             `@@dt:hostmodestate ${state}`,
           ]),
         ];
-        const result = await bootstrapHostMode(SSH_ALIAS, outcome(["@@dt:unit no"]), {
-          channel,
-          probe: async () => (reports.length > 1 ? reports.shift()! : reports[0]!),
-          sleep: async () => {},
-        });
+        const result = await bootstrapHostMode(
+          { kind: "ssh", target: SSH_ALIAS },
+          outcome(["@@dt:unit no"]),
+          {
+            channel,
+            probe: async () => (reports.length > 1 ? reports.shift()! : reports[0]!),
+            sleep: async () => {},
+          }
+        );
 
         const target = { executable: image, appPath: null, appImageExtractAndRun: true };
         const unit = await fs.readFile(
@@ -391,7 +395,7 @@ describe.skipIf(!ENABLED)(
         await standIn("open");
         // The probe reads the real /Applications/Daintree.app, so the "client" is whatever is there.
         const first = await probeHost({
-          sshTarget: SSH_ALIAS,
+          connection: { kind: "ssh", target: SSH_ALIAS },
           shell: channel,
           client: TEST_HANDSHAKE,
         });
@@ -462,7 +466,8 @@ describe.skipIf(!ENABLED)(
         try {
           // Listening for this run only, as a bare --host-mode launch leaves it.
           await service.startListening();
-          const probe = () => probeHost({ sshTarget: SSH_ALIAS, shell: channel, client });
+          const probe = () =>
+            probeHost({ connection: { kind: "ssh", target: SSH_ALIAS }, shell: channel, client });
           const before = await probe();
           expect(before.result.hostModeListening).toBe(true);
 
@@ -475,7 +480,7 @@ describe.skipIf(!ENABLED)(
               return ran;
             },
           };
-          const result = await bootstrapHostMode(SSH_ALIAS, before, {
+          const result = await bootstrapHostMode({ kind: "ssh", target: SSH_ALIAS }, before, {
             channel: toHost,
             probe,
             sleep: () => new Promise((resolve) => setTimeout(resolve, 100)),

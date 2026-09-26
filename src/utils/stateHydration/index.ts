@@ -50,7 +50,7 @@ import { scheduleScrollbackRestore } from "./scrollbackRestoreScheduler";
 import { restorePanelsPhase } from "./panelRestorePhase";
 import { isRemoteWindow, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 
 /**
  * Record which machine this view's project lives on. A remote view also asks
@@ -69,14 +69,14 @@ function seedHostPlatform(hydrateResult: {
       ...(hostTmpDir !== undefined && { tmpDir: hostTmpDir }),
     });
   }
-  if (!isRemoteWindow() || !isRemoteHostsSupported()) return;
+  if (!isRemoteWindow() || !isRemoteShellSupported()) return;
   const getWindowHost = window.electron?.remoteHosts?.getWindowHost;
   if (typeof getWindowHost !== "function") return;
   void getWindowHost()
     .then((host) => {
       setHostPlatformInfo({
         hostName: host.descriptor?.name ?? null,
-        sshTarget: host.descriptor?.sshTarget ?? null,
+        connection: host.descriptor?.connection ?? null,
         ...(hostPlatform === undefined && { platform: host.hostPlatform }),
         ...(hostHomeDir === undefined && host.hostHomeDir && { homeDir: host.hostHomeDir }),
         ...(hostTmpDir === undefined && host.hostTmpDir && { tmpDir: host.hostTmpDir }),

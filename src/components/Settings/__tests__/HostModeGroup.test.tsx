@@ -15,7 +15,11 @@ const { clientMock, supported, mac } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/clients/hostModeClient", () => ({ hostModeClient: clientMock }));
-vi.mock("@/lib/remoteHosts", () => ({ isRemoteHostsSupported: () => supported.value }));
+vi.mock("@/lib/remoteHosts", () => ({
+  isRemoteShellSupported: () => supported.value,
+  isRemoteHostSupported: () => supported.value,
+  isEitherRemoteRoleSupported: () => supported.value,
+}));
 vi.mock("@/lib/platform", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/platform")>()),
   isMac: () => mac.value,

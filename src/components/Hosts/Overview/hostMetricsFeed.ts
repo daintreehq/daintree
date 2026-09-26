@@ -1,5 +1,5 @@
 import type { HostAttentionEvent, HostMetricsEvent } from "@shared/types/ipc/hostMetrics";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { notify } from "@/lib/notify";
 import { useHostMetricsStore } from "@/store/hostMetricsStore";
 import { logWarn } from "@/utils/logger";
@@ -56,7 +56,7 @@ export function startHostMetricsFeed(): () => void {
 }
 
 function subscribe(): () => void {
-  if (!isRemoteHostsSupported()) return () => {};
+  if (!isRemoteShellSupported()) return () => {};
   const api = window.electron?.hostMetrics;
   if (!api) return () => {};
   let live = true;

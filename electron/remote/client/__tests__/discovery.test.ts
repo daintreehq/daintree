@@ -203,10 +203,10 @@ describe("discoverHosts", () => {
     const hosts = await discoverHosts({
       run,
       platform: "darwin",
-      knownTargets: ["greg@bigbox.tail1234.ts.net"],
+      knownConnections: [{ kind: "ssh", target: "greg@bigbox.tail1234.ts.net" }],
     });
     // studio-03.local may or may not be the tailnet's studio-03: nothing vouches for it.
-    expect(hosts.map((h) => [h.name, h.sshTarget, h.source, h.alreadyAdded])).toEqual([
+    expect(hosts.map((h) => [h.name, h.connection.target, h.source, h.alreadyAdded])).toEqual([
       ["studio-03", "studio-03.tail1234.ts.net", "tailscale", false],
       ["bigbox", "bigbox.tail1234.ts.net", "tailscale", true],
       ["studio-03", "studio-03.local", "bonjour", false],
@@ -233,9 +233,12 @@ describe("discoverHosts", () => {
     const hosts = await discoverHosts({
       run,
       platform: "linux",
-      knownTargets: ["greg@100.64.0.3", "greg@100.64.0.12"],
+      knownConnections: [
+        { kind: "ssh", target: "greg@100.64.0.3" },
+        { kind: "ssh", target: "greg@100.64.0.12" },
+      ],
     });
-    expect(hosts.map((h) => [h.sshTarget, h.alreadyAdded])).toEqual([
+    expect(hosts.map((h) => [h.connection.target, h.alreadyAdded])).toEqual([
       ["100.64.0.3", true],
       ["100.64.0.9", false],
       ["c.tail1234.ts.net", true],
@@ -268,8 +271,8 @@ describe("discoverHosts", () => {
       }
       return missing;
     };
-    const hosts = await discoverHosts({ run, platform: "linux", knownTargets: [] });
-    expect(hosts.map((h) => h.sshTarget)).toEqual(["box.ts.net", "box-2.local"]);
+    const hosts = await discoverHosts({ run, platform: "linux", knownConnections: [] });
+    expect(hosts.map((h) => h.connection.target)).toEqual(["box.ts.net", "box-2.local"]);
   });
 
   it("falls back to the macOS app's bundled CLI and survives every tool being absent", async () => {
@@ -278,7 +281,7 @@ describe("discoverHosts", () => {
       tried.push(command);
       return missing;
     };
-    expect(await discoverHosts({ run, platform: "linux", knownTargets: [] })).toEqual([]);
+    expect(await discoverHosts({ run, platform: "linux", knownConnections: [] })).toEqual([]);
     expect(tried).toContain("/Applications/Tailscale.app/Contents/MacOS/Tailscale");
     expect(tried).toContain("avahi-browse");
   });

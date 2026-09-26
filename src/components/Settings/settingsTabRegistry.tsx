@@ -27,7 +27,7 @@ import { DaintreeIcon, FolderGit2, Plug, McpServerIcon, Workflow } from "@/compo
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { GeneralTab } from "./GeneralTab";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import type { SettingsOwner } from "@/hooks/useSettingsOwner";
 import type {
   GlobalSettingsTab,
@@ -1556,7 +1556,7 @@ export const SETTINGS_REGISTRY = [
     ],
   } satisfies LazySettingsTabEntry,
 
-  ...(isRemoteHostsSupported() ? [HOSTS_TAB] : []),
+  ...(isRemoteShellSupported() ? [HOSTS_TAB] : []),
 
   {
     id: "portal",

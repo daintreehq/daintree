@@ -333,7 +333,7 @@ describe("probeHost", () => {
       stderr: "greg@studio-03: Permission denied (publickey).",
     });
     const { result, parsed } = await probeHost({
-      sshTarget: "greg@studio-03",
+      connection: { kind: "ssh", target: "greg@studio-03" },
       shell,
       client: CLIENT,
     });
@@ -344,13 +344,21 @@ describe("probeHost", () => {
 
   it("treats output cut short as unreachable rather than a missing install", async () => {
     const shell = shellReturning({ stdout: "@@dt:uname Darwin arm64\n" });
-    const { result } = await probeHost({ sshTarget: "studio", shell, client: CLIENT });
+    const { result } = await probeHost({
+      connection: { kind: "ssh", target: "studio" },
+      shell,
+      client: CLIENT,
+    });
     expect(result.reachable).toBe(false);
   });
 
   it("compares the install with this client and suggests the commands the user runs", async () => {
     const shell = shellReturning({ stdout: LINUX_OUTPUT });
-    const { result } = await probeHost({ sshTarget: "bigbox", shell, client: CLIENT });
+    const { result } = await probeHost({
+      connection: { kind: "ssh", target: "bigbox" },
+      shell,
+      client: CLIENT,
+    });
     expect(result.reachable).toBe(true);
     expect(result.matchesClient).toBe(false);
     expect(result.suggestedCommands.map((c) => c.command)).toEqual([
@@ -369,13 +377,21 @@ describe("probeHost", () => {
         "@@dt:end",
       ].join("\n"),
     });
-    const { result } = await probeHost({ sshTarget: "box", shell, client: CLIENT });
+    const { result } = await probeHost({
+      connection: { kind: "ssh", target: "box" },
+      shell,
+      client: CLIENT,
+    });
     expect(result.matchesClient).toBeNull();
   });
 
   it("counts a host in Host mode as running and matches an identical build", async () => {
     const shell = shellReturning({ stdout: MAC_OUTPUT });
-    const { result } = await probeHost({ sshTarget: "studio", shell, client: CLIENT });
+    const { result } = await probeHost({
+      connection: { kind: "ssh", target: "studio" },
+      shell,
+      client: CLIENT,
+    });
     expect(result.matchesClient).toBe(true);
     expect(result.appRunning).toBe(true);
     expect(result.suggestedCommands[0]?.command).toBe("sudo pmset -a sleep 0 disksleep 0");

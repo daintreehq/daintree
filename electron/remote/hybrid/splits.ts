@@ -38,6 +38,7 @@ import { isValidSshTarget } from "../client/sshTransport.js";
 import { getRemoteService } from "../runtime.js";
 import { mergeByOwnership, splitByOwnership } from "./fieldOwnership.js";
 import { notificationSettingsGet, notificationSettingsSet } from "./notificationSettings.js";
+import { sshTargetOf } from "../client/connection.js";
 
 type SplitCall = Parameters<HybridSplit>[0];
 
@@ -329,9 +330,12 @@ const openInEditor: HybridSplit = async ({ hostId, args, remote }) => {
     }
   }
 
+  // The editor's remote is SSH; a host reached another way gets its path copied.
+  const sshTarget = sshTargetOf(descriptor.connection);
+  if (!sshTarget) return copyHostPathInstead(hostId, hostPath);
   const url = buildRemoteEditorUrl({
     editorId,
-    sshTarget: descriptor.sshTarget,
+    sshTarget,
     path: hostPath,
     line: payload.line,
     col: payload.col,

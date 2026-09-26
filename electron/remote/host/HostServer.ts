@@ -55,6 +55,8 @@ export interface HostServerOptions {
    * RejectMessage.observed). Null when they can't all be seen.
    */
   observeWorkingAgents?: () => Promise<number | null>;
+  /** The argv that runs this build, published so a Shell can start `--attach-stdio` here. */
+  launchCommand?: string[];
 }
 
 /**
@@ -217,6 +219,7 @@ export class HostServer {
         socketPath,
         token: this.token,
         pid: process.pid,
+        ...(this.options.launchCommand && { command: this.options.launchCommand }),
       });
       this.assertCurrent(generation);
     } catch (err) {

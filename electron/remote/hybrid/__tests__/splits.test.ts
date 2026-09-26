@@ -24,7 +24,11 @@ const mocks = vi.hoisted(() => ({
   client: {
     list: vi.fn(() => [
       {
-        descriptor: { id: "studio", name: "studio-01", sshTarget: "greg@studio-01" },
+        descriptor: {
+          id: "studio",
+          name: "studio-01",
+          connection: { kind: "ssh", target: "greg@studio-01" },
+        },
         connection: { status: "connected" },
         summary: null,
       },

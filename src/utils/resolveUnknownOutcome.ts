@@ -1,7 +1,7 @@
 import type { OperationId, OperationOutcome } from "@shared/types/remoteHosts";
 import type { OperationsEvent } from "@shared/types/ipc/operations";
 import { operationsClient } from "@/clients/operationsClient";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { isClientAppError } from "./clientAppError";
 
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
@@ -50,7 +50,7 @@ export async function resolveUnknownOutcome(
 ): Promise<OperationOutcome> {
   // The operations handlers are registered only where Remote Hosts runs, so
   // elsewhere there is no Host record to ask for.
-  if (!options.client && !isRemoteHostsSupported()) return { status: "unknown" };
+  if (!options.client && !isRemoteShellSupported()) return { status: "unknown" };
   const client = options.client ?? operationsClient;
   const { signal } = options;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;

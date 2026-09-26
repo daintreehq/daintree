@@ -140,12 +140,13 @@ import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
 import { startHostRuntime } from "./boot/hostBootstrap.js";
 import {
   HOST_MODE_HANDOFF_NOBODY_EXIT_CODE,
+  isAttachStdioRequested,
   isHostModeEnableRequested,
   isHostModeHandoffOnly,
   isHostModeRequested,
   resolveHostModeLaunch,
 } from "./boot/hostModeLaunch.js";
-import { isRemoteHostsSupported } from "./remote/buildGate.js";
+import { isEitherRemoteRoleSupported, isRemoteHostSupported } from "./remote/buildGate.js";
 import { getRemoteService } from "./remote/runtime.js";
 
 // CRITICAL: Run IPC sender validation before any handlers are registered
@@ -300,14 +301,38 @@ app.commandLine.appendSwitch("disable-features", disabledFeatures.join(","));
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// `--attach-stdio` carries a Shell's link to the Daintree already running here
+// (see remote/host/attachStdio.ts). It is decided before the single-instance
+// lock: taking the lock would make it a second instance that quits and hands
+// its argv to the running one as a launch. It opens no window, touches no
+// logs and starts no backend, and exits once either side of the pipe closes.
+const attachStdio = isRemoteHostSupported() && isAttachStdioRequested(process.argv);
+if (attachStdio) {
+  if (__DAINTREE_REMOTE_HOSTS__) {
+    void import("./remote/host/attachStdioCli.js")
+      .then(({ runAttachStdioCli }) => runAttachStdioCli())
+      .then(
+        (code) => app.exit(code),
+        (error: unknown) => {
+          process.stderr.write(`daintree: attach failed: ${String(error)}\n`);
+          app.exit(1);
+        }
+      );
+  } else {
+    app.exit(1);
+  }
+}
+
 // Acquire single-instance lock before any file I/O or service initialization.
 // A second instance must not touch log files, telemetry, or crash reporters.
-const gotTheLock = isSmokeTest || app.requestSingleInstanceLock();
+const gotTheLock = attachStdio || isSmokeTest || app.requestSingleInstanceLock();
 
-if (!gotTheLock) {
+if (attachStdio) {
+  // Bridging; nothing else of the app starts in this process.
+} else if (!gotTheLock) {
   console.log("[MAIN] Another instance is already running. Quitting...");
   app.quit();
-} else if (isRemoteHostsSupported() && isHostModeHandoffOnly(process.argv)) {
+} else if (isRemoteHostSupported() && isHostModeHandoffOnly(process.argv)) {
   // Host setup runs this from an SSH session only to reach a running
   // Daintree; with none to hand over to, it must not become the backend there.
   console.log("[MAIN] Host mode handoff found no running instance. Quitting...");
@@ -400,11 +425,11 @@ if (!gotTheLock) {
   // the process alive once the last window closes. Read from the store at each
   // use, so switching it on mid-session applies to the next close.
   const isHostModeEnabled = (): boolean =>
-    isRemoteHostsSupported() && store.get("hostMode")?.enabled === true;
+    isRemoteHostSupported() && store.get("hostMode")?.enabled === true;
   // `--host-mode` is known from argv before `ready`, so a second launch or Dock
   // click during the windowless startup is already treated as Host mode; the
   // store-dependent cases are resolved once the app is ready.
-  let hostModeLaunch = isRemoteHostsSupported() && isHostModeRequested(process.argv);
+  let hostModeLaunch = isRemoteHostSupported() && isHostModeRequested(process.argv);
   // Flips once the initial windows (or the windowless Host runtime) are up, so
   // a second launch before then doesn't open a window of its own.
   let launchSettled = false;
@@ -416,7 +441,7 @@ if (!gotTheLock) {
   let hostModeHandedOff = false;
   // Host setup from another machine (`--enable-host-mode`, on this launch or a
   // later one): switch Host mode on for good, not just for this run.
-  let hostModeEnableRequested = isRemoteHostsSupported() && isHostModeEnableRequested(process.argv);
+  let hostModeEnableRequested = isRemoteHostSupported() && isHostModeEnableRequested(process.argv);
   let remoteHostsStarted = false;
   const listenForHandedOffHostMode = (): void => {
     const hostMode = getRemoteService("hostMode");
@@ -896,7 +921,7 @@ if (!gotTheLock) {
     windowRegistry,
     isHostModeActive: () => hostModeLaunch || hostModeHandedOff || isHostModeEnabled(),
     isLaunchSettled: () => launchSettled,
-    onHostModeRequested: isRemoteHostsSupported()
+    onHostModeRequested: isRemoteHostSupported()
       ? (commandLine) => {
           hostModeHandedOff = true;
           if (isHostModeEnableRequested(commandLine)) hostModeEnableRequested = true;
@@ -987,7 +1012,7 @@ if (!gotTheLock) {
       const launchIntent = resolveLaunchIntent(launchSignals);
       const hostModeEnabled = isHostModeEnabled();
       hostModeLaunch =
-        isRemoteHostsSupported() &&
+        isRemoteHostSupported() &&
         resolveHostModeLaunch({
           argv: process.argv,
           hostModeEnabled,
@@ -1149,7 +1174,7 @@ if (!gotTheLock) {
       appLifecycle.onLaunchSettled();
 
       if (__DAINTREE_REMOTE_HOSTS__) {
-        if (isRemoteHostsSupported()) {
+        if (isEitherRemoteRoleSupported()) {
           try {
             const remoteHosts = await import("./remote/boot.js");
             // Published before the start resolves, so a quit during it still

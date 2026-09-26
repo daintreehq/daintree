@@ -22,7 +22,7 @@ function entry(notificationsEnabled: boolean): HostListEntry {
     descriptor: {
       id: "studio-01",
       name: "studio-01",
-      sshTarget: "greg@studio",
+      connection: { kind: "ssh", target: "greg@studio" },
       platform: "linux",
       arch: "x64",
       lastHandshake: null,

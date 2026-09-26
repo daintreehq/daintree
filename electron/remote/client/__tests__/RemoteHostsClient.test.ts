@@ -132,7 +132,7 @@ describe("RemoteHostsClient", () => {
       installRouter,
       emit: (event) => events.push(event),
     });
-    registry.add({ name: "studio-01", sshTarget: "studio.example" });
+    registry.add({ name: "studio-01", connection: { kind: "ssh", target: "studio.example" } });
     events.length = 0;
   });
 
@@ -435,7 +435,10 @@ describe("RemoteHostsClient", () => {
     });
     await withCleanup.forget({ hostId: "studio-01" });
     expect(onForget).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "studio-01", sshTarget: "studio.example" })
+      expect.objectContaining({
+        id: "studio-01",
+        connection: { kind: "ssh", target: "studio.example" },
+      })
     );
   });
 
@@ -603,7 +606,7 @@ describe("RemoteHostsClient", () => {
     it("drops the views of a forgotten host", async () => {
       await disconnectWithBoundView();
       await client.forget({ hostId: "studio-01" });
-      registry.add({ name: "studio-01", sshTarget: "studio.example" });
+      registry.add({ name: "studio-01", connection: { kind: "ssh", target: "studio.example" } });
       manager.connect("studio-01");
       manager.emit("studio-01", connected);
       await new Promise((resolve) => setTimeout(resolve, 0));

@@ -7,7 +7,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const supported = vi.hoisted(() => ({ value: true }));
 
 vi.mock("@/lib/remoteHosts", () => ({
-  isRemoteHostsSupported: () => supported.value,
+  isRemoteShellSupported: () => supported.value,
+  isRemoteHostSupported: () => supported.value,
+  isEitherRemoteRoleSupported: () => supported.value,
 }));
 vi.mock("../HostFilePickerHost", () => ({
   HostFilePickerHost: () => <div data-testid="host-file-picker-host" />,

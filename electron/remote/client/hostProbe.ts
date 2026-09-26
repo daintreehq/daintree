@@ -1,5 +1,6 @@
 import type {
   HostArch,
+  HostConnection,
   HostHandshakeInfo,
   HostPlatform,
 } from "../../../shared/types/remoteHosts.js";
@@ -378,19 +379,19 @@ export interface ProbeOutcome {
 }
 
 export async function probeHost(params: {
-  sshTarget: string;
+  connection: HostConnection;
   shell: HostCommandChannel;
   client: Pick<HostHandshakeInfo, "version" | "commit">;
   options?: CommandOptions;
 }): Promise<ProbeOutcome> {
-  const { sshTarget, shell } = params;
+  const { connection, shell } = params;
   const run = await shell.exec(buildHostProbeScript(), { timeoutMs: 30_000, ...params.options });
   const parsed = run.code === 0 ? parseHostProbe(run.stdout) : null;
   if (!parsed || !parsed.complete || !parsed.platform) {
     return {
       parsed: null,
       result: {
-        sshTarget,
+        connection,
         reachable: false,
         sshError: failureDetail(
           run,
@@ -421,7 +422,7 @@ export async function probeHost(params: {
   return {
     parsed,
     result: {
-      sshTarget,
+      connection,
       reachable: true,
       sshError: null,
       platform: parsed.platform,

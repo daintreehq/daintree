@@ -12,7 +12,11 @@ vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
   return { ...actual, createPortal: (children: React.ReactNode) => children };
 });
-vi.mock("@/lib/remoteHosts", () => ({ isRemoteHostsSupported: () => supported.value }));
+vi.mock("@/lib/remoteHosts", () => ({
+  isRemoteShellSupported: () => supported.value,
+  isRemoteHostSupported: () => supported.value,
+  isEitherRemoteRoleSupported: () => supported.value,
+}));
 vi.mock("@/lib/platform", async () => {
   const actual = await vi.importActual<typeof import("@/lib/platform")>("@/lib/platform");
   return { ...actual, isMac: () => true, isWindows: () => false, isLinux: () => false };
@@ -52,7 +56,7 @@ function host(id: string, connection: HostConnectionState = CONNECTED): HostList
     descriptor: {
       id,
       name: id,
-      sshTarget: id,
+      connection: { kind: "ssh", target: id },
       platform: "linux",
       arch: "x64",
       lastHandshake: null,

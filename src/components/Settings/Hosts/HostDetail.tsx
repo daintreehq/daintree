@@ -4,7 +4,12 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { HostListEntry } from "@shared/types/remoteHosts";
+import {
+  formatHostConnection,
+  sshConnection,
+  sshTargetOf,
+  type HostListEntry,
+} from "@shared/types/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { SettingsInput } from "../SettingsInput";
@@ -37,7 +42,7 @@ function useCommittedField(initial: string, commit: (value: string) => Promise<u
   return { draft, setDraft, error, save };
 }
 
-/** One host: its name and SSH target, what its connection reports, and forgetting it. */
+/** One host: its name and address, what its connection reports, and forgetting it. */
 export function HostDetail({
   entry,
   onBack,
@@ -53,8 +58,10 @@ export function HostDetail({
   const name = useCommittedField(descriptor.name, (value) =>
     remoteHostsClient.update({ hostId: descriptor.id, name: value })
   );
-  const target = useCommittedField(descriptor.sshTarget, (value) =>
-    remoteHostsClient.update({ hostId: descriptor.id, sshTarget: value })
+  // Only an ssh target is typed; another kind of connection is shown as it is.
+  const sshTarget = sshTargetOf(descriptor.connection);
+  const target = useCommittedField(sshTarget ?? "", (value) =>
+    remoteHostsClient.update({ hostId: descriptor.id, connection: sshConnection(value) })
   );
   const agentClis = summary?.agentClis ?? [];
   const forges = summary?.forges;
@@ -118,17 +125,24 @@ export function HostDetail({
             onBlur={name.save}
             onKeyDown={(e) => e.key === "Enter" && name.save()}
           />
-          <SettingsInput
-            label="SSH target"
-            description="What `ssh` is given: user@host, a tailnet name, or an ~/.ssh/config alias"
-            layout="inline"
-            spellCheck={false}
-            value={target.draft}
-            error={target.error}
-            onChange={(e) => target.setDraft(e.target.value)}
-            onBlur={target.save}
-            onKeyDown={(e) => e.key === "Enter" && target.save()}
-          />
+          {sshTarget !== null ? (
+            <SettingsInput
+              label="SSH target"
+              description="What `ssh` is given: user@host, a tailnet name, or an ~/.ssh/config alias"
+              layout="inline"
+              spellCheck={false}
+              value={target.draft}
+              error={target.error}
+              onChange={(e) => target.setDraft(e.target.value)}
+              onBlur={target.save}
+              onKeyDown={(e) => e.key === "Enter" && target.save()}
+            />
+          ) : (
+            <SettingsRow
+              label="Address"
+              description={formatHostConnection(descriptor.connection)}
+            />
+          )}
           <SettingsRow
             label="Connection"
             description={
@@ -262,7 +276,7 @@ export function HostDetail({
           existing={{
             hostId: descriptor.id,
             name: descriptor.name,
-            sshTarget: descriptor.sshTarget,
+            connection: descriptor.connection,
           }}
         />
       )}

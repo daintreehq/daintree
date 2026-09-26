@@ -204,7 +204,7 @@ async function buildHarness(
     async open(signal) {
       if (!allowConnect) throw new Error("host unreachable");
       const connection = await direct.open(signal);
-      sockets.push(connection.socket);
+      sockets.push(connection.socket as net.Socket);
       return connection;
     },
   };
@@ -219,7 +219,7 @@ async function buildHarness(
   if (!booted) throw new Error("boot did not start the Remote Hosts client");
   const added = booted.client.add({
     name: HOST_ID,
-    sshTarget: options.sshTarget ?? "studio.example",
+    connection: { kind: "ssh", target: options.sshTarget ?? "studio.example" },
   });
   if (added.id !== HOST_ID) throw new Error(`unexpected host id ${added.id}`);
 

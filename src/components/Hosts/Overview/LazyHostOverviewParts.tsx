@@ -1,6 +1,6 @@
 import { lazy, Suspense, type ComponentProps } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { hasRemoteHosts, useHostList } from "../hostList";
 import type { OtherHostsWorktrees as OtherHostsWorktreesComponent } from "./OtherHostsWorktrees";
 import type { WorktreePlacementRow as WorktreePlacementRowComponent } from "./WorktreePlacementRow";
@@ -30,7 +30,7 @@ const OtherWorktrees = lazy(loadOtherHostsWorktrees);
 /** Whether another host exists here: until one does, nothing is loaded or shown. */
 function useRemoteHostsInUse(): boolean {
   const hostList = useHostList();
-  return isRemoteHostsSupported() && hasRemoteHosts(hostList);
+  return isRemoteShellSupported() && hasRemoteHosts(hostList);
 }
 
 /** The new-worktree dialog's host choice; absent until a host other than this machine exists. */

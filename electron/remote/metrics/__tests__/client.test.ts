@@ -36,7 +36,7 @@ function descriptor(id: string, notificationsEnabled = false): HostDescriptor {
   return {
     id,
     name: `name-${id}`,
-    sshTarget: id,
+    connection: { kind: "ssh", target: id },
     platform: "linux",
     arch: "x64",
     lastHandshake: null,
@@ -391,7 +391,7 @@ describe("HostMetricsClient", () => {
     h.client.record("studio-01", summary(1));
     h.setHosts([{ ...descriptor("studio-01"), name: "renamed" }]);
     expect(h.client.latest("studio-01")?.sampledAt).toBe(1);
-    h.setHosts([{ ...descriptor("studio-01"), sshTarget: "elsewhere" }]);
+    h.setHosts([{ ...descriptor("studio-01"), connection: { kind: "ssh", target: "elsewhere" } }]);
     expect(h.client.latest("studio-01")).toBeNull();
     expect(h.connect).toHaveBeenCalledTimes(1);
     h.client.dispose();

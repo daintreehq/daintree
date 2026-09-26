@@ -89,7 +89,7 @@ import { registerProjectMatchHandlers } from "./handlers/projectMatch.js";
 import { registerHostMetricsHandlers } from "./handlers/hostMetrics.js";
 import { registerPortForwardsHandlers } from "./handlers/portForwards.js";
 import { registerPluginParityHandlers } from "./handlers/pluginParity.js";
-import { isRemoteHostsSupported } from "../remote/buildGate.js";
+import { isEitherRemoteRoleSupported } from "../remote/buildGate.js";
 import { registerSitePreviewHandlers } from "./handlers/sitePreview.js";
 import { registerWebviewEmulationHandlers } from "./handlers/webviewEmulation.js";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics.js";
@@ -257,7 +257,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerScratchHandlers(deps));
 
     // Remote Hosts: macOS and Linux only. Windows builds register none of it.
-    if (isRemoteHostsSupported()) {
+    if (isEitherRemoteRoleSupported()) {
       register(() => registerRemoteHostsHandlers());
       register(() => registerHostModeHandlers());
       register(() => registerDriveLeaseHandlers());

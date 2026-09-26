@@ -92,7 +92,7 @@ function entry(id: string, connection: HostListEntry["connection"]): HostListEnt
     descriptor: {
       id,
       name: id,
-      sshTarget: id,
+      connection: { kind: "ssh", target: id },
       platform: "linux",
       arch: "x64",
       lastHandshake: null,

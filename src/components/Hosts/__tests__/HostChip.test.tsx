@@ -15,7 +15,11 @@ vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
   return { ...actual, createPortal: (children: React.ReactNode) => children };
 });
-vi.mock("@/lib/remoteHosts", () => ({ isRemoteHostsSupported: () => supported.value }));
+vi.mock("@/lib/remoteHosts", () => ({
+  isRemoteShellSupported: () => supported.value,
+  isRemoteHostSupported: () => supported.value,
+  isEitherRemoteRoleSupported: () => supported.value,
+}));
 vi.mock("@/lib/platform", async () => {
   const actual = await vi.importActual<typeof import("@/lib/platform")>("@/lib/platform");
   return {
@@ -55,7 +59,7 @@ function host(id: string, name: string, extra: Partial<HostListEntry> = {}): Hos
     descriptor: {
       id,
       name,
-      sshTarget: `greg@${name}`,
+      connection: { kind: "ssh", target: `greg@${name}` },
       platform: "linux",
       arch: "x64",
       lastHandshake: null,

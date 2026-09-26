@@ -7,6 +7,7 @@ import {
   isLocalHostId,
   parseHostScopedKey,
   toHostScopedKey,
+  type HostConnection,
   type HostDescriptor,
   type HostId,
 } from "../../../shared/types/remoteHosts.js";
@@ -39,6 +40,7 @@ import {
 import { RemoteHostsClient, type WindowControl } from "./RemoteHostsClient.js";
 import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
 import { answerReverseRequest } from "./reverseRequests.js";
+import { unsupportedConnection } from "./connection.js";
 import { SshTransport } from "./sshTransport.js";
 import type { LinkTransport } from "./transport.js";
 import { WindowHostBinding } from "./WindowHostBinding.js";
@@ -256,6 +258,17 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
   };
 }
 
+/** How a host's link is opened, by how it is reached. */
+function transportFor(connection: HostConnection, clientDir: string): LinkTransport {
+  switch (connection.kind) {
+    case "ssh":
+      return new SshTransport({ target: connection.target, clientDir });
+    default:
+      // A new kind brings its own transport (WSL: a command stream over `wsl.exe`).
+      throw unsupportedConnection(connection, "Connecting");
+  }
+}
+
 /**
  * Start the Shell side of Remote Hosts: the host list, per-host connections
  * (dialled only when a window or the user asks), window bindings and the
@@ -287,8 +300,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const manager = new RemoteHostManager({
     registry,
     createTransport:
-      hooks.createTransport ??
-      ((descriptor) => new SshTransport({ target: descriptor.sshTarget, clientDir })),
+      hooks.createTransport ?? ((descriptor) => transportFor(descriptor.connection, clientDir)),
     handshake: getLocalHandshakeInfo,
     client: {
       // Per launch: a session only resumes within one run of this app.
@@ -319,7 +331,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     run: defaultCommandRunner,
     clientDir,
     platform: process.platform,
-    knownTargets: () => registry.list().map((host) => host.sshTarget),
+    knownConnections: () => registry.list().map((host) => host.connection),
     clientBuild: () => {
       const handshake = getLocalHandshakeInfo();
       return {

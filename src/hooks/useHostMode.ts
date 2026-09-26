@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { hostModeClient } from "@/clients/hostModeClient";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteHostSupported } from "@/lib/remoteHosts";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { HostModeStatus, SetHostModePayload } from "@shared/types/ipc/hostMode";
 
@@ -29,7 +29,7 @@ export interface UseHostModeResult {
  * try/finally, which the React Compiler can't lower.
  */
 export function useHostMode(): UseHostModeResult {
-  const supported = isRemoteHostsSupported();
+  const supported = isRemoteHostSupported();
   const [status, setStatus] = useState<HostModeStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<SetHostModePayload | null>(null);

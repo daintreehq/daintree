@@ -1,6 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isEitherRemoteRoleSupported } from "@/lib/remoteHosts";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { getDriveLeaseSnapshot, subscribeDriveLeaseSnapshot } from "@/services/terminal/inputGate";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -77,7 +77,7 @@ let stopSync: (() => void) | null = null;
  * about who drives, and nobody asks the host twice.
  */
 function beginSync(): () => void {
-  if (!isRemoteHostsSupported()) return () => {};
+  if (!isEitherRemoteRoleSupported()) return () => {};
   const adopt = () => {
     const next = getDriveLeaseSnapshot();
     setLease(next !== null && next.projectId === getViewWorkspaceId() ? next : null);

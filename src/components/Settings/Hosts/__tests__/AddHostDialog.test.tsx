@@ -8,7 +8,7 @@ import { AddHostDialog } from "../AddHostDialog";
 
 function probeResult(overrides: Partial<HostProbeResult> = {}): HostProbeResult {
   return {
-    sshTarget: "greg@studio",
+    connection: { kind: "ssh", target: "greg@studio" },
     reachable: true,
     sshError: null,
     platform: "darwin",
@@ -69,7 +69,11 @@ beforeEach(() => {
     probe: vi.fn(async () => probeResult()),
     planInstall: vi.fn(async () => UPDATE_PLAN),
     install: vi.fn(async () => ({ status: "agents-working", working: 2 })),
-    add: vi.fn(async () => ({ id: "studio", name: "studio", sshTarget: "greg@studio" })),
+    add: vi.fn(async () => ({
+      id: "studio",
+      name: "studio",
+      connection: { kind: "ssh", target: "greg@studio" },
+    })),
     connect: vi.fn(async () => ({ status: "connecting", attempt: 1 })),
     cancelInstall: vi.fn(async () => true),
     startHostMode: vi.fn(async () => ({ probe: probeResult(), lingerRefused: null })),
@@ -106,7 +110,7 @@ describe("AddHostDialog", () => {
     remoteHosts.discover!.mockResolvedValueOnce([
       {
         name: "studio-03",
-        sshTarget: "studio-03.tail.ts.net",
+        connection: { kind: "ssh", target: "studio-03.tail.ts.net" },
         source: "tailscale",
         platform: "darwin",
         online: true,
@@ -155,7 +159,11 @@ describe("AddHostDialog", () => {
       <AddHostDialog
         isOpen
         onClose={() => {}}
-        existing={{ hostId: "studio", name: "studio", sshTarget: "greg@studio" }}
+        existing={{
+          hostId: "studio",
+          name: "studio",
+          connection: { kind: "ssh", target: "greg@studio" },
+        }}
       />
     );
     remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
@@ -185,7 +193,11 @@ describe("AddHostDialog", () => {
       <AddHostDialog
         isOpen
         onClose={() => {}}
-        existing={{ hostId: "studio", name: "studio", sshTarget: "greg@studio" }}
+        existing={{
+          hostId: "studio",
+          name: "studio",
+          connection: { kind: "ssh", target: "greg@studio" },
+        }}
       />
     );
     remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
@@ -302,7 +314,9 @@ describe("AddHostDialog", () => {
     expect(
       await screen.findByText(/Host mode is on at bigbox and starts at login there/)
     ).toBeTruthy();
-    expect(remoteHosts.startHostMode).toHaveBeenCalledWith({ sshTarget: "greg@bigbox" });
+    expect(remoteHosts.startHostMode).toHaveBeenCalledWith({
+      connection: { kind: "ssh", target: "greg@bigbox" },
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(
