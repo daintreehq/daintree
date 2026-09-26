@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { pluginSdkRuntimeBuildConfig } from "./lib/plugin-sdk-runtime.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
@@ -741,10 +742,13 @@ async function run() {
     guestRuntimeBuildConfig(asset, { minify: isProd, absWorkingDir: root })
   );
 
+  const sdkConfig = pluginSdkRuntimeBuildConfig({ minify: isProd, absWorkingDir: root });
+
   try {
     if (isWatch) {
       const ctxEsm = await context(esmConfig);
       const ctxCjs = await context(cjsConfig);
+      const ctxSdk = await context(sdkConfig);
       const ctxGuests = await Promise.all(guestConfigs.map((config) => context(config)));
 
       // Every discovered guest bundle gets its own watch context, so editing a
@@ -754,7 +758,12 @@ async function run() {
       // are, so adding or renaming a declaration needs the watcher restarted.
       // That is the pre-existing model for every manifest-derived build input,
       // not something guest adapters introduce.
-      await Promise.all([ctxEsm.watch(), ctxCjs.watch(), ...ctxGuests.map((c) => c.watch())]);
+      await Promise.all([
+        ctxEsm.watch(),
+        ctxCjs.watch(),
+        ctxSdk.watch(),
+        ...ctxGuests.map((c) => c.watch()),
+      ]);
       copyBuiltInWorkflows();
       copyBuiltInPluginManifests();
       copySamplePluginManifests();
@@ -762,7 +771,12 @@ async function run() {
       validateGuestAssets();
       console.log("[Build] Watching for changes...");
     } else {
-      await Promise.all([build(esmConfig), build(cjsConfig), ...guestConfigs.map(build)]);
+      await Promise.all([
+        build(esmConfig),
+        build(cjsConfig),
+        build(sdkConfig),
+        ...guestConfigs.map(build),
+      ]);
       copyBuiltInWorkflows();
       copyBuiltInPluginManifests();
       copySamplePluginManifests();

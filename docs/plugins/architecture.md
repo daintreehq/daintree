@@ -478,11 +478,14 @@ A short rationale for the decisions most likely to feel arbitrary:
 
 `shared/types/plugin-sdk.ts` is the public export boundary for `@daintreehq/plugin-sdk` and the single source of truth for what a plugin author may name. Every symbol re-exported there is a contract: additions are non-breaking, removals are breaking. **Read that file rather than a table here** — it is grouped by area with a comment per group, and a list duplicated into prose only rots.
 
-Three entry points:
+Four runtime entry points (plus `/testing`, the mock host):
 
 - `@daintreehq/plugin-sdk` — manifest-authoring types, the host API and its sub-APIs, worktree/agent projections, the forge and file-decoration contracts, action dispatch and catalog types, plus two runtime values (`localAuthStubs`, `PLUGIN_PROCESS_STREAM_CHANNEL`).
 - `@daintreehq/plugin-sdk/react` — the renderer hooks for view components (`useHostChannel`, `usePluginEvent`, `usePluginPanelEvent`) and their types (`shared/types/plugin-sdk-react.ts`). The implementations live in `packages/plugin-sdk/src/react/`; Daintree's own `src/hooks/` re-exports them through thin shims so host and plugins run one implementation. This subpath is **not** in the host import map (which serves only React specifiers), so it resolves only in a view bundled by `@daintreehq/plugin-vite`; a raw, un-bundled `plugin://` view talks to the host through `window.electron.plugin.on` / `.invoke` directly (see [Host API → React hooks](./host-api.md#react-hooks--daintreehqplugin-sdkreact)).
 - `@daintreehq/plugin-sdk/files` — the headless file-listing model Daintree's own file browser runs on (`packages/plugin-sdk/src/files/`). No components, no icons, no I/O. See [Host API → File listings](./host-api.md#file-listings--daintreehqplugin-sdkfiles).
+- `@daintreehq/plugin-sdk/data` — frontmatter, JSON Lines and the conflict-checked `editFile` loop (`packages/plugin-sdk/src/data/`). See [Data helpers](./data-helpers.md).
+
+The plugin worker serves `.`, `/files` and `/data` to a plugin that has no SDK of its own. `plugin-dev-worker-bootstrap.ts` installs a `module.registerHooks` resolve hook (`electron/services/plugin/pluginSdkResolution.ts`) before any plugin code loads; it lets normal resolution run first and, only when that fails with `ERR_MODULE_NOT_FOUND` or `ERR_PACKAGE_PATH_NOT_EXPORTED`, points the specifier at `dist-electron/electron/plugin-sdk/<entry>.js`. `scripts/build-main.mjs` builds those files from the SDK source with every dependency bundled (`scripts/lib/plugin-sdk-runtime.mjs`); in a packaged app they sit inside the ASAR beside the worker's own bundles. `/react` and `/testing` are refused by name.
 
 ### What is deliberately host-internal
 
