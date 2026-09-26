@@ -6,9 +6,11 @@ import { CHANNEL_LOCALITY, getChannelLocality } from "./channelLocality.js";
  *
  * - `free`: anyone attached to the project may call it: reads, a view's own
  *   attachment and flow control, host-wide settings, and taking the lease.
- * - `driver`: it changes the project (worktrees, git, terminals, the saved
- *   layout, project settings), so only the lease holder may call it, or
- *   anyone while nobody holds it. Refused with `DRIVEN_ELSEWHERE`.
+ * - `driver`: it changes a project (worktrees, git, terminals, the saved
+ *   layout, project settings), so only that project's lease holder may call
+ *   it, or anyone while nobody holds it. Refused with `DRIVEN_ELSEWHERE`. The
+ *   project is the one the call targets, found through
+ *   {@link CHANNEL_LEASE_TARGETS}, not the one the caller is showing.
  * - `handler`: the handler enforces the lease itself, per terminal rather
  *   than per caller's project (terminal input, submit and resizes).
  *
@@ -16,7 +18,9 @@ import { CHANNEL_LOCALITY, getChannelLocality } from "./channelLocality.js";
  * from this machine's own views once the lease service exists (Host mode);
  * without it, as for anyone who never used Remote Hosts, nothing is checked.
  * A local view's hybrid call mixes this machine's fields into the same write,
- * so only its `host` channels are checked; a link call's hybrid host leg is.
+ * so only its `host` channels are checked here; a link call's hybrid host leg
+ * is. `app:set-state`'s handler holds a local view's host-owned fields to the
+ * lease itself.
  *
  * The record is total over the host and hybrid channels, so a new one that
  * doesn't declare its policy fails typecheck.
@@ -41,7 +45,7 @@ export const CHANNEL_LEASE_POLICY = {
   "agent-session:get-retention": "free",
   "agent-session:list": "free",
   "agent-session:list-bookmarks": "free",
-  "agent-session:prepare-bookmark": "free",
+  "agent-session:prepare-bookmark": "driver",
   "agent-session:promote-bookmark": "free",
   "agent-session:rename-bookmark": "free",
   "agent-session:set-retention": "free",
@@ -606,12 +610,187 @@ export const CHANNEL_LEASE_POLICY = {
   "worktree:pr-refresh": "free",
   "worktree:pr-status": "free",
   "worktree:refresh": "free",
-  "worktree:remove": "driver",
+  "worktree:remove": "free",
   "worktree:restart-service": "driver",
   "worktree:retry-auth-fetch": "free",
   "worktree:retry-project-load": "free",
   "worktree:set-active": "free",
 } as const satisfies Record<HostSideChannel, LeasePolicy>;
+
+/**
+ * Where a call's argument sits: the argument's index, then the keys into it.
+ */
+export type LeaseArgPath = readonly [index: number, ...keys: string[]];
+
+/**
+ * One way a `driver` call names the project it changes. Each is resolved from
+ * what this Host itself records, never from what the caller says it is
+ * showing: a repository path to the registered project it belongs to, a
+ * terminal id to the project its pty-host record names, a worktree id (its
+ * path) to its repository's project, an operation, preview panel or assistant
+ * session to the project it was started for.
+ *
+ * - `caller`: the project the calling view is bound to, for a handler that acts
+ *   on exactly that (`ctx.projectId`).
+ * - `every-project`: host-wide, so it changes every project anyone drives here.
+ * - `optional: true` skips an argument that is absent; `optional: "caller"`
+ *   falls back to the caller's project instead, and `"current-project"` to
+ *   this Host's current project, for a handler that falls back to it.
+ *   Otherwise an absent argument leaves the target unresolved, and the call
+ *   is refused.
+ * - `unowned: "allow"`: a path inside no registered project changes none.
+ */
+export type LeaseTargetSource =
+  | { readonly from: "caller" }
+  | { readonly from: "every-project" }
+  | {
+      readonly from: "project" | "worktree" | "terminal";
+      readonly at: LeaseArgPath;
+      readonly optional?: true | "caller" | "current-project";
+    }
+  | {
+      readonly from: "path";
+      readonly at: LeaseArgPath;
+      readonly optional?: true | "caller";
+      readonly unowned?: "allow";
+    }
+  | {
+      readonly from: "operation" | "dev-preview-panel" | "help-session";
+      readonly at: LeaseArgPath;
+    };
+
+/** Every project a `driver` call may change: all of them must be driven by its caller. */
+export type LeaseTarget = readonly LeaseTargetSource[];
+
+type DriverChannel = {
+  [K in keyof typeof CHANNEL_LEASE_POLICY]: (typeof CHANNEL_LEASE_POLICY)[K] extends "driver"
+    ? K
+    : never;
+}[keyof typeof CHANNEL_LEASE_POLICY];
+
+const CALLER: LeaseTarget = [{ from: "caller" }];
+const PROJECT_ARG: LeaseTarget = [{ from: "project", at: [0] }];
+const PROJECT_FIELD: LeaseTarget = [{ from: "project", at: [0, "projectId"] }];
+const CWD_ARG: LeaseTarget = [{ from: "path", at: [0] }];
+const CWD_FIELD: LeaseTarget = [{ from: "path", at: [0, "cwd"] }];
+const TERMINAL_ARG: LeaseTarget = [{ from: "terminal", at: [0] }];
+const WORKTREE_FIELD: LeaseTarget = [{ from: "worktree", at: [0, "worktreeId"] }];
+
+/**
+ * How the lease gate finds the project each `driver` channel changes. Total
+ * over the driver channels, so a new one that doesn't say fails typecheck; the
+ * gate checks the lease on every project it names, not the caller's own.
+ */
+export const CHANNEL_LEASE_TARGETS = {
+  "agent-session:prepare-bookmark": [{ from: "terminal", at: [0, "terminalId"] }],
+  "app:set-state": CALLER,
+  "artifact:apply-patch": CWD_FIELD,
+  "artifact:save-to-file": [{ from: "path", at: [0, "cwd"], optional: "caller", unowned: "allow" }],
+  "commands:execute": [
+    { from: "project", at: [0, "context", "projectId"], optional: "caller" },
+    { from: "terminal", at: [0, "context", "terminalId"], optional: true },
+    { from: "worktree", at: [0, "context", "worktreeId"], optional: true },
+    { from: "path", at: [0, "context", "cwd"], optional: true },
+  ],
+  "copytree:inject": [
+    { from: "terminal", at: [0, "terminalId"] },
+    { from: "worktree", at: [0, "worktreeId"] },
+  ],
+  "dev-preview:ensure": [
+    { from: "project", at: [0, "projectId"] },
+    { from: "path", at: [0, "cwd"], unowned: "allow" },
+  ],
+  "dev-preview:reinstall-and-restart": PROJECT_FIELD,
+  "dev-preview:restart": PROJECT_FIELD,
+  "dev-preview:restart-and-clear-cache": PROJECT_FIELD,
+  "dev-preview:restart-by-worktree": WORKTREE_FIELD,
+  "dev-preview:stop": PROJECT_FIELD,
+  "dev-preview:stop-by-panel": [{ from: "dev-preview-panel", at: [0, "panelId"] }],
+  "dev-preview:stop-by-worktree": WORKTREE_FIELD,
+  "dev-preview:stop-dev-server-by-worktree": WORKTREE_FIELD,
+  "git:abort-repository-operation": CWD_ARG,
+  "git:checkout-ours-theirs": CWD_FIELD,
+  "git:commit": CWD_FIELD,
+  "git:continue-repository-operation": CWD_ARG,
+  "git:fetch": CWD_FIELD,
+  "git:force-push-with-lease": CWD_FIELD,
+  "git:merge-base-into-branch": CWD_FIELD,
+  "git:pull-rebase": CWD_FIELD,
+  "git:push": CWD_FIELD,
+  "git:rebase-onto-base": CWD_FIELD,
+  "git:stage-all": CWD_ARG,
+  "git:stage-file": CWD_FIELD,
+  "git:stage-files": CWD_FIELD,
+  "git:unstage-all": CWD_ARG,
+  "git:unstage-file": CWD_FIELD,
+  "git:unstage-files": CWD_FIELD,
+  "help:provision-session": [
+    { from: "project", at: [0, "projectId"] },
+    { from: "path", at: [0, "projectPath"] },
+  ],
+  "help:restore-pending-hibernation": PROJECT_ARG,
+  "help:revoke-session": [{ from: "help-session", at: [0] }],
+  "help:take-pending-hibernation": PROJECT_ARG,
+  "idle-terminal:close-project": PROJECT_ARG,
+  "mcp-server:adopt-terminal": [{ from: "terminal", at: [0, "terminalId"] }],
+  "mcp-server:release-terminal-adoption": [{ from: "terminal", at: [0, "terminalId"] }],
+  "mcp-server:stop-pane-watches": TERMINAL_ARG,
+  "operations:cancel": [{ from: "operation", at: [0, "opId"] }],
+  "plugin:project-activate-staged": CALLER,
+  "plugin:project-reload": CALLER,
+  "plugin:project-set-muted": CALLER,
+  "plugin:project-set-trust": CALLER,
+  "plugin:project-surface-choice-set": CALLER,
+  "plugin:project-visibility-set": CALLER,
+  "project-match:take-pending-setup": PROJECT_FIELD,
+  "project-relocation:apply": PROJECT_FIELD,
+  "project:add-recipe": PROJECT_FIELD,
+  "project:close": PROJECT_ARG,
+  "project:delete-inrepo-recipe": PROJECT_FIELD,
+  "project:delete-recipe": PROJECT_FIELD,
+  "project:disable-in-repo-settings": PROJECT_ARG,
+  "project:enable-in-repo-settings": PROJECT_ARG,
+  "project:init-git": [{ from: "path", at: [0], unowned: "allow" }],
+  "project:init-git-guided": [{ from: "path", at: [0, "directoryPath"], unowned: "allow" }],
+  "project:remove": PROJECT_ARG,
+  "project:save-recipes": PROJECT_FIELD,
+  "project:save-settings": PROJECT_FIELD,
+  "project:set-draft-inputs": PROJECT_FIELD,
+  "project:set-focus-mode": PROJECT_FIELD,
+  "project:set-tab-groups": PROJECT_FIELD,
+  "project:set-terminal-sizes": PROJECT_FIELD,
+  "project:set-terminals": PROJECT_FIELD,
+  "project:sleep": PROJECT_ARG,
+  "project:sync-inrepo-recipes": PROJECT_FIELD,
+  "project:update": PROJECT_ARG,
+  "project:update-inrepo-recipe": PROJECT_FIELD,
+  "project:update-recipe": PROJECT_FIELD,
+  "project:write-claude-md": PROJECT_FIELD,
+  "terminal:graceful-kill": TERMINAL_ARG,
+  "terminal:kill": TERMINAL_ARG,
+  "terminal:restart-service": [{ from: "every-project" }],
+  "terminal:restore": TERMINAL_ARG,
+  // With no projectId the handler spawns into this Host's current project.
+  "terminal:spawn": [
+    { from: "project", at: [0, "projectId"], optional: "current-project" },
+    { from: "path", at: [0, "cwd"], optional: true, unowned: "allow" },
+  ],
+  "terminal:trash": TERMINAL_ARG,
+  "terminal:update-title": [{ from: "terminal", at: [0, "id"] }],
+  "terminal:update-worktree-id": [{ from: "terminal", at: [0, "id"] }],
+  "worktree:attach-issue": WORKTREE_FIELD,
+  "worktree:create": [{ from: "path", at: [0, "rootPath"] }],
+  "worktree:delete": WORKTREE_FIELD,
+  "worktree:detach-issue": WORKTREE_FIELD,
+  "worktree:fetch-pr-branch": [{ from: "path", at: [0, "rootPath"] }],
+  "worktree:restart-service": CALLER,
+} as const satisfies Record<DriverChannel, LeaseTarget>;
+
+/** How a `driver` channel's target project is found; null for any other channel. */
+export function getChannelLeaseTarget(channel: string): LeaseTarget | null {
+  if (!Object.hasOwn(CHANNEL_LEASE_TARGETS, channel)) return null;
+  return (CHANNEL_LEASE_TARGETS as Record<string, LeaseTarget>)[channel]!;
+}
 
 /** The channel's lease policy; `free` for anything the record doesn't name (events, shell channels). */
 export function getChannelLeasePolicy(channel: string): LeasePolicy {
