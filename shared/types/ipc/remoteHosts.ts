@@ -49,11 +49,14 @@ export interface SwitchWindowHostPayload {
  * `window-opened`: a new window is on the host, showing its project list.
  * `choose-project`: the host reported no project to return to, so nothing
  * moved; the caller shows that host's project list for the window to pick from.
+ * `superseded`: a newer switch for the same window was asked for while this
+ * one waited, so this one moved nothing.
  */
 export type SwitchWindowHostResult =
   | { outcome: "switched"; hostId: HostId; projectId: string }
   | { outcome: "window-opened"; hostId: HostId }
-  | { outcome: "choose-project"; hostId: HostId };
+  | { outcome: "choose-project"; hostId: HostId }
+  | { outcome: "superseded"; hostId: HostId };
 
 /** A project as the host that has it lists it. Its id means something only on that host. */
 export interface HostProjectSummary {
