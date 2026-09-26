@@ -1005,6 +1005,7 @@ export class PluginDevWorkerHostProxy {
           const database: PluginDatabase = await openPluginDatabase(location, {
             ...options,
             revalidate: () => this.call<PluginDatabaseLocation>("db.resolve", params),
+            prepareBackup: (destPath) => this.call<string>("db.prepareBackup", { id, destPath }),
             onClosed: () => this.databases.delete(database),
           });
           if (this.disposed) {

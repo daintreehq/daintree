@@ -359,6 +359,40 @@ describe("openPluginDatabase", () => {
     ]);
   });
 
+  it("backs up a consistent snapshot to an approved destination", async () => {
+    const approved: string[] = [];
+    const db = await open({
+      migrations: ["CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1), (2)"],
+      // The host hands back the realpath form, which the handle re-verifies.
+      prepareBackup: async (destPath) => {
+        approved.push(destPath);
+        return path.join(fs.realpathSync(path.dirname(destPath)), path.basename(destPath));
+      },
+    });
+    const dest = path.join(dir, "backups", "ledger-2026-09-26.db");
+    fs.mkdirSync(path.dirname(dest));
+    const result = await db.backup(dest);
+    expect(approved).toEqual([dest]);
+    expect(result).toEqual({ path: fs.realpathSync(dest), bytes: fs.statSync(dest).size });
+    const copy = new DatabaseSync(dest);
+    expect(copy.prepare("SELECT count(*) AS n FROM t").get()).toEqual({ n: 2 });
+    copy.close();
+    expect(fs.readdirSync(path.dirname(dest))).toEqual(["ledger-2026-09-26.db"]);
+  });
+
+  it("refuses a backup without an approval hook or onto itself", async () => {
+    const plain = await open({ migrations: ["CREATE TABLE t (x)"] });
+    await expect(plain.backup(path.join(dir, "b.db"))).rejects.toMatchObject({
+      code: "DB_UNSUPPORTED",
+    });
+    await plain.close();
+    const db = await open({
+      migrations: ["CREATE TABLE t (x)"],
+      prepareBackup: async (destPath) => destPath,
+    });
+    await expect(db.backup(location.path)).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
   it("tells its owner when it closes", async () => {
     let closedCount = 0;
     const db = await open({ onClosed: () => closedCount++ });

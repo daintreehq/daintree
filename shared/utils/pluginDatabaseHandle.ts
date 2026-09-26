@@ -159,6 +159,12 @@ export interface OpenPluginDatabaseOptions extends PluginDatabaseOpenOptions {
   revalidate?: () => Promise<PluginDatabaseLocation>;
   /** Called once when the handle closes, so an owner can stop tracking it. */
   onClosed?: () => void;
+  /**
+   * Approve a backup destination and return the absolute path to write. The
+   * host passes its `host.fs` write gate (containment, capability, consent,
+   * symlink refusal, audit); without it `backup` is unavailable.
+   */
+  prepareBackup?: (destPath: string) => Promise<string>;
 }
 
 /**
@@ -624,6 +630,55 @@ export async function openPluginDatabase(
         listeners.delete(callback);
         if (listeners.size === 0) stopWatching();
       };
+    },
+    backup: async (destPath: string) => {
+      if (typeof destPath !== "string" || destPath.length === 0) {
+        throw databaseError("VALIDATION", "backup requires a destination path");
+      }
+      if (!options.prepareBackup) {
+        throw databaseError("DB_UNSUPPORTED", "this host cannot approve a backup destination");
+      }
+      const target = await options.prepareBackup(destPath);
+      if (path.resolve(target) === path.resolve(filePath)) {
+        throw databaseError("VALIDATION", "a backup cannot overwrite the database itself");
+      }
+      const sqlite = process.getBuiltinModule("node:sqlite") as
+        { backup?: (db: unknown, dest: string) => Promise<number> } | undefined;
+      if (typeof sqlite?.backup !== "function") {
+        throw databaseError("DB_UNSUPPORTED", "this runtime's node:sqlite has no backup()");
+      }
+      // Snapshot into a directory created exclusively beside the destination
+      // (nothing can be waiting at its name), then rename, so a reader or a
+      // sync client never sees a half-written copy.
+      const parent = path.dirname(target);
+      const assertParentUnmoved = (): void => {
+        // The host approved `parent` as a realpath; a directory on the way
+        // swapped for a link since would resolve somewhere else now.
+        if (fs.realpathSync(parent) !== parent) {
+          throw databaseError(
+            "TARGET_UNAVAILABLE",
+            "the backup destination moved after it was approved"
+          );
+        }
+      };
+      return serialize(async () => {
+        if (needsReopen()) await reopen();
+        assertParentUnmoved();
+        const stage = fs.mkdtempSync(path.join(parent, ".daintree-backup-"));
+        const temp = path.join(stage, "snapshot.db");
+        try {
+          await sqlite.backup!(db, temp);
+          assertParentUnmoved();
+          const leaf = fs.lstatSync(target, { throwIfNoEntry: false });
+          if (leaf?.isSymbolicLink()) {
+            throw databaseError("TARGET_IS_SYMLINK", "refusing to replace a symlink with a backup");
+          }
+          fs.renameSync(temp, target);
+        } finally {
+          fs.rmSync(stage, { recursive: true, force: true });
+        }
+        return { path: target, bytes: fs.statSync(target).size };
+      });
     },
     close: async () => {
       if (closed) return;

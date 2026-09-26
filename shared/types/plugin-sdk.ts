@@ -145,6 +145,7 @@ export type {
   PluginDatabaseParams,
   PluginDatabaseRunResult,
   PluginDatabaseColumn,
+  PluginDatabaseBackupResult,
   PluginDatabaseChangeEvent,
   PluginDatabaseOpenOptions,
 } from "./plugin.js";

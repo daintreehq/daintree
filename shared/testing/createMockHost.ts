@@ -14,7 +14,7 @@ import {
   projectIdFromPluginInstanceKey,
 } from "../types/plugin.js";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { join as joinPath } from "node:path";
@@ -954,10 +954,17 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     db: {
       resolve: (id, resolveOptions) => resolveMockDatabase(id, resolveOptions?.readonly === true),
       open: async (id, openOptions) =>
-        openPluginDatabase(
-          await resolveMockDatabase(id, openOptions?.readonly === true),
-          openOptions
-        ),
+        openPluginDatabase(await resolveMockDatabase(id, openOptions?.readonly === true), {
+          ...openOptions,
+          // The mock has no fs gate; it approves any absolute destination.
+          prepareBackup: async (destPath) => {
+            if (!path.isAbsolute(destPath)) {
+              throw new Error(`Plugin "${pluginId}" db.backup: destination must be absolute`);
+            }
+            // The real host returns the realpath form, which the handle checks.
+            return path.join(realpathSync(path.dirname(destPath)), path.basename(destPath));
+          },
+        }),
     },
     panelKindId(bareId: string) {
       if (typeof bareId !== "string" || bareId.length === 0) {

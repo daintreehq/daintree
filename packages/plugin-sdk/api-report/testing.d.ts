@@ -2038,8 +2038,24 @@ interface PluginDatabase extends PluginDatabaseStatements {
      * a burst of external commits delivers one event. Returns a disposer.
      */
     onDidChange(callback: (event: PluginDatabaseChangeEvent) => void): () => void;
+    /**
+     * Write a consistent snapshot of the database to `destPath` using SQLite's
+     * online backup, then move it into place atomically. The destination is
+     * checked exactly like `host.fs.writeFile`: it must be inside your declared
+     * `scopes.fs.allowedPaths` (or your data directory), needs the matching
+     * `fs:*-write` capability and first-use consent, and a symlink there is
+     * refused. Use it for a "Back up" button, or to hand a sync folder a copy
+     * rather than the live file.
+     */
+    backup(destPath: string): Promise<PluginDatabaseBackupResult>;
     /** Close the connection and stop change detection. Idempotent. */
     close(): Promise<void>;
+}
+interface PluginDatabaseBackupResult {
+    /** Absolute path the snapshot now stands at. */
+    path: string;
+    /** Size of the snapshot in bytes. */
+    bytes: number;
 }
 /**
  * Host-managed SQLite for plugins (`host.db`). A database is declared in

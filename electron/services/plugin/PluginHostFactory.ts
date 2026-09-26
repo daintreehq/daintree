@@ -44,6 +44,8 @@ import { createListenerFailureState, invokeTrackedListener } from "./pluginCallb
 import { isChannelSchema } from "./PluginChannelRegistry.js";
 import { abortErrorFor } from "./pluginAbortError.js";
 import { openPluginDatabase, resolvePluginDatabaseLocation } from "./pluginDatabase.js";
+import type { PluginDatabaseApi } from "../../../shared/types/plugin.js";
+import { databaseBackupApprovers, fsWriteApprovers } from "./pluginInternalApprovers.js";
 import { agentMcpEndpointRegistry } from "../pluginAgentMcp/endpointRegistry.js";
 import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
 import type { AgentMcpToolInvoker } from "../pluginAgentMcp/types.js";
@@ -692,6 +694,14 @@ export function createHost(
       ? { projectRoot: boundScopeRoot, worktreePath: await resolveBoundWorktreeTarget() }
       : { projectRoot: boundScopeRoot };
 
+  const fsApi = buildFsApi(deps, pluginId);
+  const prepareDatabaseBackup = async (id: string, destPath: string): Promise<string> => {
+    await resolveDatabase(id, { readonly: true });
+    const approve = fsWriteApprovers.get(fsApi);
+    if (!approve) throw new Error(`Plugin "${pluginId}" db.backup: unavailable`);
+    return approve(`db.backup:${id}`, destPath);
+  };
+
   const resolveDatabase = async (id: string, options?: { readonly?: boolean }) => {
     const readonly = options?.readonly === true;
     if (typeof id !== "string" || id.length === 0) {
@@ -726,6 +736,32 @@ export function createHost(
       existingOnly: readonly,
     });
   };
+
+  const dbApi: PluginDatabaseApi = {
+    resolve: (id: string, options?: { readonly?: boolean }) => resolveDatabase(id, options),
+    open: async (id, options) => {
+      const mode = { readonly: options?.readonly === true };
+      const location = await resolveDatabase(id, mode);
+      let untrack: (() => void) | null = null;
+      const database = await openPluginDatabase(location, {
+        ...options,
+        revalidate: () => resolveDatabase(id, mode),
+        prepareBackup: (destPath) => prepareDatabaseBackup(id, destPath),
+        onClosed: () => untrack?.(),
+      });
+      if (!deps.plugins.has(pluginId)) {
+        await database.close();
+        throw new Error(
+          `PLUGIN_UNLOADED: plugin "${pluginId}" db.open: plugin is no longer loaded`
+        );
+      }
+      untrack = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
+        void database.close();
+      });
+      return database;
+    },
+  };
+  databaseBackupApprovers.set(dbApi, prepareDatabaseBackup);
 
   // The live disposer per `agentMcp` endpoint, so a replaced roster is released
   // rather than kept reachable from the unload cascade for the host's lifetime.
@@ -1689,7 +1725,7 @@ export function createHost(
     // post-activation timers and callbacks. Every path argument is realpath-
     // contained to the declared scopes.fs.allowedPaths and capability-gated;
     // this is the runtime enforcement of allowedPaths (formerly advisory).
-    fs: buildFsApi(deps, pluginId),
+    fs: fsApi,
     git: buildGitApi(deps, pluginId),
     // Host-mediated OS clipboard surface backing the clipboard:read /
     // clipboard:write tokens. Runs in the main process (Electron's clipboard
@@ -1797,29 +1833,7 @@ export function createHost(
     // asynchronously, so set/delete re-check liveness after the await — a
     // plugin unloaded mid-resolution silently no-ops rather than writing into
     // a torn-down plugin's file (lessons #9322/#9428/#9533).
-    db: {
-      resolve: (id: string, options?: { readonly?: boolean }) => resolveDatabase(id, options),
-      open: async (id, options) => {
-        const mode = { readonly: options?.readonly === true };
-        const location = await resolveDatabase(id, mode);
-        let untrack: (() => void) | null = null;
-        const database = await openPluginDatabase(location, {
-          ...options,
-          revalidate: () => resolveDatabase(id, mode),
-          onClosed: () => untrack?.(),
-        });
-        if (!deps.plugins.has(pluginId)) {
-          await database.close();
-          throw new Error(
-            `PLUGIN_UNLOADED: plugin "${pluginId}" db.open: plugin is no longer loaded`
-          );
-        }
-        untrack = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
-          void database.close();
-        });
-        return database;
-      },
-    },
+    db: dbApi,
     storage: {
       get: async <T = unknown>(
         key: string,
@@ -2597,7 +2611,24 @@ function buildFsApi(
     });
   };
 
-  return {
+  // Approves a file another host component writes (a database backup)
+  // through the same gate as writeFile. Kept off the object plugins receive.
+  const prepareWrite = async (op: string, targetPath: string): Promise<string> => {
+    requireLoaded(op);
+    const writeCap = requireWriteCap(op);
+    if (typeof targetPath !== "string" || targetPath.length === 0) {
+      throw new Error(`Plugin "${pluginId}" ${op}: a destination path is required`);
+    }
+    const { resolved, isDataDirTarget } = await gateMutation(op, targetPath, writeCap);
+    if (isDataDirTarget) await createDataDirParents(op, resolved);
+    await refuseSymlinkLeaf(op, targetPath);
+    // Recorded when approved: the write itself happens in the plugin's own
+    // process, which the audit trail cannot see.
+    auditMutation(`${op}:approved`, resolved);
+    return resolved;
+  };
+
+  const api: BuiltinPluginFsApi = {
     readFile: async (filePath, options) => {
       options?.signal?.throwIfAborted();
       requireLoaded("readFile");
@@ -3169,6 +3200,8 @@ function buildFsApi(
       return dispose;
     },
   };
+  fsWriteApprovers.set(api, prepareWrite);
+  return api;
 }
 
 /**

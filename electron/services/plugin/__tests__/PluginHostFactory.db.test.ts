@@ -126,6 +126,22 @@ describe("host.db (in-process host)", () => {
     expect(pluginEventCleanups.get(INSTANCE)).toBeUndefined();
   });
 
+  it("backs up only to a destination the fs write gate approves", async () => {
+    ensureAllowed.mockClear();
+    const { deps } = makeDeps([
+      { id: "ledger", location: "project", path: "data/finance.db", journalMode: "delete" },
+    ]);
+    (deps as unknown as { declaredCapabilities: () => Set<string> }).declaredCapabilities = () =>
+      new Set(["fs:project-write", "fs:project-read"]);
+    (deps as unknown as { declaredAllowedPaths?: unknown }).declaredAllowedPaths = undefined;
+    const { host } = createHost(deps, INSTANCE, { projectId: PROJECT_ID, projectRoot });
+    const db = await host.db.open("ledger", { migrations: ["CREATE TABLE t (x)"] });
+    const outside = path.join(tmp, "elsewhere.db");
+    await expect(db.backup(outside)).rejects.toThrow();
+    expect(fs.existsSync(outside)).toBe(false);
+    await db.close();
+  });
+
   it("refuses an undeclared id", async () => {
     const { deps } = makeDeps([]);
     const { host } = createHost(deps, INSTANCE, { projectId: PROJECT_ID, projectRoot });

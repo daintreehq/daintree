@@ -75,6 +75,7 @@ import type { PluginDevWorkerHost } from "./PluginDevWorkerHost.js";
 import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
 import { abortErrorFor } from "./pluginAbortError.js";
 import { serializableErrorFields } from "./pluginHostErrorFields.js";
+import { approvePluginDatabaseBackup } from "./pluginInternalApprovers.js";
 
 const logger = createLogger("main:PluginDevWorkerBridge");
 
@@ -844,6 +845,10 @@ export class PluginDevWorkerMainBridge {
         const p = params as StorageDeleteParams;
         await this.host.storage.delete(p.key, p.scope);
         return undefined;
+      }
+      case "db.prepareBackup": {
+        const p = params as { id: string; destPath: string };
+        return approvePluginDatabaseBackup(this.host.db, p.id, p.destPath);
       }
       case "db.resolve": {
         const p = params as { id: string; readonly?: unknown };
