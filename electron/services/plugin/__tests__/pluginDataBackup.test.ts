@@ -12,6 +12,30 @@ import {
 } from "../pluginDataBackup.js";
 import type { PluginDatabaseDeclaration } from "../pluginDatabase.js";
 
+// Runs once the snapshot is written and before the backup publishes it — the
+// window in which another process can start using the destination.
+const { afterSnapshot } = vi.hoisted(() => ({
+  afterSnapshot: { run: null as (() => void) | null },
+}));
+vi.mock("../pluginDatabase.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../pluginDatabase.js")>();
+  return {
+    ...actual,
+    openPluginDatabase: async (...args: Parameters<typeof actual.openPluginDatabase>) => {
+      const database = await actual.openPluginDatabase(...args);
+      const backup = database.backup;
+      database.backup = async (destPath) => {
+        const result = await backup(destPath);
+        const hook = afterSnapshot.run;
+        afterSnapshot.run = null;
+        hook?.();
+        return result;
+      };
+      return database;
+    },
+  };
+});
+
 const { DatabaseSync } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
 
 // Local time, so the expected stamp is the one a user in any zone would see.
@@ -94,6 +118,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  afterSnapshot.run = null;
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -325,6 +350,111 @@ describe("backupPluginData", () => {
     ).rejects.toMatchObject({ code: "DESTINATION_HAS_JOURNAL" });
     expect(fs.readFileSync(target, "utf8")).toBe("previous backup");
     expect(listTree(downloads)).toEqual(["old.db", "old.db-wal"]);
+  });
+
+  it("won't write over a database with a hot journal from an unfinished transaction", async () => {
+    seed(localDb("ledger"), ["rent"]);
+    const target = path.join(downloads, "old.db");
+    seed(target, ["previous backup"]);
+    const writer = new DatabaseSync(target);
+    writer.exec("BEGIN IMMEDIATE; UPDATE entries SET label = 'half-written'");
+    try {
+      expect(fs.existsSync(`${target}-journal`)).toBe(true);
+      await expect(
+        backupPluginData(source([local("ledger")]), picker({ file: target }), {
+          downloadsDir: downloads,
+          now: NOW,
+        })
+      ).rejects.toMatchObject({ code: "DESTINATION_HAS_JOURNAL" });
+    } finally {
+      writer.exec("ROLLBACK");
+      writer.close();
+    }
+    expect(readLabels(target)).toEqual(["previous backup"]);
+  });
+
+  it("refuses the database's own journal names as the destination", async () => {
+    const live = localDb("ledger");
+    seed(live, ["rent"]);
+    for (const suffix of ["-journal", "-wal"]) {
+      await expect(
+        backupPluginData(source([local("ledger")]), picker({ file: `${live}${suffix}` }), {
+          downloadsDir: downloads,
+          now: NOW,
+        })
+      ).rejects.toMatchObject({ code: "DESTINATION_IS_SOURCE" });
+    }
+    expect(fs.readdirSync(path.dirname(live))).toEqual(["ledger.db"]);
+  });
+
+  it("refuses another database's journal name as the destination", async () => {
+    seed(localDb("ledger"), ["rent"]);
+    const target = path.join(downloads, "other.db-wal");
+    fs.writeFileSync(target, "another database's log");
+    await expect(
+      backupPluginData(source([local("ledger")]), picker({ file: target }), {
+        downloadsDir: downloads,
+        now: NOW,
+      })
+    ).rejects.toMatchObject({ code: "DESTINATION_IS_JOURNAL" });
+    expect(fs.readFileSync(target, "utf8")).toBe("another database's log");
+  });
+
+  it("won't publish over a file that appeared at the destination during the snapshot", async () => {
+    seed(localDb("ledger"), ["rent"]);
+    const target = path.join(downloads, "new.db");
+    afterSnapshot.run = () => fs.writeFileSync(target, "someone else's file");
+
+    await expect(
+      backupPluginData(source([local("ledger")]), picker({ file: target }), {
+        downloadsDir: downloads,
+        now: NOW,
+      })
+    ).rejects.toMatchObject({ code: "DESTINATION_EXISTS" });
+    expect(fs.readFileSync(target, "utf8")).toBe("someone else's file");
+    expect(listTree(downloads)).toEqual(["new.db"]);
+  });
+
+  it("won't replace a destination another process started using during the snapshot", async () => {
+    seed(localDb("ledger"), ["rent"]);
+    const target = path.join(downloads, "old.db");
+    seed(target, ["previous backup"]);
+    let other: InstanceType<typeof DatabaseSync> | null = null;
+    afterSnapshot.run = () => {
+      other = new DatabaseSync(target);
+      other.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
+      other.exec("INSERT INTO entries (label) VALUES ('new work')");
+    };
+
+    try {
+      await expect(
+        backupPluginData(source([local("ledger")]), picker({ file: target }), {
+          downloadsDir: downloads,
+          now: NOW,
+        })
+      ).rejects.toMatchObject({ code: "DESTINATION_HAS_JOURNAL" });
+    } finally {
+      (other as InstanceType<typeof DatabaseSync> | null)?.close();
+    }
+    expect(readLabels(target)).toEqual(["previous backup", "new work"]);
+  });
+
+  it("won't replace a destination that was swapped for another file during the snapshot", async () => {
+    seed(localDb("ledger"), ["rent"]);
+    const target = path.join(downloads, "old.db");
+    fs.writeFileSync(target, "previous backup");
+    afterSnapshot.run = () => {
+      fs.writeFileSync(`${target}.next`, "a newer file");
+      fs.renameSync(`${target}.next`, target);
+    };
+
+    await expect(
+      backupPluginData(source([local("ledger")]), picker({ file: target }), {
+        downloadsDir: downloads,
+        now: NOW,
+      })
+    ).rejects.toMatchObject({ code: "DESTINATION_CHANGED" });
+    expect(fs.readFileSync(target, "utf8")).toBe("a newer file");
   });
 
   it("replaces a file the save dialog already agreed to replace", async () => {

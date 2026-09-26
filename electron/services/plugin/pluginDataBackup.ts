@@ -8,7 +8,10 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import type { PluginDatabaseLocation } from "../../../shared/types/plugin.js";
 import type { PluginDataBackupOutcome } from "../../../shared/types/ipc/pluginDataBackup.js";
-import { databaseError } from "../../../shared/utils/pluginDatabaseHandle.js";
+import {
+  backupDestinationProblem,
+  databaseError,
+} from "../../../shared/utils/pluginDatabaseHandle.js";
 import {
   openPluginDatabase,
   resolvePluginDatabaseLocation,
@@ -153,9 +156,6 @@ async function locateExistingPluginDatabases(
   return found;
 }
 
-/** Files SQLite pairs with a database by name, and would replay into a new one. */
-const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
-
 /**
  * Put the finished snapshot at `target`. Without replacement the publish is
  * exclusive — a hard link, or an exclusive copy where the disk has none — so
@@ -230,36 +230,37 @@ async function snapshotDatabaseOnce(
 
   const parent = await fsp.realpath(path.dirname(destination));
   const target = path.join(parent, path.basename(destination));
-  const existingTarget = await fsp.lstat(target).catch(() => null);
-  if (existingTarget) {
-    // By identity, not name: a case-insensitive disk or a hard link names
-    // the source under a different spelling.
-    const sourceStat = await fsp.stat(location.path);
-    const targetStat = await fsp.stat(target).catch(() => null);
-    if (targetStat && sameFile(targetStat, sourceStat)) {
+  const checkDestination = async (): Promise<fs.Stats | null> => {
+    const problem = await backupDestinationProblem(target, location.path);
+    if (problem?.kind === "source") {
       throw new PluginDataBackupError(
         `That file is the plugin's database "${location.id}" itself. Choose another location.`,
         "DESTINATION_IS_SOURCE"
       );
     }
-    if (!options.replace) throw destinationExists(target);
-    if (existingTarget.isSymbolicLink() || !existingTarget.isFile()) {
+    const existing = await fsp.lstat(target).catch(() => null);
+    if (existing && !options.replace) throw destinationExists(target);
+    if (problem?.kind === "symlink" || problem?.kind === "not-file") {
       throw new PluginDataBackupError(
         `${path.basename(target)} isn't a plain file, so it wasn't replaced. Choose another name.`,
         "DESTINATION_NOT_FILE"
       );
     }
-  }
-  // A journal left beside the name belongs to whatever database was there
-  // before; SQLite would replay it into the copy the next time it is opened.
-  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
-    if (await fsp.lstat(`${target}${suffix}`).catch(() => null)) {
+    if (problem?.kind === "journal-name") {
       throw new PluginDataBackupError(
-        `${path.basename(target)}${suffix} is next to that name and would be mixed into the copy. Choose another name or folder.`,
+        `${path.basename(target)} is named like a database journal, so SQLite would treat it as one. Choose another name.`,
+        "DESTINATION_IS_JOURNAL"
+      );
+    }
+    if (problem?.kind === "journal") {
+      throw new PluginDataBackupError(
+        `${path.basename(problem.path)} is next to that name and would be mixed into the copy. Choose another name or folder.`,
         "DESTINATION_HAS_JOURNAL"
       );
     }
-  }
+    return existing;
+  };
+  const before = await checkDestination();
 
   const stage = await fsp.mkdtemp(path.join(parent, ".daintree-backup-"));
   try {
@@ -275,7 +276,26 @@ async function snapshotDatabaseOnce(
     } finally {
       await database.close();
     }
-    await publishSnapshot(staged, target, options.replace);
+    // Everything is proved again now the snapshot exists: another process
+    // may have started a database at the destination while it was written.
+    // The parent is checked last, synchronously, so no await separates it
+    // from the publish.
+    const now = await checkDestination();
+    if (before && (!now || !sameFile(before, now))) {
+      throw new PluginDataBackupError(
+        `${path.basename(target)} changed while the backup was being written, so it wasn't replaced. Try again.`,
+        "DESTINATION_CHANGED"
+      );
+    }
+    if (fs.realpathSync(parent) !== parent) {
+      throw new PluginDataBackupError(
+        `${path.dirname(target)} moved while the backup was being written. Try again.`,
+        "DESTINATION_CHANGED"
+      );
+    }
+    // Only a file the user agreed to replace is replaced; one that appeared
+    // since is not.
+    await publishSnapshot(staged, target, before !== null);
     return target;
   } finally {
     await fsp.rm(stage, { recursive: true, force: true });
