@@ -338,6 +338,34 @@ export function parseHostProbe(stdout: string): ParsedProbe {
   };
 }
 
+/**
+ * The build a listening host runs, as that same process recorded it in
+ * `host-mode.json`; null unless the file's writer is the live listener.
+ */
+export function runningHostBuild(
+  probe: Pick<ParsedProbe, "hostModeListening" | "hostPid" | "hostModeState">
+): { version: string; commit: string } | null {
+  const state = probe.hostModeState;
+  if (!probe.hostModeListening || !state?.build || state.pid !== probe.hostPid) return null;
+  return state.build;
+}
+
+/**
+ * Whether the host runs exactly this client's build. A listening host's own
+ * record decides, since that build is the one the link's handshake meets;
+ * otherwise what is installed there.
+ */
+export function hostMatchesClient(
+  probe: ParsedProbe,
+  client: Pick<HostHandshakeInfo, "version" | "commit">
+): boolean | null {
+  const running = runningHostBuild(probe);
+  if (running) return running.version === client.version && running.commit === client.commit;
+  // Which AppImage runs is unknown, so whether it matches is too.
+  if (probe.appImageConflict) return null;
+  return installMatches(probe.install, client);
+}
+
 /** Whether what is installed there is exactly this client's build. */
 export function installMatches(
   install: HostInstallInfo | null,
@@ -433,8 +461,7 @@ export async function probeHost(params: {
       appRunning: parsed.appRunning || parsed.hostModeListening,
       appImages: parsed.appImages,
       canDownload: parsed.canDownload,
-      // Which AppImage runs is unknown, so whether it matches is too.
-      matchesClient: parsed.appImageConflict ? null : installMatches(parsed.install, params.client),
+      matchesClient: hostMatchesClient(parsed, params.client),
       advice: parsed.advice,
       hostModeState: parsed.hostModeState,
     },

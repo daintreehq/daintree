@@ -396,4 +396,69 @@ describe("probeHost", () => {
     expect(result.appRunning).toBe(true);
     expect(result.suggestedCommands[0]?.command).toBe("sudo pmset -a sleep 0 disksleep 0");
   });
+
+  describe("a listening host's own build", () => {
+    const state = (pid: number, build: { version: string; commit: string }) =>
+      JSON.stringify({
+        daintreeHostMode: 1,
+        pid,
+        build,
+        enabled: true,
+        startAtLogin: false,
+        startAtLoginInstalled: false,
+        startAtLoginError: null,
+        keychain: { state: "unknown", detail: "not checked", checked: false },
+      });
+    const OLD_APP = [
+      "@@dt:uname Darwin arm64",
+      "@@dt:install app-bundle /Applications/Daintree.app",
+      "@@dt:version 1.3.0",
+      '@@dt:buildinfo {"daintreeBuildInfo":1,"version":"1.3.0","commit":"0000000000000000"}',
+    ];
+    const probe = async (lines: string[]) =>
+      (
+        await probeHost({
+          connection: { kind: "ssh", target: "studio" },
+          shell: shellReturning({ stdout: [...lines, "@@dt:end"].join("\n") }),
+          client: CLIENT,
+        })
+      ).result;
+
+    it("matches on the build the listener runs, whatever the installed app is", async () => {
+      const result = await probe([
+        ...OLD_APP,
+        "@@dt:listening yes",
+        "@@dt:hostpid 4242",
+        `@@dt:hostmodestate ${state(4242, CLIENT)}`,
+      ]);
+      expect(result.install?.version).toBe("1.3.0");
+      expect(result.matchesClient).toBe(true);
+    });
+
+    it("reports a different build when the listener runs one, whatever is installed", async () => {
+      const result = await probe([
+        "@@dt:uname Darwin arm64",
+        "@@dt:install app-bundle /Applications/Daintree.app",
+        "@@dt:version 1.4.0",
+        `@@dt:buildinfo {"daintreeBuildInfo":1,"version":"1.4.0","commit":"${CLIENT.commit}"}`,
+        "@@dt:listening yes",
+        "@@dt:hostpid 4242",
+        `@@dt:hostmodestate ${state(4242, { version: "1.4.0", commit: "ffffffffffffffff" })}`,
+      ]);
+      expect(result.matchesClient).toBe(false);
+    });
+
+    it("falls back to the install when the record isn't the live listener's", async () => {
+      // Written by an earlier process, or nothing is listening now.
+      const stale = await probe([
+        ...OLD_APP,
+        "@@dt:listening yes",
+        "@@dt:hostpid 4242",
+        `@@dt:hostmodestate ${state(1111, CLIENT)}`,
+      ]);
+      expect(stale.matchesClient).toBe(false);
+      const notListening = await probe([...OLD_APP, `@@dt:hostmodestate ${state(4242, CLIENT)}`]);
+      expect(notListening.matchesClient).toBe(false);
+    });
+  });
 });

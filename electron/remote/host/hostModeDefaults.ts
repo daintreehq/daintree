@@ -112,7 +112,14 @@ export function createHostModeService(
     run: runCommand,
     broadcast: broadcastLocal,
     writeStatus: statusDir
-      ? (observation) => writeHostModeStatusFile(statusDir, { pid: process.pid, ...observation })
+      ? (observation) => {
+          const { version, commit } = getLocalHandshakeInfo();
+          return writeHostModeStatusFile(statusDir, {
+            pid: process.pid,
+            build: { version, commit },
+            ...observation,
+          });
+        }
       : undefined,
   });
 }

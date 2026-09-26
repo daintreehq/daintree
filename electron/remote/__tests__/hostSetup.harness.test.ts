@@ -236,6 +236,8 @@ describe("host setup over the harness", () => {
       expect(enables).toBe(1);
       expect(result.probe.hostModeState).toEqual({
         pid: process.pid,
+        // The build the listener runs, which the link's handshake meets.
+        build: { version: "0.0.0-harness", commit: expect.any(String) },
         enabled: true,
         startAtLogin: true,
         startAtLoginInstalled: true,
@@ -247,6 +249,8 @@ describe("host setup over the harness", () => {
         },
       });
       expect(result.probe.advice.startAtLoginInstalled).toBe(true);
+      // No app is installed in the temp HOME, but the listener runs this build.
+      expect(result.probe.matchesClient).toBe(true);
       // Saved as the Settings switch saves it, with the LaunchAgent in the host's home.
       expect(memoryStore.get("hostMode")).toEqual({ enabled: true, startAtLogin: true });
       const plist = await fs.readFile(
