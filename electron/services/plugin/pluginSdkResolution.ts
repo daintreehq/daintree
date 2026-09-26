@@ -7,8 +7,9 @@
 // is imported.
 
 import { registerHooks, type ResolveFnOutput, type ResolveHookSync } from "node:module";
+import { existsSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SDK_PACKAGE = "@daintreehq/plugin-sdk";
 
@@ -25,17 +26,42 @@ const REFUSED_SDK_ENTRIES: Readonly<Record<string, string>> = {
   [`${SDK_PACKAGE}/testing`]: "it is a test-time mock host, not something a running plugin loads",
 };
 
-// Only these mean "there is no SDK of the plugin's own to use" — the first for
-// `import`, the last for `require()`. Any other failure is the plugin's own
-// install being broken, which it should see.
-const FALL_BACK_ON = new Set([
-  "ERR_MODULE_NOT_FOUND",
-  "ERR_PACKAGE_PATH_NOT_EXPORTED",
-  "MODULE_NOT_FOUND",
-]);
+// "Not found" from `import` and from `require()`. Both are also raised when an
+// installed SDK's export names a file that is missing, so they only mean "no
+// SDK of the plugin's own" once the lookup below has confirmed there is none.
+const NOT_FOUND = new Set(["ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND"]);
+
+// An installed SDK that does not export the entry: one older than the entry.
+const NOT_EXPORTED = "ERR_PACKAGE_PATH_NOT_EXPORTED";
 
 function isSdkSpecifier(specifier: string): boolean {
   return specifier === SDK_PACKAGE || specifier.startsWith(`${SDK_PACKAGE}/`);
+}
+
+/**
+ * Whether Node's package lookup from the importing module would find an
+ * installed SDK — the same `node_modules` walk up the directory tree.
+ */
+function hasInstalledSdk(parentURL: string | undefined): boolean {
+  if (!parentURL?.startsWith("file:")) return false;
+  let dir = path.dirname(fileURLToPath(parentURL));
+  for (;;) {
+    if (existsSync(path.join(dir, "node_modules", SDK_PACKAGE, "package.json"))) return true;
+    const parent = path.dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+}
+
+/**
+ * Whether a failed lookup means the plugin has no usable SDK of its own. A
+ * broken install — an export pointing at a missing file, say — is not that,
+ * and is rethrown so the plugin sees its own error.
+ */
+function shouldFallBack(error: unknown, parentURL: string | undefined): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === NOT_EXPORTED) return true;
+  return typeof code === "string" && NOT_FOUND.has(code) && !hasInstalledSdk(parentURL);
 }
 
 function notServed(specifier: string): Error {
@@ -60,8 +86,7 @@ export function createPluginSdkResolveHook(sdkDir: string): ResolveHookSync {
     try {
       return nextResolve(specifier, context);
     } catch (error) {
-      const code = (error as { code?: unknown } | null)?.code;
-      if (typeof code !== "string" || !FALL_BACK_ON.has(code)) throw error;
+      if (!shouldFallBack(error, context.parentURL)) throw error;
       const file = HOST_SERVED_SDK_ENTRIES[specifier];
       if (!file) throw notServed(specifier);
       return {

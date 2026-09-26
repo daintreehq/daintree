@@ -58,7 +58,9 @@ declare function stringifyFrontmatter(data: Record<string, unknown>, body: strin
  * non-empty patch re-serialises it as a whole.
  *
  * Throws {@link FrontmatterError} when the existing frontmatter is invalid,
- * and when the edit would leave it unreadable — deleting or replacing a value
+ * when a patched value carries a tag beyond the core types (`!!binary`,
+ * `!!timestamp`, a custom `!tag`) that the new value would lose, and when the
+ * edit would leave the frontmatter unreadable — deleting or replacing a value
  * whose anchor another key still refers to.
  */
 declare function updateFrontmatter(text: string, patch: Record<string, unknown>): string;

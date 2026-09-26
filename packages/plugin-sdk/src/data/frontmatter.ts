@@ -1,4 +1,5 @@
 import {
+  type Alias,
   Document,
   isMap,
   isNode,
@@ -99,17 +100,33 @@ type YamlReading =
   | { ok: true; doc: Document.Parsed; data: Record<string, unknown> }
   | { ok: false; problem: string; offset: number };
 
-/** The offset of the first alias whose anchor is not defined before it. */
-function unresolvedAliasOffset(doc: Document.Parsed): number | undefined {
-  let offset: number | undefined;
+/**
+ * The offset of the alias that made `toJS` throw — one whose anchor is not
+ * defined before it, or whose expansion crossed the alias limit. yaml's error
+ * does not say which alias it was, so on this failure path only, the aliases
+ * are wrapped and the conversion re-run to catch the first one that throws.
+ */
+function failingAliasOffset(doc: Document.Parsed): number | undefined {
+  let culprit: Alias | undefined;
   visit(doc, {
     Alias(_, node) {
-      if (node.resolve(doc) !== undefined) return undefined;
-      offset = node.range?.[0];
-      return visit.BREAK;
+      const toJSON = node.toJSON.bind(node);
+      node.toJSON = (...args: Parameters<Alias["toJSON"]>) => {
+        try {
+          return toJSON(...args);
+        } catch (error) {
+          culprit ??= node;
+          throw error;
+        }
+      };
     },
   });
-  return offset;
+  try {
+    doc.toJS();
+  } catch {
+    // Expected: this pass only repeats the failure to see where it happens.
+  }
+  return culprit?.range?.[0];
 }
 
 /**
@@ -135,8 +152,13 @@ function readYaml(yaml: string): YamlReading {
   } catch (toJsError) {
     // yaml throws plain Errors (a ReferenceError for an unresolved alias).
     const reason = (toJsError as Error).message;
-    const offset = unresolvedAliasOffset(doc) ?? doc.contents?.range?.[0] ?? 0;
-    return { ok: false, problem: `invalid YAML: ${reason}`, offset };
+    const offset = failingAliasOffset(doc);
+    if (offset !== undefined) return { ok: false, problem: `invalid YAML: ${reason}`, offset };
+    return {
+      ok: false,
+      problem: `invalid YAML: ${reason} (the failing node could not be located, so the position given is the start of the frontmatter)`,
+      offset: 0,
+    };
   }
   const data =
     value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -281,6 +303,22 @@ function isInlineScalarNode(node: unknown): node is { range: [number, number, nu
   return node.type !== "BLOCK_LITERAL" && node.type !== "BLOCK_FOLDED";
 }
 
+const CORE_TAG_PREFIX = "tag:yaml.org,2002:";
+
+/**
+ * Tags a rewrite may drop: each is a type a plain value written in its place
+ * already expresses. Any other tag (`!!binary`, `!!timestamp`, a custom `!foo`)
+ * names a type the patch cannot reproduce, so such a value is refused rather
+ * than silently turned into a string or a plain collection.
+ */
+const REWRITABLE_TAGS = new Set(
+  ["str", "int", "float", "bool", "null", "map", "seq"].map((name) => CORE_TAG_PREFIX + name)
+);
+
+function shortTag(tag: string): string {
+  return tag.startsWith(CORE_TAG_PREFIX) ? `!!${tag.slice(CORE_TAG_PREFIX.length)}` : tag;
+}
+
 /**
  * Change only the named top-level frontmatter keys and leave every other byte
  * of the document alone — comments, key order, quoting, blank lines, and the
@@ -299,7 +337,9 @@ function isInlineScalarNode(node: unknown): node is { range: [number, number, nu
  * non-empty patch re-serialises it as a whole.
  *
  * Throws {@link FrontmatterError} when the existing frontmatter is invalid,
- * and when the edit would leave it unreadable — deleting or replacing a value
+ * when a patched value carries a tag beyond the core types (`!!binary`,
+ * `!!timestamp`, a custom `!tag`) that the new value would lose, and when the
+ * edit would leave the frontmatter unreadable — deleting or replacing a value
  * whose anchor another key still refers to.
  */
 export function updateFrontmatter(text: string, patch: Record<string, unknown>): string {
@@ -345,6 +385,15 @@ export function updateFrontmatter(text: string, patch: Record<string, unknown>):
       if (value === undefined) {
         splices.push({ start: range.start, end: range.end, text: "" });
         continue;
+      }
+      const tag = isNode(pair.value) ? pair.value.tag : undefined;
+      if (tag !== undefined && !REWRITABLE_TAGS.has(tag)) {
+        const at = (pair.value as { range?: [number, number, number] }).range?.[0] ?? range.start;
+        throw failure(
+          source,
+          at,
+          `cannot patch "${key}": its value is tagged ${shortTag(tag)}, a type a plain value cannot carry, so the edit would silently change it`
+        );
       }
       const inline = inlineScalarText(value);
       if (inline !== null && isInlineScalarNode(pair.value)) {
